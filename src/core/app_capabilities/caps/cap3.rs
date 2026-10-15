@@ -227,6 +227,13 @@ pub static ROUTES: &[NativeRoute] = &[
     ),
     // ---- CAP-3b
     route(
+        "browser.automation",
+        "run",
+        "cap.browser.automation.run",
+        "browser.op sequence via the §16.46 core entry",
+        "src/core/app_capabilities/caps/browser.rs",
+    ),
+    route(
         "files",
         "put",
         "cap.files.put",
@@ -438,6 +445,9 @@ impl CapabilityBackend for Cap3Backend<'_> {
             "files" => files::execute(self.file_store()?, ctx, function, payload),
             "process" => process::execute(self.root, self.file_store(), ctx, payload),
             "browser.auth_assist" => browser::auth_assist_request(self.root, ctx, payload),
+            "browser.automation" => {
+                browser::automation_run(self.browser, self.file_store(), ctx, payload)
+            }
             "directory" | "identity.users" | "policy" | "command" => {
                 directory::execute(self.root, ctx, call.route().capability, function, payload)
             }
@@ -613,8 +623,14 @@ pub fn contract() -> Value {
             vec!["invalid", "unavailable"],
         ),
         (
+            "browser.automation.run",
+            json!({"required":["steps"],"properties":{"session_id":s("256"),"steps":{"type":"array","minItems":1,"maxItems":browser::MAX_AUTOMATION_STEPS,"items":{"required":["op"],"properties":{"op":{"enum":browser::ALLOWED_OPS},"tab_id":s("256"),"params":{"type":"object"}}}},"timeout_ms":{"type":"integer","minimum":1000,"maximum":300000}},"description":"every step validated before the first runs; per-step §16.46 gate and audit"}),
+            json!({"session_id":"string","steps":[{"op":"string","ok":"boolean"}],"completed":"integer","timed_out":"boolean","artifact":{"ref":"sha256","file_id":"string"}}),
+            vec!["invalid", "forbidden", "unavailable"],
+        ),
+        (
             "process.run",
-            json!({"required":["program"],"properties":{"program":{"description":"name in platform allowlist business_os.process_allowlist"},"args":{"type":"array","maxItems":128},"cwd_ref":{"description":"relative path inside the app workspace"},"stdin":{"type":"string"},"stdin_ref":{"description":"files.ref of the app"},"env":{"type":"object","maxProperties":32,"description":"the complete child environment; nothing inherited"},"timeout_ms":{"type":"integer","minimum":1,"maximum":process::MAX_TIMEOUT_MS}}}),
+            json!({"required":["program"],"properties":{"program":{"description":"name in platform allowlist business_os.process_allowlist"},"args":{"type":"array","maxItems":128},"cwd_ref":{"description":"relative path inside the app workspace"},"stdin":{"type":"string"},"stdin_ref":{"properties":{"ref":{"description":"files.ref of the calling app"}}},"program_note":{"description":"allowlist entry: program or interpreter+script, plus platform base env (PATH, CTOX_BIN, LANG)"},"env":{"type":"object","maxProperties":32,"description":"the complete child environment; nothing inherited"},"timeout_ms":{"type":"integer","minimum":1,"maximum":process::MAX_TIMEOUT_MS}}}),
             json!({"exit":"integer|null","timed_out":"boolean","duration_ms":"integer","stdout":"string","stdout_truncated":"boolean","stderr":"string","stderr_truncated":"boolean"}),
             vec!["invalid", "forbidden", "not_found", "unavailable"],
         ),

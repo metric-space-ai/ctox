@@ -1479,3 +1479,177 @@ fn app_capabilities_cap3_browser_internal_only_contract() {
         "the Core binding, not the document, names the owner"
     );
 }
+
+// ------------------------------------------------------------------ CAP-3d (§16.47)
+
+#[test]
+fn app_capabilities_cap3_process_base_env_contract() {
+    let f = Fixture::new();
+    let host = Host::new("outbound-lead-generation", "staff");
+    let script = f.root.path().join("platform-script.sh");
+    std::fs::write(&script, "printf 'script:%s' \"$1\"").unwrap();
+    let allowlist = json!({
+        "sh": {"program":"/bin/sh","env":{"PATH":"/usr/bin:/bin","LANG":"C.UTF-8","CTOX_BIN":"/opt/ctox/bin/ctox"}},
+        "scrape": {"interpreter":"/bin/sh","script":script.to_string_lossy(),"env":{"PATH":"/usr/bin:/bin"}}
+    });
+    crate::inference::runtime_env::set_runtime_env_value(
+        f.root.path(),
+        process::ALLOWLIST_KEY,
+        &allowlist.to_string(),
+    )
+    .unwrap();
+    let env = f
+        .call(&host, "process", "run", json!({"program":"sh","args":["-c","printf '[%s][%s][%s][%s][%s]' \"$PATH\" \"$LANG\" \"$CTOX_BIN\" \"$CTOX_SCRAPE_X\" \"$HOME\""],
+            "env":{"CTOX_SCRAPE_X":"1"}}))
+        .unwrap();
+    assert_eq!(
+        env["stdout"], "[/usr/bin:/bin][C.UTF-8][/opt/ctox/bin/ctox][1][]",
+        "platform base env missing"
+    );
+    // The app adds variables; it cannot replace the platform base.
+    assert_eq!(
+        code(f.call(
+            &host,
+            "process",
+            "run",
+            json!({"program":"sh","env":{"PATH":"/tmp"}})
+        )),
+        ErrorCode::Invalid
+    );
+    // Interpreter + script from the allowlist; the app only supplies args.
+    let scripted = f
+        .call(
+            &host,
+            "process",
+            "run",
+            json!({"program":"scrape","args":["a"]}),
+        )
+        .unwrap();
+    assert_eq!(scripted["stdout"], "script:a");
+    // stdin as text or as a files record of the calling app only.
+    let text = f
+        .call(
+            &host,
+            "process",
+            "run",
+            json!({"program":"sh","args":["-c","cat"],"stdin":"inline"}),
+        )
+        .unwrap();
+    assert_eq!(text["stdout"], "inline");
+    let own = f
+        .call(
+            &host,
+            "files",
+            "put",
+            json!({"name":"in.txt","text":"from-file"}),
+        )
+        .unwrap();
+    let piped = f
+        .call(
+            &host,
+            "process",
+            "run",
+            json!({"program":"sh","args":["-c","cat"],"stdin_ref":{"ref":own["ref"]}}),
+        )
+        .unwrap();
+    assert_eq!(piped["stdout"], "from-file");
+    let foreign = f
+        .call(
+            &Host::new("news", "staff"),
+            "files",
+            "put",
+            json!({"name":"secret.txt","text":"other-app"}),
+        )
+        .unwrap();
+    assert_eq!(
+        code(f.call(
+            &host,
+            "process",
+            "run",
+            json!({"program":"sh","args":["-c","cat"],"stdin_ref":{"ref":foreign["ref"]}})
+        )),
+        ErrorCode::NotFound,
+        "stdin_ref of another app must be refused"
+    );
+}
+
+#[test]
+fn app_capabilities_cap3_browser_automation_contract() {
+    let f = Fixture::new();
+    let host = Host::new("outbound", "staff");
+    let ok = f
+        .call(
+            &host,
+            "browser.automation",
+            "run",
+            json!({"session":"s-auto","timeout_ms":10000,"steps":[
+            {"op":"navigate","params":{"url":"https://example.test/"}},{"op":"reload"}]}),
+        )
+        .unwrap();
+    assert_eq!(
+        (ok["completed"].clone(), ok["session_id"].clone()),
+        (json!(2), json!("s-auto"))
+    );
+    let artifact = ok["artifact"]["ref"].as_str().unwrap().to_owned();
+    let stored = f
+        .call(&host, "files", "get", json!({"ref":artifact}))
+        .unwrap();
+    assert!(stored["text"].as_str().unwrap().contains("\"reload\""));
+    assert_eq!(f.engine.ops.borrow().len(), 2);
+    // A disallowed op anywhere refuses the whole run before its first step.
+    for steps in [
+        json!([{"op":"navigate","params":{"url":"https://example.test/"}},{"op":"evaluate","params":{"source":"x"}}]),
+        json!([{"op":"reload"},{"op":"navigate","params":{"url":"file:///etc/passwd"}}]),
+        json!([{"op":"reload"},{"op":"credential_fill","params":{"credential_ref":"X","passwordValue":"pw"}}]),
+    ] {
+        assert_eq!(
+            code(f.call(&host, "browser.automation", "run", json!({"steps":steps}))),
+            ErrorCode::Invalid
+        );
+    }
+    assert_eq!(
+        f.engine.ops.borrow().len(),
+        2,
+        "a refused run executed a step"
+    );
+}
+
+#[test]
+fn app_capabilities_cap3_policy_assignment_contract() {
+    let f = Fixture::new();
+    let root = f.root.path();
+    let founder = crate::business_os::CoreBrowserBinding {
+        app_id: "outbound",
+        user_id: "u-founder",
+        role: "founder",
+        command_id: "cmd",
+        call_id: "call",
+    };
+    let denied = crate::business_os::core_browser_gate(root, &founder, "browser.navigate", "s-f")
+        .map_err(|e| format!("{e:#}"))
+        .unwrap_err();
+    assert!(denied.contains("policy"), "{denied}");
+    let decide = json!({"permission":"data.write","module":"outbound"});
+    let host = Host::new("threads", "founder");
+    let mut host_founder = host;
+    host_founder.ctx.actor.id = "u-founder".into();
+    assert_eq!(
+        f.call(&host_founder, "policy", "module_decision", decide.clone())
+            .unwrap()["allowed"],
+        false
+    );
+    // Founder assignment in business_module_acl grants module rights.
+    let conn = crate::business_os::store::open_store(root).unwrap();
+    conn.execute(
+        "INSERT INTO business_module_acl (module_id,user_id,role,active,created_at_ms,updated_at_ms)
+         VALUES ('outbound','u-founder','founder',1,1,1)",
+        [],
+    )
+    .unwrap();
+    crate::business_os::core_browser_gate(root, &founder, "browser.navigate", "s-f").unwrap();
+    assert_eq!(
+        f.call(&host_founder, "policy", "module_decision", decide)
+            .unwrap()["allowed"],
+        true
+    );
+}

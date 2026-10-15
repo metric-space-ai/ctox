@@ -108,9 +108,7 @@ pub(super) fn execute(
             Ok(json!({ "users": list }))
         }
         ("policy", "module_decision") => {
-            use crate::business_os::policy::{
-                evaluate, BusinessOsActor, BusinessOsPermission, BusinessOsScope,
-            };
+            use crate::business_os::policy::BusinessOsPermission;
             let request: ModuleDecision = decode(args)?;
             crate::app_capabilities::protocol::identifier(&request.module, "$.module")?;
             let permission = match request.permission.as_str() {
@@ -119,14 +117,17 @@ pub(super) fn execute(
                 "apps.modify" => BusinessOsPermission::AppsModify,
                 _ => return Err(invalid("$.permission")),
             };
-            // The actor is the Core-bound command actor, never a payload field.
-            // Module assignment is not resolved here: assigned-only grants are denied.
-            let actor = BusinessOsActor::new(Some(ctx.actor.id.clone()), &ctx.actor.role);
-            let decision = evaluate(
-                &actor,
+            // The actor is the Core-bound command actor, never a payload field;
+            // module assignment (founder ACL) and explicit grants are resolved natively.
+            let decision = crate::business_os::store::trusted_mcp_actor_policy_decision_with_role(
+                root,
+                &ctx.actor.id,
+                &ctx.actor.role,
                 permission,
-                &BusinessOsScope::module(request.module, false),
-            );
+                crate::business_os::policy::BusinessOsScopeType::Module,
+                Some(&request.module),
+            )
+            .map_err(native_error)?;
             Ok(
                 json!({"allowed":decision.allowed,"display_reason":decision.display_reason,
                       "reason_code":decision.reason_code}),

@@ -62,15 +62,20 @@ PROOFS=[
  ("files-list-owner","files.rs",E(".filter(|meta| meta.owner_app == ctx.app_id)"),".filter(|_| true)","files_owner_contract"),
  ("process-env-clear","process.rs",E(".env_clear()"),"","process_env_contract"),
  ("process-cwd","process.rs",E("Some(path) if relative(path) => {"),"Some(path) => {","process_env_contract"),
- ("policy-actor","directory.rs",E("BusinessOsActor::new(Some(ctx.actor.id.clone()), &ctx.actor.role)"),'BusinessOsActor::new(Some(ctx.actor.id.clone()), "admin")',"directory_policy_contract"),
+ ("policy-actor","directory.rs",E("&ctx.actor.role,"),'"admin",',"directory_policy_contract"),
  ("command-scope","directory.rs",E("WHERE command_id=?1 AND module=?2"),"WHERE command_id=?1 AND ?2=?2","directory_policy_contract"),
  ("auth-assist-module","browser.rs",E(".is_some_and(|module| module != ctx.app_id)"),".is_some_and(|_| false)","auth_assist_contract"),
  # ---- CAP-3c (§16.46)
  ("core-app-binding",PEER,E("if bound_app != binding.app_id {"),"if false {","browser_core_entry_contract"),
  ("core-user-binding",PEER,E("if bound_user != binding.user_id {"),"if false {","browser_core_entry_contract"),
- ("core-policy",PEER,E("if !decision.allowed {"),"if false {","browser_core_entry_contract"),
+ ("core-policy",PEER,E("if !decision.as_ref().is_ok_and(|decision| decision.allowed) {"),"if false {","browser_core_entry_contract"),
+ ("core-assignment",PEER,E("Some(binding.app_id),"),'Some("__unassigned__"),',"policy_assignment_contract"),
  ("core-audit",PEER,E('core_browser_audit(root, binding, command_type, session_id, "allowed", "")'),"Ok(())","browser_core_entry_contract"),
  ("core-internal-only",PEER,E("if let Some(owner) = core_owner {"),'if let Some(owner) = core_owner.or_else(|| document.pointer("/client_context/actor/id").and_then(Value::as_str)) {',"browser_internal_only_contract"),
+ # ---- CAP-3d (§16.47)
+ ("process-base-env","process.rs",E(".envs(&base_env)"),"","process_base_env_contract"),
+ ("process-stdin-owner","process.rs",E("meta.owner_app == ctx.app_id && sha256_hex(bytes) == meta.reference"),"sha256_hex(bytes) == meta.reference","process_base_env_contract"),
+ ("automation-prevalidate","browser.rs",E('validate_step(step).map_err(|_| invalid("$.steps"))?;'),"","browser_automation_contract"),
  ("mail-redact","mail.rs",E('|| !(k.contains("password")'),"|| !(false","mail_server_intake_contract"),
 ]
 SELECTED=set(sys.argv[2].split(",")) if len(sys.argv)>2 and sys.argv[2] else None

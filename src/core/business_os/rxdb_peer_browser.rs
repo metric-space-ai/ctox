@@ -5016,14 +5016,17 @@ pub(crate) fn core_browser_gate(
     if !CORE_BROWSER_COMMANDS.contains(&command_type) {
         return refuse("command");
     }
-    let actor =
-        super::policy::BusinessOsActor::new(Some(binding.user_id.to_string()), binding.role);
-    let decision = super::policy::evaluate(
-        &actor,
+    // Native module policy for the bound user on the calling app, including
+    // the founder assignment (business_module_acl) and explicit grants.
+    let decision = store::trusted_mcp_actor_policy_decision_with_role(
+        root,
+        binding.user_id,
+        binding.role,
         BusinessOsPermission::DataWrite,
-        &super::policy::BusinessOsScope::module(binding.app_id, false),
+        super::policy::BusinessOsScopeType::Module,
+        Some(binding.app_id),
     );
-    if !decision.allowed {
+    if !decision.as_ref().is_ok_and(|decision| decision.allowed) {
         return refuse("policy");
     }
     let path = crate::paths::core_db(root);

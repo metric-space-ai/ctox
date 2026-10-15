@@ -449,3 +449,110 @@ impl BrowserEngine for PeerBrowserEngine<'_> {
         })
     }
 }
+
+// ---------------------------------------------------------------- §16.47
+pub const MAX_AUTOMATION_STEPS: usize = 32;
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Step {
+    op: String,
+    tab_id: Option<String>,
+    #[serde(default)]
+    params: Value,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Automation {
+    #[serde(alias = "session")]
+    session_id: Option<String>,
+    steps: Vec<Step>,
+    timeout_ms: Option<u64>,
+}
+fn validate_step(step: &Step) -> Result<(), CtoxError> {
+    if let Some(tab) = &step.tab_id {
+        crate::app_capabilities::protocol::identifier(tab, "$.tab_id")?;
+    }
+    if !ALLOWED_OPS.contains(&step.op.as_str()) {
+        return Err(invalid("$.op"));
+    }
+    validate_params(&step.op, &step.params)
+}
+/// `browser.automation.run` — a bounded sequence of browser.op in one
+/// session. Every step is validated BEFORE the first one runs; each step then
+/// passes the same engine gate as browser.op (§16.46: op allowlist,
+/// (app, user) session binding, audit per step). Step results land in one
+/// files record of the calling app.
+pub(super) fn automation_run(
+    engine: &dyn BrowserEngine,
+    files: Result<&dyn files::FileStore, CtoxError>,
+    ctx: &CapCallContext,
+    args: &Value,
+) -> Result<Value, CtoxError> {
+    let request: Automation = decode(args)?;
+    if request.steps.is_empty() || request.steps.len() > MAX_AUTOMATION_STEPS {
+        return Err(invalid("$.steps"));
+    }
+    let timeout = request.timeout_ms.unwrap_or(120_000);
+    if !(1_000..=300_000).contains(&timeout) {
+        return Err(invalid("$.timeout_ms"));
+    }
+    for step in &request.steps {
+        validate_step(step).map_err(|_| invalid("$.steps"))?;
+    }
+    let session = match request.session_id {
+        Some(session) => session,
+        None => {
+            let identity = serde_json::to_vec(&(&ctx.app_id, &ctx.command_id, &ctx.call_id))
+                .map_err(native_error)?;
+            format!("automation-{}", &sha256_hex(&identity)[..24])
+        }
+    };
+    crate::app_capabilities::protocol::identifier(&session, "$.session_id")?;
+    let store = files.as_ref().map_err(Clone::clone)?;
+    let started = std::time::Instant::now();
+    let mut steps = Vec::new();
+    let mut timed_out = false;
+    for step in &request.steps {
+        if started.elapsed() >= std::time::Duration::from_millis(timeout) {
+            timed_out = true;
+            break;
+        }
+        let params = if step.params.is_null() {
+            json!({})
+        } else {
+            step.params.clone()
+        };
+        match engine.op(ctx, &session, step.tab_id.as_deref(), &step.op, &params) {
+            Ok(result) => {
+                steps.push(json!({"op":step.op,"ok":true,"result":strip_secrets(result)}))
+            }
+            Err(error) => {
+                // Earlier steps took effect; stop here and report, never replay.
+                steps.push(json!({"op":step.op,"ok":false,"code":error.code}));
+                break;
+            }
+        }
+    }
+    let artifact =
+        serde_json::to_vec(&json!({"session_id":session,"steps":steps})).map_err(native_error)?;
+    let name = format!("{session}.automation.json");
+    let meta = store.put(
+        &ctx.app_id,
+        &ctx.actor.id,
+        &name,
+        "application/json",
+        &artifact,
+    )?;
+    if meta.reference != sha256_hex(&artifact) || meta.owner_app != ctx.app_id {
+        return Err(CtoxError::uncertain());
+    }
+    let summary = steps
+        .iter()
+        .map(|step| json!({"op":step["op"],"ok":step["ok"]}))
+        .collect::<Vec<_>>();
+    let completed = summary.iter().filter(|s| s["ok"] == true).count();
+    Ok(
+        json!({"session_id":session,"steps":summary,"completed":completed,"timed_out":timed_out,
+              "artifact":{"ref":meta.reference,"file_id":meta.id}}),
+    )
+}

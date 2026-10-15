@@ -33,14 +33,63 @@ struct Run {
     args: Vec<String>,
     cwd_ref: Option<String>,
     stdin: Option<String>,
-    stdin_ref: Option<String>,
+    stdin_ref: Option<FileRef>,
     #[serde(default)]
     env: std::collections::BTreeMap<String, String>,
     timeout_ms: Option<u64>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileRef {
+    #[serde(rename = "ref")]
+    reference: String,
+}
+/// One platform allowlist entry (§16.47): a program, or an interpreter plus
+/// script path, and the fixed base environment (PATH, CTOX_BIN, LANG, …).
+/// The script always comes from here, never from the app or stdin.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum AllowEntry {
+    Path(String),
+    Spec(ProgramSpec),
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProgramSpec {
+    pub program: Option<String>,
+    pub interpreter: Option<String>,
+    pub script: Option<String>,
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
+}
+/// (executable, leading args, base environment) of an entry; absolute paths only.
+fn resolve_entry(
+    entry: &AllowEntry,
+) -> Option<(
+    String,
+    Vec<String>,
+    std::collections::BTreeMap<String, String>,
+)> {
+    let absolute = |path: &String| Path::new(path).is_absolute();
+    match entry {
+        AllowEntry::Path(path) => {
+            absolute(path).then(|| (path.clone(), Vec::new(), Default::default()))
+        }
+        AllowEntry::Spec(spec) => {
+            let (program, prefix) = match (&spec.program, &spec.interpreter, &spec.script) {
+                (Some(program), None, None) => (program.clone(), Vec::new()),
+                (None, Some(interpreter), Some(script)) if absolute(script) => {
+                    (interpreter.clone(), vec![script.clone()])
+                }
+                _ => return None,
+            };
+            absolute(&program).then(|| (program, prefix, spec.env.clone()))
+        }
+    }
+}
 /// Platform allowlist from the runtime config store (JSON object).
-pub fn allowlist(root: &Path) -> std::collections::BTreeMap<String, String> {
+pub fn allowlist(root: &Path) -> std::collections::BTreeMap<String, AllowEntry> {
     crate::inference::runtime_env::get_runtime_env_value(root, ALLOWLIST_KEY)
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_default()
@@ -79,10 +128,11 @@ pub(super) fn execute(
 ) -> Result<Value, CtoxError> {
     let request: Run = decode(args)?;
     let programs = allowlist(root);
-    let program = programs
-        .get(&request.program)
-        .filter(|path| Path::new(path).is_absolute())
-        .ok_or_else(|| forbidden("program is not allowlisted"))?;
+    let (program, prefix_args, base_env) =
+        programs
+            .get(&request.program)
+            .and_then(resolve_entry)
+            .ok_or_else(|| forbidden("program is not allowlisted"))?;
     if request.args.len() > 128
         || request
             .args
@@ -95,7 +145,9 @@ pub(super) fn execute(
         return Err(invalid("$.env"));
     }
     for (key, value) in &request.env {
-        if !env_key(key) || value.len() > 4096 || value.contains('\0') {
+        // The app only adds variables; the platform base environment wins.
+        if !env_key(key) || base_env.contains_key(key) || value.len() > 4096 || value.contains('\0')
+        {
             return Err(invalid("$.env"));
         }
     }
@@ -105,7 +157,7 @@ pub(super) fn execute(
     }
     let stdin = match (request.stdin, request.stdin_ref) {
         (Some(text), None) => text.into_bytes(),
-        (None, Some(reference)) => {
+        (None, Some(FileRef { reference })) => {
             crate::app_capabilities::protocol::identifier(&reference, "$.stdin_ref")?;
             files?
                 .get(&ctx.app_id, &reference)?
@@ -138,11 +190,13 @@ pub(super) fn execute(
         }
         Some(_) => return Err(invalid("$.cwd_ref")),
     };
-    let mut command = std::process::Command::new(program);
+    let mut command = std::process::Command::new(&program);
     command
+        .args(&prefix_args)
         .args(&request.args)
         .current_dir(&cwd)
         .env_clear()
+        .envs(&base_env)
         .envs(&request.env)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
