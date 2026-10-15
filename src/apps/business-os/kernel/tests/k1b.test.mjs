@@ -143,10 +143,8 @@ test('5 §16.19 Nr. 3: shell_preferences ist Plattform-Collection (Schema ctox-p
   assert.equal(own.status, 'accepted', JSON.stringify(own));
   await assert.rejects(api.put('shell_preferences', { id: 'u2', pins: [] }).local, (e) => e.code === 'forbidden');
   await assert.rejects(api.put('shell_preferences', { id: 'u1', fremd: 1 }).local, (e) => e.code === 'invalid', 'Schema aus dem Plattform-Manifest');
-  // Zeile eines anderen Nutzers im Spiegel (Rollenwechsel im selben Store) bleibt unsichtbar
-  k.sim.setActor({ id: 'u2' });
-  assert.equal((await api.put('shell_preferences', { id: 'u2', pins: ['x'] }).result).status, 'accepted');
-  k.sim.setActor({ id: 'u1' });
+  // Zeile eines anderen Nutzers, die der Core liefert, bleibt unsichtbar
+  await k.sim.push('shell_preferences', [{ id: 'u2', pins: ['x'] }]);
   const q = api.query('shell_preferences', { selector: {} });
   await until(() => q.get().length === 1);
   assert.deepEqual(q.get().map((d) => [d.id, d.pins]), [['u1', ['crm']]]);
@@ -193,43 +191,54 @@ test('0 §16.15a Nr. 3: Hash-Fehlschlag beim Artefaktabruf → einmal neu holen,
   assert.equal(k.apps.get()[0].activated_ver, '1', 'letzte funktionierende Version läuft weiter');
 });
 
-test('K-1c 1 §16.39 Nr. 1 (A6): artifacts.url → /~a/<app>@<ver>~shell@<sv>/<path>, sv beim Mount fixiert', async (t) => {
+test('K-1c 1 §16.39 Nr. 1 (A6): artifacts.url synchron → /~a/<app>@<ver>~shell@<sv>/<path>, sv beim Mount fixiert', async (t) => {
   const k = await mk(t);
   await k.sim.publishAppVersion('shell', '7', { files: { 'index.js': MOUNT } });
   await k.sim.publishAppVersion('crm', '3', { files: { 'index.js': MOUNT, 'img/a b.png': 'x' } });
-  await k.artifacts.pin('crm', '3');
-  assert.equal(k.artifacts.url('crm', '3', 'img/a b.png'), '/~a/crm@3~shell@7/img/a%20b.png');
+  const url = k.artifacts.url('crm', '3', 'img/a b.png');
+  assert.equal(typeof url, 'string', 'synchron, kein Promise');
+  assert.equal(url, '/~a/crm@3~shell@7/img/a%20b.png');
   await k.sim.publishAppVersion('shell', '8', { files: { 'index.js': `${MOUNT}\n// 8` } });
   assert.equal(k.artifacts.url('crm', '3', 'index.js'), '/~a/crm@3~shell@7/index.js', 'App-Instanz bleibt auf ihrer Shell-Version');
   assert.equal(k.artifacts.url('crm', '3', 'index.js', { shellVer: '8' }), '/~a/crm@3~shell@8/index.js');
-  assert.equal(k.artifacts.url('notes', '1', 'index.js'), '/~a/notes@1~shell@8/index.js', 'ohne Mount: aktive Shell-Version');
+  assert.equal(k.artifacts.url('notes', '1', 'index.js'), '/~a/notes@1~shell@8/index.js', 'neue Instanz: aktive Shell-Version');
+  assert.equal(k.artifacts.url('shell', '8', 'index.js'), '/~a/shell@8/index.js');
   assert.throws(() => k.artifacts.url('crm', '3', '../x'), (e) => e.code === 'invalid');
 });
 
-test('K-1c 2 §16.39 Nr. 2: lib-URL mit Minor, beim Mount fixiert; active:lib-Meta; SW lib-miss/lib-hit → LRU je Byte-Budget', async (t) => {
+test('K-1c 2 §16.39 Nr. 2 + LIBS2: Lib-Bindung aus dem Shell-Manifest in der Instanz-Wurzel; SW-Miss holt genau die Minor der URL; lib-hit → LRU', async (t) => {
   const k = await mk(t, { libByteBudget: 25 });
   await k.sim.publishAppVersion('lib:monaco', '0.3', { files: { 'a.js': 'A'.repeat(10), 'b.js': 'B'.repeat(10), 'c.js': 'C'.repeat(10) } });
+  await k.sim.publishAppVersion('lib:ctox-office', '1.4', { files: { 'o.js': 'o' } });
   assert.deepEqual(k.apps.get(), [], 'Bibliotheken sind keine Apps und werden nicht eager aktiviert');
-  await k.sim.publishAppVersion('crm', '1', { files: { 'index.js': MOUNT }, manifestExtra: { libs: { monaco: '0' } } });
-  const pin = await k.artifacts.pin('crm', '1');
-  assert.deepEqual(pin.libs, { 'monaco@0': '0.3' });
-  assert.equal(k.artifacts.libUrl('crm', '1', 'monaco', 0, 'a.js'), '/~a/lib:monaco@0.3/a.js');
+  await k.sim.publishAppVersion('shell', '5', { files: { 'index.js': MOUNT }, manifestExtra: { libs: { monaco: '0', 'ctox-office': '1' } } });
+  await k.sim.publishAppVersion('crm', '1', { files: { 'index.js': MOUNT } });
+  assert.equal(k.artifacts.url('crm', '1', 'index.js'), '/~a/crm@1~shell@5~lib:ctox-office@1.4~lib:monaco@0.3/index.js');
+  assert.equal(k.artifacts.url('shell', '5', 'index.js'), '/~a/shell@5~lib:ctox-office@1.4~lib:monaco@0.3/index.js');
+  assert.equal(k.artifacts.url('lib:monaco', '0.3', 'a.js'), '/~a/lib:monaco@0.3/a.js');
   await k.sim.publishAppVersion('lib:monaco', '0.4', { files: { 'a.js': 'a'.repeat(10) } });
-  assert.equal(k.artifacts.libUrl('crm', '1', 'monaco', 0, 'a.js'), '/~a/lib:monaco@0.3/a.js', 'Instanz bleibt auf 0.3');
-  assert.equal(k.artifacts.libUrl('notes', '1', 'monaco', 0, 'a.js'), '/~a/lib:monaco@0.4/a.js', 'neue Instanz: höchste Minor');
-  assert.equal((await k.sim.inspectMeta('active:lib:monaco@0')).value, '0.3');
-  // SW-Miss: genau eine Datei holen; Antwort über den Port
+  assert.equal(k.artifacts.url('crm', '1', 'index.js'), '/~a/crm@1~shell@5~lib:ctox-office@1.4~lib:monaco@0.3/index.js', 'Instanz bleibt auf 0.3');
+  assert.equal(k.artifacts.url('notes', '1', 'index.js'), '/~a/notes@1~shell@5~lib:ctox-office@1.4~lib:monaco@0.4/index.js', 'neue Instanz: höchste Minor');
+  await k.sim.settle();
+  assert.equal((await k.sim.inspectMeta('active:lib:monaco@0')).value, '0.4');
+  // SW-Miss mit alter Minor in der URL, obwohl 0.4 aktiv ist → genau die alte Datei
   const replies = [];
   const port = { postMessage: (m) => replies.push(m) };
-  const lib = (path) => k.libs.onSwMessage({ type: 'ctox:lib-miss', lib: 'monaco', major: '0', path, ver: '0.3', sha: null, reason: 'artifact' }, port);
-  await lib('a.js'); await lib('b.js');
+  const lib = (path, ver = '0.3') => k.libs.onSwMessage({ type: 'ctox:lib-miss', lib: 'monaco', major: '0', path, ver, sha: null, reason: 'artifact' }, port);
+  await lib('a.js');
+  const m03 = await k.artifacts.manifest('lib:monaco', '0.3');
+  const rowsNow = await k.sim.artifactRows();
+  assert.equal(rowsNow.find((r) => r.app_id === 'lib:monaco')?.hash, m03.files['a.js'], 'Datei der Minor aus der URL, nicht der aktiven');
+  assert.equal(rowsNow.find((r) => r.app_id === 'lib:monaco')?.content, 'A'.repeat(10));
+  await lib('b.js');
   await lib('fehlt.js');
-  assert.deepEqual(replies, [{ type: 'ctox:lib-ready' }, { type: 'ctox:lib-ready' }, { type: 'ctox:lib-abort', reason: 'not_found' }]);
+  await lib('a.js', null);
+  assert.deepEqual(replies, [{ type: 'ctox:lib-ready' }, { type: 'ctox:lib-ready' }, { type: 'ctox:lib-abort', reason: 'not_found' }, { type: 'ctox:lib-abort', reason: 'invalid' }]);
   const libRows = async () => (await k.sim.artifactRows()).filter((r) => r.app_id === 'lib:monaco').map((r) => r.path).sort();
   assert.deepEqual(await libRows(), ['a.js', 'b.js']);
   // a.js wird getroffen (SW bündelt), danach c.js: Budget 25 Bytes → b.js (am längsten ungenutzt) fliegt
   await tick(5);
-  await k.libs.onSwMessage({ type: 'ctox:lib-hit', hits: [{ sha: (await k.artifacts.manifest('lib:monaco', '0.3')).files['a.js'], at: Date.now() + 1000 }] });
+  await k.libs.onSwMessage({ type: 'ctox:lib-hit', hits: [{ lib: 'monaco', major: '0', ver: '0.3', path: 'a.js', sha: m03.files['a.js'], n: 2, last_ms: Date.now() + 1000 }] });
   await lib('c.js');
   assert.deepEqual(await libRows(), ['a.js', 'c.js']);
 });

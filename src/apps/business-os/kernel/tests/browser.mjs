@@ -7,9 +7,17 @@ const require=createRequire(import.meta.url);
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE??'playwright');
 const root=resolve('src/apps/business-os/kernel');
 const out=process.env.KERNEL_EVIDENCE_DIR??resolve(process.env.TMPDIR??'.','k1-browser');
+async function capture(page,name){
+ try{await page.screenshot({path:resolve(out,name)});}catch(error){
+  if(!String(error.message).includes('Unable to capture screenshot'))throw error;
+  console.log('SCREENSHOT_RECOVERY '+name);await page.bringToFront();await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));await page.screenshot({path:resolve(out,name)});
+ }
+}
 await mkdir(out,{recursive:true});
 const server=createServer(async(req,res)=>{
  try{
+  if(req.url==='/rxdb/src/hello.mjs'){res.setHeader('Content-Type','text/javascript');res.end(await readFile(resolve('src/apps/business-os/rxdb/src/hello.mjs')));return;}
+  if(req.url==='/sw.js'){res.setHeader('Content-Type','text/javascript');res.end("self.addEventListener('install',()=>self.skipWaiting());self.addEventListener('message',event=>{if(event.data==='ctox:claim')event.waitUntil(clients.claim().then(()=>clients.matchAll()).then(list=>list.forEach(client=>client.postMessage('claimed'))));});");return;}
   if(req.url==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><meta charset="utf-8"><title>Kernel acceptance</title><pre id="result">Running kernel acceptance</pre>');return;}
   const path=resolve(root,'.'+decodeURIComponent(new URL(req.url,'http://local').pathname));
   if(!path.startsWith(root+'/'))throw Error('outside root');
@@ -39,7 +47,8 @@ try{
   if((await k.sim.archiveLocal()).length!==1)throw Error('unconfirmed legacy input not archived');
   await k.close();const again=createKernel(options);await again.ready;
   if((await again.sim.archiveLocal()).length!==1)throw Error('migration replayed twice');
-  await again.logout({deleteData:true});await new Promise(r=>{const q=indexedDB.deleteDatabase(source);q.onsuccess=r;});
+  await again.logout({deleteData:true});await new Promise
+(r=>{const q=indexedDB.deleteDatabase(source);q.onsuccess=r;});
   return {imported:260,archived:1,oneTime:true};
  });
  const first=await page.evaluate(async()=>{
@@ -58,7 +67,7 @@ try{
   document.querySelector('#result').textContent='PASS: V3 → IDB v5; offline outbox durably committed';
   return {storage:k.storageKind,leader:k.isLeader,dbName:k.dbName};
  });
- await page.screenshot({path:resolve(out,'01-migration-offline.png')});
+ await capture(page,'01-migration-offline.png');
  await page.evaluate(()=>kernel.close());await page.reload();
  const reopened=await page.evaluate(async()=>{
   const {createKernel}=await import('/kernel.mjs');const {MemoryCoreTransport}=await import('/fake-core.mjs');
@@ -85,14 +94,14 @@ try{
    return {readerUpload:true,droppedEventsRecovered:true};
   } finally {kernel.sim.dropBroadcasts(false);}
  });
- await reader.screenshot({path:resolve(out,'02-reader-write.png')});
+ await capture(reader,'02-reader-write.png');
  await page.close();await reader.waitForFunction(()=>globalThis.kernel?.isLeader,undefined,{timeout:10000});
  const takeover=await reader.evaluate(async()=>{
   const h=kernel.appApi('notes','1').put('notes',{id:'takeover',title:'new leader'});await h.local;await h.result;
   const leader=kernel.shell.leader.get();document.querySelector('#result').textContent=`PASS: Web Lock takeover; leader_gen=${leader.leader_gen}; new leader write accepted`;
   return leader;
  });
- await reader.screenshot({path:resolve(out,'03-leader-takeover.png')});
+ await capture(reader,'03-leader-takeover.png');
  const quota=await reader.evaluate(async()=>{
   const original=IDBObjectStore.prototype.put;let injected=0;
   IDBObjectStore.prototype.put=function(value,...rest){
@@ -107,8 +116,51 @@ try{
    return {injected,accepted:true,statusReported:true};
   } finally {IDBObjectStore.prototype.put=original;}
  });
- await reader.screenshot({path:resolve(out,'04-quota-reclaim.png')});
+ await capture(reader,'04-quota-reclaim.png');
  await reader.evaluate(()=>kernel.logout({deleteData:true}));
+ const rtc=await reader.evaluate(async()=>{
+  const {createKernel}=await import('/kernel.mjs');const {WebRTCKernelTransport,createReliableChannels}=await import('/transport-webrtc.mjs');const {FakeNativePeer,offer,scopeFor}=await import('/tests/fake-native-peer.mjs');
+  const a=new RTCPeerConnection({iceServers:[]}),b=new RTCPeerConnection({iceServers:[]}),client=createReliableChannels(a),server={};
+  let serverResolve,serverTimer;const serverReady=new Promise((resolve,reject)=>{serverResolve=resolve;serverTimer=setTimeout(()=>reject(Error('Native channel readiness deadline: '+JSON.stringify(Object.values(server).map(c=>[c.label,c.readyState])))),10000);});serverReady.catch(()=>{});
+  const serverCheck=()=>{if(Object.keys(server).length===6&&Object.values(server).every(c=>c.readyState==='open')){clearTimeout(serverTimer);serverResolve();}};
+  b.addEventListener('datachannel',e=>{const name=e.channel.label.slice('ctox-v4-'.length);server[{control:0,commands:1,interactive:2,live:3,initial:4,transfer:5}[name]]=e.channel;e.channel.addEventListener('open',serverCheck,{once:true});serverCheck();});
+  const gathered=pc=>pc.iceGatheringState==='complete'?Promise.resolve():new Promise((r,j)=>{const t=setTimeout(()=>j(Error('ICE gathering deadline')),10000);const f=()=>{if(pc.iceGatheringState==='complete'){clearTimeout(t);pc.removeEventListener('icegatheringstatechange',f);r()}};pc.addEventListener('icegatheringstatechange',f);});
+  let native,k;
+  try {
+   await a.setLocalDescription(await a.createOffer());await gathered(a);await b.setRemoteDescription(a.localDescription);await b.setLocalDescription(await b.createAnswer());await gathered(b);await a.setRemoteDescription(b.localDescription);
+   await Promise.all(Object.values(client).map(c=>c.readyState==='open'?Promise.resolve():new Promise((r,j)=>{const t=setTimeout(()=>j(Error('RTC open deadline')),10000);c.addEventListener('open',()=>{clearTimeout(t);r()},{once:true});})));
+   await serverReady;
+   if(Object.keys(server).length!==6)throw Error('native channels missing');
+   native=new FakeNativePeer(server,{instanceId:'rtc-browser',onSubscribe:async(sub,p)=>p.page(sub.collection,sub.collection==='notes'?[{id:'server',data:{id:'server',title:'native page'},seq:p.head,rev:'native'}]:[])});
+   let allow;const transport=new WebRTCKernelTransport({channels:client,peer:a,hello:()=>new Promise(r=>allow=r),resolveScope:scopeFor,verifyPackage:async p=>p.sig==='test-signature'});
+   k=createKernel({instanceId:'rtc-browser',userId:'alice',transport,tabKey:'rtc-tab'});await k.ready;
+   if(!allow)throw Error('hello provider not started');const localReadyBeforeHello=transport.session===undefined;
+   if(!localReadyBeforeHello)throw Error('local readiness gated by hello');allow(offer('rtc-browser'));await transport.ready;
+   const h=k.appApi('notes','1').put('notes',{id:'client',title:'durable via RTC'});await h.local;const result=await h.result;
+   await new Promise((resolve,reject)=>{let off=()=>{};const timer=setTimeout(()=>{off();reject(Error('RTC page/metrics deadline'));},3000);off=k.metrics.subscribe(value=>{if(value.timing&&k.appApi('notes','1').get('notes','server').get()){clearTimeout(timer);off();resolve();}});});
+   if(result.status!=='accepted'||k.appApi('notes','1').get('notes','server').get()?.title!=='native page')throw Error('RTC page/write result did not apply');
+   if(!k.metrics.get().timing || k.metrics.get().timing.samples<1)throw Error('clock-synchronized metrics missing');
+   await k.windowState.put('layout',{open:['notes']});if((await k.windowState.get('layout')).open[0]!=='notes')throw Error('window persistence failed');
+   if(k.shell.mount!==undefined)throw Error('kernel still mounts apps');
+   const metrics=k.metrics.get();document.querySelector('#result').textContent='PASS: actual Chromium RTCDataChannels; local ready before hello; canonical scoped page + write_result committed in IDB; decimal seq='+result.seq+'; clock metrics='+JSON.stringify(metrics.timing);
+   return {localReadyBeforeHello,channels:6,seq:result.seq,timing:metrics.timing,errors:native.errors.map(String)};
+  }finally{clearTimeout(serverTimer);await k?.logout({deleteData:true});native?.close();a.close();b.close();}
+ });
+ await capture(reader,'05-real-webrtc.png');
+ const claims=await reader.evaluate(async()=>{
+  const {createLoader}=await import('/loader.mjs');const {MemoryCoreTransport}=await import('/fake-core.mjs');
+  let imports=0;globalThis.claimCount=0;const listener=e=>{if(e.data==='claimed')globalThis.claimCount++};navigator.serviceWorker.addEventListener('message',listener);
+  let sent=0;const post=ServiceWorker.prototype.postMessage;
+  ServiceWorker.prototype.postMessage=function(message,...args){if(message==='ctox:claim')sent++;return post.call(this,message,...args);};
+  const loader=await createLoader({instanceId:'claim-browser',userId:'alice',transport:new MemoryCoreTransport({namespace:'claim-browser'}),resolveShell:()=>{if(!navigator.serviceWorker.controller||sent!==imports+1)throw Error('Shell imported before claim');imports++;return {startShell(){},stopShell(){return {open:['notes']}}}}});
+  try {
+   for(const ver of ['1','2']){await loader.kernel.sim.publishAppVersion('shell',ver,{});await loader.settle();}
+   if(imports!==2)throw Error('Shell replacement failed');if((await loader.kernel.windowState.get('shell')).open[0]!=='notes')throw Error('Shell snapshot not in tab window state');
+   document.querySelector('#result').textContent='PASS: SW ctox:claim sent before both Shell imports; snapshot preserved in tab-scoped window_state';
+   return {imports,claimsSent:sent,shellVersion:loader.shellVersion};
+  }finally{await loader.close();ServiceWorker.prototype.postMessage=post;navigator.serviceWorker.removeEventListener('message',listener);await loader.registration?.unregister();}
+ });
+ await capture(reader,'06-shell-claim.png');
  if(errors.length)throw Error(errors.join('\n'));
- const result={pass:true,external,first,reopened,follower,files,takeover,quota,errors};await writeFile(resolve(out,'result.json'),JSON.stringify(result,null,2));console.log('KERNEL_BROWSER '+JSON.stringify(result));
+ const result={pass:true,external,first,reopened,follower,files,takeover,quota,rtc,claims,errors};await writeFile(resolve(out,'result.json'),JSON.stringify(result,null,2));console.log('KERNEL_BROWSER '+JSON.stringify(result));
 }finally{await browser?.close();await new Promise(r=>server.close(r));}

@@ -8,6 +8,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::channels::record_channel_db_open_for_tests;
 use crate::channels::{ensure_open_routing_rows_once, ensure_schema_once};
 
+/// V4 channel jobs share Core's existing writer/readers. Schema installation
+/// belongs to P3-06; this attachment performs no DDL or raw open.
+pub(crate) async fn attach_channel_store(
+    path: &Path,
+    writer: ctox_store::writer::WriterHandle,
+    readers: ctox_store::read_pool::ReadPool,
+) -> std::result::Result<crate::lcm::owner_adapter::OwnerAdapter, ctox_store::StoreError> {
+    crate::lcm::owner_adapter::OwnerAdapter::attach(path, writer, readers).await
+}
+
+// Compatibility only: callers retaining Connection must migrate to
+// attach_channel_store and the existing *_tx operations before removal.
 pub(crate) fn open_channel_db(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)

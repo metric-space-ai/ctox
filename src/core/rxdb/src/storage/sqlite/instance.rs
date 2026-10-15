@@ -395,7 +395,8 @@ pub struct RxStorageInstanceSqlite {
     pub database_name: String,
     pub collection_name: String,
     pub schema: RxJsonSchema,
-    pub connection: SharedSqliteConnection,
+    pub connection: Option<SharedSqliteConnection>,
+    owner: Option<Arc<dyn super::types::SqliteOwnerJobs>>,
     pub table_name: String,
     pub primary_path: String,
     /// File path so V1.5 `query_stream` can open a separate read-only
@@ -454,7 +455,8 @@ impl RxStorageInstanceSqlite {
             database_name: params.database_name,
             collection_name: params.collection_name,
             schema: params.schema,
-            connection,
+            connection: Some(connection),
+            owner: None,
             table_name,
             primary_path,
             database_path,
@@ -469,6 +471,74 @@ impl RxStorageInstanceSqlite {
             #[cfg(test)]
             bulk_write_current_state_batch_loads: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    pub(crate) fn new_owned(
+        owner: Arc<dyn super::types::SqliteOwnerJobs>,
+        params: RxStorageInstanceCreationParams,
+        table_name: String,
+        database_path: std::path::PathBuf,
+    ) -> Self {
+        let primary_path = get_primary_field_of_primary_key(&params.schema.primary_key);
+        let database_key = database_key_for_path(&database_path);
+        let notifier = register_table_notifier(&database_key, &table_name);
+        let changes = RxSubject::with_lag_signal(DEFAULT_SUBJECT_BUFFER, |skipped| {
+            Some(EventBulk::rxsubject_lagged(skipped))
+        });
+        let closed = Arc::new(AtomicBool::new(false));
+        start_owned_change_feed(
+            owner.clone(),
+            table_name.clone(),
+            primary_path.clone(),
+            changes.clone(),
+            closed.clone(),
+            notifier.clone(),
+        );
+        Self {
+            database_name: params.database_name,
+            collection_name: params.collection_name,
+            schema: params.schema,
+            connection: None,
+            owner: Some(owner),
+            table_name,
+            primary_path,
+            database_path,
+            database_key,
+            changes,
+            closed,
+            external_checkpoint: Arc::new(Mutex::new(json!({ "id": "", "lwt": 0 }))),
+            external_notifier: notifier,
+            notifier_registered: AtomicBool::new(true),
+            read_connection: Arc::new(Mutex::new(None)),
+            instance_id: INSTANCE_ID.fetch_add(1, Ordering::SeqCst),
+            #[cfg(test)]
+            bulk_write_current_state_batch_loads: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    async fn with_write_connection<T, F>(&self, write: F) -> RxResult<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&rusqlite::Connection) -> RxResult<T> + Send + 'static,
+    {
+        if let Some(owner) = &self.owner {
+            let ticket = owner.write(Box::new(move |conn| {
+                write(conn).map(|value| Box::new(value) as super::types::SqliteJobValue)
+            }))?;
+            return super::types::owner_result(ticket).await;
+        }
+        let connection = self.connection.as_ref().expect("legacy connection").clone();
+        tokio::task::spawn_blocking(move || {
+            let mut conn = lock_sqlite_writer(&connection);
+            let tx = conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(sqlite_error)?;
+            let result = write(&tx)?;
+            tx.commit().map_err(sqlite_error)?;
+            Ok(result)
+        })
+        .await
+        .map_err(join_error)?
     }
 
     fn ensure_open(&self, method: &str) -> RxResult<()> {
@@ -497,9 +567,15 @@ impl RxStorageInstanceSqlite {
         T: Send + 'static,
         F: FnOnce(&rusqlite::Connection) -> RxResult<T> + Send + 'static,
     {
+        if let Some(owner) = &self.owner {
+            let ticket = owner.read(Box::new(move |conn| {
+                read(conn).map(|value| Box::new(value) as super::types::SqliteJobValue)
+            }))?;
+            return super::types::owner_result(ticket).await;
+        }
         let database_path = self.database_path.clone();
         let read_connection = Arc::clone(&self.read_connection);
-        let writer = Arc::clone(&self.connection);
+        let writer = self.connection.as_ref().expect("legacy connection").clone();
         tokio::task::spawn_blocking(move || {
             let connection =
                 match cached_read_only_connection_for_path(&database_path, &read_connection) {
@@ -558,6 +634,16 @@ fn checkpoint_status_snapshot(
     schema: &RxJsonSchema,
 ) -> Value {
     let conn = lock_sqlite_writer(connection);
+    checkpoint_status_on_connection(&conn, table_name, database_name, collection_name, schema)
+}
+
+fn checkpoint_status_on_connection(
+    conn: &rusqlite::Connection,
+    table_name: &str,
+    database_name: &str,
+    collection_name: &str,
+    schema: &RxJsonSchema,
+) -> Value {
     let checkpoint =
         latest_checkpoint(&conn, table_name).unwrap_or_else(|| json!({ "id": "", "lwt": 0 }));
     let latest_id = checkpoint
@@ -798,6 +884,187 @@ fn execute_query_documents(
     let start = skip.min(rows.len());
     let end = skip_plus_limit.min(rows.len());
     Ok(rows[start..end].to_vec())
+}
+
+/// Drain the retained global log; commit notifications are wakeups only.
+/// Head, changed IDs and document envelopes come from one owner read snapshot.
+fn start_owned_change_feed(
+    owner: Arc<dyn super::types::SqliteOwnerJobs>,
+    table: String,
+    primary: String,
+    changes: RxSubject<EventBulk>,
+    closed: Arc<AtomicBool>,
+    notifier: Arc<TableNotifier>,
+) {
+    let mut commits = owner.subscribe_commits();
+    tokio::spawn(async move {
+        let mut checkpoint = None;
+        loop {
+            if closed.load(Ordering::SeqCst) {
+                break;
+            }
+            commits.borrow_and_update();
+            let read_table = table.clone();
+            let read_primary = primary.clone();
+            let previous = checkpoint.clone();
+            let ticket = match owner.read(Box::new(move |conn| {
+                owned_changes_since(conn, &read_table, &read_primary, 500, previous.as_ref())
+                    .map(|page| Box::new(page) as super::types::SqliteJobValue)
+            })) {
+                Ok(ticket) => ticket,
+                Err(_) => {
+                    changes.next(EventBulk::rxsubject_lagged(1));
+                    break;
+                }
+            };
+            let page =
+                match super::types::owner_result::<RxStorageChangedDocumentsSinceResult>(ticket)
+                    .await
+                {
+                    Ok(page) => page,
+                    Err(_) => {
+                        changes.next(EventBulk::rxsubject_lagged(1));
+                        break;
+                    }
+                };
+            let full = page.documents.len() == 500;
+            checkpoint = Some(page.checkpoint.clone());
+            let events = page
+                .documents
+                .into_iter()
+                .map(|document| crate::types::RxStorageChangeEvent {
+                    operation: if document["_deleted"] == true {
+                        "DELETE"
+                    } else {
+                        "UPDATE"
+                    }
+                    .into(),
+                    document_id: document[&primary].as_str().unwrap_or_default().into(),
+                    document_data: Some(document),
+                    previous_document_data: None,
+                    is_local: false,
+                })
+                .collect::<Vec<_>>();
+            if !events.is_empty() {
+                notifier.signal(); // owner commit wake only; never an ordering cursor
+                changes.next(EventBulk {
+                    id: random_token(Some(10)),
+                    events,
+                    checkpoint: checkpoint.clone(),
+                    context: Some("sqlite-owner".into()),
+                });
+            }
+            if full {
+                continue;
+            }
+            if closed.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::select! {
+                result = commits.changed() => { if result.is_err() { break; } }
+                _ = notifier.notify.notified() => {}
+            }
+        }
+    });
+}
+
+/// One retained-log page, used by both explicit catch-up and commit-driven live.
+fn owned_changes_since(
+    conn: &rusqlite::Connection,
+    table: &str,
+    primary: &str,
+    limit: u64,
+    checkpoint: Option<&Value>,
+) -> RxResult<RxStorageChangedDocumentsSinceResult> {
+    if limit == 0 || limit > 10_000 {
+        return Err(super::types::owner_job_error(
+            "change page limit must be 1..=10000",
+        ));
+    }
+    let (epoch,head,horizon):(String,u64,u64) = conn.query_row(
+        "SELECT epoch,v,horizon_seq FROM _meta CROSS JOIN _seq WHERE _meta.singleton=1 AND _seq.singleton=1",
+        [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).map_err(sqlite_error)?;
+    let cursor = match checkpoint {
+        None => 0,
+        Some(checkpoint) => {
+            if checkpoint.get("epoch").and_then(Value::as_str) != Some(epoch.as_str()) {
+                return Err(super::types::owner_job_error(
+                    "checkpoint epoch changed; resnapshot required",
+                ));
+            }
+            checkpoint
+                .get("seq")
+                .and_then(Value::as_str)
+                .filter(|s| {
+                    !s.is_empty()
+                        && s.bytes().all(|b| b.is_ascii_digit())
+                        && (s.len() == 1 || !s.starts_with('0'))
+                })
+                .and_then(|s| s.parse::<u64>().ok())
+                .ok_or_else(|| {
+                    super::types::owner_job_error("decimal sequence checkpoint required")
+                })?
+        }
+    };
+    if cursor > head || (cursor != 0 && cursor < horizon) {
+        return Err(super::types::owner_job_error(
+            "checkpoint expired/ahead; resnapshot required",
+        ));
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT c.id,c.seq,c.op,c.rev FROM _changes c
+        JOIN _change_sources s ON s.collection=c.collection AND s.gen=c.gen
+        WHERE s.table_name=?1 AND c.seq>?2 ORDER BY c.seq LIMIT ?3",
+        )
+        .map_err(sqlite_error)?;
+    let rows = stmt
+        .query_map(params![table, cursor, limit], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, u64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(sqlite_error)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(sqlite_error)?;
+    let ids = rows.iter().map(|r| r.0.clone()).collect::<Vec<_>>();
+    let mut docs = documents_by_ids(conn, table, &ids, true)?
+        .into_iter()
+        .filter_map(|doc| {
+            let id = doc.get(primary)?.as_str()?.to_owned();
+            Some((id, doc))
+        })
+        .collect::<HashMap<_, _>>();
+    let next = if rows.len() < limit as usize {
+        head
+    } else {
+        rows.last().unwrap().1
+    };
+    let mut documents = Vec::with_capacity(rows.len());
+    for (id, _, op, rev) in rows {
+        let doc = match docs.remove(&id) {
+            Some(doc) => doc,
+            None if op == 1 => {
+                let mut doc =
+                    json!({"_rev":rev,"_deleted":true,"_attachments":{},"_meta":{"lwt":0}});
+                doc[primary] = json!(id);
+                doc
+            }
+            None => {
+                return Err(super::types::owner_job_error(
+                    "log references missing live document",
+                ))
+            }
+        };
+        documents.push(doc);
+    }
+    Ok(RxStorageChangedDocumentsSinceResult {
+        documents,
+        checkpoint: json!({"epoch":epoch,"seq":next.to_string()}),
+    })
 }
 
 struct ExternalWritePoll {
@@ -1200,7 +1467,6 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         // there, and return only the `Send` results (errors, optional event
         // bulk, optional checkpoint). Semantics (ordering, Immediate
         // transaction, error mapping) are unchanged — only WHERE it runs.
-        let connection = Arc::clone(&self.connection);
         let schema_has_attachments = self.schema.attachments.is_some();
         let json_schema = self.schema.clone();
         let primary_path = self.primary_path.clone();
@@ -1215,13 +1481,9 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
             Vec<crate::types::RxStorageWriteError>,
             Option<EventBulk>,
             Option<Value>,
-        ) = tokio::task::spawn_blocking(move || -> RxResult<_> {
-            let mut conn = lock_sqlite_writer(&connection);
+        ) = self.with_write_connection(move |tx| -> RxResult<_> {
             let result = (|| -> RxResult<_> {
                 SQLITE_WRITE_TRANSACTIONS_STARTED.fetch_add(1, Ordering::Relaxed);
-                let tx = conn
-                    .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-                    .map_err(sqlite_error)?;
 
                 // Production write-path validation: reject clearly-corrupt peer
                 // documents with a 422 instead of persisting them. Conservative by
@@ -1344,9 +1606,6 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
                 for row in categorized.bulk_update_docs.iter() {
                     update_document(&tx, &table_name, &primary_path, row)?;
                 }
-                tx.commit().map_err(sqlite_error)?;
-                SQLITE_WRITE_TRANSACTIONS_COMMITTED.fetch_add(1, Ordering::Relaxed);
-
                 let mut event_bulk: Option<EventBulk> = None;
                 let mut checkpoint: Option<Value> = None;
                 if !categorized.event_bulk.events.is_empty() {
@@ -1372,15 +1631,15 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
             }
             result
         })
-        .await
-        .map_err(join_error)??;
+        .await?;
+        SQLITE_WRITE_TRANSACTIONS_COMMITTED.fetch_add(1, Ordering::Relaxed);
 
         let ret = RxStorageBulkWriteResponse { error };
 
         if let Some(checkpoint) = checkpoint {
             *self.external_checkpoint.lock() = checkpoint;
         }
-        if let Some(bulk) = event_bulk {
+        if let Some(bulk) = event_bulk.filter(|_| self.owner.is_none()) {
             self.changes.next(bulk);
         }
         Ok(ret)
@@ -1424,22 +1683,45 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         // from starving replication timers on small runtimes.
         let (batch_sender, mut batch_receiver) = mpsc::channel::<Vec<Value>>(1);
         let (decision_sender, decision_receiver) = std::sync::mpsc::channel::<bool>();
-        let stream_task = tokio::task::spawn_blocking(move || {
-            query_stream_on_dedicated_connection(
-                &database_path,
-                &table_name,
-                &collection_name,
-                &primary_path,
-                &prepared_query,
-                chunk_size,
-                |batch| {
-                    if batch_sender.blocking_send(batch).is_err() {
-                        return Ok(false);
-                    }
-                    Ok(decision_receiver.recv().unwrap_or(false))
-                },
-            )
-        });
+        let stream_task = if let Some(owner) = &self.owner {
+            let ticket = owner.read_stream(Box::new(move |conn| {
+                query_stream_on_connection(
+                    conn,
+                    &table_name,
+                    &collection_name,
+                    &primary_path,
+                    &prepared_query,
+                    chunk_size,
+                    |batch| {
+                        if batch_sender.blocking_send(batch).is_err() {
+                            return Ok(false);
+                        }
+                        Ok(decision_receiver
+                            .recv_timeout(Duration::from_secs(30))
+                            .unwrap_or(false))
+                    },
+                )?;
+                Ok(Box::new(()) as super::types::SqliteJobValue)
+            }))?;
+            tokio::spawn(async move { super::types::owner_result::<()>(ticket).await })
+        } else {
+            tokio::task::spawn_blocking(move || {
+                query_stream_on_dedicated_connection(
+                    &database_path,
+                    &table_name,
+                    &collection_name,
+                    &primary_path,
+                    &prepared_query,
+                    chunk_size,
+                    |batch| {
+                        if batch_sender.blocking_send(batch).is_err() {
+                            return Ok(false);
+                        }
+                        Ok(decision_receiver.recv().unwrap_or(false))
+                    },
+                )
+            })
+        };
 
         let mut callback_error = None;
         while let Some(batch) = batch_receiver.recv().await {
@@ -1484,6 +1766,9 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         chunk_size: usize,
         on_event: &mut (dyn FnMut(RxStorageSnapshotEvent) -> RxResult<bool> + Send),
     ) -> Option<RxResult<()>> {
+        if self.owner.is_some() {
+            return Some(self.owner_stream_blocking(prepared_query, chunk_size, true, on_event));
+        }
         Some(self.ensure_open("query_snapshot_stream").and_then(|()| {
             query_snapshot_on_dedicated_connection(
                 &self.database_path,
@@ -1584,6 +1869,14 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         self.ensure_open("get_changed_documents_since")?;
         let table_name = self.table_name.clone();
         let checkpoint = checkpoint.cloned();
+        if self.owner.is_some() {
+            let primary = self.primary_path.clone();
+            return self
+                .with_read_connection(ReadOperation::ChangedDocumentsSince, move |conn| {
+                    owned_changes_since(conn, &table_name, &primary, limit, checkpoint.as_ref())
+                })
+                .await;
+        }
         self.with_read_connection(ReadOperation::ChangedDocumentsSince, move |conn| {
             changed_documents_since(conn, &table_name, limit, checkpoint.as_ref())
         })
@@ -1596,27 +1889,53 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
 
     async fn cleanup(&self, min_deleted_time: i64) -> Result<bool, RxError> {
         self.ensure_open("cleanup")?;
-        // FIX 1: run the DELETE off the tokio worker thread.
-        let connection = Arc::clone(&self.connection);
         let table_name = self.table_name.clone();
-        tokio::task::spawn_blocking(move || -> RxResult<bool> {
-            cleanup_deleted_documents(&connection, &table_name, min_deleted_time)
+        let owned = self.owner.is_some();
+        self.with_write_connection(move |conn| -> RxResult<bool> {
+            if owned {
+                return super::cleanup::cleanup_deleted_documents_batch(
+                    conn,
+                    &table_name,
+                    min_deleted_time,
+                    500,
+                );
+            }
+            cleanup_deleted_documents(conn, &table_name, min_deleted_time)
         })
         .await
-        .map_err(join_error)?
     }
 
     async fn remove(&self) -> Result<(), RxError> {
         self.ensure_open("remove")?;
-        // FIX 1: run the DROP TABLE off the tokio worker thread.
-        let connection = Arc::clone(&self.connection);
+        if self.owner.is_some() {
+            // Retain the empty physical source until P3-06 retires its
+            // generation. DROP bypasses DELETE triggers and strands log rows.
+            loop {
+                let table = quote_identifier(&self.table_name);
+                let deleted = self
+                    .with_write_connection(move |conn| {
+                        conn.execute(
+                            &format!(
+                                "DELETE FROM {table} WHERE rowid IN
+                        (SELECT rowid FROM {table} LIMIT 500)"
+                            ),
+                            [],
+                        )
+                        .map_err(sqlite_error)
+                    })
+                    .await?;
+                if deleted < 500 {
+                    break;
+                }
+            }
+            self.closed.store(true, Ordering::SeqCst);
+            self.external_notifier.signal();
+            self.unregister_table_notifier_once();
+            return Ok(());
+        }
         let table_name = self.table_name.clone();
-        tokio::task::spawn_blocking(move || -> RxResult<()> {
-            let conn = lock_sqlite_writer(&connection);
-            drop_table(&conn, &table_name)
-        })
-        .await
-        .map_err(join_error)??;
+        self.with_write_connection(move |conn| -> RxResult<()> { drop_table(conn, &table_name) })
+            .await?;
         self.closed.store(true, Ordering::SeqCst);
         self.external_notifier.signal();
         self.unregister_table_notifier_once();
@@ -1631,8 +1950,30 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
     }
 
     async fn replication_checkpoint_status(&self) -> Value {
+        if let Some(owner) = &self.owner {
+            let table_name = self.table_name.clone();
+            let database_name = self.database_name.clone();
+            let collection_name = self.collection_name.clone();
+            let schema = self.schema.clone();
+            let result = owner.read(Box::new(move |conn| {
+                let (epoch, head): (String, u64) = conn.query_row(
+                    "SELECT epoch,v FROM _meta CROSS JOIN _seq WHERE _meta.singleton=1 AND _seq.singleton=1",
+                    [], |row| Ok((row.get(0)?, row.get(1)?))).map_err(sqlite_error)?;
+                let mut status = checkpoint_status_on_connection(conn, &table_name,
+                    &database_name, &collection_name, &schema);
+                status["epoch"] = json!(epoch);
+                status["headSeq"] = json!(head.to_string());
+                Ok(Box::new(status) as super::types::SqliteJobValue)
+            }));
+            return match result {
+                Ok(ticket) => super::types::owner_result::<Value>(ticket)
+                    .await
+                    .unwrap_or_else(|_| json!({"source":"rxdb-rs-sqlite-owner","state":"error"})),
+                Err(_) => json!({"source":"rxdb-rs-sqlite-owner","state":"error"}),
+            };
+        }
         // FIX 1: compute the checkpoint snapshot off the tokio worker thread.
-        let connection = Arc::clone(&self.connection);
+        let connection = self.connection.as_ref().expect("legacy connection").clone();
         let table_name = self.table_name.clone();
         let database_name = self.database_name.clone();
         let collection_name = self.collection_name.clone();
@@ -1741,12 +2082,11 @@ fn query_stream_on_dedicated_connection<F>(
     primary_path: &str,
     prepared_query: &Value,
     chunk_size: usize,
-    mut visit: F,
+    visit: F,
 ) -> RxResult<()>
 where
     F: FnMut(Vec<Value>) -> RxResult<bool>,
 {
-    let query = parse_filled_query(prepared_query)?;
     // A stream deliberately does not borrow the cached point-read connection:
     // its cursor stays open across callbacks and must not serialize unrelated reads.
     let read_conn = match open_dedicated_read_only_connection_for_path(database_path) {
@@ -1757,11 +2097,35 @@ where
         }
     };
 
+    query_stream_on_connection(
+        &read_conn,
+        table_name,
+        collection_name,
+        primary_path,
+        prepared_query,
+        chunk_size,
+        visit,
+    )
+}
+
+fn query_stream_on_connection<F>(
+    read_conn: &rusqlite::Connection,
+    table_name: &str,
+    collection_name: &str,
+    primary_path: &str,
+    prepared_query: &Value,
+    chunk_size: usize,
+    mut visit: F,
+) -> RxResult<()>
+where
+    F: FnMut(Vec<Value>) -> RxResult<bool>,
+{
+    let query = parse_filled_query(prepared_query)?;
     if let Some(compiled) = compile_query_sql(table_name, primary_path, &query) {
         let chunk = chunk_size.max(1);
         let mut batch = Vec::with_capacity(chunk);
         let mut keep_streaming = true;
-        for_each_document_with_compiled_sql(&read_conn, &compiled, |doc| {
+        for_each_document_with_compiled_sql(read_conn, &compiled, |doc| {
             SQLITE_QUERY_STREAM_RESULTS.fetch_add(1, Ordering::Relaxed);
             #[cfg(test)]
             std::thread::sleep(test_query_stream_row_delay(table_name));
@@ -1806,13 +2170,21 @@ impl RxStorageInstanceSqlite {
         &self,
         prepared_query: &Value,
         chunk_size: usize,
-        visit: F,
+        mut visit: F,
     ) -> RxResult<()>
     where
-        F: FnMut(Vec<Value>) -> RxResult<bool>,
+        F: FnMut(Vec<Value>) -> RxResult<bool> + Send,
     {
         self.ensure_open("query_stream")?;
         SQLITE_QUERY_STREAM_CALLS.fetch_add(1, Ordering::Relaxed);
+        if self.owner.is_some() {
+            return self.owner_stream_blocking(prepared_query, chunk_size, false, &mut |event| {
+                match event {
+                    RxStorageSnapshotEvent::Documents(batch) => visit(batch),
+                    _ => Ok(true),
+                }
+            });
+        }
         query_stream_on_dedicated_connection(
             &self.database_path,
             &self.table_name,
@@ -1822,6 +2194,91 @@ impl RxStorageInstanceSqlite {
             chunk_size,
             visit,
         )
+    }
+
+    /// The visitor runs on the calling blocking worker. The bounded hand-off
+    /// keeps the actual cursor and its complete snapshot inside the read job.
+    /// Dropping either endpoint cancels the producer; no connection escapes.
+    fn owner_stream_blocking(
+        &self,
+        prepared_query: &Value,
+        chunk_size: usize,
+        snapshot: bool,
+        visit: &mut (dyn FnMut(RxStorageSnapshotEvent) -> RxResult<bool> + Send),
+    ) -> RxResult<()> {
+        self.ensure_open("query_stream")?;
+        let owner = self.owner.as_ref().expect("owned stream");
+        let table = self.table_name.clone();
+        let collection = self.collection_name.clone();
+        let primary = self.primary_path.clone();
+        let query = prepared_query.clone();
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        let (decide, decisions) = std::sync::mpsc::channel();
+        let ticket = owner.read_stream(Box::new(move |conn| {
+            let emit = |event| -> RxResult<bool> {
+                if send.send(event).is_err() {
+                    return Ok(false);
+                }
+                Ok(decisions
+                    .recv_timeout(Duration::from_secs(30))
+                    .unwrap_or(false))
+            };
+            if snapshot {
+                let head: u64 = conn
+                    .query_row("SELECT v FROM _seq WHERE singleton=1", [], |row| row.get(0))
+                    .map_err(sqlite_error)?;
+                if !emit(RxStorageSnapshotEvent::Start {
+                    change_counter: head,
+                })? {
+                    return Ok(Box::new(false) as super::types::SqliteJobValue);
+                }
+            }
+            let mut complete = true;
+            query_stream_on_connection(
+                conn,
+                &table,
+                &collection,
+                &primary,
+                &query,
+                chunk_size,
+                |batch| {
+                    complete = emit(RxStorageSnapshotEvent::Documents(batch))?;
+                    Ok(complete)
+                },
+            )?;
+            Ok(Box::new(complete) as super::types::SqliteJobValue)
+        }))?;
+        let mut callback_error = None;
+        while let Ok(event) = receive.recv() {
+            match visit(event) {
+                Ok(keep) => {
+                    let _ = decide.send(keep);
+                    if !keep {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    callback_error = Some(error);
+                    let _ = decide.send(false);
+                    break;
+                }
+            }
+        }
+        drop(receive);
+        drop(decide);
+        let value = ticket
+            .blocking_recv()
+            .map_err(|_| super::types::owner_job_error("owner closed"))??;
+        let complete = *value
+            .downcast::<bool>()
+            .map_err(|_| super::types::owner_job_error("invalid stream result"))?;
+        if let Some(error) = callback_error {
+            return Err(error);
+        }
+        if snapshot && complete {
+            visit(RxStorageSnapshotEvent::End)?;
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -1845,6 +2302,456 @@ impl RxStorageInstanceSqlite {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    enum OwnerTestJob {
+        Read(
+            super::super::types::SqliteOwnerJob,
+            tokio::sync::oneshot::Sender<RxResult<super::super::types::SqliteJobValue>>,
+        ),
+        Write(
+            super::super::types::SqliteOwnerWriteJob,
+            tokio::sync::oneshot::Sender<RxResult<super::super::types::SqliteJobValue>>,
+        ),
+    }
+    struct RejectOwner;
+    impl super::super::types::SqliteOwnerJobs for RejectOwner {
+        fn read(
+            &self,
+            _: super::super::types::SqliteOwnerJob,
+        ) -> RxResult<super::super::types::SqliteJobTicket> {
+            Err(super::super::types::owner_job_error("busy"))
+        }
+        fn write(
+            &self,
+            _: super::super::types::SqliteOwnerWriteJob,
+        ) -> RxResult<super::super::types::SqliteJobTicket> {
+            Err(super::super::types::owner_job_error("busy"))
+        }
+        fn install_change_log(
+            &self,
+            _: &rusqlite::Transaction<'_>,
+            _: &str,
+            _: &str,
+            _: i32,
+        ) -> RxResult<()> {
+            unreachable!()
+        }
+        fn backfill_change_log(
+            &self,
+            _: &rusqlite::Transaction<'_>,
+            _: &str,
+            _: Option<&str>,
+        ) -> RxResult<Option<String>> {
+            unreachable!()
+        }
+        fn subscribe_commits(&self) -> tokio::sync::watch::Receiver<u64> {
+            tokio::sync::watch::channel(0).1
+        }
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn owner_jobs_admission_error_never_opens_a_legacy_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("must-not-exist/db.sqlite3");
+        let storage = super::super::types::RxStorageSqlite::with_owner(
+            RxStorageSqliteSettings {
+                database_path: path.clone(),
+            },
+            Arc::new(RejectOwner),
+        );
+        let error = create_storage_instance(&storage, params(test_schema()))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.parameters()["message"], "busy");
+        let error = crate::types::RxStorage::create_storage_instance(
+            storage.as_ref(),
+            params(test_schema()),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert_eq!(error.parameters()["message"], "busy");
+        assert!(storage.connection.lock().is_none());
+        assert!(!path.parent().unwrap().exists());
+    }
+
+    struct TestOwner {
+        send: Option<std::sync::mpsc::SyncSender<OwnerTestJob>>,
+        head: tokio::sync::watch::Sender<u64>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+    impl Drop for TestOwner {
+        fn drop(&mut self) {
+            self.send.take();
+            self.thread.take().unwrap().join().unwrap();
+        }
+    }
+    impl TestOwner {
+        fn new(path: std::path::PathBuf) -> Arc<Self> {
+            let (send, receive) = std::sync::mpsc::sync_channel(16);
+            let (head, _) = tokio::sync::watch::channel(0);
+            let publish = head.clone();
+            let thread = std::thread::spawn(move || {
+                let mut conn = rusqlite::Connection::open(path).unwrap();
+                conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=0;")
+                    .unwrap();
+                while let Ok(job) = receive.recv() {
+                    let (write, reply, result) = match job {
+                        OwnerTestJob::Read(job, reply) => {
+                            let tx = conn.transaction().unwrap();
+                            let result = job(&tx);
+                            tx.rollback().unwrap();
+                            (false, reply, result)
+                        }
+                        OwnerTestJob::Write(job, reply) => {
+                            let tx = conn
+                                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                                .unwrap();
+                            let result = job(&tx);
+                            if result.is_ok() {
+                                tx.commit().unwrap();
+                            } else {
+                                tx.rollback().unwrap();
+                            }
+                            (true, reply, result)
+                        }
+                    };
+                    if write && result.is_ok() {
+                        let head = conn
+                            .query_row("SELECT v FROM _seq WHERE singleton=1", [], |r| r.get(0))
+                            .unwrap_or(0);
+                        publish.send_replace(head);
+                    }
+                    let _ = reply.send(result);
+                }
+            });
+            Arc::new(Self {
+                send: Some(send),
+                head,
+                thread: Some(thread),
+            })
+        }
+        fn submit(&self, job: OwnerTestJob) -> RxResult<()> {
+            self.send
+                .as_ref()
+                .unwrap()
+                .try_send(job)
+                .map_err(|_| super::super::types::owner_job_error("test owner busy/closed"))
+        }
+    }
+    impl super::super::types::SqliteOwnerJobs for TestOwner {
+        fn read(
+            &self,
+            job: super::super::types::SqliteOwnerJob,
+        ) -> RxResult<super::super::types::SqliteJobTicket> {
+            let (send, receive) = tokio::sync::oneshot::channel();
+            self.submit(OwnerTestJob::Read(job, send))?;
+            Ok(receive)
+        }
+        fn write(
+            &self,
+            job: super::super::types::SqliteOwnerWriteJob,
+        ) -> RxResult<super::super::types::SqliteJobTicket> {
+            let (send, receive) = tokio::sync::oneshot::channel();
+            self.submit(OwnerTestJob::Write(job, send))?;
+            Ok(receive)
+        }
+        fn subscribe_commits(&self) -> tokio::sync::watch::Receiver<u64> {
+            self.head.subscribe()
+        }
+        fn backfill_change_log(
+            &self,
+            _: &rusqlite::Transaction<'_>,
+            _: &str,
+            _: Option<&str>,
+        ) -> RxResult<Option<String>> {
+            Ok(None)
+        }
+        fn install_change_log(
+            &self,
+            tx: &rusqlite::Transaction<'_>,
+            table: &str,
+            collection: &str,
+            _: i32,
+        ) -> RxResult<()> {
+            // An instrumented sink tests the job boundary, not P3-05's implementation.
+            tx.execute_batch("CREATE TABLE IF NOT EXISTS _seq(singleton INTEGER PRIMARY KEY,v INTEGER);
+                INSERT OR IGNORE INTO _seq VALUES(1,0);
+                CREATE TABLE IF NOT EXISTS _meta(singleton INTEGER PRIMARY KEY,epoch TEXT,horizon_seq INTEGER);
+                INSERT OR IGNORE INTO _meta VALUES(1,'test',0);
+                CREATE TABLE IF NOT EXISTS _changes(collection TEXT,gen INTEGER,id TEXT,seq INTEGER,op INTEGER,rev TEXT,PRIMARY KEY(collection,gen,id));
+                CREATE TABLE IF NOT EXISTS _change_sources(collection TEXT,gen INTEGER,table_name TEXT);")
+                .map_err(sqlite_error)?;
+            tx.execute("INSERT INTO _change_sources SELECT ?1,1,?2 WHERE NOT EXISTS(SELECT 1 FROM _change_sources WHERE table_name=?2)", params![collection,table]).map_err(sqlite_error)?;
+            for (event, suffix, row, op) in [
+                ("INSERT", "i", "NEW", "NEW.deleted"),
+                ("UPDATE", "u", "NEW", "NEW.deleted"),
+                ("DELETE", "d", "OLD", "1"),
+            ] {
+                tx.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS {} AFTER {event} ON {} BEGIN
+                    UPDATE _seq SET v=v+1;
+                    INSERT INTO _changes VALUES('{}',1,{row}.id,(SELECT v FROM _seq),{op},{row}.revision)
+                    ON CONFLICT(collection,gen,id) DO UPDATE SET seq=excluded.seq,op=excluded.op,rev=excluded.rev; END;",
+                    quote_identifier(&format!("{table}_{suffix}")),quote_identifier(table),collection.replace('\'',"''")))
+                    .map_err(sqlite_error)?;
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn owner_jobs_factory_write_read_cleanup_and_commit_stream() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("owner.sqlite3");
+        let owner = TestOwner::new(path.clone());
+        let storage = super::super::types::RxStorageSqlite::with_owner(
+            RxStorageSqliteSettings {
+                database_path: path,
+            },
+            owner.clone(),
+        );
+        let instance = create_storage_instance(&storage, params(test_schema()))
+            .await
+            .unwrap();
+        assert!(storage.connection().is_err());
+        assert!(instance.connection.is_none());
+        let before_wake =
+            table_change_generation_for_path(&instance.database_path, &instance.table_name)
+                .unwrap();
+        let mut stream = instance.change_stream();
+        let result = instance
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: doc("owned", "1-one", 3, false, 100.0),
+                }],
+                "test",
+            )
+            .await
+            .unwrap();
+        assert!(result.error.is_empty());
+        let event = tokio::time::timeout(
+            Duration::from_secs(2),
+            tokio_stream::StreamExt::next(&mut stream),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(event.events[0].document_id, "owned");
+        assert!(
+            table_change_generation_for_path(&instance.database_path, &instance.table_name)
+                .unwrap()
+                > before_wake
+        );
+        assert_eq!(
+            instance
+                .find_documents_by_id(&["owned".into()], false)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            instance.replication_checkpoint_status().await["headSeq"],
+            "1"
+        );
+        assert!(instance.cleanup(0).await.unwrap());
+        instance.close().await.unwrap();
+        // Closing the collection retires its commit subscription/owner reference.
+        tokio::task::yield_now().await;
+    }
+
+    #[tokio::test]
+    async fn owner_jobs_global_cursor_covers_old_lwt_empty_ranges_and_hard_deletes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("owner.sqlite3");
+        let owner = TestOwner::new(path.clone());
+        let storage = super::super::types::RxStorageSqlite::with_owner(
+            RxStorageSqliteSettings {
+                database_path: path,
+            },
+            owner,
+        );
+        let instance = create_storage_instance(&storage, params(test_schema()))
+            .await
+            .unwrap();
+        let first = doc("a", "1-a", 1, false, 100.0);
+        assert!(instance
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: first.clone()
+                }],
+                "test"
+            )
+            .await
+            .unwrap()
+            .error
+            .is_empty());
+        let page = instance
+            .get_changed_documents_since(10, None)
+            .await
+            .unwrap();
+        assert_eq!(page.checkpoint["seq"], "1");
+        assert!(instance
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: Some(first),
+                    document: doc("a", "2-a", 2, false, 1.0)
+                }],
+                "test"
+            )
+            .await
+            .unwrap()
+            .error
+            .is_empty());
+        let changed = instance
+            .get_changed_documents_since(10, Some(&page.checkpoint))
+            .await
+            .unwrap();
+        assert_eq!(changed.documents[0]["_rev"], "2-a");
+        let mut other_params = params(test_schema());
+        other_params.collection_name = "other".into();
+        let other = create_storage_instance(&storage, other_params)
+            .await
+            .unwrap();
+        other
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: doc("b", "1-b", 3, false, 2.0),
+                }],
+                "test",
+            )
+            .await
+            .unwrap();
+        let empty = instance
+            .get_changed_documents_since(10, Some(&changed.checkpoint))
+            .await
+            .unwrap();
+        assert!(empty.documents.is_empty());
+        assert_eq!(empty.checkpoint["seq"], "3");
+        let mut invalid = empty.checkpoint.clone();
+        invalid["epoch"] = json!("foreign");
+        assert!(instance
+            .get_changed_documents_since(10, Some(&invalid))
+            .await
+            .is_err());
+        invalid = empty.checkpoint.clone();
+        invalid["seq"] = json!("03");
+        assert!(instance
+            .get_changed_documents_since(10, Some(&invalid))
+            .await
+            .is_err());
+        instance.remove().await.unwrap();
+        let reopened = create_storage_instance(&storage, params(test_schema()))
+            .await
+            .unwrap();
+        let deleted = reopened
+            .get_changed_documents_since(10, Some(&empty.checkpoint))
+            .await
+            .unwrap();
+        assert_eq!(deleted.documents[0]["id"], "a");
+        assert_eq!(deleted.documents[0]["_deleted"], true);
+        assert!(reopened
+            .find_documents_by_id(&["a".into()], true)
+            .await
+            .unwrap()
+            .is_empty());
+        reopened.close().await.unwrap();
+        other.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn owner_jobs_stream_snapshot_releases_before_end_and_cancellation_has_no_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("owner.sqlite3");
+        let owner = TestOwner::new(path.clone());
+        let storage = super::super::types::RxStorageSqlite::with_owner(
+            RxStorageSqliteSettings {
+                database_path: path,
+            },
+            owner.clone(),
+        );
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+        instance
+            .bulk_write(
+                (0..3)
+                    .map(|i| BulkWriteRow {
+                        previous: None,
+                        document: doc(&format!("doc{i}"), "1-a", i, false, 1.0),
+                    })
+                    .collect(),
+                "test",
+            )
+            .await
+            .unwrap();
+        let query = snapshot_query(&schema);
+        let mut seen = Vec::new();
+        instance
+            .query_stream_into(&query, 1, &mut |batch| {
+                seen.extend(batch);
+                Ok(true)
+            })
+            .await
+            .unwrap();
+        assert_eq!(seen.len(), 3);
+        let run = instance.clone();
+        let query2 = query.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut phases = Vec::new();
+            run.query_snapshot_stream_into_blocking(&query2, 1, &mut |event| {
+                match event {
+                    RxStorageSnapshotEvent::Start { change_counter } => {
+                        assert_eq!(change_counter, 3);
+                        phases.push("start");
+                    }
+                    RxStorageSnapshotEvent::Documents(batch) => {
+                        assert_eq!(batch.len(), 1);
+                        phases.push("doc");
+                    }
+                    RxStorageSnapshotEvent::End => {
+                        // The same test owner cannot execute another job until
+                        // the snapshot cursor has returned and released its tx.
+                        let ticket = super::super::types::SqliteOwnerJobs::read(
+                            owner.as_ref(),
+                            Box::new(|conn| {
+                                let n: u64 = conn
+                                    .query_row("SELECT v FROM _seq", [], |r| r.get(0))
+                                    .map_err(sqlite_error)?;
+                                Ok(Box::new(n) as super::super::types::SqliteJobValue)
+                            }),
+                        )?;
+                        let value = ticket.blocking_recv().unwrap()?;
+                        assert_eq!(*value.downcast::<u64>().unwrap(), 3);
+                        phases.push("end");
+                    }
+                }
+                Ok(true)
+            })
+            .unwrap()
+            .unwrap();
+            assert_eq!(phases, vec!["start", "doc", "doc", "doc", "end"]);
+            let mut ended = false;
+            run.query_snapshot_stream_into_blocking(&query2, 1, &mut |event| match event {
+                RxStorageSnapshotEvent::Documents(_) => Ok(false),
+                RxStorageSnapshotEvent::End => {
+                    ended = true;
+                    Ok(true)
+                }
+                _ => Ok(true),
+            })
+            .unwrap()
+            .unwrap();
+            assert!(!ended);
+        })
+        .await
+        .unwrap();
+        instance.close().await.unwrap();
+    }
 
     use std::collections::{HashMap, HashSet};
 
@@ -4599,7 +5506,7 @@ mod tests {
         );
 
         {
-            let conn = instance.connection.lock();
+            let conn = instance.connection.as_ref().unwrap().lock();
             conn.execute(
                 &format!("DROP TABLE {}", quote_identifier(&instance.table_name)),
                 [],
@@ -4669,7 +5576,7 @@ mod tests {
         let mut stream = instance.change_stream();
 
         {
-            let conn = instance.connection.lock();
+            let conn = instance.connection.as_ref().unwrap().lock();
             insert_document(
                 &conn,
                 &instance.table_name,

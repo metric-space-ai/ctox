@@ -12,20 +12,21 @@ test('loader follows shell activation, persists snapshot and falls back on faile
  };
  const loader=await createLoader({instanceId:`loader-${process.pid}`,userId:'u',storage:'memory',multiTab:false,serviceWorker:false,transport,resolveShell:ver=>modules[ver]});
  for(const version of ['1','2','3']){
-  await loader.kernel.sim.publishAppVersion('shell',version,{module:{mount(){return {unmount(){}}}}});await loader.settle();
+  await loader.kernel.sim.publishAppVersion('shell',version,{});await loader.settle();
  }
  assert.equal(loader.shellVersion,'2');assert.deepEqual(calls.find(x=>x[0]==='start2')[1],{draft:'kept'});
  assert.ok(loader.kernel.statusZone.get().some(x=>x.code==='shell.swap_failed'));
  assert.equal((await loader.kernel.windowState.get('shell')).draft,'second');
+ assert.equal(loader.kernel.activation.get('shell').get().activated_ver,'2');assert.equal(loader.kernel.activation.get('shell').get().state,'failed');
  await loader.close();
 });
 test('artifact URLs are versioned and reject path traversal',()=>{
- assert.equal(artifactUrl('my app','2','shared/helper.js'),'/~a/my%20app@2/shared/helper.js');
- for(const path of ['../secret','/absolute','x/../y','x?token','x\\y'])assert.throws(()=>artifactUrl('a','1',path),e=>e.code==='invalid');
+ assert.equal(artifactUrl('my app','2','shared/helper.js','3'),'/~a/my%20app@2~shell@3/shared/helper.js');
+ for(const path of ['../secret','/absolute','x/../y','x?token','x\\y'])assert.throws(()=>artifactUrl('a','1',path,'3'),e=>e.code==='invalid');
 });
 
 test('module import handles a large UTF-8 entry without an argument stack overflow',async()=>{
- const {createStubKernel}=await import('../kernel.mjs');
+ const {createStubKernel}=await import('./legacy-kernel.mjs');
  const k=createStubKernel({instanceId:`large-module-${process.pid}`,userId:'u',storage:'memory',multiTab:false});await k.ready;
  try {
   const code='/*'+'ä'.repeat(300000)+'*/ export function mount(root){root.loaded=true;return {unmount(){}}}';
@@ -34,7 +35,7 @@ test('module import handles a large UTF-8 entry without an argument stack overfl
  } finally {await k.close();}
 });
 test('a stalled old app snapshot and unmount cannot hold hot activation forever',async()=>{
- const {createStubKernel}=await import('../kernel.mjs');
+ const {createStubKernel}=await import('./legacy-kernel.mjs');
  const k=createStubKernel({instanceId:`hung-old-${process.pid}`,userId:'u',storage:'memory',multiTab:false,remountTimeoutMs:25});await k.ready;
  try {
   await k.sim.publishAppVersion('notes','1',{module:{mount(){return {unmount:()=>new Promise(()=>{}),snapshot:()=>new Promise(()=>{})}}}});
@@ -45,7 +46,7 @@ test('a stalled old app snapshot and unmount cannot hold hot activation forever'
 });
 
 test('close during a pending remount never restarts the old app and disposes a late mount',async()=>{
- const {createStubKernel}=await import('../kernel.mjs');
+ const {createStubKernel}=await import('./legacy-kernel.mjs');
  const k=createStubKernel({instanceId:`close-remount-${process.pid}`,userId:'u',storage:'memory',multiTab:false,remountTimeoutMs:100});await k.ready;
  let mounts=0,lateUnmounts=0,start,complete;
  const started=new Promise(r=>start=r),pending=new Promise(r=>complete=r);

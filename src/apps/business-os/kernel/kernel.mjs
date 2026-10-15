@@ -1,3 +1,4 @@
+import { PLATFORM_COLLECTIONS, PLATFORM_APP_ID } from './platform.mjs';
 import { artifactUrl, utf8Base64, bytesBase64 } from './artifact-url.mjs';
 import { takeoverV3Database } from './migrate-v3.mjs';
 import { snapshotBytes } from './snapshot.mjs';
@@ -17,7 +18,7 @@ export { SCHEMA_FILE, parseCollectionsFile, classifyCollections, applyMigrationS
 export { createShellKernel } from './shell-api.mjs';
 export const APP_API_VERSION = '4.0';
 const SNAPSHOT_MAX_BYTES = 1024 * 1024;
-const SYSTEM_COLLECTIONS = new Set(['business_commands', 'files', 'business_apps', 'business_app_versions', 'shell_preferences', 'app_drafts']);
+const SYSTEM_COLLECTIONS = new Set(PLATFORM_COLLECTIONS);
 // §16.19 Nr. 6: Shell-Layoutfelder im Manifest; fehlende Felder sind null.
 export const LAYOUT_KEYS = Object.freeze(['icon_asset', 'icon_svg', 'category', 'frame_palette', 'default_width', 'default_height', 'min_width', 'min_height', 'presentation']);
 export function normalizeLayout(l) {
@@ -48,20 +49,8 @@ const PLATFORM_SCHEMAS = Object.freeze({
     },
   }),
 });
-const PLATFORM_APP = Object.freeze({ id: 'ctox-platform', ver: '1' });
+const PLATFORM_APP = Object.freeze({ id: PLATFORM_APP_ID, ver: '1' });
 const OWN_ROW_COLLECTIONS = new Set(['shell_preferences', 'app_drafts']);
-// Tab-Identität für window_state: überlebt Neuladen desselben Tabs (sessionStorage), sonst je Kernel neu.
-function sessionTabKey() {
-  try {
-    const ss = globalThis.sessionStorage;
-    if (ss) {
-      let k = ss.getItem('ctox-tab-key');
-      if (!k) { k = uuidv7(); ss.setItem('ctox-tab-key', k); }
-      return k;
-    }
-  } catch { /* kein sessionStorage */ }
-  return uuidv7();
-}
 // §16.19 Nr. 6 / Befund K-1b: Artefakte sind Bytes. Text bleibt string (UTF-8), Binärinhalt wird Uint8Array;
 // der Hash läuft immer über die Bytes, nie über String(content) ("[object Blob]").
 export async function artifactContent(content) {
@@ -104,16 +93,20 @@ export function createKernel(opts = {}) {
   const fakeCore = transport instanceof MemoryCoreTransport ? transport : null;
   const subscriptions = new Set();
   const scopeCursors = new Map();
+  const expectedScopes = new Map();
+  let timing = null;
   const scopeBacklog = new Map();
   const evicted = new Set();
   const lastUsed = new Map();
   let transportConnected = false;
-  const remountTimeoutMs = opts.remountTimeoutMs ?? 10000;
-  const tabKey = opts.tabKey ?? sessionTabKey();
+  const remountTimeoutMs = opts.shellStartTimeoutMs ?? 9000;
+  const generationGraceMs = opts.generationGraceMs ?? 600000;
+  const getTabKey = () => opts.tabKey ?? (()=>{try{const key=`ctox-tab:${dbName}`;let id=sessionStorage.getItem(key);if(!id){id=uuidv7();sessionStorage.setItem(key,id);}return id;}catch{return tabId;}})();
   // §16.37/§16.39 Nr. 2: Byte-Budget der bei Bedarf geholten Bibliotheksdateien (LRU über IDB artifacts)
   const libByteBudget = opts.libByteBudget ?? 512 * 1024 * 1024;
   const capabilities = new Set(opts.capabilities ?? []);
   const tabId = uuidv7();
+  const tabKey = getTabKey();
   const channelName = `ctox-kernel:${dbName}`;
 
   let db = null;
@@ -134,8 +127,7 @@ export function createKernel(opts = {}) {
   const waiters = new Map(); // op_id -> resolve(WriteResult)
   const cmdRejected = new Map();
   const zone = [];
-  const mounts = new Set();
-  const moduleRegistry = new Map(), moduleCache = new Map();
+  const moduleCache = new Map();
   const routeListeners = new Map();
   const windowStates = new Map();
   let locale = opts.locale ?? 'de';
@@ -148,12 +140,13 @@ export function createKernel(opts = {}) {
   const skipBeforeCommit = new Set();
   const uploadProgress = new Map(), uploadsDone = new Set();
   const activationListeners = new Set();
-  const remountChains = new Map(), activationChains = new Map();
+  let activationReports=Promise.resolve();
+  const activationChains = new Map();
+  let corruptNextFetch=0;
   const publishing = new Set();
   const doubleWrite = new Map(); // ns_old -> {ns_new, migrate}
   const sim0 = { reject: [], migrate: [], failCmd: new Map(), cmdHandlers: new Map() };
-  const simRecord = { lastVisible: null, activationReports: [], navigations: [], dialogs: [], openedFiles: [], staleDiscards: 0, refetches: 0 };
-  let corruptNextFetch = 0;
+  const simRecord = { lastVisible: null, activationReports: [], navigations: [], dialogs: [], openedFiles: [], staleDiscards: 0, refetches:0 };
   let readyResolve;
   const ready = new Promise((r) => { readyResolve = r; });
   const preReady = [];
@@ -319,7 +312,7 @@ export function createKernel(opts = {}) {
     return {
       backlog: net.backlog,
       outbox: { count: outboxStat.count, oldest_ms: outboxStat.oldest_at ? Math.max(0, Date.now() - outboxStat.oldest_at) : 0 },
-      link: { ...net.link },
+      link: { ...net.link }, ...(timing?{timing:{...timing}}:{}),
     };
   });
   let knownGen = 0;
@@ -346,6 +339,7 @@ export function createKernel(opts = {}) {
     /** Eigene Einträge der Shell (source 'shell', §16.19 Nr. 1). */
     report: (appId, item) => zoneReport(appId, item, 'shell'),
     clear: (appId, code) => zoneClear(appId, code),
+    report:(appId,item)=>zoneReport(appId,item,'shell'),
   };
 
   // ---- Laden, Leiterwahl ----
@@ -375,6 +369,7 @@ export function createKernel(opts = {}) {
     for(const record of snapshot.docs) if((record.lseq??0)>known && mirrorPut(record))n++;
     for(const meta of snapshot.metas){
       if(meta.key.startsWith('upload_done:')){uploadsDone.add(meta.ref);notify('uploads');}
+      if(meta.key.startsWith('retired:') && (meta.record?.lseq??0)>known)mirrorPut(meta.record);
       if(meta.key==='checkpoint')setCheckpoint(meta.value);
       if(meta.key==='network' && !isLeader){followerNet=meta.value;notify('metrics');}
       if(meta.key.startsWith('activation:'))applyActivationLocal(meta,false);
@@ -393,17 +388,20 @@ export function createKernel(opts = {}) {
     post({ type: 'leader', gen: myGen });
     if (!transportConnected) {
       transportConnected = true;
-      await transport.connect({ instanceId, userId }, {
-        page: (page) => receivePage(page),
-        link: (next) => { link = { ...link, ...next }; netChanged(); if(link.state === 'online') schedulePump(); },
-        write_result: (message) => receiveResult(message),
-        actor: (next) => { if(next.id !== userId)throw new CtoxError('forbidden','Actor identity mismatch');actor={...actor,...next};notify('actor'); },
-      });
+      track(Promise.resolve().then(()=>transport.connect({instanceId,userId},{
+        page:receivePage,write_result:receiveResult,
+        link:next=>{link={...link,...next,state:next.state==='online'?'online':'offline'};if(link.state==='offline'){inflight.clear();inflightOps.clear();}netChanged();if(link.state==='online'){for(const value of activations.values())sendActivationReport(value);for(const id of mirror.get('business_apps')?.keys()??[])scheduleActivation(id);if(transport.scope)for(const collection of subscriptions)track(subscribeCollection(collection));schedulePump();}},
+        actor:next=>{if(next.id!==userId)throw new CtoxError('forbidden','Actor identity mismatch');actor={...actor,...next};notify('actor');},
+        timing:next=>{timing=next;notify('metrics');},
+        status:(appId,item)=>zoneReport(appId,item,'kernel'),
+        revoke:receiveRevoke,
+      })).then(async()=>{
+        if(closed||!isLeader)return;
+        for(const collection of new Set(['business_apps','business_app_versions','business_commands','files','shell_preferences','app_drafts',...mirror.keys()]))await subscribeCollection(collection);
+        await deliver();schedulePump();
+      }).catch(error=>{if(!closed){link={...link,state:'offline'};netChanged();zoneReport('kernel',{level:'error',code:'transport.connect',text:error.message},'kernel');}}));
     }
-    for (const collection of new Set(['business_apps', 'business_app_versions', 'business_commands', 'files', 'shell_preferences', 'app_drafts', ...mirror.keys()])) await subscribeCollection(collection);
-    netChanged();scheduleCacheBudget();
-    track(deliver());
-    schedulePump();
+    netChanged();scheduleCacheBudget();schedulePump();
     for (const id of mirror.get('business_apps')?.keys() ?? []) scheduleActivation(id);
   }
   function stepDown() {
@@ -509,6 +507,7 @@ export function createKernel(opts = {}) {
     const prepare = () => {
       guardAlive();
       if (typeof collection !== 'string' || !collection) throw new CtoxError('invalid', 'collection fehlt', { path: 'collection' });
+      if(collection==='shell_preferences' && id!==userId)throw new CtoxError('forbidden','Only own shell preferences are writable',{path:'id'});
       if (typeof id !== 'string' || !id) throw new CtoxError('invalid', 'id (string) fehlt', { path: 'id' });
       if (!ownRowOk(collection, id)) throw new CtoxError('forbidden', `${collection}: nur die eigene Zeile (id = actor.id)`, { path: 'id' });
       if (collection === 'app_drafts' && app.id !== PLATFORM_APP.id) throw new CtoxError('forbidden', 'app_drafts nur über kernel.source(appId).draft.*', { path: 'collection' });
@@ -644,15 +643,18 @@ export function createKernel(opts = {}) {
   async function subscribeCollection(collection,priority='P2') {
     if (!isLeader || closed || !transportConnected) return;
     evicted.delete(collection);
-    const scope = { epoch: opts.epoch ?? '1', collection, scope_hash: opts.scopeHash ?? 'local', gen: genOf(collection) };
+    const scope = transport.scope ? await transport.scope(collection) : {epoch:opts.epoch??'1',collection,scope_hash:opts.scopeHash??'local',gen:genOf(collection)};
+    expectedScopes.set(collection,scope);
     const cp = await db.get('meta', checkpointKey(scope));
+    scopeCursors.set(collection,cp?.cursor_to??'0');
     await transport.subscribe({ ...scope, checkpoint_seq: cp?.cursor_to ?? '0', priority });
     subscriptions.add(collection);
   }
   async function receivePage(page) {
     if (!isLeader || closed) return;
     const scope = { ...page, epoch: page.epoch ?? opts.epoch ?? '1', scope_hash: page.scope_hash ?? opts.scopeHash ?? 'local', gen: page.gen ?? genOf(page.collection) };
-    if(scope.scope_hash !== (opts.scopeHash ?? 'local') || String(scope.epoch) !== String(opts.epoch ?? '1')) throw new CtoxError('revoked', 'Unexpected scope or epoch');
+    const expected=expectedScopes.get(page.collection)??{scope_hash:opts.scopeHash??'local',epoch:opts.epoch??'1'};
+    if(scope.scope_hash !== expected.scope_hash || String(scope.epoch) !== String(expected.epoch)) throw new CtoxError('revoked', 'Unexpected scope or epoch');
     if(!Number.isSafeInteger(scope.gen) || scope.gen!==genOf(page.collection))throw new CtoxError('invalid','Page generation does not match collection namespace');
     const cursor = decimalSeq(page.cursor_to ?? page.head_seq ?? '0');
     const out = await db.tx(async (t) => {
@@ -764,12 +766,16 @@ export function createKernel(opts = {}) {
     }
     return deepFreeze(result);
   }
-  function schemaFor(app, collection) { return PLATFORM_SCHEMAS[collection] ?? versionDoc(app.id, app.ver)?.manifest?.collections?.[collection]?.schema ?? null; }
+  async function receiveRevoke(message){
+    const collections=new Set(message.collections??[]),rows=await db.tx(async t=>{await assertGen(t);const changed=[];for(const row of await t.all('docs'))if(collections.has(row.collection)){const revoked={...row,data:null,base:emptyBase(),deleted:true,revoked:true};await putDoc(t,revoked);changed.push(revoked);}for(const hash of message.artifacts??[])await t.del('artifacts',hash);await t.put('meta',{key:'rights_ver',value:message.rights_ver});return changed;});
+    for(const row of rows)mirrorPut(row);post({type:'docs',keys:rows.map(r=>[r.collection,r.id])});
+  }
+  function schemaFor(app, collection) { const owner=SYSTEM_COLLECTIONS.has(collection)?PLATFORM_APP_ID:app.id;const ver=owner===app.id?app.ver:activations.get(owner)?.activated_ver??visible(mirrorGet('business_apps',owner))?.active_ver;return versionDoc(owner,ver)?.manifest?.collections?.[collection]?.schema??(owner===PLATFORM_APP_ID?PLATFORM_SCHEMAS[collection]??null:null); }
   // §16.19 Nr. 3: shell_preferences – eine Zeile je Nutzer (id = actor.id), lesen und schreiben nur die eigene.
   function ownRowOk(collection, id) {
     if (!OWN_ROW_COLLECTIONS.has(collection)) return true;
-    if (collection === 'app_drafts') return typeof id === 'string' && id.startsWith(`${actor.id}/`); // id = '<user>/<app>'
-    return id === actor.id;
+    if (collection === 'app_drafts') return typeof id === 'string' && id.startsWith(`${userId}/`); // id = '<user>/<app>'
+    return id === userId; // Identität des Kernels (actor.id kann nicht abweichen, §16.7)
   }
 
   async function publishInternal(appId, ver, o = {}) {
@@ -778,6 +784,7 @@ export function createKernel(opts = {}) {
     try {
       const appDoc = visible(mirrorGet('business_apps', appId));
       if (o.baseAppVer !== undefined && (appDoc?.active_ver ?? null) !== o.baseAppVer) throw new CtoxError('conflict', 'stale_base');
+      if(o.module!==undefined)throw new CtoxError('invalid','App modules belong to the Shell/testkit host');
       if (versionDoc(appId, ver)) throw new CtoxError('conflict', `Version ${appId}@${ver} existiert bereits`);
       const prevManifest = appDoc ? versionDoc(appId, appDoc.active_ver)?.manifest : null;
       const files = o.files ?? {};
@@ -805,6 +812,7 @@ export function createKernel(opts = {}) {
       const head = fakeCore?.head ?? '0';
       const M = o.migratedAtSeq ?? head;
       const manifest = {
+        retires:{...(prevManifest?.retires??{})},
         app_id: appId, app_ver: ver, files: fileHashes, entry: o.entry ?? 'index.js',
         collections: o.collections ?? prevManifest?.collections ?? {}, generations,
         handlers: o.handlers ?? {}, min_app_api: o.minAppApi ?? '4.0',
@@ -844,15 +852,15 @@ export function createKernel(opts = {}) {
     const superseded = () => visible(mirrorGet('business_apps', appId))?.active_ver !== ver;
     await setActivation(appId, { target_ver: ver, state: 'received', error: null });
     // fetched: alle Dateien per Hash geprüft (aus „Spur 4“ = transport CAS)
-    for (const [path, hash] of Object.entries(manifest.files ?? {})) {
+    for(const [path,hash]of Object.entries(manifest.files??{})){
       const cached=await db.get('artifacts',hash);
       if(cached && await sha256Hex(cached.content)===hash)continue;
-      await waitUntil(() => link.state === 'online' || closed);
+      await waitUntil(() => link.state === 'online' || closed); if (closed) return;
       // §16.15a Nr. 3 (wie Stub): sha256-Fehlschlag → einmal neu über Spur 4 holen, erst wiederholter Fehlschlag → failed.
-      // Jeder Zweig endet in setActivation; kein Warten ohne Ende (K-1c Punkt 0).
+      // Jeder Zweig endet in setActivation; kein Warten ohne Ende (K-1c Punkt 0). Transport offline → Fehler nach oben.
       let content = null;
       for (let attempt = 0; attempt < 2 && content === null; attempt++) {
-        let got = await transport.artifact(hash).then(artifactContent).catch(() => null);
+        let got = await transport.artifact(hash).then(artifactContent).catch((error) => { if (error?.code === 'unavailable') throw error; return null; });
         if (got == null) { await setActivation(appId, { target_ver: ver, state: 'failed', error: `artifact_missing:${path}` }); return; }
         if (corruptNextFetch > 0) { corruptNextFetch--; got = typeof got === 'string' ? `${got}\n/* beschädigt */` : Uint8Array.from([...got, 0]); }
         if ((await sha256Hex(got)) === hash) content = got;
@@ -876,9 +884,8 @@ export function createKernel(opts = {}) {
     await waitUntil(() => dataReady() || superseded() || closed || !isLeader);
     if (superseded() || closed || !isLeader) return;
     await setActivation(appId, { target_ver: ver, state: 'data-ready' });
-    const prevAct = activations.get(appId);
-    const good = [...(prevAct?.good_vers ?? []).filter((v) => v !== ver), ver].slice(-10); // §16.19 Nr. 2: Rückfallziele
-    await setActivation(appId, { target_ver: ver, activated_ver: ver, previous_ver: prevAct?.activated_ver ?? null, good_vers: good, state: 'activated', at_seq: checkpoint });
+    const previous=activations.get(appId);
+    await setActivation(appId,{target_ver:ver,activated_ver:ver,previous_ver:previous?.activated_ver??null,good_vers:[...(previous?.good_vers??[]).filter(v=>v!==ver),ver].slice(-10),state:'activated',at_seq:checkpoint});
   }
   function compareVer(a, b) {
     const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
@@ -894,11 +901,16 @@ export function createKernel(opts = {}) {
       await bumpLocalSeq(t);
       return v;
     });
-    await transport.appActivation({ app_id: appId, app_ver: value.target_ver, state: value.state, at_seq: checkpoint, ...(value.state === 'failed' && value.error ? { error: value.error } : {}) });
     simRecord.activationReports.push({ app_id: appId, app_ver: value.target_ver, state: value.state, at_seq: checkpoint, error: value.error ?? undefined });
     applyActivationLocal(value, true);
     post({ type: 'activation', value });
+    sendActivationReport(value);
     return value;
+  }
+  function sendActivationReport(value){
+    const report={app_id:value.app_id,app_ver:value.target_ver,state:value.state,at_seq:checkpoint,...(value.state==='failed'&&value.error?{error:value.error}:{})};
+    activationReports=activationReports.then(()=>{if(!closed&&isLeader)return transport.appActivation(report);}).catch(error=>{if(!closed)zoneReport('kernel',{level:'warn',code:'activation.report',text:error.message},'kernel');});
+    track(activationReports);
   }
   function applyActivationLocal(value, fromSelf) {
     const prev = activations.get(value.app_id);
@@ -913,9 +925,8 @@ export function createKernel(opts = {}) {
     } else if (value.state === 'failed' && value.error) {
       zoneReport(value.app_id, { level: 'error', code: 'app.activation_failed', text: `Aktivierung ${value.app_id}@${value.target_ver} fehlgeschlagen: ${value.error}`, ref: value.target_ver }, 'kernel');
     }
-    if (value.activated_ver) scheduleRemount(value.app_id, value.activated_ver);
     if(isLeader && value.state==='activated' && value.previous_ver && value.previous_ver!==value.activated_ver) {
-      later(()=>track(retireGenerations(value.app_id,value.activated_ver,value.previous_ver)),10*60*1000);
+      later(()=>track(retireGenerations(value.app_id,value.activated_ver,value.previous_ver)),generationGraceMs);
     }
     void fromSelf;
   }
@@ -933,19 +944,19 @@ export function createKernel(opts = {}) {
       for(const ns of namespaces){
         if(entries.some(e=>e.collection===ns))continue;
         for(const row of await t.all('docs'))if(row.collection===ns){
-          const empty={collection:row.collection,id:row.id,data:null,base:emptyBase(),rev:null,seq:'0',deleted:true,pending:false,retired:true};await putDoc(t,empty);out.push(empty);
+          const empty={collection:row.collection,id:row.id,data:null,base:emptyBase(),rev:null,seq:'0',deleted:true,pending:false,retired:true};await putDoc(t,empty);await t.del('docs',[ns,row.id]);await t.put('meta',{key:`retired:${ns}:${row.id}`,record:empty});out.push(empty);
         }
       }
       return out;
     });
-    for(const row of retired)mirrorPut(row);
+    for(const row of retired){mirrorPut(row);doubleWrite.delete(row.collection);}
     post({type:'docs',keys:retired.map(r=>[r.collection,r.id])});
   }
 
   // ---- Mount / Remount (§10.2a Nr. 1, §16.10) ----
   async function loadModule(appId, ver) {
-    const key = `${appId}@${ver}`;
-    if (moduleRegistry.has(key)) return moduleRegistry.get(key);
+    const shellVer=appId==='shell'?ver:activations.get('shell')?.activated_ver??'0';
+    const key = `${appId}@${ver}~shell@${shellVer}`;
     if (moduleCache.has(key)) return moduleCache.get(key);
     const manifest = versionDoc(appId, ver)?.manifest;
     if (!manifest) throw new CtoxError('not_found', `Manifest ${key} fehlt`);
@@ -954,7 +965,7 @@ export function createKernel(opts = {}) {
     if (!art) throw new CtoxError('not_found', `Einstiegsdatei ${manifest.entry} von ${key} nicht lokal`);
     let url, revoke = null;
     if (globalThis.navigator?.serviceWorker?.controller) {
-      url = artifactUrl(appId,ver,manifest.entry);
+      url = artifactsUrl(appId, ver, manifest.entry); // §16.39: Wurzel mit Shell- und Lib-Bindung
     } else if (typeof window !== 'undefined' && typeof URL.createObjectURL === 'function' && hasBlob) {
       url = URL.createObjectURL(new Blob([art.content], { type: 'text/javascript' }));
       revoke = url;
@@ -966,19 +977,6 @@ export function createKernel(opts = {}) {
       moduleCache.set(key, mod);
       return mod;
     } finally { if (revoke) URL.revokeObjectURL(revoke); }
-  }
-  function mountFnOf(mod) {
-    const fn = mod?.mount ?? mod?.default?.mount ?? (typeof mod?.default === 'function' ? mod.default : null);
-    if (typeof fn !== 'function') throw new CtoxError('invalid', 'App-Modul exportiert kein mount()');
-    return fn;
-  }
-  async function mountVersion(root, appId, ver, ctx) {
-    await pinInstance(appId, ver); // §16.39 Nr. 1/2: Shell-Version und Lib-Minors für diese App-Instanz fixieren
-    const mod = await loadModule(appId, ver);
-    const api = makeAppApi(appId, ver);
-    const handle = await mountFnOf(mod)(root, api, ctx);
-    if (!handle || typeof handle.unmount !== 'function') throw new CtoxError('invalid', 'mount() muss {unmount} liefern');
-    return { handle, api };
   }
   function withTimeout(p, ms, onLate) {
     return new Promise((resolve,reject)=>{
@@ -1006,42 +1004,6 @@ export function createKernel(opts = {}) {
       return undefined;
     }
   }
-  function scheduleRemount(appId, ver) {
-    const targets = [...mounts].filter((m) => m.appId === appId && m.ver !== ver && !m.closed);
-    if (!targets.length) return;
-    const prev = remountChains.get(appId) ?? Promise.resolve();
-    const next = prev.then(async () => {
-      for (const m of targets) if (mounts.has(m) && m.ver !== ver) await remountOne(m, ver);
-    });
-    remountChains.set(appId, next.catch(() => {}));
-    track(next);
-  }
-  async function remountOne(m, newVer) {
-    const oldVer = m.ver;
-    let snap;
-    try { snap = m.handle.snapshot ? await withTimeout(Promise.resolve().then(()=>m.handle.snapshot()),remountTimeoutMs) : undefined; } catch (e) {
-      zoneReport(m.appId, { level: 'warn', code: 'app.snapshot_failed', text: `snapshot() warf: ${e?.message ?? e}` }, 'kernel');
-    }
-    if(closed)return;
-    snap = checkSnapshot(m.appId, snap);
-    // §16.10: Snapshot vor dem Umschalten in window_state (IDB)
-    await db.tx((t) => t.put('window_state', { key: `${m.appId}:${m.id}`, app_id: m.appId, mount_id: m.id, ver: oldVer, next_ver: newVer, snapshot: snap ?? null, at: Date.now() }));
-    try { await withTimeout(Promise.resolve().then(()=>m.handle.unmount()),remountTimeoutMs); } catch (e) { console.error('[ctox-kernel] unmount', e); }
-    if(closed)return;
-    try {
-      const r = await withTimeout(mountVersion(m.root, m.appId, newVer, { restored: cloneValue(snap) }), remountTimeoutMs, (late) => { try { Promise.resolve(late.handle.unmount()).catch(()=>{}); } catch {} });
-      Object.assign(m, { ver: newVer, handle: r.handle, api: r.api });
-      zoneClear(m.appId, 'app.remount_failed');
-    } catch (err) {
-      if(closed)return;
-      zoneReport(m.appId, { level: 'error', code: 'app.remount_failed', text: `Version ${newVer} startet nicht (${err?.message ?? err}); vorherige Version ${oldVer} läuft`, ref: newVer }, 'kernel');
-      const r = await withTimeout(mountVersion(m.root, m.appId, oldVer, { restored: cloneValue(snap) }),remountTimeoutMs);
-      Object.assign(m, { ver: oldVer, handle: r.handle, api: r.api });
-      try { await reportFailed(m.appId, newVer, `mount_failed: ${String(err?.message ?? err)}`); } catch (e) { console.error('[ctox-kernel] reportFailed', e); }
-    }
-    notify('mounts');
-  }
-
   // ---- Datei-Blobs ----
   function setUploadProgress(ref, sent, total, broadcast) {
     uploadProgress.set(ref, { sent, total });
@@ -1069,7 +1031,7 @@ export function createKernel(opts = {}) {
     const winTag = `win:${appId}`;
     const shell = Object.freeze({
       setTitle(title) { win.title = String(title); notify(winTag); },
-      registerHeader(spec) { win.header = spec == null ? null : cloneValue(spec); notify(winTag); },
+      registerHeader(el){if(el!==null && (typeof HTMLElement==='function'?!(el instanceof HTMLElement):!el||typeof el!=='object'||typeof el.tagName!=='string'))throw new CtoxError('invalid','Header must be an HTMLElement or null');win.header=el;notify(winTag);},
       navigate(target, params = {}) {
         const known = target === 'shell' || !!visible(mirrorGet('business_apps', target));
         if (!known) {
@@ -1205,11 +1167,11 @@ export function createKernel(opts = {}) {
       put(collection, doc) { return localWrite(app, 'put', collection, doc?.id, doc); },
       patch(collection, id, patch) { return localWrite(app, 'patch', collection, id, patch); },
       remove(collection, id) { return localWrite(app, 'delete', collection, id, null); },
-      command(type, payload = {}) {
+      command(type, payload = {}, commandOptions={}) {
         if (typeof type !== 'string' || !type) throw new CtoxError('invalid', 'Befehlstyp fehlt', { path: 'type' });
         const id = uuidv7();
         const write = localWrite(app, 'put', 'business_commands', id, {
-          id, type, payload, status: 'queued', app_id: appId, actor_id: actor.id, created_at: new Date().toISOString(),
+          id, ...(commandOptions.record_id===undefined?{}:{record_id:commandOptions.record_id}), type, payload, status: 'queued', app_id: appId, actor_id: actor.id, created_at: new Date().toISOString(),
         });
         const status = makeLive(['c:business_commands', 'commands'], () => {
           const d = visible(mirrorGet('business_commands', id));
@@ -1257,7 +1219,7 @@ export function createKernel(opts = {}) {
   // Entwurf je (App, Nutzer) als Dokument der Plattform-Collection app_drafts (id '<user>/<app>', wie der Stub), über den
   // normalen Schreibweg (Outbox → Core). files: Pfad → sha256 (Inhalt im IDB-Store artifacts, Text oder Bytes),
   // null = im Entwurf gelöscht. manifest.json ist keine Datei; Manifest-Felder nur über draft.setManifest (manifest_fields).
-  const draftId = (appId) => `${actor.id}/${appId}`;
+  const draftId = (appId) => `${userId}/${appId}`;
   const activeVerOf = (appId) => visible(mirrorGet('business_apps', appId))?.active_ver ?? null;
   const asText = (c) => (typeof c === 'string' ? c : new TextDecoder().decode(c));
   function noManifestFile(path, field = 'path') {
@@ -1502,11 +1464,15 @@ export function createKernel(opts = {}) {
     delete: windowStateDelete,
     del: windowStateDelete,
   });
-  // ---- §16.39 Nr. 1/2, §16.37: Artefakt-URLs mit Shell-Version, Standardbibliotheken lib:<name>@<major>.<minor> ----
-  // Je App-Instanz (appId@ver) fixiert der Mount die aktive Shell-Version und je gebundener Bibliothek die Minor.
+  // ---- §16.39 Nr. 1/2 (+ Ergänzung LIBS2), §16.37: Artefakt-URLs mit Instanz-Bindung ----
+  // Eine App-Instanz = eine URL-Wurzel: /~a/<app>@<ver>~shell@<sv>~lib:<name>@<M.m>…/<pfad> (Libs nach Name sortiert).
+  // Die Bindung (Shell-Version + je Bibliothek aus dem Shell-Manifest `libs` die Minor) wird beim ersten url()-Aufruf
+  // für die Instanz (= Mount) synchron aus dem Spiegel aufgelöst und fixiert; spätere Shell-/Lib-Wechsel ändern sie nicht.
+  // Die Shell selbst: /~a/shell@<sv>~lib:…/…; Bibliotheken: /~a/lib:<name>@<M.m>[~lib:…]/… (immutable).
   const instancePins = new Map();
-  const activeShellVer = () => activations.get('shell')?.activated_ver ?? null;
+  const activeShellVer = () => activations.get('shell')?.activated_ver ?? visible(mirrorGet('business_apps', 'shell'))?.active_ver ?? null;
   const LIB_NAME = /^[a-z0-9][a-z0-9._-]*$/;
+  const SEG = /^[A-Za-z0-9._+-]+$/;
   function libVersionsOf(name, major) {
     const out = [];
     for (const r of mirror.get('business_app_versions')?.values() ?? []) {
@@ -1529,49 +1495,52 @@ export function createKernel(opts = {}) {
       if (!cur || minorOf(cur.value) < minorOf(ver)) await t.put('meta', { key, value: ver });
     });
   }
-  async function pinInstance(appId, ver, o = {}) {
-    const key = `${appId}@${ver}`;
-    if (instancePins.has(key) && !o.libs) return instancePins.get(key);
+  // Bindungen: libs des Shell-Manifests (der gebundenen Shell-Version) plus eigene libs der App; {name: 'M.m'}
+  function resolveLibs(appId, ver, shellVer) {
+    const bound = { ...(shellVer ? versionDoc('shell', shellVer)?.manifest?.libs ?? {} : {}), ...(versionDoc(appId, ver)?.manifest?.libs ?? {}) };
     const libs = {};
-    const bound = o.libs ?? versionDoc(appId, ver)?.manifest?.libs ?? {};
     for (const [name, majorRaw] of Object.entries(bound)) {
       const major = String(majorRaw).split('.')[0];
-      const resolved = resolveLibMinor(name, major);
-      if (!resolved) continue;
-      libs[`${name}@${major}`] = resolved;
-      await setActiveLib(name, major, resolved);
+      const resolved = LIB_NAME.test(name) ? resolveLibMinor(name, major) : null;
+      if (!resolved) continue; // nicht veröffentlicht → keine Bindung, ctox:lib/ lädt dann nicht (kein Rückgriff)
+      libs[name] = resolved;
+      track(setActiveLib(name, major, resolved).catch(() => {}));
     }
-    const pin = deepFreeze({ shellVer: o.shellVer ?? activeShellVer(), libs });
-    instancePins.set(key, pin);
+    return libs;
+  }
+  function pinInstance(appId, ver, o = {}) {
+    const key = `${appId}@${ver}`;
+    if (instancePins.has(key) && o.shellVer === undefined) return instancePins.get(key);
+    const shellVer = appId === 'shell' ? String(ver) : String(o.shellVer ?? instancePins.get(key)?.shellVer ?? activeShellVer() ?? '');
+    const pin = deepFreeze({ shellVer: shellVer || null, libs: resolveLibs(appId, ver, shellVer || null) });
+    if (o.shellVer === undefined) instancePins.set(key, pin);
     return pin;
   }
-  function encPath(path) { return artifactUrl('x', '0', path).slice('/~a/x@0/'.length); } // gleiche Pfadprüfung wie artifactUrl
-  /** A6: /~a/<app>@<ver>~shell@<sv>/<path>; lib:<name> mit ver "<major>.<minor>" → /~a/lib:<name>@<major>.<minor>/<path>. */
+  const libSuffix = (libs, skip = null) => Object.keys(libs).filter((n) => n !== skip).sort().map((n) => `~lib:${n}@${libs[n]}`).join('');
+  function encPath(path) { return artifactUrl('x', '0', path, 'x').slice('/~a/x@0~shell@x/'.length); } // gleiche Pfadprüfung
+  /** A6: synchron. /~a/<app>@<ver>~shell@<sv>~lib:…/<path>; lib:<name> mit "<M.m>" → /~a/lib:<name>@<M.m>[~lib:…]/<path>. */
   function artifactsUrl(appId, ver, path, o = {}) {
     if (typeof appId !== 'string' || !appId || ver == null || ver === '') throw new CtoxError('invalid', 'appId und ver nötig', { path: 'appId' });
+    if (!SEG.test(String(ver))) throw new CtoxError('invalid', 'Version mit unzulässigen Zeichen', { path: 'ver' });
     if (isLib(appId)) {
       const name = appId.slice(LIB_PREFIX.length);
       if (!LIB_NAME.test(name) || !/^\d+\.\d+$/.test(String(ver))) throw new CtoxError('invalid', 'lib-URL braucht lib:<name> und <major>.<minor>', { path: 'ver' });
-      return `/~a/${LIB_PREFIX}${name}@${ver}/${encPath(path)}`;
+      return `/~a/${LIB_PREFIX}${name}@${ver}${libSuffix(o.libs ?? {}, name)}/${encPath(path)}`;
     }
-    const sv = o.shellVer ?? instancePins.get(`${appId}@${ver}`)?.shellVer ?? activeShellVer();
-    if (sv == null) return artifactUrl(appId, String(ver), path);
-    return `/~a/${encodeURIComponent(appId)}@${encodeURIComponent(String(ver))}~shell@${encodeURIComponent(String(sv))}/${encPath(path)}`;
-  }
-  /** URL einer Bibliotheksdatei für eine App-Instanz: fixierte Minor, sonst aktuell höchste. */
-  function libUrl(appId, ver, name, major, path) {
-    const m = String(major).split('.')[0];
-    const pinned = instancePins.get(`${appId}@${ver}`)?.libs?.[`${name}@${m}`] ?? resolveLibMinor(name, m);
-    if (!pinned) throw new CtoxError('not_found', `lib:${name}@${m} nicht veröffentlicht`, { path: 'name' });
-    return artifactsUrl(`${LIB_PREFIX}${name}`, pinned, path);
+    const pin = pinInstance(appId, String(ver), o);
+    if (appId === 'shell') return `/~a/shell@${encodeURIComponent(String(ver))}${libSuffix(pin.libs)}/${encPath(path)}`;
+    if (!pin.shellVer) throw new CtoxError('unavailable', 'Keine aktive Shell-Version für die Instanz-URL', { path: 'shellVer' });
+    return `/~a/${encodeURIComponent(appId)}@${encodeURIComponent(String(ver))}~shell@${encodeURIComponent(pin.shellVer)}${libSuffix(pin.libs)}/${encPath(path)}`;
   }
   const contentBytes = (c) => (typeof c === 'string' ? new TextEncoder().encode(c).byteLength : c?.byteLength ?? 0);
   // SW-Miss (Vertrag v4/sw.js 9b414f663): genau diese eine Datei über Spur 4 holen, sha256 prüfen, in artifacts ablegen.
   const libInflight = new Map();
   async function libFetchLeader(lib, major, path, ver) {
-    const v = ver ?? resolveLibMinor(lib, major);
-    const hash = v ? versionDoc(`${LIB_PREFIX}${lib}`, v)?.manifest?.files?.[path] : null;
-    if (!hash) return { ok: false, reason: v ? 'not_found' : 'manifest' };
+    // §16.39 LIBS2: genau die Minor aus der URL holen, nie die gerade aktive
+    const v = typeof ver === 'string' && /^\d+\.\d+$/.test(ver) && ver.split('.')[0] === String(major) ? ver : null;
+    if (!v) return { ok: false, reason: 'invalid' };
+    const hash = versionDoc(`${LIB_PREFIX}${lib}`, v)?.manifest?.files?.[path];
+    if (!hash) return { ok: false, reason: versionDoc(`${LIB_PREFIX}${lib}`, v) ? 'not_found' : 'manifest' };
     if (!libInflight.has(hash)) {
       libInflight.set(hash, (async () => {
         const have = await db.get('artifacts', hash);
@@ -1619,8 +1588,9 @@ export function createKernel(opts = {}) {
   }
   function noteLibHits(list) {
     for (const h of Array.isArray(list) ? list : []) {
-      const hash = typeof h === 'string' ? h : h?.sha;
-      if (typeof hash === 'string' && hash) pendingHits.set(hash, Math.max(pendingHits.get(hash) ?? 0, Number(h?.at) || Date.now()));
+      // SW-Vertrag LIBS2: {lib, major, ver, path, sha, n, last_ms}; sha fehlt → aus dem Manifest der Minor
+      const hash = typeof h === 'string' ? h : h?.sha ?? (h?.lib && h?.ver ? versionDoc(`${LIB_PREFIX}${h.lib}`, h.ver)?.manifest?.files?.[h.path] : null);
+      if (typeof hash === 'string' && hash) pendingHits.set(hash, Math.max(pendingHits.get(hash) ?? 0, Number(h?.last_ms ?? h?.at) || Date.now()));
     }
     if (!hitFlush && pendingHits.size) {
       const wait = Math.max(0, lastHitFlush + 1000 - Date.now());
@@ -1670,10 +1640,8 @@ export function createKernel(opts = {}) {
       async manifest(appId, ver) { return versionDoc(appId, ver)?.manifest ?? null; },
       /** §16.39 Nr. 1 (A6): /~a/<app>@<ver>~shell@<sv>/<path>; sv = opts.shellVer, sonst beim Mount fixierte Shell-Version. */
       url: (appId, ver, path, o) => { guardAlive(); return artifactsUrl(appId, ver, path, o); },
-      /** §16.39 Nr. 2: Bibliotheksdatei für eine App-Instanz → /~a/lib:<name>@<major>.<minor>/<path>. */
-      libUrl: (appId, ver, name, major, path) => { guardAlive(); return libUrl(appId, ver, name, major, path); },
-      /** Shell: beim Mount fixieren (mountVersion tut es selbst). libs = {name: major}, sonst aus dem Manifest. */
-      pin: (appId, ver, o) => { guardAlive(); return pinInstance(appId, ver, o); },
+      /** Bindung einer App-Instanz ({shellVer, libs}); url() fixiert sie beim ersten Aufruf. */
+      binding: (appId, ver) => { guardAlive(); return pinInstance(appId, String(ver)); },
     }),
     /** §16.39 Nr. 2: SW-Nachrichten (ctox:lib-hit, ctox:lib-miss) – im Browser automatisch an navigator.serviceWorker gebunden. */
     libs: Object.freeze({ onSwMessage, resolve: resolveLibMinor, enforceBudget: () => enforceLibBudget(), get byteBudget() { return libByteBudget; } }),
@@ -1693,35 +1661,20 @@ export function createKernel(opts = {}) {
       if (!windowStates.has(appId)) windowStates.set(appId, { title: appId, header: null, size: { width: 0, height: 0 }, mode: 'normal', closed: false });
       const win = windowStates.get(appId);
       return Object.freeze({
-        state: makeLive([tag], () => cloneValue(win)),
+        state: makeLive([tag], () => ({...win,size:{...win.size}})),
         setSize(size) { win.size = { width: Number(size?.width ?? 0), height: Number(size?.height ?? 0) }; notify(tag); },
         setMode(mode) { win.mode = String(mode); notify(tag); },
         reopen() { win.closed = false; notify(tag); },
       });
     },
-    async mount(root, appId) {
-      guardAlive();
-      await ready;
-      const ver = activations.get(appId)?.activated_ver;
-      if (!ver) throw new CtoxError('not_found', `App ${appId} ist nicht aktiviert`);
-      const r = await mountVersion(root, appId, ver, { restored: undefined });
-      const m = { id: uuidv7(), appId, ver, root, handle: r.handle, api: r.api, closed: false };
-      mounts.add(m);
-      notify('mounts');
-      return Object.freeze({
-        app_id: appId,
-        get ver() { return m.ver; },
-        get api() { return m.api; },
-        snapshot: () => m.handle.snapshot?.(),
-        async unmount() { m.closed = true; mounts.delete(m); notify('mounts'); await m.handle.unmount(); },
-      });
-    },
+
   });
 
   // ---- Sim-Implementierung (läuft im Leiter) ----
   const simImpl = {
     push: (collection, docs) => corePush(collection, docs),
     setLink(partial) {
+      if(partial.state!==undefined && !['online','offline'].includes(partial.state))throw new CtoxError('invalid','Link state must be online or offline');
       link = { ...link, ...partial };
       if(fakeCore)fakeCore.online = link.state === 'online';
       netChanged();
@@ -1736,7 +1689,6 @@ export function createKernel(opts = {}) {
       await publishInternal(appId, ver, o);
       if (isLib(appId)) { await waitUntil(() => versionDoc(appId, ver) || closed); return null; } // Bibliotheken werden nie aktiviert
       await waitUntil(() => isTerminalFor(appId, ver) || visible(mirrorGet('business_apps', appId))?.active_ver !== ver || closed);
-      await (remountChains.get(appId) ?? Promise.resolve());
       return activations.has(appId) ? { ...activations.get(appId) } : null;
     },
     // §16.22 A2/A3/A6/A9 + §16.26 + Befund B4. Im Leiter, weil der Test-Core hier die Veröffentlichung simuliert.
@@ -1808,8 +1760,10 @@ export function createKernel(opts = {}) {
       const v = await setActivation(appId, { target_ver: ver, activated_ver: lastGood, good_vers: good, state: 'failed', error: `reported: ${reason}` });
       return { ...v };
     },
+    corruptNextFetch(n){corruptNextFetch+=n;},
+
   };
-  const forward = (name) => (...args) => callLeader(name, args);
+  const forward = (name) => (...args) => Promise.resolve().then(()=>callLeader(name,args));
 
   // ---- Sim-Fassade (Test-Hooks) ----
   const sim = {
@@ -1820,24 +1774,21 @@ export function createKernel(opts = {}) {
     push: (collection, docs) => forward('push')(collection, docs),
     setLink: (partial) => forward('setLink')(partial),
     setBacklog: (n) => forward('setBacklog')(n),
-    publishAppVersion(appId, ver, o = {}) {
-      const { module, migrate, ...rest } = o;
-      if (module) moduleRegistry.set(`${appId}@${ver}`, module);
-      if (isLeader || !bc) return simImpl.publishAppVersion(appId, ver, { ...rest, migrate });
-      return (async () => {
-        await callLeader('publishAppVersion', [appId, ver, rest]); // migrate-Funktionen sind nicht übertragbar
-        if (isLib(appId)) return null;
-        await waitUntil(() => isTerminalFor(appId, ver) || closed);
-        await (remountChains.get(appId) ?? Promise.resolve());
-        return activations.has(appId) ? { ...activations.get(appId) } : null;
-      })();
+    publishAppVersion(appId,ver,o={}){
+      if(o.module!==undefined)return Promise.reject(new CtoxError('invalid','App modules belong to Shell/testkit'));
+      if(isLeader||!bc)return Promise.resolve().then(()=>simImpl.publishAppVersion(appId,ver,o));
+      return callLeader('publishAppVersion',[appId,ver,o]).then(()=>(isLib(appId)?null:activations.get(appId)??null));
     },
-    registerModule(appId, ver, module) { moduleRegistry.set(`${appId}@${ver}`, module); },
+    corruptNextFetch:(n=1)=>callLeader('corruptNextFetch',[n]),
+    retireGenerationsNow:appId=>{const a=activations.get(appId);return retireGenerations(appId,a?.activated_ver,a?.previous_ver);},
     // Loader-Rolle (§16.15): Shell starten und live tauschen.
     async startShell(shellModule, o = {}) {
       if (typeof shellModule?.startShell !== 'function') throw new CtoxError('invalid', 'Shell-Modul exportiert kein startShell()');
       await ready;
-      await shellModule.startShell(kernel, { restored: o.restored });
+      await withTimeout(Promise.resolve().then(()=>shellModule.startShell(kernel,{restored:o.restored})),remountTimeoutMs,
+        ()=>{try{shellModule.stopShell?.();}catch{}});
+      guardAlive();
+
       currentShell = shellModule;
       return true;
     },
@@ -1851,7 +1802,7 @@ export function createKernel(opts = {}) {
         }
       }
       snap = checkSnapshot('shell', snap);
-      await windowStateApi.put('shell', snap ?? null); // §16.19 Nr. 3: Shell-Snapshot je Tab unter windowState 'shell'
+      await windowStateApi.put('shell',snap??null);
       try {
         await withTimeout(Promise.resolve().then(() => nextShellModule.startShell(kernel, { restored: cloneValue(snap) })), remountTimeoutMs,
           () => { try { nextShellModule.stopShell?.(); } catch { /* egal */ } });
@@ -1886,6 +1837,8 @@ export function createKernel(opts = {}) {
     inspectMeta: async (key) => db.get('meta', key),
     /** @deprecated seit §16.19 – Alias für `windowStateRows`. */
     windowState: async () => db.all('window_state'),
+    windowStateRows:async()=>db.all('window_state'),
+    get refetches(){return simRecord.refetches;},
     coreHead: async () => Number(fakeCore?.head ?? '0'),
     get checkpoint() { return checkpoint; },
     get lastVisible() { return simRecord.lastVisible; },
@@ -1918,8 +1871,6 @@ export function createKernel(opts = {}) {
     for(const cancel of [...deadlineCancels])cancel();
     const cleanup=[];
     if(currentShell?.stopShell)cleanup.push(()=>currentShell.stopShell());
-    for(const m of mounts)cleanup.push(()=>m.handle.unmount());
-    mounts.clear();
     for (const t of timers) clearTimeout(t);
     timers.clear();
     clearInterval(ticker);
@@ -1940,7 +1891,7 @@ export function createKernel(opts = {}) {
     try { bc?.close(); } catch { /* egal */ }
     bc = null;
     try { transport.close(); } catch {}
-    db?.close();
+    await db?.close();
     // Release connection/locks/listeners before app code. A stuck app must not
     // keep an identity alive or prevent the next tab from becoming leader.
     await Promise.allSettled(cleanup.map(fn=>withTimeout(Promise.resolve().then(fn),remountTimeoutMs)));
@@ -1960,6 +1911,7 @@ export function createKernel(opts = {}) {
     get storageKind() { return db?.kind ?? null; },
     tabKey,
     appApi: (appId, appVer) => makeAppApi(appId, appVer),
+    apps:shellApi.apps,activation:shellApi.activation,metrics:shellApi.metrics,leader:shellApi.leader,status:statusZone,windowState:windowStateApi,artifacts:shellApi.artifacts,source:shellApi.source,identity:shellApi.identity,
     statusZone,
     shell: shellApi,
     // Shell-Kernel-Objekte direkt am Kernel (dieselben Objekte wie kernel.shell.*), wie im Stub

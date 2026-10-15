@@ -195,6 +195,12 @@ impl WriterHandle {
         job.options.check()?;
         let (reply, receive) = oneshot::channel();
         let queue = self.inner.queue.lock().unwrap_or_else(|p| p.into_inner());
+        if matches!(
+            *self.inner.state.borrow(),
+            Lifecycle::Closing | Lifecycle::Stopped(_)
+        ) {
+            return Err(StoreError::Closed);
+        }
         let queue = queue.as_ref().ok_or(StoreError::Closed)?;
         queue
             .try_send(Box::new(TypedPending { job, reply }))
@@ -203,6 +209,15 @@ impl WriterHandle {
                 TrySendError::Disconnected(_) => StoreError::Closed,
             })?;
         Ok(JobHandle(receive))
+    }
+    /// Fence new producers before draining readers or other dependencies.
+    /// Keep the file owner alive until `shutdown` (or the last handle's drop):
+    /// a failed reader drain must not open an offline-maintenance window.
+    pub fn stop_admission(&self) {
+        let queue = self.inner.queue.lock().unwrap_or_else(|p| p.into_inner());
+        if queue.is_some() && !matches!(*self.inner.state.borrow(), Lifecycle::Stopped(_)) {
+            self.inner.state.send_replace(Lifecycle::Closing);
+        }
     }
     /// Reject new jobs, drain accepted work, close SQLite, release ownership.
     /// Awaiting this never blocks an async worker or calls block_on.
@@ -289,15 +304,13 @@ fn serve(
     }
     let mut connection = Connection::open(inner.db_id.path())?;
     DbId::new(inner.db_id.path())?;
-    // P3-04 replaces this bootstrap with its shared pragma configuration. Keep
-    // defaults safe while the skeleton's config module is being implemented.
-    connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=0; PRAGMA foreign_keys=ON; PRAGMA journal_size_limit=67108864; PRAGMA wal_autocheckpoint=1000;")?;
+    crate::config::ConnectionConfig::default().apply_writer(&connection)?;
     if let Some(configure) = &options.configure {
         configure(&connection)?;
     }
     {
         let queue = inner.queue.lock().unwrap_or_else(|p| p.into_inner());
-        if queue.is_some() {
+        if queue.is_some() && matches!(*inner.state.borrow(), Lifecycle::Starting) {
             inner.state.send_replace(Lifecycle::Ready);
         }
     }
