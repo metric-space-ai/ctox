@@ -9,7 +9,7 @@ mkdir -p "$PROOF"
 REGISTRY_SOURCE=c132b903d8f08b0caf7034db984f76d834e392ff
 mkdir -p "$TMPDIR/import-registry"
 git --git-dir=/mnt/nvme1/build-lane/mirror/metric-space-ai__ctox.git cat-file -e "$REGISTRY_SOURCE^{commit}" || git --git-dir=/mnt/nvme1/build-lane/mirror/metric-space-ai__ctox.git fetch --filter=blob:none origin "$REGISTRY_SOURCE"
-git --git-dir=/mnt/nvme1/build-lane/mirror/metric-space-ai__ctox.git archive "$REGISTRY_SOURCE" src/core/store src/core/paths.rs tests/sync-v4-m2 | tar -x -C "$TMPDIR/import-registry"
+git --git-dir=/mnt/nvme1/build-lane/mirror/metric-space-ai__ctox.git archive "$REGISTRY_SOURCE" src/core/store src/core/paths.rs src/core/rxdb/src/plugins/replication_webrtc/v4_stream.rs tests/sync-v4-m2 | tar -x -C "$TMPDIR/import-registry"
 STORE="$TMPDIR/import-registry/src/core/store"
 CAS_SOURCE=7d1cb291550b859a8c05997603f285cb7d3ca8ac
 git --git-dir=/mnt/nvme1/build-lane/mirror/metric-space-ai__ctox.git archive "$CAS_SOURCE" src/core/store/cas | tar -x -C "$TMPDIR/import-registry"

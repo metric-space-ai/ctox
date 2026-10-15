@@ -4,7 +4,11 @@
 /// May also be called against a separate frozen mail-server database.
 /// The caller must select each source database once, never import both mirrors.
 pub fn collect_mail_tracking(tx: &Transaction<'_>) -> Result<CoreImport> {
-    let mut out = CoreImport { documents: vec![], dataframe_rows: vec![], report: ImportReport::default() };
+    let mut out = CoreImport {
+        documents: vec![],
+        dataframe_rows: vec![],
+        report: ImportReport::default(),
+    };
     mail_tracking(tx, &mut out)?;
     Ok(out)
 }
@@ -14,21 +18,48 @@ fn mail_tracking(tx: &Transaction<'_>, out: &mut CoreImport) -> Result<()> {
     for name in ["outbound_tracking_tokens", "outbound_tracking_events"] {
         out.report.collections.entry(name.into()).or_default();
     }
-    let tokens = rows(tx,"stalwart_mail_tracking_tokens","token,message_id,campaign_id,event_type,target_url,created_at")?;
+    let tokens = rows(
+        tx,
+        "stalwart_mail_tracking_tokens",
+        "token,message_id,campaign_id,event_type,target_url,created_at",
+    )?;
     let mut campaigns = BTreeMap::new();
     for token in tokens {
-        let id = text(&token,"token")?.to_owned();
-        let created = token["created_at"].as_i64().and_then(|t| t.checked_mul(1000)).ok_or_else(||invalid("tracking_token_timestamp"))?;
+        let id = text(&token, "token")?.to_owned();
+        let created = token["created_at"]
+            .as_i64()
+            .and_then(|t| t.checked_mul(1000))
+            .ok_or_else(|| invalid("tracking_token_timestamp"))?;
         let campaign = token["campaign_id"].as_str().unwrap_or("").to_owned();
         campaigns.insert(id.clone(), campaign.clone());
-        push(out,"outbound_tracking_tokens",id.clone(),json!({"id":id,"token":id,"message_id":text(&token,"message_id")?,"campaign_id":campaign,"event_type":text(&token,"event_type")?,"target_url":token["target_url"].as_str().unwrap_or(""),"created_at_ms":created}))?;
+        push(
+            out,
+            "outbound_tracking_tokens",
+            id.clone(),
+            json!({"id":id,"token":id,"message_id":text(&token,"message_id")?,"campaign_id":campaign,"event_type":text(&token,"event_type")?,"target_url":token["target_url"].as_str().unwrap_or(""),"created_at_ms":created}),
+        )?;
     }
-    for event in rows(tx,"stalwart_mail_tracking_events","id,token,message_id,event_type,occurred_at,user_agent")? {
-        let id = event["id"].as_str().map(str::to_owned).or_else(||event["id"].as_i64().map(|n|n.to_string())).ok_or_else(||invalid("tracking_event_identity"))?;
-        let token = text(&event,"token")?;
+    for event in rows(
+        tx,
+        "stalwart_mail_tracking_events",
+        "id,token,message_id,event_type,occurred_at,user_agent",
+    )? {
+        let id = event["id"]
+            .as_str()
+            .map(str::to_owned)
+            .or_else(|| event["id"].as_i64().map(|n| n.to_string()))
+            .ok_or_else(|| invalid("tracking_event_identity"))?;
+        let token = text(&event, "token")?;
         let campaign = campaigns.get(token).cloned().unwrap_or_default();
-        let occurred = event["occurred_at"].as_i64().ok_or_else(||invalid("tracking_event_timestamp"))?;
-        push(out,"outbound_tracking_events",id.clone(),json!({"id":id,"token":token,"message_id":text(&event,"message_id")?,"campaign_id":campaign,"event_type":text(&event,"event_type")?,"occurred_at_ms":occurred,"user_agent":event["user_agent"].as_str().unwrap_or("")}))?;
+        let occurred = event["occurred_at"]
+            .as_i64()
+            .ok_or_else(|| invalid("tracking_event_timestamp"))?;
+        push(
+            out,
+            "outbound_tracking_events",
+            id.clone(),
+            json!({"id":id,"token":token,"message_id":text(&event,"message_id")?,"campaign_id":campaign,"event_type":text(&event,"event_type")?,"occurred_at_ms":occurred,"user_agent":event["user_agent"].as_str().unwrap_or("")}),
+        )?;
     }
     Ok(())
 }
