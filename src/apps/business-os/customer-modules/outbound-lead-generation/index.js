@@ -26,11 +26,13 @@ function showBusinessConfirm(message, options = {}) { return shellConfirm(messag
 function showBusinessPrompt(message, options = {}) { return shellPrompt(message, { host: eigenesDialogZiel(), ...options }); }
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { createCollectionReloader } from './collection-reloader.mjs';
-import { loadLeadList, loadFullLeadRows, leadListRow, withLeadQueryAuthority } from './lead-list-loader.mjs';
+import { hasLocalStore, loadLeadList, loadFullLeadRows, leadListRow, readStoredLeadRows, withLeadQueryAuthority } from './lead-list-loader.mjs';
 import { captureResearchExport, openResearchSnapshot } from './current-state-export.mjs';
 import { optionalKeysForRequiredCheckbox } from './required-field-selection.mjs';
 import { readErrorEntry, visibleReadErrorKeys } from './read-error-grace.mjs';
 import { inFlightLeadsOutsideWindow, IN_FLIGHT_SWEEP_INTERVAL_MS } from './in-flight-lead-sweep.mjs';
+import { revealDetailIfStacked } from './stacked-detail-reveal.mjs';
+import { doppelteAdapterIds } from './adapter-dedupe.mjs';
 import { abgleichBasisVeraltet, hatBelegteFelder } from './reconcile-basis.mjs';
 import {
   actionAllowedOnStartupSnapshot, buildStartupSnapshot, readStartupSnapshot,
@@ -909,6 +911,7 @@ async function synchronizeInitialData() {
   // wenn alle Sammlungen live sind; sonst beim naechsten Start.
   if (!nichtLive.length) {
     bootSchritt('repair-adapters');
+    await pflegeSchritt('dedupe-adapters', () => entferneDoppelteAdapter());
     // Nachladen nur, wenn ein Schritt etwas geaendert hat: jedes reload sind
     // mehrere Abfragen gegen das Abfragekontingent des Browsers.
     if (await pflegeSchritt('repair-adapters', () => repairAdapterActivationDrift())) {
@@ -1289,6 +1292,8 @@ async function seedSources() {
     };
     if (existing) {
       const current = existing.toJSON?.() || existing;
+      // Vom Nutzer entfernte mitgelieferte Quelle bleibt entfernt (Owner 15.10.2026).
+      if (current.payload?.removed === true) continue;
       if (current.payload?.builtin !== false) {
         // Built-in bedeutet „mitgeliefert“, nicht „unveränderlich“. Beim
         // Upgrade ergänzen wir neue Pflichtabdeckung additiv, lassen aber die
@@ -1720,7 +1725,8 @@ const LEAD_LIST_LOAD_TIMEOUT_MS = 45000;
 function sharedLeadListLoad(collection, previousLeads, bindingGeneration) {
   const running = state.leadListLoad;
   if (running && running.bindingGeneration === bindingGeneration) return running.promise;
-  const promise = withLeadQueryAuthority(state.ctx.sync,
+  // Mit lokalem Speicher braucht die Liste keinen CTOX-Lesekanal (client first).
+  const promise = hasLocalStore(collection) ? loadLeadList(collection, previousLeads) : withLeadQueryAuthority(state.ctx.sync,
     signal => loadLeadList(collection, previousLeads, { signal }), {
       collection,
       isCurrent: () => state.collectionBindingGeneration === bindingGeneration,
@@ -1788,6 +1794,12 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration, changesByKey = nu
       }
       if (!leadChanges) leadChanges = await sharedLeadListLoad(collection, previousLeads, bindingGeneration);
       return [key, leadChanges.rows];
+    }
+    // Client first: kleine Sammlungen (Quellen, Adapter, Kampagnen, Einstellungen)
+    // kommen direkt aus dem lokalen Speicher; ueber find().exec() warteten sie nach
+    // jedem Neuladen auf CTOX ("Aktueller Stand wird aus CTOX geladen …").
+    if (hasLocalStore(collection)) {
+      return [key, (await collection.storageCollection.allDocuments()).filter((doc) => doc && !doc._deleted)];
     }
     const collectionName = `outbound_lead_generation_${key === 'researchPolicies' ? 'research_policies' : key}`;
     const docs = await withLeadQueryAuthority(state.ctx.sync,
@@ -1901,7 +1913,7 @@ function applyFreshCollections(fresh, bindingGeneration, leadChanges) {
   // sie bestaetigt: ein Nachladen mit dem aelteren Serverstand liess ihn sonst
   // zuruckspringen, und der naechste Klick schaltete falsch herum (Rundgang
   // 25.09.2026). Nach zwei Minuten gilt wieder, was die Datenbank sagt.
-  if (fresh.has('sources')) state.sources = sources.map((source) => {
+  if (fresh.has('sources')) state.sources = sources.filter((source) => source.payload?.removed !== true).map((source) => {
     const absicht = state.sourceToggleIntent.get(source.id);
     if (!absicht) return source;
     if ((source.enabled !== false) === absicht.enabled || Date.now() > absicht.bis) {
@@ -1994,13 +2006,21 @@ async function ensureFullLeads(ids, { fresh = false } = {}) {
   const requested = [...new Set(ids.filter(Boolean))];
   const summaries = new Map(listLeads().map(row => [row.id, row]));
   const cached = new Map(state.leads.map(row => [row.id, row]));
-  const missing = requested.filter(id => fresh || !cached.has(id) || cached.get(id)._rev !== summaries.get(id)?._rev);
+  let missing = requested.filter(id => fresh || !cached.has(id) || cached.get(id)._rev !== summaries.get(id)?._rev);
   if (!missing.length) return requested.map(id => cached.get(id));
   const sequence = ++state.fullLeadReadSequence;
+  // Anzeige liest zuerst den lokalen Speicher (client first); nur fehlende oder
+  // veraltete Leads gehen an CTOX. Aktionen (fresh) lesen weiter autoritativ.
+  const stored = fresh ? new Map() : await readStoredLeadRows(state.collections.leads, missing);
+  const local = missing.map(id => stored.get(id))
+    // Der lokale Speicher fuehrt kein _rev; ein lokaler Lead gilt, solange die
+    // Listenzeile keine abweichende Revision meldet.
+    .filter(row => row && (!row._rev || !summaries.get(row.id)?._rev || summaries.get(row.id)._rev === row._rev));
+  missing = missing.filter(id => !local.some(row => row.id === id));
   // Ein Lesefenster (15 s) je Paket: alle 498 Leads einer Kampagne in einem
   // Fenster waren 63 Achter-Abfragen und liefen auf thesen (08.10.2026)
   // regelmaessig in "Daten konnten nicht rechtzeitig aus CTOX geladen werden".
-  const rows = [];
+  const rows = [...local];
   for (let offset = 0; offset < missing.length; offset += FULL_LEAD_READ_PACKAGE) {
     const paket = missing.slice(offset, offset + FULL_LEAD_READ_PACKAGE);
     rows.push(...await withLeadQueryAuthority(state.ctx.sync,
@@ -3250,7 +3270,6 @@ function renderSourceRow(item) {
   const needsBrowserAuthorization = intern || istSchluesselZugang(item.credential_secret_name)
     ? false
     : item.payload?.input_driven !== true;
-  const userManaged = item.payload?.builtin === false;
   const hintergrund = intern
     ? ' · interne Quelle'
     : item.payload?.input_driven === true
@@ -3279,8 +3298,7 @@ function renderSourceRow(item) {
       <button class="ctox-pane-icon" data-action="test-adapter" title="${tr('testAdapter', 'Datenzugriff prüfen')}" aria-label="${tr('testAdapter', 'Datenzugriff prüfen')}">${icon('test')}</button>
       ${item.requires_credential ? `<button class="ctox-pane-icon" data-action="check-credential" title="Zugang prüfen" aria-label="Zugang von ${escapeHtml(item.label)} prüfen">${icon('key')}</button>` : ''}
       ${needsBrowserAuthorization ? `<button class="ctox-pane-icon" data-action="auth-source" title="${tr('browserSignIn', 'Im CTOX-Browser anmelden / entsperren')}" aria-label="${tr('signIn', 'Anmelden')}">${icon('login')}</button>` : ''}
-      <button class="ctox-pane-icon is-danger" data-action="delete-adapter" title="Adapter entfernen" aria-label="Adapter für ${escapeHtml(item.label)} entfernen">${icon('trash')}</button>
-      ${userManaged ? `<button class="ctox-pane-icon is-danger" data-action="delete-source" title="Quelle vollständig löschen" aria-label="${escapeHtml(item.label)} vollständig löschen">${icon('close')}</button>` : ''}
+      <button class="ctox-pane-icon is-danger" data-action="delete-source" title="Quelle entfernen" aria-label="${escapeHtml(item.label)} entfernen">${icon('trash')}</button>
     </div>`}
   </div>`;
 }
@@ -3447,7 +3465,7 @@ function renderCenter() {
   if (status) {
     // <details>-Zustand ueberlebt den Neuaufbau (gleiche Falle wie im Detail).
     const openDisclosures = new Set([...status.querySelectorAll('details[open][data-disclosure]')].map((node) => node.dataset.disclosure));
-    setzeHtmlWennGeaendert(status, `${renderCampaignProgress(campaignProgress)}${renderUnvollstaendigerImport(state.selectedCampaign)}${renderCampaignRecipientExclusions(state.selectedCampaign)}`);
+    setzeHtmlWennGeaendert(status, `${renderCampaignProgress(campaignProgress)}${renderUnvollstaendigerImport(state.selectedCampaign)}`);
     openDisclosures.forEach((key) => {
       const node = status.querySelector(`details[data-disclosure="${key}"]`);
       if (node) node.open = true;
@@ -3497,27 +3515,9 @@ function renderCenter() {
   if (headerCheckbox) headerCheckbox.indeterminate = someVisibleSelected;
 }
 
-function campaignRecipientExclusions(campaign) {
-  const rows = [];
-  const removedKeys = new Set();
-  for (const [leadId, notices] of state.recipientRemovalNotices) {
-    for (const notice of notices || []) removedKeys.add(recipientEligibilityKey(leadId, notice.contact?.id));
-  }
-  for (const lead of campaignLeads(campaign)) {
-    for (const contact of lead.contacts || []) {
-      const decision = currentContactEligibility(lead, contact);
-      if (decision.status === 'free') continue;
-      rows.push({
-        lead,
-        contact,
-        decision,
-        removed: removedKeys.has(recipientEligibilityKey(lead.id, contact.id)),
-      });
-    }
-  }
-  return rows;
-}
-
+// Kein Sammelfeld „gesperrt · ungeprüft · Prüfung wiederholen“ mehr (Owner 15.10.2026:
+// „wenn einer gesperrt ist, dann darf er nicht ausgewählt werden“). Der Sperrvermerk
+// steht am Kontakt in der Empfängerauswahl, der Kontakt ist dort nicht wählbar.
 function renderUnvollstaendigerImport(campaign) {
   const job = unvollstaendigerImport(campaign);
   if (!job) return '';
@@ -3528,83 +3528,6 @@ function renderUnvollstaendigerImport(campaign) {
     <button class="ctox-button" data-action="resume-import" data-import-id="${escapeHtml(job.id)}">Fortsetzen</button>
   </div>`;
 }
-function renderCampaignRecipientExclusions(campaign) {
-  const cached = new Set(state.leads.map(lead => lead.id));
-  const missing = campaignListLeads(campaign).filter(lead => !cached.has(lead.id)).length;
-  const notice = missing ? `<div class="leadgen-recipient-exclusions is-pending is-compact" role="status"><span>Kontaktdaten von ${missing} Leads werden erst bei Auswahl oder Prüfung geladen.</span><button class="ctox-button" data-action="recheck-sellify">Kontakte prüfen</button></div>` : '';
-  return notice + renderLoadedCampaignRecipientExclusions(campaign);
-}
-function renderLoadedCampaignRecipientExclusions(campaign) {
-  const rows = campaignRecipientExclusions(campaign);
-  if (!rows.length) return '';
-  // Owner-Befund 03.09.: Das Feld nannte einen Systemzustand und keine
-  // Aufgabe — 48 Zeilen, derselbe Name mehrfach, Kontakte fremder Firmen,
-  // und keine Handlung. Ein Kontakt, der geprueft werden MUSS, ist eine
-  // Aufgabe; ein Abgleich, der nicht laufen KANN, ist genau eine Meldung mit
-  // genau einem Knopf.
-  const seen = new Set();
-  const unique = [];
-  for (const row of rows) {
-    const name = personDisplayName(row.contact) || '';
-    const key = `${row.lead.id}|${name.toLowerCase()}|${String(row.contact?.person_email || '').toLowerCase()}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(row);
-  }
-  const pending = unique.filter((row) => row.decision.pending === true
-    || /nicht prüfbar|wird geprüft/i.test(String(row.decision.label || '')));
-  const blocked = unique.filter((row) => !pending.includes(row));
-  if (!blocked.length) {
-    // Nichts ist ausgeschlossen — die Pruefung konnte nur nicht laufen.
-    // Laufende Pruefung von ausgebliebener Antwort unterscheiden: eine Pruefung
-    // dauert gemessen bis 75 Sekunden. "Hat nicht geantwortet" waehrend sie noch
-    // laeuft las sich wie ein Defekt.
-    const laeuft = unique.some((row) => state.recipientEligibilityBusy.has(row.lead?.id));
-    const zeitueberschritten = unique.filter((row) => state.recipientEligibilityTimedOut.has(row.lead?.id)).length;
-    // Rundgang 11.09.2026: der rote Kasten nahm in schmalen Fenstern die ganze
-    // Leadliste ein. Eine Zeile reicht; die Begruendung steht im Hinweistext.
-    const erklaerung = 'Solange ein Kontakt nicht gegen Sellify geprüft ist, bleibt er für die Übergabe gesperrt – ohne Prüfung darf niemand angeschrieben werden. '
-      + (laeuft ? 'Die Prüfung dauert je Lead bis zu 90 Sekunden.' : '');
-    const text = laeuft
-      ? `Sperrvermerk-Prüfung läuft · ${unique.length} Kontakt${unique.length === 1 ? '' : 'e'}`
-      : zeitueberschritten
-        ? `Sperrvermerk-Prüfung ohne Antwort · ${zeitueberschritten} Kontakt${zeitueberschritten === 1 ? '' : 'e'}`
-        : `Sperrvermerk-Prüfung ausstehend · ${unique.length} Kontakt${unique.length === 1 ? '' : 'e'}`;
-    return `<div class="leadgen-recipient-exclusions is-pending is-compact" role="status" title="${escapeHtml(erklaerung)}">
-      <span>${escapeHtml(text)}</span>
-      <button class="ctox-button" data-action="recheck-sellify"${laeuft ? ' disabled' : ''}>${laeuft ? 'Prüfung läuft …' : 'Jetzt prüfen'}</button>
-    </div>`;
-  }
-  const foreign = unique.filter((row) => {
-    const company = String(row.contact?.company || row.contact?.firma_name || '').trim().toLowerCase();
-    return company && company !== String(row.lead?.name || '').trim().toLowerCase();
-  });
-  const shown = blocked.slice(0, 5);
-  // "gesperrt" und "zu prüfen" getrennt zaehlen (Klicktest P2 V9) und eine
-  // laufende Pruefung auch in dieser Form zeigen (PRG-02a).
-  const hartGesperrt = blocked.filter((row) => row.decision?.status === 'blocked').length;
-  const zuPruefen = blocked.length - hartGesperrt;
-  const pruefungLaeuft = unique.some((row) => state.recipientEligibilityBusy.has(row.lead?.id));
-  const teile = [
-    hartGesperrt ? `${hartGesperrt} Kontakt${hartGesperrt === 1 ? '' : 'e'} gesperrt` : '',
-    zuPruefen ? `${zuPruefen} zu prüfen` : '',
-    pending.length ? `${pending.length} ungeprüft` : '',
-    pruefungLaeuft ? 'Prüfung läuft …' : '',
-  ].filter(Boolean);
-  return `<details class="leadgen-recipient-exclusions" data-disclosure="recipient-exclusions">
-    <summary>${escapeHtml(teile.join(' · '))}</summary>
-    <ul>${shown.map(({ lead, contact, decision, removed }) => `<li>
-      <strong>${escapeHtml(personDisplayName(contact) || tr('contact', 'Kontakt'))}</strong>
-      <span>${escapeHtml(lead.name)} · ${escapeHtml(decision.label)}${removed ? ' · abgewählt' : ''}</span>
-      ${decision.originalRemark ? `<q>${escapeHtml(decision.originalRemark)}</q>` : `<span>${escapeHtml(decision.reason || '')}</span>`}
-    </li>`).join('')}</ul>
-    ${blocked.length > shown.length ? `<p>… und ${blocked.length - shown.length} weitere.</p>` : ''}
-    ${pending.length ? `<p>${pending.length} Kontakt${pending.length === 1 ? '' : 'e'} konnten nicht geprüft werden.
-      <button class="ctox-button" data-action="recheck-sellify"${pruefungLaeuft ? ' disabled' : ''}>${pruefungLaeuft ? 'Prüfung läuft …' : 'Prüfung wiederholen'}</button></p>` : ''}
-    ${foreign.length ? `<p role="status">${foreign.length} Kontakt${foreign.length === 1 ? '' : 'e'} gehören laut Datensatz zu einer anderen Firma als der Lead — bitte im Lead prüfen.</p>` : ''}
-  </details>`;
-}
-
 function renderCampaignProgress(progress) {
   // Owner-Vorgabe 31.08.: Die Leiste ist ein LAUF-Monitor, kein Dauerzustand.
   // Ohne aktive Recherche ist sie ueberfluessig und verschwindet.
@@ -4183,7 +4106,6 @@ async function handleClick(event) {
   if (action === 'check-credential') await pruefeZugang(id);
   if (action === 'test-adapter') await runAdapterCommand(id, 'outbound.research_source.test');
   if (action === 'auth-source') await runAdapterCommand(id, 'outbound.research_source.auth_assist');
-  if (action === 'delete-adapter') await deleteSourceAdapter(id);
   if (action === 'edit-source') await editSource(id);
   if (action === 'delete-source') await deleteSource(id);
   if (action === 'research-campaign') await startCampaignResearch(trigger.dataset.campaign || state.selectedCampaign);
@@ -4349,6 +4271,8 @@ function selectLeadAndRefreshEligibility(id) {
   state.selectedDetailError = '';
   renderCenter();
   renderDetail();
+  const host = state.ctx?.host;
+  revealDetailIfStacked({ leads: host?.querySelector('.leadgen-leads'), detail: host?.querySelector('.leadgen-detail') });
   void loadSelectedLeadDetails();
 }
 
@@ -7772,21 +7696,68 @@ async function editSource(sourceId) {
   await queueAdapterReconciliationAfterSourceChange('source_settings_changed');
 }
 
+// Alle Adapter einer Quelle: auf der Kundeninstanz lagen je Quelle zwei (adapter_thesen_* vom
+// 22.09. und adapter_leadgen_*); geloescht wurde nur der erste, die Zeile blieb
+// (Owner 15.10.2026: „ich habe zwei adapter gelöscht, aber es ist gar nichts passiert“).
+// Lesen und Schreiben direkt im lokalen Speicher (wie RxDocument.incrementalPatch);
+// find().exec() ging bis zur Shell-Freigabe an CTOX und hing (15.10.2026).
+async function patchStoredDoc(collection, doc, fields) {
+  const now = Number(fields?.updated_at_ms || Date.now());
+  await collection.storageCollection.upsert({
+    ...doc, ...fields, updated_at_ms: now, _meta: { ...(doc._meta || {}), lwt: now },
+  });
+}
+
+async function entferneDoppelteAdapter() {
+  const adapters = state.collections.adapters;
+  if (typeof adapters?.storageCollection?.allDocuments !== 'function') return false;
+  const docs = await adapters.storageCollection.allDocuments();
+  const ids = new Set(doppelteAdapterIds(docs));
+  for (const doc of docs) {
+    if (ids.has(doc.id)) await patchStoredDoc(adapters, doc, { _deleted: true, is_deleted: true });
+  }
+  if (ids.size) state.adapters = state.adapters.filter((entry) => !ids.has(entry.id));
+  return ids.size > 0;
+}
+
+async function removeAllSourceAdapters(sourceId) {
+  const adapters = state.collections.adapters;
+  const docs = (await adapters.storageCollection.allDocuments()).filter((doc) => doc.source_id === sourceId);
+  for (const doc of docs) await patchStoredDoc(adapters, doc, { _deleted: true, is_deleted: true });
+  state.adapters = state.adapters.filter((entry) => entry.source_id !== sourceId);
+}
+
 async function deleteSource(sourceId) {
   const item = state.sources.find((entry) => entry.id === sourceId);
-  if (!item || item.payload?.builtin !== false) return;
+  if (!item) return;
+  const mitgeliefert = item.payload?.builtin !== false;
   const confirmed = await showBusinessConfirm(
-    `Die Quelle „${item.label}“ und ihr eingerichteter Datenzugriff werden vollständig gelöscht.`,
+    `Die Quelle „${item.label}“ wird entfernt und bei Recherchen nicht mehr verwendet.`,
     {
-      title: 'Quelle löschen',
-      confirmLabel: 'Quelle löschen',
+      title: 'Quelle entfernen',
+      confirmLabel: 'Quelle entfernen',
       kind: 'danger',
     },
   );
   if (!confirmed) return;
-  const adapter = state.adapters.find((entry) => entry.source_id === sourceId);
-  const adapterDoc = adapter ? await state.collections.adapters.findOne(adapter.id).exec() : null;
-  if (adapterDoc) await adapterDoc.remove();
+  await removeAllSourceAdapters(sourceId);
+  if (mitgeliefert) {
+    // Mitgelieferte Quellen legt seedSources bei jedem Start an; sie bleiben
+    // deshalb als entfernt markiert statt geloescht.
+    const now = Date.now();
+    const sources = state.collections.sources;
+    const current = (await sources.storageCollection.findDocumentsById([sourceId]))[sourceId];
+    if (current) {
+      await patchStoredDoc(sources, current, {
+        enabled: false,
+        payload: { ...(current.payload || {}), removed: true, removed_at_ms: now },
+        updated_at_ms: now,
+      });
+    }
+    state.sources = state.sources.filter((entry) => entry.id !== sourceId);
+    renderSourcePanel();
+    return;
+  }
   const sourceDoc = await state.collections.sources.findOne(sourceId).exec();
   const geloeschterStand = sourceDoc ? (sourceDoc.toJSON?.() || sourceDoc) : null;
   if (sourceDoc) await sourceDoc.remove();
@@ -8090,55 +8061,6 @@ async function runAdapterCommandInner(item, commandType, preopened) {
     console.error('[outbound-lead-generation] adapter command failed', error);
     showBusinessAlert(message);
   }
-}
-
-async function deleteSourceAdapter(sourceId) {
-  const item = state.sources.find((entry) => entry.id === sourceId);
-  const adapter = state.adapters.find((entry) => entry.source_id === sourceId);
-  if (!item) return;
-  // Ohne Adapterdatensatz warf der Abschluss einen TypeError (adapter.id) —
-  // die Quelle war schon zurueckgesetzt, eine Meldung kam nie
-  // (Klicktest-Befund P4 V4).
-  if (!adapter) {
-    await showBusinessAlert(`Für „${item.label}“ ist kein Datenzugriff eingerichtet.`);
-    return;
-  }
-  const confirmed = await showBusinessConfirm(
-    `Der eingerichtete Datenzugriff für „${item.label}“ wird gelöscht. Die Quelle selbst bleibt erhalten.`,
-    {
-      title: 'Datenzugriff löschen',
-      confirmLabel: 'Datenzugriff löschen',
-      kind: 'danger',
-    },
-  );
-  if (!confirmed) return;
-  const adapterDoc = adapter ? await state.collections.adapters.findOne(adapter.id).exec() : null;
-  if (adapterDoc) await adapterDoc.remove();
-  const now = Date.now();
-  // Ein hinterlegter Zugang bleibt hinterlegt; nur der Datenzugriff geht
-  // (vorher immer "required", Klicktest-Befund P4 V19).
-  // Der Secret-Katalog entscheidet, sonst Quelle ODER Adapter: die Quelle
-  // selbst stand oft noch auf "required", obwohl ein Zugang liegt (Nachtest F, T54).
-  const katalog = secretStand(item.credential_secret_name);
-  const zugangLiegt = katalog
-    ? katalog.vorhanden
-    : ['credential_available', 'authenticated'].includes(item.auth_status)
-      || ['credential_available', 'authenticated'].includes(adapter.auth_status);
-  const authStatus = !item.requires_credential
-    ? 'not_required'
-    : (zugangLiegt ? 'credential_available' : 'required');
-  const sourceDoc = await state.collections.sources.findOne(item.id).exec();
-  await sourceDoc?.incrementalPatch({
-    adapter_status: 'draft',
-    scrape_status: 'target_available',
-    auth_status: authStatus,
-    updated_at_ms: now,
-  });
-  state.adapters = state.adapters.filter((entry) => entry.id !== adapter.id);
-  state.sources = state.sources.map((entry) => entry.id === item.id
-    ? { ...entry, adapter_status: 'draft', scrape_status: 'target_available', auth_status: authStatus, updated_at_ms: now }
-    : entry);
-  renderSourcePanel();
 }
 
 function authAssistFromCommandResult(result) {
@@ -14401,7 +14323,6 @@ export const __leadgenOutboundTestHooks = {
   normalizeProtectionText,
   repairLeadRecipientSelections,
   refreshLeadRecipientEligibility,
-  renderCampaignRecipientExclusions,
   adapterCommandRecordPatch,
   adapterReady,
   campaignResearchProgress,

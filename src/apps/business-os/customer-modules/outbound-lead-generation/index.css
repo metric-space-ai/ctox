@@ -458,7 +458,10 @@
 .leadgen-table tbody tr { cursor: pointer; }
 .leadgen-table tbody tr:hover, .leadgen-table tbody tr[aria-selected="true"] { background: var(--accent-soft); }
 .leadgen-table tbody tr[data-checked="true"] { box-shadow: inset 3px 0 0 var(--accent); }
-.leadgen-table td:nth-child(2) { display: grid; gap: 2px; }
+/* Die Namenszelle bleibt eine Tabellenzelle: mit display:grid sass ihre Unterkante
+   auf eigener Hoehe statt auf der Zeile, die Trennstriche verrutschten (Kundeninstanz 15.10.2026). */
+.leadgen-table td:nth-child(2) > strong, .leadgen-table td:nth-child(2) > span { display: block; }
+.leadgen-table td:nth-child(2) > span { margin-top: 2px; }
 .leadgen-table td:nth-child(2) span { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .leadgen-table .leadgen-select-column { width: 38px; padding-right: 2px; text-align: center; }
 .leadgen-table input[type="checkbox"],
@@ -1004,7 +1007,7 @@ button.leadgen-review-value:focus-visible { border-bottom-color: currentColor; }
 }
 .leadgen-table tbody tr[data-checked="true"] { box-shadow: inset 3px 0 0 var(--accent); }
 .leadgen-table tbody tr[aria-selected="true"][data-checked="true"] { box-shadow: inset 3px 0 0 var(--accent); }
-.leadgen-table td:nth-child(2) { gap: 3px; }
+.leadgen-table td:nth-child(2) > span { margin-top: 3px; }
 .leadgen-table td:nth-child(2) strong { font-weight: 650; letter-spacing: -.01em; }
 .leadgen-table td:nth-child(2) span { font-size: 10px; }
 
