@@ -1,3 +1,50 @@
+#[test]
+fn migration_sequences_are_lossless_canonical_decimal_strings() {
+    let seq = 9_007_199_254_740_993_u64;
+    let migration = Migration {
+        publication_id: "p".into(),
+        collection: "items".into(),
+        source_gen: 1,
+        gen: 2,
+        cursor: seq,
+        state: "ready".into(),
+        epoch: "e".into(),
+        migrated_at_seq: Some(seq + 1),
+    };
+    let mut wire = serde_json::to_value(&migration).unwrap();
+    assert_eq!(wire["cursor"], json!(seq.to_string()));
+    assert_eq!(wire["migrated_at_seq"], json!((seq + 1).to_string()));
+    assert_eq!(
+        serde_json::from_value::<Migration>(wire.clone()).unwrap(),
+        migration
+    );
+    wire["migrated_at_seq"] = json!(seq);
+    assert!(serde_json::from_value::<Migration>(wire.clone()).is_err());
+    wire["migrated_at_seq"] = json!("01");
+    assert!(serde_json::from_value::<Migration>(wire.clone()).is_err());
+    wire["migrated_at_seq"] = Value::Null;
+    assert_eq!(
+        serde_json::from_value::<Migration>(wire.clone())
+            .unwrap()
+            .migrated_at_seq,
+        None
+    );
+    wire["cursor"] = json!(seq);
+    assert!(serde_json::from_value::<Migration>(wire).is_err());
+    let collection = Collection {
+        definition: definition("items"),
+        gen: 2,
+        table: "c_items__g2".into(),
+        state: "active".into(),
+        migrated_at_seq: Some(seq),
+    };
+    let wire = serde_json::to_value(&collection).unwrap();
+    assert_eq!(wire["migrated_at_seq"], json!(seq.to_string()));
+    assert_eq!(
+        serde_json::from_value::<Collection>(wire).unwrap(),
+        collection
+    );
+}
 use super::*;
 use rusqlite::Connection;
 use serde_json::json;

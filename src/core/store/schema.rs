@@ -30,6 +30,7 @@ pub struct Collection {
     pub gen: u64,
     pub table: String,
     pub state: String,
+    #[serde(with = "change_log::optional_decimal")]
     pub migrated_at_seq: Option<u64>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,9 +51,11 @@ pub struct Migration {
     pub collection: String,
     pub source_gen: u64,
     pub gen: u64,
+    #[serde(with = "change_log::decimal")]
     pub cursor: u64,
     pub state: String,
     pub epoch: String,
+    #[serde(with = "change_log::optional_decimal")]
     pub migrated_at_seq: Option<u64>,
 }
 #[derive(Debug, Clone)]

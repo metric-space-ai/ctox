@@ -45,6 +45,21 @@ pub(crate) fn atomic<T>(tx: &Transaction<'_>, f: impl FnOnce() -> Result<T>) -> 
     }
 }
 
+/// Optional sequence watermarks preserve the same lossless wire encoding.
+pub mod optional_decimal {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    #[derive(Serialize, Deserialize)]
+    struct Sequence(#[serde(with = "super::decimal")] u64);
+    pub fn serialize<S: Serializer>(value: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error> {
+        value.map(Sequence).serialize(serializer)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<u64>, D::Error> {
+        Option::<Sequence>::deserialize(deserializer).map(|value| value.map(|seq| seq.0))
+    }
+}
+
 /// Public sequence fields serialize as decimal strings on the wire.
 pub mod decimal {
     use serde::{de::Error, Deserialize, Deserializer, Serializer};
