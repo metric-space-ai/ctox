@@ -5,10 +5,10 @@ export {LANES} from './framing.mjs';
  * not on application acknowledgement. Control ACKs never consume ACK credit.
  */
 export class SendScheduler {
- constructor(channels,{frameBytes=FRAME_BYTES,maxBuffered=65536,windowFrames=4,maxQueueBytes=32*1024*1024,codec='gzip',adapters={},onError=()=>{}}={}){
+ constructor(channels,{frameBytes=FRAME_BYTES,maxBuffered=65536,windowFrames=8,maxQueueBytes=32*1024*1024,codec='gzip',adapters={},onError=()=>{}}={}){
   this.channels=channels;this.frameBytes=Math.min(frameBytes,FRAME_BYTES);this.maxBuffered=Math.min(maxBuffered,128*1024);this.windowFrames=windowFrames;this.maxQueueBytes=maxQueueBytes;this.codec=codec;this.adapters=adapters;this.onError=onError;
   if(this.frameBytes<1024 || this.maxBuffered<this.frameBytes || windowFrames<2)throw new CtoxError('invalid','Invalid scheduler limits');
-  this.queues=Array.from({length:6},()=>[]);this.sent=Array(6).fill(0);this.acked=Array(6).fill(0);this.credits=[0,0,0,0,0,0];this.weights=[0,0,0,8,3,1];this.cursor=3;this.packet=0;this.queuedBytes=0;this.closed=false;this.listeners=[];
+  this.queues=Array.from({length:6},()=>[]);this.sent=Array(6).fill(0);this.acked=Array(6).fill(0);this.credits=[0,0,0,0,0,0];this.weights=[0,0,0,8,3,1];this.cursor=3;this.visiting=null;this.preparing=0;this.packet=0;this.queuedBytes=0;this.closed=false;this.listeners=[];
   for(const channel of new Set(Object.values(channels))){channel.bufferedAmountLowThreshold=Math.min(16384,this.maxBuffered/2);for(const name of ['bufferedamountlow','open']){const fn=()=>this.wake();channel.addEventListener(name,fn);this.listeners.push([channel,name,fn]);}}
  }
  configure({codec,frame_bytes}){this.codec=codec;this.frameBytes=Math.min(frame_bytes,FRAME_BYTES);}
@@ -19,7 +19,9 @@ export class SendScheduler {
   lane=typeof lane==='string'?LANES[lane]:lane;if(!Number.isInteger(lane)||lane<0||lane>5)throw new CtoxError('invalid','Invalid reliable lane');
   if(this.closed)throw new CtoxError('unavailable','Scheduler closed');
   const raw=new TextEncoder().encode(JSON.stringify(message));if(raw.length>MAX_MESSAGE_BYTES)throw new CtoxError('quota','Message exceeds limit');
-  const encoded=await transform(raw,this.codec,false,this.adapters);const packet=++this.packet,step=this.frameBytes-HEADER_BYTES,count=Math.max(1,Math.ceil(encoded.length/step));
+  if(this.preparing+this.queuedBytes+raw.length>this.maxQueueBytes)throw new CtoxError('quota','Send preparation budget exceeded');
+  this.preparing+=raw.length;let encoded;try{encoded=await transform(raw,this.codec,false,this.adapters);}finally{this.preparing-=raw.length;}
+  const packet=++this.packet;if(packet>0xffffffff)throw new CtoxError('unavailable','Packet sequence exhausted; reconnect');const step=this.frameBytes-HEADER_BYTES,count=Math.max(1,Math.ceil(encoded.length/step));
   const frames=Array.from({length:count},(_,index)=>({lane,codec:this.codec,packet,index,count,total:encoded.length,raw:raw.length,payload:encoded.slice(index*step,(index+1)*step)}));
   return this.enqueue(lane,frames,false);
  }
@@ -28,7 +30,7 @@ export class SendScheduler {
   if(this.closed)return Promise.reject(new CtoxError('unavailable','Scheduler closed'));
   if(this.queuedBytes+bytes>this.maxQueueBytes)return Promise.reject(new CtoxError('quota','Send queue full'));
   if(frames.some(f=>f.plain && new TextEncoder().encode(f.plain).length>this.frameBytes))return Promise.reject(new CtoxError('invalid','Control frame too large'));
-  return new Promise((resolve,reject)=>{this.queuedBytes+=bytes;this.queues[lane].push({frames,at:0,noAck,resolve,reject});this.wake();});
+  return new Promise((resolve,reject)=>{this.queuedBytes+=bytes;const entry={frames,at:0,noAck,resolve,reject};if(noAck)this.queues[lane].unshift(entry);else this.queues[lane].push(entry);this.wake();});
  }
  ack(lane,upto){
   const n=Number(upto);if(!Number.isSafeInteger(n)||n<0||n>this.sent[lane])throw new CtoxError('invalid','ACK exceeds sent prefix');
@@ -37,11 +39,13 @@ export class SendScheduler {
  eligible(lane){const q=this.queues[lane][0],c=this.channels[lane]??this.channels[0];return q && c?.readyState==='open' && (q.noAck || this.sent[lane]-this.acked[lane]<this.windowFrames);}
  next(){
   for(const lane of [0,1,2])if(this.eligible(lane))return lane;
-  for(let tries=0;tries<6;tries++){
+  for(let tries=0;tries<9;tries++){
    const lane=this.cursor;
-   if(!this.credits[lane])this.credits[lane]=this.weights[lane];
-   if(this.eligible(lane)&&this.credits[lane]>0){this.credits[lane]--;if(!this.credits[lane])this.cursor=lane===5?3:lane+1;return lane;}
-   this.credits[lane]=0;this.cursor=lane===5?3:lane+1;
+   if(!this.eligible(lane)){this.credits[lane]=0;this.cursor=lane===5?3:lane+1;this.visiting=null;continue;}
+   if(this.visiting!==lane){this.credits[lane]+=this.weights[lane]*this.frameBytes;this.visiting=lane;}
+   const frame=this.queues[lane][0].frames[this.queues[lane][0].at],cost=HEADER_BYTES+frame.payload.length;
+   if(cost<=this.credits[lane]){this.credits[lane]-=cost;return lane;}
+   this.cursor=lane===5?3:lane+1;this.visiting=null;
   }
   return null;
  }

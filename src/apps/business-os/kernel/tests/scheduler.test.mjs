@@ -6,11 +6,13 @@ import {decodeFrame,encodeFrame} from '../framing.mjs';
 class Channel extends EventTarget {readyState='open';bufferedAmount=0;frames=[];send(data){this.frames.push(data);this.onSend?.(data);}}
 const tick=()=>new Promise(r=>setTimeout(r,0));
 test('window sends four fragments without ACK and control preempts remaining bulk',async()=>{
- const c=new Channel(),s=new SendScheduler({0:c},{codec:'identity'});
+ const c=new Channel(),s=new SendScheduler({0:c},{codec:'identity',windowFrames:4});
  const bulk=s.send('transfer',{text:'x'.repeat(200000)});await tick();assert.equal(c.frames.length,4);
  await s.plain({type:'ack',lane:4,upto:'1'});assert.equal(JSON.parse(c.frames[4]).type,'ack');
  let done=false;bulk.then(()=>done=true,()=>{});assert.equal(done,false);
- s.close();await assert.rejects(bulk,e=>e.code==='unavailable');
+ const control=s.send('control',{text:'c'.repeat(200000)});control.catch(()=>{});await tick();
+ await s.plain({type:'ack',lane:1,upto:'1'});assert.equal(JSON.parse(c.frames.at(-1)).type,'ack','ACK bypasses a blocked control window');
+ s.close();await assert.rejects(bulk,e=>e.code==='unavailable');await assert.rejects(control,e=>e.code==='unavailable');
 });
 test('connection buffer budget covers all channels and wakes on low watermark',async()=>{
  const a=new Channel(),b=new Channel();a.bufferedAmount=60000;
