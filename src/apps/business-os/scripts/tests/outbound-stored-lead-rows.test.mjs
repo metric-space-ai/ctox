@@ -28,3 +28,23 @@ test('a collection without a local store yields no rows', async () => {
   assert.equal((await readStoredLeadRows({}, ['a'])).size, 0);
   assert.equal((await readStoredLeadRows(null, ['a'])).size, 0);
 });
+
+test('the lead list comes from the local store without CTOX', async () => {
+  const { loadLeadList } = await import('../../customer-modules/outbound-lead-generation/lead-list-loader.mjs');
+  const col = {
+    find() { throw new Error('must not query CTOX'); },
+    storageCollection: {
+      async allDocuments() {
+        return [
+          { id: 'b', name: 'B', campaign: 'K', evidence: [{ big: true }] },
+          { id: 'a', name: 'A', campaign: 'K' },
+          { id: 'x', _deleted: true },
+        ];
+      },
+    },
+  };
+  const result = await loadLeadList(col, [{ id: 'gone', name: 'G' }]);
+  assert.deepEqual(result.rows.map((row) => row.id), ['a', 'b']);
+  assert.equal('evidence' in result.rows[1], false);
+  assert.deepEqual([...result.removedIds], ['gone']);
+});

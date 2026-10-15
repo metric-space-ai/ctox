@@ -26,7 +26,7 @@ function showBusinessConfirm(message, options = {}) { return shellConfirm(messag
 function showBusinessPrompt(message, options = {}) { return shellPrompt(message, { host: eigenesDialogZiel(), ...options }); }
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { createCollectionReloader } from './collection-reloader.mjs';
-import { loadLeadList, loadFullLeadRows, leadListRow, readStoredLeadRows, withLeadQueryAuthority } from './lead-list-loader.mjs';
+import { hasLocalStore, loadLeadList, loadFullLeadRows, leadListRow, readStoredLeadRows, withLeadQueryAuthority } from './lead-list-loader.mjs';
 import { captureResearchExport, openResearchSnapshot } from './current-state-export.mjs';
 import { optionalKeysForRequiredCheckbox } from './required-field-selection.mjs';
 import { readErrorEntry, visibleReadErrorKeys } from './read-error-grace.mjs';
@@ -1723,7 +1723,8 @@ const LEAD_LIST_LOAD_TIMEOUT_MS = 45000;
 function sharedLeadListLoad(collection, previousLeads, bindingGeneration) {
   const running = state.leadListLoad;
   if (running && running.bindingGeneration === bindingGeneration) return running.promise;
-  const promise = withLeadQueryAuthority(state.ctx.sync,
+  // Mit lokalem Speicher braucht die Liste keinen CTOX-Lesekanal (client first).
+  const promise = hasLocalStore(collection) ? loadLeadList(collection, previousLeads) : withLeadQueryAuthority(state.ctx.sync,
     signal => loadLeadList(collection, previousLeads, { signal }), {
       collection,
       isCurrent: () => state.collectionBindingGeneration === bindingGeneration,
