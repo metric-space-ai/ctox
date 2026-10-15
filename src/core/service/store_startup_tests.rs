@@ -141,5 +141,27 @@ async fn foreground_owns_real_files_and_drains_engine_before_store() -> anyhow::
         .await?;
     assert_eq!(count, 1);
     reopened.shutdown().await?;
+    if let Some(destination) = std::env::var_os("CTOX_CUTOVER_FIXTURE_EXPORT") {
+        let root = root.to_owned();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let destination = std::path::PathBuf::from(destination).join("runtime");
+            std::fs::create_dir_all(&destination)?;
+            for source in [crate::paths::core_db(&root), crate::paths::sync_db(&root)] {
+                let _offline = ipc::MaintenanceOwner::acquire(
+                    &queue_store::endpoint(&root),
+                    DbId::new(&source)?,
+                )?;
+                let wal = std::path::PathBuf::from(format!("{}-wal", source.display()));
+                anyhow::ensure!(
+                    !wal.exists() || wal.metadata()?.len() == 0,
+                    "offline fixture retains nonempty WAL"
+                );
+                std::fs::copy(&source, destination.join(source.file_name().unwrap()))?;
+            }
+            Ok(())
+        })
+        .await??;
+    }
+
     Ok(())
 }

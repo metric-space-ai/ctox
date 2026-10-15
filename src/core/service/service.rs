@@ -1599,15 +1599,6 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     );
     install_service_panic_hook();
     let root = root.to_path_buf();
-    std::fs::create_dir_all(crate::paths::runtime_dir(&root))?;
-    write_pid_file(&root, std::process::id())?;
-    struct PidGuard(PathBuf);
-    impl Drop for PidGuard {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
-        }
-    }
-    let _pid_guard = PidGuard(service_pid_path(&root));
     let runtime = crate::runtime::shared()?;
     let (send, receive) = std::sync::mpsc::sync_channel(1);
     let run_root = root.clone();
@@ -1620,7 +1611,6 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     let result = receive
         .recv()
         .context("store daemon task stopped without an outcome")?;
-    let _ = std::fs::remove_file(service_pid_path(&root));
     result
 }
 
@@ -5053,7 +5043,7 @@ mod web_stack_ipc_timeout_tests {
     }
 }
 
-fn write_pid_file(root: &Path, pid: u32) -> Result<()> {
+pub(super) fn write_pid_file(root: &Path, pid: u32) -> Result<()> {
     let path = service_pid_path(root);
     std::fs::write(&path, format!("{pid}\n"))
         .with_context(|| format!("failed to write service pid file {}", path.display()))
@@ -5068,7 +5058,7 @@ fn read_pid_file(root: &Path) -> Option<u32> {
     raw.trim().parse::<u32>().ok()
 }
 
-fn service_pid_path(root: &Path) -> std::path::PathBuf {
+pub(super) fn service_pid_path(root: &Path) -> std::path::PathBuf {
     root.join(SERVICE_PID_RELATIVE_PATH)
 }
 

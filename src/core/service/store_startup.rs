@@ -148,7 +148,30 @@ impl Foreground {
 pub(crate) async fn run(root: PathBuf) -> anyhow::Result<()> {
     #[cfg(unix)]
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-    let mut owner = Foreground::start(root, Handle::current()).await?;
+    let mut owner = Foreground::start(root.clone(), Handle::current()).await?;
+    // Publish process metadata only after acquiring the daemon/file custody.
+    // A rejected second start must not overwrite the running owner's PID.
+    let pid_root = root.clone();
+    let pid_result = tokio::task::spawn_blocking(move || {
+        let path = super::service_loop::service_pid_path(&pid_root);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        super::service_loop::write_pid_file(&pid_root, std::process::id())
+    })
+    .await;
+    match pid_result {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            owner.shutdown().await?;
+            return Err(error);
+        }
+        Err(error) => {
+            owner.shutdown().await?;
+            return Err(error.into());
+        }
+    }
+
     eprintln!(
         "ctox v4 store daemon ready: Core/Sync owners and typed store IPC; engine bindings={}",
         owner.engines.len()
@@ -158,7 +181,21 @@ pub(crate) async fn run(root: PathBuf) -> anyhow::Result<()> {
         tokio::select! { result=tokio::signal::ctrl_c()=>result, _=terminate.recv()=>Ok(()) };
     #[cfg(not(unix))]
     let signal_result = tokio::signal::ctrl_c().await;
+    // Retire the PID while the daemon lease is still held; a successor cannot
+    // publish its own PID between our identity check and unlink.
+    let pid_result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        let path = super::service_loop::service_pid_path(&root);
+        if std::fs::read_to_string(&path)
+            .ok()
+            .is_some_and(|s| s.trim() == std::process::id().to_string())
+        {
+            std::fs::remove_file(path)?;
+        }
+        Ok(())
+    })
+    .await;
     let shutdown_result = owner.shutdown().await;
+    pid_result??;
     signal_result?;
     shutdown_result?;
     FACTORIES
