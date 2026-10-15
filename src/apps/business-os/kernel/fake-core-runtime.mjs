@@ -9,7 +9,7 @@ import { PLATFORM_COLLECTIONS, PLATFORM_APP_ID } from './platform.mjs';
 import { SCHEMA_FILE, parseCollectionsFile, classifyCollections, manifestCollectionsToParsed, parsedToManifestCollections } from './schema-diff.mjs';
 
 /** Katalog-Primitive, die der Fake-Core als ctx.cap anbietet (Aktivierung prüft capabilities_required dagegen). */
-export const FAKE_CORE_CAPABILITIES = Object.freeze(['audit.event', 'agent.task.enqueue', 'agent.task.get', 'agent.task.find', 'agent.task.cancel', 'model', 'model.run', 'files', 'files.put', 'files.get', 'files.list', 'files.delete']);
+export const FAKE_CORE_CAPABILITIES = Object.freeze(['audit.event', 'agent.task.enqueue', 'agent.task.get', 'agent.task.find', 'agent.task.cancel', 'model', 'model.run', 'files', 'files.put', 'files.get', 'files.list', 'files.delete', 'process', 'process.run']);
 // Zeilenrechte der Plattform-Collections (docs/v4-manifests/ctox-platform.manifest.json, Auszug).
 const PLATFORM_RIGHTS = Object.freeze({
   shell_preferences: { read: 'own', write: 'own' },
@@ -217,6 +217,66 @@ export function createCoreRuntime(core) {
       },
     };
   }
+  // ---- K-1i: process.run (CAP-3d #844, §16.47) – Allowlist der Plattform, Grund-Umgebung, stdin/stdin_ref; SIMULIERT ----
+  // Kein echter Prozess: die Ausführung ist deterministisch nachgebildet (cat → stdin, echo → args, env → Umgebung,
+  // false → exit 1, sleep N → timed_out, wenn N·1000 > timeout_ms; sonst JSON-Beschreibung des Aufrufs).
+  const DEFAULT_BASE_ENV = Object.freeze({ PATH: '/usr/local/bin:/usr/bin:/bin', CTOX_BIN: '/opt/ctox/bin', LANG: 'C.UTF-8' });
+  const DEFAULT_PROCESS_ALLOWLIST = Object.freeze({
+    cat: { program: '/bin/cat', env: DEFAULT_BASE_ENV },
+    echo: { program: '/bin/echo', env: DEFAULT_BASE_ENV },
+    env: { program: '/usr/bin/env', env: DEFAULT_BASE_ENV },
+    false: { program: '/usr/bin/false', env: DEFAULT_BASE_ENV },
+    sleep: { program: '/bin/sleep', env: DEFAULT_BASE_ENV },
+    scrape: { interpreter: '/usr/local/bin/tsx', script: '/opt/ctox/scripts/scrape.ts', env: DEFAULT_BASE_ENV },
+  });
+  const STDIN_MAX = 1024 * 1024, ENV_VALUE_MAX = 4096;
+  const PROCESS_FIELDS = ['program', 'args', 'env', 'stdin', 'stdin_ref', 'timeout_ms'];
+  async function simulateProcessRun(appId, req, allowlist, readOwnFile) {
+    const bad = (code, reason) => { throw new CtoxError(code, reason); };
+    if (!isPlainObject(req)) bad('invalid', 'payload_invalid:request');
+    for (const k of Object.keys(req)) if (!PROCESS_FIELDS.includes(k)) bad('invalid', `payload_invalid:${k}`);
+    if (typeof req.program !== 'string' || !req.program) bad('invalid', 'payload_invalid:program');
+    const raw = (allowlist ?? DEFAULT_PROCESS_ALLOWLIST)[req.program];
+    if (!raw) bad('forbidden', 'program_not_allowed');
+    const entry = typeof raw === 'string' ? { program: raw, env: {} } : raw;
+    const args = req.args ?? [];
+    if (!Array.isArray(args) || args.some((a) => typeof a !== 'string')) bad('invalid', 'payload_invalid:args');
+    const baseEnv = { ...(entry.env ?? {}) };
+    const appEnv = req.env ?? {};
+    if (!isPlainObject(appEnv)) bad('invalid', 'payload_invalid:env');
+    for (const [key, v] of Object.entries(appEnv)) {
+      if (typeof v !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) bad('invalid', 'payload_invalid:env');
+      if (Object.prototype.hasOwnProperty.call(baseEnv, key)) bad('invalid', `env_base_override:${key}`); // Grundvariable nie ersetzbar
+      if (new TextEncoder().encode(v).byteLength > ENV_VALUE_MAX) bad('invalid', `env_value_too_large:${key}`);
+    }
+    if (req.stdin !== undefined && req.stdin_ref !== undefined) bad('invalid', 'payload_invalid:stdin');
+    let stdin = '';
+    if (req.stdin !== undefined) {
+      if (typeof req.stdin !== 'string') bad('invalid', 'payload_invalid:stdin');
+      if (new TextEncoder().encode(req.stdin).byteLength > STDIN_MAX) bad('invalid', 'stdin_too_large');
+      stdin = req.stdin;
+    } else if (req.stdin_ref !== undefined) {
+      if (!isPlainObject(req.stdin_ref) || typeof req.stdin_ref.ref !== 'string') bad('invalid', 'payload_invalid:stdin_ref');
+      const f = await readOwnFile(req.stdin_ref.ref); // nur files-Datensätze der aufrufenden App (sonst forbidden)
+      if (!f?.found) bad('not_found', 'stdin_ref_not_found');
+      if (typeof f.text !== 'string') bad('invalid', 'stdin_ref_not_utf8');
+      if (new TextEncoder().encode(f.text).byteLength > STDIN_MAX) bad('invalid', 'stdin_too_large');
+      stdin = f.text;
+    }
+    const timeout = req.timeout_ms ?? 30000;
+    if (!Number.isInteger(timeout) || timeout <= 0) bad('invalid', 'payload_invalid:timeout_ms');
+    const env = { ...baseEnv, ...appEnv }; // Kind = leere Umgebung + Grund-Umgebung + App-env
+    const argv = entry.interpreter ? [entry.interpreter, entry.script, ...args] : [entry.program, ...args];
+    const name = String(argv[entry.interpreter ? 1 : 0]).split('/').pop();
+    let exit_code = 0, stdout = '', stderr = '', timed_out = false;
+    if (name === 'cat') stdout = stdin;
+    else if (name === 'echo') stdout = `${args.join(' ')}\n`;
+    else if (name === 'env') stdout = Object.keys(env).sort().map((k) => `${k}=${env[k]}`).join('\n') + '\n';
+    else if (name === 'false') exit_code = 1;
+    else if (name === 'sleep') { if (Number(args[0] ?? 0) * 1000 > timeout) { timed_out = true; exit_code = null; stderr = `timeout after ${timeout} ms\n`; } }
+    else stdout = `${JSON.stringify({ app: appId, argv, env_keys: Object.keys(env).sort(), stdin_bytes: new TextEncoder().encode(stdin).byteLength })}\n`;
+    return { exit_code, stdout, stderr, timed_out };
+  }
   function makeCtx(appId, manifest, command, depth) {
     const declared = new Set(manifest.capabilities_required ?? []);
     const ns = (c, op) => {
@@ -280,6 +340,7 @@ export function createCoreRuntime(core) {
       cap: Object.freeze({
         files: Object.freeze(Object.fromEntries(Object.entries(filesCap(appId, command, depth)).map(([fn, f]) => [fn, cap(`files.${fn}`, f)]))),
         model: Object.freeze({ run: cap('model.run', async (r) => modelRun(appId, r)) }),
+        process: Object.freeze({ run: cap('process.run', (r) => simulateProcessRun(appId, r, core.processAllowlist, (ref) => filesCap(appId, command, depth).get({ ref }))) }),
         audit: Object.freeze({ event: cap('audit.event', async (a) => { const id = uuidv7(); await commit('_audit', [{ id, app_id: appId, ...cloneValue(a), at_ms: Date.now() }], depth); return { id }; }) }),
         agent: Object.freeze({ task: Object.freeze({
           enqueue: cap('agent.task.enqueue', (a) => enqueueTask(appId, manifest, a, command, depth)),

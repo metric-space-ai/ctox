@@ -44,7 +44,13 @@ function coreFor(namespace) {
 async function runCommand(core, doc, depth, via) {
   const latency = via?.latencyMs ?? 5;
   const sleep = () => new Promise((r) => setTimeout(r, latency));
-  const update = async (patch) => { const current = core.docs.get(JSON.stringify(['business_commands', doc.id]))?.data ?? doc; await core.commit('business_commands', [mergePatch(current, patch)]); };
+  // result ist ein Wert, kein Merge-Patch: null-Felder (z. B. exit_code bei Zeitüberschreitung) bleiben erhalten
+  const update = async (patch) => {
+    const current = core.docs.get(JSON.stringify(['business_commands', doc.id]))?.data ?? doc;
+    const next = mergePatch(current, patch);
+    if (Object.prototype.hasOwnProperty.call(patch, 'result')) next.result = cloneValue(patch.result);
+    await core.commit('business_commands', [next]);
+  };
   await sleep(); await update({ status: 'accepted' }); await sleep(); await update({ status: 'running', progress: 0.5 });
   const user = core.users.get(doc.actor_id) ?? null;
   let final;

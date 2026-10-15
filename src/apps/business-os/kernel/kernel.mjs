@@ -1793,17 +1793,23 @@ export function createKernel(opts = {}) {
   /** §16.39 Bindung je MOUNT: einmal beim Mount, eingefroren; url(path) synchron. */
   function bindArtifacts(appId, ver, o = {}) {
     const b = makeBinding(appId, ver, o);
-    return Object.freeze({ ...b, url: (path) => b.root + encPath(path) });
+    // §16.50: Worker (Monaco u. a.) immer gleich-ursprünglich unter der gebundenen Lib-Wurzel, nie data:/blob:
+    const workerUrl = (lib, path) => {
+      if (typeof lib !== 'string' || !b.libs[lib]) throw new CtoxError('not_found', `Bibliothek ${lib} ist in dieser Bindung nicht gebunden`, { path: 'lib' });
+      return `/~a/${LIB_PREFIX}${lib}@${b.libs[lib]}${libSuffix(b.libs, lib)}/${encPath(path)}`;
+    };
+    return Object.freeze({ ...b, url: (path) => b.root + encPath(path), workerUrl });
   }
   const contentBytes = (c) => (typeof c === 'string' ? new TextEncoder().encode(c).byteLength : c?.byteLength ?? 0);
   // SW-Miss (Vertrag v4/sw.js 9b414f663): genau diese eine Datei über Spur 4 holen, sha256 prüfen, in artifacts ablegen.
   const libInflight = new Map();
-  async function libFetchLeader(lib, major, path, ver) {
+  async function libFetchLeader(lib, major, path, ver, sha = null) {
     // §16.39 LIBS2: genau die Minor aus der URL holen, nie die gerade aktive
     const v = typeof ver === 'string' && /^\d+\.\d+$/.test(ver) && ver.split('.')[0] === String(major) ? ver : null;
     if (!v) return { ok: false, reason: 'invalid' };
     const hash = versionDoc(`${LIB_PREFIX}${lib}`, v)?.manifest?.files?.[path];
     if (!hash) return { ok: false, reason: versionDoc(`${LIB_PREFIX}${lib}`, v) ? 'not_found' : 'manifest' };
+    if (sha && sha !== hash) return { ok: false, reason: 'hash_mismatch' }; // §16.50: erwartete sha256 des SW passt nicht → Fehler statt Auslieferung
     await writeFilesMeta(`${LIB_PREFIX}${lib}`, v, versionDoc(`${LIB_PREFIX}${lib}`, v).manifest.files); // K-1d: Zuordnung der Bibliotheks-Minor
     if (!libInflight.has(hash)) {
       libInflight.set(hash, (async () => {
@@ -1864,14 +1870,31 @@ export function createKernel(opts = {}) {
     return hitFlush ?? Promise.resolve();
   }
   /** Nachrichten des Service Workers (ctox:lib-hit, ctox:lib-miss); Antwort auf lib-miss über den übergebenen Port. */
+  // §16.50: Der Kernel bedient ctox:lib-miss unabhängig davon, welcher Client (Fenster, Worker, Client ohne Kernel) den
+  // Miss im SW ausgelöst hat; Antwort an den SW mit der Datei (sha256-geprüft) oder einem Grund, spätestens vor dessen 15 s.
+  const LIB_MISS_ANSWER_MS = opts.libMissAnswerMs ?? 14000;
   async function onSwMessage(data, port) {
     if (closed || !data || typeof data !== 'object') return;
     if (data.type === 'ctox:lib-hit') { await noteLibHits(data.hits ?? data.shas); return; }
     if (data.type !== 'ctox:lib-miss') return;
+    let timer;
+    const timeout = new Promise((r) => { timer = setTimeout(() => r({ ok: false, reason: 'timeout' }), LIB_MISS_ANSWER_MS); });
     let r;
-    try { r = await callLeader('libFetch', [String(data.lib), String(data.major), String(data.path), data.ver ?? null]); } catch (e) { r = { ok: false, reason: e?.code ?? 'unavailable' }; }
-    try { port?.postMessage(r.ok ? { type: 'ctox:lib-ready' } : { type: 'ctox:lib-abort', reason: r.reason }); } catch { /* Port zu */ }
-    return r;
+    try {
+      r = await Promise.race([callLeader('libFetch', [String(data.lib), String(data.major), String(data.path), data.ver ?? null, typeof data.sha === 'string' ? data.sha : null]), timeout]);
+    } catch (e) { r = { ok: false, reason: e?.code ?? 'unavailable' }; } finally { clearTimeout(timer); }
+    let msg = { type: 'ctox:lib-abort', reason: r.reason, lib: data.lib, ver: data.ver ?? null, path: data.path }, transfer = [];
+    if (r.ok) {
+      const row = await db.get('artifacts', r.hash);
+      const bytes = row ? (typeof row.content === 'string' ? new TextEncoder().encode(row.content) : new Uint8Array(row.content)) : null;
+      if (bytes && (await sha256Hex(bytes)) === r.hash) {
+        const body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+        msg = { type: 'ctox:lib-ready', lib: data.lib, ver: r.ver, path: data.path, sha: r.hash, mime: artifactMime(data.path), size: bytes.byteLength, body };
+        transfer = [body];
+      } else msg = { ...msg, reason: 'hash_mismatch' };
+    }
+    try { port?.postMessage(msg, transfer); } catch { /* Port zu */ }
+    return { ...r, reply: msg.type };
   }
   const swMessageListener = (ev) => { void onSwMessage(ev.data, ev.ports?.[0]); };
   try { globalThis.navigator?.serviceWorker?.addEventListener?.('message', swMessageListener); } catch { /* kein SW */ }
@@ -2037,7 +2060,7 @@ export function createKernel(opts = {}) {
       }
       return { status: 'accepted', rev: ver, diff: diff.map(({ name, kind }) => ({ name, kind })) };
     },
-    libFetch(lib, major, path, ver) { return libFetchLeader(lib, major, path, ver); },
+    libFetch(lib, major, path, ver, sha) { return libFetchLeader(lib, major, path, ver, sha); },
     // §16.45 „Neu verbinden“: voller Neuaufbau des Transports im Leiter (nie Seiten-Reload); alle Bereiche neu abonniert
     async reconnect() {
       guardAlive();
@@ -2142,6 +2165,8 @@ export function createKernel(opts = {}) {
     agentOutcome: (fn) => fakeCore?.runtime.setAgentOutcome(fn),
     /** Fake-Core: Write eines anderen Clients direkt an den Core (z. B. doppelte Befehls-id). */
     coreWrite: (entry) => fakeCore?.write(entry),
+    /** Fake-Core: Plattform-Allowlist für process.run (CAP-3d; Name → Pfad oder {program|interpreter+script, env}). */
+    setProcessAllowlist: (map) => { if (fakeCore) fakeCore.core.processAllowlist = map ? cloneValue(map) : null; },
     coreLog: () => [...(fakeCore?.runtime.log ?? [])],
     /** Fake-Core: wie oft sich der Transport verbunden hat (kernel.reconnect = voller Neuaufbau). */
     get transportConnects() { return fakeCore?.connects ?? 0; },
