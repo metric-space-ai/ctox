@@ -870,7 +870,7 @@ export function createKernel(opts = {}) {
       await db.tx(async (t) => { await assertGen(t); await t.put('artifacts', { hash, content, app_id: appId, app_ver: ver, path, stored_at: Date.now() }); });
     }
     await setActivation(appId, { target_ver: ver, state: 'fetched' });
-    const missing = (manifest.capabilities_required ?? []).filter((c) => !capabilities.has(c));
+    const missing = (manifest.capabilities_required ?? []).filter((c) => !capabilities.has(c) && !(transport.capabilities ?? []).includes(c)); // Katalog-Primitive des Core (§16.29)
     if (missing.length || compareVer(manifest.min_app_api ?? '4.0', APP_API_VERSION) > 0) {
       await setActivation(appId, { target_ver: ver, state: 'failed', error: `needs_update:${missing.join(',') || `app_api ${manifest.min_app_api}`}` });
       return;
@@ -1238,6 +1238,7 @@ export function createKernel(opts = {}) {
   async function storeDraftContent(appId, path, content) {
     const hash = await sha256Hex(content);
     await db.tx((t) => t.put('artifacts', { hash, content, app_id: appId, app_ver: 'draft', path, draft: true, size: contentBytes(content), stored_at: Date.now() }));
+    fakeCore?.putArtifact(hash, content); // Fake-Core: Entwurfsinhalt im Core-CAS (ctox.app.publish liest ihn dort; echter Core: Upload)
     return hash;
   }
   const draftContent = async (hash) => (await db.get('artifacts', hash))?.content ?? readArtifactContent(hash);
@@ -1986,5 +1987,10 @@ export function createKernel(opts = {}) {
 
 export function createStubKernel(opts = {}) {
   const namespace = opts.dbName ?? `ctox-${opts.instanceId ?? 'stub'}-${opts.userId ?? opts.actor?.id ?? 'local'}`;
-  return createKernel({instanceId:'stub',userId:'local',actor:{id:opts.userId??opts.actor?.id??'local',role:'admin',permissions:['apps.source.view','apps.source.edit'],...opts.actor},...opts,transport:new MemoryCoreTransport({namespace,latencyMs:opts.latencyMs})});
+  const actor = {id:opts.userId??opts.actor?.id??'local',role:'admin',permissions:['apps.source.view','apps.source.edit'],...opts.actor};
+  // K-1c Punkt 4: coreNamespace = ein Core je Instanz für mehrere Nutzer (eigene DB je Nutzer, §16.7); der Core kennt
+  // dann den Nutzer (Rolle, Rechte) und setzt Zeilen-, Collection- und Befehlsrechte durch.
+  const shared = typeof opts.coreNamespace === 'string' && opts.coreNamespace;
+  const transport = new MemoryCoreTransport({namespace:shared?opts.coreNamespace:namespace,latencyMs:opts.latencyMs,user:shared?{...actor,...(opts.coreUser??{}),id:actor.id}:null,everyMs:opts.everyMs,agentDelayMs:opts.agentDelayMs});
+  return createKernel({instanceId:'stub',userId:'local',...opts,actor,transport});
 }
