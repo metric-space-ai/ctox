@@ -5,7 +5,7 @@ import {decodeFrame,transform,FRAME_BYTES,MAX_MESSAGE_BYTES} from './framing.mjs
  * follows application/IDB commit. No frame is silently discarded.
  */
 export class LaneIngress {
- constructor({apply,ack,onError=()=>{},frameBytes=FRAME_BYTES,codec='gzip',adapters={},maxReassemblyBytes=32*1024*1024,maxQueuedBytes=128*1024}={}){
+ constructor({apply,ack,onError=()=>{},frameBytes=FRAME_BYTES,codec='gzip',adapters={},maxReassemblyBytes=32*1024*1024,maxQueuedBytes=512*1024}={}){
   this.apply=apply;this.ack=ack;this.onError=onError;this.frameBytes=frameBytes;this.codec=codec;this.adapters=adapters;this.maxReassemblyBytes=maxReassemblyBytes;this.maxQueuedBytes=maxQueuedBytes;
   this.chains=Array(6).fill(Promise.resolve());this.seqs=Array(6).fill(0);this.packets=new Map();this.bytes=0;this.queued=0;this.closed=false;
  }
