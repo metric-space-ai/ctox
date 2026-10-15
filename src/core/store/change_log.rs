@@ -221,6 +221,18 @@ pub fn install_triggers(tx: &Transaction<'_>, binding: &TableBinding) -> Result<
     atomic(tx, || {
         initialize(tx)?;
         let gen = integer(binding.gen)?;
+        let columns = {
+            let mut statement = tx.prepare("SELECT name FROM pragma_table_xinfo(?1)")?;
+            let rows = statement.query_map([&binding.table], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>>>()?;
+            rows
+        };
+        for required in [&binding.id_column, &binding.rev_column, &binding.data_column,
+                         &binding.deleted_column].into_iter().chain(binding.schema_column.iter()) {
+            if !columns.contains(required) {
+                return Err(invalid(format!("change source column missing: {required}")));
+            }
+        }
         let existing: Option<String> = tx
             .query_row(
                 "SELECT table_name FROM _change_sources WHERE collection=?1 AND gen=?2",
@@ -434,9 +446,12 @@ pub fn backfill_page(
             Some(c) => identifier(c)?,
             None => source.schema_ver.to_string(),
         };
+        // Keep the continuation predicate sargable: a nullable OR would scan
+        // every preceding id again on later pages.
+        let predicate = if after.is_some() { format!("{id}>?1") } else { "?1 IS NULL".into() };
         let mut stmt = tx.prepare(&format!(
             "SELECT {id},{rev},{deleted},{schema} FROM {table}
-            WHERE (?1 IS NULL OR {id}>?1) ORDER BY {id} LIMIT ?2"
+            WHERE {predicate} ORDER BY {id} LIMIT ?2"
         ))?;
         let rows = stmt
             .query_map(params![after, limit as i64], |r| {
