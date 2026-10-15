@@ -277,8 +277,22 @@ pub enum ClientMessage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CoreMessage {
+    RequiresPage(RequiresPage),
     WriteResult(OrderedWriteResult),
     HelloOk(HelloOk),
+}
+/// Restart this collection in its own generation namespace, retaining the old
+/// local view until complete. gen=None means the collection was removed.
+/// Scope admission remains mandatory for the replacement subscription.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequiresPage {
+    pub collection: String,
+    pub scope_hash: String,
+    pub previous_gen: u64,
+    pub gen: Option<u64>,
+    pub checkpoint_seq: Seq,
+    pub migrated_at_seq: Option<Seq>,
 }
 /// Scope token values are issued/validated by P6, never minted by this codec.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
