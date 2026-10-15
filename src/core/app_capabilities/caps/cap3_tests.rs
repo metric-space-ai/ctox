@@ -383,7 +383,7 @@ fn app_capabilities_cap3_secrets_scope_contract() {
     assert_eq!(stored["scope"], "app:outbound-lead-generation");
     // The intake is consumed once; a replay has no value to store.
     assert_eq!(code(f.call(&olg, "secret", "put", put)), ErrorCode::Invalid);
-    let scope = f.call(&olg, "secret", "scope", json!({})).unwrap()["scope"].clone();
+    let scope = f.call(&olg, "secret", "scope", Value::Null).unwrap()["scope"].clone();
     let exists = f
         .call(
             &olg,

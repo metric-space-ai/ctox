@@ -263,6 +263,8 @@ fn wire_args(name: String, function: String, args: Value) -> (String, String, Va
         .chain(ROUTES)
         .any(|r| r.capability == route.capability && r.function == route.function);
     let args = if flat {
+        // `ctx.cap.secret.scope()` and `mail.server.config.get()` carry no args.
+        let args = if args.is_null() { json!({}) } else { args };
         json!({ "payload": args })
     } else if route.capability == "agent.coding" {
         crate::app_capabilities::caps::coding_flat_envelope(route.function, args)
