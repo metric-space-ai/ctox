@@ -460,6 +460,7 @@ dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "ctox-store",
  "dashmap",
  "flate2",
  "futures",
@@ -486,6 +487,18 @@ dependencies = [
  "uuid",
  "webrtc",
  "zstd",
+]
+
+[[package]]
+name = "ctox-store"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
