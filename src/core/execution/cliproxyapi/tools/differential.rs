@@ -1259,6 +1259,7 @@ fn run_plugin_child(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
         }
 
         let mut registered = false;
+        let mut quota_fixture_url = "https://fixture.invalid/quota".to_owned();
         loop {
             let Some(message) = read_process_message(&mut stream).await? else {
                 return Ok(());
@@ -1276,6 +1277,12 @@ fn run_plugin_child(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
                 let lifecycle: RpcLifecycleRequest = decode_upstream_json(&payload)?;
                 if lifecycle.schema_version != ctox_cliproxyapi::sdk::pluginabi::SCHEMA_VERSION {
                     return Err("invalid lifecycle schema".into());
+                }
+                if plugin_id == "fixture-quota" && !lifecycle.config_yaml.is_empty() {
+                    let config: Value = serde_yaml::from_slice(&lifecycle.config_yaml)?;
+                    if let Some(url) = config.get("fixture_quota_url").and_then(Value::as_str) {
+                        quota_fixture_url = url.to_owned();
+                    }
                 }
                 let registration = RpcRegistration {
                     schema_version: lifecycle.schema_version,
@@ -1316,7 +1323,7 @@ fn run_plugin_child(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
                             request_id: "fixture-http".into(), method: "host.http.do".into(), deadline_unix_ms: None,
                             payload: encode_upstream_json(&serde_json::json!({
                                 "host_callback_id":request["host_callback_id"],
-                                "method":"GET", "url":"https://fixture.invalid/quota"
+                                "method":"GET", "url":quota_fixture_url
                             }))?,
                         }).await?;
                         let Some(ProcessMessage::Response { request_id: id, envelope, .. }) = read_process_message(&mut stream).await? else { return Err("missing callback response".into()); };

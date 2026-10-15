@@ -53,6 +53,11 @@ fn route(path: &str) -> Option<Route> {
 fn error(error: ManagementPluginQuotaError) -> ManagementHttpResponse {
     use ManagementPluginQuotaError::*;
     let (status, kind, message) = match error {
+        RuntimeUnavailable => (
+            503,
+            "quota_runtime_unavailable",
+            "quota plugin runtime unavailable",
+        ),
         AccountNotFound => (404, "account_not_found", "auth not found"),
         CredentialSourceUnavailable => (
             500,
@@ -127,7 +132,15 @@ impl ManagementHandler {
         mut self,
         service: Arc<ManagementPluginQuotaService>,
     ) -> Self {
+        self.quota_runtime_unavailable = false;
         self.quota_service = Some(service);
+        self
+    }
+    /// A local startup/configuration failure affects quota routes only. Other
+    /// authenticated management operations remain available for recovery.
+    pub fn attach_quota_runtime_unavailable(mut self) -> Self {
+        self.quota_service = None;
+        self.quota_runtime_unavailable = true;
         self
     }
     async fn handle_quota_route(
@@ -148,6 +161,9 @@ impl ManagementHandler {
             management_key(headers),
         ) {
             return ManagementHttpResponse::error(error.status(), &error.message());
+        }
+        if self.quota_runtime_unavailable {
+            return error(ManagementPluginQuotaError::RuntimeUnavailable);
         }
         if let Route::Providers = route {
             if method != "GET" {
