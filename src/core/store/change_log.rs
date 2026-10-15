@@ -1,6 +1,8 @@
 //! Transaction-only global change log for Sync v4 (§2.2, §16.1).
 //! The Store owner supplies the transaction and authorization; no connection is opened.
 use rusqlite::{params, OptionalExtension, Transaction};
+#[path = "subscription.rs"]
+pub mod subscription;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
