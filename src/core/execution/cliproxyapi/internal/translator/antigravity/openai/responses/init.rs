@@ -60,5 +60,4 @@ fn antigravity_state(state: &mut TranslationState) -> &mut AntigravityToResponse
 mod tests {
     use super::*;
     use crate::sdk::translator::TranslationContext;
-
 }

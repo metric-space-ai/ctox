@@ -100,5 +100,4 @@ mod tests {
             self.0.lock().unwrap().push(record.clone());
         }
     }
-
 }

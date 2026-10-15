@@ -45,5 +45,4 @@ pub fn register_all(registry: &Registry) {
 mod tests {
     use super::*;
     use crate::sdk::translator::{claude, codex, interactions, openai, openai_response};
-
 }

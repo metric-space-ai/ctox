@@ -11,5 +11,4 @@ pub const DEFAULT_DISCOVERY_SERVICE_TYPE: &str = "_ai-gateway._tcp";
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

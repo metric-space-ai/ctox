@@ -51,5 +51,4 @@ fn codex_chat_state(state: &mut TranslationState) -> &mut CodexToChatStreamState
 mod tests {
     use super::*;
     use crate::sdk::translator::TranslationContext;
-
 }

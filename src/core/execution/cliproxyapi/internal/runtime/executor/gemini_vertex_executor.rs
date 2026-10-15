@@ -872,5 +872,4 @@ mod tests {
         convert_imagen_to_gemini_response, convert_to_imagen_request, is_imagen_model,
         vertex_action, vertex_base_url,
     };
-
 }

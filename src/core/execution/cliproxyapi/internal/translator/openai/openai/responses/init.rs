@@ -37,5 +37,4 @@ pub fn register_openai_responses_chat_completions(registry: &Registry) {
 mod tests {
     use super::*;
     use crate::sdk::translator::TranslationContext;
-
 }

@@ -127,5 +127,4 @@ pub fn map_codex_websocket_close(code: u16) -> CodexWebsocketError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

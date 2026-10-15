@@ -1302,5 +1302,4 @@ mod speech_availability_tests {
             SpeechAvailability::Unknown
         );
     }
-
 }

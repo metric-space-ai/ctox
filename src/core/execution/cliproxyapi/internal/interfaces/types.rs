@@ -15,5 +15,4 @@ mod tests {
     fn accepts_stream_alias(_: Option<TranslateResponseFunc>) {}
     fn accepts_non_stream_alias(_: Option<TranslateResponseNonStreamFunc>) {}
     fn accepts_response_alias(_: Option<TranslateResponse>) {}
-
 }

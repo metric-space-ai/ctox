@@ -43,5 +43,4 @@ pub fn email_required_message(error: Option<&EmailRequiredError>) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

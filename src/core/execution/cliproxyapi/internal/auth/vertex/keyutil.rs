@@ -299,5 +299,4 @@ mod tests {
         assert_eq!(label, "RSA PRIVATE KEY");
         RsaKeyPair::from_der(&der).unwrap();
     }
-
 }

@@ -259,5 +259,4 @@ fn merge_aliases<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

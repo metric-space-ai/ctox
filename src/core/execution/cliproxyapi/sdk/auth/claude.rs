@@ -622,5 +622,4 @@ mod tests {
             "access-secret"
         );
     }
-
 }

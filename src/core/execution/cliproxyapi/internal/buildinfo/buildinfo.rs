@@ -37,5 +37,4 @@ impl Default for BuildInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

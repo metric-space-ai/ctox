@@ -43,5 +43,4 @@ pub fn sanitize_meta_web_search_tools(body: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

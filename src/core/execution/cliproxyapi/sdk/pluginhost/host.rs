@@ -584,5 +584,4 @@ mod tests {
             Box::pin(async { Err(PluginClientError::Closed) })
         }
     }
-
 }

@@ -25,5 +25,4 @@ pub fn encode_image_marker(path: &Path) -> String {
 mod tests {
     use super::encode_image_marker;
     use std::path::PathBuf;
-
 }

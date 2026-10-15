@@ -89,5 +89,4 @@ pub struct StreamingConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

@@ -14,5 +14,4 @@ pub const INTERACTIONS: &str = "interactions";
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

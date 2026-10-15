@@ -341,5 +341,4 @@ mod tests {
             "Authentication was cancelled or denied."
         );
     }
-
 }

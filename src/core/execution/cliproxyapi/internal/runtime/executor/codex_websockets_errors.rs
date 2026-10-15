@@ -138,5 +138,4 @@ fn parse_headers(value: &Value) -> BTreeMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

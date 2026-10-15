@@ -52,5 +52,4 @@ fn antigravity_chat_state(state: &mut TranslationState) -> &mut AntigravityToCha
 mod tests {
     use super::*;
     use crate::sdk::translator::TranslationContext;
-
 }

@@ -123,5 +123,4 @@ fn is_zero_f64(value: &f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

@@ -70,5 +70,4 @@ impl std::fmt::Debug for CodexWebsocketStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

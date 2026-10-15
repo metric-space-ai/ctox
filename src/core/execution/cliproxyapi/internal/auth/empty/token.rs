@@ -26,5 +26,4 @@ mod tests {
     use std::path::Path;
 
     use super::{EmptyStorage, TokenStorage};
-
 }

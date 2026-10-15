@@ -33,5 +33,4 @@ pub fn register_openai_responses_codex(registry: &Registry) {
 mod tests {
     use super::*;
     use crate::sdk::translator::TranslationContext;
-
 }

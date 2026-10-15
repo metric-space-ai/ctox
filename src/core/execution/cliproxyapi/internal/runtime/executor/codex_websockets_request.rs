@@ -134,5 +134,4 @@ fn canonical_header(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

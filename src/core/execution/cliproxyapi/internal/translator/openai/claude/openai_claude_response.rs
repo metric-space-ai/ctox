@@ -1331,5 +1331,4 @@ mod tests {
         );
         assert_eq!(map_openai_finish_reason_to_anthropic(""), "end_turn");
     }
-
 }

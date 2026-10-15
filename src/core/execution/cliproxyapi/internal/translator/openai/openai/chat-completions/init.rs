@@ -31,5 +31,4 @@ pub fn register_openai_chat_passthrough(registry: &Registry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

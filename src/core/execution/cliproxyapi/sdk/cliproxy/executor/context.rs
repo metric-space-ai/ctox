@@ -50,5 +50,4 @@ pub fn required_upstream_websocket(context: Option<&ExecutionTransportContext>) 
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

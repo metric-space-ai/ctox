@@ -21,5 +21,4 @@ pub fn interactions_usage(root: &Value) -> Option<&Value> {
 mod tests {
     use super::interactions_usage;
     use serde_json::json;
-
 }

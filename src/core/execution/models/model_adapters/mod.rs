@@ -568,5 +568,4 @@ mod tests {
             ResponsesTransportKind::ChatCompletions
         );
     }
-
 }

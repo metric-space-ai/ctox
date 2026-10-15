@@ -52,5 +52,4 @@ fn gemini_chat_state(state: &mut TranslationState) -> &mut GeminiToChatStreamSta
 mod tests {
     use super::*;
     use crate::sdk::translator::TranslationContext;
-
 }

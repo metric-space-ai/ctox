@@ -56,5 +56,4 @@ pub fn register_openai_chat_interactions(registry: &Registry) {
 mod tests {
     use super::*;
     use crate::sdk::translator::TranslationContext;
-
 }

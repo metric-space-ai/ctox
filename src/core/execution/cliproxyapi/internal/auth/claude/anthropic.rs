@@ -194,5 +194,4 @@ mod tests {
         assert!(!debug.contains("access-do-not-leak"));
         assert!(!debug.contains("refresh-do-not-leak"));
     }
-
 }

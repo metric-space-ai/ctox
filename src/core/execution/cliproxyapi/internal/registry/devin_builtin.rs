@@ -144,5 +144,4 @@ mod tests {
         embedded_models_catalog, lookup_static_registry_model_info, models_for_channel,
     };
     use super::*;
-
 }

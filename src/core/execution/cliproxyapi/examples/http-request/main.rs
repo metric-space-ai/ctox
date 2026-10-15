@@ -210,5 +210,4 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
-
 }

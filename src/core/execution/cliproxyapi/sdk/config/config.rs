@@ -272,5 +272,4 @@ mod tests {
         let value: serde_yaml::Value = serde_yaml::from_slice(&document.read().unwrap()).unwrap();
         assert_eq!(value["plugins"]["enabled"].as_str(), Some("true"));
     }
-
 }

@@ -748,5 +748,4 @@ pub fn mime_type_for_extension(extension: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::mime_type_for_extension;
-
 }

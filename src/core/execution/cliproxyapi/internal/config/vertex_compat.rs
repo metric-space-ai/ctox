@@ -148,5 +148,4 @@ pub(crate) fn normalize_excluded_models(models: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

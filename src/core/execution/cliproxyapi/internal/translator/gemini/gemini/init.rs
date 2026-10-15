@@ -31,5 +31,4 @@ pub fn register_gemini_passthrough(registry: &Registry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

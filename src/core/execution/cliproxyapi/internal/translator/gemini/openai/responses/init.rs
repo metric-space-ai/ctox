@@ -59,5 +59,4 @@ fn gemini_state(state: &mut TranslationState) -> &mut GeminiToResponsesState {
 mod tests {
     use super::*;
     use crate::sdk::translator::TranslationContext;
-
 }

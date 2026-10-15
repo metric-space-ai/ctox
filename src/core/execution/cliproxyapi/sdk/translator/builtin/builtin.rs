@@ -23,5 +23,4 @@ pub fn pipeline() -> Pipeline {
 mod tests {
     use super::*;
     use crate::sdk::translator::{claude, openai, openai_response};
-
 }

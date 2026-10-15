@@ -126,5 +126,4 @@ pub fn label_for_vertex(project_id: &str, email: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }
