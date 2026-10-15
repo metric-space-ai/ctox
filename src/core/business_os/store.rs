@@ -15050,6 +15050,26 @@ pub fn refresh_business_command_queue_task_projection(
             payload,
         )?;
     }
+    // A news run that ends on a hold (e.g. a technical hold after repeated
+    // "direct session timeout" attempts) never reaches the `failed` paths that
+    // call mark_news_command_failed, so the issue kept spinning on
+    // "Ausgabe wird erstellt" with no retry button (welsch, 15.10.2026).
+    if matches!(
+        terminal_command_status,
+        Some("failed" | "blocked" | "cancelled")
+    ) {
+        let reason = task
+            .status_note
+            .as_deref()
+            .map(str::trim)
+            .filter(|note| !note.is_empty())
+            .unwrap_or("CTOX hat die Ausgabe nicht abgeschlossen.");
+        if let Err(error) =
+            super::store_news_commands::mark_news_command_failed(root, &conn, &command, reason)
+        {
+            eprintln!("[business-os] news hold projection for `{command_id}` failed: {error:#}");
+        }
+    }
     Ok(Some(command_projection))
 }
 
@@ -27038,7 +27058,7 @@ fn command_prompt(
     }
     // The owner's research workflow (Outbound → Rechercheablauf) is the
     // agent's contract and must reach it verbatim. Inside the bounded JSON
-    // preview it sat behind the lead snapshot and was cut off: on THESEN
+    // preview it sat behind the lead snapshot and was cut off: on a customer tenant
     // (14.10.2026) a 13k-char workflow never reached the worker ("… truncated
     // 30533 chars …"), so the research ignored its contact areas and source
     // chain. It is rendered as its own block and dropped from the preview.
@@ -29786,7 +29806,7 @@ pub(super) mod tests {
 
     #[test]
     fn intake_failure_attempts_stay_distinct_after_history_resolution() -> anyhow::Result<()> {
-        // THESEN 14.10.2026: after a resolution the next failure reused
+        // Customer tenant 14.10.2026: after a resolution the next failure reused
         // attempt 1, hit UNIQUE(command_id, attempt), was never recorded and
         // intake replayed the command about twice per second.
         let root = tempdir()?;
@@ -47037,7 +47057,7 @@ pub(super) mod tests {
     #[test]
     fn token_less_projection_replay_of_admitted_auth_assist_skips_capability_gate(
     ) -> anyhow::Result<()> {
-        // THESEN 14.10.2026: native projected an accepted auth_assist from its
+        // Customer tenant 14.10.2026: native projected an accepted auth_assist from its
         // audited intent (no capability_token); background recovery re-read
         // that projection as a replicated command and the capability gate
         // rejected it on every intake pass.

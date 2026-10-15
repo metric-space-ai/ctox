@@ -26,11 +26,13 @@ function showBusinessConfirm(message, options = {}) { return shellConfirm(messag
 function showBusinessPrompt(message, options = {}) { return shellPrompt(message, { host: eigenesDialogZiel(), ...options }); }
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { createCollectionReloader } from './collection-reloader.mjs';
-import { loadLeadList, loadFullLeadRows, leadListRow, withLeadQueryAuthority } from './lead-list-loader.mjs';
+import { hasLocalStore, loadLeadList, loadFullLeadRows, leadListRow, readStoredLeadRows, withLeadQueryAuthority } from './lead-list-loader.mjs';
 import { captureResearchExport, openResearchSnapshot } from './current-state-export.mjs';
 import { optionalKeysForRequiredCheckbox } from './required-field-selection.mjs';
 import { readErrorEntry, visibleReadErrorKeys } from './read-error-grace.mjs';
 import { inFlightLeadsOutsideWindow, IN_FLIGHT_SWEEP_INTERVAL_MS } from './in-flight-lead-sweep.mjs';
+import { revealDetailIfStacked } from './stacked-detail-reveal.mjs';
+import { doppelteAdapterIds } from './adapter-dedupe.mjs';
 import { abgleichBasisVeraltet, hatBelegteFelder } from './reconcile-basis.mjs';
 import {
   actionAllowedOnStartupSnapshot, buildStartupSnapshot, readStartupSnapshot,
@@ -48,13 +50,13 @@ import {
 // zusaetzlich Bundesanzeiger), Fax ueber Google, Steckbrief aus der Homepage
 // (25.09.2026). Umsatz/Mitarbeiter unveraendert.
 const SOURCE_DEFS = Object.freeze([
-  source('handelsregister.de', 'Handelsregister', 'https://www.handelsregister.de/', ['DE'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung', 'firma_prokura', 'person_vorname', 'person_nachname']),
-  source('bundesanzeiger.de', 'Bundesanzeiger', 'https://www.bundesanzeiger.de/', ['DE'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_ort', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung', 'firma_prokura', 'wz_code', 'umsatz', 'mitarbeiter']),
-  source('northdata.de', 'Northdata', 'https://www.northdata.de/', ['DE', 'AT', 'CH'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftsfuehrung', 'firma_prokura', 'umsatz', 'mitarbeiter', 'person_vorname', 'person_nachname', 'person_position']),
+  source('handelsregister.de', 'Handelsregister', 'https://www.handelsregister.de/', ['DE'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung', 'person_vorname', 'person_nachname']),
+  source('bundesanzeiger.de', 'Bundesanzeiger', 'https://www.bundesanzeiger.de/', ['DE'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_ort', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung', 'wz_code', 'umsatz', 'mitarbeiter']),
+  source('northdata.de', 'Northdata', 'https://www.northdata.de/', ['DE', 'AT', 'CH'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftsfuehrung', 'umsatz', 'mitarbeiter', 'person_vorname', 'person_nachname', 'person_position']),
   // Owner 23.09.2026: CompanyHouse nur ueber die offizielle GraphQL-API
   // (Zugangstoken aus der Premium-Mitgliedschaft), kein Scraping. Bis ein
   // Token hinterlegt ist, zeigt die Zeile "Zugang fehlt" statt "defekt".
-  source('companyhouse.de', 'CompanyHouse', 'https://www.companyhouse.de/', ['DE'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_geschaeftsfuehrung', 'firma_prokura', 'person_titel'], 'COMPANYHOUSE_API_TOKEN'),
+  source('companyhouse.de', 'CompanyHouse', 'https://www.companyhouse.de/', ['DE'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_geschaeftsfuehrung', 'person_titel'], 'COMPANYHOUSE_API_TOKEN'),
   source('dnbhoovers.com', 'D&B Hoovers', 'https://app.dnbhoovers.com/', ['DE', 'AT', 'CH'], ['firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftstaetigkeit', 'wz_code', 'umsatz', 'mitarbeiter'], 'DNB_HOOVERS_BROWSER_LOGIN'),
   source('leadfeeder.com', 'Leadfeeder', 'https://app.leadfeeder.com/f/200538/dashboard?organization_id=wmNE2MdyDk&full_view=false&tab=overview', ['DE', 'AT', 'CH'], ['firma_name', 'firma_domain', 'firma_homepage_fact_sheet', 'firma_geschaeftstaetigkeit', 'wz_code'], 'LEADFEEDER_BROWSER_LOGIN'),
   // Owner 18.09.2026: LinkedIn wird ueber den Bright Data "LinkedIn People
@@ -77,25 +79,26 @@ const SOURCE_DEFS = Object.freeze([
   // Sitzung session_expired_login_landing (Messung 22.09.2026). Ohne Zugangs-
   // verweis gab es in der App keinen Ort, den Login zu hinterlegen.
   source('rocketreach.com', 'RocketReach', 'https://rocketreach.co/', ['DE', 'AT', 'CH'], ['person_titel', 'person_vorname', 'person_nachname', 'person_funktion', 'person_position', 'person_email', 'person_telefon'], 'ROCKETREACH_BROWSER_LOGIN'),
-  source('firmenabc.at', 'FirmenABC', 'https://www.firmenabc.at/', ['AT'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_email', 'firma_domain', 'firma_telefon', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung', 'firma_prokura']),
-  source('moneyhouse.ch', 'Moneyhouse', 'https://www.moneyhouse.ch/', ['CH'], ['firma_name', 'firma_fruehere_namen', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_aktivitaetsstatus', 'firma_geschaeftsfuehrung', 'firma_prokura', 'person_vorname', 'person_nachname', 'person_position']),
-  source('zefix.ch', 'Zefix', 'https://www.zefix.ch/', ['CH'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung', 'firma_prokura']),
+  source('firmenabc.at', 'FirmenABC', 'https://www.firmenabc.at/', ['AT'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_email', 'firma_domain', 'firma_telefon', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung']),
+  source('moneyhouse.ch', 'Moneyhouse', 'https://www.moneyhouse.ch/', ['CH'], ['firma_name', 'firma_fruehere_namen', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_aktivitaetsstatus', 'firma_geschaeftsfuehrung', 'person_vorname', 'person_nachname', 'person_position']),
+  source('zefix.ch', 'Zefix', 'https://www.zefix.ch/', ['CH'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung']),
   source('experte.de', 'E-Mail-Prüfung', 'https://www.experte.de/email-pruefen', ['DE', 'AT', 'CH'], ['person_email_validation']),
   source('mailtester.com', 'MailTester', 'https://mailtester.com/', ['DE', 'AT', 'CH'], ['person_email_validation']),
   source('evi.gv.at', 'EVI – Amtsblatt Österreich', 'https://www.evi.gv.at/', ['AT'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftstaetigkeit']),
-  source('justizonline.gv.at', 'Firmenbuch / JustizOnline', 'https://justizonline.gv.at/jop/web/firmenbuchabfrage', ['AT'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung', 'firma_prokura']),
-  source('shab.ch', 'SHAB – Schweizerisches Handelsamtsblatt', 'https://www.shab.ch/#!/gazette', ['CH'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung', 'firma_prokura']),
+  source('justizonline.gv.at', 'Firmenbuch / JustizOnline', 'https://justizonline.gv.at/jop/web/firmenbuchabfrage', ['AT'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung']),
+  source('shab.ch', 'SHAB – Schweizerisches Handelsamtsblatt', 'https://www.shab.ch/#!/gazette', ['CH'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung']),
 ]);
 // Sellify ist keine Adapter-Quelle: keine Anmeldung, kein Scrape-Target.
 // Sie erscheint in der Quellenliste als interne Quelle und als Beleg an
 // jedem Feld, das aus dem eigenen CRM uebernommen wurde.
 const SELLIFY_SOURCE_ID = 'sellify';
 const SELLIFY_SOURCE_LABEL = 'Sellify (eigenes CRM)';
-// Owner-Vorgabe 31.08.: mindestens eine Person je Kategorie, in dieser
-// Reihenfolge (Prompt-Punkt 4).
+// Die sieben Ansprechpartner-Bereiche des Rechercheablaufs (Schritt 4), in
+// dieser Reihenfolge. Prokura wird gar nicht recherchiert, weder als Feld noch
+// als Bereich (Owner 15.10.2026: "keine Prokura mehr"). Die alte Liste mit
+// Prokura ging mit jedem Auftrag an den Agenten und uebersteuerte den Prompt.
 const PERSON_RESEARCH_PRIORITIES = Object.freeze([
-  'Geschäftsführung',
-  'Prokura',
+  'Gesamtverantwortung',
   'Finanzen',
   'Einkauf',
   'Supply Chain',
@@ -122,7 +125,6 @@ const RESEARCH_FIELDS = Object.freeze([
   'firma_geschaeftstaetigkeit',
   'firma_homepage_fact_sheet',
   'firma_geschaeftsfuehrung',
-  'firma_prokura',
   'wz_code',
   'umsatz',
   'mitarbeiter',
@@ -162,7 +164,6 @@ const GOVERNANCE_FIELDS = Object.freeze([
   'firma_umsatz_schaetzung',
   'firma_mitarbeiter_schaetzung',
   'firma_geschaeftsfuehrung',
-  'firma_prokura',
   'firma_email_domain_konflikt',
   'herkunft_import',
   'adressquelle',
@@ -253,7 +254,6 @@ const RESEARCH_FIELD_GROUPS = Object.freeze([
       ['firma_geschaeftstaetigkeit', 'Geschäftstätigkeit'],
       ['firma_homepage_fact_sheet', 'Homepage-Fact-Sheet / URL'],
       ['firma_geschaeftsfuehrung', 'Geschäftsführung'],
-      ['firma_prokura', 'Prokura'],
       ['firma_email_domain_konflikt', 'E-Mail-/Info-/Homepage-Domain'],
     ]),
   },
@@ -542,16 +542,16 @@ const REPLICATED_COLLECTIONS = Object.freeze([
 ]);
 const DEFAULT_RESEARCH_POLICY = [
   "0. Zuerst prüfen, ob Unternehmen und Ansprechpartner bereits in Sellify vorhanden sind. Der Sellify-Bestand ist der Ausgangswert jedes Feldes und zugleich eine Quelle. Er wird nur geändert, wenn eine externe Quelle etwas anderes belegt.",
-  "1. Identität und Registerdaten zuerst klären: Firmenname einschließlich früherer Namen und Umfirmierungen, Rechtsform, Aktivitätsstatus sowie Geschäftsführung und Prokura aus dem Register. Nur amtierende Geschäftsführer und Prokuristen übernehmen; Ausgeschiedene („nicht mehr Geschäftsführer“, „ausgeschieden“, „Prokura erloschen“) nie eintragen. Deutschland: Handelsregister, Northdata, Bundesanzeiger, CompanyHouse. Österreich: Firmenbuch/JustizOnline, FirmenABC, Northdata. Schweiz: Zefix/Handelsregister, SHAB, Moneyhouse, Northdata.",
+  "1. Identität und Registerdaten zuerst klären: Firmenname einschließlich früherer Namen und Umfirmierungen, Rechtsform, Aktivitätsstatus sowie Geschäftsführung aus dem Register. Nur amtierende Geschäftsführer übernehmen; Ausgeschiedene („nicht mehr Geschäftsführer“, „ausgeschieden“) nie eintragen. Prokura wird nicht recherchiert, weder als Feld noch als Ansprechpartner. Deutschland: Handelsregister, Northdata, Bundesanzeiger, CompanyHouse. Österreich: Firmenbuch/JustizOnline, FirmenABC, Northdata. Schweiz: Zefix/Handelsregister, SHAB, Moneyhouse, Northdata.",
   "2. Danach Website, Anschrift und Kommunikation: zuerst die Domain, weil Impressum und Unternehmensseite ohne sie nicht auffindbar sind. Dann Anschrift, PLZ, Ort, Länderkennzeichen, Firmen-E-Mail und Firmen-Telefon. Priorität der Adresssuche in allen drei Ländern: 1. Impressum der offiziellen Website, 2. FirmenABC (Österreich) bzw. Zefix (Schweiz) bzw. D&B Hoovers (Deutschland, Schweiz), 3. Northdata als letzte Quelle.",
   "2a. Besucheradresse und Postadresse: Nennt keine Quelle eine abweichende Besucher- oder Postadresse, sind beide gleich der Anschrift. Dann beide mit dem Wert und dem Beleg der Anschrift eintragen und als Begründung „keine abweichende Angabe gefunden“ vermerken. Nur eine ausdrücklich abweichende Angabe (z. B. „Besucheranschrift:“, „Postanschrift:“, „Lieferadresse“) wird getrennt geführt.",
   "2b. Optionale Felder wie Fax, Postfach und frühere Namen nur eintragen, wenn sie bei der Suche nach den anderen Feldern auftauchen. Für sie keine eigene Suche; ihr Fehlen blockiert nichts.",
   "3. Danach die Kennzahlen: WZ-Code, Umsatz, Mitarbeiter und Geschäftstätigkeit. WZ-Code in allen drei Ländern ausschließlich aus D&B Hoovers und/oder Leadfeeder; Deutschland zusätzlich Bundesanzeiger. Kennzahlen gehören zur exakten juristischen Person des Leads, nicht zum Konzern. Umsatz und Mitarbeiter mit Geschäftsjahr im Zitat; den jüngsten Jahresabschluss im Bundesanzeiger bevorzugen, D&B-Schätzwerte als Schätzung kennzeichnen. Die Geschäftstätigkeit über D&B Hoovers oder eine Google-Suche nach Unternehmensname und Tätigkeit klären; aus der Homepage einen Firmensteckbrief erstellen (Homepage-Fact-Sheet).",
-  "4. Zuletzt die Ansprechpartner: Vorname, Nachname, Funktion, Position, E-Mail, Telefon, LinkedIn und XING. Gesucht wird mindestens eine Person aus jeder dieser Kategorien, in dieser Reihenfolge: Geschäftsführung/Gesamtverantwortung, Prokura, Leitung Finanzen, Einkauf, Supply Chain Management, Operations, Technik, Entwicklung. Personen über die Namenssuche in LinkedIn und XING ansteuern, nicht über angeklickte Suchtreffer.",
+  "4. Zuletzt die Ansprechpartner: Vorname, Nachname, Funktion, Position, E-Mail, Telefon, LinkedIn und XING. Gesucht wird mindestens eine Person aus jeder dieser Kategorien, in dieser Reihenfolge: Geschäftsführung/Gesamtverantwortung, Leitung Finanzen, Einkauf, Supply Chain Management, Operations, Technik, Entwicklung. Personen über die Namenssuche in LinkedIn und XING ansteuern, nicht über angeklickte Suchtreffer.",
   "4a. Geschlecht und Titel jeder Person selbst bestimmen, nicht suchen: Das Geschlecht ergibt sich aus dem Vornamen (männlich/weiblich). Als Beleg die Quelle der Person mit dem Zitat, das ihren Vornamen nennt, und als Begründung „aus dem Vornamen abgeleitet“. Nur bei einem nicht eindeutigen Vornamen (z. B. Kim, Andrea im Ausland) das Feld als prüfbedürftig melden. Titel ist ein akademischer Titel, wenn eine Quelle ihn nennt (z. B. Dr., Prof., Dipl.-Ing.); sonst „Herr“ oder „Frau“ nach dem Geschlecht.",
   "4b. E-Mail der Person: Steht die Adresse wörtlich auf der Unternehmensseite oder in einer anderen Quelle, ist sie damit belegt. Sonst die Adresse aus dem Muster anderer bekannter Adressen derselben Firma bilden: Adressen anderer Mitarbeiter auf der Website, in Sellify, in Registern, Pressemitteilungen, Leadfeeder oder RocketReach (z. B. vorname.nachname@, v.nachname@, vorname@). Umlaute und ß wie im Muster umsetzen (ü → ue). Die gebildete Adresse über den Adapter experte-de prüfen, bei unklarem Ergebnis einmal über mailtester-com. Nur ein Ergebnis „gültig“ bzw. „zustellbar“ belegt die Adresse: dann die E-Mail eintragen mit dem Prüfergebnis als Beleg und der Musterquelle als zweitem Beleg, und das Ergebnis in E-Mail-Prüfung festhalten. Bei „ungültig“ das nächste plausible Muster prüfen, höchstens drei Varianten je Person. Bei „unbekannt“ oder Catch-All die beste Variante eintragen und als prüfbedürftig melden. Jede Adresse höchstens einmal je Prüfdienst; ist ein Dienst blockiert, das Feld als prüfbedürftig mit diesem Grund melden.",
   "4c. Telefon der Person: Durchwahl aus Website, Signatur, Pressemitteilung, Leadfeeder oder RocketReach. Ohne eigene Durchwahl bleibt das Feld leer; die Zentrale gehört in Firmen-Telefon, nicht zur Person.",
-  "5. Belegregel (Owner 07.10.2026: „Qualität geht immer vor Quantität. Wenn es nur eine Quelle gibt, ist die Recherche nicht gut, das sollte nur im Notfall sein.“): Für jedes Feld, das Dritte unabhängig prüfen können (Firmenname, Anschrift, PLZ, Ort, Länderkennzeichen, Aktivitätsstatus, frühere Namen, Geschäftstätigkeit, Geschäftsführung, Prokura, WZ-Code, Umsatz, Mitarbeiter), zwei unabhängige Quellen (verschiedene Anbieter) mit URL und wörtlichem Zitat, das den konkreten Wert nennt. Nur wenn nach allen dafür genannten Quellen nur eine den Wert belegt, den Wert mit Begründung „single source: …“ eintragen. So viele Quellen wie möglich, jede aber nur einmal. Zwei Seiten derselben Quelle sind eine Quelle, und Sellify allein belegt nichts. Eine Spanne (z. B. 11–100) belegt keinen Einzelwert.",
+  "5. Belegregel (Owner 07.10.2026: „Qualität geht immer vor Quantität. Wenn es nur eine Quelle gibt, ist die Recherche nicht gut, das sollte nur im Notfall sein.“): Für jedes Feld, das Dritte unabhängig prüfen können (Firmenname, Anschrift, PLZ, Ort, Länderkennzeichen, Aktivitätsstatus, frühere Namen, Geschäftstätigkeit, Geschäftsführung, WZ-Code, Umsatz, Mitarbeiter), zwei unabhängige Quellen (verschiedene Anbieter) mit URL und wörtlichem Zitat, das den konkreten Wert nennt. Nur wenn nach allen dafür genannten Quellen nur eine den Wert belegt, den Wert mit Begründung „single source: …“ eintragen. So viele Quellen wie möglich, jede aber nur einmal. Zwei Seiten derselben Quelle sind eine Quelle, und Sellify allein belegt nichts. Eine Spanne (z. B. 11–100) belegt keinen Einzelwert.",
   "5a. Selbstauskünfte wie Domain, Firmen-E-Mail, Firmen-Telefon, Fax, Postfach, Besucheradresse, Postadresse, Homepage-Fact-Sheet sowie alle Felder der Ansprechpartner belegt die Unternehmensseite (Impressum, Kontakt, Team) bzw. das Profil selbst, mit URL und wörtlichem Zitat. Einen so belegten Wert eintragen, niemals als nicht gefunden verwerfen mit der Begründung, er stehe nur auf der eigenen Website.",
   "5b. Werte in der Schreibweise der Quelle übernehmen, mit Umlauten und ß. Keine Umschrift: Nürnberg, nicht Nuernberg; Lechstraße, nicht Lechstrasse. Schweizer Adressen behalten ihr ss.",
   "5c. Belege als reine JSON-Liste senden: \"sources\": [ { … }, { … } ]. Kein Trägerobjekt wie {\"item\": [ … ]}. Das gilt auch für result.person_records und result.evidence.",
@@ -911,6 +911,7 @@ async function synchronizeInitialData() {
   // wenn alle Sammlungen live sind; sonst beim naechsten Start.
   if (!nichtLive.length) {
     bootSchritt('repair-adapters');
+    await pflegeSchritt('dedupe-adapters', () => entferneDoppelteAdapter());
     // Nachladen nur, wenn ein Schritt etwas geaendert hat: jedes reload sind
     // mehrere Abfragen gegen das Abfragekontingent des Browsers.
     if (await pflegeSchritt('repair-adapters', () => repairAdapterActivationDrift())) {
@@ -1291,6 +1292,8 @@ async function seedSources() {
     };
     if (existing) {
       const current = existing.toJSON?.() || existing;
+      // Vom Nutzer entfernte mitgelieferte Quelle bleibt entfernt (Owner 15.10.2026).
+      if (current.payload?.removed === true) continue;
       if (current.payload?.builtin !== false) {
         // Built-in bedeutet „mitgeliefert“, nicht „unveränderlich“. Beim
         // Upgrade ergänzen wir neue Pflichtabdeckung additiv, lassen aber die
@@ -1602,7 +1605,7 @@ function quellenGlossar() {
 // (v32, 23.09. 13:13) trug weiter die alte Zwei-Quellen-Regel, der Agent liess
 // Registerfelder, WZ-Code und Land deshalb offen (25.09.2026). Ersetzt werden
 // nur die beiden alten Zeilen, wortgleich; jede eigene Fassung bleibt stehen.
-const VERALTETE_BELEGREGEL = Object.freeze(["5. Belegregel. Angaben, die Dritte unabhängig prüfen können, brauchen zwei unabhängige Quellen: firma_name, firma_anschrift, firma_plz, firma_ort, firma_land, firma_aktivitaetsstatus, firma_fruehere_namen, firma_geschaeftstaetigkeit, firma_geschaeftsfuehrung, firma_prokura, wz_code, umsatz, mitarbeiter. Zwei Seiten derselben Quelle sind eine Quelle, und Sellify allein belegt nichts.", "5a. Selbstauskünfte genügen mit EINER Quelle, weil es dafür keine zweite unabhängige geben kann: firma_domain, firma_email, firma_telefon, firma_fax, firma_postfach, firma_besucheranschrift, firma_postanschrift, firma_homepage_fact_sheet sowie alle person_-Felder. Beleg ist die Unternehmensseite (Impressum, Kontakt, Team) bzw. das Profil selbst, mit URL und wörtlichem Zitat. Einen so belegten Wert eintragen, niemals als no_match verwerfen mit der Begründung, er stehe nur auf der eigenen Website."]);
+const VERALTETE_BELEGREGEL = Object.freeze(["5. Belegregel. Angaben, die Dritte unabhängig prüfen können, brauchen zwei unabhängige Quellen: firma_name, firma_anschrift, firma_plz, firma_ort, firma_land, firma_aktivitaetsstatus, firma_fruehere_namen, firma_geschaeftstaetigkeit, firma_geschaeftsfuehrung, wz_code, umsatz, mitarbeiter. Zwei Seiten derselben Quelle sind eine Quelle, und Sellify allein belegt nichts.", "5a. Selbstauskünfte genügen mit EINER Quelle, weil es dafür keine zweite unabhängige geben kann: firma_domain, firma_email, firma_telefon, firma_fax, firma_postfach, firma_besucheranschrift, firma_postanschrift, firma_homepage_fact_sheet sowie alle person_-Felder. Beleg ist die Unternehmensseite (Impressum, Kontakt, Team) bzw. das Profil selbst, mit URL und wörtlichem Zitat. Einen so belegten Wert eintragen, niemals als no_match verwerfen mit der Begründung, er stehe nur auf der eigenen Website."]);
 function aktuelleBelegregel() {
   const zeilen = DEFAULT_RESEARCH_POLICY.split('\n');
   return [zeilen.find((z) => z.startsWith('5. Belegregel')), zeilen.find((z) => z.startsWith('5a. '))];
@@ -1722,8 +1725,10 @@ const LEAD_LIST_LOAD_TIMEOUT_MS = 45000;
 function sharedLeadListLoad(collection, previousLeads, bindingGeneration) {
   const running = state.leadListLoad;
   if (running && running.bindingGeneration === bindingGeneration) return running.promise;
-  const promise = withLeadQueryAuthority(state.ctx.sync,
+  // Mit lokalem Speicher braucht die Liste keinen CTOX-Lesekanal (client first).
+  const promise = hasLocalStore(collection) ? loadLeadList(collection, previousLeads) : withLeadQueryAuthority(state.ctx.sync,
     signal => loadLeadList(collection, previousLeads, { signal }), {
+      collection,
       isCurrent: () => state.collectionBindingGeneration === bindingGeneration,
       timeoutMs: LEAD_LIST_LOAD_TIMEOUT_MS,
     });
@@ -1755,6 +1760,7 @@ async function loadLeadDelta(collection, changes, bindingGeneration) {
   const fetched = fetchIds.length
     ? await withLeadQueryAuthority(state.ctx.sync,
       signal => loadFullLeadRows(collection, fetchIds, { signal }), {
+        collection,
         isCurrent: () => state.collectionBindingGeneration === bindingGeneration,
       })
     : [];
@@ -1789,9 +1795,15 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration, changesByKey = nu
       if (!leadChanges) leadChanges = await sharedLeadListLoad(collection, previousLeads, bindingGeneration);
       return [key, leadChanges.rows];
     }
+    // Client first: kleine Sammlungen (Quellen, Adapter, Kampagnen, Einstellungen)
+    // kommen direkt aus dem lokalen Speicher; ueber find().exec() warteten sie nach
+    // jedem Neuladen auf CTOX ("Aktueller Stand wird aus CTOX geladen …").
+    if (hasLocalStore(collection)) {
+      return [key, (await collection.storageCollection.allDocuments()).filter((doc) => doc && !doc._deleted)];
+    }
     const collectionName = `outbound_lead_generation_${key === 'researchPolicies' ? 'research_policies' : key}`;
     const docs = await withLeadQueryAuthority(state.ctx.sync,
-      signal => collection.find().exec({ signal }), { collectionName,
+      signal => collection.find().exec({ signal }), { collectionName, collection,
         isCurrent: () => state.collectionBindingGeneration === bindingGeneration });
     return [key, docs.map((doc) => doc.toJSON())];
   }));
@@ -1901,7 +1913,7 @@ function applyFreshCollections(fresh, bindingGeneration, leadChanges) {
   // sie bestaetigt: ein Nachladen mit dem aelteren Serverstand liess ihn sonst
   // zuruckspringen, und der naechste Klick schaltete falsch herum (Rundgang
   // 25.09.2026). Nach zwei Minuten gilt wieder, was die Datenbank sagt.
-  if (fresh.has('sources')) state.sources = sources.map((source) => {
+  if (fresh.has('sources')) state.sources = sources.filter((source) => source.payload?.removed !== true).map((source) => {
     const absicht = state.sourceToggleIntent.get(source.id);
     if (!absicht) return source;
     if ((source.enabled !== false) === absicht.enabled || Date.now() > absicht.bis) {
@@ -1994,17 +2006,26 @@ async function ensureFullLeads(ids, { fresh = false } = {}) {
   const requested = [...new Set(ids.filter(Boolean))];
   const summaries = new Map(listLeads().map(row => [row.id, row]));
   const cached = new Map(state.leads.map(row => [row.id, row]));
-  const missing = requested.filter(id => fresh || !cached.has(id) || cached.get(id)._rev !== summaries.get(id)?._rev);
+  let missing = requested.filter(id => fresh || !cached.has(id) || cached.get(id)._rev !== summaries.get(id)?._rev);
   if (!missing.length) return requested.map(id => cached.get(id));
   const sequence = ++state.fullLeadReadSequence;
+  // Anzeige liest zuerst den lokalen Speicher (client first); nur fehlende oder
+  // veraltete Leads gehen an CTOX. Aktionen (fresh) lesen weiter autoritativ.
+  const stored = fresh ? new Map() : await readStoredLeadRows(state.collections.leads, missing);
+  const local = missing.map(id => stored.get(id))
+    // Der lokale Speicher fuehrt kein _rev; ein lokaler Lead gilt, solange die
+    // Listenzeile keine abweichende Revision meldet.
+    .filter(row => row && (!row._rev || !summaries.get(row.id)?._rev || summaries.get(row.id)._rev === row._rev));
+  missing = missing.filter(id => !local.some(row => row.id === id));
   // Ein Lesefenster (15 s) je Paket: alle 498 Leads einer Kampagne in einem
   // Fenster waren 63 Achter-Abfragen und liefen auf thesen (08.10.2026)
   // regelmaessig in "Daten konnten nicht rechtzeitig aus CTOX geladen werden".
-  const rows = [];
+  const rows = [...local];
   for (let offset = 0; offset < missing.length; offset += FULL_LEAD_READ_PACKAGE) {
     const paket = missing.slice(offset, offset + FULL_LEAD_READ_PACKAGE);
     rows.push(...await withLeadQueryAuthority(state.ctx.sync,
       signal => loadFullLeadRows(state.collections.leads, paket, { signal }), {
+        collection: state.collections.leads,
         isCurrent: () => state.collectionBindingGeneration === generation && state.uiMounted !== false,
       }));
   }
@@ -3249,7 +3270,6 @@ function renderSourceRow(item) {
   const needsBrowserAuthorization = intern || istSchluesselZugang(item.credential_secret_name)
     ? false
     : item.payload?.input_driven !== true;
-  const userManaged = item.payload?.builtin === false;
   const hintergrund = intern
     ? ' · interne Quelle'
     : item.payload?.input_driven === true
@@ -3278,8 +3298,7 @@ function renderSourceRow(item) {
       <button class="ctox-pane-icon" data-action="test-adapter" title="${tr('testAdapter', 'Datenzugriff prüfen')}" aria-label="${tr('testAdapter', 'Datenzugriff prüfen')}">${icon('test')}</button>
       ${item.requires_credential ? `<button class="ctox-pane-icon" data-action="check-credential" title="Zugang prüfen" aria-label="Zugang von ${escapeHtml(item.label)} prüfen">${icon('key')}</button>` : ''}
       ${needsBrowserAuthorization ? `<button class="ctox-pane-icon" data-action="auth-source" title="${tr('browserSignIn', 'Im CTOX-Browser anmelden / entsperren')}" aria-label="${tr('signIn', 'Anmelden')}">${icon('login')}</button>` : ''}
-      <button class="ctox-pane-icon is-danger" data-action="delete-adapter" title="Adapter entfernen" aria-label="Adapter für ${escapeHtml(item.label)} entfernen">${icon('trash')}</button>
-      ${userManaged ? `<button class="ctox-pane-icon is-danger" data-action="delete-source" title="Quelle vollständig löschen" aria-label="${escapeHtml(item.label)} vollständig löschen">${icon('close')}</button>` : ''}
+      <button class="ctox-pane-icon is-danger" data-action="delete-source" title="Quelle entfernen" aria-label="${escapeHtml(item.label)} entfernen">${icon('trash')}</button>
     </div>`}
   </div>`;
 }
@@ -3304,7 +3323,28 @@ function adapterScriptText(adapter) {
   return definition ? JSON.stringify(sanitizeCommandResult(definition), null, 2) : '';
 }
 
+// Client first: die Leads der geoeffneten Kampagne liegen vollstaendig im
+// Browser, bevor jemand klickt. Vorher wurde jeder Lead erst beim Klick vom
+// Server geholt ("Details und Belege werden geladen ..." bis zu 20 s, Kundeninstanz
+// 15.10.2026). selectedLead() zeigt einen vorhandenen vollstaendigen Stand
+// sofort; ein neuerer Stand wird danach im Hintergrund nachgeladen.
+const CAMPAIGN_PREFETCH_LIMIT = 100;
+function prefetchCampaignLeads() {
+  const kampagne = state.selectedCampaign;
+  if (!kampagne || state.uiMounted === false || state.campaignPrefetchRunning) return;
+  const vorhanden = new Set(state.leads.map((row) => row.id));
+  const fehlend = campaignListLeads(kampagne).map((row) => row.id)
+    .filter((id) => id && !vorhanden.has(id)).slice(0, CAMPAIGN_PREFETCH_LIMIT);
+  if (!fehlend.length) return;
+  state.campaignPrefetchRunning = true;
+  ensureFullLeads(fehlend)
+    .then(() => { if (state.uiMounted !== false) renderDetail(); })
+    .catch(() => {})
+    .finally(() => { state.campaignPrefetchRunning = false; });
+}
+
 function renderCenter() {
+  queueMicrotask(prefetchCampaignLeads);
   const pane = state.ctx.host.querySelector('[data-leads-pane]');
   if (!pane) return;
   const statusFilter = state.leadStatusFilter;
@@ -3425,7 +3465,7 @@ function renderCenter() {
   if (status) {
     // <details>-Zustand ueberlebt den Neuaufbau (gleiche Falle wie im Detail).
     const openDisclosures = new Set([...status.querySelectorAll('details[open][data-disclosure]')].map((node) => node.dataset.disclosure));
-    setzeHtmlWennGeaendert(status, `${renderCampaignProgress(campaignProgress)}${renderUnvollstaendigerImport(state.selectedCampaign)}${renderCampaignRecipientExclusions(state.selectedCampaign)}`);
+    setzeHtmlWennGeaendert(status, `${renderCampaignProgress(campaignProgress)}${renderUnvollstaendigerImport(state.selectedCampaign)}`);
     openDisclosures.forEach((key) => {
       const node = status.querySelector(`details[data-disclosure="${key}"]`);
       if (node) node.open = true;
@@ -3475,27 +3515,9 @@ function renderCenter() {
   if (headerCheckbox) headerCheckbox.indeterminate = someVisibleSelected;
 }
 
-function campaignRecipientExclusions(campaign) {
-  const rows = [];
-  const removedKeys = new Set();
-  for (const [leadId, notices] of state.recipientRemovalNotices) {
-    for (const notice of notices || []) removedKeys.add(recipientEligibilityKey(leadId, notice.contact?.id));
-  }
-  for (const lead of campaignLeads(campaign)) {
-    for (const contact of lead.contacts || []) {
-      const decision = currentContactEligibility(lead, contact);
-      if (decision.status === 'free') continue;
-      rows.push({
-        lead,
-        contact,
-        decision,
-        removed: removedKeys.has(recipientEligibilityKey(lead.id, contact.id)),
-      });
-    }
-  }
-  return rows;
-}
-
+// Kein Sammelfeld „gesperrt · ungeprüft · Prüfung wiederholen“ mehr (Owner 15.10.2026:
+// „wenn einer gesperrt ist, dann darf er nicht ausgewählt werden“). Der Sperrvermerk
+// steht am Kontakt in der Empfängerauswahl, der Kontakt ist dort nicht wählbar.
 function renderUnvollstaendigerImport(campaign) {
   const job = unvollstaendigerImport(campaign);
   if (!job) return '';
@@ -3506,83 +3528,6 @@ function renderUnvollstaendigerImport(campaign) {
     <button class="ctox-button" data-action="resume-import" data-import-id="${escapeHtml(job.id)}">Fortsetzen</button>
   </div>`;
 }
-function renderCampaignRecipientExclusions(campaign) {
-  const cached = new Set(state.leads.map(lead => lead.id));
-  const missing = campaignListLeads(campaign).filter(lead => !cached.has(lead.id)).length;
-  const notice = missing ? `<div class="leadgen-recipient-exclusions is-pending is-compact" role="status"><span>Kontaktdaten von ${missing} Leads werden erst bei Auswahl oder Prüfung geladen.</span><button class="ctox-button" data-action="recheck-sellify">Kontakte prüfen</button></div>` : '';
-  return notice + renderLoadedCampaignRecipientExclusions(campaign);
-}
-function renderLoadedCampaignRecipientExclusions(campaign) {
-  const rows = campaignRecipientExclusions(campaign);
-  if (!rows.length) return '';
-  // Owner-Befund 03.09.: Das Feld nannte einen Systemzustand und keine
-  // Aufgabe — 48 Zeilen, derselbe Name mehrfach, Kontakte fremder Firmen,
-  // und keine Handlung. Ein Kontakt, der geprueft werden MUSS, ist eine
-  // Aufgabe; ein Abgleich, der nicht laufen KANN, ist genau eine Meldung mit
-  // genau einem Knopf.
-  const seen = new Set();
-  const unique = [];
-  for (const row of rows) {
-    const name = personDisplayName(row.contact) || '';
-    const key = `${row.lead.id}|${name.toLowerCase()}|${String(row.contact?.person_email || '').toLowerCase()}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(row);
-  }
-  const pending = unique.filter((row) => row.decision.pending === true
-    || /nicht prüfbar|wird geprüft/i.test(String(row.decision.label || '')));
-  const blocked = unique.filter((row) => !pending.includes(row));
-  if (!blocked.length) {
-    // Nichts ist ausgeschlossen — die Pruefung konnte nur nicht laufen.
-    // Laufende Pruefung von ausgebliebener Antwort unterscheiden: eine Pruefung
-    // dauert gemessen bis 75 Sekunden. "Hat nicht geantwortet" waehrend sie noch
-    // laeuft las sich wie ein Defekt.
-    const laeuft = unique.some((row) => state.recipientEligibilityBusy.has(row.lead?.id));
-    const zeitueberschritten = unique.filter((row) => state.recipientEligibilityTimedOut.has(row.lead?.id)).length;
-    // Rundgang 11.09.2026: der rote Kasten nahm in schmalen Fenstern die ganze
-    // Leadliste ein. Eine Zeile reicht; die Begruendung steht im Hinweistext.
-    const erklaerung = 'Solange ein Kontakt nicht gegen Sellify geprüft ist, bleibt er für die Übergabe gesperrt – ohne Prüfung darf niemand angeschrieben werden. '
-      + (laeuft ? 'Die Prüfung dauert je Lead bis zu 90 Sekunden.' : '');
-    const text = laeuft
-      ? `Sperrvermerk-Prüfung läuft · ${unique.length} Kontakt${unique.length === 1 ? '' : 'e'}`
-      : zeitueberschritten
-        ? `Sperrvermerk-Prüfung ohne Antwort · ${zeitueberschritten} Kontakt${zeitueberschritten === 1 ? '' : 'e'}`
-        : `Sperrvermerk-Prüfung ausstehend · ${unique.length} Kontakt${unique.length === 1 ? '' : 'e'}`;
-    return `<div class="leadgen-recipient-exclusions is-pending is-compact" role="status" title="${escapeHtml(erklaerung)}">
-      <span>${escapeHtml(text)}</span>
-      <button class="ctox-button" data-action="recheck-sellify"${laeuft ? ' disabled' : ''}>${laeuft ? 'Prüfung läuft …' : 'Jetzt prüfen'}</button>
-    </div>`;
-  }
-  const foreign = unique.filter((row) => {
-    const company = String(row.contact?.company || row.contact?.firma_name || '').trim().toLowerCase();
-    return company && company !== String(row.lead?.name || '').trim().toLowerCase();
-  });
-  const shown = blocked.slice(0, 5);
-  // "gesperrt" und "zu prüfen" getrennt zaehlen (Klicktest P2 V9) und eine
-  // laufende Pruefung auch in dieser Form zeigen (PRG-02a).
-  const hartGesperrt = blocked.filter((row) => row.decision?.status === 'blocked').length;
-  const zuPruefen = blocked.length - hartGesperrt;
-  const pruefungLaeuft = unique.some((row) => state.recipientEligibilityBusy.has(row.lead?.id));
-  const teile = [
-    hartGesperrt ? `${hartGesperrt} Kontakt${hartGesperrt === 1 ? '' : 'e'} gesperrt` : '',
-    zuPruefen ? `${zuPruefen} zu prüfen` : '',
-    pending.length ? `${pending.length} ungeprüft` : '',
-    pruefungLaeuft ? 'Prüfung läuft …' : '',
-  ].filter(Boolean);
-  return `<details class="leadgen-recipient-exclusions" data-disclosure="recipient-exclusions">
-    <summary>${escapeHtml(teile.join(' · '))}</summary>
-    <ul>${shown.map(({ lead, contact, decision, removed }) => `<li>
-      <strong>${escapeHtml(personDisplayName(contact) || tr('contact', 'Kontakt'))}</strong>
-      <span>${escapeHtml(lead.name)} · ${escapeHtml(decision.label)}${removed ? ' · abgewählt' : ''}</span>
-      ${decision.originalRemark ? `<q>${escapeHtml(decision.originalRemark)}</q>` : `<span>${escapeHtml(decision.reason || '')}</span>`}
-    </li>`).join('')}</ul>
-    ${blocked.length > shown.length ? `<p>… und ${blocked.length - shown.length} weitere.</p>` : ''}
-    ${pending.length ? `<p>${pending.length} Kontakt${pending.length === 1 ? '' : 'e'} konnten nicht geprüft werden.
-      <button class="ctox-button" data-action="recheck-sellify"${pruefungLaeuft ? ' disabled' : ''}>${pruefungLaeuft ? 'Prüfung läuft …' : 'Prüfung wiederholen'}</button></p>` : ''}
-    ${foreign.length ? `<p role="status">${foreign.length} Kontakt${foreign.length === 1 ? '' : 'e'} gehören laut Datensatz zu einer anderen Firma als der Lead — bitte im Lead prüfen.</p>` : ''}
-  </details>`;
-}
-
 function renderCampaignProgress(progress) {
   // Owner-Vorgabe 31.08.: Die Leiste ist ein LAUF-Monitor, kein Dauerzustand.
   // Ohne aktive Recherche ist sie ueberfluessig und verschwindet.
@@ -3874,7 +3819,7 @@ function renderLeadEditor() {
   // EDT-F42a: 2 von 7 Zeichen verloren). Der Entwurf steht ohnehin im Zustand
   // (input-Handler); gleicher Lead = nichts Neues zu zeigen.
   const offenerEditor = mount.querySelector('[data-lead-editor]');
-  if (offenerEditor && offenerEditor.dataset.leadId === String(state.leadEditorId || '')) {
+  if (!state.leadEditorSaving && offenerEditor && offenerEditor.dataset.leadId === String(state.leadEditorId || '')) {
     const aktiv = mount.ownerDocument?.activeElement;
     if (aktiv && offenerEditor.contains(aktiv)) return;
   }
@@ -3889,7 +3834,7 @@ function renderLeadEditor() {
   const fieldInput = (key, label, value, options = {}) => `
     <label class="leadgen-form-field ${options.wide ? 'is-wide' : ''}">
       <span>${escapeHtml(label)}</span>
-      <input data-lead-edit-field="${escapeHtml(key)}" value="${escapeHtml(value || '')}" ${options.required ? 'required' : ''}${suggestions[key] ? ` list="leadgen-suggest-${escapeHtml(key)}"` : ''}>
+      <input data-lead-edit-field="${escapeHtml(key)}" value="${escapeHtml(value || '')}" ${options.required ? 'required' : ''}${state.leadEditorSaving ? ' disabled' : ''}${suggestions[key] ? ` list="leadgen-suggest-${escapeHtml(key)}"` : ''}>
       ${suggestions[key] ? `<datalist id="leadgen-suggest-${escapeHtml(key)}">${suggestions[key].map((item) => `<option value="${escapeHtml(item)}"></option>`).join('')}</datalist>` : ''}
     </label>`;
   // firma_land hat im Editor genau EIN Feld ("Land (Länderkennzeichen)" =
@@ -3906,7 +3851,7 @@ function renderLeadEditor() {
       <section class="leadgen-lead-editor" role="dialog" aria-modal="true" aria-label="Lead bearbeiten" data-lead-editor data-lead-id="${escapeHtml(String(state.leadEditorId || ''))}">
         <header class="ctox-pane-header ctox-pane-band leadgen-header">
           <div><span class="ctox-pane-kicker">Lead</span><h2 class="ctox-pane-title">Bearbeiten</h2></div>
-          <button class="ctox-pane-icon" data-action="close-lead-editor" title="Schließen" aria-label="Schließen">${icon('close')}</button>
+          <button class="ctox-pane-icon" data-action="close-lead-editor" title="Schließen" aria-label="Schließen" ${state.leadEditorSaving ? 'disabled' : ''}>${icon('close')}</button>
         </header>
         <div class="leadgen-lead-form">
           ${fieldInput('name', 'Organisation', draft.name, { required: true, wide: true })}
@@ -3929,8 +3874,8 @@ function renderLeadEditor() {
           </details>` : ''}
         </div>
         <footer class="leadgen-dialog-actions">
-          <button class="ctox-button" data-action="close-lead-editor">Abbrechen</button>
-          <button class="ctox-button is-primary" data-action="save-lead-editor">Speichern</button>
+          <button class="ctox-button" data-action="close-lead-editor" ${state.leadEditorSaving ? 'disabled' : ''}>Abbrechen</button>
+          <button class="ctox-button is-primary" data-action="save-lead-editor" ${state.leadEditorSaving ? 'disabled' : ''}>${state.leadEditorSaving ? 'Wird gespeichert …' : 'Speichern'}</button>
         </footer>
       </section>
     </div>`;
@@ -4161,7 +4106,6 @@ async function handleClick(event) {
   if (action === 'check-credential') await pruefeZugang(id);
   if (action === 'test-adapter') await runAdapterCommand(id, 'outbound.research_source.test');
   if (action === 'auth-source') await runAdapterCommand(id, 'outbound.research_source.auth_assist');
-  if (action === 'delete-adapter') await deleteSourceAdapter(id);
   if (action === 'edit-source') await editSource(id);
   if (action === 'delete-source') await deleteSource(id);
   if (action === 'research-campaign') await startCampaignResearch(trigger.dataset.campaign || state.selectedCampaign);
@@ -4327,6 +4271,8 @@ function selectLeadAndRefreshEligibility(id) {
   state.selectedDetailError = '';
   renderCenter();
   renderDetail();
+  const host = state.ctx?.host;
+  revealDetailIfStacked({ leads: host?.querySelector('.leadgen-leads'), detail: host?.querySelector('.leadgen-detail') });
   void loadSelectedLeadDetails();
 }
 
@@ -7750,21 +7696,68 @@ async function editSource(sourceId) {
   await queueAdapterReconciliationAfterSourceChange('source_settings_changed');
 }
 
+// Alle Adapter einer Quelle: auf der Kundeninstanz lagen je Quelle zwei (adapter_thesen_* vom
+// 22.09. und adapter_leadgen_*); geloescht wurde nur der erste, die Zeile blieb
+// (Owner 15.10.2026: „ich habe zwei adapter gelöscht, aber es ist gar nichts passiert“).
+// Lesen und Schreiben direkt im lokalen Speicher (wie RxDocument.incrementalPatch);
+// find().exec() ging bis zur Shell-Freigabe an CTOX und hing (15.10.2026).
+async function patchStoredDoc(collection, doc, fields) {
+  const now = Number(fields?.updated_at_ms || Date.now());
+  await collection.storageCollection.upsert({
+    ...doc, ...fields, updated_at_ms: now, _meta: { ...(doc._meta || {}), lwt: now },
+  });
+}
+
+async function entferneDoppelteAdapter() {
+  const adapters = state.collections.adapters;
+  if (typeof adapters?.storageCollection?.allDocuments !== 'function') return false;
+  const docs = await adapters.storageCollection.allDocuments();
+  const ids = new Set(doppelteAdapterIds(docs));
+  for (const doc of docs) {
+    if (ids.has(doc.id)) await patchStoredDoc(adapters, doc, { _deleted: true, is_deleted: true });
+  }
+  if (ids.size) state.adapters = state.adapters.filter((entry) => !ids.has(entry.id));
+  return ids.size > 0;
+}
+
+async function removeAllSourceAdapters(sourceId) {
+  const adapters = state.collections.adapters;
+  const docs = (await adapters.storageCollection.allDocuments()).filter((doc) => doc.source_id === sourceId);
+  for (const doc of docs) await patchStoredDoc(adapters, doc, { _deleted: true, is_deleted: true });
+  state.adapters = state.adapters.filter((entry) => entry.source_id !== sourceId);
+}
+
 async function deleteSource(sourceId) {
   const item = state.sources.find((entry) => entry.id === sourceId);
-  if (!item || item.payload?.builtin !== false) return;
+  if (!item) return;
+  const mitgeliefert = item.payload?.builtin !== false;
   const confirmed = await showBusinessConfirm(
-    `Die Quelle „${item.label}“ und ihr eingerichteter Datenzugriff werden vollständig gelöscht.`,
+    `Die Quelle „${item.label}“ wird entfernt und bei Recherchen nicht mehr verwendet.`,
     {
-      title: 'Quelle löschen',
-      confirmLabel: 'Quelle löschen',
+      title: 'Quelle entfernen',
+      confirmLabel: 'Quelle entfernen',
       kind: 'danger',
     },
   );
   if (!confirmed) return;
-  const adapter = state.adapters.find((entry) => entry.source_id === sourceId);
-  const adapterDoc = adapter ? await state.collections.adapters.findOne(adapter.id).exec() : null;
-  if (adapterDoc) await adapterDoc.remove();
+  await removeAllSourceAdapters(sourceId);
+  if (mitgeliefert) {
+    // Mitgelieferte Quellen legt seedSources bei jedem Start an; sie bleiben
+    // deshalb als entfernt markiert statt geloescht.
+    const now = Date.now();
+    const sources = state.collections.sources;
+    const current = (await sources.storageCollection.findDocumentsById([sourceId]))[sourceId];
+    if (current) {
+      await patchStoredDoc(sources, current, {
+        enabled: false,
+        payload: { ...(current.payload || {}), removed: true, removed_at_ms: now },
+        updated_at_ms: now,
+      });
+    }
+    state.sources = state.sources.filter((entry) => entry.id !== sourceId);
+    renderSourcePanel();
+    return;
+  }
   const sourceDoc = await state.collections.sources.findOne(sourceId).exec();
   const geloeschterStand = sourceDoc ? (sourceDoc.toJSON?.() || sourceDoc) : null;
   if (sourceDoc) await sourceDoc.remove();
@@ -8068,55 +8061,6 @@ async function runAdapterCommandInner(item, commandType, preopened) {
     console.error('[outbound-lead-generation] adapter command failed', error);
     showBusinessAlert(message);
   }
-}
-
-async function deleteSourceAdapter(sourceId) {
-  const item = state.sources.find((entry) => entry.id === sourceId);
-  const adapter = state.adapters.find((entry) => entry.source_id === sourceId);
-  if (!item) return;
-  // Ohne Adapterdatensatz warf der Abschluss einen TypeError (adapter.id) —
-  // die Quelle war schon zurueckgesetzt, eine Meldung kam nie
-  // (Klicktest-Befund P4 V4).
-  if (!adapter) {
-    await showBusinessAlert(`Für „${item.label}“ ist kein Datenzugriff eingerichtet.`);
-    return;
-  }
-  const confirmed = await showBusinessConfirm(
-    `Der eingerichtete Datenzugriff für „${item.label}“ wird gelöscht. Die Quelle selbst bleibt erhalten.`,
-    {
-      title: 'Datenzugriff löschen',
-      confirmLabel: 'Datenzugriff löschen',
-      kind: 'danger',
-    },
-  );
-  if (!confirmed) return;
-  const adapterDoc = adapter ? await state.collections.adapters.findOne(adapter.id).exec() : null;
-  if (adapterDoc) await adapterDoc.remove();
-  const now = Date.now();
-  // Ein hinterlegter Zugang bleibt hinterlegt; nur der Datenzugriff geht
-  // (vorher immer "required", Klicktest-Befund P4 V19).
-  // Der Secret-Katalog entscheidet, sonst Quelle ODER Adapter: die Quelle
-  // selbst stand oft noch auf "required", obwohl ein Zugang liegt (Nachtest F, T54).
-  const katalog = secretStand(item.credential_secret_name);
-  const zugangLiegt = katalog
-    ? katalog.vorhanden
-    : ['credential_available', 'authenticated'].includes(item.auth_status)
-      || ['credential_available', 'authenticated'].includes(adapter.auth_status);
-  const authStatus = !item.requires_credential
-    ? 'not_required'
-    : (zugangLiegt ? 'credential_available' : 'required');
-  const sourceDoc = await state.collections.sources.findOne(item.id).exec();
-  await sourceDoc?.incrementalPatch({
-    adapter_status: 'draft',
-    scrape_status: 'target_available',
-    auth_status: authStatus,
-    updated_at_ms: now,
-  });
-  state.adapters = state.adapters.filter((entry) => entry.id !== adapter.id);
-  state.sources = state.sources.map((entry) => entry.id === item.id
-    ? { ...entry, adapter_status: 'draft', scrape_status: 'target_available', auth_status: authStatus, updated_at_ms: now }
-    : entry);
-  renderSourcePanel();
 }
 
 function authAssistFromCommandResult(result) {
@@ -8613,6 +8557,7 @@ function openLeadEditor(id) {
 }
 
 function closeLeadEditor() {
+  if (state.leadEditorSaving) return;
   state.leadEditorOpen = false;
   state.leadEditorId = '';
   state.leadEditorContactId = '';
@@ -8622,6 +8567,7 @@ function closeLeadEditor() {
 }
 
 async function saveLeadEditor() {
+  if (state.leadEditorSaving) return;
   const lead = state.leads.find((entry) => entry.id === state.leadEditorId);
   const draft = state.leadDraft;
   if (!lead || !draft) return;
@@ -8767,13 +8713,12 @@ async function saveLeadEditor() {
       label: tr('operatorEdited', 'Vom Nutzer geändert'),
     });
   }
-  // Das Fenster schliesst sofort; gespeichert wird im Hintergrund mit sichtbarer
-  // Rueckmeldung. Vorher blieb es offen, bis Datenbankabfrage und Schreiben
-  // durch den Abgleich waren - unter Last sah "Speichern" tot aus (25.09.2026).
-  state.selectedCampaign = campaign;
-  closeLeadEditor();
+  // Die Maske darf erst nach einer bestaetigten Schreiboperation schliessen.
+  // Scheitert der vorausgehende native Read (z. B. RATE_LIMITED), bleibt der
+  // Entwurf samt Ansprechpartner im Editor fuer einen erneuten Versuch erhalten.
+  state.leadEditorSaving = true;
   zeigeHinweis(`„${name}“ wird gespeichert …`, 0);
-  render();
+  renderLeadEditor();
   const speichern = patchLead(lead.id, {
     ...(personChanges.length ? { contacts: nextContacts } : {}),
     name,
@@ -8793,10 +8738,16 @@ async function saveLeadEditor() {
   });
   try {
     await speichern;
+    state.leadEditorSaving = false;
+    state.selectedCampaign = campaign;
+    closeLeadEditor();
     zeigeHinweis(`„${name}“ gespeichert.`, 6000);
   } catch (error) {
+    state.leadEditorSaving = false;
+    renderLeadEditor();
     zeigeHinweis(`Speichern von „${name}“ fehlgeschlagen.`, 30000);
     await showBusinessAlert(`Die Änderungen an „${name}“ konnten nicht gespeichert werden: ${String(error?.message || error)}`);
+    return;
   }
   await reload().catch(() => {});
   render();
@@ -10508,7 +10459,7 @@ async function researchLead(id, options = {}) {
         lead_id: lead.id,
         // Was der Agent über den Lead schon weiss (er hat keinen Record-Lesebefehl):
         lead_snapshot: { data: lead.data || {}, contacts: lead.contacts || [] },
-        company: lead.name,
+        company: researchCompanyName(lead),
         country: normalizedResearchCountry(lead.country),
         mode: researchMode,
         fields: nurFelder || activeResearchFields(),
@@ -12486,6 +12437,16 @@ function enabledPrivateResearchSources(sources = state.sources) {
     .sort();
 }
 
+// Firmenname fuer die Anbieter-Suche: der in den Lead-Daten belegte aktuelle
+// Name (firma_name) geht vor dem Listentitel. Kundeninstanz 14.10.2026: der Lead
+// "Kiesow Dr. Brinkmann" (2020 umfirmiert) wurde bei Leadfeeder und D&B nur
+// unter dem Altnamen gesucht (0 Treffer); unter dem aktuellen Namen lieferten
+// beide 20 Ansprechpartner.
+function researchCompanyName(lead) {
+  const current = String(lead?.data?.firma_name || '').trim();
+  return current || String(lead?.name || '').trim();
+}
+
 function normalizedResearchCountry(value) {
   const country = String(value || 'DE').trim().toUpperCase();
   if (['A', 'AT', 'AUT', 'AUSTRIA', 'ÖSTERREICH', 'OESTERREICH'].includes(country)) return 'AT';
@@ -12766,7 +12727,7 @@ function deduplicateEvidence(entries) {
 // zurueck und loeschten zwischenzeitlich Geschriebenes (Klicktest P2 V15).
 async function patchLead(id, patch, { payloadMerge = false, dataMerge = false } = {}) {
   const doc = await state.collections.leads.findOne(id).exec();
-  if (!doc) return;
+  if (!doc) throw new Error('LEAD_NOT_FOUND: Der Lead wurde zwischenzeitlich entfernt.');
   const current = doc.toJSON?.() || doc;
   if (payloadMerge && patch?.payload) patch = { ...patch, payload: { ...(current.payload || {}), ...patch.payload } };
   if (dataMerge && patch?.data) patch = { ...patch, data: { ...(current.data || {}), ...patch.data } };
@@ -13478,7 +13439,7 @@ function researchFieldReview(lead) {
 // Domain belegt und hing an „frühere Firmennamen fehlt", obwohl die Recherche
 // dokumentiert festgestellt hatte, dass es keine gibt. Ein sauber belegtes
 // „gibt es nicht" darf keine Freigabe blockieren.
-const FELDER_MIT_LEERER_ANTWORT = new Set(['firma_fruehere_namen', 'firma_prokura']);
+const FELDER_MIT_LEERER_ANTWORT = new Set(['firma_fruehere_namen']);
 function fieldAnsweredAsNone(lead, key) {
   if (!FELDER_MIT_LEERER_ANTWORT.has(key)) return false;
   const status = lead?.field_status?.[key];
@@ -13508,7 +13469,6 @@ function validationBlockerDetails(lead) {
     ['firma_geschaeftstaetigkeit', 'Geschäftstätigkeit'],
     ['firma_homepage_fact_sheet', 'Homepage-Fact-Sheet'],
     ['firma_geschaeftsfuehrung', 'Geschäftsführung'],
-    ['firma_prokura', 'Prokura oder explizit „keine gefunden“'],
     ['firma_email_domain_konflikt', 'E-Mail-/Domain-Konsistenz'],
     ['wz_code', 'WZ-Code'],
     ['firma_aufnahmeeignung', 'fachliche Eignung'],
@@ -13890,13 +13850,12 @@ function contactTabLead(lead) {
         const exact = PERSON_RESEARCH_PRIORITIES.findIndex((value) => role.includes(value.toLowerCase()));
         if (exact >= 0) return exact;
         if (/gesch[aä]ftsführ|managing director|\bceo\b|gesamtverantwort|vorstand/.test(role)) return 0;
-        if (/prokur|vertretungsberechtigt/.test(role)) return 1;
-        if (/finanz|\bcfo\b|controlling/.test(role)) return 2;
-        if (/einkauf|procurement|purchas/.test(role)) return 3;
-        if (/supply chain|\bscm\b|logistik/.test(role)) return 4;
-        if (/operations|betriebsleit|\bcoo\b/.test(role)) return 5;
-        if (/technik|technisch|\bcto\b|technical/.test(role)) return 6;
-        if (/entwicklung|f&e|r&d/.test(role)) return 7;
+        if (/finanz|\bcfo\b|controlling/.test(role)) return 1;
+        if (/einkauf|procurement|purchas/.test(role)) return 2;
+        if (/supply chain|\bscm\b|logistik/.test(role)) return 3;
+        if (/operations|betriebsleit|\bcoo\b/.test(role)) return 4;
+        if (/technik|technisch|\bcto\b|technical/.test(role)) return 5;
+        if (/entwicklung|f&e|r&d/.test(role)) return 6;
         return PERSON_RESEARCH_PRIORITIES.length;
       };
       return priority(left.contact) - priority(right.contact) || left.index - right.index;
@@ -14055,13 +14014,12 @@ function renderContactTabs(lead) {
     const exact = PERSON_RESEARCH_PRIORITIES.findIndex((value) => role.includes(value.toLowerCase()));
     if (exact >= 0) return exact;
     if (/gesch[aä]ftsführ|managing director|\bceo\b|gesamtverantwort|vorstand/.test(role)) return 0;
-    if (/prokur|vertretungsberechtigt/.test(role)) return 1;
-    if (/finanz|\bcfo\b|controlling/.test(role)) return 2;
-    if (/einkauf|procurement|purchas/.test(role)) return 3;
-    if (/supply chain|\bscm\b|logistik/.test(role)) return 4;
-    if (/operations|betriebsleit|\bcoo\b/.test(role)) return 5;
-    if (/technik|technisch|\bcto\b|technical/.test(role)) return 6;
-    if (/entwicklung|f&e|r&d/.test(role)) return 7;
+    if (/finanz|\bcfo\b|controlling/.test(role)) return 1;
+    if (/einkauf|procurement|purchas/.test(role)) return 2;
+    if (/supply chain|\bscm\b|logistik/.test(role)) return 3;
+    if (/operations|betriebsleit|\bcoo\b/.test(role)) return 4;
+    if (/technik|technisch|\bcto\b|technical/.test(role)) return 5;
+    if (/entwicklung|f&e|r&d/.test(role)) return 6;
     return PERSON_RESEARCH_PRIORITIES.length;
   };
   const groups = PERSON_RESEARCH_PRIORITIES.map((label) => ({ label, contacts: [] }));
@@ -14347,6 +14305,7 @@ export const __leadgenOutboundTestHooks = {
   researchAnsweredNotFound,
   setEmptyFieldRelease,
   patchLead,
+  saveLeadEditor,
   freitextPruefungPrompt,
   freitextPakete,
   freitextLeadDaten,
@@ -14372,7 +14331,6 @@ export const __leadgenOutboundTestHooks = {
   normalizeProtectionText,
   repairLeadRecipientSelections,
   refreshLeadRecipientEligibility,
-  renderCampaignRecipientExclusions,
   adapterCommandRecordPatch,
   adapterReady,
   campaignResearchProgress,

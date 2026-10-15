@@ -204,6 +204,103 @@ pub fn export_jami_archive_for_business_os(root: &Path) -> Value {
     })
 }
 
+/// Map the Business OS email form to CTO_EMAIL_* runtime keys. Shared by the
+/// save command and the draft connection test so both read the same fields.
+pub fn email_config_env(config: &Value) -> BTreeMap<String, String> {
+    let mut env_map = BTreeMap::new();
+    let str_field = |key: &str| -> Option<String> {
+        config
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    };
+    let num_field = |key: &str| -> Option<String> {
+        config
+            .get(key)
+            .and_then(Value::as_i64)
+            .filter(|value| *value > 0)
+            .map(|value| value.to_string())
+    };
+    if let Some(value) = str_field("address") {
+        env_map.insert("CTO_EMAIL_ADDRESS".to_owned(), value);
+    }
+    if let Some(value) = str_field("provider") {
+        env_map.insert("CTO_EMAIL_PROVIDER".to_owned(), value);
+    }
+    if let Some(value) = str_field("password") {
+        // save_runtime_env_map routes CTO_EMAIL_PASSWORD through the
+        // encrypted secret store; it must never land in runtime_env_kv.
+        env_map.insert("CTO_EMAIL_PASSWORD".to_owned(), value);
+    }
+    if let Some(value) = str_field("imap_host") {
+        env_map.insert("CTO_EMAIL_IMAP_HOST".to_owned(), value);
+    }
+    if let Some(value) = num_field("imap_port") {
+        env_map.insert("CTO_EMAIL_IMAP_PORT".to_owned(), value);
+    }
+    if let Some(value) = str_field("smtp_host") {
+        env_map.insert("CTO_EMAIL_SMTP_HOST".to_owned(), value);
+    }
+    if let Some(value) = num_field("smtp_port") {
+        env_map.insert("CTO_EMAIL_SMTP_PORT".to_owned(), value);
+    }
+    if let Some(value) = str_field("tenant_id") {
+        env_map.insert("CTO_EMAIL_GRAPH_TENANT_ID".to_owned(), value);
+    }
+    if let Some(value) = str_field("client_id") {
+        env_map.insert("CTO_EMAIL_GRAPH_CLIENT_ID".to_owned(), value);
+    }
+    if let Some(value) = str_field("graph_user") {
+        env_map.insert("CTO_EMAIL_GRAPH_USER".to_owned(), value);
+    }
+    if let Some(value) = str_field("ews_url") {
+        env_map.insert("CTO_EMAIL_EWS_URL".to_owned(), value);
+    }
+    if let Some(value) = str_field("owa_url") {
+        env_map.insert("CTO_EMAIL_OWA_URL".to_owned(), value);
+    }
+    if let Some(value) = str_field("ews_auth_type") {
+        env_map.insert("CTO_EMAIL_EWS_AUTH_TYPE".to_owned(), value);
+    }
+    if let Some(value) = str_field("ews_username") {
+        env_map.insert("CTO_EMAIL_EWS_USERNAME".to_owned(), value);
+    }
+    if let Some(value) = str_field("ews_version") {
+        env_map.insert("CTO_EMAIL_EWS_VERSION".to_owned(), value);
+    }
+    if let Some(value) = str_field("active_sync_server") {
+        env_map.insert("CTO_EMAIL_ACTIVESYNC_SERVER".to_owned(), value);
+    }
+    if let Some(value) = str_field("active_sync_username") {
+        env_map.insert("CTO_EMAIL_ACTIVESYNC_USERNAME".to_owned(), value);
+    }
+    if let Some(value) = str_field("active_sync_path") {
+        env_map.insert("CTO_EMAIL_ACTIVESYNC_PATH".to_owned(), value);
+    }
+    if let Some(value) = str_field("active_sync_device_id") {
+        env_map.insert("CTO_EMAIL_ACTIVESYNC_DEVICE_ID".to_owned(), value);
+    }
+    if let Some(value) = str_field("active_sync_device_type") {
+        env_map.insert("CTO_EMAIL_ACTIVESYNC_DEVICE_TYPE".to_owned(), value);
+    }
+    if let Some(value) = str_field("active_sync_protocol_version") {
+        env_map.insert("CTO_EMAIL_ACTIVESYNC_PROTOCOL_VERSION".to_owned(), value);
+    }
+    if let Some(value) = str_field("active_sync_policy_key") {
+        env_map.insert("CTO_EMAIL_ACTIVESYNC_POLICY_KEY".to_owned(), value);
+    }
+    env_map
+}
+
+/// Test email settings before they are saved (`ctox.channel.test` with a
+/// `config`). Saves nothing.
+pub fn test_email_draft_for_business_os(root: &Path, config: &Value) -> Value {
+    let db_path = resolve_db_path(root, None);
+    crate::communication::email_native::test_draft(root, &db_path, &email_config_env(config))
+}
+
 /// Persist channel-specific settings (Email IMAP/SMTP/Graph/EWS/ActiveSync,
 /// Teams tenant/client, Jami account id, …) into the operator env map and then re-run
 /// sync_prompt_identity so communication_accounts is updated immediately.
@@ -230,74 +327,7 @@ pub fn save_channel_settings_for_business_os(
     };
     match channel {
         "email" => {
-            if let Some(value) = str_field("address") {
-                env_map.insert("CTO_EMAIL_ADDRESS".to_owned(), value);
-            }
-            if let Some(value) = str_field("provider") {
-                env_map.insert("CTO_EMAIL_PROVIDER".to_owned(), value);
-            }
-            if let Some(value) = str_field("password") {
-                // save_runtime_env_map routes CTO_EMAIL_PASSWORD through the
-                // encrypted secret store; it must never land in runtime_env_kv.
-                env_map.insert("CTO_EMAIL_PASSWORD".to_owned(), value);
-            }
-            if let Some(value) = str_field("imap_host") {
-                env_map.insert("CTO_EMAIL_IMAP_HOST".to_owned(), value);
-            }
-            if let Some(value) = num_field("imap_port") {
-                env_map.insert("CTO_EMAIL_IMAP_PORT".to_owned(), value);
-            }
-            if let Some(value) = str_field("smtp_host") {
-                env_map.insert("CTO_EMAIL_SMTP_HOST".to_owned(), value);
-            }
-            if let Some(value) = num_field("smtp_port") {
-                env_map.insert("CTO_EMAIL_SMTP_PORT".to_owned(), value);
-            }
-            if let Some(value) = str_field("tenant_id") {
-                env_map.insert("CTO_EMAIL_GRAPH_TENANT_ID".to_owned(), value);
-            }
-            if let Some(value) = str_field("client_id") {
-                env_map.insert("CTO_EMAIL_GRAPH_CLIENT_ID".to_owned(), value);
-            }
-            if let Some(value) = str_field("graph_user") {
-                env_map.insert("CTO_EMAIL_GRAPH_USER".to_owned(), value);
-            }
-            if let Some(value) = str_field("ews_url") {
-                env_map.insert("CTO_EMAIL_EWS_URL".to_owned(), value);
-            }
-            if let Some(value) = str_field("owa_url") {
-                env_map.insert("CTO_EMAIL_OWA_URL".to_owned(), value);
-            }
-            if let Some(value) = str_field("ews_auth_type") {
-                env_map.insert("CTO_EMAIL_EWS_AUTH_TYPE".to_owned(), value);
-            }
-            if let Some(value) = str_field("ews_username") {
-                env_map.insert("CTO_EMAIL_EWS_USERNAME".to_owned(), value);
-            }
-            if let Some(value) = str_field("ews_version") {
-                env_map.insert("CTO_EMAIL_EWS_VERSION".to_owned(), value);
-            }
-            if let Some(value) = str_field("active_sync_server") {
-                env_map.insert("CTO_EMAIL_ACTIVESYNC_SERVER".to_owned(), value);
-            }
-            if let Some(value) = str_field("active_sync_username") {
-                env_map.insert("CTO_EMAIL_ACTIVESYNC_USERNAME".to_owned(), value);
-            }
-            if let Some(value) = str_field("active_sync_path") {
-                env_map.insert("CTO_EMAIL_ACTIVESYNC_PATH".to_owned(), value);
-            }
-            if let Some(value) = str_field("active_sync_device_id") {
-                env_map.insert("CTO_EMAIL_ACTIVESYNC_DEVICE_ID".to_owned(), value);
-            }
-            if let Some(value) = str_field("active_sync_device_type") {
-                env_map.insert("CTO_EMAIL_ACTIVESYNC_DEVICE_TYPE".to_owned(), value);
-            }
-            if let Some(value) = str_field("active_sync_protocol_version") {
-                env_map.insert("CTO_EMAIL_ACTIVESYNC_PROTOCOL_VERSION".to_owned(), value);
-            }
-            if let Some(value) = str_field("active_sync_policy_key") {
-                env_map.insert("CTO_EMAIL_ACTIVESYNC_POLICY_KEY".to_owned(), value);
-            }
+            env_map.extend(email_config_env(config));
         }
         "teams" => {
             if let Some(value) = str_field("tenant_id") {

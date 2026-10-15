@@ -1039,6 +1039,11 @@ transaction; a failed marker write rolls deletion back. Store recreation gets
 a new identity. Legacy checkpoints without that identity require one confirming
 pull before reuse; existing records and recovery journals are retained. Schema,
 permission and native-generation changes keep their existing invalidation rules.
+Established browser checkpoints read the marker and document head in one
+IndexedDB `readonly` transaction. Only a new or legacy collection without a marker
+initializes it in a narrow `readwrite` marker transaction, then repeats the
+consistent read. Reconnecting many windowed collections therefore does not
+reserve the shared document writer merely to inspect their local heads.
 
 Historical first-pull readiness survives valid checkpoint reuse so cached UI
 can still paint immediately. It does not certify the current connection's
@@ -1524,6 +1529,19 @@ and transport teardown remove only that owner's requests; a later handshake
 cannot revive a removed request. The existing 60-second peer-readiness wait
 remains bounded. Already dispatched requests retain their existing RPC,
 collector and retry behavior.
+
+**S5-Vorgriff (THESEN, 14.10.2026):** The same admission queue also reserves
+per-peer query-fetch rate tokens before dispatch. Native permits an initial
+`max(32, streams × 8)` burst and refills 16 requests/s; the browser deliberately
+uses `streams × 6` and 12/s, leaving capacity for reads outside its queue.
+Foreground app queries take the next available token before queued shell feeds.
+The bucket resets on a new authenticated peer identity, while requests waiting
+for a token occupy no stream slot. `query-rate-admission-smoke.mjs` tests a
+59-window shell burst and a subsequent foreground lead read without changing
+the native peer limit.
+Native spends a rate token only after a stream slot is actually acquired:
+`STREAM_LIMIT_EXCEEDED` retries must not consume the later interactive query's
+budget. Browser retries reserve another local token before sending another RPC.
 
 Identical demand-query windows also share an unfinished network operation when
 connection generation, accepted peer, current permission digest and the complete

@@ -11477,7 +11477,7 @@ pub(in crate::business_os) mod tests {
 
     #[test]
     fn replicated_command_without_capability_terminalizes_without_retry_loop() {
-        // THESEN 14.10.2026: an outbound auth_assist command arrived without a
+        // Customer tenant 14.10.2026: an outbound auth_assist command arrived without a
         // valid capability token and intake rejected it ~2x per second
         // forever. It must reach one browser-visible terminal failure.
         let root = tempfile::tempdir().expect("temp root");
@@ -14126,6 +14126,21 @@ pub(in crate::business_os) mod tests {
             .filter_map(|(key, value)| (key == "cap").then(|| value.into_owned()))
             .collect::<Vec<_>>();
         assert_eq!(capabilities, CTOX_NATIVE_CAPABILITIES);
+    }
+
+    #[test]
+    fn workjet_signaling_capabilities_are_advertised_in_the_handshake() {
+        let handshake =
+            rxdb::plugins::replication_webrtc::index_mod::native_handshake_capabilities();
+        for capability in CTOX_NATIVE_CAPABILITIES
+            .iter()
+            .filter(|capability| capability.starts_with("ctox-workjet-"))
+        {
+            assert!(
+                handshake.contains(capability),
+                "{capability} is announced in the signaling URL but missing from the WebRTC handshake"
+            );
+        }
     }
 
     #[tokio::test]

@@ -14,20 +14,32 @@
   without an ambient environment switch. Qualification is tracked in PR #735;
   neither the accepted pin nor installed/live-provider acceptance is promoted.
 
+- Candidate upstream `02fc76b149a917d07db6c1f588f47341bb29c7be` adds request-local
+  recovery of declared caller-owned MCP tools wrapped in the actual virtual server,
+  including full `mcp__server__tool`, unprefixed full names and unique tool tails.
+  Buffered JSON/SSE and fragmented live streams use the same resolver. Unknown or
+  foreign names stay unchanged; ambiguous tails fail locally before continuity
+  publication and do not create provider-account cooldowns. The public reverse map
+  continues to contain only actual forward renames. Seven focused guards passed;
+  actual-executor stream/cooldown guards and the broader feature matrices are being
+  qualified in PR #734. The accepted pin remains unchanged, and full current-upstream
+  parity and installed provider acceptance remain incomplete.
+
 
 - The Grok client-version slice from v8.0.23, immutable upstream
-  `d318bcc3afb9ea8782862f5e8cdb541afdc9dfa5`, now has the upstream 1.0.46
-  fallback and strict numeric 1.0.13 floor. An anonymous npm metadata fetch is
-  bounded to ten seconds and 1 MiB, runs once at startup and every three hours,
-  and retains the last accepted version on failure. The existing native
-  subscription-proxy runtime owns the refresh guard; its catalog and inference
-  paths read the same cache as the portable unary/stream header builder.
-  SDK Service owners may bind the anonymous fetcher using their existing typed
-  proxy configuration; Service shutdown stops it. A replacement cancels the
-  previous fetch without letting its retired guard stop the new owner.
-  API keys/custom origins remain outside the subscription header identity,
-  and explicit account headers retain precedence. The accepted production pin
-  is unchanged; this slice is not complete v8 parity or installed acceptance.
+  `d318bcc3afb9ea8782862f5e8cdb541afdc9dfa5`, keeps the reviewed 1.0.46
+  release fallback and strict numeric 1.0.13 floor. CTOX does not bind a native
+  background metadata request. Upstream's npm polling is intentionally excluded
+  under the no-third-party-runtime-services rule. The optional SDK capability
+  targets only the proposed CTOX-owned metadata URL and requires its typed
+  schema/provider envelope; raw registry metadata is rejected. It remains
+  unbound by default, and its existing timeout, body-size, cancellation and
+  replacement-owner guards remain intact. The proposed source and its required
+  publication proof are in [the metadata source proposal](CLIENT_METADATA_SOURCE.md).
+  Catalog/inference and unary/stream headers share the same version reader.
+  API keys/custom origins retain their separate identity and custom headers
+  retain precedence. The accepted pin is unchanged; full v8 parity and installed
+  acceptance remain open.
 
 - Upstream: `a88197f845c979132c8978ea223c6af05cc81536`
 - Track A, accepted v7.2.116 standalone Rust-port release: **COMPLETE**

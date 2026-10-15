@@ -172,7 +172,35 @@ pub(super) fn execute(
         "Business command writeback failed: {}",
         outcome
     );
-    Ok(outcome)
+    Ok(with_stored_lead_readback(root, &payload, outcome))
+}
+
+/// The receipt carries the stored lead as the compact read-back, the same
+/// view `business_os.get_record` returns for a large lead and the review gate
+/// judges against. The echo of the delivered statuses (with every quote) is
+/// dropped from this MCP response only; the persisted command result keeps it.
+/// Without this, a lead of ~254 KB pushed the worker's read-back beyond what
+/// it could read and the closing report was written from memory (customer
+/// tenant, 14.10.2026).
+fn with_stored_lead_readback(root: &Path, payload: &Value, mut outcome: Value) -> Value {
+    let Some(record_id) = payload.get("record_id").and_then(Value::as_str) else {
+        return outcome;
+    };
+    let readback = match crate::business_os::outbound_lead_readback::load_compact_lead_readback(
+        root, record_id,
+    ) {
+        Ok(Some(view)) => view,
+        Ok(None) => return outcome,
+        Err(error) => {
+            outcome["stored_lead_error"] = Value::String(format!("{error:#}"));
+            return outcome;
+        }
+    };
+    if let Some(result) = outcome.get_mut("result").and_then(Value::as_object_mut) {
+        result.remove("field_status");
+    }
+    outcome["stored_lead"] = readback;
+    outcome
 }
 
 #[cfg(test)]

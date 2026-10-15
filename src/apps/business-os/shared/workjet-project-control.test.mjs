@@ -43,7 +43,7 @@ test('Workjet project control is installed and uses the RxDB command plane', () 
   assert.match(controlSource, /startCollection\?\.\('business_commands'\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_projects', \{ pin: false, forceDirect: true \}\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_working_copies', \{ pin: false, forceDirect: true \}\)/);
-  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 11);
+  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 12);
   assert.match(controlSource, /waitForProjectedWorkjetProject\(/);
   assert.match(controlSource, /rawProject\?\.name === expectedTitle/);
   assert.match(controlSource, /rawProject\?\.status === 'active'/);
@@ -2036,6 +2036,12 @@ test('same-task input capability is opt-in and comes from the actual scoped nati
   assert.equal(invalid.commands.length, 0);
 });
 
+test('project.init dispatches the native onboarding command with a stable operation id', () => {
+  assert.match(controlSource, /action === 'project\.init'/);
+  assert.match(controlSource, /command_type: 'ctox\.workjet\.project\.init'/);
+  assert.match(controlSource, /payload: \{ project_id: projectId, operation_id: operationId \}/);
+});
+
 test('native KPI refresh maps per-KPI status and rejects malformed reports', async () => {
   const report = { completed: false, reason_code: 'time_limit',
     items: [{ kpi_id: 'kpi-1', status: 'blocked', reason_code: 'resolving' }] };
@@ -2048,4 +2054,21 @@ test('native KPI refresh maps per-KPI status and rejects malformed reports', asy
     receipt.result.refresh = { completed: true, items: [{ kpi_id: 'kpi-1', status: 'ready' }] };
   });
   await assert.rejects(broken.invoke({ action: 'project.kpis.refresh', commandId: 'r2', projectId: 'project-1' }));
+});
+
+test('feed settings map between Workjet wire and native fields and reject unknown values', () => {
+  const context = vm.createContext({});
+  vm.runInContext(controlSource + '\nglobalThis.meta = boundedWorkjetProjectMetadata; globalThis.result = boundedWorkjetProjectResult;', context);
+  const wire = { title: ' Release-Feed ', windowDays: 7, sources: { setup: false }, defaultTab: 'latest',
+    body: 'full', replies: 'all', notifyDisruptions: true };
+  const native = JSON.parse(JSON.stringify(context.meta({ feedSettings: wire })));
+  assert.deepEqual(native.feed_settings, { title: 'Release-Feed', window_days: 7, sources: { setup: false },
+    default_tab: 'latest', body: 'full', replies: 'all', notify_disruptions: true });
+  assert.equal(context.meta({ feedSettings: null }).feed_settings, null);
+  for (const bad of [{ windowDays: 3 }, { defaultTab: 'oldest' }, { sources: { other: true } }, { extra: 1 }, []]) {
+    assert.throws(() => context.meta({ feedSettings: bad }), /feedSettings|Unsupported Workjet project payload field/);
+  }
+  const project = JSON.parse(JSON.stringify(context.result({ id: 'p1', name: 'P', status: 'active', feed_settings: native.feed_settings },
+    { includeConfiguration: true })));
+  assert.deepEqual(project.feedSettings, { ...wire, title: 'Release-Feed' });
 });

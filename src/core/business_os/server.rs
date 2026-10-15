@@ -36,7 +36,7 @@ use tiny_http::Server;
 use url::Url;
 use uuid::Uuid;
 
-use super::module_manifest_loader::{load_module_manifests, upsert_module_manifest};
+use super::module_manifest_loader::load_module_manifests;
 use super::policy;
 use super::store;
 
@@ -375,9 +375,6 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                 None => respond_status(request, 404, "tracking token not found")?,
             }
         }
-        (Method::Get, "/api/business-os/status") => {
-            respond_json(request, &store::status(root)?)?;
-        }
         (Method::Get, "/api/business-os/launch-context") => {
             let session = request_session(root, &request);
             respond_json_value_no_store(request, launch_context_value(root, &session)?)?;
@@ -606,34 +603,6 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                 respond_shell_update_operation(request, root, &session, "rollback", result)?;
             }
         }
-        (Method::Post, "/api/business-os/ctox/tasks/update") => {
-            let session = request_session(root, &request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let mutation = serde_json::from_value(body)?;
-                respond_json_value(request, store::update_ctox_task(root, &session, mutation)?)?;
-            }
-        }
-        (Method::Post, "/api/business-os/ctox/tasks/delete") => {
-            let session = request_session(root, &request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let mutation = serde_json::from_value(body)?;
-                respond_json_value(request, store::delete_ctox_task(root, &session, mutation)?)?;
-            }
-        }
-        (Method::Get, "/api/business-os/session") => {
-            let session = request_session(root, &request);
-            respond_json(request, &session)?;
-        }
         (Method::Post, "/login") => {
             handle_login_request(root, request)?;
         }
@@ -644,183 +613,6 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                 let _ = store::revoke_business_session(root, &token);
             }
             respond_redirect_with_cookie(request, "/", "", 0)?;
-        }
-        (Method::Get, "/api/business-os/users") => {
-            let session = request_session(root, &request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else {
-                respond_json_value(request, store::list_users(root, &session)?)?;
-            }
-        }
-        (Method::Post, "/api/business-os/users") => {
-            let session = request_session(root, &request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !session
-                .user
-                .as_ref()
-                .map(|user| user.is_admin)
-                .unwrap_or(false)
-            {
-                respond_status(request, 403, "admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let mutation = serde_json::from_value(body)?;
-                respond_json_value(request, store::upsert_user(root, &session, mutation)?)?;
-            }
-        }
-        (Method::Get, "/api/business-os/modules") => {
-            let session = request_session(root, &request);
-            let installed_app_root = resolve_business_os_installed_app_root(root);
-            respond_json(
-                request,
-                &serde_json::json!({
-                    "ok": true,
-                    "modules": load_module_manifests(root, app_root, &installed_app_root)?.manifests,
-                    "governance": store::module_governance_map(root, &session)?
-                }),
-            )?;
-        }
-        (Method::Get, "/api/business-os/module-governance") => {
-            let session = request_session(root, &request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else {
-                respond_json_value(request, store::module_governance_map(root, &session)?)?;
-            }
-        }
-        (Method::Post, "/api/business-os/modules") => {
-            let session = request_session(root, &request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let mutation: store::ModuleUpsertRequest = serde_json::from_value(body)?;
-                if !store::session_can_modify_module(root, &session, &mutation.id)? {
-                    respond_status(request, 403, "module modification rights required")?;
-                    return Ok(());
-                }
-                let installed_app_root = resolve_business_os_installed_app_root(root);
-                let manifest = upsert_module_manifest(app_root, &installed_app_root, mutation)?;
-                respond_json(
-                    request,
-                    &serde_json::json!({
-                        "ok": true,
-                        "module": manifest
-                    }),
-                )?;
-            }
-        }
-        (Method::Get, "/api/business-os/module-layout") => {
-            respond_json_value(request, load_module_layout(root)?)?;
-        }
-        (Method::Post, "/api/business-os/module-layout") => {
-            let body = read_json(&mut request)?;
-            save_module_layout(root, &body)?;
-            respond_json(
-                request,
-                &serde_json::json!({
-                    "ok": true,
-                    "layout": body
-                }),
-            )?;
-        }
-        (Method::Get, "/api/business-os/templates") => {
-            respond_json(
-                request,
-                &serde_json::json!({
-                    "ok": true,
-                    "templates": load_template_manifests(app_root)?
-                }),
-            )?;
-        }
-        (Method::Get, "/api/business-os/knowledge") => {
-            respond_json_value(request, knowledge_index_payload(root)?)?;
-        }
-        (Method::Get, "/api/business-os/knowledge/document") => {
-            let id = query_param(&url, "id").unwrap_or_default();
-            respond_json_value(request, knowledge_document_payload(root, &id)?)?;
-        }
-        (Method::Get, "/api/business-os/knowledge/dataframe/schema") => {
-            let id = query_param(&url, "id").unwrap_or_default();
-            respond_json_value(request, knowledge_dataframe_schema_payload(root, &id)?)?;
-        }
-        (Method::Get, "/api/business-os/knowledge/dataframe/rows") => {
-            let query = parse_query(&url);
-            let id = query.get("id").cloned().unwrap_or_default();
-            let offset = parse_usize_query(&query, "offset", 0);
-            let limit = parse_usize_query(&query, "limit", 120).clamp(1, 500);
-            respond_json_value(
-                request,
-                knowledge_dataframe_rows_payload(root, &id, offset, limit)?,
-            )?;
-        }
-        _ if path.starts_with("/api/business-os/knowledge") => {
-            respond_status(request, 404, "unknown Business OS knowledge endpoint")?;
-        }
-        (Method::Post, "/api/business-os/modules/install-template") => {
-            let session = request_session(root, &request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let install: store::ModuleInstallTemplateRequest = serde_json::from_value(body)?;
-                let installed_app_root = resolve_business_os_installed_app_root(root);
-                let result = store::install_template_module_command(
-                    root,
-                    app_root,
-                    &installed_app_root,
-                    &session,
-                    install,
-                )?;
-                respond_json_value(request, result)?;
-            }
-        }
-        (Method::Post, "/api/business-os/modules/delete") => {
-            let session = request_session(root, &request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let delete: DeleteModuleRequest = serde_json::from_value(body)?;
-                if !store::session_can_modify_module(root, &session, &delete.module_id)? {
-                    respond_status(request, 403, "module modification rights required")?;
-                    return Ok(());
-                }
-                delete_installed_module(app_root, root, delete)?;
-                respond_json(
-                    request,
-                    &serde_json::json!({
-                        "ok": true
-                    }),
-                )?;
-            }
-        }
-        (Method::Post, "/api/business-os/modules/assign-founder") => {
-            let session = request_session(root, &request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let assignment = serde_json::from_value(body)?;
-                respond_json_value(
-                    request,
-                    store::assign_module_founder(root, &session, assignment)?,
-                )?;
-            }
-        }
-        (Method::Post, "/api/business-os/reports") => {
-            let session = request_session(root, &request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let report = serde_json::from_value(body)?;
-                respond_json_value(request, store::record_report(root, &session, report)?)?;
-            }
         }
         (Method::Get, "/api/business-os/sync/config") => {
             let session = request_session(root, &request);
@@ -841,9 +633,6 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             } else {
                 respond_json_value(request, super::rxdb_peer::restart_native_peer(root)?)?;
             }
-        }
-        (Method::Get, "/api/business-os/ctox/harness-flow") => {
-            respond_json_value(request, latest_harness_flow_payload(root))?;
         }
         // Mail account settings are an explicit control-plane endpoint. The
         // old channel-account record listing is deliberately absent here; its
@@ -1007,146 +796,6 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                             )?,
                             Err(error) => respond_status(request, 400, &error.to_string())?,
                         }
-                    }
-                }
-            }
-        }
-        (Method::Post, "/api/business-os/channels/test") => {
-            let session = request_session(root, &request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let channel = body.get("channel").and_then(Value::as_str).unwrap_or("");
-                let account_key = body
-                    .get("account_key")
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.is_empty());
-                match crate::mission::channels::test_channel_for_business_os(
-                    root,
-                    channel,
-                    account_key,
-                ) {
-                    Ok(value) => respond_json_value(request, value)?,
-                    Err(error) => respond_status(request, 400, &error.to_string())?,
-                }
-            }
-        }
-        (Method::Post, "/api/business-os/channels/sync") => {
-            let session = request_session(root, &request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let channel = body.get("channel").and_then(Value::as_str).unwrap_or("");
-                match crate::mission::channels::sync_channel_for_business_os(root, channel) {
-                    Ok(value) => respond_json_value(request, value)?,
-                    Err(error) => respond_status(request, 400, &error.to_string())?,
-                }
-            }
-        }
-        (Method::Post, "/api/business-os/channels/settings") => {
-            let session = request_session(root, &request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let channel = body.get("channel").and_then(Value::as_str).unwrap_or("");
-                let config = body.get("config").cloned().unwrap_or_else(|| Value::Null);
-                match crate::mission::channels::save_channel_settings_for_business_os(
-                    root, channel, &config,
-                ) {
-                    Ok(value) => respond_json_value(request, value)?,
-                    Err(error) => respond_status(request, 400, &error.to_string())?,
-                }
-            }
-        }
-        (Method::Post, "/api/business-os/channels/disconnect") => {
-            let session = request_session(root, &request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let account_key = body
-                    .get("account_key")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                match crate::mission::channels::disconnect_communication_account_for_business_os(
-                    root,
-                    account_key,
-                ) {
-                    Ok(value) => respond_json_value(request, value)?,
-                    Err(error) => respond_status(request, 400, &error.to_string())?,
-                }
-            }
-        }
-        (Method::Post, "/api/business-os/channels/pair/start") => {
-            let session = request_session(root, &request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let channel = body.get("channel").and_then(Value::as_str).unwrap_or("");
-                match crate::mission::channels::start_pairing_for_business_os(root, channel) {
-                    Ok(value) => respond_json_value(request, value)?,
-                    Err(error) => respond_status(request, 400, &error.to_string())?,
-                }
-            }
-        }
-        (Method::Get, "/api/business-os/channels/pair/state") => {
-            let session = request_session(root, &request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else {
-                let channel = query_param(&url, "channel").unwrap_or_default();
-                let payload =
-                    crate::mission::channels::read_pairing_state_for_business_os(root, &channel);
-                respond_json_value(request, payload)?;
-            }
-        }
-        (Method::Post, "/api/business-os/channels/jami/export") => {
-            let session = request_session(root, &request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let payload = crate::mission::channels::export_jami_archive_for_business_os(root);
-                respond_json_value(request, payload)?;
-            }
-        }
-        (Method::Post, "/api/business-os/channels/jami/create") => {
-            let session = request_session(root, &request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let display_name = body
-                    .get("display_name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("CTOX");
-                let config = serde_json::json!({ "profile_name": display_name });
-                let save_result = crate::mission::channels::save_channel_settings_for_business_os(
-                    root, "jami", &config,
-                );
-                if let Err(error) = save_result {
-                    respond_status(request, 400, &error.to_string())?;
-                } else {
-                    match crate::mission::channels::start_pairing_for_business_os(root, "jami") {
-                        Ok(value) => respond_json_value(request, value)?,
-                        Err(error) => respond_status(request, 400, &error.to_string())?,
                     }
                 }
             }
@@ -4245,6 +3894,76 @@ fn mime_for(path: &PathBuf) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retired_http_data_paths_return_gone_before_store_access() {
+        use std::io::Read;
+
+        let root = tempfile::tempdir().expect("isolated root");
+        let app_root = root.path().join("shell");
+        let server = Server::http("127.0.0.1:0").expect("isolated HTTP listener");
+        let addr = server.server_addr().to_ip().expect("TCP address");
+        let paths = [
+            "/api/business-os/status",
+            "/api/business-os/ctox/tasks/update",
+            "/api/business-os/ctox/tasks/delete",
+            "/api/business-os/session",
+            "/api/business-os/users",
+            "/api/business-os/modules",
+            "/api/business-os/module-governance",
+            "/api/business-os/module-layout",
+            "/api/business-os/templates",
+            "/api/business-os/knowledge",
+            "/api/business-os/knowledge/document",
+            "/api/business-os/knowledge/dataframe/schema",
+            "/api/business-os/knowledge/dataframe/rows",
+            "/api/business-os/knowledge/unknown",
+            "/api/business-os/modules/install-template",
+            "/api/business-os/modules/delete",
+            "/api/business-os/modules/assign-founder",
+            "/api/business-os/reports",
+            "/api/business-os/ctox/harness-flow",
+            "/api/business-os/channels/test",
+            "/api/business-os/channels/sync",
+            "/api/business-os/channels/settings",
+            "/api/business-os/channels/disconnect",
+            "/api/business-os/channels/pair/start",
+            "/api/business-os/channels/pair/state",
+            "/api/business-os/channels/jami/export",
+            "/api/business-os/channels/jami/create",
+        ];
+        let root_path = root.path().to_path_buf();
+        let handler = thread::spawn(move || {
+            for _ in 0..paths.len() * 2 {
+                let request = server
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("receive HTTP request")
+                    .expect("bounded HTTP request");
+                handle_request(&root_path, &app_root, request).expect("410 response");
+            }
+        });
+        for path in paths {
+            for method in ["GET", "POST"] {
+                let mut stream = std::net::TcpStream::connect(addr).expect("connect");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .expect("bounded read");
+                write!(
+                    stream,
+                    "{method} {path}?probe=1 HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+                )
+                .expect("send HTTP request");
+                let mut response = String::new();
+                stream.read_to_string(&mut response).expect("read response");
+                assert!(response.starts_with("HTTP/1.1 410"), "{method} {path}");
+                assert!(
+                    response.contains("Business OS HTTP data APIs are disabled; use RxDB/WebRTC.")
+                );
+            }
+        }
+        handler.join().expect("HTTP handler terminal");
+        assert_eq!(fs::read_dir(root.path()).expect("root entries").count(), 0);
+    }
 
     #[test]
     fn mail_share_input_requires_admin_and_explicit_array() {

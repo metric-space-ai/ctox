@@ -38,8 +38,78 @@ export function leadListRow(full) {
   return result;
 }
 
+// Client first: once the replicated store holds the whole collection
+// (localReplicaComplete, set when the pull drained; after a reload it resumes
+// from the persisted checkpoint), every read is answered from the browser.
+// Native reads remain only for the first sync of a fresh profile.
+export function hasLocalStore(collection) {
+  return typeof collection?.storageCollection?.allDocuments === 'function';
+}
+
+export function readsLocally(collection) {
+  return collection?.localReplicaComplete === true;
+}
+
+// Rows already stored in the browser, read straight from the local store. The
+// shell routes find().exec() to CTOX while localReplicaComplete is false; after
+// every reload or native restart that lasted until the pull drained, and a lead
+// detail hung on "werden geladen" although the lead was stored locally
+// (Kundeninstanz, 15.10.2026). Missing rows stay absent; callers fetch only those.
+export async function readStoredLeadRows(collection, ids) {
+  const store = collection?.storageCollection;
+  if (typeof store?.findDocumentsById !== 'function') return new Map();
+  const found = await store.findDocumentsById([...new Set(ids.filter(id => typeof id === 'string' && id))]);
+  return new Map(Object.entries(found || {})
+    .filter(([id, row]) => row && row.id === id && !row._deleted));
+}
+
 export async function loadLeadList(collection, previousRows = [], { pageSize = 200, signal } = {}) {
   const previous = new Map(previousRows.map(row => [row.id, row]));
+  // Client first: the list always comes from the browser's own store when one
+  // exists. Through find().exec() it went to CTOX until the shell marked the
+  // replica complete; after a reload or native restart that read timed out,
+  // the app stayed on its startup snapshot and blocked every action
+  // (Kundeninstanz, 15.10.2026: deleting a source did nothing).
+  if (hasLocalStore(collection)) {
+    const rows = [];
+    for (const full of await collection.storageCollection.allDocuments()) {
+      if (!full?.id || full._deleted) continue;
+      rows.push(leadListRow(full));
+    }
+    rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const ids = new Set(rows.map(row => row.id));
+    return {
+      rows,
+      changedIds: new Set(rows.filter(row => JSON.stringify(previous.get(row.id) || null) !== JSON.stringify(row)).map(row => row.id)),
+      removedIds: new Set([...previous.keys()].filter(id => !ids.has(id))),
+    };
+  }
+  if (readsLocally(collection)) {
+    // Local reads are windowed (at most 200 rows per query): page by id.
+    const rows = [];
+    let after = '';
+    for (let page = 0; page < 1000; page++) {
+      const docs = await collection.find({
+        selector: after ? { id: { $gt: after } } : {}, sort: [{ id: 'asc' }], limit: pageSize,
+      }).exec({ signal });
+      if (!docs.length) break;
+      for (const doc of docs) {
+        const full = json(doc);
+        if (!full?.id) continue;
+        after = full.id;
+        if (full._deleted) continue;
+        const before = previous.get(full.id);
+        rows.push(before?._rev === full._rev ? before : leadListRow(full));
+      }
+      if (docs.length < pageSize) break;
+    }
+    const ids = new Set(rows.map(row => row.id));
+    return {
+      rows,
+      changedIds: new Set(rows.filter(row => previous.get(row.id)?._rev !== row._rev).map(row => row.id)),
+      removedIds: new Set([...previous.keys()].filter(id => !ids.has(id))),
+    };
+  }
   const rows = [];
   const seen = new Set();
   let cursor = '';
@@ -76,6 +146,12 @@ export async function loadLeadList(collection, previousRows = [], { pageSize = 2
 export async function loadFullLeadRows(collection, ids, { batchSize = 8, signal } = {}) {
   const requested = [...new Set(ids.filter(id => typeof id === 'string' && id))];
   const rows = [];
+  if (readsLocally(collection)) {
+    const docs = await collection.find({ selector: { id: { $in: requested } } }).exec({ signal });
+    const found = new Map(docs.map(doc => json(doc)).filter(row => row?.id && !row._deleted).map(row => [row.id, row]));
+    if (found.size !== requested.length) throw error('Mindestens ein Lead wurde gelöscht oder ist nicht mehr zugänglich.', 'LEAD_DETAIL_MISSING');
+    return requested.map(id => found.get(id));
+  }
   const read = token();
   for (let offset = 0; offset < requested.length; offset += batchSize) {
     const batch = requested.slice(offset, offset + batchSize);
@@ -99,7 +175,10 @@ export async function loadFullLeadRows(collection, ids, { batchSize = 8, signal 
 
 /** Acquire the Shell's native query authority, never a follower/local fallback. */
 export async function withLeadQueryAuthority(sync, work, { timeoutMs = 15000, isCurrent = () => true,
-  collectionName = 'outbound_lead_generation_leads' } = {}) {
+  collectionName = 'outbound_lead_generation_leads', collection = null } = {}) {
+  // A complete local replica needs no native lease: leasing and releasing an
+  // eager collection on every read stopped its replication on release.
+  if (readsLocally(collection)) return work(new AbortController().signal);
   if (typeof sync?.leaseCollection !== 'function') throw error('CTOX stellt keinen aktuellen Lesekanal bereit.', 'LEAD_QUERY_AUTHORITY_MISSING');
   const deadline = Date.now() + timeoutMs;
   const controller = new AbortController();

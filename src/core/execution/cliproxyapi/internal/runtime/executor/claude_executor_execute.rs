@@ -2,6 +2,7 @@
 // Port-Status: adapted_to_ctox
 // License: MIT (upstream); modifications AGPL-3.0-only
 
+use super::claude_executor_request::ClaudeMcpAliasResolver;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
@@ -705,7 +706,8 @@ impl ClaudeSubscriptionMessagesExecutor {
                 .await
                 .map_err(ClaudeExecutionError::Transport)?,
             &request,
-        );
+        )
+        .map_err(|_| ClaudeExecutionError::AmbiguousToolAlias)?;
         let mut replay = UnauthorizedReplayState::default();
         if replay.observe(first.status(), true) != UnauthorizedReplayDecision::RefreshAndReplay {
             self.publish_usage(model, &first, request.stream());
@@ -754,7 +756,8 @@ impl ClaudeSubscriptionMessagesExecutor {
                 .await
                 .map_err(ClaudeExecutionError::Transport)?,
             &retry,
-        );
+        )
+        .map_err(|_| ClaudeExecutionError::AmbiguousToolAlias)?;
         let _ = replay.observe(response.status(), true);
         self.publish_usage(model, &response, retry.stream());
         if (200..300).contains(&response.status()) {
@@ -951,6 +954,10 @@ impl ClaudeSubscriptionMessagesExecutor {
             failure_binding: self.account_state.clone(),
             model: model.map(str::to_owned),
             tool_name_reverse_map: request.tool_name_reverse_map().clone(),
+            tool_name_resolver: ClaudeMcpAliasResolver::new(
+                request.body(),
+                request.tool_name_reverse_map(),
+            ),
             usage_sink: self.usage_sink.clone(),
             diagnostics_state,
             request_scoped,
@@ -974,6 +981,7 @@ impl ClaudeSubscriptionMessagesExecutor {
             failure_binding: None,
             model: model.map(str::to_owned),
             tool_name_reverse_map: HashMap::new(),
+            tool_name_resolver: ClaudeMcpAliasResolver::default(),
             usage_sink: None,
             diagnostics_state,
             request_scoped: true,
@@ -1167,6 +1175,7 @@ pub struct ClaudeStreamExecutionOutcome {
     failure_binding: Option<AccountStateBinding>,
     model: Option<String>,
     tool_name_reverse_map: HashMap<String, String>,
+    tool_name_resolver: ClaudeMcpAliasResolver,
     usage_sink: Option<Arc<dyn ClaudeUsageSink>>,
     diagnostics_state: ClaudeDiagnosticsRequestState,
     request_scoped: bool,
@@ -1190,6 +1199,7 @@ impl ClaudeStreamExecutionOutcome {
             model: self.model,
             failure_recorded: false,
             tool_name_reverse_map: self.tool_name_reverse_map,
+            tool_name_resolver: self.tool_name_resolver,
             usage_sink: self.usage_sink,
             stream_line_buffer: Vec::new(),
             stream_eof: false,
@@ -1244,6 +1254,7 @@ pub struct ClaudeTrackedMessagesStreamResponse {
     model: Option<String>,
     failure_recorded: bool,
     tool_name_reverse_map: HashMap<String, String>,
+    tool_name_resolver: ClaudeMcpAliasResolver,
     stream_line_buffer: Vec<u8>,
     stream_eof: bool,
     pending_transport_failure: Option<ClaudeMessagesTransportFailure>,
@@ -1274,12 +1285,13 @@ impl ClaudeTrackedMessagesStreamResponse {
             }
             if let Some(boundary) = complete_sse_frame_len(&self.stream_line_buffer) {
                 let frame: Vec<u8> = self.stream_line_buffer.drain(..boundary).collect();
+                let restored = match self.restore_frame(&frame) {
+                    Ok(data) => data,
+                    Err(error) => return Some(Err(error)),
+                };
                 observe_plugin_executor_stream("claude", &frame, &mut self.usage_buffer);
                 self.observe_diagnostics(&frame);
-                return Some(Ok(restore_claude_stream_tool_names(
-                    &frame,
-                    &self.tool_name_reverse_map,
-                )));
+                return Some(Ok(restored));
             }
             if self.stream_eof {
                 if self.stream_line_buffer.is_empty() {
@@ -1293,12 +1305,13 @@ impl ClaudeTrackedMessagesStreamResponse {
                     return None;
                 }
                 let line = std::mem::take(&mut self.stream_line_buffer);
+                let restored = match self.restore_frame(&line) {
+                    Ok(data) => data,
+                    Err(error) => return Some(Err(error)),
+                };
                 observe_plugin_executor_stream("claude", &line, &mut self.usage_buffer);
                 self.observe_diagnostics(&line);
-                return Some(Ok(restore_claude_stream_tool_names(
-                    &line,
-                    &self.tool_name_reverse_map,
-                )));
+                return Some(Ok(restored));
             }
             match self.response.next_chunk().await {
                 Some(Ok(chunk)) => self.stream_line_buffer.extend_from_slice(&chunk),
@@ -1307,6 +1320,21 @@ impl ClaudeTrackedMessagesStreamResponse {
                     self.pending_transport_failure = Some(error);
                 }
                 None => self.stream_eof = true,
+            }
+        }
+    }
+
+    fn restore_frame(&mut self, frame: &[u8]) -> Result<Vec<u8>, ClaudeMessagesTransportFailure> {
+        match restore_claude_stream_tool_names(frame, &self.tool_name_resolver) {
+            Ok(data) => Ok(data),
+            Err(_) => {
+                // A request-local alias ambiguity is not an account failure.
+                self.failure_binding = None;
+                self.stream_line_buffer.clear();
+                self.pending_transport_failure = None;
+                self.stream_eof = true;
+                self.finish_stream_usage();
+                Err(ClaudeMessagesTransportFailure::Protocol)
             }
         }
     }
@@ -1468,6 +1496,7 @@ pub enum ClaudeExecutionError {
     Transport(ClaudeMessagesTransportFailure),
     AccountStateConfiguration,
     StreamingUnavailable,
+    AmbiguousToolAlias,
     CallerSystemBlock(ClaudeCallerSystemBlockError),
 }
 
@@ -1492,6 +1521,9 @@ impl fmt::Display for ClaudeExecutionError {
             }
             Self::Request(error) => write!(formatter, "Claude request is invalid: {error}"),
             Self::Transport(error) => write!(formatter, "Claude transport failed: {error:?}"),
+            Self::AmbiguousToolAlias => {
+                formatter.write_str("Claude MCP alias matches multiple declared tools")
+            }
             Self::AccountStateConfiguration => {
                 formatter.write_str("Claude account state configuration is invalid")
             }
@@ -1885,6 +1917,10 @@ impl ClaudeSubscriptionAccountPool {
                     Default::default(),
                 )
             });
+            let quota_observation = self
+                .router
+                .begin_claude_quota_observation(&selected.auth_id)
+                .map_err(ClaudeAccountPoolError::Routing)?;
             match executor
                 .execute_stream_for_model_with_context(
                     target,
@@ -1898,6 +1934,13 @@ impl ClaudeSubscriptionAccountPool {
                     if outcome.state_persisted() != Some(true) {
                         return Err(ClaudeAccountPoolError::OutcomePersistence);
                     }
+                    self.router
+                        .observe_claude_quota(
+                            quota_observation,
+                            outcome.response().headers(),
+                            self.clock.now_ms(),
+                        )
+                        .map_err(ClaudeAccountPoolError::Routing)?;
                     let status = outcome.response().status();
                     if outcome.request_scoped()
                         || (200..300).contains(&status)
@@ -1980,6 +2023,10 @@ impl ClaudeSubscriptionAccountPool {
                     Default::default(),
                 )
             });
+            let quota_observation = self
+                .router
+                .begin_claude_quota_observation(&selected.auth_id)
+                .map_err(ClaudeAccountPoolError::Routing)?;
             match executor
                 .execute_for_model_with_context(
                     target,
@@ -1994,6 +2041,13 @@ impl ClaudeSubscriptionAccountPool {
                     if outcome.state_persisted() != Some(true) {
                         return Err(ClaudeAccountPoolError::OutcomePersistence);
                     }
+                    self.router
+                        .observe_claude_quota(
+                            quota_observation,
+                            outcome.response().headers(),
+                            self.clock.now_ms(),
+                        )
+                        .map_err(ClaudeAccountPoolError::Routing)?;
                     let status = outcome.response().status();
                     if outcome.request_scoped()
                         || (200..300).contains(&status)
@@ -3372,6 +3426,124 @@ data: {\"type\":\"message_stop\"}\n\n";
     }
 
     #[tokio::test]
+    async fn upstream_mcp_live_stream_restores_fragmented_declared_passthroughs() {
+        let alias = super::super::helps::claude_mcp_tool_alias("access-old", "Bash", 0);
+        let server = alias
+            .strip_prefix("mcp__")
+            .unwrap()
+            .split_once("__")
+            .unwrap()
+            .0;
+        let catalog = crate::internal::registry::embedded_models_catalog().unwrap();
+        let model = crate::internal::registry::models_for_channel(&catalog, "claude")
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .id;
+        for suffix in [
+            "mcp__docs-search__search-pages",
+            "docs-search__search-pages",
+            "search-pages",
+        ] {
+            let frame=format!("data: {}\n\n",serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"fixture-tool","name":format!("mcp__{server}__{suffix}"),"input":{}}})).into_bytes();
+            let middle = frame.len() / 2;
+            let start=format!("data: {}\n\n",serde_json::json!({"type":"message_start","message":{"id":"fixture-message","model":model}})).into_bytes();
+            let chunks=vec![Ok(start),Ok(frame[..middle].to_vec()),Ok(frame[middle..].to_vec()),Ok(b"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n".to_vec())];
+            let account = executor(Arc::new(SequenceTransport::statuses(vec![])))
+                .with_stream_transport(Arc::new(FixedStreamingTransport {
+                    status: 200,
+                    chunks,
+                }));
+            let outcome=account.execute_stream_for_model(target(),None,br#"{"messages":[{"role":"user","content":"go"}],"tools":[{"name":"Bash"},{"name":"mcp__docs-search__search-pages"}]}"#.to_vec()).await.unwrap();
+            let mut stream = outcome.into_response();
+            let mut output = Vec::new();
+            while let Some(chunk) = stream.next_chunk().await {
+                output.extend(chunk.unwrap());
+            }
+            let text = String::from_utf8(output).unwrap();
+            assert!(text.contains("\"name\":\"mcp__docs-search__search-pages\""));
+            assert!(!text.contains(&format!("mcp__{server}__")));
+            assert!(stream.diagnostics_committed);
+        }
+    }
+    #[tokio::test]
+    async fn upstream_mcp_unary_ambiguity_never_records_account_cooldown() {
+        let alias = super::super::helps::claude_mcp_tool_alias("access-old", "Bash", 0);
+        let server = alias
+            .strip_prefix("mcp__")
+            .unwrap()
+            .split_once("__")
+            .unwrap()
+            .0;
+        let body=serde_json::to_vec(&serde_json::json!({"content":[{"type":"tool_use","name":format!("mcp__{server}__query")}]})).unwrap();
+        let transport = Arc::new(SequenceTransport::responding(&body));
+        let cooldowns = Arc::new(MemoryCooldownStore::default());
+        let account = executor(transport.clone())
+            .with_account_state_clock(
+                "fixture-account",
+                Arc::new(CooldownConductor::new(cooldowns.clone())),
+                Arc::new(FixedAccountClock),
+            )
+            .unwrap();
+        let result=account.execute(target(),br#"{"messages":[{"role":"user","content":"go"}],"tools":[{"name":"Bash"},{"name":"mcp__first__query"},{"name":"mcp__second__query"}]}"#.to_vec(),false).await;
+        assert!(matches!(
+            result,
+            Err(ClaudeExecutionError::AmbiguousToolAlias)
+        ));
+        assert_eq!(transport.bodies.lock().unwrap().len(), 1);
+        assert!(cooldowns.0.lock().unwrap().is_empty());
+    }
+    #[tokio::test]
+    async fn upstream_mcp_stream_ambiguity_stops_locally_without_cooldown_or_continuity() {
+        let alias = super::super::helps::claude_mcp_tool_alias("access-old", "Bash", 0);
+        let server = alias
+            .strip_prefix("mcp__")
+            .unwrap()
+            .split_once("__")
+            .unwrap()
+            .0;
+        let frame=format!("data: {}\n\n",serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"fixture-tool","name":format!("mcp__{server}__query"),"input":{}}})).into_bytes();
+        let catalog = crate::internal::registry::embedded_models_catalog().unwrap();
+        let model = crate::internal::registry::models_for_channel(&catalog, "claude")
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .id;
+        let start=format!("data: {}\n\n",serde_json::json!({"type":"message_start","message":{"id":"fixture-ambiguous-message","model":model}})).into_bytes();
+        let cooldowns = Arc::new(MemoryCooldownStore::default());
+        let account = executor(Arc::new(SequenceTransport::statuses(vec![])))
+            .with_account_state_clock(
+                "fixture-account",
+                Arc::new(CooldownConductor::new(cooldowns.clone())),
+                Arc::new(FixedAccountClock),
+            )
+            .unwrap()
+            .with_stream_transport(Arc::new(FixedStreamingTransport {
+                status: 200,
+                chunks: vec![
+                    Ok(start),
+                    Ok(frame),
+                    Ok(b"data: {\"type\":\"message_stop\"}\n\n".to_vec()),
+                ],
+            }));
+        let outcome=account.execute_stream_for_model(target(),None,br#"{"messages":[{"role":"user","content":"go"}],"tools":[{"name":"Bash"},{"name":"mcp__first__query"},{"name":"mcp__second__query"}]}"#.to_vec()).await.unwrap();
+        let mut stream = outcome.into_response();
+        let first = stream.next_chunk().await.unwrap().unwrap();
+        assert!(String::from_utf8(first).unwrap().contains("message_start"));
+        assert_eq!(
+            stream.next_chunk().await,
+            Some(Err(ClaudeMessagesTransportFailure::Protocol))
+        );
+        stream.record_terminal_failure().await;
+        assert!(stream.next_chunk().await.is_none());
+        assert!(stream.failure_binding.is_none());
+        assert!(!stream.diagnostics_committed);
+        assert!(cooldowns.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn fragmented_sse_tool_names_are_restored_only_after_complete_line() {
         let (sender, receiver) = mpsc::channel(4);
         sender
@@ -3386,6 +3558,10 @@ data: {\"type\":\"message_stop\"}\n\n";
             model: None,
             failure_recorded: false,
             tool_name_reverse_map: HashMap::from([("Bash".to_owned(), "bash".to_owned())]),
+            tool_name_resolver: ClaudeMcpAliasResolver::new(
+                b"{}",
+                &HashMap::from([("Bash".to_owned(), "bash".to_owned())]),
+            ),
             stream_line_buffer: Vec::new(),
             stream_eof: false,
             usage_sink: None,

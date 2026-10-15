@@ -16,8 +16,10 @@ import {
   domainOf,
   issueDateKey,
   issueLabel,
+  issueNodeLabel,
   issuesForTopic,
   mergeIntoAccountSource,
+  migrateLegacyRedditSources,
   monogram,
   newId,
   newSource,
@@ -511,13 +513,16 @@ function renderLeft() {
   const html = topics.map((topic) => {
     const selected = topic.id === state.selectedTopicId;
     const issues = selected ? issuesForTopic(state.issues, topic.id) : [];
-    const issueRows = issues.map((issue) => `
+    const issueRows = issues.map((issue) => {
+      const label = issueNodeLabel(issue, issues, state.lang);
+      return `
       <button type="button" class="news-issue-node${issue.id === state.selectedIssueId ? ' is-selected' : ''}"
         data-issue-id="${esc(issue.id)}" data-issue-topic="${esc(topic.id)}"
         data-context-record-id="${esc(issue.id)}" data-context-record-type="news_issue"
-        data-context-label="${esc(`${topic.title} · ${issueLabel(issue.issue_date, state.lang)}`)}">
-        <span>${esc(issueLabel(issue.issue_date, state.lang))}</span>${issueStatusDot(issue)}
-      </button>`).join('');
+        data-context-label="${esc(`${topic.title} · ${label}`)}">
+        <span>${esc(label)}</span>${issueStatusDot(issue)}
+      </button>`;
+    }).join('');
     return `
       <div class="news-topic-group${selected ? ' is-open' : ''}">
         <button type="button" class="news-topic${selected ? ' is-selected' : ''}${compact ? ' is-compact' : ''}"
@@ -886,6 +891,9 @@ function openDrawer(topic) {
     removed: new Set(),
     tab: 'topic',
   };
+  const migrated = migrateLegacyRedditSources(state.drawer.sources, draft.id);
+  state.drawer.sources = migrated.sources;
+  migrated.removedIds.forEach((id) => state.drawer.removed.add(id));
   els.drawerTitle.textContent = persisted ? draft.title : t('newTopic');
   const form = els.form;
   form.elements.title.value = draft.title || '';
