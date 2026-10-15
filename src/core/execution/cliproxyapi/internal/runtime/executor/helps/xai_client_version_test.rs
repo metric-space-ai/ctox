@@ -32,12 +32,35 @@ fn source(replies: Vec<Result<Vec<u8>, VersionFetchError>>) -> Arc<Scripted> {
     })
 }
 fn metadata(version: &str) -> Result<Vec<u8>, VersionFetchError> {
-    Ok(serde_json::to_vec(&serde_json::json!({"version":version})).unwrap())
+    Ok(serde_json::to_vec(&serde_json::json!({
+        "schema": XAI_OWNED_METADATA_SCHEMA,
+        "provider": "xai",
+        "version": version
+    }))
+    .unwrap())
 }
 async fn flush() {
     for _ in 0..8 {
         tokio::task::yield_now().await;
     }
+}
+
+#[test]
+fn metadata_requires_owned_schema_and_provider_before_changing_identity() {
+    for value in [
+        serde_json::json!({"version": "1.0.46"}),
+        serde_json::json!({"schema": "unexpected", "provider": "xai", "version": "1.0.46"}),
+        serde_json::json!({"schema": XAI_OWNED_METADATA_SCHEMA, "provider": "other", "version": "1.0.46"}),
+    ] {
+        assert_eq!(
+            parse_version(&serde_json::to_vec(&value).unwrap()),
+            Err(VersionFetchError::Malformed)
+        );
+    }
+    assert_eq!(
+        parse_version(&metadata("1.0.46").unwrap()).unwrap(),
+        "1.0.46"
+    );
 }
 
 #[test]
@@ -274,7 +297,7 @@ async fn http_case(status: u16, body: Vec<u8>) -> Result<Vec<u8>, VersionFetchEr
         let _ = socket.write_all(&body).await;
     });
     let mut fetcher = HttpXaiVersionFetcher::new(None).unwrap();
-    fetcher.registry_url = url;
+    fetcher.metadata_url = url;
     let result = tokio::time::timeout(XAI_VERSION_FETCH_TIMEOUT, fetcher.fetch())
         .await
         .unwrap();
