@@ -946,6 +946,7 @@ fn start_owned_change_feed(
                 })
                 .collect::<Vec<_>>();
             if !events.is_empty() {
+                notifier.signal(); // owner commit wake only; never an ordering cursor
                 changes.next(EventBulk {
                     id: random_token(Some(10)),
                     events,
@@ -2514,6 +2515,9 @@ mod tests {
             .unwrap();
         assert!(storage.connection().is_err());
         assert!(instance.connection.is_none());
+        let before_wake =
+            table_change_generation_for_path(&instance.database_path, &instance.table_name)
+                .unwrap();
         let mut stream = instance.change_stream();
         let result = instance
             .bulk_write(
@@ -2534,6 +2538,11 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(event.events[0].document_id, "owned");
+        assert!(
+            table_change_generation_for_path(&instance.database_path, &instance.table_name)
+                .unwrap()
+                > before_wake
+        );
         assert_eq!(
             instance
                 .find_documents_by_id(&["owned".into()], false)
