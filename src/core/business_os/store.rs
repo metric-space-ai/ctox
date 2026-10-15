@@ -26130,6 +26130,9 @@ fn business_command_prompt_enrichment(
     if let Some(block) = materialize_business_os_app_import_source(root, command_id, command)? {
         blocks.push(block);
     }
+    if let Some(block) = super::store_news_commands::issue_run_prompt_block(root, command)? {
+        blocks.push(block);
+    }
     Ok((!blocks.is_empty()).then(|| format!("\n{}\n", blocks.join("\n"))))
 }
 

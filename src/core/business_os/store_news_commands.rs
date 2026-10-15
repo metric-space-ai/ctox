@@ -419,7 +419,7 @@ pub(crate) fn emit_scheduled_issue(
     drop(conn);
 
     let session = active_domain_recovery_session(root, &route.owner_user_id)?;
-    let mut payload = generate_payload(
+    let payload = generate_payload(
         &topic,
         &sources,
         &issue_id,
@@ -427,7 +427,6 @@ pub(crate) fn emit_scheduled_issue(
         &command_id,
         &window,
     );
-    attach_checkpoint(&mut payload, root, &issue_id);
     let accepted = accept_rxdb_business_command_with_origin(
         root,
         json!({
@@ -720,18 +719,7 @@ fn generate_payload(
             window.covered_urls.len().min(MAX_COVERED_URLS)
         ),
         format!("Liefere das Ergebnis im Vertrag {NEWS_ISSUE_CONTRACT}; jeder Beitrag braucht mindestens eine Quelle mit Link."),
-        "Aufwand begrenzen: höchstens zwei Abrufe pro Quelle, keine Quelle zweimal lesen; sobald genug Beiträge belegt sind, nicht weiter suchen, sondern das Ergebnis liefern.".to_string(),
     ];
-    if !skipped.is_empty() {
-        instruction.push(format!(
-            "Diese Quellen in diesem Lauf überspringen: {}.",
-            skipped
-                .iter()
-                .map(|(label, reason)| format!("{label} ({reason})"))
-                .collect::<Vec<_>>()
-                .join("; ")
-        ));
-    }
     if signed_in {
         // The owner of an authenticated read is resolved from this command.
         instruction.insert(
@@ -826,27 +814,60 @@ fn issue_checkpoint_path(root: &Path, issue_id: &str) -> std::path::PathBuf {
         .join(format!("{issue_id}.json"))
 }
 
-fn attach_checkpoint(payload: &mut Value, root: &Path, issue_id: &str) {
-    let path = issue_checkpoint_path(root, issue_id);
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+/// Run contract appended to every `news.issue.generate` prompt, manual
+/// ("Ausgabe jetzt erzeugen") and scheduled alike: skip unusable sources, cap
+/// the effort, and resume from the per-issue checkpoint after a timeout.
+pub(super) fn issue_run_prompt_block(
+    root: &Path,
+    command: &BusinessCommand,
+) -> anyhow::Result<Option<String>> {
+    if command.module != NEWS_MODULE || command.command_type != NEWS_ISSUE_GENERATE {
+        return Ok(None);
     }
-    let path = path.to_string_lossy().to_string();
-    let note = format!(
-        "Zwischenstand: Prüfe zuerst {path}. Existiert die Datei, sind die Quellen schon gelesen: übernimm die Kandidaten daraus und lies nur die dort fehlenden Quellen. Sonst nach dem Lesen der Quellen sofort alle Kandidaten (Titel, Link, Datum, Quelle, Kurzinhalt) als JSON dorthin schreiben, bevor du auswählst und schreibst."
+    let issue_id = first_string_field(&command.payload, &["issue_id"]).unwrap_or_default();
+    ensure!(
+        valid_record_id(&issue_id),
+        "news issue command is missing issue_id"
     );
-    if let Some(object) = payload.as_object_mut() {
-        let instruction = object
-            .get("instruction")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        object.insert(
-            "instruction".into(),
-            json!(format!("{instruction}\n{note}")),
-        );
-        object.insert("checkpoint_path".into(), json!(path));
+    let sources: Vec<Value> = command
+        .payload
+        .pointer("/record_snapshot/sources")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let (usable, skipped) = select_run_sources(&sources);
+    let path = issue_checkpoint_path(root, &issue_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
     }
+    let mut lines = vec!["News-Laufvertrag (verbindlich):".to_string()];
+    if !skipped.is_empty() {
+        let labels = |list: &[Value]| {
+            list.iter()
+                .filter_map(|source| source.get("label").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        lines.push(if usable.is_empty() {
+            "- Keine nutzbare Quelle: nutze die Websuche.".to_string()
+        } else {
+            format!("- Nur diese Quellen lesen: {}.", labels(&usable))
+        });
+        lines.push(format!(
+            "- Überspringen: {}.",
+            skipped
+                .iter()
+                .map(|(label, reason)| format!("{label} ({reason})"))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+    }
+    lines.push("- Höchstens zwei Abrufe pro Quelle, keine Quelle zweimal lesen; sobald genug Beiträge belegt sind, nicht weiter suchen, sondern das Ergebnis liefern.".to_string());
+    lines.push(format!(
+        "- Zwischenstand: Prüfe zuerst {}. Existiert die Datei, sind die Quellen schon gelesen: übernimm die Kandidaten daraus und lies nur die dort fehlenden Quellen. Sonst nach dem Lesen der Quellen sofort alle Kandidaten (Titel, Link, Datum, Quelle, Kurzinhalt) als JSON dorthin schreiben, bevor du auswählst und schreibst.",
+        path.display()
+    ));
+    Ok(Some(lines.join("\n")))
 }
 
 /// Crew "Wiederholen" on a failed issue run submits the command again; put
@@ -1712,7 +1733,10 @@ mod tests {
             &test_window(),
         );
         let instruction = payload["instruction"].as_str().unwrap();
-        assert!(instruction.contains("OpenAI (failed)"));
+        assert!(
+            !instruction.contains("OpenAI"),
+            "skipped sources stay out of the source list"
+        );
         assert!(
             !instruction.contains("--task-id"),
             "skipped Reddit must not ask for a signed-in read"
@@ -1727,18 +1751,33 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_is_stable_per_issue() {
+    fn manual_and_scheduled_runs_get_the_same_run_contract() {
         let root = std::env::temp_dir().join(format!("ctox-news-ckpt-{}", std::process::id()));
-        let mut a = json!({"instruction": "x"});
-        let mut b = json!({"instruction": "x"});
-        attach_checkpoint(&mut a, &root, "issue_1");
-        attach_checkpoint(&mut b, &root, "issue_1");
-        assert_eq!(a["checkpoint_path"], b["checkpoint_path"]);
-        assert!(a["checkpoint_path"]
-            .as_str()
+        let command = |id: &str| BusinessCommand {
+            origin: super::super::store::CommandOrigin::TrustedLocal,
+            id: Some(id.to_string()),
+            module: NEWS_MODULE.to_string(),
+            command_type: NEWS_ISSUE_GENERATE.to_string(),
+            record_id: Some("topic_1".to_string()),
+            payload: json!({
+                "issue_id": "issue_1",
+                "record_snapshot": {"sources": [
+                    {"label": "OpenAI", "status": "failed"},
+                    {"label": "Anthropic", "status": "ok"}
+                ]}
+            }),
+            client_context: json!({}),
+        };
+        let a = issue_run_prompt_block(&root, &command("cmd_manual"))
             .unwrap()
-            .ends_with("checkpoints/issue_1.json"));
-        assert!(a["instruction"].as_str().unwrap().contains("Zwischenstand"));
+            .unwrap();
+        let b = issue_run_prompt_block(&root, &command("cmd_sched"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(a, b, "the checkpoint follows the issue, not the command");
+        assert!(a.contains("OpenAI (failed)"));
+        assert!(a.contains("Nur diese Quellen lesen: Anthropic."));
+        assert!(a.contains("checkpoints/issue_1.json"));
         let _ = std::fs::remove_dir_all(root);
     }
 }

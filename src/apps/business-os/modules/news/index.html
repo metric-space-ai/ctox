@@ -196,9 +196,12 @@
         </div>
       </div>
     </form>
-    <footer class="news-drawer-foot">
-      <button class="ctox-button" type="button" data-action="close-drawer">Abbrechen</button>
-      <button class="ctox-button is-primary" type="button" data-action="save-topic">Speichern</button>
+    <div class="news-undo" data-drawer-undo hidden role="status" aria-live="polite">
+      <span data-drawer-undo-text></span>
+      <button class="ctox-button" type="button" data-action="drawer-undo">Rückgängig</button>
+    </div>
+    <footer class="news-drawer-foot" data-drawer-create-foot>
+      <button class="ctox-button is-primary" type="button" data-action="save-topic">Thema anlegen</button>
     </footer>
   </section>
 </main>

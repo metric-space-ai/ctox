@@ -512,3 +512,7 @@
   .news-source-add { grid-template-columns: minmax(0, 1fr) auto; }
   .news-source-add select { grid-column: 1 / -1; }
 }
+
+/* Instant save: one undo bar under the drawer form (8 s). */
+.news-drawer .news-undo[data-drawer-undo] { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 14px 10px; padding: 8px 10px; border: 1px solid var(--news-line); border-radius: 8px; }
+.news-drawer .news-undo[data-drawer-undo][hidden] { display: none; }
