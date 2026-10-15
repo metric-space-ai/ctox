@@ -49,6 +49,7 @@ pub trait ManagementQuotaCredentialSource: Send + Sync {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ManagementPluginQuotaError {
+    RuntimeUnavailable,
     AccountNotFound,
     CredentialSourceUnavailable,
     AccountContextMismatch,

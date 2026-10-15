@@ -91,6 +91,8 @@ const INSTANCE_PROXY_CONFIG_TABLE: &str = "cliproxyapi_runtime_config";
 pub(crate) mod account_controls;
 #[path = "cliproxyapi_plugin_quota.rs"]
 pub(crate) mod plugin_quota;
+#[path = "cliproxyapi_quota_runtime.rs"]
+pub mod quota_runtime;
 const INSTANCE_PROXY_CONFIG_SCHEMA: &str = "ctox.cliproxyapi.runtime-config.v1";
 const INSTANCE_ANTIGRAVITY_CAPABILITY_REFRESH_SECONDS: u64 = 10 * 60;
 const INSTANCE_SIGNATURE_CACHE_TABLE: &str = "cliproxyapi_signature_cache";
@@ -3235,6 +3237,8 @@ async fn run_instance_management_supervisor(root: PathBuf) {
         serve_management_connection, ManagementHandler,
     };
 
+    // Retry a broken plugin only after its explicit configuration changes.
+    let mut failed_plugin_identity: Option<String> = None;
     loop {
         let snapshot = match InstanceManagementKeySnapshot::load(&root) {
             Ok(Some(snapshot)) => snapshot,
@@ -3287,11 +3291,9 @@ async fn run_instance_management_supervisor(root: PathBuf) {
         drop(snapshot);
         let runtime_status = Arc::new(CtoxManagementRuntimeStatusSource::new(root.clone()));
         let runtime_config = Arc::new(CtoxManagementRuntimeConfigSource::new(root.clone()));
-        let handler = Arc::new(ManagementHandler::with_runtime_sources(
-            authenticator,
-            runtime_status,
-            runtime_config,
-        ));
+        let handler =
+            ManagementHandler::with_runtime_sources(authenticator, runtime_status, runtime_config);
+        let plugin_identity = quota_runtime::identity(&root).ok();
         let listener = match tokio::net::TcpListener::bind(instance_management_addr()).await {
             Ok(listener) => listener,
             Err(error) => {
@@ -3307,7 +3309,44 @@ async fn run_instance_management_supervisor(root: PathBuf) {
                 continue;
             }
         };
-        set_instance_management_status(&root, InstanceManagementPhase::Ready, None);
+        let (plugins, quota_error) = if let Some(identity) = &plugin_identity {
+            if failed_plugin_identity.as_ref() == Some(identity) {
+                (
+                    None,
+                    Some("quota plugin startup failed; reconfigure the plugin to retry".to_owned()),
+                )
+            } else {
+                match quota_runtime::Owner::start(&root).await {
+                    Ok(plugins) => {
+                        failed_plugin_identity = None;
+                        (Some(plugins), None)
+                    }
+                    Err(_) => {
+                        failed_plugin_identity = Some(identity.clone());
+                        (None, Some("quota plugin startup failed; check its pinned artifact and private configuration".to_owned()))
+                    }
+                }
+            }
+        } else {
+            (
+                None,
+                Some("quota plugin configuration authority unavailable".to_owned()),
+            )
+        };
+        let managed_identity = plugins
+            .as_ref()
+            .map(|plugins| plugins.identity.clone())
+            .or(plugin_identity);
+        let handler = match plugins
+            .as_ref()
+            .and_then(|plugins| plugins.service.as_ref())
+        {
+            Some(service) => handler.attach_plugin_quota_service(service.clone()),
+            None if quota_error.is_some() => handler.attach_quota_runtime_unavailable(),
+            None => handler,
+        };
+        let handler = Arc::new(handler);
+        set_instance_management_status(&root, InstanceManagementPhase::Ready, quota_error);
 
         loop {
             tokio::select! {
@@ -3337,11 +3376,15 @@ async fn run_instance_management_supervisor(root: PathBuf) {
                     INSTANCE_MANAGEMENT_RETRY_SECONDS,
                 )) => {
                     match InstanceManagementKeySnapshot::load(&root) {
-                        Ok(Some(current)) if current.fingerprint == key_fingerprint => {}
+                        Ok(Some(current)) if current.fingerprint == key_fingerprint
+                            && quota_runtime::identity(&root).ok() == managed_identity => {}
                         _ => break,
                     }
                 }
             }
+        }
+        if let Some(plugins) = plugins {
+            plugins.shutdown().await;
         }
     }
 }

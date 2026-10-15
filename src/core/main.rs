@@ -670,6 +670,12 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 }));
                 Ok(())
             }
+            Some("quota-plugins-configure") => {
+                anyhow::ensure!(args.len() == 3, "usage: ctox runtime quota-plugins-configure <quota-plugins.json>");
+                let status = execution::cliproxyapi_host::quota_runtime::configure_from_file(&root, Path::new(&args[2]))?;
+                println!("{}", serde_json::to_string_pretty(&status)?);
+                Ok(())
+            }
             Some("speech-configure") => {
                 anyhow::ensure!(
                     args.len() == 3,

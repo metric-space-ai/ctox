@@ -245,7 +245,10 @@ fn validate(request: &HttpRequest, a: &Account) -> anyhow::Result<()> {
         for value in values {
             bytes = bytes.saturating_add(name.len()).saturating_add(value.len());
             anyhow::ensure!(
-                !value.contains(['\r', '\n']) && bytes <= 65536,
+                value
+                    .bytes()
+                    .all(|byte| byte == b'\t' || (byte >= 0x20 && byte != 0x7f))
+                    && bytes <= 65536,
                 "invalid quota header"
             );
         }

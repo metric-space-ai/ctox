@@ -2,6 +2,16 @@
 
 ## State
 
+- The native management listener now composes explicitly configured quota
+  plugins with the canonical native account/secret authority. Configuration is
+  revisioned in Runtime SQLite; private plugin YAML stays in the encrypted
+  store. Local artifacts are pinned, account HTTP is origin-scoped, and late
+  results are rejected after credential or topology changes. Configuration
+  changes retire the old plugin host; startup failures do not respawn an
+  unchanged artifact repeatedly. See [native quota plugin setup](NATIVE_QUOTA_PLUGINS.md).
+  This quota-only path does not enable general plugin executors/OAuth or promote
+  the accepted upstream pin. Installed provider acceptance remains open.
+
 - Management plugin quota reads and resets require an opaque server-only
   credential/policy binding. The injected credential source validates that
   binding under the same fence as account mutations before a response is
@@ -9,8 +19,8 @@
   response from a retired binding, including an old authentication error, is
   discarded as an account-context mismatch. Store failures remain authority
   failures. The binding is never serialized to a plugin or accepted from an
-  HTTP caller. Native credential/startup composition is still required before
-  this optional service can be enabled in the installed daemon.
+  HTTP caller. The quota-only native composition above supplies that authority;
+  broader native plugin composition and installed acceptance remain open.
 
 - The explicitly injected `ProcessPluginLoader` supports ordered process streams
   as well as unary calls. It reuses the versioned frame sequencer and the same
@@ -24,8 +34,8 @@
   closure even while waiting for the first or next chunk. Unary calls keep
   their 30-second bound.
 
-  This loader remains opt-in; native credential/config/startup composition,
-  Windows runtime acceptance and installed provider acceptance remain open.
+  This loader remains opt-in; general native plugin composition, Windows
+  runtime acceptance and installed provider acceptance remain open.
 
 - The Grok client-version slice from v8.0.23, immutable upstream
   `d318bcc3afb9ea8782862f5e8cdb541afdc9dfa5`, now has the upstream 1.0.46

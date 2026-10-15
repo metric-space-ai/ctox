@@ -1,3 +1,5 @@
+#[path = "cliproxyapi_quota_runtime_tests.rs"]
+mod runtime_tests;
 // Origin: CTOX; License: AGPL-3.0-only
 use super::*;
 use std::{
@@ -24,7 +26,15 @@ fn write(root: &Path, name: &str, value: &str) {
     .unwrap();
 }
 fn fixture(origin: &str) -> Fixture {
-    let root = tempfile::tempdir().unwrap();
+    let base = if cfg!(target_os = "macos") {
+        "/Volumes/tmp"
+    } else {
+        "/tmp"
+    };
+    let root = tempfile::Builder::new()
+        .prefix("nq-")
+        .tempdir_in(base)
+        .unwrap();
     write(root.path(), "quota-access", "fixture-access-only");
     write(root.path(), "quota-refresh", "fixture-refresh-only");
     let parsed = url::Url::parse(origin).unwrap();
@@ -37,7 +47,15 @@ fn fixture(origin: &str) -> Fixture {
 }
 #[test]
 fn native_quota_missing_topology_does_not_initialize_storage() {
-    let root = tempfile::tempdir().unwrap();
+    let base = if cfg!(target_os = "macos") {
+        "/Volumes/tmp"
+    } else {
+        "/tmp"
+    };
+    let root = tempfile::Builder::new()
+        .prefix("nq-")
+        .tempdir_in(base)
+        .unwrap();
     assert!(CtoxQuotaCredentials::new(root.path())
         .resolve("quota-account")
         .unwrap()

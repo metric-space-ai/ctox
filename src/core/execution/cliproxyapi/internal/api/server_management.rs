@@ -178,6 +178,7 @@ mod quota_route_tests;
 #[path = "server_management_quota.rs"]
 mod quota_routes;
 pub struct ManagementHandler {
+    quota_runtime_unavailable: bool,
     quota_service:
         Option<Arc<crate::internal::api::handlers::management::ManagementPluginQuotaService>>,
     authenticator: Arc<ManagementAuthenticator>,
@@ -199,6 +200,7 @@ impl ManagementHandler {
             api_key_usage: None,
             quota_reset: None,
             quota_switches: None,
+            quota_runtime_unavailable: false,
             quota_service: None,
         }
     }
@@ -215,6 +217,7 @@ impl ManagementHandler {
             api_key_usage: None,
             quota_reset: None,
             quota_switches: None,
+            quota_runtime_unavailable: false,
             quota_service: None,
         }
     }
@@ -232,6 +235,7 @@ impl ManagementHandler {
             api_key_usage: None,
             quota_reset: None,
             quota_switches: None,
+            quota_runtime_unavailable: false,
             quota_service: None,
         }
     }
@@ -248,6 +252,7 @@ impl ManagementHandler {
             api_key_usage: None,
             quota_reset: None,
             quota_switches: None,
+            quota_runtime_unavailable: false,
             quota_service: None,
         }
     }
