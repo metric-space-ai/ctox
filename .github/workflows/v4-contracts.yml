@@ -1,0 +1,104 @@
+name: V4 contracts
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [v4/integration, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v4-contracts-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  v4-contracts:
+    name: v4-contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/v4-contracts-target
+      CARGO_BUILD_JOBS: '2'
+      RUST_TEST_THREADS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: '1.93.0'
+          components: rustfmt
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.13.1'
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+        with:
+          key: v4-contracts
+          cache-on-failure: true
+          workspaces: |
+            . -> ${{ runner.temp }}/v4-contracts-target
+            src/core/rxdb -> ${{ runner.temp }}/v4-contracts-target
+            src/core/rxdb/patches/webrtc -> ${{ runner.temp }}/v4-contracts-target
+            src/core/app_capabilities/contract -> ${{ runner.temp }}/v4-contracts-target
+      - name: Prepare evidence and reject empty test runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/v4-contracts-proof"
+          git rev-parse HEAD > "$RUNNER_TEMP/v4-contracts-proof/source-revision.txt"
+          cat > "$RUNNER_TEMP/v4-contracts-nonempty.py" <<'PY'
+          import pathlib, re, sys
+          kind, filename = sys.argv[1:]
+          text = pathlib.Path(filename).read_text()
+          pattern = {
+              "rust": r"^test result: ok\. ([1-9][0-9]*) passed; 0 failed;",
+              "node": r"^# pass ([1-9][0-9]*)$",
+          }[kind]
+          if not re.search(pattern, text, re.M):
+              raise SystemExit(f"{kind}: no executed passing tests in {filename}")
+          PY
+          # Guard the guard: a stale/misspelled filter must fail this job.
+          printf 'test result: ok. 0 passed; 0 failed; 0 ignored;\n' > "$RUNNER_TEMP/v4-empty-rust.log"
+          printf '# tests 0\n' > "$RUNNER_TEMP/v4-empty-node.log"
+          if python3 "$RUNNER_TEMP/v4-contracts-nonempty.py" rust "$RUNNER_TEMP/v4-empty-rust.log"; then
+            exit 1
+          fi
+          if python3 "$RUNNER_TEMP/v4-contracts-nonempty.py" node "$RUNNER_TEMP/v4-empty-node.log"; then
+            exit 1
+          fi
+          printf '# tests 1\n# pass 0\n# skipped 1\n' > "$RUNNER_TEMP/v4-skipped-node.log"
+          if python3 "$RUNNER_TEMP/v4-contracts-nonempty.py" node "$RUNNER_TEMP/v4-skipped-node.log"; then
+            exit 1
+          fi
+      - name: Store, CAP and transport contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_rust() {
+            local name="$1"
+            shift
+            cargo test --locked --jobs 2 "$@" -- --test-threads=2 \
+              | tee "$RUNNER_TEMP/v4-contracts-proof/$name.log"
+            python3 "$RUNNER_TEMP/v4-contracts-nonempty.py" rust "$RUNNER_TEMP/v4-contracts-proof/$name.log"
+          }
+          run_rust store -p ctox-store --lib
+          run_rust cap --manifest-path src/core/app_capabilities/contract/Cargo.toml --lib
+          run_rust webrtc --manifest-path src/core/rxdb/patches/webrtc/Cargo.toml --lib p4_
+          run_rust native-send --manifest-path src/core/rxdb/Cargo.toml --lib p4_
+      - name: Kernel contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test --test-concurrency=2 --test-reporter=tap src/apps/business-os/kernel/tests/*.test.mjs \
+            | tee "$RUNNER_TEMP/v4-contracts-proof/kernel.log"
+          python3 "$RUNNER_TEMP/v4-contracts-nonempty.py" node "$RUNNER_TEMP/v4-contracts-proof/kernel.log"
+      - name: Retain contract evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: v4-contracts-${{ github.sha }}
+          path: ${{ runner.temp }}/v4-contracts-proof/
+          if-no-files-found: error
