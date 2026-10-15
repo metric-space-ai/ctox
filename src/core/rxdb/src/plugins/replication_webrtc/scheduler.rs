@@ -1054,17 +1054,40 @@ mod native_tests {
     }
     async fn v4_scheduler_native_teardown_revokes_retained_clones() {
         let channels: Vec<_> = (0..7).map(Channel::new).collect();
-        channels[5].block.store(true, std::sync::atomic::Ordering::SeqCst);
-        let scheduler = NativeSendScheduler::from_channels(channels.iter().map(|c| c.clone() as Arc<dyn DataChannel>).collect(), framer()).await.unwrap();
+        channels[5]
+            .block
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let scheduler = NativeSendScheduler::from_channels(
+            channels
+                .iter()
+                .map(|c| c.clone() as Arc<dyn DataChannel>)
+                .collect(),
+            framer(),
+        )
+        .await
+        .unwrap();
         let retained = scheduler.clone();
         let pending = {
             let sender = retained.clone();
-            tokio::spawn(async move { sender.send(Lane::Transfer, WireSeq(1), b"retired-peer", None).await })
+            tokio::spawn(async move {
+                sender
+                    .send(Lane::Transfer, WireSeq(1), b"retired-peer", None)
+                    .await
+            })
         };
-        tokio::time::timeout(Duration::from_secs(2), channels[5].entered.notified()).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), channels[5].entered.notified())
+            .await
+            .unwrap();
         scheduler.close_now();
-        assert!(retained.send(Lane::Control, WireSeq(2), b"stale-clone", None).await.is_err());
-        assert!(tokio::time::timeout(Duration::from_secs(2), pending).await.unwrap().unwrap().is_err());
+        assert!(retained
+            .send(Lane::Control, WireSeq(2), b"stale-clone", None)
+            .await
+            .is_err());
+        assert!(tokio::time::timeout(Duration::from_secs(2), pending)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err());
         assert!(channels[5].sent.lock().is_empty());
     }
     struct DeniedAfterCallback;

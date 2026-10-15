@@ -242,8 +242,14 @@ mod tests {
     fn v4_frames_negotiate_codecs_bound_frames_and_roundtrip_decimal_seq() {
         for codec in [Codec::Zstd, Codec::Gzip] {
             let f = framer(codec);
-            assert_eq!(f.encode(Lane::Live, WireSeq(11), &vec![7; 1023]).unwrap()[0][5], 0);
-            assert_ne!(f.encode(Lane::Live, WireSeq(12), &vec![7; 1024]).unwrap()[0][5], 0);
+            assert_eq!(
+                f.encode(Lane::Live, WireSeq(11), &vec![7; 1023]).unwrap()[0][5],
+                0
+            );
+            assert_ne!(
+                f.encode(Lane::Live, WireSeq(12), &vec![7; 1024]).unwrap()[0][5],
+                0
+            );
             let mut r = Reassembler::new(f.clone());
             let payload = vec![42; 200_000];
             let frames = f
