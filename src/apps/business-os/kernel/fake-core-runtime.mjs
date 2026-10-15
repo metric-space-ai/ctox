@@ -2,7 +2,7 @@
 // Trigger-Lauf (§16.20, fremde Collections nur nach §16.34 Nr. 3), Katalog-Primitive audit/agent.task (§16.29/§16.30)
 // und die Plattformbefehle ctox.app.publish|update|rollback|release|remove (§16.29 B, §16.33).
 // Nur für MemoryCoreTransport (Tests, Shell-Entwicklung). Der echte Core macht das in Rust.
-import { CtoxError, cloneValue, isPlainObject, mergePatch, uuidv7 } from './values.mjs';
+import { CtoxError, cloneValue, isPlainObject, mergePatch, uuidv7, sha256Hex } from './values.mjs';
 import { compileQuery, runCompiledQuery, validateSchema } from './app-api.mjs';
 import { bytesBase64 } from './artifact-url.mjs';
 import { PLATFORM_COLLECTIONS, PLATFORM_APP_ID } from './platform.mjs';
@@ -112,6 +112,7 @@ export function createCoreRuntime(core) {
     const c = baseName(entry.collection);
     // Plattformbefehle prüft der Core immer (CAS, Codes §16.33); ohne bekannten Nutzer gilt der Client als Admin (Bind-Aufbau).
     if (c === 'business_commands' && entry.op === 'put' && entry.body?.status === 'queued' && String(entry.body.type).startsWith('ctox.app.')) return checkPlatformCommand(user ?? SYSTEM_ADMIN, entry.body);
+    if (c === 'business_commands' && entry.op === 'put' && entry.body?.status === 'queued' && String(entry.body.type).startsWith('ctox.coding.')) return checkCodingCommand(user ?? { ...SYSTEM_ADMIN, id: entry.body.actor_id ?? 'admin' }, entry.body);
     if (!user) return null;
     if (c === 'business_commands') {
       const body = entry.body ?? old?.data;
@@ -459,9 +460,147 @@ export function createCoreRuntime(core) {
     return { status: 'failed', error: 'invalid' };
   }
 
+  // ---- K-1f: Coding Agent im Quelltext-Modus (§16.44, Vertrag befund-coding-panel.md / Core-PR #848), simuliert ----
+  // Der simulierte Agent ändert deterministisch: er hängt an die erste im Prompt genannte Datei des Entwurfs (sonst die erste
+  // Textdatei) eine Kommentarzeile an. Nachrichten und tool_events erscheinen wie beim echten Sidecar erst am Turn-Ende.
+  const TURN_FIELDS = ['app_id', 'draft_id', 'base_draft_rev', 'prompt', 'model', 'turn_id'];
+  const TURN_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
+  const activeTurns = new Map(); // draft_id → turn_id (Prüfung und Reservierung in einem Schritt wie die Writer-Transaktion)
+  const turnRow = (id) => core.docs.get(key('coding_turns', id));
+  const draftRow = (id) => { const r = core.docs.get(key('app_drafts', id)); return r && !r.deleted && r.data ? r : null; };
+  const inv = (f) => ({ code: 'invalid', reason: `payload_invalid:${f}` });
+  function runningTurnFor(draftId) {
+    if (activeTurns.has(draftId)) return activeTurns.get(draftId);
+    for (const r of rowsOf('coding_turns')) if (r.data.draft_id === draftId && ['queued', 'running'].includes(r.data.state)) return r.id;
+    return null;
+  }
+  /** null = angenommen, sonst {code, reason} (write_result rejected). */
+  function checkCodingCommand(user, body) {
+    const p = isPlainObject(body.payload) ? body.payload : {};
+    if (body.type === 'ctox.coding.turn') {
+      for (const k of Object.keys(p)) if (!TURN_FIELDS.includes(k)) return inv(k);
+      for (const f of ['app_id', 'draft_id', 'base_draft_rev', 'prompt']) if (typeof p[f] !== 'string' || !p[f].trim()) return inv(f);
+      if (p.model !== undefined && (typeof p.model !== 'string' || !p.model)) return inv('model');
+      if (p.turn_id !== undefined && (typeof p.turn_id !== 'string' || !TURN_ID.test(p.turn_id))) return inv('turn_id');
+      if (!hasPerm(user, 'apps.source.edit')) return { code: 'forbidden', reason: 'apps.source.edit' };
+      const row = draftRow(p.draft_id);
+      if (!row) return { code: 'not_found', reason: 'draft_not_found' };
+      if (row.data.user_id !== user.id || row.data.app_id !== p.app_id) return { code: 'forbidden', reason: 'draft_not_owned' }; // auch Admin nicht
+      if (row.rev !== p.base_draft_rev) return { code: 'conflict', reason: 'stale_draft_rev' };
+      if (runningTurnFor(p.draft_id)) return { code: 'conflict', reason: 'turn_running' };
+      const taken = p.turn_id ? turnRow(p.turn_id) : null;
+      if (taken && taken.data?.command_id !== body.id) return { code: 'conflict', reason: 'turn_id_taken' };
+      return null;
+    }
+    if (body.type === 'ctox.coding.cancel') {
+      for (const k of Object.keys(p)) if (k !== 'turn_id') return inv(k);
+      if (typeof p.turn_id !== 'string' || !p.turn_id) return inv('turn_id');
+      const t = turnRow(p.turn_id);
+      if (!t || t.deleted) return { code: 'not_found', reason: 'turn_not_found' };
+      if (t.data.user_id !== user.id) return { code: 'forbidden', reason: 'turn_not_owned' };
+      if (!['queued', 'running'].includes(t.data.state)) return { code: 'conflict', reason: 'turn_not_running' };
+      return null;
+    }
+    return { code: 'invalid', reason: 'payload_invalid:type' };
+  }
+  /** Annahme eines Turns (synchron mit dem Write): Turn-id vergeben, Entwurf reservieren, Turn-Dokument queued anlegen. */
+  function acceptCodingTurn(user, body) {
+    const p = body.payload;
+    const turn_id = p.turn_id ?? `turn-${uuidv7()}`;
+    activeTurns.set(p.draft_id, turn_id);
+    const now = Date.now();
+    const doc = { id: turn_id, app_id: p.app_id, draft_id: p.draft_id, user_id: user.id, command_id: body.id, origin_app: body.app_id,
+      base_draft_rev: p.base_draft_rev, prompt: p.prompt, model: p.model ?? null, state: 'queued', messages: [], tool_events: [],
+      draft_rev_after: null, changed_files: [], callback: { on_complete: body.on_complete ?? null, on_failed: body.on_failed ?? null },
+      created_at_ms: now, updated_at_ms: now };
+    turnsAccepted.set(body.id, turn_id);
+    void commit('coding_turns', [doc]);
+    return turn_id;
+  }
+  const turnsAccepted = new Map(); // command_id → turn_id
+  async function setTurn(turn_id, patch) {
+    const cur = turnRow(turn_id)?.data;
+    if (!cur) return null;
+    if (!['queued', 'running'].includes(cur.state) && patch.state) return cur; // Endzustand genau einmal
+    const next = { ...cur, ...patch, updated_at_ms: Date.now() };
+    await commit('coding_turns', [next]);
+    return next;
+  }
+  async function codingCallback(doc, turn, status, result) {
+    const type = status === 'done' ? turn.callback?.on_complete : turn.callback?.on_failed;
+    const id = `coding-callback:${doc.id}`;
+    if (!type || data('business_commands', id)) return; // höchstens einmal
+    const cb = { id, type, payload: { command_id: doc.id, turn_id: turn.id, status, result: cloneValue(result) }, status: 'queued', app_id: turn.origin_app, actor_id: 'core', created_at: new Date().toISOString() };
+    await commit('business_commands', [cb]);
+    core.spawnCommand(cb, 1);
+  }
+  async function runCodingTurn(doc) {
+    const turn_id = turnsAccepted.get(doc.id) ?? doc.payload?.turn_id;
+    await until(() => turnRow(turn_id)); // das queued-Dokument ist schon unterwegs
+    let turn = turnRow(turn_id).data;
+    const finish = async (state, extra, cmd) => {
+      activeTurns.delete(turn.draft_id);
+      const ended = await setTurn(turn_id, { state, finished_at_ms: Date.now(), ...extra });
+      const t = ended ?? turn;
+      const finalState = t.state; // ein Abbruch kann vorher gewonnen haben
+      const result = { turn_id, state: finalState, draft_rev_after: t.draft_rev_after ?? null, changed_files: t.changed_files ?? [], ...(t.patch ? { patch: t.patch } : {}), ...(t.error ? { error: t.error } : {}) };
+      await codingCallback(doc, t, finalState === 'done' ? 'done' : finalState, result);
+      if (finalState === 'done') return { status: 'done', progress: 1, result };
+      if (finalState === 'cancelled') return { status: 'cancelled', result };
+      return { status: 'failed', error: `${t.error?.code ?? 'failed'}: ${t.error?.reason ?? finalState}`, result };
+    };
+    if (turn.state !== 'queued') return finish(turn.state, {});
+    turn = await setTurn(turn_id, { state: 'running' }) ?? turn;
+    // Arbeitsbaum = Entwurf auf der Basis-Revision (Snapshot beim Start)
+    const startRow = draftRow(turn.draft_id);
+    const files = cloneValue(startRow?.data?.files ?? {});
+    await new Promise((r) => setTimeout(r, core.codingDelayMs ?? 60));
+    if (turnRow(turn_id).data.state === 'cancelled') return finish('cancelled', {});
+    const textPaths = Object.keys(files).filter((p) => files[p] && typeof core.artifacts.get(files[p]) === 'string').sort();
+    const named = textPaths.find((p) => turn.prompt.includes(p));
+    const path = named ?? textPaths[0] ?? 'NOTES.md';
+    const old = files[path] ? String(core.artifacts.get(files[path])) : '';
+    const line = `// coding-agent ${turn_id}: ${turn.prompt.replace(/\s+/g, ' ').slice(0, 60)}`;
+    const next = `${old}${old && !old.endsWith('\n') ? '\n' : ''}${line}\n`;
+    const hash = await sha256Hex(next);
+    core.artifacts.set(hash, next);
+    const at = Date.now();
+    const transcript = {
+      messages: [{ role: 'user', text: turn.prompt, at_ms: at }, { role: 'assistant', text: `Kommentarzeile in ${path} ergänzt.`, at_ms: at }],
+      tool_events: [{ kind: 'read', path, at_ms: at }, { kind: 'edit', path, at_ms: at }],
+    };
+    if (turnRow(turn_id).data.state === 'cancelled') return finish('cancelled', transcript);
+    // Rückschreiben als neue Entwurfsrevision per CAS auf base_draft_rev
+    const cur = draftRow(turn.draft_id);
+    if (cur && cur.rev === turn.base_draft_rev) {
+      await commit('app_drafts', [{ ...cur.data, files: { ...cur.data.files, [path]: hash }, updated_at_ms: at }]);
+      return finish('done', { ...transcript, draft_rev_after: draftRow(turn.draft_id).rev, changed_files: [path] });
+    }
+    // Nutzer hat inzwischen editiert: nichts überschreiben, Patch als files-Datensatz
+    const n = old ? old.split('\n').length - (old.endsWith('\n') ? 1 : 0) : 0;
+    const patch = `--- a/${path}\n+++ b/${path}\n@@ -${n},0 +${n + 1},1 @@\n+${line}\n`;
+    const bytes = new TextEncoder().encode(patch);
+    const ref = await sha256Hex(bytes);
+    core.blobs.set(ref, new Blob([bytes], { type: 'text/x-diff' }));
+    const file_id = `coding-patch:${turn_id}`;
+    await commit('files', [{ id: file_id, ref, name: `${file_id.replace(':', '-')}.diff`, mime: 'text/x-diff', size: bytes.length, owner_app: turn.app_id, owner_user: turn.user_id, created_at_ms: at }]);
+    return finish('conflict', { ...transcript, changed_files: [path], patch: { ref, file_id }, error: { status: 'failed', code: 'conflict', reason: 'draft_changed' } });
+  }
+  async function runCodingCancel(doc) {
+    const turn_id = doc.payload.turn_id;
+    const t = turnRow(turn_id)?.data;
+    if (!t || !['queued', 'running'].includes(t.state)) return { status: 'failed', error: 'conflict: turn_not_running' };
+    await setTurn(turn_id, { state: 'cancelled', finished_at_ms: Date.now() }); // zuerst persistieren, dann „Sidecar beenden“
+    activeTurns.delete(t.draft_id);
+    return { status: 'done', progress: 1, result: { turn_id, state: 'cancelled' } };
+  }
+  async function until(pred, ms = 5000) { const t0 = Date.now(); while (!pred()) { if (Date.now() - t0 > ms) fail('unavailable', 'Turn-Dokument fehlt'); await new Promise((r) => setTimeout(r, 2)); } }
+
   /** Ausführung eines Befehls: Plattformbefehl → App-Handler (Routing nach (app_id, type)). null = kein Handler. */
   async function execute(user, doc, depth) {
     if (String(doc.type).startsWith('ctox.app.')) return runPlatformCommand(user, doc);
+    if (doc.type === 'ctox.coding.turn') return runCodingTurn(doc);
+    if (doc.type === 'ctox.coding.cancel') return runCodingCancel(doc);
     const manifest = activeManifest(doc.app_id);
     const path = manifest?.handlers?.[doc.type];
     if (!path) return null;
@@ -470,7 +609,7 @@ export function createCoreRuntime(core) {
   }
 
   return {
-    canRead, checkWrite, execute, onCommit, refreshEvery, idle, log, tasks,
+    canRead, checkWrite, execute, onCommit, refreshEvery, idle, log, tasks, acceptCodingTurn,
     setAgentOutcome(fn) { agentOutcome = typeof fn === 'function' ? fn : null; },
     capabilities: FAKE_CORE_CAPABILITIES,
   };

@@ -110,6 +110,20 @@ export type Metrics = {
   outbox: { count: number; oldest_ms: number };
   /** §16.19 Nr. 7: state ∈ online | offline. */
   link: { state: 'online' | 'offline'; rtt_ms: number; relay: boolean };
+  /**
+   * §16.45 Collection-Liveness je abonnierter Collection: live = Verbindung oben und Backlog 0 nach vollständiger Seite;
+   * catching_up = Backlog > 0 oder Seite unvollständig; offline = Verbindung weg (lokale Daten lesbar); error mit Code (§16.42).
+   * Die Shell zeigt grün nur, wenn alle angeforderten Collections live sind.
+   */
+  collections: Record<string, CollectionLiveness>;
+};
+export type CollectionLiveness = {
+  state: 'live' | 'catching_up' | 'offline' | 'error';
+  backlog: number;
+  gen: number;
+  /** Zeitpunkt des letzten Zustandswechsels (ms seit Epoche). */
+  since_ms: number;
+  error?: { code: string; message: string };
 };
 
 export interface RouteEvent { from: string; to: string; params: Record<string, unknown> }
@@ -169,7 +183,10 @@ export interface CtoxAppApi {
   remove(collection: string, id: string): WriteHandle;
   // Befehle – Dokument mit gepushtem Status
   /** opts.record_id (§16.19 Nr. 8): optionaler Bezug des Befehls auf einen Datensatz. */
-  command(type: string, payload: object, opts?: { record_id?: string }): CommandHandle;
+  /** opts.on_complete/on_failed: Rückruf-Befehlstypen der eigenen App (§16.39 Nr. 3), als Felder am Befehlsdokument.
+   *  §16.44: ctox.coding.turn {app_id, draft_id, base_draft_rev, prompt, model?, turn_id?}, ctox.coding.cancel {turn_id};
+   *  Ablehnung im write_result {status:'rejected', code, reason}. */
+  command(type: string, payload: object, opts?: { record_id?: string; on_complete?: string; on_failed?: string }): CommandHandle;
   // Priorität (E1) – reiner Hinweis
   setVisible(collections: string[]): void;
   // Zustand – nur an die Zustandszone der Shell (Anf. 27)
@@ -286,7 +303,20 @@ export type CollectionDiff = {
   migration: { from_ver: string; migrate_fn?: string; steps?: MigrationStep[] } | null;
 };
 /** §16.22 A4. files: Pfad → Text, null = im Entwurf gelöscht. */
-export type DraftInfo = { base_app_ver: string | null; files: Record<string, string | Uint8Array | null>; manifest: Record<string, unknown>; updated_at: number };
+export type DraftInfo = { base_app_ver: string | null; files: Record<string, string | Uint8Array | null>; manifest: Record<string, unknown>; updated_at: number ; /** Revision der app_drafts-Zeile im Core = base_draft_rev für ctox.coding.turn (§16.44). */ rev: string | null };
+/** §16.44: Plattform-Collection coding_turns/<turn_id> (schreibt nur der Core; messages/tool_events erst am Turn-Ende). */
+export type CodingTurn = {
+  id: string; app_id: string; draft_id: string; user_id: string; command_id: string; origin_app: string; base_draft_rev: string;
+  prompt: string; model: string | null;
+  state: 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'conflict';
+  messages: Array<{ role: 'user' | 'assistant'; text: string; at_ms: number }>;
+  tool_events: Array<{ kind: string; path?: string; at_ms: number }>;
+  draft_rev_after: string | null; changed_files: string[];
+  patch?: { ref: string; file_id: string };
+  error?: { status: 'failed'; code: string; reason: string; detail?: string };
+  callback: { on_complete: string | null; on_failed: string | null };
+  created_at_ms: number; updated_at_ms: number; finished_at_ms?: number;
+};
 
 /** §10.2a Nr. 7 + §16.22. Entwürfe je (App, Nutzer); im Kernel lokal in IDB meta `draft:<app>` (IDB je Instanz+Nutzer, §16.7). */
 export interface SourceApi {
@@ -377,6 +407,8 @@ export interface ShellKernelApi {
   identity: {
     readonly instance_id: string;
     readonly user_id: string;
+    /** §16.43: eigene device_pairing_id („Dieses Gerät“); null, wenn der Bootstrap keine Gerätebindung liefert. */
+    readonly device_id: string | null;
     /** Schließt DB, beendet Callbacks, sperrt Zugriff. Löschen nur mit deleteData:true. */
     logout(opts?: { deleteData?: boolean }): Promise<void>;
     /** Schließt diesen Kernel und liefert einen Kernel für (Instanz, Nutzer). */
@@ -432,6 +464,12 @@ export interface StubKernelOptions {
   agentDelayMs?: number;
   /** §16.37: Byte-Budget der Bibliotheksdateien (LRU), Standard 512 MiB. */
   libByteBudget?: number;
+  /** §16.43: device_pairing_id aus der Gerätebindung (dieselbe id wie im hello device_proof). */
+  deviceId?: string;
+  /** Fake-Core: Gerätekennung für die deterministische device_id (Standard 'browser'). */
+  deviceLabel?: string;
+  /** Fake-Core: Laufzeit des simulierten Coding-Agent-Turns (§16.44, Standard 60 ms). */
+  codingDelayMs?: number;
   /** false = Ein-Tab-Betrieb erzwingen. */
   multiTab?: boolean;
 }
@@ -542,6 +580,8 @@ export interface StubKernel {
   identity: ShellKernelApi['identity'];
   shell: ShellKernelApi;
   shellApi(): ShellKernelApi;
+  /** §16.45 „Neu verbinden“: voller Neuaufbau des Transports (nie Seiten-Reload); im Leser über den Leiter. */
+  reconnect(): Promise<{ link: Metrics['link']; collections: Metrics['collections'] }>;
   sim: StubSim;
   close(): Promise<void>;
   logout(opts?: { deleteData?: boolean }): Promise<void>;
