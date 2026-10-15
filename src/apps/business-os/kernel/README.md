@@ -34,7 +34,7 @@ The default transport is offline; it NEVER manufactures acceptance. `createStubK
 - `outbox.mjs`: optimistic base plus ordered operations, immutable op IDs and chained base revisions.
 - `app-api.mjs`/`values.mjs`: Mango, JSON validation, JSON Schema subset, errors, hashing.
 - `kernel.mjs`: local live views, shared outbox, leader dispatch, transactional page cursor, reader reconciliation,
-  activation, hot remount with persisted snapshot and rollback, files, Shell/actor/status facade.
+  activation, files, Shell/actor/status streams; app mounting lives exclusively in Shell/testkit.
 - `transport.mjs`: KernelTransport seam. `connect(identity,{page,write_result,link})`, `subscribe(scope)`,
   `write(entry)`, `appActivation(report)`, `priority(hint)`, `artifact(hash)`, `blob(ref)`, `upload(ref,blob)`.
   A write may return its result or deliver `write_result`; duplicate results are harmless. The adapter receives
@@ -42,7 +42,18 @@ The default transport is offline; it NEVER manufactures acceptance. `createStubK
   gen, docs, complete and per-subscription backlog. Signature verification is the adapter's responsibility.
 - `fake-core.mjs`: explicit in-memory core from the executable stub contract; isolated from client IDB.
 - `shell-api.mjs`/`loader.mjs`: Shell-only API and live Shell bootstrap/replacement. `/sw.js` belongs to Shell v4;
-  artifact route `/~a/<app>@<version>/<path>`, Blob/data module fallback when no controlling SW exists.
+  artifact route `/~a/<app>@<version>~shell@<shellVersion>/<path>` and `ctox:claim` before every Shell import.
+- `transport-webrtc.mjs`: authenticated P4 hello, canonical scopes, signed progress pages, write results,
+  clock metrics, and bounded CAS transfers over reliable RTCDataChannels. The host supplies `hello`,
+  `verifyPackage`, `resolveScope` and either channels or `createPeer(address, identity)`; reconnect uses the factory.
+- `scheduler.mjs`/`ingress.mjs`/`framing.mjs`: control > commands > interactive, then byte DRR 8:3:1
+  live/initial/transfer; per-lane ACK windows, aggregate SCTP budget, parallel ordered lane ingress.
+  Frames are at most 16 KiB total. The 32-byte big-endian header is CTX4 magic, lane/codec/reserved,
+  then u32 packet/index/count/encodedBytes/rawBytes/frameSeq. Logical messages are UTF-8 JSON.
+  Native P5/P8 must implement this same framing; the executable fake native peer is under tests only.
+- `platform.mjs`: shared collections belong to `ctox-platform`, including user-owned `shell_preferences`.
+- `testkit/app-host.mjs`: explicit reference host for tests/Shell development, never imported by the kernel;
+  owns mount/snapshot/restore and reports activation failures through the public kernel contract.
 
 `index.d.ts` retains the normative App API from the binding stub, with the real kernel/transport additions.
 Readers never wait for initial sync or call a remote query. New collections require no IDB version increase.
@@ -58,5 +69,5 @@ The explicit Node lock adapter is test-only; browsers use actual navigator.locks
 Without a controlling SW, the Blob/data fallback supports a self-contained entry; relative module imports
 use the Shell-owned versioned SW artifact route. Publication/authorization remain Core responsibilities.
 
-No old runtime is switched off by this slice. Integration and real WebRTC are phases5/8; no production hot-plug
+No old runtime is switched off by this slice. Native-counterpart integration is phases5/8; no production hot-plug
 claim until the installed all-app acceptance. Old runtime retirement requires zero usage for24h on WELSCH.
