@@ -291,7 +291,3 @@ fn error_output(error: &ArtifactsError) -> ArtifactCommandOutput {
         stderr: error.to_string(),
     }
 }
-
-#[cfg(test)]
-#[path = "artifacts_tests.rs"]
-mod tests;

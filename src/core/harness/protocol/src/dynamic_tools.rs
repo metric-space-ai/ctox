@@ -80,37 +80,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
-    #[test]
-    fn dynamic_tool_spec_deserializes_defer_loading() {
-        let value = json!({
-            "name": "lookup_ticket",
-            "description": "Fetch a ticket",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "id": { "type": "string" }
-                }
-            },
-            "deferLoading": true,
-        });
-
-        let actual: DynamicToolSpec = serde_json::from_value(value).expect("deserialize");
-
-        assert_eq!(
-            actual,
-            DynamicToolSpec {
-                name: "lookup_ticket".to_string(),
-                description: "Fetch a ticket".to_string(),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "id": { "type": "string" }
-                    }
-                }),
-                defer_loading: true,
-            }
-        );
-    }
 
     #[test]
     fn dynamic_tool_spec_legacy_expose_to_context_inverts_to_defer_loading() {

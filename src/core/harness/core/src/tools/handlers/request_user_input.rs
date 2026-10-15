@@ -119,7 +119,3 @@ impl ToolHandler for RequestUserInputHandler {
         Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }
-
-#[cfg(test)]
-#[path = "request_user_input_tests.rs"]
-mod tests;

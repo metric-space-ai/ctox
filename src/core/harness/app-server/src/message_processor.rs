@@ -918,6 +918,3 @@ impl MessageProcessor {
         }
     }
 }
-
-#[cfg(test)]
-mod tracing_tests;

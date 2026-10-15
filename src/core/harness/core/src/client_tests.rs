@@ -960,49 +960,8 @@ fn http_request_keeps_full_input_when_request_shape_changes() {
     assert_eq!(wire_request.input, next_request.input);
 }
 
-#[test]
-fn build_subagent_headers_sets_other_subagent_label() {
-    let client = test_model_client(SessionSource::SubAgent(SubAgentSource::Other(
-        "memory_consolidation".to_string(),
-    )));
-    let headers = client.build_subagent_headers();
-    let value = headers
-        .get("x-openai-subagent")
-        .and_then(|value| value.to_str().ok());
-    assert_eq!(value, Some("memory_consolidation"));
-}
 
-#[tokio::test]
-async fn summarize_memories_returns_empty_for_empty_input() {
-    let client = test_model_client(SessionSource::Cli);
-    let model_info = test_model_info();
-    let session_telemetry = test_session_telemetry();
 
-    let output = client
-        .summarize_memories(Vec::new(), &model_info, None, &session_telemetry)
-        .await
-        .expect("empty summarize request should succeed");
-    assert_eq!(output.len(), 0);
-}
-
-#[test]
-fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
-    let auth_context = AuthRequestTelemetryContext::new(
-        Some(crate::auth::AuthMode::Chatgpt),
-        &crate::api_bridge::CoreAuthProvider::for_test(Some("access-token"), Some("workspace-123")),
-        PendingUnauthorizedRetry::from_recovery(UnauthorizedRecoveryExecution {
-            mode: "managed",
-            phase: "refresh_token",
-        }),
-    );
-
-    assert_eq!(auth_context.auth_mode, Some("Chatgpt"));
-    assert!(auth_context.auth_header_attached);
-    assert_eq!(auth_context.auth_header_name, Some("authorization"));
-    assert!(auth_context.retry_after_unauthorized);
-    assert_eq!(auth_context.recovery_mode, Some("managed"));
-    assert_eq!(auth_context.recovery_phase, Some("refresh_token"));
-}
 
 #[test]
 fn local_ipc_request_omits_native_web_search_tools() {

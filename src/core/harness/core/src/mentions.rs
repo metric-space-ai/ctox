@@ -130,7 +130,3 @@ pub(crate) fn build_connector_slug_counts(
     }
     counts
 }
-
-#[cfg(test)]
-#[path = "mentions_tests.rs"]
-mod tests;

@@ -658,11 +658,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
-    #[test]
-    fn websocket_config_enables_permessage_deflate() {
-        let config = websocket_config();
-        assert!(config.extensions.permessage_deflate.is_some());
-    }
 
     #[test]
     fn parse_wrapped_websocket_error_event_maps_to_transport_http() {

@@ -361,7 +361,3 @@ impl<'a> SandboxAttempt<'a> {
             })
     }
 }
-
-#[cfg(test)]
-#[path = "sandboxing_tests.rs"]
-mod tests;

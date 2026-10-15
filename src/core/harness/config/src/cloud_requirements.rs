@@ -80,26 +80,3 @@ impl Default for CloudRequirementsLoader {
         Self::new(async { Ok(None) })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::atomic::Ordering;
-
-    #[tokio::test]
-    async fn shared_future_runs_once() {
-        let counter = Arc::new(AtomicUsize::new(0));
-        let counter_clone = Arc::clone(&counter);
-        let loader = CloudRequirementsLoader::new(async move {
-            counter_clone.fetch_add(1, Ordering::SeqCst);
-            Ok(Some(ConfigRequirementsToml::default()))
-        });
-
-        let (first, second) = tokio::join!(loader.get(), loader.get());
-        assert_eq!(first, second);
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-    }
-}

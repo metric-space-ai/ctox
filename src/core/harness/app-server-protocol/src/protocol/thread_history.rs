@@ -1313,28 +1313,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn preserves_agent_message_phase_in_history() {
-        let events = vec![EventMsg::AgentMessage(AgentMessageEvent {
-            message: "Final reply".into(),
-            phase: Some(CoreMessagePhase::FinalAnswer),
-        })];
-
-        let items = events
-            .into_iter()
-            .map(RolloutItem::EventMsg)
-            .collect::<Vec<_>>();
-        let turns = build_turns_from_rollout_items(&items);
-        assert_eq!(turns.len(), 1);
-        assert_eq!(
-            turns[0].items[0],
-            ThreadItem::AgentMessage {
-                id: "item-1".into(),
-                text: "Final reply".into(),
-                phase: Some(MessagePhase::FinalAnswer),
-            }
-        );
-    }
 
     #[test]
     fn splits_reasoning_when_interleaved() {

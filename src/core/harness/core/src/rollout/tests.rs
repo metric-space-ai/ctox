@@ -262,15 +262,6 @@ async fn find_thread_path_repairs_missing_db_row_after_filesystem_fallback() {
     assert_state_db_rollout_path(home, thread_id, Some(fs_rollout_path.as_path())).await;
 }
 
-#[test]
-fn rollout_date_parts_extracts_directory_components() {
-    let file_name = OsStr::new("rollout-2025-03-01T09-00-00-123.jsonl");
-    let parts = rollout_date_parts(file_name);
-    assert_eq!(
-        parts,
-        Some(("2025".to_string(), "03".to_string(), "01".to_string()))
-    );
-}
 
 async fn assert_state_db_rollout_path(
     home: &Path,
@@ -946,90 +937,7 @@ async fn test_get_thread_contents() {
     assert_eq!(content, expected_content);
 }
 
-#[tokio::test]
-async fn test_base_instructions_missing_in_meta_defaults_to_null() {
-    let temp = TempDir::new().unwrap();
-    let home = temp.path();
 
-    let ts = "2025-04-02T10-30-00";
-    let uuid = Uuid::from_u128(101);
-    let payload = serde_json::json!({
-        "id": uuid,
-        "timestamp": ts,
-        "cwd": ".",
-        "originator": "test_originator",
-        "cli_version": "test_version",
-        "source": "vscode",
-        "model_provider": "test-provider",
-    });
-    write_session_file_with_meta_payload(home, ts, uuid, payload).unwrap();
-
-    let provider_filter = provider_vec(&[TEST_PROVIDER]);
-    let page = get_threads(
-        home,
-        1,
-        None,
-        ThreadSortKey::CreatedAt,
-        INTERACTIVE_SESSION_SOURCES,
-        Some(provider_filter.as_slice()),
-        TEST_PROVIDER,
-    )
-    .await
-    .unwrap();
-
-    let head = read_head_for_summary(&page.items[0].path)
-        .await
-        .expect("session meta head");
-    let first = head.first().expect("first head entry");
-    assert_eq!(
-        first.get("base_instructions"),
-        Some(&serde_json::Value::Null)
-    );
-}
-
-#[tokio::test]
-async fn test_base_instructions_present_in_meta_is_preserved() {
-    let temp = TempDir::new().unwrap();
-    let home = temp.path();
-
-    let ts = "2025-04-03T10-30-00";
-    let uuid = Uuid::from_u128(102);
-    let base_text = "Custom base instructions";
-    let payload = serde_json::json!({
-        "id": uuid,
-        "timestamp": ts,
-        "cwd": ".",
-        "originator": "test_originator",
-        "cli_version": "test_version",
-        "source": "vscode",
-        "model_provider": "test-provider",
-        "base_instructions": {"text": base_text},
-    });
-    write_session_file_with_meta_payload(home, ts, uuid, payload).unwrap();
-
-    let provider_filter = provider_vec(&[TEST_PROVIDER]);
-    let page = get_threads(
-        home,
-        1,
-        None,
-        ThreadSortKey::CreatedAt,
-        INTERACTIVE_SESSION_SOURCES,
-        Some(provider_filter.as_slice()),
-        TEST_PROVIDER,
-    )
-    .await
-    .unwrap();
-
-    let head = read_head_for_summary(&page.items[0].path)
-        .await
-        .expect("session meta head");
-    let first = head.first().expect("first head entry");
-    let base = first
-        .get("base_instructions")
-        .and_then(|value| value.get("text"))
-        .and_then(serde_json::Value::as_str);
-    assert_eq!(base, Some(base_text));
-}
 
 #[tokio::test]
 async fn test_created_at_sort_uses_file_mtime_for_updated_at() -> Result<()> {

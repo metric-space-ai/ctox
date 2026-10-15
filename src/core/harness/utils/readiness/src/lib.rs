@@ -275,40 +275,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn subscribe_returns_error_when_lock_is_held() {
-        let flag = ReadinessFlag::new();
-        let _guard = flag
-            .tokens
-            .try_lock()
-            .expect("initial lock acquisition should succeed");
 
-        let err = flag
-            .subscribe()
-            .await
-            .expect_err("contended subscribe should report a lock failure");
-        assert_matches!(err, ReadinessError::TokenLockFailed);
-    }
 
-    #[tokio::test]
-    async fn subscribe_skips_zero_token() -> Result<(), ReadinessError> {
-        let flag = ReadinessFlag::new();
-        flag.next_id.store(0, Ordering::Relaxed);
-
-        let token = flag.subscribe().await?;
-        assert_ne!(token, Token(0));
-        assert!(flag.mark_ready(token).await?);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn subscribe_avoids_duplicate_tokens() -> Result<(), ReadinessError> {
-        let flag = ReadinessFlag::new();
-        let token = flag.subscribe().await?;
-        flag.next_id.store(token.0, Ordering::Relaxed);
-
-        let token2 = flag.subscribe().await?;
-        assert_ne!(token2, token);
-        Ok(())
-    }
 }

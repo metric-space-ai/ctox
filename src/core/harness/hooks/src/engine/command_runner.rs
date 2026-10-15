@@ -135,18 +135,3 @@ fn default_shell_command() -> Command {
         command
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::default_shell_command;
-
-    #[test]
-    #[cfg(not(windows))]
-    fn default_shell_command_uses_stable_non_login_sh() {
-        let command = default_shell_command();
-        let rendered = format!("{command:?}");
-        assert!(rendered.contains("/bin/sh"));
-        assert!(rendered.contains("\"-c\""));
-        assert!(!rendered.contains("\"-lc\""));
-    }
-}

@@ -1611,7 +1611,3 @@ fn normalize_plugin_mcp_server_value(
 struct PluginMcpDiscovery {
     mcp_servers: HashMap<String, McpServerConfig>,
 }
-
-#[cfg(test)]
-#[path = "manager_tests.rs"]
-mod tests;

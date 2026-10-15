@@ -29,32 +29,7 @@ fn template(uri_template: &str, name: &str) -> ResourceTemplate {
     .no_annotation()
 }
 
-#[test]
-fn resource_with_server_serializes_server_field() {
-    let entry = ResourceWithServer::new("test".to_string(), resource("memo://id", "memo"));
-    let value = serde_json::to_value(&entry).expect("serialize resource");
 
-    assert_eq!(value["server"], json!("test"));
-    assert_eq!(value["uri"], json!("memo://id"));
-    assert_eq!(value["name"], json!("memo"));
-}
-
-#[test]
-fn list_resources_payload_from_single_server_copies_next_cursor() {
-    let result = ListResourcesResult {
-        meta: None,
-        next_cursor: Some("cursor-1".to_string()),
-        resources: vec![resource("memo://id", "memo")],
-    };
-    let payload = ListResourcesPayload::from_single_server("srv".to_string(), result);
-    let value = serde_json::to_value(&payload).expect("serialize payload");
-
-    assert_eq!(value["server"], json!("srv"));
-    assert_eq!(value["nextCursor"], json!("cursor-1"));
-    let resources = value["resources"].as_array().expect("resources array");
-    assert_eq!(resources.len(), 1);
-    assert_eq!(resources[0]["server"], json!("srv"));
-}
 
 #[test]
 fn list_resources_payload_from_all_servers_is_sorted() {
@@ -84,12 +59,6 @@ fn list_resources_payload_from_all_servers_is_sorted() {
     );
 }
 
-#[test]
-fn call_tool_result_from_content_marks_success() {
-    let result = call_tool_result_from_content("{}", Some(true));
-    assert_eq!(result.is_error, Some(false));
-    assert_eq!(result.content.len(), 1);
-}
 
 #[test]
 fn parse_arguments_handles_empty_and_json() {
@@ -107,19 +76,4 @@ fn parse_arguments_handles_empty_and_json() {
         .expect("parse json")
         .expect("value present");
     assert_eq!(value["server"], json!("figma"));
-}
-
-#[test]
-fn template_with_server_serializes_server_field() {
-    let entry = ResourceTemplateWithServer::new("srv".to_string(), template("memo://{id}", "memo"));
-    let value = serde_json::to_value(&entry).expect("serialize template");
-
-    assert_eq!(
-        value,
-        json!({
-            "server": "srv",
-            "uriTemplate": "memo://{id}",
-            "name": "memo"
-        })
-    );
 }

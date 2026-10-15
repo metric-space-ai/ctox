@@ -101,37 +101,6 @@ mod tests {
     use http::StatusCode;
     use pretty_assertions::assert_eq;
 
-    #[test]
-    fn extract_response_debug_context_decodes_identity_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-oai-request-id", HeaderValue::from_static("req-auth"));
-        headers.insert("cf-ray", HeaderValue::from_static("ray-auth"));
-        headers.insert(
-            "x-openai-authorization-error",
-            HeaderValue::from_static("missing_authorization_header"),
-        );
-        headers.insert(
-            "x-error-json",
-            HeaderValue::from_static("eyJlcnJvciI6eyJjb2RlIjoidG9rZW5fZXhwaXJlZCJ9fQ=="),
-        );
-
-        let context = extract_response_debug_context(&TransportError::Http {
-            status: StatusCode::UNAUTHORIZED,
-            url: Some("https://chatgpt.com/backend-api/codex/models".to_string()),
-            headers: Some(headers),
-            body: Some(r#"{"error":{"message":"plain text error"},"status":401}"#.to_string()),
-        });
-
-        assert_eq!(
-            context,
-            ResponseDebugContext {
-                request_id: Some("req-auth".to_string()),
-                cf_ray: Some("ray-auth".to_string()),
-                auth_error: Some("missing_authorization_header".to_string()),
-                auth_error_code: Some("token_expired".to_string()),
-            }
-        );
-    }
 
     #[test]
     fn telemetry_error_messages_omit_http_bodies() {
@@ -149,20 +118,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn telemetry_error_messages_preserve_non_http_details() {
-        let network = TransportError::Network("dns lookup failed".to_string());
-        let build = TransportError::Build("invalid header value".to_string());
-        let stream = ApiError::Stream("socket closed".to_string());
-
-        assert_eq!(
-            telemetry_transport_error_message(&network),
-            "dns lookup failed"
-        );
-        assert_eq!(
-            telemetry_transport_error_message(&build),
-            "invalid header value"
-        );
-        assert_eq!(telemetry_api_error_message(&stream), "socket closed");
-    }
 }

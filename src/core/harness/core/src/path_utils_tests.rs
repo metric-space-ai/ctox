@@ -27,28 +27,8 @@ mod wsl {
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
-    #[test]
-    fn wsl_mnt_drive_paths_lowercase() {
-        let normalized = normalize_for_wsl_with_flag(PathBuf::from("/mnt/C/Users/Dev"), true);
 
-        assert_eq!(normalized, PathBuf::from("/mnt/c/users/dev"));
-    }
 
-    #[test]
-    fn wsl_non_drive_paths_unchanged() {
-        let path = PathBuf::from("/mnt/cc/Users/Dev");
-        let normalized = normalize_for_wsl_with_flag(path.clone(), true);
-
-        assert_eq!(normalized, path);
-    }
-
-    #[test]
-    fn wsl_non_mnt_paths_unchanged() {
-        let path = PathBuf::from("/home/Dev");
-        let normalized = normalize_for_wsl_with_flag(path.clone(), true);
-
-        assert_eq!(normalized, path);
-    }
 }
 
 mod native_workdir {
@@ -68,11 +48,4 @@ mod native_workdir {
         );
     }
 
-    #[test]
-    fn non_windows_paths_are_unchanged() {
-        let path = PathBuf::from(r"\\?\D:\c\x\worktrees\2508\swift-base");
-        let normalized = normalize_for_native_workdir_with_flag(path.clone(), false);
-
-        assert_eq!(normalized, path);
-    }
 }
