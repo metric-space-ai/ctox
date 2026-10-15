@@ -1,6 +1,9 @@
 import { migrateV3Upgrade } from './migrate-v3.mjs';
 import { CtoxError, cloneValue } from './values.mjs';
 export const IDB_VERSION = 5;
+export function storageError(error) {
+  return error?.name === 'QuotaExceededError' ? new CtoxError('quota', 'Local storage quota exceeded') : error;
+}
 export const STORES = {
   docs: ['collection', 'id'],
   meta: 'key',
@@ -98,7 +101,19 @@ export class IdbBackend {
     return { count: all.length, oldest_at: all.length ? Math.min(...all.map((e) => e.created_at)) : null };
   }
   read(fn) { return this.transaction(fn, 'readonly'); }
-  tx(fn) { return this.transaction(fn, 'readwrite'); }
+  async tx(fn) {
+    try { return await this.transaction(fn, 'readwrite'); }
+    catch (error) {
+      const failure=storageError(error);
+      if(failure?.code!=='quota' || !this.recoverQuota)throw failure;
+      // One bounded reclaim/retry; reclamation uses transaction() directly so
+      // a full disk cannot recurse through the same quota handler.
+      this.reclaiming ??= Promise.resolve().then(()=>this.recoverQuota()).finally(()=>{this.reclaiming=null;});
+      if(!await this.reclaiming)throw failure;
+      try { return await this.transaction(fn,'readwrite'); }
+      catch(retryError){throw storageError(retryError);}
+    }
+  }
   transaction(fn, mode) {
     return new Promise((resolve, reject) => {
       let t;

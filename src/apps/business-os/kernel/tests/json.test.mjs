@@ -27,3 +27,13 @@ test('snapshot accounting includes binary content and cycles rather than JSON-on
  assert.ok(snapshotBytes(cycle)>1024*1024);
  assert.ok(snapshotBytes({text:'ä'.repeat(600000)})>1024*1024);
 });
+
+test('cyclic merge patch rejects as invalid without corrupting saved data',async()=>{
+ const k=createStubKernel({instanceId:`patch-cycle-${process.pid}`,userId:'u',storage:'memory',multiTab:false});await k.ready;
+ try {
+  const api=k.appApi('notes','1');await api.put('notes',{id:'a',title:'keep'}).result;
+  const patch={title:'no'};patch.self=patch;const h=api.patch('notes','a',patch);
+  await assert.rejects(h.local,e=>e.code==='invalid' && e.path==='self');assert.equal((await h.result).reason,'invalid');
+  assert.equal(api.get('notes','a').get().title,'keep');assert.equal((await k.sim.outbox()).length,0);
+ } finally {await k.close();}
+});

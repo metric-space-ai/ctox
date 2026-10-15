@@ -220,7 +220,7 @@ export type Activation = {
   previous_ver?: string | null;
   state: ActivationState | null;
   error: string | null;
-  at_seq?: number;
+  at_seq?: string;
   updated_at: number;
 };
 export type ActivationEvent = { app_id: string; ver: string | null; state: ActivationState; activated_ver: string | null; error: string | null };
@@ -380,9 +380,9 @@ export interface StubSim {
   coreHead(): Promise<number>;
   /** Wartet, bis Outbox, Zustellung und Hintergrundaufgaben ruhen. */
   settle(timeoutMs?: number): Promise<true>;
-  readonly checkpoint: number;
+  readonly checkpoint: string;
   readonly lastVisible: { app_id: string; collections: string[]; at: number } | null;
-  readonly activationReports: Array<{ app_id: string; app_ver: string; state: ActivationState; at_seq: number; error?: string }>;
+  readonly activationReports: Array<{ app_id: string; app_ver: string; state: ActivationState; at_seq: string; error?: string }>;
   readonly navigations: RouteEvent[];
   readonly dialogs: Array<{ app_id: string; kind: 'dialog' | 'menu'; spec: unknown }>;
   readonly openedFiles: Array<{ app_id: string; ref: string }>;
@@ -423,6 +423,8 @@ export interface KernelOptions extends Omit<StubKernelOptions, 'instanceId'|'use
   locks?: LockManager;
   epoch?: string;
   scopeHash?: string;
+  /** Explicit identity-verified, stopped V3 source. Never guessed from database names. */
+  legacyDatabase?: {name:string;instanceId:string;userId:string;quiesced:true};
 }
 export interface Subscription {
   epoch: string; collection: string; scope_hash: string; gen: number;
@@ -462,3 +464,16 @@ export interface Kernel extends StubKernel {
   evict(collection:string):Promise<number>;
 }
 export declare function createKernel(options:KernelOptions):Kernel;
+
+export interface KernelLoader {
+  readonly kernel:Kernel;
+  readonly shellVersion:string|null;
+  settle():Promise<void>;
+  close():Promise<void>;
+}
+export interface LoaderOptions extends KernelOptions {
+  serviceWorker?: false | '/sw.js';
+  resolveShell?:(version:string,artifacts:ShellKernelApi['artifacts'])=>ShellModule|Promise<ShellModule>;
+}
+export declare function createLoader(options:LoaderOptions):Promise<KernelLoader>;
+export declare function artifactUrl(appId:string,version:string,path:string):string;

@@ -37,3 +37,17 @@ test('reader recovers a dropped result event from durable meta.local_seq',async(
  await reader.sim.reconcile();assert.equal((await h.result).status,'accepted');
  await leader.close();await reader.close();
 });
+
+test('backlogs sum across scopes and readers reconcile missed network state durably',async()=>{
+ const transport=new CapturingTransport(),opts={instanceId:`metrics-${process.pid}`,userId:'alice',storage:'memory',locks:testLocks};
+ const leader=createKernel({...opts,transport});await leader.ready;
+ const reader=createKernel({...opts,transport:new CapturingTransport()});await reader.ready;
+ try {
+  reader.sim.dropBroadcasts(true);
+  for(const [collection,backlog] of [['notes',7],['mail',3]])await transport.events.page({epoch:'1',scope_hash:'local',gen:1,collection,cursor_to:'1',complete:false,backlog,docs:[]});
+  transport.events.link({state:'offline',rtt_ms:80,relay:true});
+  for(let i=0;i<10 && reader.shell.metrics.get().backlog!==10;i++){await tick();await reader.sim.reconcile();}
+  assert.equal(leader.shell.metrics.get().backlog,10);assert.equal(reader.shell.metrics.get().backlog,10);
+  assert.equal(reader.shell.metrics.get().link.state,'offline');assert.equal(reader.shell.metrics.get().link.relay,true);
+ } finally {await reader.close();await leader.close();}
+});

@@ -1,3 +1,4 @@
+export {artifactUrl} from './artifact-url.mjs';
 import { createKernel } from './kernel.mjs';
 import { CtoxError } from './values.mjs';
 
@@ -42,8 +43,4 @@ export async function createLoader(options) {
     async settle(){await chain;},
     async close(){if(closed)return;closed=true;off();await chain;await kernel.close();}
   });
-}
-export function artifactUrl(appId, version, path) {
-  if(typeof path!=='string' || path.startsWith('/') || path.split('/').some(s=>s==='..'||s==='.'||s.includes('\\')) || /[?#\x00]/.test(path))throw new CtoxError('invalid','Invalid artifact path');
-  return `/~a/${encodeURIComponent(appId)}@${encodeURIComponent(version)}/${path.split('/').map(encodeURIComponent).join('/')}`;
 }

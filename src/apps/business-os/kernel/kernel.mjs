@@ -1,6 +1,7 @@
+import { artifactUrl, utf8Base64 } from './artifact-url.mjs';
 import { takeoverV3Database } from './migrate-v3.mjs';
 import { snapshotBytes } from './snapshot.mjs';
-import { evictCollection } from './cache.mjs';
+import { evictCollection, reclaimCache } from './cache.mjs';
 import { KernelTransport, decimalSeq, seqGreater, maxSeq, checkpointKey } from './transport.mjs';
 import { MemoryCoreTransport } from './fake-core.mjs';
 import { assertLeader, acquireGeneration } from './leader.mjs';
@@ -26,7 +27,9 @@ export function createKernel(opts = {}) {
   const fakeCore = transport instanceof MemoryCoreTransport ? transport : null;
   const subscriptions = new Set();
   const scopeCursors = new Map();
+  const scopeBacklog = new Map();
   const evicted = new Set();
+  const lastUsed = new Map();
   let transportConnected = false;
   const remountTimeoutMs = opts.remountTimeoutMs ?? 10000;
   const capabilities = new Set(opts.capabilities ?? []);
@@ -188,7 +191,7 @@ export function createKernel(opts = {}) {
     await t.put('meta', { key: 'local_seq', value: ls });
     return ls;
   }
-  const assertGen = (t) => assertLeader(t, isLeader, myGen);
+  const assertGen = (t) => assertLeader(t, isLeader && !closed, myGen);
   const getCore = async () => ({ head: fakeCore?.head ?? checkpoint });
 
   // ---- Metriken ----
@@ -199,7 +202,15 @@ export function createKernel(opts = {}) {
   }
   function netChanged() {
     notify('metrics');
-    if (isLeader) post({ type: 'net', link, backlog: (fakeCore?.backlog ?? 0) + extraBacklog });
+    if (isLeader) {
+      const state={link:{...link},backlog:(fakeCore?.backlog ?? 0)+extraBacklog};
+      post({type:'net',...state});
+      if(db && !closed)track(db.tx(async t=>{
+        await assertGen(t);const old=await t.get('meta','network');
+        if(jsonEq(old?.value,state))return;
+        await t.put('meta',{key:'network',value:state});await bumpLocalSeq(t);
+      }).catch(err=>{if(err instanceof StaleLeader)stepDown();else throw err;}));
+    }
   }
   let followerNet = null;
   const metricsLive = makeLive(['metrics'], () => {
@@ -260,6 +271,7 @@ export function createKernel(opts = {}) {
     for(const record of snapshot.docs) if((record.lseq??0)>known && mirrorPut(record))n++;
     for(const meta of snapshot.metas){
       if(meta.key==='checkpoint')setCheckpoint(meta.value);
+      if(meta.key==='network' && !isLeader){followerNet=meta.value;notify('metrics');}
       if(meta.key.startsWith('activation:'))applyActivationLocal(meta,false);
       if(meta.key.startsWith('result:') && waiters.has(meta.info.op_id))handleWriteResult(meta.info,meta.result);
     }
@@ -443,6 +455,7 @@ export function createKernel(opts = {}) {
       (err) => {
         if(entry && db && !closed)void db.get('docs',[entry.collection,id]).then(record=>mirrorPut(record??{...recompute(entry.collection,id,emptyBase(),[]),data:null}));
         waiters.delete(op_id);
+        if(err?.code==='quota')zoneReport(app.id,{level:'error',code:'storage.quota',text:'Local storage is full; the change was not saved'},'kernel');
         resolveResult({ status: 'rejected', reason: err instanceof CtoxError ? err.code : 'local_error' });
       },
     );
@@ -450,16 +463,9 @@ export function createKernel(opts = {}) {
     return handleFor(op_id, localDone, result, () => cancelWrite(op_id, () => entry));
   }
   function normalizeJsonPatch(p) {
-    if (!isPlainObject(p)) throw new CtoxError('invalid', 'patch muss ein Objekt sein', { path: '' });
-    if (p.id !== undefined) throw new CtoxError('invalid', 'id ist im patch nicht änderbar', { path: 'id' });
-    const keep = (v, path) => {
-      if (v === null) return null; // Merge-Patch: null = Feld entfernen
-      if (isPlainObject(v)) { const o = {}; for (const [k, x] of Object.entries(v)) if (x !== undefined) o[k] = keep(x, `${path}.${k}`); return o; }
-      return normalizeJson(v, path);
-    };
-    const o = {};
-    for (const [k, x] of Object.entries(p)) if (x !== undefined) o[k] = keep(x, k);
-    return o;
+    if(!isPlainObject(p))throw new CtoxError('invalid','patch must be an object',{path:''});
+    if(p.id!==undefined)throw new CtoxError('invalid','id cannot be changed by patch',{path:'id'});
+    return normalizeJson(p,'');
   }
   function cancelWrite(op_id, getEntry) {
     if (closed || loggedOut) return false;
@@ -555,15 +561,16 @@ export function createKernel(opts = {}) {
           await putDoc(t,rec); recs.push(rec);
         }
       }
-      await t.put('meta',{key,...scope,cursor_to:maxSeq(previous?.cursor_to ?? '0',cursor),complete:!!page.complete});
+      await t.put('meta',{key,...scope,cursor_to:maxSeq(previous?.cursor_to ?? '0',cursor),complete:seqGreater(previous?.cursor_to??'0',cursor)?previous.complete:!!page.complete});
       const cp=maxSeq((await t.get('meta','checkpoint'))?.value ?? '0',cursor);
       await t.put('meta',{key:'checkpoint',value:cp});
       return {recs,cp};
     }).catch(err => { if(err instanceof StaleLeader){stepDown();return null;} throw err; });
     if(!out)return;
     for(const rec of out.recs)mirrorPut(rec);
-    scopeCursors.set(page.collection,cursor);notify('checkpoint');
-    setCheckpoint(out.cp); extraBacklog=Number(page.backlog??0); netChanged();
+    scopeCursors.set(page.collection,maxSeq(scopeCursors.get(page.collection)??'0',cursor));notify('checkpoint');
+    scopeBacklog.set(checkpointKey(scope),Math.max(0,Number(page.backlog??0)));
+    setCheckpoint(out.cp); extraBacklog=[...scopeBacklog.values()].reduce((a,b)=>a+b,0); netChanged();
     post({type:'docs',keys:out.recs.map(r=>[r.collection,r.id]),checkpoint:out.cp});
   }
   async function receiveResult(message) {
@@ -819,12 +826,12 @@ export function createKernel(opts = {}) {
     if (!art) throw new CtoxError('not_found', `Einstiegsdatei ${manifest.entry} von ${key} nicht lokal`);
     let url, revoke = null;
     if (globalThis.navigator?.serviceWorker?.controller) {
-      url = `/~a/${encodeURIComponent(appId)}@${encodeURIComponent(ver)}/${manifest.entry.split('/').map(encodeURIComponent).join('/')}`;
+      url = artifactUrl(appId,ver,manifest.entry);
     } else if (typeof window !== 'undefined' && typeof URL.createObjectURL === 'function' && hasBlob) {
       url = URL.createObjectURL(new Blob([art.content], { type: 'text/javascript' }));
       revoke = url;
     } else {
-      url = `data:text/javascript;base64,${btoa(String.fromCharCode(...new TextEncoder().encode(art.content)))}`;
+      url = `data:text/javascript;base64,${utf8Base64(art.content)}`;
     }
     try {
       const mod = await import(/* @vite-ignore */ url);
@@ -877,13 +884,13 @@ export function createKernel(opts = {}) {
   async function remountOne(m, newVer) {
     const oldVer = m.ver;
     let snap;
-    try { snap = m.handle.snapshot ? await m.handle.snapshot() : undefined; } catch (e) {
+    try { snap = m.handle.snapshot ? await withTimeout(Promise.resolve().then(()=>m.handle.snapshot()),remountTimeoutMs) : undefined; } catch (e) {
       zoneReport(m.appId, { level: 'warn', code: 'app.snapshot_failed', text: `snapshot() warf: ${e?.message ?? e}` }, 'kernel');
     }
     snap = checkSnapshot(m.appId, snap);
     // §16.10: Snapshot vor dem Umschalten in window_state (IDB)
     await db.tx((t) => t.put('window_state', { key: `${m.appId}:${m.id}`, app_id: m.appId, mount_id: m.id, ver: oldVer, next_ver: newVer, snapshot: snap ?? null, at: Date.now() }));
-    try { await m.handle.unmount(); } catch (e) { console.error('[ctox-kernel] unmount', e); }
+    try { await withTimeout(Promise.resolve().then(()=>m.handle.unmount()),remountTimeoutMs); } catch (e) { console.error('[ctox-kernel] unmount', e); }
     try {
       const r = await withTimeout(mountVersion(m.root, m.appId, newVer, { restored: cloneValue(snap) }), remountTimeoutMs, (late) => { try { late.handle.unmount(); } catch { /* egal */ } });
       Object.assign(m, { ver: newVer, handle: r.handle, api: r.api });
@@ -1034,6 +1041,7 @@ export function createKernel(opts = {}) {
       query(collection, q = {}) {
         const cq = compileQuery(q);
         const ns = resolveNs(app, collection);
+        lastUsed.set(ns,Date.now());
         if(evicted.has(ns))track(subscribeCollection(ns));
         return makeLive([`c:${ns}`], () => {
           const m = mirror.get(ns);
@@ -1045,6 +1053,7 @@ export function createKernel(opts = {}) {
       },
       get(collection, id) {
         const ns = resolveNs(app, collection);
+        lastUsed.set(ns,Date.now());
         if(evicted.has(ns))track(subscribeCollection(ns));
         return makeLive([`c:${ns}`], () => withDefaults(app,collection,visible(mirrorGet(ns,id))));
       },
@@ -1289,7 +1298,7 @@ export function createKernel(opts = {}) {
       const prev = currentShell;
       let snap;
       if (prev?.stopShell) {
-        try { snap = await prev.stopShell(); } catch (e) {
+        try { snap = await withTimeout(Promise.resolve().then(()=>prev.stopShell()),remountTimeoutMs); } catch (e) {
           zoneReport('shell', { level: 'warn', code: 'shell.snapshot_failed', text: `stopShell() warf: ${e?.message ?? e}` }, 'kernel');
         }
       }
@@ -1304,7 +1313,7 @@ export function createKernel(opts = {}) {
       } catch (err) {
         // §10.1: defekte Shell → vorherige Shell-Version starten und Fehler melden
         zoneReport('shell', { level: 'error', code: 'shell.swap_failed', text: `Neue Shell startet nicht (${err?.message ?? err}); vorherige Shell läuft`, ref: null }, 'kernel');
-        if (prev) await prev.startShell(kernel, { restored: cloneValue(snap) });
+        if (prev) await withTimeout(Promise.resolve().then(()=>prev.startShell(kernel, { restored: cloneValue(snap) })),remountTimeoutMs);
         return { swapped: false, restored: snap, error: String(err?.message ?? err) };
       }
     },
@@ -1413,6 +1422,15 @@ export function createKernel(opts = {}) {
   (async () => {
     db = await openBackend(dbName, opts.storage);
     db.onVersionChange = () => { void close(); };
+    db.recoverQuota = async () => {
+      if(!isLeader || closed)return false;
+      const reclaimed=await reclaimCache(db,assertGen,lastUsed,SYSTEM_COLLECTIONS);
+      for(const row of reclaimed.records)mirrorPut(row);
+      if(reclaimed.collection){evicted.add(reclaimed.collection);scopeCursors.delete(reclaimed.collection);subscriptions.delete(reclaimed.collection);}
+      post({type:'docs',keys:reclaimed.records.map(row=>[row.collection,row.id])});
+      zoneReport('kernel',{level:reclaimed.reclaimed?'warn':'error',code:'storage.quota',text:reclaimed.reclaimed?'Local cache reclaimed after storage quota was reached':'Storage full; pending input is protected'},'kernel');
+      return reclaimed.reclaimed;
+    };
     await db.tx(async t=>{
       const identity=(await t.get('meta','identity'))?.value;
       if(identity && (identity.instanceId!==instanceId || identity.userId!==userId))throw new CtoxError('forbidden','Database belongs to another identity');

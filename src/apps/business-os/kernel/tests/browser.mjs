@@ -82,7 +82,22 @@ try{
   return leader;
  });
  await reader.screenshot({path:resolve(out,'03-leader-takeover.png')});
+ const quota=await reader.evaluate(async()=>{
+  const original=IDBObjectStore.prototype.put;let injected=0;
+  IDBObjectStore.prototype.put=function(value,...rest){
+   if(this.name==='outbox' && value.id==='quota-retry' && injected++===0)throw new DOMException('injected full disk','QuotaExceededError');
+   return original.call(this,value,...rest);
+  };
+  try {
+   const h=kernel.appApi('notes','1').put('notes',{id:'quota-retry',title:'saved after reclaim'});await h.local;
+   const result=await h.result;if(result.status!=='accepted')throw Error('quota retry not accepted');
+   if(!kernel.statusZone.get().some(e=>e.code==='storage.quota'))throw Error('quota missing status zone');
+   document.querySelector('#result').textContent='PASS: real IDB transaction abort on quota; protected LRU reclaim; one retry accepted';
+   return {injected,accepted:true,statusReported:true};
+  } finally {IDBObjectStore.prototype.put=original;}
+ });
+ await reader.screenshot({path:resolve(out,'04-quota-reclaim.png')});
  await reader.evaluate(()=>kernel.logout({deleteData:true}));
  if(errors.length)throw Error(errors.join('\n'));
- const result={pass:true,external,first,reopened,follower,takeover,errors};await writeFile(resolve(out,'result.json'),JSON.stringify(result,null,2));console.log('KERNEL_BROWSER '+JSON.stringify(result));
+ const result={pass:true,external,first,reopened,follower,takeover,quota,errors};await writeFile(resolve(out,'result.json'),JSON.stringify(result,null,2));console.log('KERNEL_BROWSER '+JSON.stringify(result));
 }finally{await browser?.close();await new Promise(r=>server.close(r));}
