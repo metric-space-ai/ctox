@@ -460,6 +460,7 @@ dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "ctox-store",
  "dashmap",
  "flate2",
  "futures",
@@ -494,6 +495,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "uuid",
 ]
