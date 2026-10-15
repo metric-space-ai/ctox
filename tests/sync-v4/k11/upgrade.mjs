@@ -22,7 +22,7 @@ export function requireSandbox(proof){
  }
  if(process.getuid()===0)throw Error('Installer runs as the fixture owner, not root');
 }
-export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,roundtrip=false}){
+export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,roundtrip=false,resumeRolledBack=false}){
  requireSandbox(proof);if(!tmpdir||!fs.statSync(tmpdir).isDirectory())throw Error('Canonical lane TMPDIR required');const {before,after}=verifiedUpgrade(oldReceipt,newReceipt,root);
  const installRoot=join(root,'managed'),stateRoot=join(root,'runtime');
  const home=join(root,'installer-home');fs.mkdirSync(home,{recursive:true,mode:0o700});
@@ -30,11 +30,17 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
  const releases=join(installRoot,'releases');fs.mkdirSync(releases,{recursive:true});
  // Initial fixture layout only. The transition below is the actual supported
  // update apply path, including its own backup, maintenance and link switch.
- const initial=join(releases,oldRelease);fs.mkdirSync(initial);
- for(const part of ['src','contracts','Cargo.toml'])fs.symlinkSync(join(before.source,part),join(initial,part));
- fs.mkdirSync(join(initial,'bin'));fs.copyFileSync(before.binary,join(initial,'bin/ctox'));
- fs.symlinkSync(stateRoot,join(initial,'runtime'));fs.symlinkSync(initial,join(installRoot,'current'));
- fs.writeFileSync(join(installRoot,'install_manifest.json'),JSON.stringify({schema_version:1,install_root:installRoot,state_root:stateRoot,current_release:oldRelease,previous_release:null,adopted_from:null,release_channel:null,updated_at:new Date().toISOString()}));
+ const initial=join(releases,oldRelease);
+ if(resumeRolledBack){
+  const state=JSON.parse(fs.readFileSync(join(stateRoot,'update_state.json')));
+  if(state.phase!=='rolled_back'||fs.realpathSync(join(installRoot,'current'))!==initial||hash(fs.readFileSync(join(initial,'bin/ctox')))!==before.binarySha256)throw Error('Recovery must start from the actual verified rolled-back state');
+ }else{
+  fs.mkdirSync(initial);
+  for(const part of ['src','contracts','Cargo.toml'])fs.symlinkSync(join(before.source,part),join(initial,part));
+  fs.mkdirSync(join(initial,'bin'));fs.copyFileSync(before.binary,join(initial,'bin/ctox'));
+  fs.symlinkSync(stateRoot,join(initial,'runtime'));fs.symlinkSync(initial,join(installRoot,'current'));
+  fs.writeFileSync(join(installRoot,'install_manifest.json'),JSON.stringify({schema_version:1,install_root:installRoot,state_root:stateRoot,current_release:oldRelease,previous_release:null,adopted_from:null,release_channel:null,updated_at:new Date().toISOString()}));
+ }
  const bundle=join(output,'bundle');fs.mkdirSync(bundle);
  const manifest=fs.readFileSync(join(after.source,'contracts/binary_bundle_manifest.txt'),'utf8');
  for(const path of ['src/apps/business-os','contracts']){const dest=join(bundle,path);fs.mkdirSync(resolve(dest,'..'),{recursive:true});fs.cpSync(join(after.source,path),dest,{recursive:true});}
@@ -72,7 +78,7 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
   const code=await new Promise((r,j)=>{p.once('exit',r);p.once('error',j);});clearTimeout(timer);
   calls.push({args,startedAtMs:at,durationMs:Date.now()-at,code});if(code!==0)throw Error('Real installer CLI failed: '+args.join(' ')+' exit '+code);
  };
- const record={before:{revision:before.revision,binarySha256:before.binarySha256},after:{revision:after.revision,binarySha256:after.binarySha256},stateRoot,archiveSha256,calls,serviceCalls,requests,installerExecuted:false,migrationExecuted:false};
+ const record={before:{revision:before.revision,binarySha256:before.binarySha256},after:{revision:after.revision,binarySha256:after.binarySha256},stateRoot,archiveSha256,calls,serviceCalls,requests,resumeRolledBack,installerExecuted:false,migrationExecuted:false};
  try{
   await cli(['update','status']);
   await cli(['update','channel','set-github','--repo','e2e/fixture','--api-base',base]);
