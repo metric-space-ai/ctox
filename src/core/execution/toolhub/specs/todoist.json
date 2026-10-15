@@ -1,0 +1,1700 @@
+{
+  "schema": "ctox.adapter-spec/v1",
+  "slug": "todoist",
+  "version": "1.0.0",
+  "docs": [
+    "https://developer.todoist.com/api/v1/"
+  ],
+  "notes": "Ported from the compiled adapter src/toolkits/todoist.rs (Activepieces piece-todoist, MIT) as a hot-plug proof.",
+  "api_base": "https://api.todoist.com/api/v1",
+  "allowed_hosts": [
+    "api.todoist.com"
+  ],
+  "replaces_builtin": true,
+  "name": "Todoist",
+  "description": {
+    "de": "Aufgaben, Projekte, Abschnitte, Labels und Kommentare in Todoist lesen und bearbeiten.",
+    "en": "Read and change tasks, projects, sections, labels and comments in Todoist."
+  },
+  "auth_schemes": [
+    {
+      "type": "oauth2",
+      "authorize_url": "https://todoist.com/oauth/authorize",
+      "token_url": "https://todoist.com/oauth/access_token",
+      "default_scopes": [
+        "data:read_write"
+      ],
+      "pkce": false,
+      "scope_separator": " ",
+      "refreshable": true,
+      "extra_authorize_params": []
+    },
+    {
+      "type": "bearer"
+    }
+  ],
+  "actions": [
+    {
+      "slug": "TODOIST_GET_CURRENT_USER",
+      "title": {
+        "de": "Aktuellen Nutzer lesen",
+        "en": "Get current user"
+      },
+      "description": {
+        "de": "Liest das Profil des angemeldeten Todoist-Kontos.",
+        "en": "Reads the profile of the authenticated Todoist account."
+      },
+      "risk": "read",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/user"
+      }
+    },
+    {
+      "slug": "TODOIST_LIST_PROJECTS",
+      "title": {
+        "de": "Projekte auflisten",
+        "en": "List projects"
+      },
+      "description": {
+        "de": "Listet alle aktiven Projekte des Kontos.",
+        "en": "Lists every active project of the account."
+      },
+      "risk": "read",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "`next_cursor` of a previous call, to fetch the next page.",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects",
+        "query": {
+          "cursor": {
+            "arg": "cursor"
+          }
+        }
+      },
+      "response": {
+        "mode": "list",
+        "pointer": "/results",
+        "as": "projects"
+      }
+    },
+    {
+      "slug": "TODOIST_GET_PROJECT",
+      "title": {
+        "de": "Projekt lesen",
+        "en": "Get project"
+      },
+      "description": {
+        "de": "Liest ein einzelnes Projekt mit allen Feldern.",
+        "en": "Reads one project with all of its fields."
+      },
+      "risk": "read",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "project_id": {
+            "description": "Projekt-ID (aus TODOIST_LIST_PROJECTS)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/{project_id}"
+      }
+    },
+    {
+      "slug": "TODOIST_LIST_ARCHIVED_PROJECTS",
+      "title": {
+        "de": "Archivierte Projekte auflisten",
+        "en": "List archived projects"
+      },
+      "description": {
+        "de": "Listet die archivierten Projekte des Kontos.",
+        "en": "Lists the archived projects of the account."
+      },
+      "risk": "read",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "`next_cursor` of a previous call, to fetch the next page.",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/archived",
+        "query": {
+          "cursor": {
+            "arg": "cursor"
+          }
+        }
+      },
+      "response": {
+        "mode": "list",
+        "pointer": "/results",
+        "as": "projects"
+      }
+    },
+    {
+      "slug": "TODOIST_LIST_SECTIONS",
+      "title": {
+        "de": "Abschnitte auflisten",
+        "en": "List sections"
+      },
+      "description": {
+        "de": "Listet Abschnitte, optional auf ein Projekt beschränkt.",
+        "en": "Lists sections, optionally scoped to one project."
+      },
+      "risk": "read",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "`next_cursor` of a previous call, to fetch the next page.",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "Nur Abschnitte dieses Projekts; leer = alle",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/sections",
+        "query": {
+          "project_id": {
+            "arg": "project_id"
+          },
+          "cursor": {
+            "arg": "cursor"
+          }
+        }
+      },
+      "response": {
+        "mode": "list",
+        "pointer": "/results",
+        "as": "sections"
+      }
+    },
+    {
+      "slug": "TODOIST_GET_SECTION",
+      "title": {
+        "de": "Abschnitt lesen",
+        "en": "Get section"
+      },
+      "description": {
+        "de": "Liest einen einzelnen Abschnitt.",
+        "en": "Reads one section."
+      },
+      "risk": "read",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "section_id": {
+            "description": "Abschnitts-ID (aus TODOIST_LIST_SECTIONS)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "section_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/sections/{section_id}"
+      }
+    },
+    {
+      "slug": "TODOIST_LIST_ARCHIVED_SECTIONS",
+      "title": {
+        "de": "Archivierte Abschnitte auflisten",
+        "en": "List archived sections"
+      },
+      "description": {
+        "de": "Listet die archivierten Abschnitte eines Projekts.",
+        "en": "Lists the archived sections of one project."
+      },
+      "risk": "read",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "`next_cursor` of a previous call, to fetch the next page.",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "Projekt-ID der archivierten Abschnitte",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/sections/archived",
+        "query": {
+          "project_id": {
+            "arg": "project_id",
+            "required": true
+          },
+          "cursor": {
+            "arg": "cursor"
+          }
+        }
+      },
+      "response": {
+        "mode": "list",
+        "pointer": "/results",
+        "as": "sections"
+      }
+    },
+    {
+      "slug": "TODOIST_LIST_LABELS",
+      "title": {
+        "de": "Labels auflisten",
+        "en": "List labels"
+      },
+      "description": {
+        "de": "Listet die persönlichen Labels des Kontos.",
+        "en": "Lists the personal labels of the account."
+      },
+      "risk": "read",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "`next_cursor` of a previous call, to fetch the next page.",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/labels",
+        "query": {
+          "cursor": {
+            "arg": "cursor"
+          }
+        }
+      },
+      "response": {
+        "mode": "list",
+        "pointer": "/results",
+        "as": "labels"
+      }
+    },
+    {
+      "slug": "TODOIST_GET_LABEL",
+      "title": {
+        "de": "Label lesen",
+        "en": "Get label"
+      },
+      "description": {
+        "de": "Liest ein einzelnes Label.",
+        "en": "Reads one label."
+      },
+      "risk": "read",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "label_id": {
+            "description": "Label-ID (aus TODOIST_LIST_LABELS)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/labels/{label_id}"
+      }
+    },
+    {
+      "slug": "TODOIST_LIST_SHARED_LABELS",
+      "title": {
+        "de": "Geteilte Labels auflisten",
+        "en": "List shared labels"
+      },
+      "description": {
+        "de": "Listet die Label-Namen, die mit anderen Konten geteilt sind.",
+        "en": "Lists the label names shared with other accounts."
+      },
+      "risk": "read",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "omit_personal": {
+            "description": "Persönliche Labels aus der Liste entfernen",
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/labels/shared",
+        "query": {
+          "omit_personal": {
+            "arg": "omit_personal"
+          }
+        }
+      },
+      "response": {
+        "mode": "list",
+        "pointer": "/results",
+        "as": "shared_labels"
+      }
+    },
+    {
+      "slug": "TODOIST_GET_TASK",
+      "title": {
+        "de": "Aufgabe lesen",
+        "en": "Get task"
+      },
+      "description": {
+        "de": "Liest den aktuellen Datensatz einer Aufgabe.",
+        "en": "Reads the current record of one task."
+      },
+      "risk": "read",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "description": "Aufgaben-ID (aus TODOIST_FILTER_TASKS)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/tasks/{task_id}"
+      }
+    },
+    {
+      "slug": "TODOIST_FILTER_TASKS",
+      "title": {
+        "de": "Aufgaben filtern",
+        "en": "Filter tasks"
+      },
+      "description": {
+        "de": "Sucht aktive Aufgaben mit Todoists Filter-Syntax, z. B. \"today | overdue\".",
+        "en": "Searches active tasks with Todoist filter syntax, e.g. \"today | overdue\"."
+      },
+      "risk": "read",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "`next_cursor` of a previous call, to fetch the next page.",
+            "type": "string"
+          },
+          "lang": {
+            "description": "IETF-Sprachcode für Datumswörter, z. B. en oder de",
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "description": "Aufgaben pro Seite (1-200)",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "query": {
+            "description": "Filter-Query, z. B. \"today | overdue\", \"p1 & !#Work\", \"search: meeting\"",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/tasks/filter",
+        "query": {
+          "query": {
+            "arg": "query",
+            "required": true
+          },
+          "lang": {
+            "arg": "lang"
+          },
+          "limit": {
+            "arg": "limit",
+            "clamp": [
+              1,
+              200
+            ]
+          },
+          "cursor": {
+            "arg": "cursor"
+          }
+        }
+      },
+      "response": {
+        "mode": "list",
+        "pointer": "/results",
+        "as": "tasks"
+      }
+    },
+    {
+      "slug": "TODOIST_LIST_COMPLETED_TASKS",
+      "title": {
+        "de": "Erledigte Aufgaben (Erledigt-am) auflisten",
+        "en": "List completed tasks (by completion date)"
+      },
+      "description": {
+        "de": "Listet Aufgaben, die zwischen `since` und `until` abgehakt wurden.",
+        "en": "Lists tasks checked off between `since` and `until`."
+      },
+      "risk": "read",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "`next_cursor` of a previous call, to fetch the next page.",
+            "type": "string"
+          },
+          "filter_query": {
+            "description": "Optionaler Todoist-Filter, gleiche Syntax wie TODOIST_FILTER_TASKS",
+            "type": "string"
+          },
+          "limit": {
+            "default": 200,
+            "description": "Aufgaben pro Seite (1-200)",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "parent_id": {
+            "description": "Nur erledigte Teilaufgaben dieser Elternaufgabe",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "Nur erledigte Aufgaben dieses Projekts",
+            "type": "string"
+          },
+          "section_id": {
+            "description": "Nur erledigte Aufgaben dieses Abschnitts",
+            "type": "string"
+          },
+          "since": {
+            "description": "Start des Fensters, z. B. \"2026-06-01\" oder RFC3339",
+            "type": "string"
+          },
+          "until": {
+            "description": "Ende des Fensters, z. B. \"2026-06-27\" oder RFC3339",
+            "type": "string"
+          }
+        },
+        "required": [
+          "since",
+          "until"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/tasks/completed/by_completion_date",
+        "query": {
+          "since": {
+            "arg": "since",
+            "trim": true,
+            "required": true
+          },
+          "until": {
+            "arg": "until",
+            "trim": true,
+            "required": true
+          },
+          "project_id": {
+            "arg": "project_id"
+          },
+          "section_id": {
+            "arg": "section_id"
+          },
+          "parent_id": {
+            "arg": "parent_id"
+          },
+          "filter_query": {
+            "arg": "filter_query"
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 200,
+            "clamp": [
+              1,
+              200
+            ]
+          },
+          "cursor": {
+            "arg": "cursor"
+          }
+        }
+      },
+      "response": {
+        "mode": "list",
+        "pointer": "/results",
+        "as": "tasks"
+      }
+    },
+    {
+      "slug": "TODOIST_LIST_COMPLETED_TASKS_BY_DUE_DATE",
+      "title": {
+        "de": "Erledigte Aufgaben (Fällig-am) auflisten",
+        "en": "List completed tasks (by due date)"
+      },
+      "description": {
+        "de": "Listet erledigte Aufgaben, deren Fälligkeitsdatum im Zeitfenster liegt.",
+        "en": "Lists completed tasks whose due date falls inside the window."
+      },
+      "risk": "read",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "`next_cursor` of a previous call, to fetch the next page.",
+            "type": "string"
+          },
+          "filter_query": {
+            "description": "Optionaler Todoist-Filter, gleiche Syntax wie TODOIST_FILTER_TASKS",
+            "type": "string"
+          },
+          "limit": {
+            "default": 200,
+            "description": "Aufgaben pro Seite (1-200)",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "parent_id": {
+            "description": "Nur erledigte Teilaufgaben dieser Elternaufgabe",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "Nur erledigte Aufgaben dieses Projekts",
+            "type": "string"
+          },
+          "section_id": {
+            "description": "Nur erledigte Aufgaben dieses Abschnitts",
+            "type": "string"
+          },
+          "since": {
+            "description": "Start des Fensters, z. B. \"2026-06-01\" oder RFC3339",
+            "type": "string"
+          },
+          "until": {
+            "description": "Ende des Fensters, z. B. \"2026-06-27\" oder RFC3339",
+            "type": "string"
+          }
+        },
+        "required": [
+          "since",
+          "until"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/tasks/completed/by_due_date",
+        "query": {
+          "since": {
+            "arg": "since",
+            "trim": true,
+            "required": true
+          },
+          "until": {
+            "arg": "until",
+            "trim": true,
+            "required": true
+          },
+          "project_id": {
+            "arg": "project_id"
+          },
+          "section_id": {
+            "arg": "section_id"
+          },
+          "parent_id": {
+            "arg": "parent_id"
+          },
+          "filter_query": {
+            "arg": "filter_query"
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 200,
+            "clamp": [
+              1,
+              200
+            ]
+          },
+          "cursor": {
+            "arg": "cursor"
+          }
+        }
+      },
+      "response": {
+        "mode": "list",
+        "pointer": "/results",
+        "as": "tasks"
+      }
+    },
+    {
+      "slug": "TODOIST_LIST_ACTIVITY_LOG",
+      "title": {
+        "de": "Aktivitätsprotokoll auflisten",
+        "en": "List activity log"
+      },
+      "description": {
+        "de": "Liest das Ereignisprotokoll, optional nach Objekt, Ereignis und Datum gefiltert.",
+        "en": "Reads the event log, optionally filtered by object, event and date."
+      },
+      "risk": "read",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "`next_cursor` of a previous call, to fetch the next page.",
+            "type": "string"
+          },
+          "date_from": {
+            "description": "Nur Ereignisse ab diesem ISO-8601-Zeitpunkt",
+            "type": "string"
+          },
+          "date_to": {
+            "description": "Nur Ereignisse vor diesem ISO-8601-Zeitpunkt",
+            "type": "string"
+          },
+          "event_type": {
+            "description": "Nur ein Ereignistyp, z. B. added, updated, completed, deleted",
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "description": "Ereignisse pro Seite (1-100)",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "object_id": {
+            "description": "Nur dieses Objekt; gehört zu `object_type`",
+            "type": "string"
+          },
+          "object_type": {
+            "description": "Nur ein Objekttyp",
+            "enum": [
+              "project",
+              "item",
+              "note"
+            ],
+            "type": "string"
+          },
+          "parent_item_id": {
+            "description": "Nur eine Aufgabe samt ihrer Kommentare",
+            "type": "string"
+          },
+          "parent_project_id": {
+            "description": "Nur ein Projekt samt Aufgaben und Kommentaren",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/activities",
+        "query": {
+          "object_type": {
+            "arg": "object_type"
+          },
+          "event_type": {
+            "arg": "event_type"
+          },
+          "object_id": {
+            "arg": "object_id"
+          },
+          "parent_project_id": {
+            "arg": "parent_project_id"
+          },
+          "parent_item_id": {
+            "arg": "parent_item_id"
+          },
+          "date_from": {
+            "arg": "date_from"
+          },
+          "date_to": {
+            "arg": "date_to"
+          },
+          "limit": {
+            "arg": "limit",
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "cursor": {
+            "arg": "cursor"
+          }
+        }
+      },
+      "response": {
+        "mode": "list",
+        "pointer": "/results",
+        "as": "events"
+      }
+    },
+    {
+      "slug": "TODOIST_LIST_COMMENTS",
+      "title": {
+        "de": "Kommentare auflisten",
+        "en": "List comments"
+      },
+      "description": {
+        "de": "Listet alle Kommentare einer Aufgabe oder eines Projekts.",
+        "en": "Lists every comment of one task or one project."
+      },
+      "risk": "read",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "`next_cursor` of a previous call, to fetch the next page.",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "Nur Kommentare dieses Projekts; leer = Aufgabe",
+            "type": "string"
+          },
+          "task_id": {
+            "description": "Nur Kommentare dieser Aufgabe; leer = Projekt",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/comments",
+        "query": {
+          "task_id": {
+            "arg": "task_id"
+          },
+          "project_id": {
+            "arg": "project_id"
+          },
+          "cursor": {
+            "arg": "cursor"
+          }
+        },
+        "constraints": [
+          {
+            "kind": "at_most_one",
+            "args": [
+              "task_id",
+              "project_id"
+            ],
+            "message": "provide exactly one of `task_id` or `project_id`, not both"
+          },
+          {
+            "kind": "at_least_one",
+            "args": [
+              "task_id",
+              "project_id"
+            ],
+            "message": "provide exactly one of `task_id` or `project_id`"
+          }
+        ]
+      },
+      "response": {
+        "mode": "list",
+        "pointer": "/results",
+        "as": "comments"
+      }
+    },
+    {
+      "slug": "TODOIST_GET_COMMENT",
+      "title": {
+        "de": "Kommentar lesen",
+        "en": "Get comment"
+      },
+      "description": {
+        "de": "Liest einen einzelnen Kommentar.",
+        "en": "Reads one comment."
+      },
+      "risk": "read",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "comment_id": {
+            "description": "Kommentar-ID (aus TODOIST_LIST_COMMENTS)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "comment_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/comments/{comment_id}"
+      }
+    },
+    {
+      "slug": "TODOIST_CREATE_TASK",
+      "title": {
+        "de": "Aufgabe anlegen",
+        "en": "Create task"
+      },
+      "description": {
+        "de": "Legt eine Aufgabe in einem Projekt, Abschnitt oder dem Posteingang an; braucht --confirm.",
+        "en": "Creates a task in a project, a section or the inbox; requires --confirm."
+      },
+      "risk": "write",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "description": "Titel der Aufgabe; Markdown und Links sind erlaubt",
+            "type": "string"
+          },
+          "description": {
+            "description": "Zusatzdetails unter dem Titel; Markdown ist erlaubt",
+            "type": "string"
+          },
+          "due_date": {
+            "description": "YYYY-MM-DD, ISO-Zeitstempel oder Wörter wie \"tomorrow 5pm\"",
+            "type": "string"
+          },
+          "labels": {
+            "description": "Namen persönlicher oder geteilter Labels",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "priority": {
+            "default": 1,
+            "description": "1 = normal, 4 = dringend (Todoist zeigt 4 als P1)",
+            "maximum": 4,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Zielprojekt; leer = Posteingang",
+            "type": "string"
+          },
+          "section_id": {
+            "description": "Zielabschnitt innerhalb des Projekts",
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/tasks",
+        "body": {
+          "json": {
+            "content": {
+              "arg": "content",
+              "trim": true,
+              "required": true
+            },
+            "project_id": {
+              "arg": "project_id"
+            },
+            "description": {
+              "arg": "description"
+            },
+            "section_id": {
+              "arg": "section_id"
+            },
+            "labels": {
+              "arg": "labels",
+              "type": "string_list"
+            },
+            "priority": {
+              "arg": "priority"
+            },
+            "$switch_format": {
+              "arg": "due_date",
+              "date": "due_date",
+              "date-time": "due_datetime",
+              "other": "due_string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "TODOIST_UPDATE_TASK",
+      "title": {
+        "de": "Aufgabe ändern",
+        "en": "Update task"
+      },
+      "description": {
+        "de": "Ändert nur die übergebenen Felder einer Aufgabe; braucht --confirm.",
+        "en": "Changes only the fields you pass on a task; requires --confirm."
+      },
+      "risk": "write",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "description": "Neuer Titel",
+            "type": "string"
+          },
+          "description": {
+            "description": "Neue Beschreibung; Markdown ist erlaubt",
+            "type": "string"
+          },
+          "due_date": {
+            "description": "YYYY-MM-DD, ISO-Zeitstempel oder Wörter wie \"tomorrow 5pm\"",
+            "type": "string"
+          },
+          "labels": {
+            "description": "Ersetzt alle Labels der Aufgabe; leer = unverändert",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "priority": {
+            "default": 1,
+            "description": "1 = normal, 4 = dringend",
+            "maximum": 4,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "task_id": {
+            "description": "Aufgaben-ID (aus TODOIST_FILTER_TASKS)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/tasks/{task_id}",
+        "body": {
+          "json": {
+            "content": {
+              "arg": "content"
+            },
+            "description": {
+              "arg": "description"
+            },
+            "labels": {
+              "arg": "labels",
+              "type": "string_list"
+            },
+            "priority": {
+              "arg": "priority"
+            },
+            "$switch_format": {
+              "arg": "due_date",
+              "date": "due_date",
+              "date-time": "due_datetime",
+              "other": "due_string"
+            }
+          }
+        },
+        "nonempty_body": "nothing to update: pass at least one field to change"
+      }
+    },
+    {
+      "slug": "TODOIST_COMPLETE_TASK",
+      "title": {
+        "de": "Aufgabe abschließen",
+        "en": "Complete task"
+      },
+      "description": {
+        "de": "Hakt eine Aufgabe ab; wiederkehrende Aufgaben rücken zum nächsten Termin; braucht --confirm.",
+        "en": "Closes a task; recurring tasks advance to their next date; requires --confirm."
+      },
+      "risk": "write",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "description": "Aufgaben-ID (aus TODOIST_FILTER_TASKS)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/tasks/{task_id}/close"
+      },
+      "response": {
+        "mode": "merge_success",
+        "pointer": ""
+      }
+    },
+    {
+      "slug": "TODOIST_REOPEN_TASK",
+      "title": {
+        "de": "Aufgabe wieder öffnen",
+        "en": "Reopen task"
+      },
+      "description": {
+        "de": "Macht eine abgehakte Aufgabe wieder aktiv; braucht --confirm.",
+        "en": "Restores a completed task to the active list; requires --confirm."
+      },
+      "risk": "write",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "description": "ID der erledigten Aufgabe",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/tasks/{task_id}/reopen"
+      },
+      "response": {
+        "mode": "merge_success",
+        "pointer": ""
+      }
+    },
+    {
+      "slug": "TODOIST_MOVE_TASK",
+      "title": {
+        "de": "Aufgabe verschieben",
+        "en": "Move task"
+      },
+      "description": {
+        "de": "Verschiebt eine Aufgabe in ein anderes Projekt, einen anderen Abschnitt oder unter eine Elternaufgabe; braucht --confirm.",
+        "en": "Moves a task to another project, section or parent task; requires --confirm."
+      },
+      "risk": "write",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "parent_id": {
+            "description": "ID der neuen Elternaufgabe",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "Zielprojekt",
+            "type": "string"
+          },
+          "section_id": {
+            "description": "Zielabschnitt",
+            "type": "string"
+          },
+          "task_id": {
+            "description": "Aufgaben-ID (aus TODOIST_FILTER_TASKS)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/tasks/{task_id}/move",
+        "body": {
+          "json": {
+            "project_id": {
+              "arg": "project_id"
+            },
+            "section_id": {
+              "arg": "section_id"
+            },
+            "parent_id": {
+              "arg": "parent_id"
+            }
+          }
+        },
+        "nonempty_body": "move task requires at least one destination: `project_id`, `section_id` or `parent_id`"
+      }
+    },
+    {
+      "slug": "TODOIST_DELETE_TASK",
+      "title": {
+        "de": "Aufgabe löschen",
+        "en": "Delete task"
+      },
+      "description": {
+        "de": "Löscht eine Aufgabe endgültig; braucht --confirm.",
+        "en": "Permanently deletes a task; requires --confirm."
+      },
+      "risk": "destructive",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "description": "Aufgaben-ID (aus TODOIST_FILTER_TASKS)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "DELETE",
+        "path": "/tasks/{task_id}"
+      },
+      "response": {
+        "mode": "const",
+        "value": {
+          "success": true,
+          "deleted": true
+        }
+      }
+    },
+    {
+      "slug": "TODOIST_QUICK_ADD_TASK",
+      "title": {
+        "de": "Aufgabe im Schnelleingabe anlegen",
+        "en": "Quick add task"
+      },
+      "description": {
+        "de": "Legt eine Aufgabe aus einem natürlichen Satz an, z. B. \"Bericht bis Freitag #Arbeit p2\"; braucht --confirm.",
+        "en": "Creates a task from a natural-language sentence, e.g. \"Submit report by Friday #Work p2\"; requires --confirm."
+      },
+      "risk": "write",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "auto_reminder": {
+            "description": "Standarderinnerung ergänzen, wenn eine Uhrzeit gesetzt ist",
+            "type": "boolean"
+          },
+          "note": {
+            "description": "Optionale Notiz am erstellen Task",
+            "type": "string"
+          },
+          "reminder": {
+            "description": "Optionale Erinnerung in Worten, z. B. \"tomorrow at 9am\"",
+            "type": "string"
+          },
+          "text": {
+            "description": "Text mit Inline-Syntax: #Projekt, @Label, p1-p4, Datumsangaben",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/tasks/quick",
+        "body": {
+          "json": {
+            "text": {
+              "arg": "text",
+              "trim": true,
+              "required": true
+            },
+            "note": {
+              "arg": "note"
+            },
+            "reminder": {
+              "arg": "reminder"
+            },
+            "auto_reminder": {
+              "arg": "auto_reminder"
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "TODOIST_CREATE_PROJECT",
+      "title": {
+        "de": "Projekt anlegen",
+        "en": "Create project"
+      },
+      "description": {
+        "de": "Legt ein Projekt an; braucht --confirm.",
+        "en": "Creates a project; requires --confirm."
+      },
+      "risk": "write",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "color": {
+            "description": "Hex-Farbe, z. B. #b8256f",
+            "type": "string"
+          },
+          "description": {
+            "description": "Beschreibung; Markdown ist erlaubt",
+            "type": "string"
+          },
+          "is_favorite": {
+            "description": "Als Favorit markieren",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Name des Projekts",
+            "type": "string"
+          },
+          "parent_id": {
+            "description": "ID des übergeordneten Projekts",
+            "type": "string"
+          },
+          "view_style": {
+            "description": "Darstellung in Todoist",
+            "enum": [
+              "list",
+              "board"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/projects",
+        "body": {
+          "json": {
+            "color": {
+              "arg": "color"
+            },
+            "parent_id": {
+              "arg": "parent_id"
+            },
+            "view_style": {
+              "arg": "view_style"
+            },
+            "description": {
+              "arg": "description"
+            },
+            "name": {
+              "arg": "name",
+              "trim": true,
+              "required": true
+            },
+            "is_favorite": {
+              "arg": "is_favorite"
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "TODOIST_UPDATE_PROJECT",
+      "title": {
+        "de": "Projekt ändern",
+        "en": "Update project"
+      },
+      "description": {
+        "de": "Ändert nur die übergebenen Projekteinstellungen; braucht --confirm.",
+        "en": "Changes only the project settings you pass; requires --confirm."
+      },
+      "risk": "write",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "color": {
+            "description": "Hex-Farbe, z. B. #b8256f",
+            "type": "string"
+          },
+          "description": {
+            "description": "Neue Beschreibung; Markdown ist erlaubt",
+            "type": "string"
+          },
+          "is_favorite": {
+            "description": "Als Favorit markieren",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Neuer Name",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "Projekt-ID (aus TODOIST_LIST_PROJECTS)",
+            "type": "string"
+          },
+          "view_style": {
+            "description": "Darstellung in Todoist",
+            "enum": [
+              "list",
+              "board"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/projects/{project_id}",
+        "body": {
+          "json": {
+            "name": {
+              "arg": "name"
+            },
+            "color": {
+              "arg": "color"
+            },
+            "view_style": {
+              "arg": "view_style"
+            },
+            "description": {
+              "arg": "description"
+            },
+            "is_favorite": {
+              "arg": "is_favorite"
+            }
+          }
+        },
+        "nonempty_body": "nothing to update: pass at least one project setting"
+      }
+    },
+    {
+      "slug": "TODOIST_UNARCHIVE_PROJECT",
+      "title": {
+        "de": "Archiviertes Projekt wiederherstellen",
+        "en": "Unarchive project"
+      },
+      "description": {
+        "de": "Holt ein archiviertes Projekt zurück; braucht --confirm.",
+        "en": "Restores an archived project; requires --confirm."
+      },
+      "risk": "write",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "project_id": {
+            "description": "ID des archivierten Projekts",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/projects/{project_id}/unarchive"
+      },
+      "response": {
+        "mode": "merge_success",
+        "pointer": ""
+      }
+    },
+    {
+      "slug": "TODOIST_CREATE_SECTION",
+      "title": {
+        "de": "Abschnitt anlegen",
+        "en": "Create section"
+      },
+      "description": {
+        "de": "Legt einen Abschnitt in einem Projekt an; braucht --confirm.",
+        "en": "Creates a section in a project; requires --confirm."
+      },
+      "risk": "write",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "Name des Abschnitts",
+            "type": "string"
+          },
+          "order": {
+            "default": 0,
+            "description": "Position innerhalb des Projekts",
+            "maximum": 1000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Projekt-ID, in dem der Abschnitt entsteht",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "project_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/sections",
+        "body": {
+          "json": {
+            "name": {
+              "arg": "name",
+              "trim": true,
+              "required": true
+            },
+            "project_id": {
+              "arg": "project_id",
+              "required": true
+            },
+            "order": {
+              "arg": "order"
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "TODOIST_UPDATE_SECTION",
+      "title": {
+        "de": "Abschnitt umbenennen",
+        "en": "Update section"
+      },
+      "description": {
+        "de": "Benennt einen Abschnitt um; braucht --confirm.",
+        "en": "Renames a section; requires --confirm."
+      },
+      "risk": "write",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "Neuer Name",
+            "type": "string"
+          },
+          "section_id": {
+            "description": "Abschnitts-ID (aus TODOIST_LIST_SECTIONS)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "section_id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/sections/{section_id}",
+        "body": {
+          "json": {
+            "name": {
+              "arg": "name",
+              "trim": true,
+              "required": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "TODOIST_CREATE_TASK_COMMENT",
+      "title": {
+        "de": "Aufgabenkommentar schreiben",
+        "en": "Create task comment"
+      },
+      "description": {
+        "de": "Hängt einen Kommentar an eine Aufgabe; braucht --confirm.",
+        "en": "Posts a comment on a task; requires --confirm."
+      },
+      "risk": "write",
+      "scopes": [
+        "data:read_write"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "attachment": {
+            "description": "Optionales Attachment-Objekt, z. B. {\"resource_type\": \"file\", \"file_url\": \"https://…\"}",
+            "type": "object"
+          },
+          "content": {
+            "description": "Kommentartext, 1-15000 Zeichen; Markdown ist erlaubt",
+            "type": "string"
+          },
+          "task_id": {
+            "description": "Aufgaben-ID (aus TODOIST_FILTER_TASKS)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "content"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/comments",
+        "body": {
+          "json": {
+            "task_id": {
+              "arg": "task_id",
+              "required": true
+            },
+            "content": {
+              "arg": "content",
+              "required": true
+            },
+            "attachment": {
+              "arg": "attachment",
+              "type": "object"
+            }
+          }
+        }
+      }
+    }
+  ]
+}
