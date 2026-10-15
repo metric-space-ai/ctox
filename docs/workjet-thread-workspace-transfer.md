@@ -8,6 +8,12 @@ Native file timeouts, local admission pressure and a missing chunk sequence get 
 
 Job status retains fixed `PEER_FILE_*` codes and `PEER_AUTHORIZATION_FAILED`. Raw RPC messages, URLs and response parameters are never persisted or printed. After exhaustion, `workspace-resume` retains the original jobs, grants and verified byte checkpoints.
 
+The transfer worker explicitly releases its OS lease when dropped. A descriptor
+duplicated during a fork can remain open after the worker finishes; it must not
+prevent the next worker from recovering the durable jobs. A live replacement
+still excludes competing workers, including after the old descriptor closes.
+This release changes no job, account, grant or verified byte offset.
+
 Workjet calls the native `ctox workjet-transfer workspace-*` commands on the
 computer owning each endpoint. The Workjet thread ID remains unchanged. These
 commands move a Git workspace; transcript/session import, compaction, goal/loop

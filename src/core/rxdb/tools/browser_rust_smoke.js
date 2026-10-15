@@ -10819,10 +10819,19 @@ function ensureCtoxSmokeBinary() {
           }, 15000, 'agent scope persisted command');
           const persistedContext = persistedCommand.command?.client_context || {};
           const persistedVisibleScope = persistedContext.visible_scope || persistedContext.scope || null;
+          // Client scope is presentation, never proof of the authenticated
+          // actor. The native queue admission owns this authorization receipt.
+          const nativeAudit = persistedCommand.command?.native_authorization;
           const auditVisible = Boolean(
             persistedCommand.command
               && persistedCommand.command.command_type === auditCommandType
-              && persistedContext.actor?.id === nativeActorId
+              && nativeAudit?.contract === 'ctox-business-command-authorization-v1'
+              && nativeAudit.allowed === true
+              && nativeAudit.actor?.trusted === true
+              && nativeAudit.actor?.id === nativeActorId
+              && nativeAudit.permission === 'data.read'
+              && nativeAudit.scope_type === 'module'
+              && nativeAudit.scope_id === targetModule.id
               && persistedVisibleScope?.app?.module_id === targetModule.id
               && (dispatchResult?.task_id || dispatchResult?.command_id || commandId)
           );

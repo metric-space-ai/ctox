@@ -60,6 +60,21 @@ does not prove model health: run the normal Workjet model check before the
 supervisor performs an explicit runtime switch. These commands are available
 only once this source is delivered in the installed native binary.
 
+A failed `grok-models` exits nonzero and prints a public JSON `error` with
+`kind`, `phase`, and nullable `http_status`; the successful account/models DTO
+is unchanged. Missing native credentials are `account_not_configured` during
+`credential` and point to the operator fallback above. Invalid local records,
+unavailable secret storage, missing refresh credentials, transport failures,
+credential changes, invalid/oversized catalogs and the total timeout remain
+separate. `upstream_rejected` is used only after an actual HTTP rejection, with
+that response's status. No upstream body, credential or raw transport error is
+included. A malformed catalog received with HTTP 200 reports `invalid_catalog`
+and 200, rather than an authentication failure. Catalog IDs are bounded and
+credential echoes are rejected. These diagnostics neither cool down an account
+nor establish a successful inference check. The guarded Workjet control's
+existing reply and error-code contract is unchanged.
+
+
 ## Authorized Workjet native control
 
 The retained daemon controller registers `ctox.workjet.grok.v1` with capability

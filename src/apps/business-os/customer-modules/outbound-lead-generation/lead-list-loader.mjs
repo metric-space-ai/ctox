@@ -42,12 +42,48 @@ export function leadListRow(full) {
 // (localReplicaComplete, set when the pull drained; after a reload it resumes
 // from the persisted checkpoint), every read is answered from the browser.
 // Native reads remain only for the first sync of a fresh profile.
+export function hasLocalStore(collection) {
+  return typeof collection?.storageCollection?.allDocuments === 'function';
+}
+
 export function readsLocally(collection) {
   return collection?.localReplicaComplete === true;
 }
 
+// Rows already stored in the browser, read straight from the local store. The
+// shell routes find().exec() to CTOX while localReplicaComplete is false; after
+// every reload or native restart that lasted until the pull drained, and a lead
+// detail hung on "werden geladen" although the lead was stored locally
+// (Kundeninstanz, 15.10.2026). Missing rows stay absent; callers fetch only those.
+export async function readStoredLeadRows(collection, ids) {
+  const store = collection?.storageCollection;
+  if (typeof store?.findDocumentsById !== 'function') return new Map();
+  const found = await store.findDocumentsById([...new Set(ids.filter(id => typeof id === 'string' && id))]);
+  return new Map(Object.entries(found || {})
+    .filter(([id, row]) => row && row.id === id && !row._deleted));
+}
+
 export async function loadLeadList(collection, previousRows = [], { pageSize = 200, signal } = {}) {
   const previous = new Map(previousRows.map(row => [row.id, row]));
+  // Client first: the list always comes from the browser's own store when one
+  // exists. Through find().exec() it went to CTOX until the shell marked the
+  // replica complete; after a reload or native restart that read timed out,
+  // the app stayed on its startup snapshot and blocked every action
+  // (Kundeninstanz, 15.10.2026: deleting a source did nothing).
+  if (hasLocalStore(collection)) {
+    const rows = [];
+    for (const full of await collection.storageCollection.allDocuments()) {
+      if (!full?.id || full._deleted) continue;
+      rows.push(leadListRow(full));
+    }
+    rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const ids = new Set(rows.map(row => row.id));
+    return {
+      rows,
+      changedIds: new Set(rows.filter(row => JSON.stringify(previous.get(row.id) || null) !== JSON.stringify(row)).map(row => row.id)),
+      removedIds: new Set([...previous.keys()].filter(id => !ids.has(id))),
+    };
+  }
   if (readsLocally(collection)) {
     // Local reads are windowed (at most 200 rows per query): page by id.
     const rows = [];
