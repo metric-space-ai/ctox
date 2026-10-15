@@ -431,10 +431,58 @@ fn base_loader_prefers_optional_corrected_schemas_without_loading_inside_writer(
     )
     .unwrap();
     let platform = root.join("platform.json");
-    std::fs::write(&platform, r#"{"app_id":"ctox-platform","collections":{}}"#).unwrap();
+    std::fs::write(
+        &platform,
+        r#"{"app_id":"ctox-platform","collections":{"business_commands":{"class":"full"}}}"#,
+    )
+    .unwrap();
     let loaded = load_base_release(root, &platform).unwrap();
     assert_eq!(loaded.schemas["app"]["collections"]["items"]["version"], 2);
     assert_eq!(loaded.manifests.len(), 2);
+    let canonical = crate::change_log::subscription::write_contract::command_document_schema();
+    let manifest = loaded
+        .manifests
+        .iter()
+        .find(|m| m["app_id"] == "ctox-platform")
+        .unwrap();
+    assert_eq!(
+        manifest["collections"]["business_commands"]["schema"],
+        canonical
+    );
+    assert_eq!(
+        loaded.schemas["ctox-platform"]["collections"]["business_commands"]["schema"],
+        canonical
+    );
+    // Source artifacts are immutable; only the unsigned prepared release changes.
+    assert!(!std::fs::read_to_string(&platform)
+        .unwrap()
+        .contains("primaryKey"));
+    let corrected = root.join("schemas/ctox-platform.collections.schema.json");
+    for version in [3, 4] {
+        std::fs::write(
+            &corrected,
+            json!({"collections":{"business_commands":{"schema":{
+            "version":version,"type":"object","properties":{"future":{"type":"string"}}}}}})
+            .to_string(),
+        )
+        .unwrap();
+        assert!(
+            load_base_release(root, &platform).is_err(),
+            "different bytes at the current or a newer version must fail closed"
+        );
+    }
+    std::fs::remove_file(&corrected).unwrap();
+    std::fs::write(
+        &platform,
+        json!({"app_id":"ctox-platform","collections":{"business_commands":{
+        "class":"full","schema":{"version":4,"type":"object"}}}})
+        .to_string(),
+    )
+    .unwrap();
+    assert!(
+        load_base_release(root, &platform).is_err(),
+        "manifest cannot be downgraded either"
+    );
 }
 #[test]
 fn remove_is_cas_guarded_payload_free_and_scrubs_revisions_and_archives_atomically() {

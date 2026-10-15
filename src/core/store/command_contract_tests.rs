@@ -3,6 +3,287 @@ use super::*;
 mod native_projection_reads;
 
 #[tokio::test]
+async fn command_schema_publication_changes_generation_and_replay_is_seq_neutral() {
+    let (_dir, writer, readers) = runtime().await;
+    let plan = command_release_fixture();
+    let mut legacy = plan.collections["ctox-platform"]
+        .iter()
+        .find(|d| d.name == "business_commands")
+        .unwrap()
+        .clone();
+    legacy.schema_ver = 2;
+    legacy.app_ver = "platform-6".into();
+    legacy.schema_json = json!({"version":2,"primaryKey":"id","type":"object",
+        "properties":{"id":{"type":"string"},"command_type":{"type":"string"}},
+        "required":["id","command_type"]});
+    writer
+        .submit(WriteJob::new(JobOptions::default(), move |tx| {
+            crate::schema::create_collection(tx, &legacy)?;
+            Ok(())
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    let original = readers
+        .read(|tx| crate::schema::active_collection(tx, "business_commands"))
+        .await
+        .unwrap()
+        .unwrap();
+    crate::import::base_release::publish(&writer, &plan, &NoLegacyCommandMigration, NOW as i64)
+        .await
+        .unwrap();
+    let current = readers
+        .read(|tx| crate::schema::active_collection(tx, "business_commands"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(original.gen, 1);
+    assert_eq!(original.definition.schema_ver, 2);
+    assert_eq!(
+        current.gen, 2,
+        "incompatible schema must not overwrite the old generation"
+    );
+    assert_eq!(current.definition.schema_json, command_document_schema());
+    assert_ne!(current.table, original.table);
+    let before = readers.read(|tx| change_log::head(tx)).await.unwrap();
+    crate::import::base_release::publish(&writer, &plan, &NoLegacyCommandMigration, NOW as i64)
+        .await
+        .unwrap();
+    let after = readers.read(|tx| change_log::head(tx)).await.unwrap();
+    assert_eq!(before.head_seq, after.head_seq);
+    readers.shutdown().await.unwrap();
+    writer.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn command_schema_publication_refuses_unmapped_legacy_rows_and_resumes_explicit_migration() {
+    let (_dir, writer, readers) = runtime().await;
+    let mut plan = command_release_fixture();
+    // Deliberately exercise the importer identity fallback, not an artifact mapper.
+    plan.migrations.remove("business_commands");
+    let mut legacy = plan.collections["ctox-platform"]
+        .iter()
+        .find(|d| d.name == "business_commands")
+        .unwrap()
+        .clone();
+    legacy.schema_ver = 2;
+    legacy.app_ver = "platform-6".into();
+    legacy.schema_json = json!({"version":2,"primaryKey":"id","type":"object",
+        "properties":{"id":{"type":"string"},"command_type":{"type":"string"}},
+        "required":["id","command_type"]});
+    let source = json!({"id":"legacy-1","command_id":"legacy-1","module":"fixture",
+        "command_type":"task","status":"completed","payload":{"value":7},
+        "actor_id":"retained-user","created_at":"2026-10-15T20:00:00Z"});
+    let copy = source.clone();
+    writer.submit(WriteJob::new(JobOptions::default(),move |tx| {
+        let old=crate::schema::create_collection(tx,&legacy)?;
+        tx.execute(&format!("INSERT INTO {}(id,rev,schema_ver,data,deleted) VALUES('legacy-1','old-rev',2,?1,0)",
+            change_log::identifier(&old.table)?),[copy.to_string()])?;
+        Ok(())
+    })).unwrap().await.unwrap();
+    let failure =
+        crate::import::base_release::publish(&writer, &plan, &NoLegacyCommandMigration, NOW as i64)
+            .await
+            .expect_err("identity migration must not label a legacy row as V4");
+    assert!(
+        failure
+            .to_string()
+            .contains("command_schema_migration_required"),
+        "{failure}"
+    );
+    let copy = source.clone();
+    readers
+        .read(move |tx| {
+            let old = crate::schema::active_collection(tx, "business_commands")?.unwrap();
+            assert_eq!(old.gen, 1);
+            let body: String = tx.query_row(
+                &format!(
+                    "SELECT data FROM {} WHERE id='legacy-1'",
+                    change_log::identifier(&old.table)?
+                ),
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(serde_json::from_str::<Value>(&body).unwrap(), copy);
+            let pending = crate::schema::collection(tx, "business_commands", 2)?;
+            let count: i64 = tx.query_row(
+                &format!(
+                    "SELECT count(*) FROM {}",
+                    change_log::identifier(&pending.table)?
+                ),
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(
+                count, 0,
+                "failed migration transaction must leave no new row"
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
+    struct ExplicitMigration;
+    impl crate::import::base_release::MigrationEvaluator for ExplicitMigration {
+        fn migrate(
+            &self,
+            collection: &str,
+            _: &Value,
+            mut body: Value,
+        ) -> Result<Value, StoreError> {
+            assert_eq!(collection, "business_commands");
+            // Test artifact maps retained source fields, never guesses an actor.
+            body["type"] = body["command_type"].clone();
+            body["app_id"] = body["module"].clone();
+            body["status"] = json!("done");
+            Ok(body)
+        }
+    }
+    plan.migrations.insert(
+        "business_commands".into(),
+        json!({"from_ver":"main@4794af03d"}),
+    );
+    crate::import::base_release::publish(&writer, &plan, &ExplicitMigration, NOW as i64)
+        .await
+        .unwrap();
+    readers
+        .read(|tx| {
+            let current = crate::schema::active_collection(tx, "business_commands")?.unwrap();
+            assert_eq!(current.gen, 2);
+            let body: String = tx.query_row(
+                &format!(
+                    "SELECT data FROM {} WHERE id='legacy-1'",
+                    change_log::identifier(&current.table)?
+                ),
+                [],
+                |r| r.get(0),
+            )?;
+            let body: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(body["actor_id"], "retained-user");
+            assert_eq!(body["status"], "done");
+            assert_eq!(body["payload"], json!({"value":7}));
+            Ok(())
+        })
+        .await
+        .unwrap();
+    readers.shutdown().await.unwrap();
+    writer.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn command_fresh_import_cannot_label_legacy_payload_as_schema_v4() {
+    let (_dir, writer, readers) = runtime().await;
+    let plan = command_release_fixture();
+    crate::import::base_release::publish(&writer, &plan, &NoLegacyCommandMigration, NOW as i64)
+        .await
+        .unwrap();
+    let before = readers.read(|tx| change_log::head(tx)).await.unwrap();
+    writer.submit(WriteJob::new(JobOptions::default(),|tx| {
+        let old=crate::import::Document {collection:"business_commands".into(),id:"old-1".into(),
+            body:json!({"id":"old-1","module":"fixture","command_type":"task","status":"completed"}),
+            revision:None};
+        let error=crate::import::insert_document(tx,&old).expect_err("unmapped initial import must fail closed");
+        assert!(error.to_string().contains("command_schema_migration_required"),"{error}");
+        Ok(())
+    })).unwrap().await.unwrap();
+    let after = readers.read(|tx| change_log::head(tx)).await.unwrap();
+    assert_eq!(
+        before.head_seq, after.head_seq,
+        "invalid import must not mint a change"
+    );
+    writer
+        .submit(WriteJob::new(JobOptions::default(), |tx| {
+            let mapped = crate::import::Document {
+                collection: "business_commands".into(),
+                id: "old-1".into(),
+                body: json!({"id":"old-1","app_id":"fixture","type":"task","status":"done",
+                "actor_id":"retained-user","created_at":"2026-10-15T20:00:00Z","payload":{}}),
+                revision: None,
+            };
+            assert!(crate::import::insert_document(tx, &mapped)?);
+            let head = change_log::head(tx)?;
+            assert!(!crate::import::insert_document(tx, &mapped)?);
+            assert_eq!(change_log::head(tx)?.head_seq, head.head_seq);
+            // Removal stays payload-free even when an old source supplies no V4 intent.
+            let tombstone = crate::import::Document {
+                collection: "business_commands".into(),
+                id: "removed-1".into(),
+                body: json!({"id":"removed-1","_deleted":true}),
+                revision: None,
+            };
+            assert!(crate::import::insert_document(tx, &tombstone)?);
+            let active = crate::schema::active_collection(tx, "business_commands")?.unwrap();
+            assert!(tx.query_row(
+                &format!(
+                    "SELECT data IS NULL AND deleted=1 FROM {} WHERE id='removed-1'",
+                    change_log::identifier(&active.table)?
+                ),
+                [],
+                |r| r.get::<_, bool>(0)
+            )?);
+            Ok(())
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    readers.shutdown().await.unwrap();
+    writer.shutdown().await.unwrap();
+}
+
+// Frozen release source copied into actual loader inputs; no registry seeding.
+fn command_release_fixture() -> crate::import::base_release::ReleasePlan {
+    let defaults = crate::schema::BaseReleaseDefaults {
+        app_ver: "platform-7".into(),
+        client_limit: 1000,
+        byte_budget: 16 * 1024 * 1024,
+        rights_ver: 1,
+    };
+    // Lane acceptance uses the retained immutable A9 input; normal component
+    // runs use the checked-in release copy. Neither path touches a live tenant.
+    if let Some(input) = std::env::var_os("IMPORT_INPUT_ROOT") {
+        let input = std::path::PathBuf::from(input);
+        return crate::import::base_release::load(
+            &input.join("v4"),
+            &input.join("ctox-platform.manifest.json"),
+            &defaults,
+        )
+        .unwrap();
+    }
+    let release: crate::schema::BaseReleaseInput =
+        serde_json::from_str(include_str!("../../../tests/sync-v4-m2/base-release.json")).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for path in ["tools/manifest/out", "manifests", "schemas"] {
+        std::fs::create_dir_all(root.join(path)).unwrap();
+    }
+    std::fs::write(
+        root.join("tools/manifest/out/ownership.json"),
+        serde_json::to_vec(&release.ownership).unwrap(),
+    )
+    .unwrap();
+    for manifest in release.manifests {
+        let app = manifest["app_id"].as_str().unwrap();
+        let file = if app == "ctox-platform" {
+            root.join("platform.json")
+        } else {
+            root.join(format!("manifests/{app}.manifest.json"))
+        };
+        std::fs::write(file, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    }
+    // This is deliberately the pre-v4 shape, not the canonical test expectation.
+    std::fs::write(root.join("schemas/ctox-platform.collections.schema.json"),
+        r#"{"_base_release":"main@4794af03d","collections":{"business_commands":{"schema":{"version":2,"type":"object","properties":{"command_type":{"type":"string"}},"required":["command_type"]}}}}"#).unwrap();
+    crate::import::base_release::load(root, &root.join("platform.json"), &defaults).unwrap()
+}
+struct NoLegacyCommandMigration;
+impl crate::import::base_release::MigrationEvaluator for NoLegacyCommandMigration {
+    fn migrate(&self, _: &str, _: &Value, _: Value) -> Result<Value, StoreError> {
+        Err(StoreError::Invalid(
+            "legacy command migration must be supplied by publisher".into(),
+        ))
+    }
+}
+
+#[tokio::test]
 async fn command_release_change_retires_a_live_fence_and_old_metadata_requires_cas() {
     let (_dir, writer, readers, ingress) = commands().await;
     let created = send(
@@ -73,32 +354,37 @@ async fn command_kernel_p5_wire_replays_the_native_canonical_document() {
     use std::io::{BufRead, BufReader, Write as IoWrite};
     use std::process::Stdio;
     let (_dir, writer, readers) = runtime().await;
-    let schema = command_document_schema();
-    let schema_copy = schema.clone();
-    writer
-        .submit(WriteJob::new(JobOptions::default(), move |tx| {
-            let mut release: crate::schema::BaseReleaseInput =
-                serde_json::from_str(include_str!("../../../tests/sync-v4-m2/base-release.json"))
-                    .unwrap();
-            release.schemas.insert(
-                "ctox-platform".into(),
-                json!({"collections":{"business_commands":{"schema":schema_copy}}}),
-            );
-            crate::schema::import_base_release(
-                tx,
-                &release,
-                &crate::schema::BaseReleaseDefaults {
-                    app_ver: "platform-7".into(),
-                    client_limit: 1000,
-                    byte_budget: 16 * 1024 * 1024,
-                    rights_ver: 1,
-                },
-            )?;
-            Ok(())
-        }))
-        .unwrap()
+    let plan = command_release_fixture();
+    crate::import::base_release::publish(&writer, &plan, &NoLegacyCommandMigration, NOW as i64)
         .await
         .unwrap();
+    let schema = readers
+        .read(|tx| {
+            let active = crate::schema::active_collection(tx, "business_commands")?.unwrap();
+            assert_eq!(active.definition.app_id, "ctox-platform");
+            assert_eq!(active.definition.schema_ver, 3);
+            assert_eq!(active.definition.app_ver, "platform-7");
+            Ok(active.definition.schema_json)
+        })
+        .await
+        .unwrap();
+    assert_eq!(schema, command_document_schema());
+    assert_eq!(
+        plan.manifests
+            .iter()
+            .find(|m| m["app_id"] == "ctox-platform")
+            .unwrap()["collections"]["business_commands"]["schema"],
+        schema
+    );
+    let before = readers.read(|tx| change_log::head(tx)).await.unwrap();
+    crate::import::base_release::publish(&writer, &plan, &NoLegacyCommandMigration, NOW as i64)
+        .await
+        .unwrap();
+    let after = readers.read(|tx| change_log::head(tx)).await.unwrap();
+    assert_eq!(
+        before.head_seq, after.head_seq,
+        "publication replay must not mint changes"
+    );
     let epoch = readers
         .read(|tx| Ok(change_log::head(tx)?.epoch))
         .await
@@ -133,7 +419,9 @@ async fn command_kernel_p5_wire_replays_the_native_canonical_document() {
             .env("KERNEL_URL", format!("file://{}", kernel.display()))
             .env(
                 "COMMAND_CONFIG",
-                json!({"schema":schema,"epoch":epoch}).to_string(),
+                json!({"schema":schema,"epoch":epoch,"manifest":plan.manifests.iter()
+                    .find(|m|m["app_id"]=="ctox-platform").unwrap()})
+                .to_string(),
             )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -279,9 +567,10 @@ async fn command_kernel_p5_wire_replays_the_native_canonical_document() {
     );
     let mut measured = measured.expect("missing actual runtime measurement");
     projection_us.sort_by(|a, b| a.total_cmp(b));
-    measured["projection_read_p50_us"] = json!(projection_us[projection_us.len() / 2]);
+    measured["projection_read_p50_us"] = json!(projection_us[projection_us.len().div_ceil(2) - 1]);
     measured["projection_read_p99_us"] =
         json!(projection_us[(projection_us.len() * 99).div_ceil(100) - 1]);
+    measured["projection_samples_us"] = json!(projection_us);
     println!("P9_M8_COMPONENT {}", measured);
     assert!(measured["verified_pages"].as_u64().unwrap() > 0);
     assert!(measured["canonical_replays"].as_u64().unwrap() > 0);
