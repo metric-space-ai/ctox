@@ -20,6 +20,9 @@ use std::{
 };
 use tokio::sync::watch;
 
+#[path = "../../store/harness_adapter.rs"]
+mod owner_adapter;
+
 mod peer;
 pub use peer::{PeerAccountBinding, PeerRangeSource, PeerReadFailure, PeerSource};
 pub mod ssh_exec;
@@ -29,6 +32,16 @@ pub mod storage_ssh;
 pub use storage::{
     validate_relative_path, StorageConnection, StorageDirection, StorageResolver, StorageTransfer,
 };
+
+const TRANSFER_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS ctox_transfer_jobs (
+                id TEXT PRIMARY KEY, request TEXT NOT NULL,
+                state TEXT NOT NULL CHECK(state IN ('queued','running','paused','cancelled','failed','completed')),
+                desired TEXT NOT NULL CHECK(desired IN ('run','pause','cancel')),
+                completed_bytes INTEGER NOT NULL DEFAULT 0,
+                error_code TEXT, receipt TEXT,
+                created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+             );";
 
 pub const ENGINE_REVISION: &str = "8364bcd7902dbd853a0f746c3dc937bbaadec561";
 
@@ -143,26 +156,12 @@ impl Store {
         private_directory(&artifacts.join("staging"))?;
         private_directory(&artifacts.join("objects"))?;
         let store = Self { db, artifacts };
-        store.connection()?.execute_batch(
-            "CREATE TABLE IF NOT EXISTS ctox_transfer_jobs (
-                id TEXT PRIMARY KEY, request TEXT NOT NULL,
-                state TEXT NOT NULL CHECK(state IN ('queued','running','paused','cancelled','failed','completed')),
-                desired TEXT NOT NULL CHECK(desired IN ('run','pause','cancel')),
-                completed_bytes INTEGER NOT NULL DEFAULT 0,
-                error_code TEXT, receipt TEXT,
-                created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-                updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-             );"
-        )?;
+        store.connection()?.execute_batch(TRANSFER_SCHEMA)?;
         Ok(store)
     }
 
     fn connection(&self) -> Result<Connection> {
-        let c = Connection::open(&self.db)?;
-        c.busy_timeout(Duration::from_secs(5))?;
-        // FULL also covers a receipt committed after the object and directory were flushed.
-        c.pragma_update(None, "synchronous", "FULL")?;
-        Ok(c)
+        open_transfer_connection(&self.db, false)
     }
 
     pub fn enqueue(&self, request: DownloadRequest) -> Result<Transfer> {
@@ -347,6 +346,133 @@ impl Store {
             |r| r.get(0),
         )?)
     }
+}
+
+// One raw opener retained for compatibility and the owned path. The owned
+// path calls it only on its dedicated actor, under the canonical file lease.
+fn open_transfer_connection(path: &Path, owned: bool) -> Result<Connection> {
+    let connection = Connection::open(path)?;
+    connection.busy_timeout(if owned {
+        Duration::ZERO
+    } else {
+        Duration::from_secs(5)
+    })?;
+    if owned {
+        connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA wal_autocheckpoint=0; PRAGMA journal_size_limit=67108864;")?;
+    }
+    // Never inherit the Core writer's NORMAL setting for durable receipts.
+    connection.pragma_update(None, "synchronous", "FULL")?;
+    Ok(connection)
+}
+
+/// First owned transfer API. Core composition must inject/share this file
+/// owner before retiring Store/Worker compatibility callers. Never run both
+/// ownership paths on the same live Core file.
+#[derive(Clone)]
+pub struct OwnedTransferStore {
+    owner: owner_adapter::BoundedOwner<Connection>,
+}
+
+impl Store {
+    /// Consume the compatibility facade after its schema setup. The actor
+    /// acquires the same canonical lease as the Core owner; a second owner fails.
+    pub fn into_owner(self) -> Result<OwnedTransferStore> {
+        OwnedTransferStore::open(self.db)
+    }
+}
+
+impl OwnedTransferStore {
+    /// Metadata-only owner entry point; does not open the file on the caller.
+    /// Core composition must choose/share this owner before migrating workers.
+    pub fn open(db: impl Into<PathBuf>) -> Result<Self> {
+        let db = db.into();
+        if let Some(parent) = db.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let owner = owner_adapter::BoundedOwner::start(db, |path| {
+            let connection = open_transfer_connection(path, true).map_err(std::io::Error::other)?;
+            connection
+                .execute_batch(TRANSFER_SCHEMA)
+                .map_err(std::io::Error::other)?;
+            Ok(connection)
+        })?;
+        Ok(Self { owner })
+    }
+
+    async fn run<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&mut Connection) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        Ok(self
+            .owner
+            .call(move |connection| {
+                let sync: i64 = connection
+                    .pragma_query_value(None, "synchronous", |row| row.get(0))
+                    .map_err(std::io::Error::other)?;
+                if sync != 2 {
+                    return Err(std::io::Error::other(
+                        "transfer owner requires FULL durability",
+                    ));
+                }
+                operation(connection).map_err(std::io::Error::other)
+            })
+            .await?)
+    }
+
+    pub async fn enqueue(&self, request: DownloadRequest) -> Result<Transfer> {
+        request.validate()?;
+        self.run(move |connection| {
+            let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.execute("INSERT INTO ctox_transfer_jobs(id,request,state,desired) VALUES (?1,?2,'queued','run') ON CONFLICT(id) DO NOTHING", params![request.id, serde_json::to_string(&request)?])?;
+            let saved = read_owned_transfer(&tx, &request.id)?;
+            ensure!(saved.request == request, "transfer id conflicts with immutable request");
+            tx.commit()?;
+            Ok(saved)
+        }).await
+    }
+
+    pub async fn get(&self, id: String) -> Result<Transfer> {
+        self.run(move |connection| read_owned_transfer(connection, &id))
+            .await
+    }
+
+    pub async fn control(&self, id: String, action: String) -> Result<Transfer> {
+        ensure!(
+            matches!(action.as_str(), "cancel" | "pause" | "resume"),
+            "expected pause, resume or cancel"
+        );
+        self.run(move |connection| {
+            let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            match action.as_str() {
+                "cancel" | "pause" => {
+                    let state = if action == "cancel" { "cancelled" } else { "paused" };
+                    tx.execute("UPDATE ctox_transfer_jobs SET desired=?2, state=CASE WHEN state='running' THEN state ELSE ?3 END, updated_at=unixepoch() WHERE id=?1 AND desired!='cancel' AND state NOT IN ('completed','cancelled')", params![id, action, state])?;
+                }
+                _ => {
+                    tx.execute("UPDATE ctox_transfer_jobs SET desired='run', state=CASE WHEN state='running' THEN state ELSE 'queued' END,error_code=NULL,updated_at=unixepoch() WHERE id=?1 AND desired!='cancel' AND state IN ('paused','failed','running')", [&id])?;
+                }
+            }
+            let saved = read_owned_transfer(&tx, &id)?;
+            tx.commit()?;
+            Ok(saved)
+        }).await
+    }
+}
+
+fn read_owned_transfer(connection: &Connection, id: &str) -> Result<Transfer> {
+    let (request, state, bytes, error, receipt): (String, String, u64, Option<String>, Option<String>) = connection.query_row(
+        "SELECT request,state,completed_bytes,error_code,receipt FROM ctox_transfer_jobs WHERE id=?1", [id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+    )?;
+    Ok(Transfer {
+        request: serde_json::from_str(&request)?,
+        state,
+        completed_bytes: bytes,
+        error_code: error,
+        receipt: receipt
+            .map(|value| serde_json::from_str(&value))
+            .transpose()?,
+    })
 }
 
 pub struct Worker {
@@ -854,5 +980,70 @@ impl Drop for DaemonWorker {
         if self.stop_and_join().is_err() {
             eprintln!("ctox transfer worker storage or cleanup failure; restart required");
         }
+    }
+}
+
+#[cfg(test)]
+mod owner_contract_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn transfer_owner_full_committed_and_immutable() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = OwnedTransferStore::open(directory.path().join("core.sqlite")).unwrap();
+        let request = DownloadRequest {
+            id: "fixture".into(),
+            sources: vec!["http://127.0.0.1/fixture".into()],
+            peer_source: None,
+            storage: None,
+            sha256: "0".repeat(64),
+            size: 0,
+        };
+        let saved = store.enqueue(request.clone()).await.unwrap();
+        assert_eq!(saved.request, request);
+        store
+            .run(|connection| {
+                assert_eq!(
+                    connection
+                        .pragma_query_value(None, "synchronous", |row| row.get::<_, i64>(0))?,
+                    2
+                );
+                assert!(connection.is_autocommit());
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let mut changed = request.clone();
+        changed.sha256 = "1".repeat(64);
+        assert!(store.enqueue(changed).await.is_err());
+        assert_eq!(
+            store.get(request.id.clone()).await.unwrap().request,
+            request
+        );
+        assert_eq!(
+            store
+                .control(request.id.clone(), "cancel".into())
+                .await
+                .unwrap()
+                .state,
+            "cancelled"
+        );
+        assert_eq!(
+            store
+                .control(request.id, "resume".into())
+                .await
+                .unwrap()
+                .state,
+            "cancelled"
+        );
+        let mut closed = store.owner.closed_signal();
+        drop(store);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !*closed.borrow_and_update() {
+                closed.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
     }
 }

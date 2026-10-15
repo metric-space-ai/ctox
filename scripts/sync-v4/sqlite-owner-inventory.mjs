@@ -24,9 +24,9 @@ function sourceOnly(text) {
       }
       blank(end);
     } else {
-      const char = /^'(?:\\.|[^'\\\n])'/.exec(text.slice(i, i + 12));
+      const char = chars[i] === "'" ? /^'(?:\\.|[^'\\\n])'/.exec(text.slice(i, i + 12)) : null;
       if (char) { blank(i + char[0].length); continue; }
-      const raw = /^r(#{0,255})"/.exec(text.slice(i, i + 258));
+      const raw = chars[i] === 'r' ? /^r(#{0,255})"/.exec(text.slice(i, i + 258)) : null;
       if (raw) {
         const ending = '"' + raw[1];
         const end = text.indexOf(ending, i + raw[0].length);
