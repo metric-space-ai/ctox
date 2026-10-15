@@ -1201,7 +1201,8 @@ fn sanitize_person_status(
 ) -> Result<(FieldStatus, Vec<String>), String> {
     let mut notes = Vec::new();
     if status.status != "verified" {
-        if research_value_is_populated(&status.value) {
+        if research_value_is_populated(&status.value) && !keeps_unconfirmed_address(field, &status)
+        {
             notes.push("Wert auf nicht-verifiziertem Feld entfernt".to_string());
             status.value = Value::Null;
         }
@@ -1290,6 +1291,27 @@ fn sanitize_person_status(
         ));
     }
     Ok((status, notes))
+}
+
+/// The owner's research instructions (step 4b): a person address built from
+/// the company's demonstrable pattern whose validation stays open (catch-all,
+/// unknown, validator blocked) is entered as the best variant and reported as
+/// needing review. It is `action_required` with the address as value; the
+/// value is kept so the contact carries it and the native validation can
+/// re-check it. A conflict between sources still carries no value.
+fn keeps_unconfirmed_address(field: &str, status: &FieldStatus) -> bool {
+    field == "person_email"
+        && status.status == "action_required"
+        && !status
+            .reason
+            .trim_start()
+            .to_ascii_lowercase()
+            .starts_with("conflict")
+        && status
+            .value
+            .as_str()
+            .map(str::trim)
+            .is_some_and(|value| value.contains('@') && !value.contains(char::is_whitespace))
 }
 
 /// Minimal check for a chat assignment (the gap task checks through
@@ -1439,7 +1461,12 @@ fn fill_empty_contact_values(contact: &mut Value, statuses: &Map<String, Value>)
         let Some(status) = statuses.get(*field) else {
             continue;
         };
-        if status.get("status").and_then(Value::as_str) != Some("verified") {
+        let verified = status.get("status").and_then(Value::as_str) == Some("verified");
+        // A pattern address that awaits review fills an empty e-mail field
+        // too (see keeps_unconfirmed_address); its status says "prüfen".
+        let unconfirmed_address = *field == "person_email"
+            && status.get("status").and_then(Value::as_str) == Some("action_required");
+        if !verified && !unconfirmed_address {
             continue;
         }
         let Some(value) = status
@@ -4753,6 +4780,50 @@ mod tests {
             lead["contacts"][1]["field_status"]["person_email"]["status"],
             "verified"
         );
+    }
+
+    #[test]
+    fn unconfirmed_pattern_address_is_kept_and_reaches_the_contact() {
+        let requested = vec!["person_email".to_string()];
+        let mut lead = serde_json::json!({
+            "contacts": [{"id": "a", "person_key": "A"}, {"id": "b", "person_key": "B"}]
+        });
+        let incoming = serde_json::json!({
+            "A": {"person_email": {"status": "action_required", "value": "anna.alt@firma.test",
+                  "reason": "Musteradresse vorname.nachname@firma.test, Domain catch-all",
+                  "sources": [email_source("A", "bob.bau@firma.test")]}},
+            "B": {"person_email": {"status": "action_required", "value": "b@firma.test",
+                  "reason": "conflict: website vs leadfeeder", "sources": []}}
+        });
+        let rejections = apply_person_field_status(
+            &mut lead,
+            &incoming,
+            &BTreeMap::new(),
+            &requested,
+            &no_crm(),
+            None,
+        );
+        assert!(
+            !rejections
+                .iter()
+                .any(|line| line.contains("[A]") && line.contains("Wert")),
+            "{rejections:?}"
+        );
+        assert_eq!(
+            lead["person_field_status"]["A"]["person_email"]["value"],
+            "anna.alt@firma.test"
+        );
+        assert_eq!(
+            lead["person_field_status"]["B"]["person_email"]["value"],
+            Value::Null
+        );
+        project_person_field_status(&mut lead);
+        assert_eq!(lead["contacts"][0]["person_email"], "anna.alt@firma.test");
+        assert_eq!(
+            lead["contacts"][0]["field_status"]["person_email"]["status"],
+            "action_required"
+        );
+        assert!(lead["contacts"][1].get("person_email").is_none());
     }
 
     #[test]
