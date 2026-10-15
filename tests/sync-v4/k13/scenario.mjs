@@ -17,6 +17,7 @@ export default {
     assert.deepEqual(f.identities.map(i=>i.name).sort(),['admin','chef','user']);
     assert.ok(f.app?.baseVersion && f.app?.next?.manifest?.foreign_collections,'Use a real copied app release, not an unknown empty app');
     assert.notDeepEqual(f.app.next.manifest.layout,f.app.previous.manifest.layout,'Icon/layout must change');
+    assert.ok(f.app.iconSelector,'The real Shell icon needs an observable image selector');
     const participants=await Promise.all(f.identities.map(i=>participant(h,f,i)));
     const user=participants.find(p=>p.identity.name==='user');
     assert.equal(user.actor.is_admin,false,'The user acceptance account must be Core-authenticated as non-admin');
@@ -36,11 +37,18 @@ export default {
         const blob=await os.shell.artifacts.read(hash);
         const api=os.kernel.appApi(appId,version);
         const errors=os.shell.status.forApp(appId).get().filter(s=>/forbidden|access|missing/i.test(s.code));
-        return {role:api.actor.role,iconBytes:blob.size,hash,errors};
+        const iconUrl=os.kernel.artifacts.url(appId,version,path);
+        return {role:api.actor.role,iconBytes:blob.size,hash,errors,iconUrl:new URL(iconUrl,location.href).href};
       },{appId:f.app.id,version:published.rev});
       assert.ok(opened.iconBytes>0);assert.deepEqual(opened.errors,[]);
       assert.equal(opened.role,p.identity.role,'The actual app API must expose the Core-authenticated role');
-      openings.push({...opened,elapsedMs:Date.now()-activationStart});
+      const rendered=await p.page.locator(f.app.iconSelector).evaluate(async image=>{
+        if(!(image instanceof HTMLImageElement))throw Error('Observe the actual Shell image, not a fabricated asset probe');
+        await image.decode();return {url:image.currentSrc,width:image.naturalWidth,height:image.naturalHeight};
+      });
+      assert.equal(rendered.url,opened.iconUrl,'The Shell rendered a stale or fallback icon URL');
+      assert.ok(rendered.width>0 && rendered.height>0,'The real rendered icon failed to load');
+      openings.push({...opened,rendered,elapsedMs:Date.now()-activationStart});
       assertExactScope(await rawStore(p.page,'docs'),f.collection,f.beforeIds[p.identity.id],f.maskedFields[p.identity.id]??[]);
     }
     assert.ok(openings.every(o=>o.elapsedMs<=2000),'Authorized app/data/icon activation exceeded 2s');
