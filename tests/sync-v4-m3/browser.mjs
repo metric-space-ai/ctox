@@ -73,7 +73,7 @@ export async function start(config) {
       v4Hello: { createHello, verifyServerHello, requiredCapabilities: ['bench'] },
       iceServers: [{ urls: [config.turnUrl], username: 'bench', credential: 'bench' }],
       requestHandlers: { masterWrite: async () => ({ benchAck: true }) } });
-    peer.on('message', ({ payload }) => {
+    peer.on('message', ({ detail: { payload } }) => {
       if (payload?.method && payload.params?.[0]?.class) {
         const value = payload.params[0];
         record({ kind: 'received', id: payload.id, class: value.class, bytes: encoder.encode(value.body || '').length });
@@ -83,8 +83,8 @@ export async function start(config) {
           record({ kind: 'ack', id: payload.id, class: waiter.class, error: Boolean(payload.error), latencyMs: performance.now() - waiter.at }); waiter.resolve(!payload.error); }
       }
     });
-    peer.on('error', error => { if (errors.length < 10000) errors.push({ at: performance.now() - started, code: String(error?.code || 'transport_error') }); });
-    peer.on('peer-open', ({ peerId }) => record({ kind: 'connected', peer: peerId, generation }));
+    peer.on('error', ({ detail: error }) => { if (errors.length < 10000) errors.push({ at: performance.now() - started, code: String(error?.code || 'transport_error') }); });
+    peer.on('peer-open', ({ detail: { peerId } }) => record({ kind: 'connected', peer: peerId, generation }));
     peer.connect();
   }
   connect();
