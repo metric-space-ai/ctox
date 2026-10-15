@@ -790,20 +790,21 @@ export function createKernel(opts = {}) {
   // K-1c Punkt 9: kein busy. Veröffentlichungen einer App laufen nacheinander; die nächste wartet, bis die laufende
   // samt Aktivierung fertig ist, und endet dann selbst mit ihrem Ergebnis (pending → done/rejected).
   const publishChains = new Map();
+  // fn liefert {value, hold}: value geht sofort an den Aufrufer, die Sperre hält bis hold (Aktivierung) erledigt ist.
   function withPublishLock(appId, fn) {
     const prev = publishChains.get(appId) ?? Promise.resolve();
     const run = prev.then(() => fn());
-    const tail = run.catch(() => {});
+    const tail = run.then((r) => r?.hold).catch(() => {});
     publishChains.set(appId, tail);
     tail.then(() => { if (publishChains.get(appId) === tail) publishChains.delete(appId); });
-    return run;
+    return run.then((r) => r.value);
   }
   async function settleActivation(appId, ver) {
     if (isLib(appId)) return;
     await waitUntil(() => isTerminalFor(appId, ver) || visible(mirrorGet('business_apps', appId))?.active_ver !== ver || closed || !isLeader);
   }
   function publishInternal(appId, ver, o = {}) {
-    return withPublishLock(appId, async () => { const r = await publishCore(appId, ver, o); await settleActivation(appId, ver); return r; });
+    return withPublishLock(appId, async () => { const r = await publishCore(appId, ver, o); return { value: r, hold: settleActivation(appId, ver) }; });
   }
   async function publishCore(appId, ver, o = {}) {
     publishing.add(appId);
@@ -1735,7 +1736,12 @@ export function createKernel(opts = {}) {
       return activations.has(appId) ? { ...activations.get(appId) } : null;
     },
     // §16.22 A2/A3/A6/A9 + §16.26 + Befund B4. Im Leiter, weil der Test-Core hier die Veröffentlichung simuliert.
-    publishDraft(appId, base, draftFiles, draftManifest) { return withPublishLock(appId, () => simImpl.publishDraftLocked(appId, base, draftFiles, draftManifest)); },
+    publishDraft(appId, base, draftFiles, draftManifest) {
+      return withPublishLock(appId, async () => {
+        const value = await simImpl.publishDraftLocked(appId, base, draftFiles, draftManifest);
+        return { value, hold: value.status === 'accepted' ? settleActivation(appId, value.rev) : null };
+      });
+    },
     async publishDraftLocked(appId, base, draftFiles, draftManifest) {
       const reject = (reason, detail) => ({ status: 'rejected', reason, ...(detail ? { detail } : {}) });
       const active = activeVerOf(appId);
@@ -1793,7 +1799,6 @@ export function createKernel(opts = {}) {
         const msg = String(e?.message ?? e);
         return reject(msg.includes('stale_base') ? 'stale_base' : msg.includes('busy') ? 'busy' : (e?.code ?? 'unavailable'), msg);
       }
-      await settleActivation(appId, ver); // Ergebnis erst nach der Aktivierung: die nächste Veröffentlichung sieht den neuen Stand
       return { status: 'accepted', rev: ver, diff: diff.map(({ name, kind }) => ({ name, kind })) };
     },
     libFetch(lib, major, path, ver) { return libFetchLeader(lib, major, path, ver); },
