@@ -75,5 +75,5 @@ try {
  assert.equal((await k.sim.outbox()).length,0);assert.ok(replays>0);assert.ok(verified>0);assert.deepEqual(peer.errors,[]);
  if(heldInitial)await peer.send('initial',heldInitial);
  samples.sort((a,b)=>a-b);
- console.log(JSON.stringify({type:'measured',profile:'cross-language component, memory client/WAL core, in-process channels; not installed/TURN',p50_ms:samples[Math.ceil(samples.length*.5)-1],p95_ms:samples[Math.ceil(samples.length*.95)-1],p99_ms:samples.at(-1),verified_pages:verified,canonical_replays:replays}));
+ console.log(JSON.stringify({type:'measured',profile:'cross-language component, memory client/WAL core, in-process channels; not installed/TURN',p50_ms:samples[Math.ceil(samples.length*.5)-1],p95_ms:samples[Math.ceil(samples.length*.95)-1],p99_ms:samples[Math.ceil(samples.length*.99)-1],max_ms:samples.at(-1),verified_pages:verified,canonical_replays:replays}));
 }finally{clearTimeout(deadline);await k.close();peer.close();lines.close();}

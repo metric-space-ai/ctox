@@ -790,6 +790,11 @@ fn write_output(
             if rev.is_empty() || !body.is_object() {
                 return Err(invalid("invalid migrated document"));
             }
+            if target.definition.name == "business_commands" && target.definition.schema_ver == 3 {
+                crate::change_log::subscription::write_contract::validate_migrated_command(
+                    body, &source.id,
+                )?;
+            }
             archive(tx, target, source, "generation migration", now)?;
             tx.execute(
                 &format!(
@@ -1786,6 +1791,21 @@ pub fn bind_platform_command_schema(input: &mut BaseReleaseInput) -> Result<()> 
         .and_then(Value::as_object_mut)
         .ok_or_else(|| invalid("platform command metadata missing"))?;
     let schema = crate::change_log::subscription::write_contract::command_document_schema();
+    // Never downgrade an unknown future contract or reuse a published version
+    // for different bytes. Legacy v2 is the explicit incompatible base.
+    let corrected_schema = input
+        .schemas
+        .get("ctox-platform")
+        .and_then(|s| s["collections"].get("business_commands"))
+        .map(|entry| entry.get("schema").unwrap_or(entry));
+    for supplied in [corrected_schema, metadata.get("schema")]
+        .into_iter()
+        .flatten()
+    {
+        if supplied["version"].as_u64().unwrap_or(0) >= 3 && supplied != &schema {
+            return Err(invalid("platform command schema version collision"));
+        }
+    }
     metadata.insert("schema".into(), schema.clone());
     let corrected = input
         .schemas
