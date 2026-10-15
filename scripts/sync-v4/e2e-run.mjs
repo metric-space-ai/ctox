@@ -43,7 +43,7 @@ const config = { owner, ...build, output, profile, clients, rttMs, warmRttMs, lo
   seedAfterStart: args['seed-after-start'] === 'yes', leadProfile: args['lead-profile'] || 'eager',
   osBootstrap: args['os-bootstrap'] || null, catalogDuration: args['catalog-duration'] === 'full' ? 'full' : 'slice', prime: args.prime === 'yes', upgradeBuild: args['upgrade-build'] || null, schemaCli: args['schema-cli'] ? JSON.parse(fs.readFileSync(args['schema-cli'])) : null, catalog: args.catalog === 'yes', scenarioRoot: args.catalog === 'yes' ? join(snapshot,'tests/sync-v4') : null,
   root: join(output,`tenant-${build.revision.slice(0,12)}`), port: 19865, signalingPort: 19866, turnPort: 34789,
-  runner: join(snapshot,'tests/sync-v4-e2e/runner.mjs'), sourceManifest,
+  runner: join(snapshot,'tests/sync-v4-e2e/runner.mjs'), sourceManifest, buildReceipt: resolve(args.build), lane, canonicalTmpdir: process.env.TMPDIR,
   durationSeconds: Number(args.seconds || 900), hostNetworkNamespace: fs.readlinkSync('/proc/self/ns/net'),
   chrome: args.chrome || '/opt/google/chrome/chrome', modulesRoot: args['modules-root'] || join(lane,'deps/shell-browser-collection-auth/node_modules'),
   turnBin: args['turn-bin'] || '/usr/bin/turnserver', turnLib: args['turn-lib'] || '', scenario: args.scenario || null };

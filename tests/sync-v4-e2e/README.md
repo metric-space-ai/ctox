@@ -132,10 +132,16 @@ coverage gaps are explicit: no scenario yet claims full catalog acceptance.
   query RPCs and unclassified binary sends; absence cannot be inferred from a
   missing decoder. Real file-CAS upload and app/CPU matrix remain outstanding.
 - K11 accepts `--upgrade-build /absolute/build.json` and `--schema-cli file.json`
-  (`compatible` and `incompatible`: actual revision CLI argv arrays). It switches
-  only the owned supervised daemon and state links. It will not invoke host
-  service management or manufacture installer-maintenance flags. The isolated
-  managed-installer lifecycle still needs an adapter.
+  (`compatible`, `incompatible`: real revision CLI argv arrays; `database`: path
+  relative to the isolated tenant root). The installer now runs the real
+  `update apply --version` against a private loopback release-package fixture,
+  using two checksum-verified binaries, a private managed prefix and the
+  installer's own backup/maintenance/link-switch lifecycle. A nested private
+  PID/mount/network namespace masks `/run` before dropping to the fixture UID;
+  no host service bus or host PID can be reached. There is no restart fallback.
+  The migration CLI must change the actual `_collections` generation registry;
+  read-only proofs retain schema, row-ID and data hashes. Missing native
+  migration bindings remain `not_run`; code or a binary switch is not proof.
 - K15 runs eight continuously committing SQLite connections plus real browser
   producers, native read commands and queue CLI. `--catalog-duration full`
   selects thirty minutes, three clients via `--clients 3`, midpoint daemon
@@ -147,12 +153,37 @@ coverage gaps are explicit: no scenario yet claims full catalog acceptance.
   Actual Outbound UI, quota status/outbox assertions and the named pre-fix red
   witness remain outstanding. `--prime yes` records one explicit cold bootstrap
   before the fresh measured context; it is not a hidden retry loop.
-- K24 includes an unknown app's real source/schema/handler/one-minute-trigger
-  fixture. `--os-bootstrap /exact/same-origin/module.mjs` must export
-  `connectScenario()` returning a native-WebRTC-backed `{kernel, openApp,
-  nativePeerId, transportKind:'native-webrtc'}`. It uses `shell.source().draft`,
-  handler execution, trigger and incompatible migration/remount. No fake-core
-  fallback. Non-admin/Workjet clients, archive and native handler truth remain.
+- K24 uses the delivered Shell tool, exact `run.mjs` and app v1/v2 bytes pinned
+  per file in `tests/sync-v4/k24/ORIGIN.json` (upstream `1ab7ceb03`). The adapter
+  `k24/execute.mjs` retains every PASS/OFFEN/FAIL criterion verbatim. Bind uses
+  MemoryCoreTransport and cannot establish native acceptance. Its private
+  static server serves the additional `/rxdb/src/` module dependency of #823;
+  before/after hashes of this fixture-only adaptation are recorded. No data
+  frame or command is intercepted. Native URL mode permits only an explicitly
+  marked isolated loopback instance; no WELSCH tunnel is contacted.
+
+## E2E-K3 revision selection and comparison
+
+```sh
+scripts/sync-v4/gate-regression.sh --target v3 --build /absolute/old/build.json
+scripts/sync-v4/gate-regression.sh --target v4=v4/cutover
+scripts/sync-v4/gate-regression.sh --target v4=<immutable-sha> \
+  --build /absolute/verified/build.json --kernel-revision <sha-of-823>
+```
+
+V3 reference values are frozen in `k-support/baseline-v3.json`; reruns never
+rewrite them. The gate writes `comparison.json` and `comparison.md` alongside
+`gate.json`: V3 value, V4 value, target, red/green/not_run and evidence. A missing
+revision/build/browser/native adapter yields exit 2 and `not_run`, never red as
+if the product had been measured, and never a green empty gate. V4 default
+build host is auto; V3/Chromium uses gpu4 because its namespace permission is
+required. A supplied producer is rehashed and must match the requested SHA.
+
+**Open:** the V4 browser/store scenario adapter is not yet bound to the native
+pairing/hello/signature/scope authorities required by #823. This gate currently
+builds/verifies V4 and emits explicit not_run prerequisites; it does not execute
+the V3 app adapter against V4 and label that native V4 acceptance. T8/Z9 and
+real K11 migration remain open. K24 bind output is separate diagnostic evidence.
 
 `--lead-profile demand-only --scenario K08` runs the lease/window slice with an
 actual demand-only collection. It is not the historical Outbound startup code

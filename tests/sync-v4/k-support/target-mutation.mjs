@@ -9,11 +9,13 @@ const needle="if(!row||!['measured','failed'].includes(row.status))return 'not_r
 try{
  fs.writeFileSync(join(root,'target.test.mjs'),test);
  const run=()=>spawnSync(process.execPath,['--test',join(root,'target.test.mjs')],{encoding:'utf8'});
- fs.writeFileSync(join(root,'target.mjs'),source);const before=run();
- if(!source.includes(needle))throw Error('Mutation anchor absent');
- fs.writeFileSync(join(root,'target.mjs'),source.replace(needle,''));const mutated=run();
- fs.writeFileSync(join(root,'target.mjs'),source);const restored=run();
- const pass=before.status===0&&mutated.status!==0&&/AssertionError/.test(mutated.stdout)&&restored.status===0;
- console.log(JSON.stringify({mutation:needle+' → removed',before:before.status,mutated:mutated.status,restored:restored.status,assertion:/AssertionError/.test(mutated.stdout),pass}));
- if(!pass)throw Error('Missing-target mutation proof failed');
+ for(const [needle,replacement] of [["if(!row||!['measured','failed'].includes(row.status))return 'not_run';",''],['c.status===\'FAIL\'&&c.subs>0',"c.status==='FAIL'"]]){
+  fs.writeFileSync(join(root,'target.mjs'),source);const before=run();
+  if(!source.includes(needle))throw Error('Mutation anchor absent');
+  fs.writeFileSync(join(root,'target.mjs'),source.replace(needle,replacement));const mutated=run();
+  fs.writeFileSync(join(root,'target.mjs'),source);const restored=run();
+  const pass=before.status===0&&mutated.status!==0&&/AssertionError/.test(mutated.stdout)&&restored.status===0;
+  console.log(JSON.stringify({mutation:needle+' → '+replacement,before:before.status,mutated:mutated.status,restored:restored.status,assertion:/AssertionError/.test(mutated.stdout),pass}));
+  if(!pass)throw Error('Missing-target/bind mutation proof failed');
+ }
 }finally{fs.rmSync(root,{recursive:true,force:true});}

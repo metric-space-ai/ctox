@@ -13,7 +13,7 @@ const output=resolve(process.env.BUILD_LANE_BIN,'../artifacts/e2e-k-'+Date.now()
 fs.mkdirSync(output,{recursive:false,mode:0o700});
 const raw=process.argv.slice(2),options={};const args=[];
 for(let i=0;i<raw.length;i+=2){if(!raw[i]?.startsWith('--')||raw[i+1]===undefined)throw Error('Expected --key value');
- if(['target','kernel-revision','k24-source','k24-mode','v4-build-only'].includes(raw[i].slice(2)))options[raw[i].slice(2)]=raw[i+1];else args.push(raw[i],raw[i+1]);}
+ if(['target','target-requested','kernel-revision','k24-source','k24-mode','k24-evidence'].includes(raw[i].slice(2)))options[raw[i].slice(2)]=raw[i+1];else args.push(raw[i],raw[i+1]);}
 const target=parseTarget(options.target);
 const baseline=JSON.parse(fs.readFileSync(new URL('./baseline-v3.json',import.meta.url)));
 
@@ -28,8 +28,13 @@ const save=()=>{
 };
 save();
 if(target.kind==='v4'){
+ target.requestedLabel=options['target-requested']??target.requested;
  target.revision=resolveRevision(target.requested);
- target.kernelRevision=resolveRevision(options['kernel-revision']??'origin/v4/k-1b-shell-api');
+ if(!target.revision&&/^[a-f0-9]{40}$/.test(target.requested)){
+  const fetch=spawnSync('git',['fetch','origin',target.requested],{encoding:'utf8',timeout:60000});target.fetchExit=fetch.status;
+  if(fetch.status===0)target.revision=resolveRevision(target.requested);
+ }
+ target.kernelRevision=resolveRevision(options['kernel-revision']??'fa1b88498cdb9beed020a9bc8f32a4f4037dca20');
  let reason;
  if(!target.revision)reason='Requested V4 revision is absent: '+target.requested;
  else if(!target.kernelRevision)reason='Browser kernel #823 revision is absent';
@@ -49,14 +54,23 @@ if(target.kind==='v4'){
    // Do not drive a V4 target through legacy db.collections/startCollection.
    // #823 intentionally delegates pairing, hello, signatures and scopes to the
    // host; a native bootstrap has to supply those authorities before K cases.
-   const probe=spawnSync('git',['grep','-n','connectScenario','--', 'src/apps/business-os/kernel','src/apps/business-os/v4'],{cwd:b.source,encoding:'utf8'});
-   summary.nativeBootstrapProbe={command:'git grep -n connectScenario -- src/apps/business-os/kernel src/apps/business-os/v4',exit:probe.status,paths:probe.stdout.trim().split('\n').filter(Boolean).map(x=>x.split(':').slice(0,2).join(':'))};
-   reason=probe.status===1?'Built V4 daemon has no native scenario bootstrap; #823 requires host createPeer/hello/resolveScope/verifyPackage. V3 adapter deliberately not used.':'Native V4 app/store scenario adapter is not bound; bootstrap integration must be verified before incident measurements';
+   const kernelSource=spawnSync('git',['show',target.kernelRevision+':src/apps/business-os/kernel/transport-webrtc.mjs'],{encoding:'utf8'});
+   summary.browserKernel={revision:target.kernelRevision,sourcePresent:kernelSource.status===0,
+    hostSupplies:['createPeer','hello','resolveScope','verifyPackage'],nativeBindingExecuted:false};
+   reason='V4 app/store scenario adapter is not yet bound to native pairing/hello/signature/scope authorities required by #823; V3 db.collections/lease fallback deliberately not used. This is an open harness integration, not a measured product failure.';
+
   }catch(e){reason='V4 build unverified: '+e.message;summary.buildReceipt=receipt;}
  }
- for(const id of expected)summary.scenarios.push({id,status:'not_run',pass:false,acceptanceComplete:false,reason,evidence:summary.build?.receipt??summary.buildReceipt??null});
- summary.terminal=true;summary.finishedAt=new Date().toISOString();summary.actuallyRan=[];summary.pass=false;save();
- console.log(markdown(summary.comparison));console.log('ZERO V4 scenarios ran; not_run: '+reason+'; evidence '+output);process.exit(2);
+ for(const id of expected){
+  if(id==='K24'&&options['k24-evidence']){
+   const file=resolve(options['k24-evidence']),row=JSON.parse(fs.readFileSync(file));
+   if(row.id!=='K24'||row.terminal!==true||row.cleanup!=='owned groups absent'||row.originCommit!=='1ab7ceb03ceaeac763ea7ec99be56896608f83cb')throw Error('K24 evidence is not terminal, owned, or from the pinned tool');
+   summary.scenarios.push({...row,id,evidence:file,measured:{target:row.target,criteria:row.criteria,measures:row.measured},bindingOnly:row.target==='bind'});
+  }else summary.scenarios.push({id,status:'not_run',pass:false,acceptanceComplete:false,reason,evidence:summary.build?.receipt??summary.buildReceipt??null});
+ }
+
+ summary.terminal=true;summary.finishedAt=new Date().toISOString();summary.actuallyRan=summary.scenarios.filter(r=>r.status==='measured').map(r=>r.id);summary.pass=false;save();
+ console.log(markdown(summary.comparison));console.log('V4 native scenarios not_run: '+reason+'; evidence '+output);process.exit(2);
 }
 for(const id of expected){
  const dir=join(output,id);

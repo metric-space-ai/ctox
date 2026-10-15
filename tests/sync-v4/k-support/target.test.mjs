@@ -12,4 +12,9 @@ test('unexecuted targets and incomplete scenarios never become a green V4 compar
  const baseline={scenarios:{K01:{value:{losses:10},targetValue:{losses:0},verdict:'red'}}};
  const before=JSON.stringify(baseline);const out=comparison(baseline,[]);
  assert.equal(out[0].verdict,'not_run');assert.equal(JSON.stringify(baseline),before);
+ const b={scenarios:{K24:{value:{kernelHttpStatus:404},targetValue:'all native PASS'}}};
+ const bind={id:'K24',status:'measured',bindingOnly:true,pass:true,acceptanceComplete:true,measured:{criteria:{one:{status:'PASS',subs:1}}}};
+ assert.equal(comparison(b,[bind])[0].verdict,'not_run');
+ bind.measured.criteria.one={status:'FAIL',subs:0};assert.equal(comparison(b,[bind])[0].verdict,'not_run');
+ bind.measured.criteria.one.subs=1;assert.equal(comparison(b,[bind])[0].verdict,'red');
 });

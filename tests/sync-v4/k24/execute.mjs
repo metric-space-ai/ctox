@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import {resolve,join,dirname} from 'node:path';
 import {spawn,execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
+import {bindAssets} from './bind-assets.mjs';
 const o={};for(let i=2;i<process.argv.length;i+=2)o[process.argv[i].slice(2)]=process.argv[i+1];
 if(process.platform!=='linux'||!process.env.BUILD_LANE_BIN)throw Error('Canonical Linux lane required');
 const target=o.target??'bind';
@@ -25,6 +26,7 @@ try{
  if(manifest.shellRevision!==origin.commit)throw Error('Shell snapshot differs from delivered K24 origin');
  for(const f of manifest.files){const p=resolve(source,f.path);if(!p.startsWith(source+'/')||!fs.lstatSync(p).isFile()||hash(fs.readFileSync(p))!==f.sha256)throw Error('Snapshot hash mismatch: '+f.path);}
  const runtime=join(out,'snapshot');fs.cpSync(source,runtime,{recursive:true});
+ if(target==='bind')result.fixtureAdaptation=bindAssets(runtime);
  const k24=join(runtime,'src/apps/business-os/v4/k24');fs.mkdirSync(k24,{recursive:true});
  for(const f of origin.files){const p=join(k24,f.path);fs.mkdirSync(dirname(p),{recursive:true});fs.copyFileSync(join(here,f.path),p);}
  // Upstream fingerprints git before/after. This custody commit describes the
@@ -33,7 +35,9 @@ try{
  git(['init','--quiet']);git(['add','.']);git(['-c','user.name=CTOX synthetic fixture','-c','user.email=fixture@invalid','commit','--quiet','-m','Imported exact Shell/K-1 snapshot; see snapshot.json']);
  result.snapshot={shellRevision:manifest.shellRevision,kernelRevision:manifest.kernelRevision,manifestSha256:hash(fs.readFileSync(join(source,'snapshot.json'))),custodyCommit:git(['rev-parse','HEAD']).toString().trim(),nativePeer:target!=='bind'};
  const requireShim=join(out,'playwright.cjs');
- fs.writeFileSync(requireShim,`const real=require(${JSON.stringify(o.playwright)});module.exports={...real,chromium:{...real.chromium,launch:o=>real.chromium.launch({...o,executablePath:${JSON.stringify(o.chrome??'/opt/google/chrome/chrome')}})}};\n`);
+ fs.writeFileSync(requireShim,`module.exports=require(${JSON.stringify(join(here,'playwright-adapter.cjs'))}).create(${JSON.stringify({packagePath:o.playwright,chrome:o.chrome??'/opt/google/chrome/chrome',runtime,out})});\n`);
+ result.browserAdaptation={method:'native DOM.setFileInputFiles directory selection',reason:'Shell resets input.value after reading; avoid Playwright FileList postcondition timeout. No sync path, payload or criterion is simulated.'};
+
  const log=fs.openSync(join(out,'tool.log'),'w',0o600);
  const child=spawn(process.execPath,[join(k24,'run.mjs'),'--target',target],{cwd:runtime,env:{...process.env,PLAYWRIGHT_MODULE:requireShim,K24_GUARD_BOS:join(runtime,'src/apps/business-os')},detached:true,stdio:['ignore',log,log]});fs.closeSync(log);
  result.process={owner:'01a087a0-169a',pid:child.pid,pgid:child.pid,stop:'terminal or 12 minutes'};save();
@@ -46,7 +50,7 @@ try{
  const file=join(k24,'out/results.json');
  if(fs.existsSync(file)){
   const raw=JSON.parse(fs.readFileSync(file));result.criteria=raw.criteria;result.subs=raw.subs;result.measured=raw.measures;result.fatal=raw.fatal??null;
-  result.status=raw.fatal?'failed':'measured';result.pass=!raw.fatal&&exit.code===0&&Object.values(raw.criteria).every(c=>c.status==='PASS');
+  result.status=raw.fatal?(raw.subs?.length?'failed':'not_run'):'measured';result.pass=!raw.fatal&&exit.code===0&&['V','1','2','3','4','5','6','7','8','W'].every(k=>raw.criteria[k]?.status==='PASS'&&raw.criteria[k].subs>0);
   result.acceptanceComplete=target!=='bind'&&result.pass;
   result.reason=target==='bind'?'Bind uses MemoryCoreTransport; native criteria remain OPEN/FAIL exactly as upstream reports':null;
  }else result.reason='Delivered tool terminated before producing results';

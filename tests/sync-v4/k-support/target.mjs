@@ -18,8 +18,10 @@ export function verdict(row) {
 export function comparison(baseline,rows) {
  return Object.entries(baseline.scenarios).map(([id,b])=>{
   const row=rows.find(r=>r.id===id);
+  const criteria=row?.bindingOnly?Object.values(row.measured?.criteria??{}):[];
+  const state=row?.bindingOnly?(criteria.some(c=>c.status==='FAIL'&&c.subs>0)?'red':'not_run'):verdict(row);
   return {id,v3Value:b.value,v3Verdict:b.verdict,v3Evidence:b.evidence,v4Value:row?.measured??null,targetValue:b.targetValue,
-   verdict:verdict(row),reason:row?.reason??row?.error??'No V4 scenario executed',evidence:row?.evidence??null};
+   verdict:state,reason:row?.reason??row?.error??'No V4 scenario executed',evidence:row?.evidence??null};
  });
 }
 export function markdown(rows) {

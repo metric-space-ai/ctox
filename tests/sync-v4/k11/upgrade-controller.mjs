@@ -1,0 +1,23 @@
+import fs from 'node:fs';
+import {join,resolve} from 'node:path';
+import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {verifiedUpgrade} from './upgrade.mjs';
+const [oldReceipt,newReceipt,root,directory]=process.argv.slice(2);
+if(process.platform!=='linux'||!process.env.BUILD_LANE_BIN)throw Error('Canonical lane required');
+verifiedUpgrade(oldReceipt,newReceipt,root);
+const output=resolve(directory),allowed=resolve(process.env.BUILD_LANE_BIN,'../artifacts');
+if(!output.startsWith(allowed+'/'))throw Error('Private artifact output required');
+fs.mkdirSync(output,{recursive:false,mode:0o700});
+const here=fileURLToPath(new URL('.',import.meta.url));
+const config={oldReceipt,newReceipt,root:resolve(root),output,tmpdir:process.env.TMPDIR,uid:process.getuid(),gid:process.getgid(),runner:join(here,'upgrade-runner.mjs'),host:Object.fromEntries(['net','mnt','pid'].map(n=>[n,fs.readlinkSync('/proc/self/ns/'+n)]))};
+const file=join(output,'sandbox.json');fs.writeFileSync(file,JSON.stringify(config,null,2),{mode:0o600});
+const child=spawn('sudo',['-n','unshare','--net','--mount','--pid','--fork','--mount-proc',process.execPath,join(here,'sandbox.mjs'),file],{stdio:'inherit',detached:true});
+const row={owner:'01a087a0-169a',pid:child.pid,pgid:child.pid,purpose:'supported installer in private PID/mount/network namespaces',stop:'terminal or 10 min',startedAt:new Date().toISOString()};
+const save=()=>fs.writeFileSync(join(output,'controller.json'),JSON.stringify(row,null,2));save();
+const kill=s=>{try{process.kill(-child.pid,s);}catch(e){if(e.code!=='ESRCH')throw e;}};
+const timer=setTimeout(()=>kill('SIGKILL'),10*60*1000);process.once('SIGTERM',()=>kill('SIGKILL'));
+const exit=await new Promise((r,j)=>{child.once('exit',(code,signal)=>r({code,signal}));child.once('error',j);});
+clearTimeout(timer);kill('SIGKILL');row.exit=exit;row.finishedAt=new Date().toISOString();
+row.groupAbsent=false;for(let i=0;i<100;i++){try{process.kill(-child.pid,0);}catch(e){if(e.code==='ESRCH'){row.groupAbsent=true;break;}throw e;}await new Promise(r=>setTimeout(r,50));}
+save();if(!row.groupAbsent)throw Error('Installer sandbox group remains');process.exitCode=exit.code??1;
