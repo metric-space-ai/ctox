@@ -1927,8 +1927,10 @@ pub fn import_base_release(
                 .and_then(|v| v.get(&name));
             let schema = corrected
                 .or_else(|| metadata.get("schema"))
-                .ok_or_else(|| invalid(format!("schema missing: {name}")))?
-                .clone();
+                .ok_or_else(|| invalid(format!("schema missing: {name}")))?;
+            // Corrected Shell schema files carry collection metadata around
+            // `schema`; older release fixtures contain the schema directly.
+            let schema = schema.get("schema").unwrap_or(schema).clone();
             let version = schema.get("version").and_then(Value::as_u64).unwrap_or(0);
             let def = CollectionDefinition {
                 name: name.clone(),
