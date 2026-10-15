@@ -2,6 +2,7 @@
 // License: AGPL-3.0-only
 
 use super::super::super::policy::{self, BusinessOsActor, BusinessOsPermission, BusinessOsScope};
+use ctox_store::change_log::subscription::protocol::InstanceSigner;
 use ctox_store::{
     change_log,
     schema::{self, CollectionDefinition, PublishLock, SchemaChange},
@@ -113,6 +114,93 @@ fn catalog_contains(tx: &Transaction<'_>, app: &str, version: &str) -> Result<bo
         |r| r.get(0),
     )?)
 }
+/// Declaration gate only; the caller must also enforce native user policy.
+/// Resolve both active pointers in the same writer transaction. Prepared/old
+/// versions never become an IPC registry and no restart/cache refresh is needed.
+pub(crate) fn ipc_declarations_allow(
+    tx: &Transaction<'_>,
+    sender: &str,
+    receiver: &str,
+    kind: &str,
+) -> Result<bool, StoreError> {
+    if sender.is_empty() || receiver.is_empty() || kind.is_empty() {
+        return Ok(false);
+    }
+    if sender == receiver {
+        return Ok(true);
+    }
+    let Some(source) = active_manifest(tx, sender)? else {
+        return Ok(false);
+    };
+    let Some(target) = active_manifest(tx, receiver)? else {
+        return Ok(false);
+    };
+    let outgoing = source
+        .get("commands_out")
+        .and_then(Value::as_array)
+        .is_some_and(|edges| {
+            edges
+                .iter()
+                .any(|edge| edge["app"] == receiver && edge["type"] == kind)
+        });
+    if !outgoing {
+        return Ok(false);
+    }
+    let incoming = target
+        .get("commands_in")
+        .and_then(Value::as_array)
+        .is_some_and(|edges| {
+            edges.iter().any(|edge| {
+                edge["type"] == kind
+                    && (edge["from"] == "*"
+                        || edge["from"]
+                            .as_array()
+                            .is_some_and(|apps| apps.iter().any(|app| app == sender)))
+            })
+        });
+    Ok(incoming)
+}
+fn active_manifest(tx: &Transaction<'_>, app_id: &str) -> Result<Option<Value>, StoreError> {
+    let Some(app) = get(tx, "business_apps", app_id)? else {
+        return Ok(None);
+    };
+    if app["state"] != "active" {
+        return Ok(None);
+    }
+    let version = text(&app, "active_ver")?;
+    let Some(saved) = get(tx, "business_app_versions", &version_id(app_id, version))? else {
+        return Err(invalid("active IPC manifest missing"));
+    };
+    if saved["app_id"] != app_id || saved["app_ver"] != version || saved["state"] != "published" {
+        return Err(invalid("active IPC version binding differs"));
+    }
+    Ok(Some(saved["manifest"].clone()))
+}
+fn validate_ipc(manifest: &Value) -> Result<(), StoreError> {
+    for key in ["commands_in", "commands_out"] {
+        let Some(raw) = manifest.get(key) else {
+            continue;
+        };
+        let edges = raw
+            .as_array()
+            .ok_or_else(|| invalid("IPC declarations must be arrays"))?;
+        for edge in edges {
+            text(edge, "type")?;
+            if key == "commands_out" {
+                text(edge, "app")?;
+            } else if edge["from"] != "*"
+                && !edge["from"].as_array().is_some_and(|apps| {
+                    apps.iter()
+                        .all(|app| app.as_str().is_some_and(|id| !id.is_empty()))
+                })
+            {
+                return Err(invalid("commands_in.from must be '*' or app ids"));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn permission(
     actor: &BusinessOsActor,
     permission: BusinessOsPermission,
@@ -177,12 +265,27 @@ fn record(
     Ok(outcome)
 }
 
+pub(super) fn sign_manifest(
+    signer: &dyn InstanceSigner,
+    bytes: &[u8],
+) -> Result<String, StoreError> {
+    let signature = signer
+        .sign(bytes)
+        .map_err(|_| invalid("instance signing authority unavailable"))?;
+    if signature.len() != 64 {
+        return Err(invalid(
+            "instance signer did not return an Ed25519 signature",
+        ));
+    }
+    Ok(signature.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
 pub(super) fn execute(
     tx: &Transaction<'_>,
     actor: &BusinessOsActor,
     command: &CommandDocument,
     now: u64,
-    signer: &(dyn Fn(&[u8]) -> Result<String, StoreError> + Send + Sync),
+    signer: &dyn InstanceSigner,
     migrations: &(dyn Fn(&CollectionDefinition, &CollectionDefinition, &Value) -> bool
           + Send
           + Sync),
@@ -408,6 +511,7 @@ pub(super) fn execute(
     {
         return Err(invalid("manifest exceeds draft byte budget"));
     }
+    validate_ipc(&manifest)?;
     let mut definitions = definitions(&manifest, &request.app_id, &version)?;
     let prior_manifest = if let Some(active) = active.as_str() {
         get(
@@ -527,10 +631,7 @@ pub(super) fn execute(
     if bytes.len() > 1_048_576 {
         return Err(invalid("manifest exceeds draft byte budget"));
     }
-    let signature = signer(&bytes)?;
-    if signature.is_empty() {
-        return Err(invalid("manifest signer returned an empty signature"));
-    }
+    let signature = sign_manifest(signer, &bytes)?;
     let id = version_id(&request.app_id, &version);
     put(
         tx,

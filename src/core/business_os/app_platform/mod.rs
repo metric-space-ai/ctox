@@ -2,7 +2,7 @@
 // License: AGPL-3.0-only
 //! App publication is a transaction on the canonical store, never a second DB.
 //!
-//! The store owner injects its existing WriterHandle and manifest signer. The
+//! The store owner injects its existing Database and native stream signer. The
 //! migration runner prepares pages outside that writer and calls `complete`.
 //! Client activation remains a separate checkpoint-gated protocol.
 
@@ -11,7 +11,9 @@ mod commands;
 mod tests;
 
 use super::super::policy::BusinessOsActor;
-pub(crate) use commands::{can_read_draft, can_write_draft, handles, CommandDocument};
+pub(crate) use commands::{
+    can_read_draft, can_write_draft, handles, ipc_declarations_allow, CommandDocument,
+};
 use ctox_store::{
     types::{JobOptions, StoreError, WriteJob},
     writer::WriterHandle,
@@ -22,7 +24,7 @@ use std::sync::Arc;
 /// Implemented by the native signing-key owner. No key material enters commands.
 /// The owner loads its key before attaching: this callback performs bounded,
 /// in-memory signing only and must never do I/O on the writer thread.
-pub(crate) type Signer = Arc<dyn Fn(&[u8]) -> Result<String, StoreError> + Send + Sync>;
+pub(crate) type Signer = Arc<dyn ctox_store::change_log::subscription::protocol::InstanceSigner>;
 /// Native runner resolution, never a boolean supplied by an app. Resolution
 /// must be in-memory and bounded: migration execution happens outside writer.
 pub(crate) type MigrationResolver = Arc<
@@ -55,10 +57,15 @@ impl Platform {
                 "app platform owner generation differs".into(),
             ));
         }
+        if signer.instance_id().is_empty() || signer.key_id().is_empty() {
+            return Err(StoreError::Invalid(
+                "instance signing identity is required".into(),
+            ));
+        }
         Ok(Self::new(database.writer.clone(), signer))
     }
 
-    pub(crate) fn new(writer: WriterHandle, signer: Signer) -> Self {
+    fn new(writer: WriterHandle, signer: Signer) -> Self {
         Self {
             writer,
             signer,

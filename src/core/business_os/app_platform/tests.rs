@@ -16,13 +16,13 @@ use ring::{
     rand::SystemRandom,
     signature::{self, Ed25519KeyPair, KeyPair},
 };
-use rusqlite::{Connection, OpenFlags};
+
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{sync::Arc, time::Duration};
 
 use ctox_store::change_log::subscription::{
-    protocol::{InstanceSigner, StreamKind},
+    protocol::{InstanceSigner, InstanceVerifier, StreamKind},
     ReadAuthority, Subscription, SubscriptionKey,
 };
 
@@ -36,6 +36,23 @@ impl InstanceSigner for StreamKey {
     }
     fn sign(&self, bytes: &[u8]) -> Result<Vec<u8>, String> {
         Ok(self.0.sign(bytes).as_ref().to_vec())
+    }
+}
+
+impl InstanceVerifier for StreamKey {
+    fn verify(
+        &self,
+        instance: &str,
+        key_id: &str,
+        canonical: &[u8],
+        signature: &[u8],
+    ) -> Result<(), String> {
+        if instance != self.instance_id() || key_id != self.key_id() {
+            return Err("wrong instance signing identity".into());
+        }
+        signature::UnparsedPublicKey::new(&signature::ED25519, self.0.public_key().as_ref())
+            .verify(canonical, signature)
+            .map_err(|_| "invalid instance signature".into())
     }
 }
 
@@ -76,6 +93,8 @@ fn admin() -> BusinessOsActor {
 }
 fn manifest(version: u64) -> Value {
     json!({"app_id":"unknown-at-boot","title":"Runtime app","entry":"index.mjs","files":{"index.mjs":"a".repeat(64)},
+        "commands_in":[{"type":"app.echo","from":["app-store"]}],
+        "commands_out":[{"app":"app-store","type":"app.reply"}],
         "collections":{"runtime_records":{"class":"full","client_limit":0,"byte_budget":4096,
             "schema":{"version":version,"type":"object","primaryKey":"id","properties":{"id":{"type":"string"},"label":{"type":"string"}},"required":["id"]}}}})
 }
@@ -85,9 +104,8 @@ struct Fixture {
     writer: WriterHandle,
     platform: Platform,
     public_key: Vec<u8>,
-    stream_key: StreamKey,
-    // Opened before any app installation: no reconnect/reset/rebuild permitted.
-    reader: Connection,
+    stream_key: Arc<StreamKey>,
+
     _directory: tempfile::TempDir,
 }
 impl Fixture {
@@ -119,24 +137,11 @@ impl Fixture {
             .unwrap(),
         );
         let public_key = key.public_key().as_ref().to_vec();
-        let stream_key = StreamKey(key.clone());
-        let platform = Platform::from_database(
-            &database,
-            Arc::new(move |bytes| {
-                Ok(key
-                    .sign(bytes)
-                    .as_ref()
-                    .iter()
-                    .map(|v| format!("{v:02x}"))
-                    .collect())
-            }),
-        );
+        let stream_key = Arc::new(StreamKey(key.clone()));
+        let platform = Platform::from_database(&database, stream_key.clone());
         let platform = platform.unwrap();
-        let reader = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-        ctox_store::config::ConnectionConfig::default()
-            .apply_reader(&reader)
-            .unwrap();
-        Self {
+
+        let f = Self {
             stores,
             readers: database.readers,
             _directory: directory,
@@ -144,8 +149,58 @@ impl Fixture {
             platform,
             public_key,
             stream_key,
-            reader,
+        };
+        f.bootstrap_ipc(json!("*")).await;
+        f
+    }
+    async fn bootstrap_ipc(&self, allowed: Value) {
+        let kinds = [
+            "ctox.app.publish",
+            "ctox.app.update",
+            "ctox.app.rollback",
+            "ctox.app.release",
+            "ctox.app.remove",
+            "app.reply",
+        ];
+        for app_id in ["ctox-platform", "app-store"] {
+            let mut outgoing = kinds
+                .iter()
+                .map(|kind| json!({"app":"ctox-platform","type":kind}))
+                .collect::<Vec<_>>();
+            outgoing.push(json!({"app":"unknown-at-boot","type":"app.echo"}));
+            let manifest = json!({"app_id":app_id,"app_ver":"bootstrap","collections":{},"files":{},
+                "commands_out":outgoing,"commands_in":kinds.iter().map(|kind|json!({"type":kind,"from":allowed})).collect::<Vec<_>>()});
+            let signature = commands::sign_manifest(
+                self.platform.signer.as_ref(),
+                &serde_json::to_vec(&manifest).unwrap(),
+            )
+            .unwrap();
+            let id = version_id(app_id, "bootstrap");
+            self.seed(
+                "business_app_versions",
+                &id,
+                json!({"id":id,"app_id":app_id,"app_ver":"bootstrap",
+                "state":"published","manifest":manifest,"signature":signature}),
+            )
+            .await;
+            self.seed(
+                "business_apps",
+                app_id,
+                json!({"id":app_id,"app_id":app_id,"active_ver":"bootstrap",
+                "state":"active","provenance":{"owner_id":"owner"}}),
+            )
+            .await;
         }
+    }
+    async fn ipc_allowed(&self, sender: &str, receiver: &str, kind: &str) -> bool {
+        let (sender, receiver, kind) = (sender.to_owned(), receiver.to_owned(), kind.to_owned());
+        self.writer
+            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+                commands::ipc_declarations_allow(tx, &sender, &receiver, &kind)
+            }))
+            .unwrap()
+            .await
+            .unwrap()
     }
     async fn seed(&self, collection: &str, id: &str, body: Value) {
         let collection = collection.to_string();
@@ -171,7 +226,7 @@ impl Fixture {
     }
     async fn release_input(&self, version: &str, content: Value, catalog: bool) {
         let bytes = serde_json::to_vec(&content).unwrap();
-        let signature = self.platform.signer.as_ref()(&bytes).unwrap();
+        let signature = commands::sign_manifest(self.platform.signer.as_ref(), &bytes).unwrap();
         self.seed("business_app_versions", &version_id("unknown-at-boot",version), json!({
             "id":version_id("unknown-at-boot",version),"app_id":"unknown-at-boot","app_ver":version,
             "manifest":content,"manifest_sha256":format!("{:x}",Sha256::digest(&bytes)),"signature":signature,"state":"published"
@@ -223,21 +278,16 @@ impl Fixture {
         self.seed("app_drafts","draft",json!({"id":"draft","app_id":"unknown-at-boot","user_id":"owner","base_app_ver":base,
             "manifest_fields":content,"files":content["files"],"collections_schema":content["collections"]})).await;
     }
-    fn read(&self, collection: &str, id: &str) -> Option<Value> {
-        let table: String = self
-            .reader
-            .query_row(
-                "SELECT table_name FROM _collections WHERE name=?1 AND state='active'",
-                [collection],
-                |r| r.get(0),
-            )
-            .unwrap();
-        let value = self.reader.query_row(
-            &format!("SELECT data FROM \"{table}\" WHERE id=?1"),
-            [id],
-            |r| r.get::<_, String>(0),
-        );
-        value.ok().map(|s| serde_json::from_str(&s).unwrap())
+    async fn read(&self, collection: &str, id: &str) -> Option<Value> {
+        let collection = collection.to_owned();
+        let id = id.to_owned();
+        self.readers
+            .read(move |tx| {
+                commands::get(tx, &collection, &id)
+                    .map_err(|error| rusqlite::Error::InvalidParameterName(error.to_string()))
+            })
+            .await
+            .unwrap()
     }
 }
 
@@ -269,7 +319,7 @@ async fn publish_signed_draft_without_fabricating_client_activation() {
         )
         .await;
     assert_eq!(result["status"], "accepted");
-    let app = f.read("business_apps", "unknown-at-boot").unwrap();
+    let app = f.read("business_apps", "unknown-at-boot").await.unwrap();
     assert_eq!(app["active_ver"], result["app_ver"]);
     assert_eq!(
         app["provenance"]["calling_app"], "app-store",
@@ -344,7 +394,7 @@ async fn publish_signed_draft_without_fabricating_client_activation() {
 #[tokio::test]
 async fn update_hot_plugs_unknown_app_on_existing_connection() {
     let mut f = Fixture::new().await;
-    assert!(f.read("business_apps", "unknown-at-boot").is_none());
+    assert!(f.read("business_apps", "unknown-at-boot").await.is_none());
     let readers = f.readers.clone();
     let mut stream = Subscription::new(
         readers.clone(),
@@ -359,11 +409,17 @@ async fn update_hot_plugs_unknown_app_on_existing_connection() {
     )
     .unwrap();
     let initial = stream
-        .next_page(100, Arc::new(InstallerReadAuthority), &f.stream_key, || 1)
+        .next_page(
+            100,
+            Arc::new(InstallerReadAuthority),
+            f.stream_key.as_ref(),
+            || 1,
+        )
         .await
         .unwrap();
+    initial.verify(f.stream_key.as_ref()).unwrap();
     assert_eq!(initial.kind, StreamKind::Page);
-    assert!(initial.docs.is_empty());
+    assert!(initial.docs.iter().all(|doc| doc.id != "unknown-at-boot"));
     let mut feed = f.writer.subscribe_commits();
     feed.latest();
     let installed = f.install().await;
@@ -374,11 +430,17 @@ async fn update_hot_plugs_unknown_app_on_existing_connection() {
     assert!(notification.head_seq > 0);
     let live = tokio::time::timeout(
         Duration::from_secs(2),
-        stream.next_page(100, Arc::new(InstallerReadAuthority), &f.stream_key, || 2),
+        stream.next_page(
+            100,
+            Arc::new(InstallerReadAuthority),
+            f.stream_key.as_ref(),
+            || 2,
+        ),
     )
     .await
     .expect("existing subscription must receive the unknown app")
     .unwrap();
+    live.verify(f.stream_key.as_ref()).unwrap();
     assert_eq!(live.kind, StreamKind::Live);
     assert!(live.seq_to > initial.seq_to);
     assert!(live.docs.iter().any(|doc| doc.id == "unknown-at-boot"
@@ -387,7 +449,7 @@ async fn update_hot_plugs_unknown_app_on_existing_connection() {
             .as_ref()
             .is_some_and(|body| body["active_ver"] == installed)));
     assert_eq!(
-        f.read("business_apps", "unknown-at-boot").unwrap()["active_ver"],
+        f.read("business_apps", "unknown-at-boot").await.unwrap()["active_ver"],
         installed
     );
     f.seed(
@@ -397,6 +459,20 @@ async fn update_hot_plugs_unknown_app_on_existing_connection() {
     )
     .await;
     let mut changed = manifest(2);
+    assert!(f
+        .writer
+        .submit(WriteJob::new(JobOptions::default(), |tx| {
+            commands::ipc_declarations_allow(tx, "app-store", "unknown-at-boot", "app.echo")
+        }))
+        .unwrap()
+        .await
+        .unwrap());
+    assert!(
+        f.ipc_allowed("unknown-at-boot", "app-store", "app.reply")
+            .await
+    );
+    changed["commands_in"] = json!([]);
+    changed["commands_out"] = json!([]);
     changed["title"] = json!("Updated while connected");
     changed["collections"]["runtime_records"]["rights"] = json!({"read":"admin","write":"admin"});
     f.release_input("release-2", changed, true).await;
@@ -410,11 +486,11 @@ async fn update_hot_plugs_unknown_app_on_existing_connection() {
         .await;
     assert_eq!(result["status"], "accepted");
     assert_eq!(
-        f.read("business_apps", "unknown-at-boot").unwrap()["title"],
+        f.read("business_apps", "unknown-at-boot").await.unwrap()["title"],
         "Updated while connected"
     );
     assert_eq!(
-        f.read("runtime_records", "persisted").unwrap()["label"],
+        f.read("runtime_records", "persisted").await.unwrap()["label"],
         "survives"
     );
     f.writer
@@ -446,12 +522,30 @@ async fn update_hot_plugs_unknown_app_on_existing_connection() {
         && d.body.as_ref().unwrap()["title"] == "Updated while connected"));
     let updated = tokio::time::timeout(
         Duration::from_secs(2),
-        stream.next_page(100, Arc::new(InstallerReadAuthority), &f.stream_key, || 3),
+        stream.next_page(
+            100,
+            Arc::new(InstallerReadAuthority),
+            f.stream_key.as_ref(),
+            || 3,
+        ),
     )
     .await
     .expect("same subscription must adopt the update")
     .unwrap();
+    updated.verify(f.stream_key.as_ref()).unwrap();
     assert_eq!(updated.kind, StreamKind::Live);
+    assert!(!f
+        .writer
+        .submit(WriteJob::new(JobOptions::default(), |tx| {
+            commands::ipc_declarations_allow(tx, "app-store", "unknown-at-boot", "app.echo")
+        }))
+        .unwrap()
+        .await
+        .unwrap());
+    assert!(
+        !f.ipc_allowed("unknown-at-boot", "app-store", "app.reply")
+            .await
+    );
     assert!(updated.seq_to > live.seq_to);
     assert!(updated.docs.iter().any(|doc| doc.id == "unknown-at-boot"
         && doc
@@ -528,7 +622,7 @@ async fn rollback_publishes_new_version_and_retains_prior_versions() {
     assert_ne!(rolled["app_ver"], second);
     assert_ne!(rolled["app_ver"], "rollback-target");
     assert_eq!(
-        f.read("business_apps", "unknown-at-boot").unwrap()["title"],
+        f.read("business_apps", "unknown-at-boot").await.unwrap()["title"],
         "Original title"
     );
     assert!(f
@@ -553,7 +647,7 @@ async fn remove_archives_without_deleting_even_after_retention() {
     let result = f.run("remove", "remove", json!(installed), json!({})).await;
     assert_eq!(result["status"], "accepted");
     assert_eq!(
-        f.read("business_apps", "unknown-at-boot").unwrap()["state"],
+        f.read("business_apps", "unknown-at-boot").await.unwrap()["state"],
         "archived"
     );
     let retained = f
@@ -602,7 +696,7 @@ async fn stale_base_rejects_every_command_including_null_install() {
         );
     }
     assert_eq!(
-        f.read("business_apps", "unknown-at-boot").unwrap()["active_ver"],
+        f.read("business_apps", "unknown-at-boot").await.unwrap()["active_ver"],
         installed
     );
 }
@@ -620,7 +714,7 @@ async fn not_found_prevents_installing_unreleased_version() {
         )
         .await;
     assert_eq!(result, json!({"status":"rejected","code":"not_found"}));
-    assert!(f.read("business_apps", "unknown-at-boot").is_none());
+    assert!(f.read("business_apps", "unknown-at-boot").await.is_none());
 }
 
 #[tokio::test]
@@ -729,7 +823,7 @@ async fn migration_required_keeps_active_schema_and_data_untouched() {
         json!({"status":"rejected","code":"migration_required"})
     );
     assert_eq!(
-        f.read("business_apps", "unknown-at-boot").unwrap()["active_ver"],
+        f.read("business_apps", "unknown-at-boot").await.unwrap()["active_ver"],
         current
     );
 }
@@ -778,7 +872,7 @@ async fn native_reverse_migration_waits_for_real_pages_before_switch() {
         .await;
     assert_eq!(pending["status"], "preparing");
     assert_eq!(
-        f.read("business_apps", "unknown-at-boot").unwrap()["active_ver"],
+        f.read("business_apps", "unknown-at-boot").await.unwrap()["active_ver"],
         current
     );
     assert!(
@@ -843,7 +937,7 @@ async fn native_reverse_migration_waits_for_real_pages_before_switch() {
         "accepted"
     );
     assert_eq!(
-        f.read("runtime_records", "kept").unwrap()["previous_label"],
+        f.read("runtime_records", "kept").await.unwrap()["previous_label"],
         "retained"
     );
     // Prepare a forward rename back, then revoke the caller before the pointer
@@ -856,7 +950,7 @@ async fn native_reverse_migration_waits_for_real_pages_before_switch() {
             && new.schema_json.pointer("/properties/label/type").and_then(Value::as_str) == Some("string")
             && manifest["migrations"]["runtime_records"] == json!({"from_ver":3,"steps":[{"op":"rename","from":"previous_label","to":"label"}]})
     }));
-    let active = f.read("business_apps", "unknown-at-boot").unwrap()["active_ver"].clone();
+    let active = f.read("business_apps", "unknown-at-boot").await.unwrap()["active_ver"].clone();
     let revoke = f
         .run(
             "revoke",
@@ -924,11 +1018,11 @@ async fn native_reverse_migration_waits_for_real_pages_before_switch() {
         "forbidden"
     );
     assert_eq!(
-        f.read("business_apps", "unknown-at-boot").unwrap()["active_ver"],
+        f.read("business_apps", "unknown-at-boot").await.unwrap()["active_ver"],
         active
     );
     assert_eq!(
-        f.read("runtime_records", "kept").unwrap()["previous_label"],
+        f.read("runtime_records", "kept").await.unwrap()["previous_label"],
         "retained"
     );
 }
