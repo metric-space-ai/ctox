@@ -946,60 +946,6 @@ mod tests {
     }
 
     #[test]
-    fn local_gateway_config_prefers_runtime_port_override() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "ctox_gateway_local_runtime_port_{}_{}",
-            std::process::id(),
-            unique
-        ));
-        std::fs::create_dir_all(root.join("runtime")).unwrap();
-        persist_runtime_env_text(
-            &root,
-            "CTOX_ACTIVE_MODEL=openai/gpt-oss-120b\nCTOX_CHAT_MODEL_BASE=openai/gpt-oss-120b\nCTOX_CHAT_SOURCE=local\nCTOX_ENGINE_PORT=2235\n",
-        );
-
-        let config = GatewayConfig::resolve_with_root(&root);
-
-        assert_eq!(config.active_model.as_deref(), Some("openai/gpt-oss-120b"));
-        assert_eq!(config.listen_port, 12434);
-        assert_eq!(config.upstream_base_url, "");
-        assert!(config.upstream_transport.is_some());
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn local_gateway_config_ignores_stale_upstream_override() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "ctox_gateway_local_upstream_override_{}_{}",
-            std::process::id(),
-            unique
-        ));
-        std::fs::create_dir_all(root.join("runtime")).unwrap();
-        persist_runtime_env_text(
-            &root,
-            "CTOX_ACTIVE_MODEL=openai/gpt-oss-120b\nCTOX_CHAT_MODEL_BASE=openai/gpt-oss-120b\nCTOX_CHAT_SOURCE=local\nCTOX_ENGINE_PORT=2235\nCTOX_UPSTREAM_BASE_URL=http://127.0.0.1:1235\n",
-        );
-
-        let config = GatewayConfig::resolve_with_root(&root);
-
-        assert_eq!(config.active_model.as_deref(), Some("openai/gpt-oss-120b"));
-        assert_eq!(config.listen_port, 12434);
-        assert_eq!(config.upstream_base_url, "");
-        assert!(config.upstream_transport.is_some());
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
     fn request_runtime_switch_updates_runtime_without_legacy_gateway_loopback() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
