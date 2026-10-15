@@ -29,6 +29,8 @@ pub mod lanes;
 pub mod framing;
 #[path = "scheduler.rs"]
 pub mod scheduler;
+#[path = "v4_session.rs"]
+pub mod v4_session;
 
 use super::collection_authority::authorize_collection_for_peer;
 use super::{protocol_contract_generated, NativePeerRole};
@@ -6504,6 +6506,7 @@ mod tests {
 /// never creates device authority or scope tokens.
 pub mod v4_router {
     use super::{connection_lifecycle::*, hello::*};
+    use serde_json::Value;
     use crate::plugins::replication_webrtc::connection_handler_rs::{
         WebRTCRsConnection, WebRTCRsConnectionHandler,
     };
@@ -6532,15 +6535,18 @@ pub mod v4_router {
         pub authenticate: AuthenticatePeer,
         pub create_local_hello: CreateLocalHello,
         pub handshake_timeout: Duration,
+        pub application: Option<Arc<dyn super::v4_session::V4StreamSource>>,
     }
     struct Session {
         lifecycle: PeerLifecycle,
         rejection_sent: AtomicBool,
+        application: Mutex<Option<super::v4_session::V4Session>>,
     }
     pub struct V4ConnectionRouter {
         config: V4RouterConfig,
         registry: PeerLifecycleRegistry,
         sessions: Mutex<HashMap<WebRTCRsConnection, Arc<Session>>>,
+        reliable: Mutex<HashMap<String, Arc<super::scheduler::session_resume::ReliableSession<super::scheduler::SessionPayload>>>>,
     }
     impl V4ConnectionRouter {
         pub fn new(config: V4RouterConfig) -> RxResult<Self> {
@@ -6553,6 +6559,7 @@ pub mod v4_router {
                 config,
                 registry: PeerLifecycleRegistry::default(),
                 sessions: Mutex::new(HashMap::new()),
+                reliable: Mutex::new(HashMap::new()),
             })
         }
         pub fn snapshot(&self, peer: &WebRTCRsConnection) -> Option<ConnectionSnapshot> {
@@ -6588,6 +6595,7 @@ pub mod v4_router {
             let session = Arc::new(Session {
                 lifecycle,
                 rejection_sent: AtomicBool::new(false),
+                application: Mutex::new(None),
             });
             self.sessions.lock().insert(peer.clone(), session.clone());
             // Watch the actor's bounded timeout. Connection teardown owns/aborts
@@ -6657,11 +6665,35 @@ pub mod v4_router {
                 .get(peer)
                 .cloned()
                 .ok_or_else(|| new_rx_error("ctox_v4_hello_required", None))?;
-            let result = session.lifecycle.receive_frame(bytes).await;
+            use super::scheduler::{SessionBinding, session_resume::{SessionHello, ReliableSession}};
+            let extension = if self.config.application.is_some() {
+                Some(SessionHello::decode(bytes).map_err(|_| new_rx_error("ctox_v4_session_hello", None))?)
+            } else { None };
+            let device = extension.as_ref().and_then(|(frame, _)| match frame { HelloFrame::Hello(h) => Some(h.device_proof.device_id.clone()), _ => None });
+            let plain = extension.as_ref().map(|(frame, _)| frame.encode()).transpose().map_err(|_| new_rx_error("ctox_v4_session_hello", None))?;
+            let result = session.lifecycle.receive_frame(plain.as_deref().unwrap_or(bytes)).await;
             match result {
                 Ok(HelloFrame::HelloOk(ok)) => {
+                    let transport = ok.transport.clone();
+                    let binding = if let Some((_, remote)) = &extension {
+                        // This point is AFTER current nonce/device/rights authentication.
+                        let key = serde_json::to_string(&(&ok.instance_id, device, &ok.epoch, ok.rights_ver, &remote.session_id)).unwrap();
+                        let state = {
+                            let mut states = self.reliable.lock();
+                            if !states.contains_key(&key) && states.len() >= 128 { return Err(new_rx_error("ctox_v4_session_capacity", None)); }
+                            states.entry(key).or_insert_with(|| ReliableSession::new(remote.session_id.clone(), [131072,1048576,131072,4194304,8388608,16777216]).expect("validated session limits")).clone()
+                        };
+                        Some(SessionBinding::attach(state, remote)?)
+                    } else { None };
+                    let frame = HelloFrame::HelloOk(ok);
+                    let response = if let Some(binding) = &binding {
+                        let bytes = binding.state.hello().encode(&frame).map_err(|_| new_rx_error("ctox_v4_session_hello", None))?;
+                        let mut value: Value = serde_json::from_slice(&bytes).map_err(|_| new_rx_error("ctox_v4_session_hello", None))?;
+                        value["core_time_ms"] = super::SystemTime::now().duration_since(super::UNIX_EPOCH).unwrap_or_default().as_millis().try_into().unwrap_or(u64::MAX).into();
+                        serde_json::to_vec(&value).map_err(|_| new_rx_error("ctox_v4_session_hello", None))?
+                    } else { frame.encode().map_err(|_| new_rx_error("ctox_v4_invalid_hello", None))? };
                     if let Err(error) = handler
-                        .send_v4_control(peer, &HelloFrame::HelloOk(ok))
+                        .send_v4_bootstrap_bytes(peer, &response)
                         .await
                     {
                         handler.publish_v4_error(error.clone());
@@ -6673,6 +6705,15 @@ pub mod v4_router {
                         .hello_ok_sent()
                         .await
                         .map_err(|_| new_rx_error("ctox_v4_lifecycle_closed", None))?;
+                    if let Some(source) = &self.config.application {
+                        let owner = source.clone();
+                        let remote_peer = peer.to_string();
+                        let sender = handler.activate_v4_session_send_path(peer, transport, binding.ok_or_else(|| new_rx_error("ctox_v4_session_hello", None))?, Arc::new(move |_, _, bytes| {
+                            let packet: Value = serde_json::from_slice(bytes).map_err(|_| new_rx_error("ctox_v4_application_contract", None))?;
+                            owner.publication(&remote_peer, &packet)
+                        })).await?;
+                        *session.application.lock() = Some(super::v4_session::V4Session::start(peer.to_string(), sender, source.clone())?);
+                    }
                     handler.publish_v4_connected(peer.clone());
                     Ok(())
                 }
@@ -6727,6 +6768,7 @@ pub mod v4_router {
         pub async fn drain(&self) {
             self.registry.drain_all().await;
             self.sessions.lock().clear();
+            for (_, state) in self.reliable.lock().drain() { state.retire(); }
         }
     }
 
@@ -6754,6 +6796,7 @@ pub mod v4_router {
                     transport: hello.transport.clone(),
                 },
                 handshake_timeout: Duration::from_secs(10),
+                application: None,
                 create_local_hello: Arc::new(move |_, nonce| {
                     let mut hello = hello.clone();
                     hello.device_proof.nonce = nonce;

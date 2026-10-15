@@ -4,7 +4,7 @@ import {WebRTCKernelTransport} from '../transport-webrtc.mjs';
 import {protocolChannels,FakeNativePeer,offer,scopeFor} from './fake-native-peer.mjs';
 import {sha256Hex} from '../values.mjs';
 const tick=()=>new Promise(r=>setTimeout(r,5));
-function fixture(opts={}){const pair=protocolChannels(),peer=new FakeNativePeer(pair.server,opts),transport=new WebRTCKernelTransport({channels:pair.client,hello:offer(opts.instanceId??'instance'),resolveScope:scopeFor,verifyPackage:async p=>p.sig==='test-signature',...opts.transport});return {peer,transport};}
+function fixture(opts={}){const pair=protocolChannels(),peer=new FakeNativePeer(pair.server,opts),transport=new WebRTCKernelTransport({wireFormat:"k2-fixture",channels:pair.client,hello:offer(opts.instanceId??'instance'),resolveScope:scopeFor,verifyPackage:async p=>p.sig==='test-signature',...opts.transport});return {peer,transport};}
 test('P4 hello and exact V4 subscribe/write/result/activation/priority wire',async()=>{
  const {peer,transport}=fixture({transport:{hello:async()=>{await new Promise(resolve=>setTimeout(resolve,450));return offer("instance");}}}),pages=[],results=[],timings=[];
  try {

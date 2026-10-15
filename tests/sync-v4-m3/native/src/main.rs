@@ -85,6 +85,7 @@ fn v4_config() -> rxdb::plugins::replication_webrtc::index_mod::v4_router::V4Rou
             transport: hello.transport,
         },
         handshake_timeout: std::time::Duration::from_secs(10),
+        application: None,
         create_local_hello: Arc::new(|_, nonce| {
             Box::pin(async move { Ok(hello_template(nonce, "native-fixture".into(), 42)) })
         }),

@@ -32,7 +32,13 @@ try{
  const context=await browser.newContext({viewport:{width:1280,height:900}});
  const page=await context.newPage();page.on('pageerror',e=>errors.push(String(e)));
  const url=`http://127.0.0.1:${server.address().port}`;await page.goto(url);
+ await page.evaluate(async()=>{
+  const {IdbBackend}=await import('/store-idb-v5.mjs');const db=await IdbBackend.open('ctox-owned-close-invariant');let completed=false,closed;
+  const tx=db.trackTransaction(db.db.transaction('meta','readwrite'));
+  await new Promise((resolve,reject)=>{const request=tx.objectStore('meta').put({key:'close-proof',value:1});request.onerror=()=>reject(request.error);request.onsuccess=()=>{closed=db.close().then(()=>{if(!completed)throw Error('Close resolved before owned transaction completed');});closed.catch(()=>{});tx.addEventListener('complete',()=>{completed=true;resolve();},{once:true});};});await closed;
+ });
  const external = await page.evaluate(async()=>{
+
   const source='k1-legacy-owned',target='ctox-k1-external-alice';
   for(const name of [source,target])await new Promise((r,j)=>{const q=indexedDB.deleteDatabase(name);q.onsuccess=r;q.onerror=()=>j(q.error)});
   await new Promise((r,j)=>{const q=indexedDB.open(source,4);q.onupgradeneeded=()=>q.result.createObjectStore('documents',{keyPath:['collection','id']});q.onsuccess=()=>{
@@ -132,7 +138,7 @@ try{
    await serverReady;
    if(Object.keys(server).length!==6)throw Error('native channels missing');
    native=new FakeNativePeer(server,{instanceId:'rtc-browser',onSubscribe:async(sub,p)=>p.page(sub.collection,sub.collection==='notes'?[{id:'server',data:{id:'server',title:'native page'},seq:p.head,rev:'native'}]:[])});
-   let allow;const transport=new WebRTCKernelTransport({channels:client,peer:a,hello:()=>new Promise(r=>allow=r),resolveScope:scopeFor,verifyPackage:async p=>p.sig==='test-signature'});
+   let allow;const transport=new WebRTCKernelTransport({wireFormat:"k2-fixture",channels:client,peer:a,hello:()=>new Promise(r=>allow=r),resolveScope:scopeFor,verifyPackage:async p=>p.sig==='test-signature'});
    k=createKernel({instanceId:'rtc-browser',userId:'alice',transport,tabKey:'rtc-tab'});await k.ready;
    if(!allow)throw Error('hello provider not started');const localReadyBeforeHello=transport.session===undefined;
    if(!localReadyBeforeHello)throw Error('local readiness gated by hello');allow(offer('rtc-browser'));await transport.ready;

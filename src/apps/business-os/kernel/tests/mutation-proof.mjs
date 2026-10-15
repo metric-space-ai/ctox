@@ -49,7 +49,7 @@ try{for(const [id,file,before,after,test,pattern]of cases){const path=join(base,
  for(const [id,file,before,after,expected]of [
   ['claim-before-import','loader.mjs',"worker.postMessage('ctox:claim');",'/* omitted claim */',/Shell replacement failed|claim deadline|Shell imported before claim/],
   ['claim-every-start','loader.mjs',"worker.postMessage('ctox:claim');","if(!container.controller)worker.postMessage('ctox:claim');",/Shell replacement failed|Shell imported before claim/],
-  ['close-owned-transactions','store-idb-v5.mjs','await Promise.allSettled([...this.transactions.values()]);','',/Close other identity tabs/],
+  ['close-owned-transactions','store-idb-v5.mjs','await Promise.allSettled([...this.transactions.values()]);','',/Close other identity tabs|Close resolved before owned transaction completed/],
  ]){
   const path=join(base,file),original=await readFile(path,'utf8');if(!original.includes(before))throw Error(`Browser mutation anchor missing: ${id}`);
   await writeFile(path,original.replace(before,after));const run=browser(id);await writeFile(path,original);

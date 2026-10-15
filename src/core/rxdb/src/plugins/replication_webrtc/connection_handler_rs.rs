@@ -1335,6 +1335,14 @@ impl WebRTCRsConnectionHandler {
         peer: &WebRTCRsConnection,
         frame: &super::index_mod::hello::HelloFrame,
     ) -> RxResult<()> {
+        let bytes = frame.encode().map_err(|_| new_rx_error("ctox_v4_invalid_hello", None))?;
+        self.send_v4_bootstrap_bytes(peer, &bytes).await
+    }
+    /// Router-only hello extension. Application data never uses the bootstrap channel.
+    pub(crate) async fn send_v4_bootstrap_bytes(&self, peer: &WebRTCRsConnection, bytes: &[u8]) -> RxResult<()> {
+        if bytes.len() > super::index_mod::hello::MAX_HELLO_BYTES {
+            return Err(new_rx_error("ctox_v4_invalid_hello", None));
+        }
         let data_channel = {
             let _lifecycle = self.peer_lifecycle.lock();
             self.peers
@@ -1347,9 +1355,7 @@ impl WebRTCRsConnectionHandler {
                     stale_connection_error(peer)
                 })?
         };
-        let bytes = frame
-            .encode()
-            .map_err(|_| new_rx_error("ctox_v4_invalid_hello", None))?;
+
         let text =
             std::str::from_utf8(&bytes).map_err(|_| new_rx_error("ctox_v4_invalid_hello", None))?;
         send_text_checked(&data_channel, text)
