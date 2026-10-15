@@ -15,62 +15,82 @@ class PreparationProtocol(unittest.TestCase):
         self.root = tempfile.TemporaryDirectory(dir=os.environ['TMPDIR'])
         self.addCleanup(self.root.cleanup)
         self.rollout = Path(self.root.name) / 'rollout.jsonl'
-        self.rollout.write_text('{"type":"session_meta"}\n')
+        self.rollout.write_text(json.dumps({'type': 'response_item', 'payload': {
+            'type': 'message', 'role': 'developer',
+            'content': [{'type': 'input_text', 'text': preparation.CONTRACT}]}}) + '\n')
         self.proc = Mock(stdin=io.BytesIO())
-        self.client = preparation.Client(self.proc, Mock(), time.monotonic() + 90)
+        self.client = preparation.Client(self.proc, Mock(), time.monotonic() + 30)
 
-    def events(self, status='completed', text='READY', error=None):
-        return [
-            {'method': 'turn/started', 'params': {'threadId': 'thread', 'turn': {'id': 'turn'}}},
-            {'method': 'item/completed', 'params': {'threadId': 'thread', 'turnId': 'turn',
-              'item': {'type': 'agentMessage', 'text': text}}},
-            {'method': 'turn/completed', 'params': {'threadId': 'thread',
-              'turn': {'id': 'turn', 'status': status, 'error': error}}},
-            {'id': 4, 'result': {'turn': {'id': 'turn'}}},
-        ]
+    def replies(self, thread='thread'):
+        return [{'id': 4, 'result': {}},
+                {'id': 5, 'result': {'thread': {'id': thread}}}]
 
-    def test_fast_completion_before_rpc_response_is_retained(self):
-        self.client.receive = Mock(side_effect=self.events())
-        self.assertEqual(self.client.prepare('thread', str(self.rollout)), 'turn')
-        request = json.loads(self.proc.stdin.getvalue().splitlines()[0])
-        self.assertNotIn('developerInstructions', request['params'])
-        self.assertNotIn('model', request['params'])
-        self.assertEqual(request['params']['input'][0]['text'], preparation.PROMPT)
+    def test_persists_contract_without_user_input_or_model_turn(self):
+        self.client.receive = Mock(side_effect=self.replies())
+        self.assertIsNone(self.client.prepare('thread', str(self.rollout)))
+        requests = [json.loads(x) for x in self.proc.stdin.getvalue().splitlines()]
+        self.assertEqual([x['method'] for x in requests], ['thread/inject_items', 'thread/read'])
+        items = requests[0]['params']['items']
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]['role'], 'developer')
+        self.assertNotIn('READY', items[0]['content'][0]['text'])
+        self.assertNotIn('No implementation assignment', items[0]['content'][0]['text'])
+        self.assertFalse(requests[1]['params']['includeTurns'])
+        self.assertIsNone(self.client.turn_id)
 
-    def test_failed_interrupted_or_error_turn_never_becomes_ready(self):
-        for status, error in [('failed', None), ('interrupted', None), ('completed', {'message': 'quota'})]:
-            with self.subTest(status=status, error=error):
-                self.client.events = []
-                self.client.receive = Mock(side_effect=self.events(status=status, error=error))
-                with self.assertRaisesRegex(ValueError, 'did not complete successfully'):
-                    self.client.prepare('thread', str(self.rollout))
+    def test_rpc_failure_cannot_report_ready(self):
+        self.client.receive = Mock(return_value={'id': 4, 'error': {'message': 'unsupported'}})
+        with self.assertRaisesRegex(ValueError, 'unsupported'):
+            self.client.prepare('thread', str(self.rollout))
+        self.assertEqual(len(self.proc.stdin.getvalue().splitlines()), 1)
 
-    def test_completed_turn_requires_ready_reply(self):
-        self.client.receive = Mock(side_effect=self.events(text='I started implementation'))
-        with self.assertRaisesRegex(ValueError, 'required READY'):
+    def test_read_failure_cannot_report_ready(self):
+        self.client.receive = Mock(side_effect=[self.replies()[0],
+                                    {'id': 5, 'error': {'message': 'not persisted'}}])
+        with self.assertRaisesRegex(ValueError, 'not persisted'):
             self.client.prepare('thread', str(self.rollout))
 
-    def test_completed_turn_requires_nonempty_rollout_file(self):
+    def test_read_must_return_same_task(self):
+        self.client.receive = Mock(side_effect=self.replies('other'))
+        with self.assertRaisesRegex(ValueError, 'different task'):
+            self.client.prepare('thread', str(self.rollout))
+
+    def test_requires_nonempty_rollout_file(self):
         for path in [None, str(self.rollout.with_name('missing')), str(self.rollout)]:
             self.rollout.write_text('')
-            self.client.events = []
-            self.client.receive = Mock(side_effect=self.events())
+            self.client.receive = Mock(side_effect=self.replies())
             with self.subTest(path=path), self.assertRaisesRegex(ValueError, 'no persisted rollout'):
                 self.client.prepare('thread', path)
 
-    def test_forbidden_tool_item_interrupts_preparation(self):
-        events = self.events()
-        events.insert(1, {'method': 'item/started', 'params': {'threadId': 'thread',
-                         'turnId': 'turn', 'item': {'type': 'commandExecution'}}})
+    def test_unexpected_inference_turn_is_rejected(self):
+        events = [{'method': 'turn/started', 'params': {'threadId': 'thread',
+                   'turn': {'id': 'unexpected'}}}] + self.replies()
         self.client.receive = Mock(side_effect=events)
-        with self.assertRaisesRegex(ValueError, 'forbidden item'):
+        with self.assertRaisesRegex(ValueError, 'started an inference turn'):
             self.client.prepare('thread', str(self.rollout))
         self.client.interrupt('thread')
         last = json.loads(self.proc.stdin.getvalue().splitlines()[-1])
         self.assertEqual(last['method'], 'turn/interrupt')
-        self.assertEqual(last['params'], {'threadId': 'thread', 'turnId': 'turn'})
+        self.assertEqual(last['params']['turnId'], 'unexpected')
 
-    def test_incomplete_turn_times_out(self):
+    def test_nonempty_file_without_exact_developer_contract_is_rejected(self):
+        for record in [{'type': 'session_meta'}, {'type': 'response_item', 'payload': {
+            'type': 'message', 'role': 'user',
+            'content': [{'type': 'input_text', 'text': preparation.CONTRACT}]}},
+            {'type': 'response_item', 'payload': {'type': 'message', 'role': 'developer',
+             'content': [{'type': 'input_text', 'text': 'truncated contract'}]}}]:
+            self.rollout.write_text(json.dumps(record) + '\n')
+            self.client.receive = Mock(side_effect=self.replies())
+            with self.subTest(record=record), self.assertRaisesRegex(ValueError, 'exact execution contract'):
+                self.client.prepare('thread', str(self.rollout))
+
+    def test_setup_tool_execution_is_rejected(self):
+        self.client.receive = Mock(return_value={'method': 'item/started',
+            'params': {'threadId': 'thread', 'item': {'type': 'commandExecution'}}})
+        with self.assertRaisesRegex(ValueError, 'forbidden item'):
+            self.client.prepare('thread', str(self.rollout))
+
+    def test_incomplete_rpc_times_out(self):
         self.client.deadline = time.monotonic() - 1
         with self.assertRaisesRegex(TimeoutError, 'deadline'):
             self.client.prepare('thread', str(self.rollout))

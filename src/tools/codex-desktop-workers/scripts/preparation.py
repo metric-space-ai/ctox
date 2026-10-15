@@ -1,12 +1,10 @@
-"""Bounded READY-only first turn that materializes a Desktop rollout."""
+"""Persist a Desktop task's execution contract without starting inference."""
 import json
 import os
 from pathlib import Path
 import time
 
-PROMPT = ('This is only a task-persistence handshake. No implementation assignment has been given. '
-          'Do not use any tools, inspect or change files, run commands, contact services, or delegate. '
-          'Reply with exactly READY and finish this turn. Wait for the parent to send the real assignment later.')
+CONTRACT = "You are a Worker Task created by a main task. Your parent task ID is recorded in this contract. The first user message is the real assignment; do not produce an initialization reply. Solve the assigned problem and verify the result. Choose implementation details yourself within the brief. Do not create subworkers or delegate; do not change the task hierarchy. Write short, readable messages. Keep one task and PR for this assignment and its corrections. Before publishing work derived from private context, have the parent review outgoing changes and text for confidential information. Keep a durable private checkpoint of the assignment, progress, corrections and next step; resume it after compaction. Report results or actionable blockers to the named parent task with send_message_to_thread, then end the turn without polling. If delivery fails, preserve the pending notification. The parent owns review, merge and archive."
 
 
 class Client:
@@ -66,30 +64,31 @@ class Client:
 
     def prepare(self, thread, rollout_path):
         self.thread_id = thread
-        result = self.request(4, 'turn/start', {'threadId': thread,
-                              'input': [{'type': 'text', 'text': PROMPT}]})
-        self.turn_id = result['turn']['id']
-        while True:
-            for event in self.events:
-                params = event['params']
-                turn = params.get('turn', {})
-                if event['method'] == 'turn/completed' and turn.get('id') == self.turn_id:
-                    if turn.get('status') != 'completed' or turn.get('error'):
-                        raise ValueError('Preparation turn did not complete successfully: ' + json.dumps(turn))
-                    items = [e['params']['item'] for e in self.events
-                             if e['method'] == 'item/completed' and
-                             e['params'].get('turnId') == self.turn_id]
-                    items += turn.get('items', [])
-                    if any(i.get('type') not in ('userMessage', 'agentMessage', 'reasoning') for i in items):
-                        raise ValueError('Preparation completed with a forbidden tool item')
-                    replies = [i.get('text', '').strip() for i in items if i.get('type') == 'agentMessage']
-                    if not replies or replies[-1] != 'READY':
-                        raise ValueError('Preparation did not finish with the required READY reply')
-                    path = Path(rollout_path) if rollout_path else None
-                    if path is None or not path.is_file() or path.stat().st_size == 0:
-                        raise ValueError('Preparation completed but no persisted rollout file exists')
-                    return self.turn_id
-            self.observe(self.receive())
+        self.request(4, 'thread/inject_items', {'threadId': thread, 'items': [{
+            'type': 'message', 'role': 'developer',
+            'content': [{'type': 'input_text', 'text': CONTRACT}]}]})
+        result = self.request(5, 'thread/read', {'threadId': thread, 'includeTurns': False})
+        if result.get('thread', {}).get('id') != thread:
+            raise ValueError('Persisted task read returned a different task')
+        if self.turn_id is not None:
+            raise ValueError('Task persistence unexpectedly started an inference turn')
+        path = Path(rollout_path) if rollout_path else None
+        if path is None or not path.is_file() or path.stat().st_size == 0:
+            raise ValueError('Task contract saved but no persisted rollout file exists')
+        found_contract = False
+        with path.open() as stream:
+            for line in stream:
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                item = record.get('payload', {})
+                if (record.get('type') == 'response_item' and item.get('type') == 'message'
+                        and item.get('role') == 'developer'):
+                    found_contract |= any(part.get('text') == CONTRACT
+                                          for part in item.get('content', []))
+        if not found_contract:
+            raise ValueError('Persisted rollout does not contain the exact execution contract')
+        return None
 
     def interrupt(self, thread):
         if self.turn_id:
