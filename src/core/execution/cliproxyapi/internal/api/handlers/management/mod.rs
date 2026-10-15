@@ -157,9 +157,9 @@ pub use plugin_store::{
 pub use plugins::{
     validate_plugin_id, ManagementPluginConfig, ManagementPluginConfigField,
     ManagementPluginConfigPatch, ManagementPluginConfigStore, ManagementPluginConfigStoreError,
-    ManagementPluginError, ManagementPluginMetadata, ManagementPluginRuntimeRecord,
-    ManagementPluginRuntimeSource, ManagementPluginService, ManagementPluginSnapshot,
-    ManagementPluginView,
+    ManagementPluginError, ManagementPluginList, ManagementPluginMetadata,
+    ManagementPluginRuntimeRecord, ManagementPluginRuntimeSource, ManagementPluginService,
+    ManagementPluginSnapshot, ManagementPluginView,
 };
 pub use quota::{
     CooldownManagementQuotaReset, ManagementQuotaAccount, ManagementQuotaResetError,

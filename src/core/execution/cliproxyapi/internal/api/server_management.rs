@@ -14,9 +14,10 @@ use tokio::net::TcpListener;
 use crate::internal::api::handlers::management::{
     api_key_usage_payload, management_support_plugin_header, parse_usage_queue_count,
     static_model_definitions_payload, usage_queue_payload, ManagementApiKeyUsageError,
-    ManagementApiKeyUsageSource, ManagementAuthenticator, ManagementQuotaResetError,
-    ManagementQuotaResetSource, ManagementQuotaSwitchError, ManagementQuotaSwitchSource,
-    ManagementUsageQueue, ManagementUsageQueueError, StaticModelDefinitionsError,
+    ManagementApiKeyUsageSource, ManagementAuthenticator, ManagementPluginService,
+    ManagementQuotaResetError, ManagementQuotaResetSource, ManagementQuotaSwitchError,
+    ManagementQuotaSwitchSource, ManagementUsageQueue, ManagementUsageQueueError,
+    StaticModelDefinitionsError,
 };
 use crate::internal::config::CliproxyRuntimeConfig;
 
@@ -29,6 +30,7 @@ const RUNTIME_STATUS_PATH: &str = "/v0/management/runtime-status";
 const RUNTIME_CONFIG_PATH: &str = "/v0/management/runtime-config";
 const USAGE_QUEUE_PATH: &str = "/v0/management/usage-queue";
 const API_KEY_USAGE_PATH: &str = "/v0/management/api-key-usage";
+const PLUGINS_PATH: &str = "/v0/management/plugins";
 const RESET_QUOTA_PATH: &str = "/v0/management/reset-quota";
 const SWITCH_PROJECT_PATH: &str = "/v0/management/quota-exceeded/switch-project";
 const SWITCH_PREVIEW_MODEL_PATH: &str = "/v0/management/quota-exceeded/switch-preview-model";
@@ -180,6 +182,7 @@ pub struct ManagementHandler {
     api_key_usage: Option<Arc<dyn ManagementApiKeyUsageSource>>,
     quota_reset: Option<Arc<dyn ManagementQuotaResetSource>>,
     quota_switches: Option<Arc<dyn ManagementQuotaSwitchSource>>,
+    plugins: Option<Arc<ManagementPluginService>>,
 }
 
 impl ManagementHandler {
@@ -192,6 +195,7 @@ impl ManagementHandler {
             api_key_usage: None,
             quota_reset: None,
             quota_switches: None,
+            plugins: None,
         }
     }
 
@@ -207,6 +211,7 @@ impl ManagementHandler {
             api_key_usage: None,
             quota_reset: None,
             quota_switches: None,
+            plugins: None,
         }
     }
 
@@ -223,6 +228,7 @@ impl ManagementHandler {
             api_key_usage: None,
             quota_reset: None,
             quota_switches: None,
+            plugins: None,
         }
     }
 
@@ -238,6 +244,7 @@ impl ManagementHandler {
             api_key_usage: None,
             quota_reset: None,
             quota_switches: None,
+            plugins: None,
         }
     }
 
@@ -270,6 +277,11 @@ impl ManagementHandler {
         self
     }
 
+    pub fn attach_plugins(mut self, plugins: Arc<ManagementPluginService>) -> Self {
+        self.plugins = Some(plugins);
+        self
+    }
+
     pub fn handle(
         &self,
         method: &str,
@@ -289,6 +301,21 @@ impl ManagementHandler {
             provided,
         ) {
             return ManagementHttpResponse::error(error.status(), &error.message());
+        }
+        if path == PLUGINS_PATH {
+            let Some(plugins) = self.plugins.as_ref() else {
+                return ManagementHttpResponse::error(404, "route not found");
+            };
+            if method != "GET" {
+                return ManagementHttpResponse::error(405, "method not allowed");
+            }
+            return match plugins.list_response() {
+                Ok(list) => match serde_json::to_vec(&list) {
+                    Ok(body) => ManagementHttpResponse::json(200, body),
+                    Err(_) => ManagementHttpResponse::error(500, "plugin metadata unavailable"),
+                },
+                Err(_) => ManagementHttpResponse::error(503, "plugin metadata unavailable"),
+            };
         }
         if path == RUNTIME_CONFIG_PATH {
             let Some(source) = self.runtime_config.as_ref() else {
@@ -674,6 +701,10 @@ fn reason_phrase(status: u16) -> &'static str {
         _ => "Error",
     }
 }
+
+#[cfg(test)]
+#[path = "server_management_plugins_test.rs"]
+mod plugins_metadata_tests;
 
 #[cfg(test)]
 mod tests {

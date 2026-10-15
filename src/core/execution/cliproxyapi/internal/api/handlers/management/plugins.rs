@@ -161,6 +161,12 @@ pub struct ManagementPluginView {
     pub metadata: Option<ManagementPluginMetadata>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ManagementPluginList {
+    pub plugins_enabled: bool,
+    pub plugins: Vec<ManagementPluginView>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ManagementPluginError {
     StoreUnavailable,
@@ -206,6 +212,10 @@ impl ManagementPluginService {
     }
 
     pub fn list(&self) -> Result<Vec<ManagementPluginView>, ManagementPluginError> {
+        Ok(self.list_response()?.plugins)
+    }
+
+    pub fn list_response(&self) -> Result<ManagementPluginList, ManagementPluginError> {
         let snapshot = self.load()?;
         let runtime = self.runtime.snapshot()?;
         for record in &runtime {
@@ -232,7 +242,7 @@ impl ManagementPluginService {
             .into_iter()
             .map(|record| (record.id.clone(), record))
             .collect::<BTreeMap<_, _>>();
-        Ok(ids
+        let plugins = ids
             .into_iter()
             .map(|id| {
                 let config = snapshot.configs.get(&id);
@@ -263,7 +273,11 @@ impl ManagementPluginService {
                     metadata,
                 }
             })
-            .collect())
+            .collect();
+        Ok(ManagementPluginList {
+            plugins_enabled: snapshot.plugins_enabled,
+            plugins,
+        })
     }
 
     pub fn public_config(&self, id: &str) -> Result<ManagementPluginConfig, ManagementPluginError> {
