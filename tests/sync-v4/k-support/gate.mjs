@@ -10,11 +10,13 @@ const expected=['K01','K07','K11','K15','K02','K24'];
 const declared=fs.readdirSync('tests/sync-v4').filter(n=>/^k[0-9]+$/.test(n)).map(n=>'K'+n.slice(1));
 if(!declared.length)throw Error('ZERO scenarios discovered');
 if(expected.some(id=>!declared.includes(id)))throw Error('Missing mandatory catalog scenario');
-const output=resolve(process.env.BUILD_LANE_BIN,'../artifacts/e2e-k-'+Date.now());
-fs.mkdirSync(output,{recursive:false,mode:0o700});
 const raw=process.argv.slice(2),options={};const args=[];
 for(let i=0;i<raw.length;i+=2){if(!raw[i]?.startsWith('--')||raw[i+1]===undefined)throw Error('Expected --key value');
- if(['target','target-requested','kernel-revision','k24-source','k24-mode','k24-evidence','k11-evidence'].includes(raw[i].slice(2)))options[raw[i].slice(2)]=raw[i+1];else args.push(raw[i],raw[i+1]);}
+ if(['target','target-requested','kernel-revision','k24-source','k24-mode','k24-evidence','k11-evidence','gate-output'].includes(raw[i].slice(2)))options[raw[i].slice(2)]=raw[i+1];else args.push(raw[i],raw[i+1]);}
+const allowed=resolve(process.env.BUILD_LANE_BIN,'../artifacts')+'/';
+const output=resolve(options['gate-output']??allowed+'e2e-k-'+Date.now());
+if(!output.startsWith(allowed)||fs.existsSync(output))throw Error('New private gate output required');
+fs.mkdirSync(output,{recursive:false,mode:0o700});
 const target=parseTarget(options.target);
 const baseline=JSON.parse(fs.readFileSync(new URL('./baseline-v3.json',import.meta.url)));
 

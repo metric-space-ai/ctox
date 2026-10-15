@@ -17,7 +17,8 @@ const close=()=>shutdownPromise??=(async()=>{await browser?.close().catch(()=>{}
 process.once('SIGTERM',()=>void close());
 const timer=setTimeout(()=>void close(),c.durationSeconds*1000);save();
 try{
- result.fixture=await native.prepare(schema,resolve(new URL('../../sync-v4-e2e/',import.meta.url).pathname));
+ result.fixture=c.preparedProfile?.fixture??await native.prepare(schema,resolve(new URL('../../sync-v4-e2e/',import.meta.url).pathname));
+ if(c.preparedProfile)result.upgradedProfile=c.preparedProfile;
  fs.writeFileSync(join(c.root,'runtime/business-os/local-modules/e2e-probe/v4-preflight.html'),'<!doctype html><title>Isolated native V4 preflight</title><body>Native V4 preflight</body>');
  native.start('signaling',process.execPath,[join(c.source,'src/core/rxdb/tools/local_signaling_server.js'),String(c.signalingPort)],{...process.env,SIGNALING_HOST:'127.0.0.1',SIGNALING_PORT:String(c.signalingPort)});
  native.start('turn',c.turnBin,['-n','--lt-cred-mech','--realm=bench.test','--user=bench:bench','--no-cli','--no-tls','--no-dtls','--no-tcp-relay','--allow-loopback-peers','--relay-threads=2',`--userdb=${join(c.output,'turn.sqlite')}`,'--listening-ip=192.0.2.1','--relay-ip=192.0.2.1',`--listening-port=${c.turnPort}`,'--min-port=49152','--max-port=49251',`--pidfile=${join(c.output,'turn.pid')}`,`--log-file=${join(c.output,'turn-detail.log')}`,'--no-stdout-log'],{...process.env,LD_LIBRARY_PATH:c.turnLib||''});

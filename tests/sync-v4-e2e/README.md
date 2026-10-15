@@ -5,6 +5,39 @@ The launcher creates a fresh lane artifact directory and a private network names
 starts a checksum-verified CTOX binary, local signaling and coturn, and retires its
 own process groups. No record HTTP bridge, no mocked query/replication/readiness.
 
+## M7 rehearsal (isolated only)
+
+`tests/sync-v4/k11/m7-rehearse.mjs --before OLD/build.json --after NEW/build.json
+--kernel-revision COMMIT --output NEW_PRIVATE_OUTPUT --modules-root NODE_MODULES
+--turn-bin COTURN --turn-lib COTURN_LIB` runs the real supported installer on the
+synthetic profile, SQLite API snapshots/restores before and after, then binds the
+regression preflight to that **same upgraded state**. Pass all runtime paths from
+the accepted bench: coturn and Playwright need not live in system/default paths.
+Run through the canonical lane. `--installed-evidence /private/install/result.json`
+reuses a verified completed transition after a fixture setup correction instead
+of repeating the installer; both revisions, binary hash, owner, cleanup and
+snapshot custody must match. `--installed-profile` on `e2e-run.mjs` is accepted
+only for this verified synthetic installation, never a tenant path.
+
+The backup helper rejects unmarked/foreign profiles and writes only new lane
+artifact prefixes. It uses SQLite backup APIs (including committed WAL pages),
+checks integrity, complete row/schema fingerprints and inventories, and restores
+only into a new empty prefix. It does **not** provide a cross-database transaction:
+the profile owner is quiescent for a common checkpoint. Existing recovery copies
+under runtime/backups are retained, not recursively snapshotted. Nonstandard DB
+filenames require a separately approved inventory; do not use this fixture tool
+as a production backup command. `m7-guard-mutation.py` disables the actual
+row/schema guard in a private runner copy: loss of the committed row then fails
+the invariant; restored source passes. Shared source is never mutated.
+
+`upgrade --dev` follows main, not a supplied V4 branch. The rehearsal therefore
+exercises exact `update apply --version` with a loopback release-package fixture.
+Missing productive base import, signed Shell and generation/publication hooks
+remain explicit not_run. Physical RTC or SQLite preservation never means M7/K11
+passed. `gate.mjs --gate-output NEW_PRIVATE_DIRECTORY` changes only the evidence
+location, not scenario selection or thresholds. The WELSCH deployment runbook
+and measured durations stay in the controller's private docs, not this repo.
+
 ## Build and run
 
 From the assigned clone, use the canonical GPU lane. Build a supplied immutable

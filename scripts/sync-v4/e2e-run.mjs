@@ -59,6 +59,18 @@ const config = { owner, ...build, output, profile, clients, rttMs, warmRttMs, lo
   durationSeconds: Number(args.seconds || 900), hostNetworkNamespace: fs.readlinkSync('/proc/self/ns/net'),
   chrome: args.chrome || '/opt/google/chrome/chrome', modulesRoot: args['modules-root'] || join(lane,'deps/shell-browser-collection-auth/node_modules'),
   turnBin: args['turn-bin'] || '/usr/bin/turnserver', turnLib: args['turn-lib'] || '', scenario: args.scenario || null };
+if(args['installed-profile']){
+ if(args.v4!=='yes')throw Error('Installed profile binding is V4-only');
+ const file=resolve(args['installed-profile']);
+ if(!file.startsWith(join(lane,'artifacts')+'/'))throw Error('Private installation evidence required');
+ const proof=JSON.parse(fs.readFileSync(file));
+ if(proof.id!=='K11'||proof.terminal!==true||proof.installerExecuted!==true||proof.dataPreserved!==true||proof.controller?.groupAbsent!==true||proof.afterRevision!==build.revision||proof.installer?.activeBinarySha256!==build.binarySha256||!proof.beforeSnapshot?.quiesced||!proof.afterSnapshot?.quiesced)throw Error('Incomplete or mismatched installed profile');
+ const root=resolve(proof.root),current=fs.realpathSync(join(root,'managed/current'));
+ if(!root.startsWith(join(lane,'artifacts')+'/')||current!==proof.currentRelease||!current.startsWith(root+'/managed/releases/'))throw Error('Installed profile path mismatch');
+ const marker=JSON.parse(fs.readFileSync(join(root,'.sync-v4-e2e.json')));
+ if(marker.owner!==owner||marker.synthetic!==true||createHash('sha256').update(fs.readFileSync(join(current,'bin/ctox'))).digest('hex')!==build.binarySha256)throw Error('Installed profile owner/binary mismatch');
+ config.root=current;config.preparedProfile={evidence:file,root,fixture:proof.afterFixture};
+}
 if (!['eager','demand-only'].includes(config.leadProfile)) throw Error('Unsupported fixture profile');
 if(!Number.isInteger(config.durationSeconds)||config.durationSeconds<30||config.durationSeconds>2100) throw Error('Run duration bound 30..2100 seconds');
 for (const file of [config.turnBin, config.chrome]) fs.accessSync(file, fs.constants.X_OK);
