@@ -138,6 +138,7 @@ tempfile = "3"
 [workspace]
 members = [
     "src/core/execution/cliproxyapi",
+    "src/core/execution/toolhub",
     "src/tools/postgres-adapter",
 ]
 exclude = [
