@@ -974,3 +974,239 @@ pub fn sync_peer_authenticator_from_secret_store(
         clock,
     )
 }
+
+/// Adapter for the single P8 cursor reader and owning write transaction. The
+/// constructor receives identity from Core authentication, never a wire role.
+/// P8's ReadAuthority bridge calls authorize_snapshot/project_change; its write
+/// bridge calls with_write inside apply_write's owning transaction.
+#[derive(Clone)]
+pub struct NativeStorePolicy {
+    authority: std::sync::Arc<sync_rights::StoreRightsAuthority>,
+    actor: BusinessOsActor,
+    device_id: String,
+    app_id: String,
+}
+impl NativeStorePolicy {
+    pub fn from_verified_peer(
+        authority: std::sync::Arc<sync_rights::StoreRightsAuthority>,
+        peer: VerifiedSyncPeer,
+        app_id: String,
+    ) -> sync_rights::scope::Result<Self> {
+        if peer.actor.id.as_deref().is_none_or(str::is_empty)
+            || peer.device_id.is_empty()
+            || app_id.is_empty()
+        {
+            return Err("authenticated identity required".into());
+        }
+        authority.router.with_identity(|instance, _| {
+            if instance != peer.instance_id {
+                return Err("instance mismatch".into());
+            }
+            Ok(())
+        })?;
+        Ok(Self {
+            authority,
+            actor: peer.actor,
+            device_id: peer.device_id,
+            app_id,
+        })
+    }
+    fn snapshot(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        participant: &str,
+    ) -> rusqlite::Result<sync_rights::RightsSnapshot> {
+        fn invalid(s: impl Into<String>) -> rusqlite::Error {
+            rusqlite::Error::InvalidParameterName(s.into())
+        }
+        // A valid role from another peer or another Store cannot be substituted.
+        if participant != self.device_id {
+            return Err(invalid("participant mismatch"));
+        }
+        let file: String = tx.query_row(
+            "SELECT file FROM pragma_database_list WHERE name='main'",
+            [],
+            |r| r.get(0),
+        )?;
+        let actual =
+            std::fs::canonicalize(file).map_err(|_| invalid("store identity unavailable"))?;
+        if actual != self.authority.writer().db_id().path() {
+            return Err(invalid("foreign store transaction"));
+        }
+        // Rights and document come from this same WAL snapshot. A current router
+        // rejects an older reader snapshot and all suspended/stopped authorities.
+        let rights = sync_rights::read(tx)?;
+        self.authority
+            .router
+            .with_current_rights(|current| {
+                if current.rights_ver != rights.rights_ver {
+                    return Err("revoked".into());
+                }
+                Ok(())
+            })
+            .map_err(invalid)?;
+        Ok(rights)
+    }
+    pub fn authorize_snapshot(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        participant: &str,
+        collection: &str,
+        generation: u64,
+        scope_hash: &str,
+    ) -> rusqlite::Result<sync_rights::scope::ResolvedScope> {
+        let invalid = |s: String| rusqlite::Error::InvalidParameterName(s);
+        let rights = self.snapshot(tx, participant)?;
+        let active = ctox_store::schema::active_collection(tx, collection)?
+            .ok_or_else(|| invalid("collection unavailable".into()))?;
+        if active.gen != generation {
+            return Err(invalid("generation changed".into()));
+        }
+        let scope = rights
+            .resolve_app_collection(
+                &self.app_id,
+                self.actor.role.as_str(),
+                self.actor
+                    .id
+                    .as_deref()
+                    .ok_or_else(|| invalid("actor missing".into()))?,
+                collection,
+            )
+            .map_err(invalid)?;
+        if scope.projection(collection).is_none() || scope.hash().map_err(invalid)? != scope_hash {
+            return Err(invalid("scope changed: resnapshot required".into()));
+        }
+        Ok(scope)
+    }
+    /// Same transaction and authority as authorize_snapshot. None is P8's
+    /// op=unproject, including leaving a row filter; masks never leave Core.
+    pub fn project_change(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        participant: &str,
+        collection: &str,
+        scope_hash: &str,
+        change: &ctox_store::change_log::ChangeDocument,
+    ) -> rusqlite::Result<Option<Value>> {
+        let scope = self.authorize_snapshot(tx, participant, collection, change.gen, scope_hash)?;
+        let projection = scope.projection(collection);
+        match sync_rights::scope::scope_filter::project(
+            projection,
+            collection,
+            &change.id,
+            change.seq,
+            change.body.as_ref(),
+        )
+        .map_err(rusqlite::Error::InvalidParameterName)?
+        {
+            sync_rights::scope::scope_filter::ProjectedChange::Put { doc, .. } => Ok(Some(doc)),
+            sync_rights::scope::scope_filter::ProjectedChange::Unproject { .. } => Ok(None),
+        }
+    }
+    /// Final publication fence for the snapshot above: no prepared page may
+    /// bypass a concurrent rights commit while waiting for the transport.
+    pub fn with_page_frame<T>(
+        &self,
+        rights_ver: u64,
+        epoch: &str,
+        send_one_frame: impl FnOnce() -> sync_rights::scope::Result<T>,
+    ) -> sync_rights::scope::Result<T> {
+        self.authority
+            .router
+            .with_snapshot(rights_ver, epoch, |_, _| send_one_frame())
+    }
+    /// Final current-schema document supplied by P8, never a client-side base.
+    /// Before is fetched here from the active generation in the same writer tx.
+    /// The trusted mutation callback is synchronous and must not enqueue/await.
+    pub fn with_write<T>(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        participant: &str,
+        collection: &str,
+        id: &str,
+        after: Option<&Value>,
+        permit: Option<&sync_rights::manifest_rules::CommandPermit>,
+        commit: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<T>,
+    ) -> rusqlite::Result<T> {
+        use rusqlite::OptionalExtension;
+        let invalid = |s: String| rusqlite::Error::InvalidParameterName(s);
+        let rights = self.snapshot(tx, participant)?;
+        let active = ctox_store::schema::active_collection(tx, collection)?
+            .ok_or_else(|| invalid("collection unavailable".into()))?;
+        // Table identifiers are generated by the Store registry, not by input.
+        if !active
+            .table
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        {
+            return Err(invalid("invalid physical binding".into()));
+        }
+        let raw: Option<String> = tx
+            .query_row(
+                &format!(
+                    "SELECT data FROM \"{}\" WHERE id=?1 AND deleted=0",
+                    active.table
+                ),
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        let before: Option<Value> = raw
+            .map(|s| serde_json::from_str(&s))
+            .transpose()
+            .map_err(|_| invalid("invalid stored document".into()))?;
+        self.authority
+            .router
+            .with_current_rights(|current| {
+                if current.rights_ver != rights.rights_ver {
+                    return Err("revoked".into());
+                }
+                write_sync_document(
+                    &self.actor,
+                    &rights,
+                    &self.app_id,
+                    collection,
+                    before.as_ref(),
+                    after,
+                    permit,
+                )?;
+                // Preserve the original SQLite failure; it rolls back the owning job.
+                Ok(commit(tx))
+            })
+            .map_err(invalid)?
+    }
+    /// Core issues/renews peer authority from committed _rights and the same
+    /// authenticated app/actor/device binding. No permission/availability fallback.
+    pub async fn issue_peer_lease(
+        &self,
+        keys: &impl sync_rights::scope::InstanceSigningKeyStore,
+        collection: &str,
+        now: u64,
+    ) -> sync_rights::scope::Result<sync_rights::scope::PeerLease> {
+        let (head, rights) = self.authority.hello_snapshot().await?;
+        let scope = rights.resolve_app_collection(
+            &self.app_id,
+            self.actor.role.as_str(),
+            self.actor.id.as_deref().ok_or("actor missing")?,
+            collection,
+        )?;
+        if scope.projection(collection).is_none() {
+            return Err("revoked".into());
+        }
+        let instance = self
+            .authority
+            .router
+            .with_identity(|id, _| Ok(id.to_string()))?;
+        let lease =
+            sync_rights::scope::PeerLease::issue(keys, &instance, &self.device_id, &scope, now)?;
+        self.authority
+            .router
+            .with_snapshot(rights.rights_ver, &head.epoch, |id, _| {
+                if id != instance {
+                    return Err("instance changed".into());
+                }
+                Ok(lease)
+            })
+    }
+}

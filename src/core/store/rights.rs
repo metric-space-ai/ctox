@@ -968,6 +968,15 @@ impl StoreRightsAuthority {
     }
 }
 impl RightsRouter {
+    /// Resolve the instance identity under the same live policy fence. No
+    /// borrowed identity or rights escapes; callbacks are bounded and synchronous.
+    pub fn with_identity<T>(
+        &self,
+        f: impl FnOnce(&str, &RightsSnapshot) -> scope::Result<T>,
+    ) -> scope::Result<T> {
+        let state = self.0.lock().map_err(|_| "rights authority poisoned")?;
+        f(&state.instance_id, state.current_rights()?)
+    }
     /// Bounded policy decision on the same live committed state as replication.
     /// Callbacks must not await, enqueue Store jobs or re-enter this router.
     pub fn with_current_rights<T>(

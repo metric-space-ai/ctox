@@ -269,6 +269,53 @@ async fn rights_matrix_read_write_replication_share_committed_authority() {
     );
     let registration = bind_policy_authority(authority.clone()).unwrap();
     let mut previous_seq = 0;
+    authority
+        .writer()
+        .submit(ctox_store::WriteJob::new(Default::default(), |tx| {
+            ctox_store::schema::create_collection(
+                tx,
+                &ctox_store::schema::CollectionDefinition {
+                    name: "leads".into(),
+                    app_id: "owner".into(),
+                    schema_ver: 1,
+                    schema_json: json!({"type":"object","properties":{"id":{"type":"string"}}}),
+                    class: "full".into(),
+                    client_limit: 1000,
+                    byte_budget: 1_000_000,
+                    rights_ver: 1,
+                    app_ver: "1".into(),
+                },
+            )?;
+            Ok(())
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    let readers = ctox_store::read_pool::ReadPool::for_database(
+        authority.writer().db_id(),
+        authority.writer().generation(),
+        Default::default(),
+        Default::default(),
+    )
+    .await
+    .unwrap();
+    struct Keys(Vec<u8>);
+    impl sync_rights::scope::InstanceSigningKeyStore for Keys {
+        fn with_instance_signing_key<T>(
+            &self,
+            f: impl FnOnce(&[u8]) -> sync_rights::scope::Result<T>,
+        ) -> sync_rights::scope::Result<T> {
+            f(&self.0)
+        }
+    }
+    let keys = Keys(
+        ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+            .unwrap()
+            .as_ref()
+            .to_vec(),
+    );
+    let mut preceding_frame: Option<(NativeStorePolicy, u64, String)> = None;
+
     // Retarget the existing critical default-policy invariants to the imported
     // Store data, including actor-owned record scope and projection protection.
     let seed_collections = [
@@ -546,7 +593,7 @@ async fn rights_matrix_read_write_replication_share_committed_authority() {
             "{}: rights must share Store ordering",
             c.name
         );
-        previous_seq = head.head_seq;
+
         let actor = BusinessOsActor::new(Some(c.actor.into()), c.role);
         let scope = BusinessOsScope::collection("leads");
         let grant_matches = c.role == c.grant_role && c.grant_collection == "leads";
@@ -566,6 +613,141 @@ async fn rights_matrix_read_write_replication_share_committed_authority() {
         before[c.changed] = c.from.clone();
         let mut after = before.clone();
         after[c.changed] = c.to.clone();
+        let adapter = NativeStorePolicy::from_verified_peer(
+            authority.clone(),
+            VerifiedSyncPeer {
+                actor: actor.clone(),
+                instance_id: "matrix-instance".into(),
+                device_id: "device-a".into(),
+            },
+            c.app.into(),
+        )
+        .unwrap();
+        if let Some((old, version, epoch)) = preceding_frame.take() {
+            assert!(
+                old.with_page_frame(version, &epoch, || Ok(())).is_err(),
+                "stale prepared page must not reach IO after rights publication"
+            );
+        }
+        preceding_frame = Some((adapter.clone(), rights.rights_ver, head.epoch.clone()));
+        let input = before.clone();
+        authority.writer().submit(ctox_store::WriteJob::new(Default::default(), move |tx| {
+            tx.execute("INSERT INTO c_leads(id,rev,schema_ver,data,deleted) VALUES('lead-1','fixture',1,?1,0)
+                ON CONFLICT(id) DO UPDATE SET data=excluded.data,deleted=0", [input.to_string()])?;
+            Ok(())
+        })).unwrap().await.unwrap();
+        let resolved = rights.resolve_app_collection(c.app, c.role, c.actor, "leads");
+        let hash = resolved
+            .as_ref()
+            .ok()
+            .and_then(|s| s.hash().ok())
+            .unwrap_or_default();
+        let scoped = adapter.clone();
+        let read_hash = hash.clone();
+        let page = readers
+            .read(move |tx| {
+                scoped.authorize_snapshot(tx, "device-a", "leads", 1, &read_hash)?;
+                let page = ctox_store::change_log::read_page(tx, "leads", 1, 0, 100)?;
+                page.docs
+                    .iter()
+                    .map(|doc| scoped.project_change(tx, "device-a", "leads", &read_hash, doc))
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .await;
+        let projected = page
+            .as_ref()
+            .ok()
+            .and_then(|docs| docs.first())
+            .and_then(Option::as_ref);
+        assert_eq!(
+            projected.is_some(),
+            c.expected.0,
+            "{}: actual Store cursor visibility",
+            c.name
+        );
+        if let Some(doc) = projected {
+            assert_eq!(
+                doc.get("secret").is_some(),
+                !c.mask,
+                "{}: actual Store cursor field mask",
+                c.name
+            );
+        }
+        let scoped = adapter.clone();
+        let proposed = after.clone();
+        let written = authority
+            .writer()
+            .submit(ctox_store::WriteJob::new(Default::default(), move |tx| {
+                scoped
+                    .with_write(
+                        tx,
+                        "device-a",
+                        "leads",
+                        "lead-1",
+                        Some(&proposed),
+                        None,
+                        |tx| {
+                            tx.execute(
+                                "UPDATE c_leads SET data=?1,rev='admitted' WHERE id='lead-1'",
+                                [proposed.to_string()],
+                            )?;
+                            Ok(())
+                        },
+                    )
+                    .map_err(Into::into)
+            }))
+            .unwrap()
+            .await;
+        assert_eq!(
+            written.is_ok(),
+            c.expected.1,
+            "{}: actual Store write admission",
+            c.name
+        );
+        let lease = adapter.issue_peer_lease(&keys, "leads", 1000).await;
+        let authorized_scope = resolved
+            .as_ref()
+            .ok()
+            .is_some_and(|s| s.projection("leads").is_some());
+        assert_eq!(
+            lease.is_ok(),
+            authorized_scope,
+            "{}: real policy peer lease",
+            c.name
+        );
+        if let Ok(lease) = lease {
+            use ring::signature::KeyPair;
+            let key = ring::signature::Ed25519KeyPair::from_pkcs8(&keys.0).unwrap();
+            let scope = resolved.as_ref().unwrap();
+            assert!(lease
+                .verify(
+                    key.public_key().as_ref(),
+                    "matrix-instance",
+                    "device-a",
+                    scope,
+                    1001
+                )
+                .is_ok());
+            assert!(lease.renewal_due(1120));
+            assert!(lease
+                .verify(
+                    key.public_key().as_ref(),
+                    "matrix-instance",
+                    "device-a",
+                    scope,
+                    1300
+                )
+                .is_err());
+        }
+        // Exact device binding and a substituted scope are rejected inside the snapshot.
+        let scoped = adapter.clone();
+        assert!(
+            readers
+                .read(move |tx| scoped.authorize_snapshot(tx, "other-device", "leads", 1, &hash))
+                .await
+                .is_err(),
+            "participant substitution must not borrow an authenticated actor"
+        );
         let read = read_sync_document(&actor, &rights, c.app, "leads", &before);
         assert_eq!(read.is_ok(), c.expected.0, "{}: read boundary", c.name);
         let projection = rights
@@ -636,6 +818,7 @@ async fn rights_matrix_read_write_replication_share_committed_authority() {
             )
         });
         assert_eq!(written.is_ok(), c.expected.3, "{}: command write", c.name);
+        previous_seq = authority.hello_snapshot().await.unwrap().0.head_seq;
     }
     authority.replace(vec![], vec![]).await.unwrap();
     assert!(
@@ -647,6 +830,7 @@ async fn rights_matrix_read_write_replication_share_committed_authority() {
         .allowed,
         "committed revoke must remove runtime authority"
     );
+    readers.shutdown().await.unwrap();
     authority.writer().shutdown().await.unwrap();
     drop(registration);
     assert!(
