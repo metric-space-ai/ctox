@@ -74,7 +74,7 @@ Budget: one repair cycle (≤ 3 `test` runs) per source and attempt; still faili
 
 Person fields: `person_geschlecht`, `person_titel`, `person_vorname`, `person_nachname`, `person_funktion`, `person_position`, `person_email`, `person_email_validation`, `person_telefon`, `person_linkedin`, `person_xing`.
 
-- One person per category, in order: Geschäftsführung/Gesamtverantwortung, Prokura, Leitung Finanzen, Einkauf, Supply Chain Management, Operations, Technik, Entwicklung. Every `firma_prokura` name is also a person with `person_funktion` "Prokura". Others: company website and LinkedIn/XING name search via adapters, never clicked search hits.
+- One person per area of the research instructions (step 4), in their order: Gesamtverantwortung, Finanzen, Einkauf, Supply Chain, Operations, Technik, Entwicklung. Prokura is a register fact (`firma_prokura`), not a contact area: a Prokurist becomes a contact only when a source shows a current function in one of these areas. Persons come from the company website and LinkedIn/XING name search via adapters, never clicked search hits.
 - **Only current officers.** `firma_geschaeftsfuehrung`, `firma_prokura` and register persons take only people the source lists as current; anyone marked "nicht mehr", "ehemals", "ausgeschieden", "former" or with an end date is not a value (mention them in `reason` if relevant). The quote must show the current role.
 - `person_key`: Sellify persons keep their `sellify_person_id`; new ones get a stable key (`p-<nachname>-<vorname>`), never a URL; same name, different profile → two keys.
 - Sellify person who left: keep the key, function "… (ausgeschieden)", add the successor.
