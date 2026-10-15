@@ -1,3 +1,222 @@
+fn with_online_index() -> CollectionDefinition {
+    let mut new = definition("items");
+    new.schema_ver = 2;
+    new.app_ver = "2".into();
+    new.schema_json["indexes"] = json!(["value", "other"]);
+    new
+}
+fn physical_rows(
+    tx: &Transaction<'_>,
+    table: &str,
+) -> Vec<(String, String, u32, Option<String>, bool)> {
+    tx.prepare(&format!(
+        "SELECT id,rev,schema_ver,data,deleted FROM {table} ORDER BY id"
+    ))
+    .unwrap()
+    .query_map([], |r| {
+        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+    })
+    .unwrap()
+    .collect::<Result<Vec<_>>>()
+    .unwrap()
+}
+#[test]
+fn online_index_resumes_and_mirrors_concurrent_writes_without_changing_generation_or_sequences() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("online.sqlite");
+    let mut db = Connection::open(&path).unwrap();
+    {
+        let tx = db.transaction().unwrap();
+        create_collection(&tx, &definition("items")).unwrap();
+        for n in 0..12 {
+            put(&tx, "c_items", &format!("{n:04}"), "1");
+        }
+        reserve_publish(&tx, &lock()).unwrap();
+        update_compatible(&tx, &lock(), &with_online_index()).unwrap();
+        let page = build_online_index_page(&tx, &lock(), "items", 3).unwrap();
+        assert_eq!(
+            (page.cursor.as_deref(), page.copied, page.complete),
+            (Some("0002"), 3, false)
+        );
+        tx.commit().unwrap();
+    }
+    drop(db);
+    let mut db = Connection::open(&path).unwrap();
+    {
+        let tx = db.transaction().unwrap();
+        tx.execute(
+            "UPDATE c_items SET rev='updated',data=json_set(data,'$.other',42) WHERE id='0000'",
+            [],
+        )
+        .unwrap();
+        tx.execute("UPDATE c_items SET id='Z2' WHERE id='0002'", [])
+            .unwrap();
+        tx.execute("DELETE FROM c_items WHERE id='0001'", [])
+            .unwrap();
+        put(&tx, "c_items", "000A", "new");
+        remove_document(&tx, "items", 1, "0003", "1", "deleted").unwrap();
+        tx.commit().unwrap();
+    }
+    loop {
+        let tx = db.transaction().unwrap();
+        let page = build_online_index_page(&tx, &lock(), "items", 3).unwrap();
+        assert!(page.copied <= 3);
+        tx.commit().unwrap();
+        if page.complete {
+            break;
+        }
+    }
+    let tx = db.transaction().unwrap();
+    put(&tx, "c_items", "late", "latest");
+    let before = physical_rows(&tx, "c_items");
+    let head = change_log::head(&tx).unwrap();
+    activate_publication(&tx, &lock(), 100).unwrap();
+    assert_eq!(change_log::head(&tx).unwrap(), head); // No synthetic document mutations during physical swap.
+    assert_eq!(physical_rows(&tx, "c_items"), before);
+    assert_eq!(active_collection(&tx, "items").unwrap().unwrap().gen, 1);
+    assert!(has_index(&tx, "c_items", &["other".into()]).unwrap());
+    let column = indexed_column("other").unwrap();
+    let detail: String = tx
+        .query_row(
+            &format!("EXPLAIN QUERY PLAN SELECT id FROM c_items WHERE {column}=42"),
+            [],
+            |r| r.get(3),
+        )
+        .unwrap();
+    assert!(detail.contains("USING INDEX"), "{detail}");
+    let retired: String = tx
+        .query_row("SELECT retired_table FROM _index_builds", [], |r| r.get(0))
+        .unwrap();
+    // Both native remove and a foreign hard delete scrub old physical copies immediately.
+    tx.execute("DELETE FROM c_items WHERE id='0000'", [])
+        .unwrap();
+    let erased: bool = tx
+        .query_row(
+            &format!("SELECT data IS NULL AND deleted=1 FROM {retired} WHERE id='0000'"),
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(erased);
+    tx.commit().unwrap();
+}
+
+#[test]
+fn aborting_an_online_index_preserves_active_data_and_uses_bounded_private_copy_cleanup() {
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    create_collection(&tx, &definition("items")).unwrap();
+    for n in 0..7 {
+        put(&tx, "c_items", &n.to_string(), "1");
+    }
+    reserve_publish(&tx, &lock()).unwrap();
+    update_compatible(&tx, &lock(), &with_online_index()).unwrap();
+    build_online_index_page(&tx, &lock(), "items", 3).unwrap();
+    let target: String = tx
+        .query_row("SELECT target_table FROM _index_builds", [], |r| r.get(0))
+        .unwrap();
+    abort_publication(&tx, &lock(), 100).unwrap();
+    assert_eq!(count(&tx, "c_items"), 7);
+    remove_document(&tx, "items", 1, "0", "1", "2").unwrap();
+    assert!(tx
+        .query_row(
+            &format!("SELECT data IS NULL FROM {target} WHERE id='0'"),
+            [],
+            |r| r.get::<_, bool>(0)
+        )
+        .unwrap());
+    assert!(!purge_online_index_page(&tx, &lock().operation_id, "items", 2).unwrap());
+    assert_eq!(count(&tx, &target), 1);
+    assert!(purge_online_index_page(&tx, &lock().operation_id, "items", 2).unwrap());
+    assert_eq!(
+        active_collection(&tx, "items").unwrap().unwrap().definition,
+        definition("items")
+    );
+    put(&tx, "c_items", "still-writable", "1");
+}
+#[test]
+fn online_index_physical_swap_rolls_back_when_another_collection_cutover_fails() {
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    create_collection(&tx, &definition("items")).unwrap();
+    create_collection(&tx, &definition("z")).unwrap();
+    put(&tx, "c_items", "one", "1");
+    reserve_publish(&tx, &lock()).unwrap();
+    update_compatible(&tx, &lock(), &with_online_index()).unwrap();
+    let mut z = definition("z");
+    z.app_ver = "2".into();
+    update_compatible(&tx, &lock(), &z).unwrap();
+    build_online_index_page(&tx, &lock(), "items", 10).unwrap();
+    tx.execute("UPDATE _schema_updates SET gen=99 WHERE collection='z'", [])
+        .unwrap();
+    assert!(activate_publication(&tx, &lock(), 100).is_err());
+    assert_eq!(physical_rows(&tx, "c_items").len(), 1);
+    assert!(!has_index(&tx, "c_items", &["other".into()]).unwrap());
+    assert_eq!(
+        tx.query_row("SELECT state FROM _index_builds", [], |r| r
+            .get::<_, String>(0))
+            .unwrap(),
+        "ready"
+    );
+    tx.execute("UPDATE _schema_updates SET gen=1 WHERE collection='z'", [])
+        .unwrap();
+    activate_publication(&tx, &lock(), 100).unwrap();
+    assert!(has_index(&tx, "c_items", &["other".into()]).unwrap());
+}
+#[test]
+#[ignore = "subprocess-only crash fixture"]
+fn online_index_crash_writer_child() {
+    let path = std::env::var_os("CTOX_TEST_ONLINE_INDEX_CRASH_DB")
+        .expect("parent supplies isolated fixture");
+    let mut db = Connection::open(path).unwrap();
+    db.pragma_update(None, "journal_mode", "WAL").unwrap();
+    {
+        let tx = db.transaction().unwrap();
+        create_collection(&tx, &definition("items")).unwrap();
+        for n in 0..5 {
+            put(&tx, "c_items", &n.to_string(), "1");
+        }
+        reserve_publish(&tx, &lock()).unwrap();
+        update_compatible(&tx, &lock(), &with_online_index()).unwrap();
+        build_online_index_page(&tx, &lock(), "items", 1).unwrap();
+        tx.commit().unwrap();
+    }
+    let tx = db.transaction().unwrap();
+    build_online_index_page(&tx, &lock(), "items", 1).unwrap();
+    std::process::exit(86); // No SQLite/Transaction destructors: committed cursor must survive, uncommitted page must not.
+}
+#[test]
+fn online_index_survives_a_process_crash_between_batches() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("crash.sqlite");
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "schema::tests::online_index_crash_writer_child",
+            "--ignored",
+            "--test-threads=1",
+        ])
+        .env("CTOX_TEST_ONLINE_INDEX_CRASH_DB", &path)
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(86));
+    let mut db = Connection::open(path).unwrap();
+    let tx = db.transaction().unwrap();
+    assert_eq!(
+        tx.query_row("SELECT cursor FROM _index_builds", [], |r| r
+            .get::<_, String>(0))
+            .unwrap(),
+        "0"
+    );
+    assert!(
+        build_online_index_page(&tx, &lock(), "items", 10)
+            .unwrap()
+            .complete
+    );
+    activate_publication(&tx, &lock(), 100).unwrap();
+    assert_eq!(count(&tx, "c_items"), 5);
+    assert!(has_index(&tx, "c_items", &["other".into()]).unwrap());
+}
 fn release_fixture() -> BaseReleaseInput {
     serde_json::from_str(include_str!("../../../tests/sync-v4-m2/base-release.json")).unwrap()
 }
@@ -498,10 +717,13 @@ fn populated_compatible_index_requires_online_runner_and_rolls_back() {
     new.schema_ver = 2;
     new.app_ver = "2".into();
     new.schema_json["indexes"] = json!(["value", ["value", "other"]]);
-    let error = update_compatible(&tx, &lock(), &new)
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("online_index_build_required"), "{error}");
+    update_compatible(&tx, &lock(), &new).unwrap();
+    assert!(activate_publication(&tx, &lock(), 100).is_err());
+    assert!(
+        build_online_index_page(&tx, &lock(), "items", 10)
+            .unwrap()
+            .complete
+    );
     assert_eq!(
         active_collection(&tx, "items").unwrap().unwrap().definition,
         old

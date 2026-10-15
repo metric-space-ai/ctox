@@ -189,11 +189,11 @@ pub fn initialize(tx: &Transaction<'_>) -> Result<Head> {
            singleton INTEGER PRIMARY KEY CHECK(singleton=1),
            epoch TEXT NOT NULL, horizon_seq INTEGER NOT NULL DEFAULT 0 CHECK(horizon_seq>=0));
          CREATE TABLE IF NOT EXISTS _changes (
-           collection TEXT NOT NULL, id TEXT NOT NULL, seq INTEGER NOT NULL UNIQUE,
+           collection TEXT NOT NULL, id TEXT NOT NULL, seq INTEGER PRIMARY KEY NOT NULL,
            op INTEGER NOT NULL CHECK(op IN (0,1)), rev TEXT NOT NULL,
            gen INTEGER NOT NULL CHECK(gen>0), schema_ver INTEGER NOT NULL,
            app_ver TEXT NOT NULL, deleted_at INTEGER,
-           PRIMARY KEY(collection,gen,id));
+           UNIQUE(collection,gen,id));
          CREATE INDEX IF NOT EXISTS _changes_page ON _changes(collection,gen,seq);
          CREATE INDEX IF NOT EXISTS _changes_retention ON _changes(deleted_at,seq) WHERE op=1;
          CREATE TABLE IF NOT EXISTS _change_sources (

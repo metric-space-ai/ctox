@@ -86,6 +86,9 @@ fn profile(bytes: usize, triggers: bool) -> serde_json::Value {
         .unwrap();
     runtime.block_on(writer.ready()).unwrap();
     let payload = Arc::new(json!({"content":"x".repeat(bytes-14)}).to_string());
+    let wal_start = std::fs::metadata(path.with_extension("sqlite-wal"))
+        .unwrap()
+        .len();
     let barrier = Arc::new(std::sync::Barrier::new(8));
     std::thread::scope(|scope| {
         for producer in 0..8 {
@@ -95,10 +98,10 @@ fn profile(bytes: usize, triggers: bool) -> serde_json::Value {
             let barrier = barrier.clone();
             scope.spawn(move || {
                 barrier.wait();
-                // 8x32 admitted at once, below the 1024 queue bound; key enables actual writer batching.
-                for round in 0..8 {
+                // At most 8x4 inflight: 64KiB batches stay below the writer execution budget.
+                for round in 0..32 {
                     let mut pending = Vec::new();
-                    for item in 0..32 {
+                    for item in 0..4 {
                         let body = payload.clone();
                         let stats = stats.clone();
                         let id = format!("{producer}-{round}-{item}");
@@ -138,15 +141,17 @@ fn profile(bytes: usize, triggers: bool) -> serde_json::Value {
         .len();
     runtime.block_on(writer.shutdown()).unwrap();
     let s = samples.lock().unwrap();
-    assert_eq!(s.batch_jobs.iter().sum::<usize>(), 2048);
+    assert_eq!(s.batch_jobs.iter().sum::<usize>(), 1024);
     assert!(
         s.batch_jobs.iter().any(|n| *n > 1),
         "real batching must occur"
     );
-    json!({"payload_bytes":payload.len(),"triggers":triggers,"producers":8,"mutations":2048,"commits":s.commits.len(),
+    json!({"payload_bytes":payload.len(),"triggers":triggers,"producers":8,"mutations":1024,"commits":s.commits.len(),
         "commit_p50_us":percentile(&s.commits,0.50),"commit_p99_us":percentile(&s.commits,0.99),
         "writer_hold_p50_us":percentile(&s.holds,0.50),"writer_hold_p99_us":percentile(&s.holds,0.99),
-        "wal_bytes":wal_bytes,"batch_jobs_p50":percentile(&s.batch_jobs.iter().map(|x|*x as f64).collect::<Vec<_>>(),0.50)})
+        "wal_growth_bytes":wal_bytes-wal_start,
+        "commit_per_mutation_p50_us":percentile(&s.commits.iter().zip(&s.batch_jobs).map(|(t,n)|t / *n as f64).collect::<Vec<_>>(),0.50),
+        "commit_per_mutation_p99_us":percentile(&s.commits.iter().zip(&s.batch_jobs).map(|(t,n)|t / *n as f64).collect::<Vec<_>>(),0.99),"batch_jobs_p50":percentile(&s.batch_jobs.iter().map(|x|*x as f64).collect::<Vec<_>>(),0.50)})
 }
 
 #[test]
@@ -175,7 +180,8 @@ fn measure_m2_profile() {
         println!(
             "M2_PROFILE {}",
             json!({"document_bytes":bytes,"samples":rows,"commit_p50_overhead_percent":p50,
-            "commit_p99_overhead_percent":p99,"target_p50_percent":15,"target_p99_percent":25,"target_met":p50<=15.0&&p99<=25.0,
+            "commit_p99_overhead_percent":p99,"target_p50_percent":15,"target_p99_percent":25,"matched_batch_medians":med(true,"batch_jobs_p50")==med(false,"batch_jobs_p50"),
+            "target_met":p50<=15.0&&p99<=25.0&&med(true,"batch_jobs_p50")==med(false,"batch_jobs_p50"),
             "commit_timing":"SQLite commit_hook to postcommit WAL hook","writer_hold_timing":"first writer job to postcommit WAL hook",
             "wal":"NORMAL; canonical ConnectionConfig; autocheckpoint disabled; no reader/installed acceptance claim"})
         );
