@@ -233,7 +233,7 @@ impl CorePersistence {
             + Send
             + 'static,
     ) -> Result<T> {
-        let _admission = sync_admission()?;
+        let _admission = require_sync_owner_context()?;
         let readers = self.readers.clone();
         let (reply, result) = tokio::sync::oneshot::channel();
         self.runtime.spawn(async move {
@@ -254,7 +254,7 @@ impl CorePersistence {
             + Send
             + 'static,
     ) -> Result<T> {
-        let _admission = sync_admission()?;
+        let _admission = require_sync_owner_context()?;
         Ok(write_transaction::owner_write_blocking(
             &self.writer,
             name,
@@ -315,7 +315,7 @@ fn sync_slots() -> std::sync::Arc<tokio::sync::Semaphore> {
         .get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(4)))
         .clone()
 }
-fn sync_admission() -> Result<()> {
+pub(crate) fn require_sync_owner_context() -> Result<()> {
     // A private admission token is set only on the bounded compatibility
     // executor. Owner callbacks and async workers can never wait recursively.
     anyhow::ensure!(
@@ -437,6 +437,28 @@ pub(crate) async fn load_lease_value_owned(root: &Path, key: &str) -> Result<Opt
 }
 pub(crate) async fn release_lease_owned(root: &Path, key: &str) -> Result<()> {
     injected_core(root)?.release_lease(key).await
+}
+
+/// Read legacy Core tables through the injected snapshot pool, never another opener.
+pub(crate) async fn read_core_snapshot<T: Send + 'static>(
+    root: &Path,
+    operation: impl FnOnce(&Connection) -> std::result::Result<T, ctox_store::StoreError>
+        + Send
+        + 'static,
+) -> Result<T> {
+    let core = injected_core(root)?;
+    Ok(core
+        .readers
+        .read_job(ctox_store::ReadJob::new(Default::default(), operation))
+        .await?)
+}
+pub(crate) fn read_core_snapshot_blocking<T: Send + 'static>(
+    root: &Path,
+    operation: impl FnOnce(&Connection) -> std::result::Result<T, ctox_store::StoreError>
+        + Send
+        + 'static,
+) -> Result<T> {
+    injected_core(root)?.read_sync(operation)
 }
 
 pub fn sqlite_path(root: &Path) -> PathBuf {
@@ -608,7 +630,8 @@ mod sqlite_build_flags_tests {
 mod owner_adapter_tests {
     use super::*;
     use ctox_store::{
-        registry::Registry, testkit::StoreFixture, writer::WriterOptions, DbId, JobOptions, StoreError,
+        registry::Registry, testkit::StoreFixture, writer::WriterOptions, DbId, JobOptions,
+        StoreError,
     };
 
     async fn adapter(path: &Path) -> Result<CorePersistence> {
