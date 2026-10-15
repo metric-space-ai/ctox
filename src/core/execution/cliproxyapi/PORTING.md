@@ -2,6 +2,16 @@
 
 ## State
 
+- Management plugin quota reads and resets require an opaque server-only
+  credential/policy binding. The injected credential source validates that
+  binding under the same fence as account mutations before a response is
+  published; the routing cooldown reset itself runs inside that fence. A
+  response from a retired binding, including an old authentication error, is
+  discarded as an account-context mismatch. Store failures remain authority
+  failures. The binding is never serialized to a plugin or accepted from an
+  HTTP caller. Native credential/startup composition is still required before
+  this optional service can be enabled in the installed daemon.
+
 - The explicitly injected `ProcessPluginLoader` supports ordered process streams
   as well as unary calls. It reuses the versioned frame sequencer and the same
   call/plugin-bound callback authority. Two data chunks are buffered; a reserved

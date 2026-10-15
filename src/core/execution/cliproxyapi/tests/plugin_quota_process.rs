@@ -1,6 +1,8 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
 #![cfg(unix)]
+#[path = "support/plugin_quota_binding.rs"]
+mod binding_tests;
 use ctox_cliproxyapi::{
     internal::pluginhost::{
         auth_provider::HostConfigSummarySource,
