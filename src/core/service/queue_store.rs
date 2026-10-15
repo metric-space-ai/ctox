@@ -10,7 +10,7 @@ use ctox_store::{
         Rejection, RetryPolicy,
     },
     writer::Lifecycle,
-    JobHandle, JobOptions, ReadJob, StoreError, WriteJob,
+    JobHandle, JobOptions, StoreError, WriteJob,
 };
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
