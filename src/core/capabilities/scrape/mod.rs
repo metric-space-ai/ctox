@@ -7,7 +7,8 @@ use registry::{
 mod execute;
 use execute::{execute_scrape, CommandExecution, ProbeResult};
 pub(crate) use execute::{
-    execute_scrape_with_outcome, execute_scrape_with_probe_grant, AccountProbeGrant,
+    execute_scrape_with_outcome, execute_scrape_with_probe_grant,
+    reprobe_registered_account_keep_script, AccountProbeGrant,
 };
 mod semantic_enrichment;
 pub(crate) use semantic_enrichment::service_semantic_search;
@@ -1960,7 +1961,9 @@ fn print_json(value: &Value) -> Result<()> {
 #[cfg(test)]
 use classify::classify_outcome;
 #[cfg(test)]
-use execute::{acquire_target_run_lock, is_preserved_runner_env_key};
+use execute::{
+    acquire_target_run_lock, acquire_target_run_lock_waiting, is_preserved_runner_env_key,
+};
 #[cfg(test)]
 use reauth::{
     derived_secret_name, protected_config_from_script, url_is_login_landing,

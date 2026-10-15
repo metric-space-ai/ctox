@@ -1,0 +1,303 @@
+{
+  "collections": {
+    "news_issues": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "command_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "error": {
+          "type": "string"
+        },
+        "generated_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "issue_date": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "post_count": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "topic_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "topic_id",
+        "issue_date",
+        "status",
+        "payload",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "news_posts": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "author_handle": {
+          "type": "string"
+        },
+        "author_kind": {
+          "type": "string"
+        },
+        "author_name": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "bookmarked": {
+          "type": "boolean"
+        },
+        "category": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "discussion_count": {
+          "type": "number"
+        },
+        "hype_score": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 220,
+          "type": "string"
+        },
+        "intro": {
+          "type": "string"
+        },
+        "issue_id": {
+          "type": "string"
+        },
+        "link_card": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "published_at_ms": {
+          "type": "number"
+        },
+        "quote": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "rank": {
+          "type": "number"
+        },
+        "sources": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "topic_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "issue_id",
+        "topic_id",
+        "intro",
+        "payload",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "news_sources": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "account_handle": {
+          "type": "string"
+        },
+        "adapter_kind": {
+          "type": "string"
+        },
+        "auth_mode": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "credential_secret_name": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "last_error": {
+          "type": "string"
+        },
+        "last_run_at_ms": {
+          "type": "number"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "status": {
+          "type": "string"
+        },
+        "target_key": {
+          "type": "string"
+        },
+        "topic_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "topic_id",
+        "kind",
+        "label",
+        "enabled",
+        "payload",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "news_topics": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "cadence": {
+          "type": "string"
+        },
+        "categories": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "cron_expr": {
+          "type": "string"
+        },
+        "deadline_date": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "last_issue_at_ms": {
+          "type": "number"
+        },
+        "max_posts": {
+          "type": "number"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "run_time": {
+          "type": "string"
+        },
+        "schedule_task_id": {
+          "type": "string"
+        },
+        "sort_order": {
+          "type": "number"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "weekday": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "cadence",
+        "enabled",
+        "payload",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    }
+  },
+  "migration_strategies": {},
+  "module_id": "news",
+  "schema_format": "ctox-business-os-module-collections-v1"
+}

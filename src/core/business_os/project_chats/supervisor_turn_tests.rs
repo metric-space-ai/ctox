@@ -2,6 +2,192 @@
 // License: AGPL-3.0-only
 use super::*;
 #[test]
+fn exit_autostart_admits_exactly_one_turn_without_resources_and_retains_reasoned_proposal(
+) -> anyhow::Result<()> {
+    use crate::business_os::workjet_exit_model as exit;
+    let root = super::weekly_reports::fixture()?;
+    let conn = open_store(root.path())?;
+    assert_eq!(
+        exit::read_state(&conn, "project", "owner")?["status"],
+        "not_started"
+    );
+    drop(conn);
+    crate::business_os::refresh_due_workjet_exit_models(root.path())?;
+    crate::business_os::refresh_due_workjet_exit_models(root.path())?;
+    let conn = open_store(root.path())?;
+    let state = exit::read_state(&conn, "project", "owner")?;
+    assert_eq!(state["status"], "researching");
+    assert!(state["result"].is_null());
+    assert!(state.get("resource_proposal").is_none());
+    let (count,research):(i64,String)=conn.query_row("SELECT COUNT(*),research_command_id FROM workjet_exit_model_runs WHERE project_id='project'",[],|r|Ok((r.get(0)?,r.get(1)?)))?;
+    assert_eq!(count, 1);
+    let task =
+        crate::mission::channels::load_queue_task_for_business_os_command(root.path(), &research)?
+            .context("research queue")?;
+    assert!(task.prompt.contains("resource_proposal_reason"));
+    assert!(task.prompt.contains("never owner confirmation"));
+    assert!(task.prompt.contains("Owner project context"));
+    assert!(task
+        .prompt
+        .contains("comparison_mode MUST be equal_resources or project_specific"));
+    drop(conn);
+    exit::complete_research(root.path(),&research,&json!({"resource_proposal":{"hours_per_week":20,"monthly_budget_eur":300,"comparison_mode":"equal_resources"},"resource_proposal_reason":"Fixture-only proposal based on the documented team and budget; requires owner confirmation.","exit_model_blocked":{"missing_inputs":["confirmed_plan"]}}).to_string())?;
+    let conn = open_store(root.path())?;
+    let proposal = exit::read_state(&conn, "project", "owner")?;
+    assert_eq!(proposal["status"], "blocked");
+    assert_eq!(proposal["resource_proposal"]["monthly_budget_eur"], 300.0);
+    assert!(proposal["result"].is_null());
+    assert_eq!(
+        proposal["findings"][0]["code"],
+        "resource_proposal_recorded"
+    );
+    assert_eq!(
+        proposal["missing_inputs"],
+        json!(["researched_60_month_resource_plan", "researched_inputs"])
+    );
+    drop(conn);
+    crate::business_os::refresh_due_workjet_exit_models(root.path())?;
+    assert_eq!(
+        open_store(root.path())?.query_row(
+            "SELECT COUNT(*) FROM workjet_exit_model_runs WHERE research_command_id IS NOT NULL",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        1
+    );
+    Ok(())
+}
+#[test]
+fn exit_autostart_due_refresh_reuses_proposal_and_never_repeats_active_research(
+) -> anyhow::Result<()> {
+    use crate::business_os::workjet_exit_model as exit;
+    let root = super::weekly_reports::fixture()?;
+    let accepted = store::accept_rxdb_business_command_with_origin(
+        root.path(),
+        json!({"id":"seed-refresh","module":"ctox","record_id":"project","command_type":"ctox.workjet.exit_model.refresh","payload":{"project_id":"project","resources":{"hours_per_week":20,"monthly_budget_eur":300,"comparison_mode":"equal_resources"}},"client_context":{"actor":{"id":"owner","role":"admin"}}}),
+        CommandOrigin::TrustedLocal,
+    )?;
+    assert_eq!(accepted["status"], "completed", "{accepted}");
+    let conn = open_store(root.path())?;
+    let research: String = conn.query_row(
+        "SELECT research_command_id FROM workjet_exit_model_runs",
+        [],
+        |r| r.get(0),
+    )?;
+    drop(conn);
+    let task =
+        crate::mission::channels::load_queue_task_for_business_os_command(root.path(), &research)?
+            .context("task")?;
+    store::fail_business_command_from_queue_error(
+        root.path(),
+        &task.message_key,
+        "fixture source unavailable",
+    )?;
+    let conn = open_store(root.path())?;
+    let latest = exit::read_state(&conn, "project", "owner")?;
+    conn.execute("UPDATE workjet_exit_model_runs SET assessment_json=json_set(assessment_json,'$.refresh_due','2020-01-01') WHERE run_id=?1",[latest["run_id"].as_str().unwrap()])?;
+    drop(conn);
+    crate::business_os::refresh_due_workjet_exit_models(root.path())?;
+    crate::business_os::refresh_due_workjet_exit_models(root.path())?;
+    let conn = open_store(root.path())?;
+    let state = exit::read_state(&conn, "project", "owner")?;
+    assert_eq!(state["status"], "researching");
+    assert_eq!(state["resource_proposal"]["monthly_budget_eur"], 300.0);
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM workjet_exit_model_runs WHERE research_command_id IS NOT NULL",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        2
+    );
+    Ok(())
+}
+#[test]
+fn exit_autostart_skips_archived_projects_and_rejects_revoked_owner() -> anyhow::Result<()> {
+    for archived in [true, false] {
+        let root = super::weekly_reports::fixture()?;
+        let conn = open_store(root.path())?;
+        if archived {
+            let mut project = outbound_load_record(&conn, "workjet_projects", "project")?.unwrap();
+            project["status"] = json!("archived");
+            store::upsert_business_record(&conn, "workjet_projects", "project", 2, project)?;
+        } else {
+            conn.execute("DELETE FROM business_users WHERE user_id='owner'", [])?;
+        }
+        drop(conn);
+        let result = crate::business_os::refresh_due_workjet_exit_models(root.path());
+        assert_eq!(result.is_ok(), archived, "{result:?}");
+        let conn = open_store(root.path())?;
+        assert_eq!(
+            crate::business_os::workjet_exit_model::read_state(&conn, "project", "owner")?
+                ["status"],
+            "not_started"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn exit_autostart_researched_plan_without_prior_resources_can_be_adopted_once() -> anyhow::Result<()>
+{
+    let root = super::weekly_reports::fixture()?;
+    crate::business_os::refresh_due_workjet_exit_models(root.path())?;
+    let conn = open_store(root.path())?;
+    let research: String = conn.query_row(
+        "SELECT research_command_id FROM workjet_exit_model_runs WHERE project_id='project'",
+        [],
+        |row| row.get(0),
+    )?;
+    drop(conn);
+    let inputs = crate::business_os::workjet_exit_model_engine::fixture();
+    crate::business_os::workjet_exit_model::complete_research(root.path(), &research,
+        &json!({"exit_model_inputs":inputs,"resource_proposal":{"hours_per_week":20,"monthly_budget_eur":300,"comparison_mode":"equal_resources"},"resource_proposal_reason":"Test-only source-backed plan from the fixture; not production project data."}).to_string())?;
+    let conn = open_store(root.path())?;
+    let proposal = crate::business_os::workjet_exit_model::read_state(&conn, "project", "owner")?;
+    assert_eq!(
+        proposal["missing_inputs"],
+        json!(["confirmed_resource_plan"])
+    );
+    assert_eq!(proposal["plan_summary"]["confirmed"], false);
+    assert!(proposal["resource_proposal"].is_object());
+    assert!(proposal["result"].is_null());
+    let command = json!({"id":"exit-adopt-complete","module":"ctox","command_type":"ctox.workjet.exit_model.submit","record_id":"project","payload":{"project_id":"project","confirm_run_id":proposal["run_id"]},"client_context":{"actor":{"id":"owner","role":"admin","is_admin":true}}});
+    let started = std::time::Instant::now();
+    let confirmed = crate::business_os::command_plane::accept_rxdb_business_command(
+        root.path(),
+        command.clone(),
+    )?;
+    eprintln!(
+        "EXIT_CONFIRM_FIXTURE_ELAPSED_MS={}",
+        started.elapsed().as_millis()
+    );
+    assert_eq!(confirmed["status"], "completed", "{confirmed}");
+    assert_eq!(confirmed["result"]["assessment"]["status"], "provisional");
+    assert_eq!(
+        confirmed["result"]["assessment"]["result"]["expected_exit_equity_eur"],
+        8050.0
+    );
+    assert!(!confirmed["result"]["assessment"]["scenarios"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        crate::business_os::command_plane::accept_rxdb_business_command(root.path(), command)?
+            ["result"],
+        confirmed["result"]
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM workjet_exit_model_runs WHERE research_command_id IS NOT NULL",
+            [],
+            |row| row.get::<_, i64>(0)
+        )?,
+        1
+    );
+    Ok(())
+}
+#[test]
 fn exit_refresh_uses_one_durable_project_turn_and_typed_result() -> anyhow::Result<()> {
     let root = super::weekly_reports::fixture()?;
     let exit = |id: &str, kind: &str, payload: Value| {
@@ -47,7 +233,26 @@ fn exit_refresh_uses_one_durable_project_turn_and_typed_result() -> anyhow::Resu
     )?;
     let state = exit("exit-read", "read", json!({"project_id":"project"}))?;
     ensure!(state["status"] == "completed", "read failed: {state}");
-    assert_eq!(state["result"]["assessment"]["status"], "provisional");
+    assert_eq!(state["result"]["assessment"]["status"], "blocked");
+    assert_eq!(
+        state["result"]["assessment"]["plan_summary"]["confirmed"],
+        false
+    );
+    assert!(state["result"]["assessment"]["result"].is_null());
+    let confirmation =
+        json!({"project_id":"project","confirm_run_id":state["result"]["assessment"]["run_id"]});
+    let confirmed = exit("exit-confirm", "submit", confirmation.clone())?;
+    assert_eq!(confirmed["status"], "completed", "{confirmed}");
+    assert_eq!(confirmed["result"]["assessment"]["status"], "provisional");
+    assert_eq!(
+        exit("exit-confirm", "submit", confirmation)?["result"],
+        confirmed["result"]
+    );
+    let state = exit(
+        "exit-confirmed-read",
+        "read",
+        json!({"project_id":"project"}),
+    )?;
     assert_eq!(
         state["result"]["assessment"]["result"]["expected_exit_equity_eur"],
         8050.0

@@ -452,3 +452,60 @@ fn forged_read_fields_or_mismatched_record_routing_do_not_expose_state() -> anyh
     );
     Ok(())
 }
+
+fn refresh_command(root: &Path, actor: &str, id: &str) -> anyhow::Result<Value> {
+    send(
+        root,
+        actor,
+        id,
+        "ctox.workjet.project.kpis.refresh",
+        json!({"project_id":"project-1"}),
+    )
+}
+
+#[test]
+fn manual_refresh_reports_per_kpi_status_without_failing() -> anyhow::Result<()> {
+    let root = fixture()?;
+    let prompts = json!([{"kpi_id":"kpi-1","prompt":"Weekly active users"},
+        {"kpi_id":"kpi-2","prompt":"Revenue this month"}]);
+    configure(root.path(), "save-refresh", 0, prompts)?;
+    let refreshed = refresh_command(root.path(), ALIAS, "refresh-1")?;
+    assert_eq!(refreshed["status"], "completed", "{refreshed}");
+    let result = &refreshed["result"];
+    assert_eq!(result["kpis"]["revision"], 1);
+    let items = result["refresh"]["items"].as_array().context("items")?;
+    assert_eq!(items.len(), 2);
+    for item in items {
+        assert_eq!(item["status"], "missing");
+    }
+    Ok(())
+}
+
+#[test]
+fn manual_refresh_returns_current_state_when_the_time_limit_is_hit() -> anyhow::Result<()> {
+    let root = fixture()?;
+    configure(
+        root.path(),
+        "save-limit",
+        0,
+        json!([{"kpi_id":"kpi-1","prompt":"Weekly active users"}]),
+    )?;
+    let request = ReadKpisRequest {
+        project_id: "project-1".into(),
+        include_refresh_schedule: None,
+    };
+    let value = refresh(root.path(), ALIAS, &request, std::time::Duration::ZERO)?;
+    assert_eq!(value["kpis"]["project_id"], "project-1");
+    assert_eq!(value["refresh"]["items"].as_array().map(Vec::len), Some(1));
+    if value["refresh"]["completed"] == false {
+        assert_eq!(value["refresh"]["reason_code"], "time_limit");
+    }
+    Ok(())
+}
+
+#[test]
+fn manual_refresh_rejects_foreign_actor() -> anyhow::Result<()> {
+    let root = fixture()?;
+    rejected(refresh_command(root.path(), FOREIGN, "refresh-foreign"));
+    Ok(())
+}

@@ -10,8 +10,19 @@ use std::path::Path;
 pub(super) enum PendingBusinessCommandIntakeOutcome {
     Accepted,
     CanonicalReplayed,
-    WaitingForReplication { error: String },
-    RetryableFailure { error: String },
+    WaitingForReplication {
+        error: String,
+    },
+    RetryableFailure {
+        error: String,
+    },
+    /// Native intake rejected the replicated command because it carries no
+    /// valid capability token. Deterministic: recorded with a small budget and
+    /// then terminalized as `auth_required`, never replayed in a loop.
+    CapabilityRejected {
+        reason: &'static str,
+        error: String,
+    },
     Terminalized,
 }
 

@@ -452,6 +452,19 @@ pub(super) async fn wait_for_business_command_wake(
 /// How often a single command may fail `accept_pending_business_command`
 /// before it is marked `failed` and dropped from the pending queue.
 pub(super) const BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET: u32 = 5;
+
+/// A replicated command without any capability token can never become
+/// authorized (the token is part of its immutable client context), so it
+/// terminalizes on its first rejection. A presented token that fails
+/// verification gets one confirmation attempt, because verification also
+/// reads the user store and signing key.
+pub(super) fn capability_rejection_retry_budget(reason: &str) -> u32 {
+    if reason == store::CAPABILITY_MISSING_REASON {
+        1
+    } else {
+        2
+    }
+}
 #[cfg(test)]
 pub(super) use super::rxdb_peer_domain_recovery::BUSINESS_COMMAND_RETRY_CANDIDATE_SQL;
 
@@ -480,11 +493,19 @@ pub(super) async fn consume_pending_business_commands(
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
+        // A capability rejection is deterministic: it gets its own error code
+        // and a budget of one (missing token) or a single confirmation retry
+        // (presented but unverifiable token), then terminalizes.
+        let mut capability_rejection: Option<&'static str> = None;
         let intake_result = match accept_pending_business_command(root, database, document.clone())
             .await
         {
             Ok(PendingBusinessCommandIntakeOutcome::Accepted)
             | Ok(PendingBusinessCommandIntakeOutcome::Terminalized) => Ok(()),
+            Ok(PendingBusinessCommandIntakeOutcome::CapabilityRejected { reason, error }) => {
+                capability_rejection = Some(reason);
+                Err(anyhow::anyhow!(error))
+            }
             Ok(PendingBusinessCommandIntakeOutcome::CanonicalReplayed) => Err(anyhow::anyhow!(
                 "canonical command replay remained nonterminal"
             )),
@@ -546,12 +567,21 @@ pub(super) async fn consume_pending_business_commands(
                 let failure_message = format!("{err:#}");
                 let persisted_failure_message = failure_message.clone();
                 let persisted_failure = match tokio::task::spawn_blocking(move || {
-                    store::record_business_command_intake_failure(
-                        &failure_root,
-                        &failed_document,
-                        &persisted_failure_message,
-                        BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET,
-                    )
+                    match capability_rejection {
+                        Some(reason) => store::record_business_command_capability_rejection(
+                            &failure_root,
+                            &failed_document,
+                            &persisted_failure_message,
+                            reason,
+                            capability_rejection_retry_budget(reason),
+                        ),
+                        None => store::record_business_command_intake_failure(
+                            &failure_root,
+                            &failed_document,
+                            &persisted_failure_message,
+                            BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET,
+                        ),
+                    }
                 })
                 .await
                 {
@@ -1019,6 +1049,14 @@ pub(super) async fn accept_pending_business_command(
             )
             .await?;
             return Ok(PendingBusinessCommandIntakeOutcome::Terminalized);
+        }
+        Ok(Err(err)) if store::business_command_capability_rejection_reason(&err).is_some() => {
+            let reason = store::business_command_capability_rejection_reason(&err)
+                .unwrap_or(store::CAPABILITY_MISSING_REASON);
+            return Ok(PendingBusinessCommandIntakeOutcome::CapabilityRejected {
+                reason,
+                error: format!("native business command store execution failed: {err:#}"),
+            });
         }
         Ok(Err(err)) => {
             eprintln!("[business-os] native business command store execution failed: {err:#}");

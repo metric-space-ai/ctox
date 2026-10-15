@@ -161,7 +161,7 @@ ctox scrape execute --target-key <key> \
    - If field is financial and country=DE: search Bundesanzeiger PDF directly
      (`ctox web search --query "<company> Jahresabschluss filetype:pdf" --domain bundesanzeiger.de` + `ctox web read --url <pdf>`).
    - If field is `register_id`/`hr_amtsgericht` and country=DE: query Handelsregister via `ctox scrape execute --target-key handelsregister-de`.
-   - If field is `person_funktion`/`person_linkedin`/`person_xing` and no creds: rely on the always-on `person-discovery` source (already in the default plan for DACH); for credentialled API enrichment add `--include-private linkedin` / `--include-private xing`.
+   - If field is `person_funktion`/`person_linkedin`/`person_xing`: inspect the actual plan and its search receipts. Do not assume `person-discovery` is always enabled. If it is absent, explicitly search with `ctox web search --source person-discovery --query "<company> <requested-role aliases>" --country <iso>`. Run separate queries for each requested responsibility; an executive-only query does not cover Finance, Purchasing, Supply Chain, Operations, Technology and Development. Treat snippet names as candidates until current company/function is supported by source content. Use concrete discovered profile URLs for registered LinkedIn enrichment; `--include-private linkedin` enables a credentialled source but does not itself prove discovery or successful enrichment.
    - If country=AT and `register_id`/`firma_rechtsform` missing: probe Firmenbuch (manual `ctox web search --query "<company> firmenbuch.justiz.gv.at" + read`).
 
 4. **Compute derived fields.** When the raw inputs are present:

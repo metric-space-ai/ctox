@@ -459,15 +459,15 @@ try {
     state.uiMounted = false;
     try { hooks.__render.render(); } finally { state.ctx = previous; state.uiMounted = undefined; }
   });
-  await test('demand-only is wrapper metadata; persisted lead schema version stays zero', () => {
+  await test('the sync profile is wrapper metadata; persisted lead schema version stays zero', () => {
     const manifest = JSON.parse(readFileSync(join(source, 'collections.schema.json'), 'utf8'));
     const leads = manifest.collections.outbound_lead_generation_leads;
-    assert.equal(leads.syncProfile, 'demand-only');
+    assert.equal(leads.syncProfile, 'eager');
     assert.equal(leads.schema.version, 0);
     assert.equal(leads.schema.primaryKey, 'id');
     assert.equal(leads.schema.syncProfile, undefined);
     const original = JSON.parse(readFileSync(new URL('./fixtures/outbound-lead-schema-v0.json', import.meta.url), 'utf8'));
-    assert.deepEqual(leads.schema, original, 'demand-only must not migrate the installed lead schema');
+    assert.deepEqual(leads.schema, original, 'the sync profile must not migrate the installed lead schema');
     assert.equal(leads.schema.additionalProperties, true, 'field_status remains permitted as an additional property');
   });
   await test('actual required checkbox UI, click, denied save and reload retain persisted field semantics', async () => {
@@ -557,6 +557,34 @@ try {
       globalThis.document = oldDocument; globalThis.setTimeout = oldTimeout;
       delete globalThis.__outboundExportProbe;
     }
+  });
+  await test('a failed auth assist closes only the browser window it pre-opened', async () => {
+    // thesen 14.10.2026: the login request was rejected (no valid capability)
+    // and the pre-opened Browser window stayed empty.
+    const windows = [{ id: 'win-crm' }];
+    const destroyed = [];
+    const ctx = {
+      windowManager: {
+        listWindows: () => windows.map((win) => ({ ...win })),
+        destroy: async (id) => { destroyed.push(id); },
+      },
+      openDesktopApp: async (appId) => {
+        assert.equal(appId, 'browser');
+        windows.push({ id: 'win-browser-new' });
+        return 'win-browser-new';
+      },
+    };
+    const created = await hooks.preopenBrowserWindow(ctx);
+    assert.equal(created, 'win-browser-new');
+    assert.equal(await hooks.closePreopenedBrowserWindow(ctx, created), true);
+    assert.deepEqual(destroyed, ['win-browser-new']);
+    const reused = await hooks.preopenBrowserWindow({ ...ctx, openDesktopApp: async () => 'win-crm' });
+    assert.equal(reused, null, 'an already open browser window is never claimed');
+    assert.equal(await hooks.closePreopenedBrowserWindow(ctx, reused), false);
+    assert.deepEqual(destroyed, ['win-browser-new']);
+    const olgSource = readFileSync(join(source, 'index.js'), 'utf8');
+    assert.match(olgSource, /finally \{\s*if \(!preopened\.launched\) await closePreopenedBrowserWindow\(state\.ctx, preopened\.windowId\);/);
+    assert.match(olgSource, /preopened\.launched = await openSourceAuthorization\(item, authAssist\);/);
   });
 } finally {
   const state = (await import(pathToFileURL(join(fixture, 'modules', 'olg', 'index.js')).href)).__leadgenOutboundTestHooks.testState();

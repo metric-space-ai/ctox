@@ -6823,6 +6823,10 @@ mod projection_schema_union_tests {
 #[path = "rxdb_peer_projection_tombstone_tests.rs"]
 mod projection_tombstone_tests;
 
+#[cfg(test)]
+#[path = "rxdb_peer_communication_account_snapshot_tests.rs"]
+mod communication_account_snapshot_tests;
+
 #[derive(Debug)]
 struct ChannelStateProjection {
     accounts: Vec<Value>,
@@ -7123,19 +7127,44 @@ pub(super) async fn sync_channel_state_with_database(
         }
     }
 
-    let existing_accounts = accounts
-        .find(Some(MangoQuery {
-            limit: Some(2_000),
-            ..Default::default()
-        }))
-        .map_err(|err| anyhow::anyhow!("query communication account tombstones: {err}"))?
-        .exec(false)
-        .await
-        .map_err(|err| anyhow::anyhow!("exec communication account tombstone query: {err}"))?;
-    let existing_account_rows = existing_accounts
-        .as_array()
-        .cloned()
-        .unwrap_or_else(Vec::new);
+    let mut existing_account_rows = Vec::new();
+    let mut after_id = String::new();
+    loop {
+        let existing_accounts = accounts
+            .find(Some(MangoQuery {
+                selector: Some(json!({ "id": { "$gt": after_id } })),
+                sort: Some(vec![std::collections::HashMap::from([(
+                    "id".to_string(),
+                    "asc".to_string(),
+                )])]),
+                limit: Some(2_000),
+                ..Default::default()
+            }))
+            .map_err(|err| anyhow::anyhow!("query communication account tombstones: {err}"))?
+            .exec(false)
+            .await
+            .map_err(|err| anyhow::anyhow!("exec communication account tombstone query: {err}"))?;
+        let page = existing_accounts
+            .as_array()
+            .context("communication account tombstone query did not return an array")?;
+        if page.is_empty() {
+            break;
+        }
+        let next_id = page
+            .last()
+            .and_then(|row| row.get("id"))
+            .and_then(Value::as_str)
+            .context("communication account tombstone page has no primary key")?;
+        anyhow::ensure!(
+            next_id > after_id.as_str(),
+            "communication account tombstone cursor did not advance"
+        );
+        after_id = next_id.to_string();
+        existing_account_rows.extend(page.iter().cloned());
+        if page.len() < 2_000 {
+            break;
+        }
+    }
     for mut document in existing_account_rows {
         let Some(account_key) = document
             .get("account_key")
@@ -7270,13 +7299,8 @@ fn remove_projection_compare_metadata(value: &mut Value) {
 }
 
 fn load_channel_state_projection(root: &Path) -> anyhow::Result<ChannelStateProjection> {
-    let pulled = channels::pull_communication_accounts_for_business_os(root, Some(0), Some(2_000))
-        .context("pull communication account projection")?;
-    let accounts = pulled
-        .get("documents")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let accounts = channels::snapshot_communication_accounts_for_business_os(root)
+        .context("snapshot communication account projection")?;
     let mut channel_ids: HashSet<String> = BUSINESS_OS_CHANNEL_IDS
         .iter()
         .map(|channel| (*channel).to_string())
@@ -11452,6 +11476,100 @@ pub(in crate::business_os) mod tests {
     }
 
     #[test]
+    fn replicated_command_without_capability_terminalizes_without_retry_loop() {
+        // Customer tenant 14.10.2026: an outbound auth_assist command arrived without a
+        // valid capability token and intake rejected it ~2x per second
+        // forever. It must reach one browser-visible terminal failure.
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let command_id = "cmd_leadgen_source_without_capability";
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            database
+                .add_collections(collection_creators())
+                .await
+                .expect("register collections");
+            let commands = database
+                .collection("business_commands")
+                .expect("business_commands collection");
+            let now = now_ms() as u64;
+            commands
+                .insert(json!({
+                    "id": command_id,
+                    "command_id": command_id,
+                    "contract_version": 2,
+                    "idempotency_key": command_id,
+                    "module": "outbound",
+                    "type": "outbound.research_source.auth_assist",
+                    "command_type": "outbound.research_source.auth_assist",
+                    "record_id": "adapter-1",
+                    "status": "pending_sync",
+                    "task_status": "pending_sync",
+                    "payload": {"adapter_id": "adapter-1", "source_id": "source-1"},
+                    "client_context": {"source_module": "outbound"},
+                    "created_at_ms": now,
+                    "updated_at_ms": now,
+                }))
+                .await
+                .expect("insert pending command without capability");
+
+            assert_eq!(
+                consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
+                    .await
+                    .expect("first intake sweep"),
+                1
+            );
+            assert_eq!(
+                consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
+                    .await
+                    .expect("second intake sweep"),
+                0,
+                "a capability rejection must not be replayed"
+            );
+
+            let conn = Connection::open(store::rxdb_store_path(root.path()))
+                .expect("open persisted RxDB command store");
+            let table = latest_rxdb_collection_table(&conn, "business_commands")
+                .expect("resolve persisted command table")
+                .expect("persisted command table exists");
+            let table = sqlite_quote_identifier(&table);
+            let raw: String = conn
+                .query_row(
+                    &format!("SELECT data FROM {table} WHERE id = ?1"),
+                    params![command_id],
+                    |row| row.get(0),
+                )
+                .expect("load persisted command projection");
+            let persisted: Value = serde_json::from_str(&raw).expect("parse projection");
+            assert_eq!(persisted["status"], "failed");
+            assert_eq!(persisted["execution_phase"], "terminal");
+            assert_eq!(persisted["terminal_status"], "failed");
+            assert_eq!(persisted["error_code"], "auth_required");
+            assert_eq!(persisted["retryable"], false);
+            assert_eq!(persisted["result"]["reason"], "capability_missing");
+
+            let conn = Connection::open(crate::paths::core_db(root.path()))
+                .expect("open channel database");
+            let (total, open): (u64, u64) = conn
+                .query_row(
+                    "SELECT COUNT(*), COALESCE(SUM(resolved_at_ms IS NULL), 0)
+                     FROM business_command_intake_failures WHERE command_id = ?1",
+                    params![command_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("count intake failures");
+            assert_eq!(total, 1, "the rejection is recorded exactly once");
+            assert_eq!(open, 0, "history resolves after the terminal projection");
+        });
+    }
+
+    #[test]
     fn business_command_poll_sleep_backs_off_after_idle_round() {
         assert_eq!(
             business_command_poll_sleep_secs(0),
@@ -14008,6 +14126,21 @@ pub(in crate::business_os) mod tests {
             .filter_map(|(key, value)| (key == "cap").then(|| value.into_owned()))
             .collect::<Vec<_>>();
         assert_eq!(capabilities, CTOX_NATIVE_CAPABILITIES);
+    }
+
+    #[test]
+    fn workjet_signaling_capabilities_are_advertised_in_the_handshake() {
+        let handshake =
+            rxdb::plugins::replication_webrtc::index_mod::native_handshake_capabilities();
+        for capability in CTOX_NATIVE_CAPABILITIES
+            .iter()
+            .filter(|capability| capability.starts_with("ctox-workjet-"))
+        {
+            assert!(
+                handshake.contains(capability),
+                "{capability} is announced in the signaling URL but missing from the WebRTC handshake"
+            );
+        }
     }
 
     #[tokio::test]

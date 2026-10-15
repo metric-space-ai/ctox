@@ -37,10 +37,15 @@ pub(super) fn handle_outbound_active_command(
     // own module id; every other active outbound command stays on `outbound`.
     anyhow::ensure!(
         command.module == "outbound"
+            || (command.command_type == "outbound.research_source.reprobe"
+                && command.module == "outbound-lead-generation")
             || (command.command_type == "outbound.research_policy.publish"
                 && command.module == "outbound-lead-generation"),
         "active outbound commands require module=outbound"
     );
+    if command.command_type == "outbound.research_source.reprobe" {
+        return outbound_handle_source_reprobe(root, command);
+    }
     let now = now_ms() as i64;
     let conn = open_store(root)?;
     match command.command_type.as_str() {
@@ -4081,14 +4086,48 @@ fn outbound_scrape_test_execution_args(
     ])
 }
 
-/// The account probe grant of an Outbound source test: derived only from the
-/// command's server-side authorization (signed capability session, module
-/// policy DataWrite) and only for `outbound.research_source.test`.
+/// Reprobe one existing source without registration or script replacement.
+fn outbound_handle_source_reprobe(root: &Path, command: &BusinessCommand) -> anyhow::Result<Value> {
+    let grant = outbound_source_test_probe_grant(root, command).context(
+        "source reprobe requires a signed session and allowed Outbound data.write policy",
+    )?;
+    anyhow::ensure!(
+        command.payload.get("keep_script").and_then(Value::as_bool) == Some(true),
+        "source reprobe requires keep_script=true"
+    );
+    let target_key = outbound_required_string(&command.payload, &["target_key"])?;
+    anyhow::ensure!(
+        target_key.len() <= 128
+            && target_key
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.')),
+        "invalid source reprobe target_key"
+    );
+    let input = command
+        .payload
+        .get("probe_input")
+        .filter(|value| value.is_object())
+        .context("source reprobe requires probe_input with real provider lookup data")?;
+    let timeout_ms =
+        outbound_scrape_operation_timeout_ms(command.payload.get("operation_timeout_ms"))?;
+    scrape::reprobe_registered_account_keep_script(
+        root,
+        &target_key,
+        input,
+        timeout_ms.div_ceil(1000),
+        Some(&grant),
+    )
+}
+/// Derive a probe grant only from signed session/module DataWrite policy,
+/// for explicit source tests or script-preserving source reprobes.
 fn outbound_source_test_probe_grant(
     root: &Path,
     command: &BusinessCommand,
 ) -> Option<scrape::AccountProbeGrant> {
-    if command.command_type != "outbound.research_source.test" {
+    if !matches!(
+        command.command_type.as_str(),
+        "outbound.research_source.test" | "outbound.research_source.reprobe"
+    ) {
         return None;
     }
     let authorization =
@@ -14175,6 +14214,25 @@ mod registry_last_run_detail_tests {
             outbound_source_test_probe_grant(root, &admin_command).is_some(),
             "allowed policy on a signed session yields a grant"
         );
+
+        let reprobe = command(
+            "outbound.research_source.reprobe",
+            serde_json::json!({"capability_token":admin_capability}),
+        );
+        assert_eq!(policy(&reprobe)?, (true, true));
+        assert!(outbound_source_test_probe_grant(root, &reprobe).is_some());
+        let denied_reprobe = command(
+            "outbound.research_source.reprobe",
+            serde_json::json!({"capability_token":member_capability}),
+        );
+        assert_eq!(policy(&denied_reprobe)?, (true, false));
+        assert!(outbound_handle_source_reprobe(root, &denied_reprobe).is_err());
+        assert!(outbound_handle_source_reprobe(
+            root,
+            &command("outbound.research_source.reprobe", serde_json::json!({}))
+        )
+        .is_err());
+
         let member_command = source_test(&member_capability);
         assert_eq!(
             policy(&member_command)?,

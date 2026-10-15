@@ -130,9 +130,18 @@ pub(super) fn resolve_protected_capture_config(
     // at a specific login page, but that pointer is checked against the
     // trusted domains below.
     let recipe = ctox_web_stack::sources::find(&provider).and_then(|m| m.browser_recipe());
+    let source_defaults = crate::service::business_os::web_stack_auth_source_defaults(&provider);
     let trusted_domains = match &recipe {
         Some(recipe) if !recipe.allowed_domains.is_empty() => recipe.allowed_domains.clone(),
-        _ => url_host_lower(&target.view.start_url).into_iter().collect(),
+        _ => source_defaults
+            .map(|defaults| {
+                defaults
+                    .allowed_domains
+                    .iter()
+                    .map(|domain| (*domain).to_string())
+                    .collect()
+            })
+            .unwrap_or_else(|| url_host_lower(&target.view.start_url).into_iter().collect()),
     };
     if trusted_domains.is_empty() {
         return None;
@@ -143,6 +152,7 @@ pub(super) fn resolve_protected_capture_config(
         recipe
             .as_ref()
             .and_then(|recipe| recipe.required_secret_name.map(str::to_string))
+            .or_else(|| source_defaults.map(|defaults| defaults.secret_name.to_string()))
             .unwrap_or_else(|| derived_secret_name(&provider))
     );
     let script_login_url = fs::read_to_string(&target.script.script_path)
@@ -153,6 +163,7 @@ pub(super) fn resolve_protected_capture_config(
         login_url: recipe
             .as_ref()
             .map(|recipe| recipe.login_url.clone())
+            .or_else(|| source_defaults.map(|defaults| defaults.login_url.to_string()))
             .or(script_login_url),
         allowed_domains: trusted_domains,
         credential_ref: Some(trusted_credential_ref),

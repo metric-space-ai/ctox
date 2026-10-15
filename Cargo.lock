@@ -3257,7 +3257,7 @@ dependencies = [
 [[package]]
 name = "ctox-pdf-parse"
 version = "0.1.0"
-source = "git+https://github.com/metric-space-ai/workjet?rev=5a4e5480f6abf9fbdebf0b7c0f5c33865b09605d#5a4e5480f6abf9fbdebf0b7c0f5c33865b09605d"
+source = "git+https://github.com/metric-space-ai/workjet?rev=b4468dee780a6c75b1f0e5612af4f16ffb82fbbc#b4468dee780a6c75b1f0e5612af4f16ffb82fbbc"
 dependencies = [
  "anyhow",
  "image",
@@ -3629,11 +3629,11 @@ dependencies = [
 [[package]]
 name = "ctox-web-stack"
 version = "0.1.0"
-source = "git+https://github.com/metric-space-ai/workjet?rev=5a4e5480f6abf9fbdebf0b7c0f5c33865b09605d#5a4e5480f6abf9fbdebf0b7c0f5c33865b09605d"
+source = "git+https://github.com/metric-space-ai/workjet?rev=b4468dee780a6c75b1f0e5612af4f16ffb82fbbc#b4468dee780a6c75b1f0e5612af4f16ffb82fbbc"
 dependencies = [
  "anyhow",
  "chrono",
- "ctox-pdf-parse 0.1.0 (git+https://github.com/metric-space-ai/workjet?rev=5a4e5480f6abf9fbdebf0b7c0f5c33865b09605d)",
+ "ctox-pdf-parse 0.1.0 (git+https://github.com/metric-space-ai/workjet?rev=b4468dee780a6c75b1f0e5612af4f16ffb82fbbc)",
  "libc",
  "rand 0.8.8",
  "regex",
@@ -12383,9 +12383,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "aws-lc-rs",
  "log",

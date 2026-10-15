@@ -55,6 +55,7 @@ pub mod office_engine;
 pub(crate) mod office_staging_repair;
 pub(crate) mod outbound_field_review;
 pub(crate) mod outbound_lead_import;
+pub(crate) mod outbound_lead_readback;
 mod outbound_update_digest;
 mod person_research_command;
 mod person_research_gap_closure;
@@ -74,6 +75,7 @@ pub(crate) fn refresh_due_workjet_project_kpis(root: &std::path::Path) -> anyhow
 
 mod project_crew;
 mod workjet_exit_model;
+pub(crate) use workjet_exit_model::refresh_due as refresh_due_workjet_exit_models;
 mod workjet_exit_model_engine;
 mod workjet_identity;
 pub(crate) use project_crew::project_crew_member_for_task;
@@ -120,6 +122,7 @@ mod store_appsec_commands;
 mod store_ats_commands;
 mod store_catalog_projections;
 mod store_customer_commands;
+mod store_news_commands;
 mod store_office_commands;
 mod store_outbound_commands;
 mod store_outbound_delivery_policy;

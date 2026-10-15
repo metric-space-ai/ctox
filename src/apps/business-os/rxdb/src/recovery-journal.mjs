@@ -40,6 +40,8 @@ export class CtoxRecoveryJournal {
     this.quotaCoordinator = quotaCoordinator;
     this.replayers = new Map();
     this.lastGcAtMs = 0;
+    this.statusTimer = null;
+    this.closed = false;
   }
 
   registerCollection(collection, { schemaHash = '', applyBatch, resolveConflict = null, applyMaster = null } = {}) {
@@ -71,7 +73,7 @@ export class CtoxRecoveryJournal {
       masterAckedAtMs: 0,
     };
     await this.withQuotaRecovery(() => putSequencedBatch(this.db, batch));
-    await this.publishStatus();
+    this.scheduleStatusPublication();
     return batch.batchId;
   }
 
@@ -81,7 +83,7 @@ export class CtoxRecoveryJournal {
       committedDocs: structuredCloneSafe(success),
       primaryCommittedAtMs: Date.now(),
     }));
-    await this.publishStatus();
+    this.scheduleStatusPublication();
   }
 
   async markMasterAcknowledged(collection, documents = {}) {
@@ -477,7 +479,24 @@ export class CtoxRecoveryJournal {
     return pruned;
   }
 
+  scheduleStatusPublication() {
+    if (this.closed || this.statusTimer !== null) return;
+    // S5 P0 advance: the WAL/commit transaction has completed. Status scanning
+    // is diagnostic work, not durability, and must not serialize each command
+    // behind every pending journal payload while replication also runs.
+    this.statusTimer = setTimeout(() => {
+      this.statusTimer = null;
+      if (!this.closed) void this.publishStatus();
+    }, 1000);
+    this.statusTimer?.unref?.();
+  }
+
   async publishStatus() {
+    if (this.statusTimer !== null) {
+      clearTimeout(this.statusTimer);
+      this.statusTimer = null;
+    }
+    if (this.closed) return;
     try {
       const status = await this.getStatus();
       globalThis.dispatchEvent?.(new CustomEvent('ctox-indexeddb-recovery-status', { detail: status }));
@@ -506,6 +525,9 @@ export class CtoxRecoveryJournal {
   }
 
   close() {
+    this.closed = true;
+    if (this.statusTimer !== null) clearTimeout(this.statusTimer);
+    this.statusTimer = null;
     this.db.close();
   }
 }

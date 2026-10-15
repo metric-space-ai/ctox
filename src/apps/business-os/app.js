@@ -1,30 +1,30 @@
-import { requestSupervisorRoute } from './shared/workjet-supervisor-route-native.mjs?v=20261012-shell-v2-command-timing-rebase623';
-import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261012-shell-v2-command-timing-rebase623';
-import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261012-shell-v2-command-timing-rebase623';
-import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261012-shell-v2-command-timing-rebase623';
-import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261012-shell-v2-command-timing-rebase623';
-import { requestDictation } from './shared/speech-dictation.mjs?v=20261012-shell-v2-command-timing-rebase623';
-import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261012-shell-v2-command-timing-rebase623';
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261012-shell-v2-command-timing-rebase623';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261012-shell-v2-command-timing-rebase623';
-import { PROJECT_EXECUTION_POLICY_SCHEMA, validateProjectExecutionPolicyValue } from './shared/workjet-project-execution-policy-contract.generated.mjs?v=20261012-shell-v2-command-timing-rebase623';
-import { validateSupervisorLumaValue } from './shared/workjet-supervisor-luma-contract.generated.mjs?v=20261012-shell-v2-command-timing-rebase623';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261012-shell-v2-command-timing-rebase623';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261012-shell-v2-command-timing-rebase623';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261012-shell-v2-command-timing-rebase623';
-import { CtoxResizer } from './shared/resizer.js?v=20261012-shell-v2-command-timing-rebase623';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261012-shell-v2-command-timing-rebase623';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261012-shell-v2-command-timing-rebase623';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261012-shell-v2-command-timing-rebase623';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261012-shell-v2-command-timing-rebase623';
-import { createAppActions } from './shared/app-actions.js?v=20261012-shell-v2-command-timing-rebase623';
+import { requestSupervisorRoute } from './shared/workjet-supervisor-route-native.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
+import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
+import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
+import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
+import { requestDictation } from './shared/speech-dictation.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
+import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
+import { PROJECT_EXECUTION_POLICY_SCHEMA, validateProjectExecutionPolicyValue } from './shared/workjet-project-execution-policy-contract.generated.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
+import { validateSupervisorLumaValue } from './shared/workjet-supervisor-luma-contract.generated.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261014-shell-v2-query-checkpoint-readonly';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261014-shell-v2-query-checkpoint-readonly';
+import { CtoxResizer } from './shared/resizer.js?v=20261014-shell-v2-query-checkpoint-readonly';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261014-shell-v2-query-checkpoint-readonly';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261014-shell-v2-query-checkpoint-readonly';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261014-shell-v2-query-checkpoint-readonly';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261014-shell-v2-query-checkpoint-readonly';
+import { createAppActions } from './shared/app-actions.js?v=20261014-shell-v2-query-checkpoint-readonly';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261012-shell-v2-command-timing-rebase623';
+} from './shared/app-lifecycle.js?v=20261014-shell-v2-query-checkpoint-readonly';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -33,20 +33,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261012-shell-v2-command-timing-rebase623';
+} from './shared/permissions.js?v=20261014-shell-v2-query-checkpoint-readonly';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261012-shell-v2-command-timing-rebase623';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261012-shell-v2-command-timing-rebase623';
+} from './shared/branding.js?v=20261014-shell-v2-query-checkpoint-readonly';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261014-shell-v2-query-checkpoint-readonly';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261012-shell-v2-command-timing-rebase623';
+} from './shared/presentation.js?v=20261014-shell-v2-query-checkpoint-readonly';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -57,9 +57,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261012-shell-v2-command-timing-rebase623';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261012-shell-v2-command-timing-rebase623';
-import { createDocumentsFacade } from './shared/documents.js?v=20261012-shell-v2-command-timing-rebase623';
+} from './shared/shell-permissions-ui.js?v=20261014-shell-v2-query-checkpoint-readonly';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261014-shell-v2-query-checkpoint-readonly';
+import { createDocumentsFacade } from './shared/documents.js?v=20261014-shell-v2-query-checkpoint-readonly';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -67,27 +67,27 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261012-shell-v2-command-timing-rebase623';
+} from './shared/maintenance-state.js?v=20261014-shell-v2-query-checkpoint-readonly';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261012-shell-v2-command-timing-rebase623';
+} from './shared/workspace-session.js?v=20261014-shell-v2-query-checkpoint-readonly';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261012-shell-v2-command-timing-rebase623';
+} from './shared/taskbar-pins.js?v=20261014-shell-v2-query-checkpoint-readonly';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
   WORKJET_CATEGORY_IDS,
   workjetCategoryForModule,
   workjetCategoryForTarget,
-} from './shared/workjet-theme.js?v=20261012-shell-v2-command-timing-rebase623';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261012-shell-v2-command-timing-rebase623';
-import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261012-shell-v2-command-timing-rebase623';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261012-shell-v2-command-timing-rebase623';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261012-shell-v2-command-timing-rebase623';
+} from './shared/workjet-theme.js?v=20261014-shell-v2-query-checkpoint-readonly';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261014-shell-v2-query-checkpoint-readonly';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261014-shell-v2-query-checkpoint-readonly';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261014-shell-v2-query-checkpoint-readonly';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261014-shell-v2-query-checkpoint-readonly';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -95,14 +95,14 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261012-shell-v2-command-timing-rebase623';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261012-shell-v2-command-timing-rebase623';
-import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261012-shell-v2-command-timing-rebase623';
+} from './shared/startup-deadlines.js?v=20261014-shell-v2-query-checkpoint-readonly';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261014-shell-v2-query-checkpoint-readonly';
+import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
 import {
   PRESENTATION_ACTIONS, PRESENTATION_READ_ACTION, PRESENTATION_CANVAS_SAVE_ACTION, presentationReadPayload,
   presentationCanvasSavePayload, presentationFromReadResult, presentationMutationFromResult, readJourFixePresentationContent,
-} from './shared/jour-fixe-presentation.mjs?v=20261012-shell-v2-command-timing-rebase623';
-import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261012-shell-v2-command-timing-rebase623';
+} from './shared/jour-fixe-presentation.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
+import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -123,7 +123,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261012-shell-v2-command-timing-rebase623';
+const APP_BUILD = '20261014-shell-v2-query-checkpoint-readonly';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -14046,8 +14046,8 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
     ? Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1_000 : 0;
   const supervisorActions = ['project.supervisor.route.read.v1', 'project.supervisor.route.capabilities.v1', 'project.supervisor.route.read.v2', 'project.supervisor.route.capabilities.v2', 'project.supervisor.bind', 'project.supervisor.turn.capabilities', 'project.supervisor.turn.submit',
     'project.supervisor.turn.watch', 'project.supervisor.turn.cancel', 'project.supervisor.turn.history', 'project.supervisor.turn.input',
-    'project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read',
-    'project.exit_model.read', 'project.exit_model.refresh', 'project.exit_model.submit',
+    'project.kpis.read', 'project.kpis.refresh', 'project.kpis.configure', 'project.jour_fixe.meeting.read',
+    'project.exit_model.read', 'project.exit_model.refresh', 'project.exit_model.submit', 'project.init',
     'project.jour_fixe.meeting.start', 'project.jour_fixe.meeting.end',
     'project.jour_fixe.transcript.append', 'project.jour_fixe.narration.local_publish',
     'project.jour_fixe.transcript.local_candidate', 'project.jour_fixe.todos.revise', 'project.jour_fixe.todos.confirm',
@@ -14237,7 +14237,7 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
       ...(localCandidate ? { localCandidate: JSON.parse(JSON.stringify(receipt.result.local_candidate)) } : {}) };
   }
 
-  if (['project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read'].includes(action)) {
+  if (['project.kpis.read', 'project.kpis.refresh', 'project.kpis.configure', 'project.jour_fixe.meeting.read'].includes(action)) {
     const meetingRead = action === 'project.jour_fixe.meeting.read';
     const configuring = action === 'project.kpis.configure';
     const allowedKeys = new Set(['action', 'commandId', 'projectId']);
@@ -14295,7 +14295,22 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
       if (kpis.project_id !== projectId || !Number.isSafeInteger(kpis.revision)) {
         throw new Error('Workjet KPI result belongs to another project or revision.');
       }
-      return { action, commandId, projectId, contract: PROJECT_KPIS_SCHEMA, kpis: JSON.parse(JSON.stringify(kpis)) };
+      const result = { action, commandId, projectId, contract: PROJECT_KPIS_SCHEMA, kpis: JSON.parse(JSON.stringify(kpis)) };
+      if (action === 'project.kpis.refresh') {
+        const refresh = receipt.result.refresh;
+        const statuses = new Set(['fresh', 'stale', 'blocked', 'missing']);
+        if (!refresh || typeof refresh.completed !== 'boolean' || !Array.isArray(refresh.items)
+          || refresh.items.some(item => typeof item?.kpi_id !== 'string' || !statuses.has(item.status))) {
+          throw new TypeError('Workjet KPI refresh result is malformed.');
+        }
+        result.refresh = {
+          completed: refresh.completed,
+          ...(typeof refresh.reason_code === 'string' ? { reasonCode: refresh.reason_code } : {}),
+          items: refresh.items.map(item => ({ kpiId: item.kpi_id, status: item.status,
+            ...(typeof item.reason_code === 'string' ? { reasonCode: item.reason_code } : {}) })),
+        };
+      }
+      return result;
     }
     const meeting = receipt.result.meeting;
     if (meeting === null && payload.meeting_id !== undefined) {
@@ -14627,15 +14642,42 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
     return { action, commandId, projectId, binding: { contract, projectId, threadId, threadKey } };
   }
 
+  if (action === 'project.init') {
+    // One-click onboarding; a stable operationId makes polling idempotent.
+    assertWorkjetProjectPayloadKeys(request, new Set(['action', 'commandId', 'projectId', 'operationId']));
+    const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
+    const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
+    const operationId = boundedWorkjetProjectText(request.operationId, 'operationId', 128);
+    const receipt = await state.commandBus.dispatch({
+      id: commandId, command_id: commandId, module: 'ctox',
+      command_type: 'ctox.workjet.project.init', record_id: projectId,
+      payload: { project_id: projectId, operation_id: operationId },
+      client_context: { source: 'workjet-project-control', actor: actorContext(state.session) },
+    }, { until: 'terminal', sync_queue_tasks: false, timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
+    if (state.session !== requestSession || state.db !== requestDb || actorContext(state.session).id !== ownerUserId
+      || receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
+      || receipt.result?.ok !== true || receipt.result?.project_id !== projectId
+      || !Array.isArray(receipt.result?.steps)) {
+      throw new Error('Project init returned an uncorrelated or unsuccessful response.');
+    }
+    const steps = receipt.result.steps.slice(0, 12).map((step) => ({
+      id: String(step.id), state: String(step.state), detail: String(step.detail ?? '').slice(0, 256),
+    }));
+    return { action, commandId, projectId, operationId, steps };
+  }
+
   if (['project.exit_model.read', 'project.exit_model.refresh', 'project.exit_model.submit'].includes(action)) {
-    assertWorkjetProjectPayloadKeys(request, new Set(['action', 'commandId', 'projectId', 'asOf', 'resources', 'inputs']));
+    assertWorkjetProjectPayloadKeys(request, new Set(['action', 'commandId', 'projectId', 'asOf', 'resources', 'inputs', 'confirmRunId']));
     const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
     const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
     const verb = action.split('.').at(-1);
-    if (verb === 'read' && ['asOf', 'resources', 'inputs'].some((key) => Object.hasOwn(request, key))) throw new Error('Exit read accepts project identity only.');
-    if (verb === 'refresh' && Object.hasOwn(request, 'inputs')) throw new Error('Exit refresh cannot submit researched inputs.');
-    if (verb === 'submit' && (!request.inputs || Object.hasOwn(request, 'resources'))) throw new Error('Exit submission requires typed inputs.');
+    const confirming = Object.hasOwn(request, 'confirmRunId');
+    if (verb === 'read' && ['asOf', 'resources', 'inputs', 'confirmRunId'].some((key) => Object.hasOwn(request, key))) throw new Error('Exit read accepts project identity only.');
+    if (verb === 'refresh' && (Object.hasOwn(request, 'inputs') || confirming)) throw new Error('Exit refresh cannot submit researched inputs.');
+    if (confirming && (verb !== 'submit' || ['asOf', 'resources', 'inputs'].some((key) => Object.hasOwn(request, key)))) throw new Error('Exit confirmation cannot override the stored proposal.');
+    if (verb === 'submit' && !confirming && (!request.inputs || Object.hasOwn(request, 'resources'))) throw new Error('Exit submission requires typed inputs.');
     const payload = { project_id: projectId };
+    if (confirming) payload.confirm_run_id = boundedWorkjetProjectText(request.confirmRunId, 'confirmRunId', 256);
     if (Object.hasOwn(request, 'asOf')) {
       if (typeof request.asOf !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(request.asOf)) throw new Error('Invalid exit assessment date.');
       payload.as_of = request.asOf;
@@ -14804,7 +14846,7 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
   if (action === 'project.configure') {
     assertWorkjetProjectPayloadKeys(request, new Set([
       'action', 'commandId', 'projectId', 'title',
-      'description', 'repoUrl', 'publicUrl', 'info', 'jourFixe', 'supervisorLumaId', 'executionPolicy',
+      'description', 'repoUrl', 'publicUrl', 'info', 'jourFixe', 'feedSettings', 'supervisorLumaId', 'executionPolicy',
     ]));
     const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
     const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
@@ -15235,6 +15277,7 @@ function boundedWorkjetProjectResult(value, { includeConfiguration = false, incl
     ...(includeConfiguration && Object.hasOwn(value, 'public_url') ? { publicUrl: value.public_url } : {}),
     ...(includeConfiguration && Object.hasOwn(value, 'info') ? { info: value.info } : {}),
     ...(includeConfiguration && Object.hasOwn(value, 'jour_fixe') ? { jourFixe: value.jour_fixe } : {}),
+    ...(includeConfiguration && Object.hasOwn(value, 'feed_settings') ? { feedSettings: workjetFeedSettingsWire(value.feed_settings) } : {}),
     ...(includeSupervisorLuma && Object.hasOwn(value, 'supervisor_luma_id') ? { supervisorLumaId: value.supervisor_luma_id } : {}),
   });
   for (const [nativeKey, key] of [
@@ -15244,7 +15287,70 @@ function boundedWorkjetProjectResult(value, { includeConfiguration = false, incl
   ]) {
     if (Object.hasOwn(metadata, nativeKey)) result[key] = metadata[nativeKey];
   }
+  if (Object.hasOwn(metadata, 'feed_settings') && metadata.feed_settings !== null) {
+    result.feedSettings = workjetFeedSettingsWire(metadata.feed_settings);
+  }
   return Object.freeze(result);
+}
+
+const WORKJET_FEED_SOURCE_KEYS = ['disruptions', 'results', 'sessions', 'prs', 'meeting', 'setup'];
+const WORKJET_FEED_CHOICES = { defaultTab: ['top', 'latest'], body: ['short', 'full'], replies: ['three', 'all'] };
+const WORKJET_FEED_NATIVE = {
+  title: 'title', windowDays: 'window_days', sources: 'sources', defaultTab: 'default_tab',
+  body: 'body', replies: 'replies', notifyDisruptions: 'notify_disruptions',
+};
+
+/** Validates Workjet feed settings (camelCase wire, also accepts native snake_case) into one shape. */
+function normalizeWorkjetFeedSettings(value, keyOf) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid Workjet project feedSettings.');
+  }
+  const fields = Object.keys(WORKJET_FEED_NATIVE);
+  assertWorkjetProjectPayloadKeys(value, new Set(fields.map(keyOf)));
+  const get = (field) => value[keyOf(field)];
+  const has = (field) => Object.hasOwn(value, keyOf(field));
+  const out = {};
+  if (has('title')) {
+    const title = get('title');
+    out.title = title === null || String(title).trim() === '' ? null
+      : boundedWorkjetProjectText(title, 'feedSettings.title', 120);
+  }
+  if (has('windowDays')) {
+    const days = get('windowDays');
+    if (days !== null && ![1, 7, 30].includes(days)) throw new Error('Invalid Workjet project feedSettings.windowDays.');
+    out.windowDays = days;
+  }
+  if (has('sources')) {
+    const sources = get('sources');
+    if (!sources || typeof sources !== 'object' || Array.isArray(sources)) {
+      throw new Error('Invalid Workjet project feedSettings.sources.');
+    }
+    assertWorkjetProjectPayloadKeys(sources, new Set(WORKJET_FEED_SOURCE_KEYS));
+    out.sources = {};
+    for (const key of WORKJET_FEED_SOURCE_KEYS) {
+      if (!Object.hasOwn(sources, key)) continue;
+      if (typeof sources[key] !== 'boolean') throw new Error(`Invalid Workjet project feedSettings.sources.${key}.`);
+      out.sources[key] = sources[key];
+    }
+  }
+  for (const [field, allowed] of Object.entries(WORKJET_FEED_CHOICES)) {
+    if (!has(field)) continue;
+    if (!allowed.includes(get(field))) throw new Error(`Invalid Workjet project feedSettings.${field}.`);
+    out[field] = get(field);
+  }
+  if (has('notifyDisruptions')) {
+    if (typeof get('notifyDisruptions') !== 'boolean') throw new Error('Invalid Workjet project feedSettings.notifyDisruptions.');
+    out.notifyDisruptions = get('notifyDisruptions');
+  }
+  return out;
+}
+function workjetFeedSettingsNative(value) {
+  const wire = normalizeWorkjetFeedSettings(value, (field) => field);
+  return Object.freeze(Object.fromEntries(Object.entries(wire).map(([key, v]) => [WORKJET_FEED_NATIVE[key], v])));
+}
+function workjetFeedSettingsWire(value) {
+  if (value === null) return null;
+  return Object.freeze(normalizeWorkjetFeedSettings(value, (field) => WORKJET_FEED_NATIVE[field]));
 }
 
 function boundedWorkjetProjectMetadata(request) {
@@ -15265,6 +15371,9 @@ function boundedWorkjetProjectMetadata(request) {
       throw new Error('Invalid Workjet project supervisorLumaId.');
     }
     result.supervisor_luma_id = value === null ? null : value.trim();
+  }
+  if (Object.hasOwn(request, 'feedSettings')) {
+    result.feed_settings = request.feedSettings === null ? null : workjetFeedSettingsNative(request.feedSettings);
   }
   for (const [key, nativeKey] of [
     ['description', 'description'], ['repoUrl', 'repo_url'], ['publicUrl', 'public_url'],

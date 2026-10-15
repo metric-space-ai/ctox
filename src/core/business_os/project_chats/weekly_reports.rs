@@ -172,6 +172,13 @@ pub(crate) fn emit_project_report(
     scheduled_for: &str,
 ) -> anyhow::Result<Option<(String, String)>> {
     if !task.name.starts_with(PREFIX) {
+        if let Some(run) = crate::business_os::store_news_commands::emit_scheduled_issue(
+            root,
+            task,
+            scheduled_for,
+        )? {
+            return Ok(Some(run));
+        }
         return super::jour_fixe_preparation::emit(root, task, scheduled_for);
     }
     let route: ReportRoute = serde_json::from_str(

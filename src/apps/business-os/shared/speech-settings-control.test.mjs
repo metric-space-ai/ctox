@@ -39,3 +39,14 @@ test('missing transport and provider errors cannot leak credential input', async
   await assert.rejects(requestSpeechSettings({async requestNative(){throw new Error('private-fixture provider body');}},input,()=>{}),
     error=>error.message.includes('unavailable')&&!error.message.includes('private-fixture'));
 });
+
+test('native failures become fixed codes Workjet can explain', async () => {
+  const request={action:'speech.settings.read',commandId};
+  const fail=(error)=>requestSpeechSettings({async requestNative(){throw error;}},request,()=>{});
+  const missing=Object.assign(new Error('Native WebRTC peer lacks ctox-workjet-speech-settings-v1'),{code:'CTOX_WEBRTC_CAPABILITY_MISSING'});
+  await assert.rejects(fail(missing),e=>e.code==='SPEECH_CORE_OUTDATED');
+  await assert.rejects(fail(new Error('Native WebRTC peer is not connected')),e=>e.code==='PEER_UNAVAILABLE');
+  await assert.rejects(fail(new Error('Native request ctox.workjet.speech.settings.v1 exceeded 25000ms')),e=>e.code==='REQUEST_TIMEOUT');
+  await assert.rejects(fail(new Error('speech settings requires Owner/Admin')),e=>e.code==='SPEECH_ACCESS_DENIED');
+  await assert.rejects(fail(new Error('private-fixture')),e=>e.code==='SPEECH_SETTINGS_FAILED'&&!e.message.includes('private-fixture'));
+});

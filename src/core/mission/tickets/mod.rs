@@ -107,6 +107,13 @@ use crate::service::harness_flow::{
 
 const DEFAULT_DB_RELATIVE_PATH: &str = "runtime/ctox.sqlite3";
 const DEFAULT_LIST_LIMIT: usize = 20;
+pub(crate) fn ticket_self_work_has_terminal_success_proof(
+    root: &Path,
+    work_id: &str,
+) -> Result<bool> {
+    let conn = open_ticket_db(root)?;
+    work_items::work_item_has_terminal_success_proof(&conn, work_id)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TerminalPolicyGrantKind {

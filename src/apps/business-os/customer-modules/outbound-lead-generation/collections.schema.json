@@ -257,7 +257,7 @@
       "additionalProperties": true
     },
     "outbound_lead_generation_leads": {
-      "syncProfile": "demand-only",
+      "syncProfile": "eager",
       "schema": {
         "version": 0,
         "primaryKey": "id",

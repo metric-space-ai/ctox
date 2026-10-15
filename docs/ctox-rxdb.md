@@ -253,6 +253,98 @@ atomicity and the v4 schema are unchanged; individual batch payloads and the
 ID/order summaries still consume memory. This source repair does not establish
 the an on-prem deployment renderer-crash cause or actual Windows8GiB startup acceptance.
 
+### Local durable write admission — S5-Vorgriff
+
+Every collection shares IndexedDB's `documents` object store. A replication
+batch formerly retained its writer transaction through every sequential get/put;
+even a command's preparatory read waited behind the whole batch, before WAL
+append. This P0 S5-Vorgriff bounds replication-origin transactions to5 rows,
+serializes background writers per database handle, and gives local writes
+bounded preference through their existing recovery-journal and primary path.
+At the front of the background transaction queue, admission waits for at most
+eight completed local write attempts or eight milliseconds, then admits one
+replication quantum even while local writes remain active. Posted tasks make
+the scheduling deadline observable without hidden-guest timer clamping;
+the preference also ends after at most eight posted tasks, bounding scheduler
+work when local I/O stalls instead of polling until a wall-clock deadline.
+event-loop stalls or already active IndexedDB transactions can still delay I/O.
+It applies to local writes without collection
+special cases; transport and command authority are unchanged.
+Admission serializes individual background transactions, not whole batches,
+so small incoming receipts also progress between bulk replication quanta.
+
+The periodic unsynced diagnostic uses distinct collection keys and indexed
+pushable counts. It must not hold a readonly document-store transaction while
+cloning every replicated row, which would also block local writer transactions.
+Local WAL append and primary-commit marking still await their durable IndexedDB
+transactions. Their diagnostic status publication is coalesced after the commits
+with a one-second timer, rather than rescanning all pending WAL payloads twice
+on each command's critical path. Explicit status reads and native-ACK publication
+remain fresh; closing the journal cancels its pending diagnostic timer.
+
+The caller still awaits the entire replication batch before advancing its pull
+checkpoint. A failed batch may have a committed prefix; replay retains the
+existing per-document LWW/conflict checks. Successful batches publish one change
+notification, rather than one per quantum. Local batches retain their existing
+atomic primary transaction and journal-before-primary ordering.
+
+`command-persistence-browser-smoke.mjs` measures20 actual collection inserts
+during10,000 replication-origin upserts over a retained10,000-row browser store,
+reports the unchanged nearest-rank product target p95 below50ms, and verifies all commands,
+
+their committed WAL entries and all replicated rows after reopening. It isolates
+the production storage path; it does not certify an installed Owner guest or
+the network transport. Its output attributes time to recovery, preparatory read,
+WAL append, primary write and WAL commit. `--assert-product-budget` requires the
+50ms target on a dedicated measurement. The default shared-runner smoke instead
+requires p95 below1000ms: main2cbddfd2c reproduced16094.2ms, while the repair
+measured32.5ms on the lane and127.8ms on GitHub. This fixed regression boundary
+leaves more than7x headroom above the observed runner sample and remains more
+than16x below the original serialization defect. Every result records both
+budgets and whether the50ms product target was met; a green CI smoke alone does
+not establish that target or installed acceptance.
+
+Its20 samples span two seconds, including the periodic diagnostic refresh.
+It also checks exact unsynced counts and delivery of a small native receipt
+before the competing bulk replication finishes.
+`write-admission-fairness-browser-smoke.mjs` continuously inserts local writes
+from three producers while one real WAL-committed operation remains in flight.
+All100 native rows must commit before the pressure is released; the test also
+verifies that every completed local write retains its committed journal entry.
+
+### Native command return scheduling — S5-Vorgriff
+
+This P0 S5-Vorgriff is temporary until S5 supplies separate transport lanes.
+It adds one declared collection rule and no further priority special cases.
+
+Native command receipts share the single ACK-safe transport drainer with
+replication. The collection policy declares `business_commands` as eligible
+for response priority. One command response may overtake older
+High-priority snapshot responses, followed by one other High frame; command
+FIFO and the existing weighted Normal/Low turns remain. The same bounded
+selection applies to eligible small frames between chunk windows. Large
+command results receive priority at the next complete message boundary and
+still use the ordinary framed-transfer path; two framed transfers never nest.
+Policy filtering and publication fences apply before and during sending as before.
+
+Explicit command timing probes log only command ID and native completion,
+projection, queue-entry and DataChannel-send completion timestamps. A completed
+send is local transport acceptance, not browser observation; correlate it with
+the browser terminal mark. Control commands publish their first projection
+synchronously before canonical completion, so the separate outbox idle cadence
+is not a demonstrated cause of their first response delay. Neither these bounds
+nor an isolated smoke certifies WELSCH latency.
+
+For a paired S0 regression measurement, `scripts/sync-v3/run-native-lane.sh`
+accepts archive, pinned Playwright module, bounded soak duration, archive SHA-256,
+binary SHA-256, and native source SHA (which may differ from the measurement
+harness head). Omitted hashes retain the original pinned S0 artifact.
+Use the same measurement overlay on both native revisions: after the first
+paint and five write ACKs, five disjoint native query windows supply query
+p95. Each window must issue a real `rxdb.query.fetch` and return twenty rows.
+These samples do not change the first-paint definition or write ACK oracle;
+they remain exploratory lane evidence, not installed product acceptance.
+
 ### Browser live-query single-flight
 
 Each `RxQuery.$` subscription keeps at most one executing snapshot and one
@@ -459,6 +551,27 @@ rejected until the replacement owner removes or replaces that WAL: even a
 fresh SQLite connection can replay old frames onto the new main file. The
 read-only intake lane never deletes or checkpoints the SQLite file family.
 The existing notifier/lost-wakeup check and retry budget remain.
+
+### Intake failures and capability rejections
+
+`business_command_intake_failures` numbers attempts per command across its
+whole history (`UNIQUE(command_id, attempt)` includes resolved rows); only
+unresolved rows count against the retry budget, and a command whose canonical
+aggregate is already terminal is exhausted on its next observation so intake
+republishes the terminal projection instead of retrying. A replicated command
+rejected because it presents no capability token terminalizes on that first
+rejection (`status=failed`, `error_code=auth_required`,
+`result.reason=capability_missing`); a presented token that fails verification
+gets one confirmation attempt (`capability_invalid`). The browser command bus
+never inserts a command document without a capability token.
+
+Native projects an admitted command from its canonical intent, whose client
+context is the audited subset without `capability_token`. When background
+recovery re-reads such a token-less projection of an admitted recoverable
+control command (`is_recoverable_background_control_command_type`), intake
+takes the owner from the stored `native_authorization` receipt instead of the
+capability gate; the control claim still rejects a changed intent and the
+resume path revalidates that actor against current policy.
 
 ### Workjet computer schema upgrade (v0 to v1)
 
@@ -926,6 +1039,11 @@ transaction; a failed marker write rolls deletion back. Store recreation gets
 a new identity. Legacy checkpoints without that identity require one confirming
 pull before reuse; existing records and recovery journals are retained. Schema,
 permission and native-generation changes keep their existing invalidation rules.
+Established browser checkpoints read the marker and document head in one
+IndexedDB `readonly` transaction. Only a new or legacy collection without a marker
+initializes it in a narrow `readwrite` marker transaction, then repeats the
+consistent read. Reconnecting many windowed collections therefore does not
+reserve the shared document writer merely to inspect their local heads.
 
 Historical first-pull readiness survives valid checkpoint reuse so cached UI
 can still paint immediately. It does not certify the current connection's
@@ -1411,6 +1529,19 @@ and transport teardown remove only that owner's requests; a later handshake
 cannot revive a removed request. The existing 60-second peer-readiness wait
 remains bounded. Already dispatched requests retain their existing RPC,
 collector and retry behavior.
+
+**S5-Vorgriff (THESEN, 14.10.2026):** The same admission queue also reserves
+per-peer query-fetch rate tokens before dispatch. Native permits an initial
+`max(32, streams × 8)` burst and refills 16 requests/s; the browser deliberately
+uses `streams × 6` and 12/s, leaving capacity for reads outside its queue.
+Foreground app queries take the next available token before queued shell feeds.
+The bucket resets on a new authenticated peer identity, while requests waiting
+for a token occupy no stream slot. `query-rate-admission-smoke.mjs` tests a
+59-window shell burst and a subsequent foreground lead read without changing
+the native peer limit.
+Native spends a rate token only after a stream slot is actually acquired:
+`STREAM_LIMIT_EXCEEDED` retries must not consume the later interactive query's
+budget. Browser retries reserve another local token before sending another RPC.
 
 Identical demand-query windows also share an unfinished network operation when
 connection generation, accepted peer, current permission digest and the complete
@@ -2549,6 +2680,13 @@ a TTL'd BroadcastChannel lease with deterministic tie-break is the fallback.
 Followers keep writing to their local primary/WAL and notify the leader of
 dirty collections/ids. The leader broadcasts replicated invalidations back.
 `freeze`/`pagehide` releases ownership; persistent checkpoints handle catch-up.
+If a Web Lock remains held by a same-origin client that sends no leader
+heartbeat, a fresh tab waits one heartbeat interval plus a short grace period
+and then takes over the lock. A former leader yields on the takeover notice
+and checks that its own lock client still holds the lease before advertising
+another heartbeat. This prevents an orphaned Worker lock from leaving every
+collection in follower state indefinitely; the browser smoke holds the lock in
+a real Worker without a sync bridge and verifies single-tab recovery.
 
 Peers advertising `ctox-checkpoint-generation-v2` validate retained
 checkpoints with the persistent native storage generation, collection, schema
@@ -3191,6 +3329,7 @@ persisted even on failure. This is the retained-profile browser cohort only;
 | `projection-window-gc-smoke` | Stale projection windows are garbage-collected. |
 | `query-api-smoke` | Query API surface. |
 | `query-fetch-capability-smoke` | Capability negotiation surface. |
+| `concurrent-open-negotiation-smoke` | Collections released by one channel-open event join one accepted protocol exchange instead of occupying serial frame-ACK windows with duplicate negotiations. |
 | `query-demand-authoritative-generation-smoke` | Strict authority tokens reject absent/replaced/cancelled generations, accept native empty, and reuse only the same token/generation. |
 | `webrtc-authority-generation-smoke` | Transport renegotiation with identical native session/storage/checkpoint/schema keeps strict query generation stable; changed peer identity or any native-authority input rejects it. |
 | `query-fingerprint-corpus-smoke` | JS fingerprints match the shared JS/Rust corpus byte-for-byte. |

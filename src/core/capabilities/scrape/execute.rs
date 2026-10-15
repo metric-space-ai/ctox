@@ -374,6 +374,71 @@ pub(super) fn account_probe_authorized(
     grant.is_some() && session_owner_user_id.is_none()
 }
 
+pub(crate) fn reprobe_registered_account_keep_script(
+    root: &Path,
+    target_key: &str,
+    input: &Value,
+    timeout_seconds: u64,
+    grant: Option<&AccountProbeGrant>,
+) -> Result<Value> {
+    anyhow::ensure!(
+        grant.is_some(),
+        "account reprobe requires a policy-granted operator request"
+    );
+    anyhow::ensure!(input.is_object(), "account reprobe input must be an object");
+    anyhow::ensure!(
+        (1..=300).contains(&timeout_seconds),
+        "invalid account reprobe timeout"
+    );
+    let before = super::registry::target_script_registration(root, target_key)?
+        .context("account reprobe target is not registered")?;
+    anyhow::ensure!(
+        before["script_registered"].as_bool() == Some(true),
+        "account reprobe requires an existing unchanged registered script"
+    );
+    let target = load_registered_target(root, &open_db(root)?, target_key)?
+        .context("account reprobe target script missing")?;
+    let path = PathBuf::from(&target.script.script_path);
+    let hash_before = super::compute_sha256_bytes(&fs::read(&path)?);
+    // No register-script, upsert-target, override, allow-heal or state deletion.
+    // The existing executor owns the atomic probe lease and clears only a
+    // successfully probed generation of this exact target.
+    let outcome = execute_scrape_with_probe_grant(
+        root,
+        &[
+            "--target-key".to_string(),
+            target_key.to_string(),
+            "--trigger-kind".to_string(),
+            "account_reprobe".to_string(),
+            "--timeout-seconds".to_string(),
+            timeout_seconds.to_string(),
+            "--input-json".to_string(),
+            input.to_string(),
+            "--probe-account".to_string(),
+        ],
+        grant,
+    )?;
+    let after = super::registry::target_script_registration(root, target_key)?
+        .context("account reprobe target disappeared")?;
+    let hash_after = super::compute_sha256_bytes(&fs::read(&path)?);
+    anyhow::ensure!(
+        before["revision_no"] == after["revision_no"]
+            && before["script_sha256"] == after["script_sha256"]
+            && hash_before == hash_after
+            && after["script_registered"].as_bool() == Some(true),
+        "account reprobe detected a changed registered script"
+    );
+    Ok(json!({
+        "ok": outcome.status == ScrapeRunStatus::Succeeded,
+        "target_key": target_key,
+        "keep_script": true,
+        "script_revision": after["revision_no"],
+        "script_sha256_before": hash_before,
+        "script_sha256_after": hash_after,
+        "outcome": outcome,
+    }))
+}
+
 pub(crate) fn execute_scrape_with_outcome(
     root: &Path,
     args: &[String],
@@ -464,7 +529,8 @@ pub(crate) fn execute_scrape_with_probe_grant(
         target.script.script_path = path.clone();
     }
     let workspace_dir = resolve_workspace_dir(root, &target.view.workspace_dir);
-    let _run_lock = acquire_target_run_lock(&workspace_dir, target_key)?;
+    let _run_lock =
+        acquire_target_run_lock_waiting(&workspace_dir, target_key, TARGET_RUN_LOCK_WAIT)?;
     let run_started_at = now_iso_string();
     let run_id = format!(
         "scrape_run-{}",
@@ -722,7 +788,9 @@ pub(crate) fn execute_scrape_with_probe_grant(
     // ungated when they detect the auth wall themselves).
     // CTOX first signs in itself with the stored credential; only when that
     // is impossible or fails does the run hand the login wall to a human.
-    let auto_reauthorization = if classification.status == ScrapeRunStatus::AuthorizationRequired {
+    let auto_reauthorization = if classification.status == ScrapeRunStatus::AuthorizationRequired
+        && trigger_kind != "account_reprobe"
+    {
         reauthorization.as_ref().and_then(|action| {
             super::reauth::attempt_automatic_reauthorization(
                 root,
@@ -742,6 +810,7 @@ pub(crate) fn execute_scrape_with_probe_grant(
         == Some(true);
     let auth_assist_handoff = if classification.status == ScrapeRunStatus::AuthorizationRequired
         && !signed_in_automatically
+        && trigger_kind != "account_reprobe"
     {
         reauthorization.as_ref().and_then(|action| {
             emit_reauthorization_handoff(
@@ -851,7 +920,8 @@ pub(crate) fn execute_scrape_with_probe_grant(
                         .unwrap_or("provider_account_inactive"),
                 )
             }
-            ScrapeRunStatus::Succeeded | ScrapeRunStatus::CompletedEmpty => {
+            ScrapeRunStatus::Succeeded => super::account_state::RunResult::Succeeded,
+            ScrapeRunStatus::CompletedEmpty if trigger_kind != "account_reprobe" => {
                 super::account_state::RunResult::Succeeded
             }
             _ => super::account_state::RunResult::OtherFailure,
@@ -1287,6 +1357,36 @@ pub(super) fn execute_registered_script(
         stdout_text: String::from_utf8_lossy(&stdout_bytes).to_string(),
         stderr_text: String::from_utf8_lossy(&stderr_bytes).to_string(),
     })
+}
+
+/// How long a run waits for another live run of the same target to finish.
+/// Measured 15 October 2026: ten research agents ran in parallel, and every
+/// second call to a single-session target (D&B Hoovers, Leadfeeder, Google)
+/// failed at once with "already has an active run"; the agents recorded the
+/// source as unavailable and left WZ code, revenue and employee counts open
+/// although the source answered the other agent seconds later.
+pub(super) const TARGET_RUN_LOCK_WAIT: Duration = Duration::from_secs(150);
+
+/// Like [`acquire_target_run_lock`], but waits up to `wait` while a live run
+/// holds the target. A stale lock is still reclaimed at once.
+pub(super) fn acquire_target_run_lock_waiting(
+    workspace_dir: &Path,
+    target_key: &str,
+    wait: Duration,
+) -> Result<TargetRunLock> {
+    let deadline = Instant::now() + wait;
+    loop {
+        match acquire_target_run_lock(workspace_dir, target_key) {
+            Ok(lock) => return Ok(lock),
+            Err(err)
+                if Instant::now() < deadline
+                    && format!("{err:#}").contains("already has an active run") =>
+            {
+                thread::sleep(Duration::from_millis(500));
+            }
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 pub(super) fn acquire_target_run_lock(

@@ -89,6 +89,7 @@ pub struct CollectionPolicy {
     poll_batch_limits: Vec<PollBatchLimitRule>,
     transfer_ceilings: Vec<TransferCeilingRule>,
     demand_only_chunk_collections: Vec<String>,
+    response_priority_collections: Vec<String>,
 }
 
 impl CollectionPolicy {
@@ -99,6 +100,7 @@ impl CollectionPolicy {
             poll_batch_limits: Vec::new(),
             transfer_ceilings: Vec::new(),
             demand_only_chunk_collections: Vec::new(),
+            response_priority_collections: Vec::new(),
         }
     }
 
@@ -139,6 +141,19 @@ impl CollectionPolicy {
     pub fn with_demand_only_chunk_collection(mut self, collection: impl Into<String>) -> Self {
         self.demand_only_chunk_collections.push(collection.into());
         self
+    }
+
+    /// Responses for these collections may overtake snapshot responses.
+    /// Transport still bounds consecutive priority turns and framed transfers.
+    pub fn with_response_priority(mut self, collection: impl Into<String>) -> Self {
+        self.response_priority_collections.push(collection.into());
+        self
+    }
+
+    pub fn prioritizes_response(&self, collection: &str) -> bool {
+        self.response_priority_collections
+            .iter()
+            .any(|name| name == collection)
     }
 
     pub fn write_guard(&self, collection: &str, context: &str) -> WriteGuard {
@@ -190,6 +205,7 @@ impl CollectionPolicy {
 impl Default for CollectionPolicy {
     fn default() -> Self {
         Self::new()
+            .with_response_priority("business_commands")
             .with_write_guard(
                 "business_commands",
                 "replication-master-write",
@@ -252,6 +268,9 @@ mod tests {
     #[test]
     fn default_write_guard_is_exact_and_preserves_status_semantics() {
         let policy = CollectionPolicy::default();
+        assert!(policy.prioritizes_response("business_commands"));
+        assert!(!policy.prioritizes_response("foreign_business_commands"));
+        assert!(!CollectionPolicy::new().prioritizes_response("business_commands"));
         let guard = policy.write_guard("business_commands", "replication-master-write");
         assert!(guard.rejects(
             &json!({"status": "pending_sync"}),

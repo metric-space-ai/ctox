@@ -200,6 +200,10 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   matching_objects: "31ff9b1fce039239cf0684e1cf246b9e5d3a222abd8ca4b0c9f3c837dfeb55e1",
   matching_requirements: "7a57a57784d58c9898d135a519a8789380742cb5a0de055f19e8f6a279035b50",
   matching_results: "a5260077a1b4e9d5881ff3b265daf8651b8c6be3158cb5eff0d4f78bed21137c",
+  news_issues: "998da0eb1d010441075361aa67ee98d4e0a78086f54452376b9d0b76a710a471",
+  news_posts: "543e93d210acf0f960c7fae447b4337824d72eea1c64233ca669c2d000d913ad",
+  news_sources: "bddb8bbe67dbf4fe46b0682257626f4919c0f1b460006ab3d1f98e0a4becf483",
+  news_topics: "d3023b75265a2ffbf1f073e9fd060053123429e2969e3af1dfd55335a92060f6",
   notes: "9c02d9c9f4362f7cb9739b5b401eb59528254534fdfd807050a941041304854d",
   offers: "ee230a74c678a29a209f08b48a98e2bb7d2ddca64c606f89f4cb2af3de7382d3",
   outbound_account_limits: "35d7a40e3e485447e234f72ec898ce57b7f2b7ebc4f01bb748a7e9ea5a3fc68e",
@@ -999,6 +1003,8 @@ var CtoxRecoveryJournal = class {
     this.quotaCoordinator = quotaCoordinator;
     this.replayers = /* @__PURE__ */ new Map();
     this.lastGcAtMs = 0;
+    this.statusTimer = null;
+    this.closed = false;
   }
   registerCollection(collection, { schemaHash: schemaHash2 = "", applyBatch, resolveConflict = null, applyMaster = null } = {}) {
     if (!collection || typeof applyBatch !== "function") return;
@@ -1028,7 +1034,7 @@ var CtoxRecoveryJournal = class {
       masterAckedAtMs: 0
     };
     await this.withQuotaRecovery(() => putSequencedBatch(this.db, batch));
-    await this.publishStatus();
+    this.scheduleStatusPublication();
     return batch.batchId;
   }
   async commitBatch(batchId, success = {}) {
@@ -1037,7 +1043,7 @@ var CtoxRecoveryJournal = class {
       committedDocs: structuredCloneSafe2(success),
       primaryCommittedAtMs: Date.now()
     }));
-    await this.publishStatus();
+    this.scheduleStatusPublication();
   }
   async markMasterAcknowledged(collection, documents = {}) {
     const ids = Object.keys(documents).filter((id) => documents[id]);
@@ -1396,7 +1402,20 @@ var CtoxRecoveryJournal = class {
     }
     return pruned;
   }
+  scheduleStatusPublication() {
+    if (this.closed || this.statusTimer !== null) return;
+    this.statusTimer = setTimeout(() => {
+      this.statusTimer = null;
+      if (!this.closed) void this.publishStatus();
+    }, 1e3);
+    this.statusTimer?.unref?.();
+  }
   async publishStatus() {
+    if (this.statusTimer !== null) {
+      clearTimeout(this.statusTimer);
+      this.statusTimer = null;
+    }
+    if (this.closed) return;
     try {
       const status = await this.getStatus();
       globalThis.dispatchEvent?.(new CustomEvent("ctox-indexeddb-recovery-status", { detail: status }));
@@ -1424,6 +1443,9 @@ var CtoxRecoveryJournal = class {
     }
   }
   close() {
+    this.closed = true;
+    if (this.statusTimer !== null) clearTimeout(this.statusTimer);
+    this.statusTimer = null;
     this.db.close();
   }
 };
@@ -2675,6 +2697,38 @@ var REPLICATION_MIN_SCAN_LIMIT = 1;
 var REPLICATION_MAX_SCAN_LIMIT = 5e3;
 var INDEX_HIGH_KEY = "\uFFFF";
 var unsyncedCountScheduled = /* @__PURE__ */ new WeakSet();
+var writeAdmissionByDatabase = /* @__PURE__ */ new WeakMap();
+var REPLICATION_WRITE_QUANTUM = 5;
+var LOCAL_WRITE_PRIORITY_MAX_COMPLETIONS = 8;
+var LOCAL_WRITE_PRIORITY_MAX_MS = 8;
+var LOCAL_WRITE_PRIORITY_MAX_YIELDS = 8;
+function writeAdmission(db) {
+  let admission = writeAdmissionByDatabase.get(db);
+  if (!admission) {
+    admission = { localWrites: 0, completedLocalWrites: 0, background: Promise.resolve() };
+    writeAdmissionByDatabase.set(db, admission);
+  }
+  return admission;
+}
+function yieldWriteAdmission() {
+  return new Promise((done) => {
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      channel.port2.close();
+      done();
+    };
+    channel.port2.postMessage(null);
+  });
+}
+async function waitForReplicationAdmission(admission) {
+  const deadline = performance.now() + LOCAL_WRITE_PRIORITY_MAX_MS;
+  const completedAtStart = admission.completedLocalWrites;
+  let yields = 0;
+  while (admission.localWrites && admission.completedLocalWrites - completedAtStart < LOCAL_WRITE_PRIORITY_MAX_COMPLETIONS && performance.now() < deadline && yields++ < LOCAL_WRITE_PRIORITY_MAX_YIELDS) {
+    await yieldWriteAdmission();
+  }
+}
 async function openCtoxIndexedDbStorage({ databaseName = "ctox_business_os_js_v1" } = {}) {
   if (!globalThis.indexedDB) {
     throw new Error("indexedDB is required for ctox-rxdb-js storage");
@@ -2950,7 +3004,10 @@ var CtoxIndexedDbCollection = class {
     const { success } = await this.bulkUpsert([doc]);
     return success[id] || null;
   }
-  async bulkUpsert(docs, {
+  async bulkUpsert(docs, options = {}) {
+    return this.withLocalWriteAdmission(options, () => this._bulkUpsert(docs, options));
+  }
+  async _bulkUpsert(docs, {
     now = Date.now(),
     replicationOrigin = null,
     skipJournal = false,
@@ -2974,7 +3031,7 @@ var CtoxIndexedDbCollection = class {
     try {
       await this.persistDeleteUpdateConflicts(validDocs, replicationOrigin);
       result = await this.runWithQuotaRecovery(
-        () => this._bulkUpsertOnce(writeDocs, { now, replicationOrigin }),
+        () => replicationOrigin?.role ? this.writeReplicationChunks(writeDocs, { now, replicationOrigin }, "_bulkUpsertOnce") : this._bulkUpsertOnce(writeDocs, { now, replicationOrigin }),
         { source: recoveryReplay ? "recovery-replay" : "bulk-upsert" }
       );
     } catch (error) {
@@ -2987,7 +3044,7 @@ var CtoxIndexedDbCollection = class {
     if (replicationOrigin?.role) await this.recoveryJournal?.markMasterAcknowledged(this.name, result.success);
     return result;
   }
-  async _bulkUpsertOnce(docs, { now = Date.now(), replicationOrigin = null } = {}) {
+  async _bulkUpsertOnce(docs, { now = Date.now(), replicationOrigin = null, emitChange = true } = {}) {
     if (!Array.isArray(docs)) {
       throw new TypeError("bulkUpsert docs must be an array");
     }
@@ -3079,7 +3136,7 @@ var CtoxIndexedDbCollection = class {
       throw error2;
     }
     schedulePersistUnsyncedWriteCount(this.db);
-    if (Object.keys(success).length) {
+    if (emitChange && Object.keys(success).length) {
       this.events.emit("change", {
         collection: this.name,
         success,
@@ -3089,7 +3146,10 @@ var CtoxIndexedDbCollection = class {
     }
     return { success, error, overwrittenLocalConflicts, structuredConflicts };
   }
-  async bulkWrite(rows, {
+  async bulkWrite(rows, options = {}) {
+    return this.withLocalWriteAdmission(options, () => this._bulkWrite(rows, options));
+  }
+  async _bulkWrite(rows, {
     now = Date.now(),
     replicationOrigin = null,
     baseById = null,
@@ -3116,7 +3176,7 @@ var CtoxIndexedDbCollection = class {
     try {
       await this.persistDeleteUpdateConflicts(validRows, replicationOrigin);
       result = await this.runWithQuotaRecovery(
-        () => this._bulkWriteOnce(writeRows, { now, replicationOrigin, baseById: journalBaseById, force, authoritativeMaster }),
+        () => replicationOrigin?.role ? this.writeReplicationChunks(writeRows, { now, replicationOrigin, baseById: journalBaseById, force, authoritativeMaster }, "_bulkWriteOnce") : this._bulkWriteOnce(writeRows, { now, replicationOrigin, baseById: journalBaseById, force, authoritativeMaster }),
         { source: recoveryReplay ? "recovery-replay" : "bulk-write" }
       );
     } catch (error) {
@@ -3129,7 +3189,7 @@ var CtoxIndexedDbCollection = class {
     if (replicationOrigin?.role) await this.recoveryJournal?.markMasterAcknowledged(this.name, result.success);
     return result;
   }
-  async _bulkWriteOnce(rows, { now = Date.now(), replicationOrigin = null, baseById = null, force = false, authoritativeMaster = false } = {}) {
+  async _bulkWriteOnce(rows, { now = Date.now(), replicationOrigin = null, baseById = null, force = false, authoritativeMaster = false, emitChange = true } = {}) {
     if (!Array.isArray(rows)) {
       throw new TypeError("bulkWrite rows must be an array");
     }
@@ -3225,7 +3285,7 @@ var CtoxIndexedDbCollection = class {
       throw error2;
     }
     schedulePersistUnsyncedWriteCount(this.db);
-    if (Object.keys(success).length) {
+    if (emitChange && Object.keys(success).length) {
       this.events.emit("change", {
         collection: this.name,
         success,
@@ -3234,6 +3294,52 @@ var CtoxIndexedDbCollection = class {
       dispatchStorageChange(this.db.name, this.name, success, replicationOrigin);
     }
     return { success, error, overwrittenLocalConflicts, structuredConflicts };
+  }
+  async withLocalWriteAdmission(options, operation) {
+    if (options.replicationOrigin?.role) return operation();
+    const admission = writeAdmission(this.db);
+    admission.localWrites += 1;
+    try {
+      return await operation();
+    } finally {
+      admission.localWrites -= 1;
+      admission.completedLocalWrites += 1;
+    }
+  }
+  async writeReplicationChunks(rows, options, method) {
+    if (!Array.isArray(rows)) throw new TypeError("replication rows must be an array");
+    const admission = writeAdmission(this.db);
+    const run = async () => {
+      const result = { success: {}, error: [], overwrittenLocalConflicts: [], structuredConflicts: [] };
+      try {
+        for (let offset = 0; offset < rows.length; offset += REPLICATION_WRITE_QUANTUM) {
+          const writeQuantum = async () => {
+            await waitForReplicationAdmission(admission);
+            return this[method](rows.slice(offset, offset + REPLICATION_WRITE_QUANTUM), { ...options, emitChange: false });
+          };
+          const pending = admission.background.then(writeQuantum, writeQuantum);
+          admission.background = pending.catch(() => {
+          });
+          const chunk = await pending;
+          Object.assign(result.success, chunk.success);
+          result.error.push(...chunk.error);
+          result.overwrittenLocalConflicts.push(...chunk.overwrittenLocalConflicts);
+          result.structuredConflicts.push(...chunk.structuredConflicts);
+          await yieldWriteAdmission();
+        }
+      } catch (error) {
+        await this.persistOverwrittenLocalConflicts(result);
+        await this.persistStructuredConflictQuarantine(result);
+        throw error;
+      } finally {
+        if (Object.keys(result.success).length) {
+          this.events.emit("change", { collection: this.name, success: result.success, at: options.now });
+          dispatchStorageChange(this.db.name, this.name, result.success, options.replicationOrigin);
+        }
+      }
+      return result;
+    };
+    return run();
   }
   async runWithQuotaRecovery(operation, context = {}) {
     try {
@@ -3658,15 +3764,38 @@ var CtoxIndexedDbCollection = class {
     };
   }
   async replicationCheckpointStatus(schemaHash2 = null) {
-    const tx = this.db.transaction([DOCUMENT_STORE, COLLECTION_SCHEMA_MARKER_STORE], "readwrite");
-    const done = idbTransactionDone(tx);
-    done.catch(() => {
-    });
-    const marker = await localCheckpointMarker(tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE), this.name);
-    const index = tx.objectStore(DOCUMENT_STORE).index("collectionLwtId");
-    const range = IDBKeyRange.bound([this.name, 0, ""], [this.name, Number.MAX_SAFE_INTEGER, "\uFFFF"], false, false);
-    const record = await firstCursorValue(index.openCursor(range, "prev"));
-    await done;
+    const readSnapshot = async () => {
+      const tx = this.db.transaction([DOCUMENT_STORE, COLLECTION_SCHEMA_MARKER_STORE], "readonly");
+      const done = idbTransactionDone(tx);
+      done.catch(() => {
+      });
+      const marker2 = await localCheckpointMarker(
+        tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE),
+        this.name,
+        { create: false }
+      );
+      if (!marker2) {
+        await done;
+        return null;
+      }
+      const index = tx.objectStore(DOCUMENT_STORE).index("collectionLwtId");
+      const range = IDBKeyRange.bound([this.name, 0, ""], [this.name, Number.MAX_SAFE_INTEGER, "\uFFFF"], false, false);
+      const record2 = await firstCursorValue(index.openCursor(range, "prev"));
+      await done;
+      return { marker: marker2, record: record2 };
+    };
+    let snapshot = await readSnapshot();
+    if (!snapshot) {
+      const tx = this.db.transaction(COLLECTION_SCHEMA_MARKER_STORE, "readwrite");
+      const done = idbTransactionDone(tx);
+      done.catch(() => {
+      });
+      await localCheckpointMarker(tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE), this.name);
+      await done;
+      snapshot = await readSnapshot();
+      if (!snapshot) throw new Error("Local checkpoint marker disappeared during initialization");
+    }
+    const { marker, record } = snapshot;
     if (!record) {
       return {
         source: "browser",
@@ -3868,20 +3997,26 @@ function schedulePersistUnsyncedWriteCount(db) {
 }
 async function countUnsyncedWrites(db) {
   const tx = db.transaction(DOCUMENT_STORE, "readonly");
+  const done = idbTransactionDone(tx);
   const store = tx.objectStore(DOCUMENT_STORE);
   const byCollection = {};
-  let total = 0;
-  await iterateCursor(store.openCursor(), (cursor) => {
-    if (!cursor) return false;
-    const record = cursor.value;
-    if (Number(record?.pushable || 0) === 1) {
-      total += 1;
-      const collection = String(record.collection || "unknown");
-      byCollection[collection] = (byCollection[collection] || 0) + 1;
-    }
+  const collections = [];
+  await iterateCursor(store.index("collection").openKeyCursor(null, "nextunique"), (cursor) => {
+    collections.push(String(cursor.key));
     return true;
   });
-  await idbTransactionDone(tx);
+  const pushable = store.index(PUSHABLE_LWT_INDEX);
+  const counts = await Promise.all(collections.map((collection) => idbRequest(pushable.count(
+    IDBKeyRange.bound([collection, 1, 0, ""], [collection, 1, Number.MAX_SAFE_INTEGER, INDEX_HIGH_KEY])
+  ))));
+  await done;
+  let total = 0;
+  for (let index = 0; index < collections.length; index += 1) {
+    const count = Number(counts[index] || 0);
+    if (!count) continue;
+    byCollection[collections[index]] = count;
+    total += count;
+  }
   return { total, byCollection };
 }
 function documentId2(doc) {
@@ -4512,7 +4647,7 @@ var ctoxIndexedDbStorageTestInternals = {
   shouldAcceptDocumentWrite,
   storedRecordForWrite
 };
-async function localCheckpointMarker(store, collection) {
+async function localCheckpointMarker(store, collection, { create = true } = {}) {
   const previous = await idbRequest(store.get(collection));
   if (previous?.localStoreGeneration !== void 0) {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(previous.localStoreGeneration) || !Number.isSafeInteger(previous.evictionGeneration) || previous.evictionGeneration < 0 || previous.evictionGeneration >= Number.MAX_SAFE_INTEGER) {
@@ -4520,6 +4655,7 @@ async function localCheckpointMarker(store, collection) {
     }
     return previous;
   }
+  if (!create) return null;
   const marker = {
     ...previous,
     collection,
@@ -7225,6 +7361,9 @@ var SHELL_BACKGROUND_QUERY_COLLECTIONS = /* @__PURE__ */ new Set([
   "business_chats"
 ]);
 var CLIENT_BACKGROUND_QUERY_STREAM_LIMIT = Math.max(1, Math.floor(CLIENT_QUERY_STREAM_LIMIT / 2));
+var CLIENT_QUERY_RATE_BURST = Math.max(1, CLIENT_QUERY_STREAM_LIMIT * 6);
+var CLIENT_QUERY_RATE_REFILL_PER_SECOND = 12;
+var CLIENT_QUERY_RATE_INTERVAL_MS = 1e3;
 function isBackgroundQuery(envelope) {
   return SHELL_BACKGROUND_QUERY_COLLECTIONS.has(String(envelope?.collectionName || ""));
 }
@@ -7268,6 +7407,37 @@ function createDemandLoadingTransport({
   const fileCollectors = /* @__PURE__ */ new Map();
   const rowsCollectors = /* @__PURE__ */ new Map();
   const queryStreamState = getGlobalQueryStreamState();
+  function scheduleQueryRateWake(delayMs) {
+    if (queryStreamState.rateTimer) return;
+    queryStreamState.rateTimer = setTimeout(() => {
+      queryStreamState.rateTimer = null;
+      drainReadyQueryRequests();
+    }, Math.max(1, delayMs));
+  }
+  function takeQueryRateToken() {
+    const peerId = String(resolvePeerId() || "");
+    if (!peerId) return false;
+    const now = Date.now();
+    let bucket = queryStreamState.rateBucket;
+    if (!bucket || bucket.peerId !== peerId) {
+      bucket = { peerId, tokens: CLIENT_QUERY_RATE_BURST, atMs: now };
+      queryStreamState.rateBucket = bucket;
+    }
+    const intervals = Math.floor((now - bucket.atMs) / CLIENT_QUERY_RATE_INTERVAL_MS);
+    if (intervals > 0) {
+      bucket.tokens = Math.min(
+        CLIENT_QUERY_RATE_BURST,
+        bucket.tokens + intervals * CLIENT_QUERY_RATE_REFILL_PER_SECOND
+      );
+      bucket.atMs += intervals * CLIENT_QUERY_RATE_INTERVAL_MS;
+    }
+    if (bucket.tokens <= 0) {
+      scheduleQueryRateWake(bucket.atMs + CLIENT_QUERY_RATE_INTERVAL_MS - now);
+      return false;
+    }
+    bucket.tokens -= 1;
+    return true;
+  }
   const cancelledQueryRequests = /* @__PURE__ */ new Map();
   const transportOwner = /* @__PURE__ */ Symbol("ctox-demand-transport-owner");
   const terminalTimeoutMs = Math.max(1, Number(collectorTimeoutMs) || DEFAULT_COLLECTOR_TIMEOUT_MS);
@@ -7572,7 +7742,7 @@ function createDemandLoadingTransport({
         });
       };
       const ready = Boolean(resolvePeerId());
-      if (ready && hasFreeQuerySlot(background)) run();
+      if (ready && hasFreeQuerySlot(background) && !queryStreamState.queue.some((entry) => entry.isReady()) && takeQueryRateToken()) run();
       else {
         const queuedBytes = queryStreamState.queue.reduce(
           (total, entry2) => total + Math.max(0, Number(entry2?.estimatedBytes) || 0),
@@ -7619,6 +7789,7 @@ function createDemandLoadingTransport({
           });
         };
         if (!ready) entry.waitForReady();
+        else drainReadyQueryRequests();
       }
     });
   }
@@ -7638,6 +7809,7 @@ function createDemandLoadingTransport({
       let index = queryStreamState.queue.findIndex((entry2) => !entry2.background && admissible(entry2));
       if (index < 0) index = queryStreamState.queue.findIndex((entry2) => entry2.background && admissible(entry2));
       if (index < 0) return;
+      if (!takeQueryRateToken()) return;
       const [entry] = queryStreamState.queue.splice(index, 1);
       entry.run();
     }
@@ -7647,6 +7819,12 @@ function createDemandLoadingTransport({
     let attempt = 0;
     for (; ; ) {
       if (cancellationReason()) throw createQueryCancelError(cancellationReason());
+      if (attempt > 0) {
+        while (resolvePeerId() && !takeQueryRateToken()) {
+          if (cancellationReason()) throw createQueryCancelError(cancellationReason());
+          await delay4(50);
+        }
+      }
       const requestId = attempt === 0 ? baseRequestId : `${baseRequestId}|retry-${attempt}`;
       try {
         return await requestQueryFetchOnce({ ...envelope, requestId }, cancellationReason);
@@ -10970,6 +11148,8 @@ var SharedRoomPeer = class {
     const hintedPeerId = peerIdHint && this.isPeerOpen(peerIdHint) ? peerIdHint : "";
     const peerId = hintedPeerId || this.openSharedPeerIds()[0] || await this.waitForOpenSharedPeerId().catch(() => null);
     if (!peerId) return null;
+    if (this.negotiated && this.isPeerOpen(this.negotiated.peerId)) return this.negotiated;
+    if (this.negotiationCatchUp) return this.negotiationCatchUp;
     this.negotiationCatchUp = Promise.resolve().then(async () => {
       if (this.negotiated && this.isPeerOpen(this.negotiated.peerId)) return this.negotiated;
       if (!this.isPeerOpen(peerId)) return null;
@@ -13159,8 +13339,9 @@ function terminalPushRejection(result) {
   const message = [result.message, ...nested].map((value) => String(value || "").trim()).filter(Boolean).find((value) => !/^\s*RxDB Error-Code:/.test(value) && !/^\n/.test(value)) || String(result.message || "");
   const code = String(result.code || "");
   const status = String(result.status ?? "");
+  const nestedSchemaStatus = Array.isArray(result.errors) && result.errors.some((entry) => String(entry?.parameters?.error?.status ?? "") === "422" || String(entry?.parameters?.writeError?.status ?? "") === "422");
   const isAuthz = /not authorized/i.test(message) || /authz/i.test(code) || /cannot change native-owned/i.test(message);
-  const isSchema = /schema/i.test(message) || /schema/i.test(code) || status === "422" || /\b422\b/.test(message) || /422/.test(code);
+  const isSchema = /schema/i.test(message) || /schema/i.test(code) || status === "422" || nestedSchemaStatus || /\b422\b/.test(message) || /422/.test(code);
   if (!isAuthz && !isSchema) return null;
   return {
     kind: isAuthz ? "authz" : "schema",
@@ -13473,6 +13654,7 @@ var COORDINATORS = /* @__PURE__ */ Symbol.for("ctox.rxdb.multi-tab-sync-coordina
 var CHANNEL_PREFIX2 = "ctox-rxdb-sync-leader-";
 var HEARTBEAT_MS = 5e3;
 var LEASE_TTL_MS = 15e3;
+var ORPHANED_LOCK_GRACE_MS = HEARTBEAT_MS + 1e3;
 var DIRTY_ACK_TIMEOUT_MS = 1e4;
 var NATIVE_REQUEST_TIMEOUT_MS = 6e3;
 function getMultiTabSyncCoordinator({ databaseName, room } = {}) {
@@ -13512,6 +13694,27 @@ function createMultiTabSyncCoordinator({
   let retryReleaseElection = false;
   let lifecycleSuspended = false;
   let resumeReleasedLeader = false;
+  let lockUnavailableSinceMs = 0;
+  let orphanRecoveryTimer = null;
+  let retryStealElection = false;
+  let heldLockClientId = "";
+  const clearOrphanRecovery = () => {
+    lockUnavailableSinceMs = 0;
+    retryStealElection = false;
+    if (orphanRecoveryTimer) clearTimeout(orphanRecoveryTimer);
+    orphanRecoveryTimer = null;
+  };
+  const scheduleOrphanRecovery = () => {
+    if (closed || lifecycleSuspended || leaderTabId || role === "leader") return;
+    if (!lockUnavailableSinceMs) lockUnavailableSinceMs = clock();
+    if (orphanRecoveryTimer) return;
+    orphanRecoveryTimer = setTimeout(() => {
+      orphanRecoveryTimer = null;
+      attemptElection().catch(() => {
+      });
+    }, Math.max(0, ORPHANED_LOCK_GRACE_MS - (clock() - lockUnavailableSinceMs)));
+    orphanRecoveryTimer.unref?.();
+  };
   const emitRole = () => {
     const status = snapshot();
     for (const listener of listeners) {
@@ -13574,11 +13777,28 @@ function createMultiTabSyncCoordinator({
   };
   const becomeLeader = (reason) => {
     if (closed) return;
+    clearOrphanRecovery();
     role = "leader";
     leaderTabId = tabId;
     leaderSeenAtMs = clock();
     if (heartbeatTimer) clearInterval(heartbeatTimer);
-    heartbeatTimer = setInterval(() => {
+    heartbeatTimer = setInterval(async () => {
+      if (heldLockClientId && globalThis.navigator?.locks?.query) {
+        try {
+          const held = (await navigator.locks.query()).held || [];
+          if (!held.some((entry) => entry.name === lockName && entry.clientId === heldLockClientId)) {
+            releaseLock?.();
+            leaderTabId = "";
+            leaderSeenAtMs = 0;
+            becomeFollower("", "web-lock-lost");
+            attemptElection().catch(() => {
+            });
+            return;
+          }
+        } catch {
+        }
+      }
+      if (role !== "leader") return;
       leaderSeenAtMs = clock();
       post({ type: "leader-heartbeat" });
     }, HEARTBEAT_MS);
@@ -13592,16 +13812,23 @@ function createMultiTabSyncCoordinator({
     const changed = role !== "follower" || leader && leader !== leaderTabId;
     role = "follower";
     if (leader) leaderTabId = leader;
+    if (leader) clearOrphanRecovery();
     if (changed) emitRole();
     if (reason) post({ type: "follower", reason });
   };
-  const tryWebLock = async (waitForRelease = false) => {
+  const tryWebLock = async (waitForRelease = false, steal = false) => {
     if (closed || lifecycleSuspended || !globalThis.navigator?.locks?.request) return false;
     if (lockRequestRunning) {
-      if (waitForRelease) retryReleaseElection = true;
+      if (steal) {
+        retryStealElection = true;
+        retryReleaseElection = false;
+        releaseWaitAbort?.abort();
+        if (role !== "leader") releaseLock?.();
+      } else if (waitForRelease) retryReleaseElection = true;
       return false;
     }
     lockRequestRunning = true;
+    if (waitForRelease && !leaderTabId) scheduleOrphanRecovery();
     const abort = waitForRelease ? new AbortController() : null;
     if (abort) releaseWaitAbort = abort;
     let resolveAttempt;
@@ -13612,26 +13839,39 @@ function createMultiTabSyncCoordinator({
       if (releaseWaitAbort === abort) releaseWaitAbort = null;
       lockRequestRunning = false;
       resolveAttempt(false);
-      if (retryReleaseElection && !closed) {
+      if (retryStealElection && !closed && !lifecycleSuspended && !leaderTabId) {
+        retryStealElection = false;
+        tryWebLock(false, true).catch(() => {
+        });
+      } else if (retryReleaseElection && !closed) {
         retryReleaseElection = false;
         tryWebLock(true).catch(() => {
         });
       }
     };
-    const options = waitForRelease ? { mode: "exclusive", signal: abort.signal } : { mode: "exclusive", ifAvailable: true };
+    const options = steal ? { mode: "exclusive", steal: true } : waitForRelease ? { mode: "exclusive", signal: abort.signal } : { mode: "exclusive", ifAvailable: true };
     navigator.locks.request(lockName, options, async (lock) => {
       if (!lock || closed || lifecycleSuspended) {
         finishFailedAttempt();
+        if (!steal) scheduleOrphanRecovery();
         return;
       }
       if (releaseWaitAbort === abort) releaseWaitAbort = null;
       retryReleaseElection = false;
-      becomeLeader("web-lock");
+      retryStealElection = false;
+      try {
+        const held = (await navigator.locks.query()).held || [];
+        heldLockClientId = held.find((entry) => entry.name === lockName)?.clientId || "";
+      } catch {
+        heldLockClientId = "";
+      }
+      becomeLeader(steal ? "web-lock-takeover" : "web-lock");
       resolveAttempt(true);
       await new Promise((resolve) => {
         releaseLock = resolve;
       });
       releaseLock = null;
+      heldLockClientId = "";
       lockRequestRunning = false;
       becomeFollower("", "web-lock-released");
       if (retryReleaseElection && !closed && !lifecycleSuspended && !leaderTabId) {
@@ -13647,8 +13887,14 @@ function createMultiTabSyncCoordinator({
   const attemptElection = async () => {
     if (closed || lifecycleSuspended || role === "leader") return;
     if (clock() - leaderSeenAtMs < LEASE_TTL_MS) return;
+    if (leaderTabId) {
+      leaderTabId = "";
+      leaderSeenAtMs = 0;
+      emitRole();
+    }
     if (globalThis.navigator?.locks?.request) {
-      await tryWebLock();
+      const orphaned = lockUnavailableSinceMs && clock() - lockUnavailableSinceMs >= ORPHANED_LOCK_GRACE_MS && !leaderTabId;
+      await tryWebLock(false, orphaned);
       return;
     }
     post({ type: "leader-claim" });
@@ -13664,7 +13910,8 @@ function createMultiTabSyncCoordinator({
       if (message.type === "leader-heartbeat") {
         leaderSeenAtMs = clock();
         leaderTabId = String(message.tabId || "");
-        if (role === "leader" && leaderTabId < tabId) {
+        clearOrphanRecovery();
+        if (role === "leader" && (message.reason === "web-lock-takeover" || leaderTabId < tabId)) {
           releaseLock?.();
           becomeFollower(leaderTabId, "leader-tiebreak");
         } else if (role !== "leader") {
@@ -13717,6 +13964,7 @@ function createMultiTabSyncCoordinator({
   }
   const lifecycleRelease = () => {
     lifecycleSuspended = true;
+    clearOrphanRecovery();
     retryReleaseElection = false;
     releaseWaitAbort?.abort();
     if (role === "leader") {
@@ -13838,6 +14086,7 @@ function createMultiTabSyncCoordinator({
     async close() {
       if (role === "leader") post({ type: "leader-release" });
       closed = true;
+      clearOrphanRecovery();
       lifecycleSuspended = true;
       resumeReleasedLeader = false;
       retryReleaseElection = false;

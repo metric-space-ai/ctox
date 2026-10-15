@@ -36,6 +36,7 @@
   },
   "commands": {
     "ctox.workjet.project.kpis.read": {"request_type":"ReadKpisRequest","authorization":"owner"},
+    "ctox.workjet.project.kpis.refresh": {"request_type":"ReadKpisRequest","authorization":"owner"},
     "ctox.workjet.project.kpis.configure": {"request_type":"ConfigureKpisRequest","authorization":"owner"},
     "ctox.workjet.project.kpi.resolve": {"request_type":"ResolveKpiRequest","authorization":"bound_project_supervisor","execution":"native_registered_metric_resolver","accepts_client_result":false}
   },

@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
+mod youtube;
+
 pub use ctox_web_stack::capture_browser_transport;
 pub use ctox_web_stack::handle_browser_command;
 pub use ctox_web_stack::prepare_browser_environment;
@@ -20,6 +22,9 @@ pub use ctox_web_stack::PersistentBrowserSpawn;
 /// executor, because the durable scrape runtime/database still belongs to the
 /// wider CTOX scrape subsystem.
 pub fn handle_web_command(root: &Path, args: &[String]) -> Result<()> {
+    if args.first().map(String::as_str) == Some("youtube-transcript") {
+        return youtube::handle(args);
+    }
     if args.first().map(String::as_str) == Some("browser-automation") {
         if let Some(session_id) = web_flag_value(args, "--session-id") {
             let script_file = web_flag_value(args, "--script-file").map(PathBuf::from);

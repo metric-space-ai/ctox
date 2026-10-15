@@ -45,6 +45,8 @@ struct ProjectUpsertPayload {
     #[serde(default)]
     jour_fixe: ProjectField<JourFixe>,
     #[serde(default)]
+    feed_settings: ProjectField<FeedSettings>,
+    #[serde(default)]
     supervisor_luma_id: ProjectField<String>,
     #[serde(default)]
     execution_policy: ProjectField<
@@ -100,6 +102,65 @@ struct JourFixe {
     time: String,
     #[serde(default = "default_project_timezone")]
     timezone: String,
+}
+
+/// Reader settings of the Workjet project feed (Übersicht). Owned per project so
+/// every Workjet client of the owner shows the same feed.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FeedSettings {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    window_days: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sources: Option<FeedSources>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default_tab: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    body: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    replies: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    notify_disruptions: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FeedSources {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    disruptions: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    results: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sessions: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prs: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    meeting: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    setup: Option<bool>,
+}
+
+fn validate_feed_settings(mut feed: FeedSettings) -> anyhow::Result<Value> {
+    feed.title = optional_bounded(feed.title, "feed_settings.title", 120)?;
+    anyhow::ensure!(
+        matches!(feed.window_days, None | Some(1 | 7 | 30)),
+        "feed_settings.window_days must be 1, 7, 30 or null"
+    );
+    for (field, value, allowed) in [
+        ("default_tab", &feed.default_tab, &["top", "latest"][..]),
+        ("body", &feed.body, &["short", "full"][..]),
+        ("replies", &feed.replies, &["three", "all"][..]),
+    ] {
+        if let Some(value) = value {
+            anyhow::ensure!(
+                allowed.contains(&value.as_str()),
+                "feed_settings.{field} must be one of {allowed:?}"
+            );
+        }
+    }
+    Ok(serde_json::to_value(feed)?)
 }
 
 fn default_project_timezone() -> String {
@@ -285,6 +346,8 @@ pub(super) fn handle_workjet_project_upsert_command(
         Ok(serde_json::to_value(meeting)?)
     })?;
 
+    let feed_settings = project_field_value(payload.feed_settings, validate_feed_settings)?;
+
     let supervisor_luma_id = project_field_value(payload.supervisor_luma_id, |value| {
         Ok(Value::String(bounded_required(
             &value,
@@ -352,6 +415,7 @@ pub(super) fn handle_workjet_project_upsert_command(
             ("public_url", public_url),
             ("info", info),
             ("jour_fixe", jour_fixe),
+            ("feed_settings", feed_settings),
             ("supervisor_luma_id", supervisor_luma_id),
         ] {
             match patch {
@@ -1027,6 +1091,38 @@ pub(crate) mod tests {
         )?;
         assert!(cleared["project"].get("supervisor_luma_id").is_none());
         assert_eq!(cleared["project"]["owner_user_id"], "owner-1");
+        Ok(())
+    }
+
+    #[test]
+    fn feed_settings_are_kept_validated_and_cleared() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let upsert = |payload: serde_json::Value| {
+            handle_workjet_project_upsert_command(
+                root.path(),
+                &command("ctox.workjet.project.upsert", payload),
+                "owner-1",
+            )
+        };
+        let saved = upsert(json!({"project_id":"project-1","name":"P",
+            "feed_settings":{"title":" Release-Feed ","window_days":7,"sources":{"setup":false},
+            "default_tab":"latest","body":"full","replies":"all","notify_disruptions":true}}))?;
+        assert_eq!(saved["project"]["feed_settings"]["title"], "Release-Feed");
+        assert_eq!(saved["project"]["feed_settings"]["sources"]["setup"], false);
+        let kept = upsert(json!({"project_id":"project-1","name":"P"}))?;
+        assert_eq!(kept["project"]["feed_settings"]["window_days"], 7);
+        for bad in [
+            json!({"window_days":3}),
+            json!({"default_tab":"oldest"}),
+            json!({"sources":{"unknown":true}}),
+            json!({"extra":1}),
+        ] {
+            assert!(
+                upsert(json!({"project_id":"project-1","name":"P","feed_settings":bad})).is_err()
+            );
+        }
+        let cleared = upsert(json!({"project_id":"project-1","name":"P","feed_settings":null}))?;
+        assert!(cleared["project"].get("feed_settings").is_none());
         Ok(())
     }
 
