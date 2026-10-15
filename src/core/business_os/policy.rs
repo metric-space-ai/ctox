@@ -39,6 +39,9 @@ pub enum BusinessOsPermission {
     AppsRelease,
     AppsRollback,
     AppsSourceView,
+    /// §16.22/§16.44: write the own source draft (app_drafts) and run coding
+    /// turns on it. Never a right on an active app version.
+    AppsSourceEdit,
     DataRead,
     DataWrite,
     CtoxTaskCreate,
@@ -62,7 +65,7 @@ pub enum BusinessOsPermission {
     SessionHandoffExecute,
 }
 
-pub const BUSINESS_OS_PERMISSIONS: [BusinessOsPermission; 35] = [
+pub const BUSINESS_OS_PERMISSIONS: [BusinessOsPermission; 36] = [
     BusinessOsPermission::WorkspaceManage,
     BusinessOsPermission::WorkspaceBrandingManage,
     BusinessOsPermission::UsersManage,
@@ -79,6 +82,7 @@ pub const BUSINESS_OS_PERMISSIONS: [BusinessOsPermission; 35] = [
     BusinessOsPermission::AppsRelease,
     BusinessOsPermission::AppsRollback,
     BusinessOsPermission::AppsSourceView,
+    BusinessOsPermission::AppsSourceEdit,
     BusinessOsPermission::DataRead,
     BusinessOsPermission::DataWrite,
     BusinessOsPermission::CtoxTaskCreate,
@@ -123,6 +127,7 @@ impl BusinessOsPermission {
             Self::AppsRelease => "apps.release",
             Self::AppsRollback => "apps.rollback",
             Self::AppsSourceView => "apps.source.view",
+            Self::AppsSourceEdit => "apps.source.edit",
             Self::DataRead => "data.read",
             Self::DataWrite => "data.write",
             Self::CtoxTaskCreate => "ctox.task.create",
@@ -440,7 +445,8 @@ pub fn evaluate(
         | BusinessOsPermission::AppsModify
         | BusinessOsPermission::AppsRelease
         | BusinessOsPermission::AppsRollback
-        | BusinessOsPermission::AppsSourceView => match actor.role {
+        | BusinessOsPermission::AppsSourceView
+        | BusinessOsPermission::AppsSourceEdit => match actor.role {
             BusinessOsRole::Chef | BusinessOsRole::Admin => true,
             BusinessOsRole::Founder => {
                 scope.scope_type == BusinessOsScopeType::Module && scope.assigned_to_actor
