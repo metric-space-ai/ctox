@@ -1640,6 +1640,12 @@ export function createKernel(opts = {}) {
   }
   const swMessageListener = (ev) => { void onSwMessage(ev.data, ev.ports?.[0]); };
   try { globalThis.navigator?.serviceWorker?.addEventListener?.('message', swMessageListener); } catch { /* kein SW */ }
+  let platformApi = null;
+  function platformCommand(type, payload) {
+    guardAlive();
+    platformApi ??= makeAppApi(PLATFORM_APP_ID, '1');
+    return platformApi.command(type, payload);
+  }
   // §16.19 Nr. 2: Version für diesen Client failed, Zeiger zurück auf die letzte funktionierende, app_activation failed.
   function reportFailed(appId, ver, reason) {
     guardAlive();
@@ -1659,6 +1665,14 @@ export function createKernel(opts = {}) {
     /** @deprecated seit §16.19 – Alias für `status`. */
     statusZone,
     windowState: windowStateApi,
+    // K-1c Punkt 7 / §16.29 B, §16.33: App-Store-Wege als Plattformbefehle (Vergleich-und-Setzen auf base_app_ver).
+    // Ergebnis wie api.command: {id, status (live), local, result}; Ablehnung im write_result mit exaktem Code
+    // stale_base | migration_required | locally_modified | forbidden | not_found.
+    publishApp: (appId, o = {}) => platformCommand('ctox.app.publish', { app_id: appId, base_app_ver: o.base_app_ver ?? null, draft_id: o.draft_id ?? `${userId}/${appId}` }),
+    updateApp: (appId, o = {}) => platformCommand('ctox.app.update', { app_id: appId, base_app_ver: o.base_app_ver ?? null, release_ver: o.release_ver, ...(o.discard_local ? { discard_local: true } : {}) }),
+    rollbackApp: (appId, o = {}) => platformCommand('ctox.app.rollback', { app_id: appId, base_app_ver: o.base_app_ver ?? null, target_ver: o.target_ver }),
+    releaseApp: (appId, o = {}) => platformCommand('ctox.app.release', { app_id: appId, base_app_ver: o.base_app_ver ?? null, channel: o.channel ?? 'stable' }),
+    removeApp: (appId, o = {}) => platformCommand('ctox.app.remove', { app_id: appId, base_app_ver: o.base_app_ver ?? null }),
     artifacts: Object.freeze({
       async read(hash) {
         guardAlive();

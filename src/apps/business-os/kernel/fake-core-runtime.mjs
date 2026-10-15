@@ -38,6 +38,7 @@ function joinPath(dir, rel) {
   for (const seg of rel.split('/')) { if (seg === '.' || seg === '') continue; if (seg === '..') { if (!out.length) fail('invalid', `Import außerhalb des Pakets: ${rel}`); out.pop(); } else out.push(seg); }
   return out.join('/');
 }
+const SYSTEM_ADMIN = Object.freeze({ id: 'admin', role: 'admin', permissions: [] });
 const hasPerm = (user, p) => user?.role === 'admin' || (user?.permissions ?? []).includes(p);
 
 export function createCoreRuntime(core) {
@@ -108,8 +109,10 @@ export function createCoreRuntime(core) {
   }
   /** null = erlaubt, sonst Ablehnungscode. */
   function checkWrite(user, entry, old) {
-    if (!user) return null;
     const c = baseName(entry.collection);
+    // Plattformbefehle prüft der Core immer (CAS, Codes §16.33); ohne bekannten Nutzer gilt der Client als Admin (Bind-Aufbau).
+    if (c === 'business_commands' && entry.op === 'put' && entry.body?.status === 'queued' && String(entry.body.type).startsWith('ctox.app.')) return checkPlatformCommand(user ?? SYSTEM_ADMIN, entry.body);
+    if (!user) return null;
     if (c === 'business_commands') {
       const body = entry.body ?? old?.data;
       if (entry.op === 'put' && body?.status === 'queued') {
@@ -320,7 +323,8 @@ export function createCoreRuntime(core) {
         if (!t.every) continue;
         const ms = isoMs(t.every);
         if (!ms) continue;
-        want.set(`${appId}@${manifest.app_ver}:${t.handler}`, { appId, handler: t.handler, ms: core.everyMs ?? Math.max(60000, ms) });
+        // Schlüssel ohne Version: ein Versionswechsel setzt den Takt nicht zurück (Handler kommt beim Feuern aus der aktiven Version)
+        want.set(`${appId}:${t.handler}:${ms}`, { appId, handler: t.handler, ms: core.everyMs ?? Math.max(60000, ms) });
       }
     }
     for (const [k, timer] of everyTimers) if (!want.has(k)) { clearInterval(timer); everyTimers.delete(k); }
@@ -356,6 +360,7 @@ export function createCoreRuntime(core) {
       const cas = casCode(p); if (cas) return cas;
       const draft = data('app_drafts', p.draft_id ?? `${user.id}/${p.app_id}`);
       if (!draft || draft.app_id !== p.app_id) return 'not_found';
+      if (user.role !== 'admin' && !draft.id.startsWith(`${user.id}/`)) return 'forbidden'; // nur eigene Entwürfe
       return null;
     }
     if (type === 'ctox.app.update') {
@@ -393,7 +398,7 @@ export function createCoreRuntime(core) {
   }
   async function runPlatformCommand(user, doc) {
     const p = doc.payload ?? {};
-    const code = checkPlatformCommand(user ?? { role: 'admin', permissions: [] }, doc); // erneut prüfen: Zustand kann sich geändert haben
+    const code = checkPlatformCommand(user ?? SYSTEM_ADMIN, doc); // erneut prüfen: Zustand kann sich geändert haben
     if (code) return { status: 'failed', error: code, result: { code } };
     const appId = p.app_id;
     const cur = activeManifest(appId);

@@ -158,3 +158,78 @@ test('K-1c 6b §16.30: agent.task.enqueue mit App-Skill → Fake-Harness → Rü
   await cmdDone(api.command('rep.start', { key: 'k2' }));
   await until(() => api.get('runs', 'k2').get()?.status === 'failed', 4000, 'on_failed');
 });
+
+test('K-1c 7 §16.29 B/§16.33: ctox.app.publish|update|rollback|release|remove mit CAS und exakten Ablehnungscodes; remove archiviert', async (t) => {
+  const { admin, u2 } = await twoUsers(t);
+  const S = admin.shell, U = u2.shell;
+  const res = async (h) => (await h.result).status === 'rejected' ? (await h.result).reason : (await cmdDone(h)).status;
+  await admin.sim.publishAppVersion('crm', '1', { files: { 'index.js': MOUNT } });
+  await until(() => appVersion(u2, 'crm')?.state === 'activated', 4000, 'crm beim Nutzer');
+  assert.equal(await res(S.releaseApp('crm', { base_app_ver: '1', channel: 'stable' })), 'done');
+  assert.deepEqual((await admin.sim.coreRows('app_catalog')).map((r) => [r.id, r.channel, r.source]), [['crm@1', 'stable', 'instance']]);
+  // publish aus dem eigenen Entwurf (app_drafts + Core-CAS)
+  await admin.source('crm').draft.write('a.txt', 'A');
+  await admin.sim.settle();
+  assert.equal(await res(S.publishApp('crm', { base_app_ver: '1' })), 'done');
+  const local = appVersion(admin, 'crm').active_ver;
+  assert.notEqual(local, '1');
+  assert.equal((await admin.artifacts.manifest('crm', local)).provenance.locally_modified, true);
+  assert.equal(await res(S.publishApp('crm', { base_app_ver: '1' })), 'stale_base');
+  // update auf den Release: angepasste Fassung nur mit discard_local, das braucht apps.modify
+  assert.equal(await res(S.updateApp('crm', { base_app_ver: local, release_ver: '1' })), 'locally_modified');
+  assert.equal(await res(U.updateApp('crm', { base_app_ver: local, release_ver: '1', discard_local: true })), 'forbidden');
+  assert.equal(await res(S.updateApp('crm', { base_app_ver: local, release_ver: '9' })), 'not_found');
+  assert.equal(await res(S.updateApp('crm', { base_app_ver: local, release_ver: '1', discard_local: true })), 'done');
+  await until(() => appVersion(admin, 'crm')?.active_ver === '1', 4000, 'update aktiv');
+  const archived = (await admin.sim.coreRows('business_app_versions')).find((r) => r.id === `crm@${local}`);
+  assert.deepEqual([archived.origin, archived.status], ['local', 'archived'], 'angepasste Fassung archiviert, nicht gelöscht');
+  // rollback vorwärts: Zielfassung wird neue Version
+  assert.equal(await res(S.rollbackApp('crm', { base_app_ver: '1', target_ver: local })), 'done');
+  const rolled = appVersion(admin, 'crm').active_ver;
+  assert.ok(![local, '1'].includes(rolled));
+  assert.ok((await admin.artifacts.manifest('crm', rolled)).files['a.txt']);
+  // älteres Schema ohne Rück-Migration → migration_required
+  await admin.sim.publishAppVersion('crm', '5', { files: { 'index.js': MOUNT }, collections: { leads: { schema: { primaryKey: 'id', type: 'object', properties: { id: { type: 'string' } } } } }, incompatible: ['leads'] });
+  assert.equal(await res(S.rollbackApp('crm', { base_app_ver: '5', target_ver: '1' })), 'migration_required');
+  // remove: Recht, CAS, Archiv; verschwindet in allen Clients, Versionen bleiben
+  assert.equal(await res(U.removeApp('crm', { base_app_ver: '5' })), 'forbidden');
+  assert.equal(await res(S.removeApp('crm', { base_app_ver: '1' })), 'stale_base');
+  assert.equal(await res(S.removeApp('crm', { base_app_ver: '5' })), 'done');
+  await until(() => !appVersion(admin, 'crm') && !appVersion(u2, 'crm'), 4000, 'App verschwindet überall');
+  assert.deepEqual((await admin.sim.coreRows('app_archive')).map((r) => r.id), ['crm@5']);
+  assert.ok((await admin.sim.coreRows('business_app_versions')).some((r) => r.id === 'crm@1'), 'Versionen bleiben erhalten');
+});
+
+test('K-1c 8: neue Version aktiviert → Meldung „<app>@<alt> braucht ein Update“ verschwindet in allen Tabs', async (t) => {
+  const instanceId = `k1c-tabs-${process.pid}-${++n}`;
+  const A = await mk(t, { instanceId });
+  const B = await mk(t, { instanceId });
+  assert.deepEqual([A.isLeader, B.isLeader], [true, false]);
+  await A.sim.publishAppVersion('crm', '1', { files: { 'index.js': MOUNT }, capabilitiesRequired: ['gibt.es.nicht'] });
+  const needs = (k) => k.status.forApp('crm').get().filter((e) => e.code === 'app.needs_update');
+  await until(() => needs(A).length === 1 && needs(B).length === 1, 4000, 'needs_update in A und B');
+  assert.match(needs(B)[0].text, /crm@1/);
+  await A.sim.publishAppVersion('crm', '2', { files: { 'index.js': `${MOUNT}\n// 2` } });
+  await until(() => appVersion(B, 'crm')?.activated_ver === '2', 4000, 'v2 in B aktiviert');
+  await tick(20);
+  assert.deepEqual(needs(A), []);
+  assert.deepEqual(needs(B), [], 'Tab B zeigt keine veraltete Meldung');
+});
+
+test('K-1c 9: Veröffentlichen direkt nach Veröffentlichen ohne busy – die zweite wartet und endet mit ihrem Ergebnis', async (t) => {
+  const k = await mk(t);
+  await k.sim.publishAppVersion('crm', '1', { files: { 'index.js': MOUNT } });
+  // zwei Veröffentlichungen derselben App unmittelbar nacheinander: früher warf die zweite „busy“
+  const a = k.sim.publishAppVersion('crm', '2', { files: { 'index.js': `${MOUNT}\n// 2` } });
+  const b = k.sim.publishAppVersion('crm', '3', { files: { 'index.js': `${MOUNT}\n// 3` } });
+  const [ra, rb] = await Promise.all([a, b]);
+  assert.equal(ra.target_ver === '2' || ra.activated_ver === '3', true);
+  assert.deepEqual([rb.state, rb.activated_ver], ['activated', '3'], 'zweite wartet und wird aktiv');
+  // zwei Entwurfs-Veröffentlichungen auf derselben Basis: eine gewinnt, die andere endet mit stale_base – nie busy
+  const src = k.source('crm');
+  await src.draft.write('b.txt', 'B');
+  const p1 = src.draft.publish({ base_app_ver: '3' });
+  const p2 = src.draft.publish({ base_app_ver: '3' });
+  const rs = await Promise.all([p1.result, p2.result]);
+  assert.deepEqual(rs.map((r) => r.status === 'accepted' ? 'accepted' : r.reason).sort(), ['accepted', 'stale_base'], JSON.stringify(rs));
+});
