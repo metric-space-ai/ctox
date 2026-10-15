@@ -662,6 +662,18 @@ pub(super) fn complete(
     let mut provenance = manifest["provenance"].clone();
     provenance["owner_id"] = pending["owner_id"].clone();
     provenance["calling_app"] = pending["calling_app"].clone();
+    // Role assignment is separate native policy, not a manifest field an app
+    // editor can grant itself. New apps are initially visible to installers.
+    let visible_roles = app
+        .as_ref()
+        .and_then(|a| a.get("visible_roles"))
+        .cloned()
+        .unwrap_or(json!(["chef", "admin"]));
+    let layout = manifest
+        .get("layout")
+        .cloned()
+        .or_else(|| app.as_ref().and_then(|a| a.get("layout")).cloned())
+        .unwrap_or(json!({}));
     put(
         tx,
         "business_apps",
@@ -669,7 +681,7 @@ pub(super) fn complete(
         &json!({"id":lock.app_id,"app_id":lock.app_id,
         "title":manifest.get("title").cloned().or_else(||app.as_ref().map(|a|a["title"].clone())).unwrap_or(json!(lock.app_id)),
         "active_ver":lock.target_app_ver,"migrated_at_seq":watermark.to_string(),
-        "visible_roles":manifest.get("visible_roles").cloned().unwrap_or(json!([])),"layout":manifest.get("layout").cloned().unwrap_or(json!({})),
+        "visible_roles":visible_roles,"layout":layout,
         "provenance":provenance,"locally_modified":pending["locally_modified"],
         "state":if pending["remove"] == true {"archived"} else {"active"},"updated_at_ms":now}),
     )?; // effect: remove

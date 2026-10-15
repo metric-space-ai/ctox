@@ -193,7 +193,9 @@ impl Fixture {
 #[tokio::test]
 async fn publish_signed_draft_without_fabricating_client_activation() {
     let f = Fixture::new().await;
-    f.draft(Value::Null, manifest(1)).await;
+    let mut draft = manifest(1);
+    draft["visible_roles"] = json!(["user"]);
+    f.draft(Value::Null, draft).await;
     let admitted = Fixture::command(
         "publish",
         "publish",
@@ -219,6 +221,11 @@ async fn publish_signed_draft_without_fabricating_client_activation() {
     let app = f.read("business_apps", "unknown-at-boot").unwrap();
     assert_eq!(app["active_ver"], result["app_ver"]);
     assert_eq!(app["locally_modified"], true);
+    assert_eq!(
+        app["visible_roles"],
+        json!(["chef", "admin"]),
+        "manifest fields cannot assign native roles"
+    );
     let version = f
         .get(
             "business_app_versions",
