@@ -122,9 +122,10 @@ impl Fixture {
     }
     async fn release_input(&self, version: &str, content: Value, catalog: bool) {
         let bytes = serde_json::to_vec(&content).unwrap();
+        let signature = self.platform.signer.as_ref()(&bytes).unwrap();
         self.seed("business_app_versions", &version_id("unknown-at-boot",version), json!({
             "id":version_id("unknown-at-boot",version),"app_id":"unknown-at-boot","app_ver":version,
-            "manifest":content,"manifest_sha256":format!("{:x}",Sha256::digest(&bytes)),"signature":"trusted-release-input","state":"published"
+            "manifest":content,"manifest_sha256":format!("{:x}",Sha256::digest(&bytes)),"signature":signature,"state":"published"
         })).await;
         if catalog {
             self.seed(
