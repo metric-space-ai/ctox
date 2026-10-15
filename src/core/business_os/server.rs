@@ -3135,6 +3135,18 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
             None => return respond_shell_generation_mismatch(request, &requested, &active),
         }
     }
+    // Installed copies from the standard app bundle import system modules as
+    // siblings (`installed-modules/invoices/schema.js` -> `../desktop/schema.js`),
+    // but those live only in the active shell under `modules/<id>/` (welsch
+    // 16.10.2026). When the installed root has no such file, serve the shell
+    // module file under the global-module gate; a missing customer package has
+    // no shell counterpart and stays 404. Cache policy keeps the requested path.
+    let cache_rel = rel;
+    let shell_module_rel = release
+        .is_none()
+        .then(|| installed_module_shell_fallback(root, &selected_app_root, rel))
+        .flatten();
+    let rel = shell_module_rel.as_deref().unwrap_or(rel);
     if !runtime_module_static_authorized(root, &selected_app_root, rel, release.as_deref()) {
         // Do not reveal whether a customer package exists on this instance.
         return respond_status(request, 404, "not found");
@@ -3225,7 +3237,7 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
     let cache_control = if release.is_some() && !is_index {
         "public, max-age=31536000, immutable"
     } else {
-        business_os_static_cache_control(is_index, &rel, request.url())
+        business_os_static_cache_control(is_index, cache_rel, request.url())
     };
     if is_index {
         // Personalized per session: no ETag sharing across users.
@@ -3473,6 +3485,21 @@ fn business_os_static_cache_control(is_index: bool, rel: &str, request_url: &str
     } else {
         "public, max-age=300, stale-while-revalidate=86400"
     }
+}
+
+fn installed_module_shell_fallback(root: &Path, app_root: &Path, rel: &str) -> Option<String> {
+    let (module_id, path) = rel.strip_prefix("installed-modules/")?.split_once('/')?;
+    if module_id.is_empty() || path.is_empty() {
+        return None;
+    }
+    if resolve_business_os_installed_app_root(root)
+        .join(rel)
+        .exists()
+    {
+        return None;
+    }
+    let shell_rel = format!("modules/{module_id}/{path}");
+    app_root.join(&shell_rel).is_file().then_some(shell_rel)
 }
 
 fn business_os_instance_state_asset(rel: &str) -> bool {
@@ -4331,6 +4358,104 @@ mod tests {
         assert!(slot_asset.starts_with("HTTP/1.1 200"), "{slot_asset}");
         assert!(slot_asset.ends_with("slot-app"), "{slot_asset}");
         assert!(slot_asset.contains("immutable"), "{slot_asset}");
+        Ok(())
+    }
+
+    #[test]
+    fn installed_modules_import_system_module_siblings_from_the_active_shell() -> anyhow::Result<()>
+    {
+        use std::io::Read;
+
+        let root = tempfile::tempdir()?;
+        fs::create_dir_all(root.path().join("runtime"))?;
+        fs::write(
+            root.path().join("runtime/business-os-instance-id"),
+            "biz_local\n",
+        )?;
+        let installed = root.path().join("runtime/business-os/installed-modules");
+        for (id, file, body) in [
+            ("invoices", "schema.js", "installed-invoices"),
+            ("rem-private", "index.js", "private"),
+        ] {
+            fs::create_dir_all(installed.join(id))?;
+            fs::write(
+                installed.join(id).join("module.json"),
+                format!(r#"{{"id":"{id}","version":"1.0.0"}}"#),
+            )?;
+            fs::write(installed.join(id).join(file), body)?;
+        }
+        let version = "0.1.46-beta.103";
+        let slot = root
+            .path()
+            .join("runtime/business-os-shell/slots")
+            .join(version);
+        for (id, body) in [("desktop", "shell-desktop"), ("invoices", "shell-invoices")] {
+            fs::create_dir_all(slot.join("modules").join(id))?;
+            fs::write(
+                slot.join("modules").join(id).join("module.json"),
+                format!(r#"{{"id":"{id}","version":"1.0.0"}}"#),
+            )?;
+            fs::write(slot.join("modules").join(id).join("schema.js"), body)?;
+        }
+        fs::write(slot.join("app.js"), "slot-app")?;
+        super::super::shell_update::admit_release_for_test(root.path(), version, &["app.js"])?;
+
+        let get = |url: &str| -> anyhow::Result<String> {
+            let server = Server::http("127.0.0.1:0").expect("isolated HTTP listener");
+            let addr = server.server_addr().to_ip().expect("TCP address");
+            let path = url.split('?').next().unwrap_or(url).to_owned();
+            let (root_path, app_root) = (root.path().to_path_buf(), slot.clone());
+            let handler = thread::spawn(move || {
+                let request = server
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("receive HTTP request")
+                    .expect("bounded HTTP request");
+                serve_static(&root_path, &app_root, request, &path).expect("static response");
+            });
+            let mut stream = std::net::TcpStream::connect(addr)?;
+            stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+            write!(
+                stream,
+                "GET {url} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+            )?;
+            let mut response = String::new();
+            stream.read_to_string(&mut response)?;
+            handler.join().expect("static handler terminal");
+            Ok(response)
+        };
+
+        // Sibling import of a system module: with and without the release
+        // address and with a shell generation query, the active shell file.
+        for url in [
+            "/business-os/installed-modules/desktop/schema.js".to_owned(),
+            format!("/business-os/_shell/{version}/installed-modules/desktop/schema.js"),
+            "/business-os/installed-modules/desktop/schema.js?v=20261016-shell-v2-x".to_owned(),
+        ] {
+            let response = get(&url)?;
+            assert!(response.starts_with("HTTP/1.1 200"), "{url}: {response}");
+            assert!(response.ends_with("shell-desktop"), "{url}: {response}");
+            assert!(
+                response.contains("no-cache, must-revalidate"),
+                "{url}: {response}"
+            );
+        }
+        // An installed file always wins over the shell copy.
+        let installed_file = get("/business-os/installed-modules/invoices/schema.js")?;
+        assert!(
+            installed_file.ends_with("installed-invoices"),
+            "{installed_file}"
+        );
+        // No system module of that id: still 404.
+        for url in [
+            "/business-os/installed-modules/nonexistent/schema.js".to_owned(),
+            format!("/business-os/_shell/{version}/installed-modules/nonexistent/schema.js"),
+            // Installed customer package without the requested file.
+            "/business-os/installed-modules/rem-private/schema.js".to_owned(),
+            "/business-os/installed-modules/rem-private/index.js".to_owned(),
+        ] {
+            let response = get(&url)?;
+            assert!(response.starts_with("HTTP/1.1 404"), "{url}: {response}");
+        }
         Ok(())
     }
 
