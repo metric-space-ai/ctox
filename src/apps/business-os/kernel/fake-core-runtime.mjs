@@ -520,6 +520,25 @@ export function createCoreRuntime(core) {
     return { status: 'failed', error: 'invalid' };
   }
 
+  // Unified diff mit 3 Kontextzeilen je Hunk (ein Hunk um den geänderten Bereich; für git apply geeignet).
+  function unifiedDiff(path, before, after, context = 3) {
+    const split = (t) => (t === '' ? [] : t.replace(/\n$/, '').split('\n'));
+    const a = split(before), b = split(after);
+    let pre = 0;
+    while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++;
+    let suf = 0;
+    while (suf < a.length - pre && suf < b.length - pre && a[a.length - 1 - suf] === b[b.length - 1 - suf]) suf++;
+    const from = Math.max(0, pre - context);
+    const aEnd = Math.min(a.length, a.length - suf + context), bEnd = Math.min(b.length, b.length - suf + context);
+    const lines = [];
+    for (let i = from; i < pre; i++) lines.push(` ${a[i]}`);
+    for (let i = pre; i < a.length - suf; i++) lines.push(`-${a[i]}`);
+    for (let i = pre; i < b.length - suf; i++) lines.push(`+${b[i]}`);
+    for (let i = a.length - suf; i < aEnd; i++) lines.push(` ${a[i]}`);
+    const aLen = aEnd - from, bLen = bEnd - from;
+    const head = `@@ -${aLen ? from + 1 : from},${aLen} +${bLen ? from + 1 : from},${bLen} @@`;
+    return `--- a/${path}\n+++ b/${path}\n${head}\n${lines.join('\n')}\n`;
+  }
   // ---- K-1f: Coding Agent im Quelltext-Modus (§16.44, Vertrag befund-coding-panel.md / Core-PR #848), simuliert ----
   // Der simulierte Agent ändert deterministisch: er hängt an die erste im Prompt genannte Datei des Entwurfs (sonst die erste
   // Textdatei) eine Kommentarzeile an. Nachrichten und tool_events erscheinen wie beim echten Sidecar erst am Turn-Ende.
@@ -611,9 +630,11 @@ export function createCoreRuntime(core) {
     };
     if (turn.state !== 'queued') return finish(turn.state, {});
     turn = await setTurn(turn_id, { state: 'running' }) ?? turn;
-    // Arbeitsbaum = Entwurf auf der Basis-Revision (Snapshot beim Start)
+    // §16.44-Ergänzung (1): Arbeitsbaum = VOLLER Baum = Basisversion + Entwurfs-Überlagerung (null = gelöscht), Snapshot beim Start
     const startRow = draftRow(turn.draft_id);
-    const files = cloneValue(startRow?.data?.files ?? {});
+    const baseFiles = startRow?.data?.base_app_ver ? manifestOf(turn.app_id, startRow.data.base_app_ver)?.files ?? {} : {};
+    const files = { ...baseFiles };
+    for (const [path, h] of Object.entries(startRow?.data?.files ?? {})) { if (h === null) delete files[path]; else files[path] = h; }
     await new Promise((r) => setTimeout(r, core.codingDelayMs ?? 60));
     if (turnRow(turn_id).data.state === 'cancelled') return finish('cancelled', {});
     const textPaths = Object.keys(files).filter((p) => files[p] && typeof core.artifacts.get(files[p]) === 'string').sort();
@@ -637,8 +658,7 @@ export function createCoreRuntime(core) {
       return finish('done', { ...transcript, draft_rev_after: draftRow(turn.draft_id).rev, changed_files: [path] });
     }
     // Nutzer hat inzwischen editiert: nichts überschreiben, Patch als files-Datensatz
-    const n = old ? old.split('\n').length - (old.endsWith('\n') ? 1 : 0) : 0;
-    const patch = `--- a/${path}\n+++ b/${path}\n@@ -${n},0 +${n + 1},1 @@\n+${line}\n`;
+    const patch = unifiedDiff(path, old, next); // §16.44-Ergänzung (4): 3 Kontextzeilen, Basis = base_draft_rev
     const bytes = new TextEncoder().encode(patch);
     const ref = await sha256Hex(bytes);
     core.blobs.set(ref, new Blob([bytes], { type: 'text/x-diff' }));

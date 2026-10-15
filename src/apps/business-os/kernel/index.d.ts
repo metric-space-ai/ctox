@@ -324,7 +324,11 @@ export type CollectionDiff = {
   migration: { from_ver: string; migrate_fn?: string; steps?: MigrationStep[] } | null;
 };
 /** §16.22 A4. files: Pfad → Text, null = im Entwurf gelöscht. */
-export type DraftInfo = { base_app_ver: string | null; files: Record<string, string | Uint8Array | null>; manifest: Record<string, unknown>; updated_at: number ; /** Revision der app_drafts-Zeile im Core = base_draft_rev für ctox.coding.turn (§16.44). */ rev: string | null };
+export interface DraftWriteHandle extends Promise<void> {
+  local: Promise<void>;
+  result: Promise<{ status: 'accepted'; rev: string } | { status: 'rejected'; code: string; reason?: string }>;
+}
+export type DraftInfo = { base_app_ver: string | null; files: Record<string, string | Uint8Array | null>; manifest: Record<string, unknown>; updated_at: number ; /** Bestätigte Revision der app_drafts-Zeile (= base_draft_rev für ctox.coding.turn, §16.44); null, solange Änderungen ausstehen oder der Entwurf neu und noch unbestätigt ist. */ rev: string | null };
 /** §16.44: Plattform-Collection coding_turns/<turn_id> (schreibt nur der Core; messages/tool_events erst am Turn-Ende). */
 export type CodingTurn = {
   id: string; app_id: string; draft_id: string; user_id: string; command_id: string; origin_app: string; base_draft_rev: string;
@@ -349,7 +353,9 @@ export interface SourceApi {
     /** A4 – null, wenn kein eigener Entwurf. */
     info(): Promise<DraftInfo | null>;
     /** Recht apps.source.edit (gilt für alle schreibenden Entwurfsaufrufe). `manifest.json` → invalid (§16.26). */
-    write(path: string, content: ArtifactContent): Promise<void>;
+    /** §16.44-Ergänzung (3): {local, result}; result = vom Core bestätigte Revision {status:'accepted', rev} bzw. rejected{code};
+     *  awaitbar wie bisher (wartet auf den lokalen Commit). */
+    write(path: string, content: ArtifactContent): DraftWriteHandle;
     /** A7 – not_found, wenn die Datei nicht existiert. */
     remove(path: string): Promise<void>;
     /** A7 – not_found (Quelle fehlt), conflict (Ziel existiert). Verweise im Manifest (entry, handlers, styles) wandern mit (§16.26). */

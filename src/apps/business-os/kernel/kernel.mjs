@@ -1411,7 +1411,7 @@ export function createKernel(opts = {}) {
     const files = {};
     for (const [p, c] of Object.entries(old.files ?? {})) files[p] = c === null ? null : await storeDraftContent(appId, p, c);
     const d = Object.prototype.hasOwnProperty.call(old, 'base_app_ver') ? { app_id: appId, base_app_ver: old.base_app_ver, files, manifest: old.manifest ?? {} } : { ...freshDraft(appId), files };
-    await writeDraft(appId, d);
+    await writeDraft(appId, d).local;
     await db.tx((t) => t.del('meta', `draft:${appId}`));
   }
   /** Eigener Entwurf (files = Hashes) oder null. */
@@ -1437,7 +1437,7 @@ export function createKernel(opts = {}) {
   }
   function writeDraft(appId, d) {
     const doc = { id: draftId(appId), app_id: appId, user_id: actor.id, base_app_ver: d.base_app_ver ?? null, files: d.files, manifest_fields: d.manifest ?? {}, updated_at_ms: Date.now() };
-    return localWrite(PLATFORM_APP, 'put', 'app_drafts', doc.id, doc).local;
+    return localWrite(PLATFORM_APP, 'put', 'app_drafts', doc.id, doc);
   }
   // Lese-Ändere-Schreib-Schritt auf dem eigenen Entwurf: Spiegel lesen, ändern und optimistisch schreiben geschieht
   // synchron (localWrite.prepare), damit parallele Aufrufe (auch anderer Tabs über den Spiegel) kein Update verlieren.
@@ -1447,7 +1447,29 @@ export function createKernel(opts = {}) {
     const doc = draftDoc(appId);
     const d = doc ? docToDraft(doc) : freshDraft(appId);
     mutate(d);
-    await writeDraft(appId, d);
+    const h = writeDraft(appId, d);
+    await h.local;
+    return h;
+  }
+  /** §16.44-Ergänzung (3): {local, result}; result = vom Core bestätigte Revision {status:'accepted', rev} bzw. rejected{code}. */
+  function draftHandle(work) {
+    const local = work.then(() => undefined);
+    const result = work.then(async (h) => {
+      const r = await h.result;
+      return r.status === 'rejected' ? { status: 'rejected', code: r.code ?? r.reason, reason: r.reason } : { status: 'accepted', rev: r.rev };
+    }, (e) => ({ status: 'rejected', code: e?.code ?? 'local_error', reason: String(e?.message ?? e) }));
+    // Ein echtes Promise (auf den lokalen Commit) mit den Feldern local und result: `await`, `.catch` und
+    // assert.rejects bleiben wie bisher (Shell-Quelltextmodus nutzt write(...).catch).
+    local.catch(() => {}); // wer nur result liest, erzeugt keinen unbehandelten Fehler; await/.catch sehen ihn weiterhin
+    local.local = local;
+    local.result = result;
+    return local;
+  }
+  // §16.44-Ergänzung (2): Revision nur für eine bestätigte, nicht gelöschte Zeile ohne ausstehende Änderungen (sonst null)
+  function confirmedDraftRev(appId) {
+    const r = mirrorGet('app_drafts', draftId(appId));
+    if (!r || r.pending || !r.base?.data || r.base.deleted) return null;
+    return r.base.rev ?? null;
   }
   async function baseSchemaOf(appId, base) {
     if (!base) return { collections: {}, migrations: {} };
@@ -1494,15 +1516,17 @@ export function createKernel(opts = {}) {
           const files = {};
           for (const [p, h] of Object.entries(d.files)) files[p] = h === null ? null : await draftContent(h);
           // rev = Revision der app_drafts-Zeile im Core (base_draft_rev für ctox.coding.turn, §16.44)
-          return { base_app_ver: d.base_app_ver, files, manifest: d.manifest, updated_at: d.updated_at, rev: mirrorGet('app_drafts', draftId(appId))?.base?.rev ?? null };
+          return { base_app_ver: d.base_app_ver, files, manifest: d.manifest, updated_at: d.updated_at, rev: confirmedDraftRev(appId) };
         },
         // Text oder Bytes (Binärdateien wie PNG-Icons bleiben Bytes, Hash beim publish über die Bytes)
-        async write(path, content) {
-          requirePerm('apps.source.edit');
-          if (typeof path !== 'string' || !path || content == null) throw new CtoxError('invalid', 'path und Inhalt nötig', { path: 'path' });
-          noManifestFile(path);
-          const hash = await storeDraftContent(appId, path, await artifactContent(content));
-          await draftMutate(appId, (d) => { d.files[path] = hash; });
+        write(path, content) {
+          return draftHandle((async () => {
+            requirePerm('apps.source.edit');
+            if (typeof path !== 'string' || !path || content == null) throw new CtoxError('invalid', 'path und Inhalt nötig', { path: 'path' });
+            noManifestFile(path);
+            const hash = await storeDraftContent(appId, path, await artifactContent(content));
+            return draftMutate(appId, (d) => { d.files[path] = hash; });
+          })());
         },
         // A7
         async remove(path) {
