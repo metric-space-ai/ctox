@@ -98,11 +98,15 @@ pub struct ArtifactExposure {
     pub field_path: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScopeRevoke {
     pub rights_ver: u64,
-    /// Full replacement predicates/masks permit row and field cleanup, including
-    /// absent collections. Consumers apply this atomically with checkpoint reset.
+    /// Replacement applies only to these collections, even for an empty scope.
+    /// Other apps/collections and their checkpoints must remain intact.
+    pub collections: std::collections::BTreeSet<String>,
     pub remaining: Vec<Projection>,
+    /// Candidate hashes after deleting the revoked references. The client only
+    /// removes bytes when no authorized reference outside this scope remains.
     pub artifacts: Vec<String>,
     pub outbox_reason: String,
 }
@@ -112,9 +116,35 @@ impl ScopeRevoke {
         held_rows: &std::collections::BTreeMap<(String, String), Value>,
         artifacts: &[ArtifactExposure],
     ) -> Self {
+        let collections = scope
+            .projections
+            .iter()
+            .map(|p| p.collection.clone())
+            .chain(held_rows.keys().map(|(c, _)| c.clone()))
+            .chain(artifacts.iter().map(|a| a.collection.clone()))
+            .collect();
+        Self::for_collections(scope, collections, held_rows, artifacts)
+    }
+    pub fn for_collection(
+        scope: &ResolvedScope,
+        collection: &str,
+        held_rows: &std::collections::BTreeMap<(String, String), Value>,
+        artifacts: &[ArtifactExposure],
+    ) -> Self {
+        Self::for_collections(scope, [collection.to_string()].into(), held_rows, artifacts)
+    }
+    fn for_collections(
+        scope: &ResolvedScope,
+        collections: std::collections::BTreeSet<String>,
+        held_rows: &std::collections::BTreeMap<(String, String), Value>,
+        artifacts: &[ArtifactExposure],
+    ) -> Self {
         let mut revoked: Vec<_> = artifacts
             .iter()
             .filter(|artifact| {
+                if !collections.contains(&artifact.collection) {
+                    return false;
+                }
                 let Some(projection) = scope.projection(&artifact.collection) else {
                     return true;
                 };
@@ -130,14 +160,24 @@ impl ScopeRevoke {
             .collect();
         revoked.sort();
         revoked.dedup();
+        let remaining = scope
+            .projections
+            .iter()
+            .filter(|p| collections.contains(&p.collection))
+            .cloned()
+            .collect();
         Self {
             rights_ver: scope.rights_ver,
-            remaining: scope.projections.clone(),
+            collections,
+            remaining,
             artifacts: revoked,
             outbox_reason: "revoked".into(),
         }
     }
     pub fn clean_document(&self, collection: &str, doc: &Value) -> Result<Option<Value>> {
+        if !self.collections.contains(collection) {
+            return Ok(Some(doc.clone()));
+        }
         match self.remaining.iter().find(|p| p.collection == collection) {
             Some(p) if p.row_filter.matches(doc) => Ok(Some(p.field_mask.apply(doc)?)),
             _ => Ok(None),
@@ -305,6 +345,9 @@ pub async fn send_native_revoke<H: WebRTCConnectionHandler>(
     authority: Arc<NativePublication>,
     revoke: &ScopeRevoke,
 ) -> RxResult<()> {
+    if revoke.collections.len() != 1 || !revoke.collections.contains(&authority.collection) {
+        return Err(denied());
+    }
     let expected = ResolvedScope {
         rights_ver: revoke.rights_ver,
         projections: revoke.remaining.clone(),
@@ -320,7 +363,8 @@ pub async fn send_native_revoke<H: WebRTCConnectionHandler>(
         error: None,
         result: serde_json::json!({"type":"scope_revoke","scope_hash":authority.token.claims.scope_hash,
             "rights_ver":revoke.rights_ver.to_string(),"remaining":revoke.remaining,"artifacts":revoke.artifacts,
-            "outbox_reason":revoke.outbox_reason}),
+            "outbox_reason":revoke.outbox_reason,"collections":revoke.collections,
+            "artifact_policy":"unreferenced_after_scope_cleanup"}),
     });
     transport.send_guarded(peer, frame, authority).await
 }

@@ -894,17 +894,17 @@ pub fn authorize_sync_write(
 /// Official Core credential-provider bridge. The existing secret is canonical
 /// base64url PKCS#8 under scope "instance"; provisioning/rotation is a separate
 /// owner action. This path never initializes, replaces or writes any secret.
-pub struct SyncInstanceSigningKeyStore<'a> {
-    pub root: &'a std::path::Path,
+pub struct SyncInstanceSigningKeyStore {
+    pub root: std::path::PathBuf,
 }
-impl sync_rights::scope::InstanceSigningKeyStore for SyncInstanceSigningKeyStore<'_> {
+impl sync_rights::scope::InstanceSigningKeyStore for SyncInstanceSigningKeyStore {
     fn with_instance_signing_key<T>(
         &self,
         use_key: impl FnOnce(&[u8]) -> sync_rights::scope::Result<T>,
     ) -> sync_rights::scope::Result<T> {
         use base64::Engine as _;
         crate::secrets::with_current_secret_value(
-            self.root,
+            &self.root,
             "instance",
             sync_rights::scope::INSTANCE_SIGNING_KEY,
             |encoded| {
@@ -968,7 +968,7 @@ pub fn sync_peer_authenticator<
                 hello.instance_id.clone(),
                 hello.scopes_wanted.clone(),
             );
-            if wanted.len() > 32 {
+            if wanted.len() > 128 {
                 return Err(failure());
             }
             let verified = verify(peer, hello).await.map_err(|_| failure())?;
@@ -1045,5 +1045,21 @@ pub fn dispatch_sync_command<T>(
         command,
         assigned_by_core,
         start,
+    )
+}
+
+/// Concrete, owned official provider for the long-lived P4 callback. The
+/// factory itself performs no credential access; signing stays in the provider.
+pub fn sync_peer_authenticator_from_secret_store(
+    authority: std::sync::Arc<sync_rights::StoreRightsAuthority>,
+    root: std::path::PathBuf,
+    verify: VerifySyncPeer,
+    clock: sync_rights::scope::scope_filter::CoreClock,
+) -> rxdb::plugins::replication_webrtc::index_mod::connection_lifecycle::AuthenticatePeer {
+    sync_peer_authenticator(
+        authority,
+        std::sync::Arc::new(SyncInstanceSigningKeyStore { root }),
+        verify,
+        clock,
     )
 }

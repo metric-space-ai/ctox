@@ -1082,17 +1082,32 @@ async fn m5_four_participants_real_writer_hello_native_queue_and_stale_peer_fenc
         .is_err());
     let mut held = std::collections::BTreeMap::new();
     held.insert(("leads".into(), "lead".into()), document.clone());
-    let revoke = scope::scope_filter::ScopeRevoke::new(
+    let unrelated = json!({"label":"keep other app"});
+    held.insert(("other".into(), "other-row".into()), unrelated.clone());
+    let revoke = scope::scope_filter::ScopeRevoke::for_collection(
         &updates[0].scope,
+        "leads",
         &held,
-        &[scope::scope_filter::ArtifactExposure {
-            hash: "artifact".into(),
-            collection: "leads".into(),
-            row_id: "lead".into(),
-            field_path: "/name".into(),
-        }],
+        &[
+            scope::scope_filter::ArtifactExposure {
+                hash: "artifact".into(),
+                collection: "leads".into(),
+                row_id: "lead".into(),
+                field_path: "/name".into(),
+            },
+            scope::scope_filter::ArtifactExposure {
+                hash: "other-artifact".into(),
+                collection: "other".into(),
+                row_id: "other-row".into(),
+                field_path: "/label".into(),
+            },
+        ],
     );
     assert_eq!(revoke.clean_document("leads", &document).unwrap(), None);
+    assert_eq!(
+        revoke.clean_document("other", &unrelated).unwrap(),
+        Some(unrelated)
+    );
     assert_eq!(revoke.artifacts, vec!["artifact"]);
     let renewed = Arc::new(NativePublication {
         authority: authority.clone(),
@@ -1105,6 +1120,16 @@ async fn m5_four_participants_real_writer_hello_native_queue_and_stale_peer_fenc
         generation: 1,
         clock: clock.clone(),
     });
+    let mut wrong_domain = revoke.clone();
+    wrong_domain.collections = ["other".into()].into();
+    assert!(scope::scope_filter::send_native_revoke(
+        &*transport,
+        &"a1".into(),
+        renewed.clone(),
+        &wrong_domain
+    )
+    .await
+    .is_err());
     let mut forged = revoke.clone();
     forged.remaining = scopes[0].projections.clone();
     assert!(scope::scope_filter::send_native_revoke(
