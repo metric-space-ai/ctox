@@ -704,7 +704,11 @@ fn held_visibility_readers_preserve_native_lineage_and_fence_owner_mutation() ->
     let core = channels::open_channel_db(&crate::paths::core_db(root.path()))?;
     let store_conn = open_store(root.path())?;
     let writer = open_store(root.path())?;
-    writer.busy_timeout(std::time::Duration::ZERO)?;
+    // Only the rejected contender is nonblocking. The later ordinary owner
+    // mutation keeps the native store's normal wait budget when fixture task
+    // admission has also scheduled a concurrent projection refresh.
+    let contender = open_store(root.path())?;
+    contender.busy_timeout(std::time::Duration::ZERO)?;
     let mut project = outbound_load_record(&writer, "workjet_projects", "project")?.unwrap();
     project["owner_user_id"] = json!("new-owner");
     {
@@ -746,7 +750,7 @@ fn held_visibility_readers_preserve_native_lineage_and_fence_owner_mutation() ->
             "borrowed authority must not reopen or initialize Core"
         );
         let error = store::upsert_business_record(
-            &writer,
+            &contender,
             "workjet_projects",
             "project",
             2,
