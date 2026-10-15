@@ -4721,7 +4721,10 @@ async function startScopedResearch(campaign, leads, options = {}) {
       melde();
     }
   };
-  await Promise.all(Array.from({ length: Math.min(3, eligibleLeads.length) }, arbeiter));
+  // Owner 15.10.2026 (Stresstest): "es ist doch ein stresstest und kein
+  // streicheltest" - acht Starts nebeneinander, so viele wie die CTOX-Queue
+  // gleichzeitig abarbeitet.
+  await Promise.all(Array.from({ length: Math.min(8, eligibleLeads.length) }, arbeiter));
   if (!queued.length) {
     const message = failed.length
       ? `Kein Lead konnte gestartet werden (${failed.length} Fehler): ${failed.slice(0, 3).map((entry) => entry.error).join(' \u00b7 ')}`
