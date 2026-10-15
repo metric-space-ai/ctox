@@ -233,3 +233,33 @@ test('K-1c 2 §16.39 Nr. 2: lib-URL mit Minor, beim Mount fixiert; active:lib-Me
   await lib('c.js');
   assert.deepEqual(await libRows(), ['a.js', 'c.js']);
 });
+
+test('K-1c 3 §16.39 Nr. 4: Entwürfe in der Plattform-Collection app_drafts (id <user>/<app>, Dateien als sha256, über die Outbox zum Core)', async (t) => {
+  const instanceId = `k1c-drafts-${process.pid}`;
+  const k = await mk(t, { instanceId, tabKey: 'A' });
+  await k.sim.publishAppVersion('crm', '1', { files: { 'index.js': MOUNT } });
+  const src = k.source('crm');
+  await src.draft.write('README.md', '# crm');
+  await src.draft.write('icon.png', Uint8Array.from([137, 80, 78, 71, 255]));
+  await src.draft.setManifest({ title: 'CRM' });
+  await k.sim.settle();
+  const row = await k.sim.inspect('app_drafts', 'u1/crm');
+  assert.ok(row?.base?.seq && !row.pending, 'vom Core bestätigt (über die Outbox)');
+  assert.deepEqual(Object.keys(row.data).sort(), ['app_id', 'base_app_ver', 'files', 'id', 'manifest_fields', 'updated_at_ms', 'user_id']);
+  assert.deepEqual([row.data.user_id, row.data.base_app_ver, row.data.manifest_fields], ['u1', '1', { title: 'CRM' }]);
+  assert.equal(row.data.files['README.md'], sha(Buffer.from('# crm')), 'Datei als sha256, Inhalt im CAS');
+  assert.equal(await k.sim.inspectMeta('draft:crm'), undefined, 'nichts mehr in IDB meta');
+  // Apps schreiben app_drafts nicht direkt
+  await assert.rejects(k.appApi('crm', '1').put('app_drafts', { id: 'u1/crm', app_id: 'crm', user_id: 'u1' }).local, (e) => e.code === 'forbidden');
+  await k.close();
+  // Neustart desselben Nutzers: Entwurf samt Binärdatei wieder da
+  const k2 = await mk(t, { instanceId, tabKey: 'A' });
+  const info = await k2.source('crm').draft.info();
+  assert.equal(info.files['README.md'], '# crm');
+  assert.deepEqual([...info.files['icon.png']], [137, 80, 78, 71, 255]);
+  const r = await k2.source('crm').draft.publish().result;
+  assert.equal(r.status, 'accepted', JSON.stringify(r));
+  await k2.sim.settle();
+  assert.equal(await k2.source('crm').draft.info(), null, 'publish löscht den eigenen Entwurf');
+  assert.equal((await k2.sim.inspect('app_drafts', 'u1/crm'))?.data ?? null, null);
+});

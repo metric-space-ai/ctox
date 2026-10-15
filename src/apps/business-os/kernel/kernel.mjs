@@ -17,7 +17,7 @@ export { SCHEMA_FILE, parseCollectionsFile, classifyCollections, applyMigrationS
 export { createShellKernel } from './shell-api.mjs';
 export const APP_API_VERSION = '4.0';
 const SNAPSHOT_MAX_BYTES = 1024 * 1024;
-const SYSTEM_COLLECTIONS = new Set(['business_commands', 'files', 'business_apps', 'business_app_versions', 'shell_preferences']);
+const SYSTEM_COLLECTIONS = new Set(['business_commands', 'files', 'business_apps', 'business_app_versions', 'shell_preferences', 'app_drafts']);
 // §16.19 Nr. 6: Shell-Layoutfelder im Manifest; fehlende Felder sind null.
 export const LAYOUT_KEYS = Object.freeze(['icon_asset', 'icon_svg', 'category', 'frame_palette', 'default_width', 'default_height', 'min_width', 'min_height', 'presentation']);
 export function normalizeLayout(l) {
@@ -36,8 +36,20 @@ const PLATFORM_SCHEMAS = Object.freeze({
       settings: { type: 'object', additionalProperties: true }, updated_at_ms: { type: 'number' },
     },
   }),
+  // §16.22/§16.26/§16.39 Nr. 4: Entwurf je (App, Nutzer), Dateien als sha256 (Inhalt im CAS). Abweichung vom Plattform-
+  // Manifest: files-Werte dürfen null sein (= im Entwurf gelöscht); das Manifest erlaubt nur Hashes (Befund K-1c).
+  app_drafts: deepFreeze({
+    primaryKey: 'id', type: 'object', additionalProperties: false, required: ['id', 'app_id', 'user_id'], indexes: ['app_id', 'user_id'],
+    properties: {
+      id: { type: 'string', maxLength: 180 }, app_id: { type: 'string' }, user_id: { type: 'string' },
+      base_app_ver: { type: ['string', 'null'] }, manifest_fields: { type: 'object', additionalProperties: true },
+      files: { type: 'object', additionalProperties: { type: ['string', 'null'] } },
+      collections_schema: { type: 'object', additionalProperties: true }, updated_at_ms: { type: 'number' },
+    },
+  }),
 });
-const OWN_ROW_COLLECTIONS = new Set(['shell_preferences']);
+const PLATFORM_APP = Object.freeze({ id: 'ctox-platform', ver: '1' });
+const OWN_ROW_COLLECTIONS = new Set(['shell_preferences', 'app_drafts']);
 // Tab-Identität für window_state: überlebt Neuladen desselben Tabs (sessionStorage), sonst je Kernel neu.
 function sessionTabKey() {
   try {
@@ -388,7 +400,7 @@ export function createKernel(opts = {}) {
         actor: (next) => { if(next.id !== userId)throw new CtoxError('forbidden','Actor identity mismatch');actor={...actor,...next};notify('actor'); },
       });
     }
-    for (const collection of new Set(['business_apps', 'business_app_versions', 'business_commands', 'files', 'shell_preferences', ...mirror.keys()])) await subscribeCollection(collection);
+    for (const collection of new Set(['business_apps', 'business_app_versions', 'business_commands', 'files', 'shell_preferences', 'app_drafts', ...mirror.keys()])) await subscribeCollection(collection);
     netChanged();scheduleCacheBudget();
     track(deliver());
     schedulePump();
@@ -499,6 +511,7 @@ export function createKernel(opts = {}) {
       if (typeof collection !== 'string' || !collection) throw new CtoxError('invalid', 'collection fehlt', { path: 'collection' });
       if (typeof id !== 'string' || !id) throw new CtoxError('invalid', 'id (string) fehlt', { path: 'id' });
       if (!ownRowOk(collection, id)) throw new CtoxError('forbidden', `${collection}: nur die eigene Zeile (id = actor.id)`, { path: 'id' });
+      if (collection === 'app_drafts' && app.id !== PLATFORM_APP.id) throw new CtoxError('forbidden', 'app_drafts nur über kernel.source(appId).draft.*', { path: 'collection' });
       const ns = resolveNs(app, collection);
       let clean = null;
       if (op === 'put') {
@@ -753,7 +766,11 @@ export function createKernel(opts = {}) {
   }
   function schemaFor(app, collection) { return PLATFORM_SCHEMAS[collection] ?? versionDoc(app.id, app.ver)?.manifest?.collections?.[collection]?.schema ?? null; }
   // §16.19 Nr. 3: shell_preferences – eine Zeile je Nutzer (id = actor.id), lesen und schreiben nur die eigene.
-  function ownRowOk(collection, id) { return !OWN_ROW_COLLECTIONS.has(collection) || id === actor.id; }
+  function ownRowOk(collection, id) {
+    if (!OWN_ROW_COLLECTIONS.has(collection)) return true;
+    if (collection === 'app_drafts') return typeof id === 'string' && id.startsWith(`${actor.id}/`); // id = '<user>/<app>'
+    return id === actor.id;
+  }
 
   async function publishInternal(appId, ver, o = {}) {
     if (publishing.has(appId)) throw new CtoxError('conflict', `Veröffentlichung von ${appId} läuft bereits (busy)`);
@@ -1236,11 +1253,11 @@ export function createKernel(opts = {}) {
     if (content != null) return artifactContent(content);
     throw new CtoxError('not_found', `Artefakt ${hash} fehlt`);
   }
-  // ---- Quelltext-API (§10.2a Nr. 7, §16.22 A1–A9, §16.26) ----
-  // Entwurf je (App, Nutzer): die IDB gehört genau einem (Instanz, Nutzer) (§16.7), Zeile meta `draft:<app>`.
-  // files: Pfad → Inhalt (Text oder Bytes), null = im Entwurf gelöscht. manifest.json ist keine Datei; Manifest-Felder
-  // nur über draft.setManifest. Gleiche Regeln wie der Stub (kernel.source(appId) dort).
-  const draftKey = (appId) => `draft:${appId}`;
+  // ---- Quelltext-API (§10.2a Nr. 7, §16.22 A1–A9, §16.26, §16.39 Nr. 4) ----
+  // Entwurf je (App, Nutzer) als Dokument der Plattform-Collection app_drafts (id '<user>/<app>', wie der Stub), über den
+  // normalen Schreibweg (Outbox → Core). files: Pfad → sha256 (Inhalt im IDB-Store artifacts, Text oder Bytes),
+  // null = im Entwurf gelöscht. manifest.json ist keine Datei; Manifest-Felder nur über draft.setManifest (manifest_fields).
+  const draftId = (appId) => `${actor.id}/${appId}`;
   const activeVerOf = (appId) => visible(mirrorGet('business_apps', appId))?.active_ver ?? null;
   const asText = (c) => (typeof c === 'string' ? c : new TextDecoder().decode(c));
   function noManifestFile(path, field = 'path') {
@@ -1248,17 +1265,35 @@ export function createKernel(opts = {}) {
   }
   function freshDraft(appId) {
     const base = activeVerOf(appId);
-    const d = { key: draftKey(appId), app_id: appId, user_id: userId, base_app_ver: base, files: {}, manifest: {}, created_at: Date.now() };
+    const d = { app_id: appId, base_app_ver: base, files: {}, manifest: {} };
     // §16.26: eine Basisdatei manifest.json wird beim Anlegen des Entwurfs verworfen
     if (base && versionDoc(appId, base)?.manifest?.files?.[MANIFEST_FILE]) d.files[MANIFEST_FILE] = null;
     return d;
   }
+  const docToDraft = (doc) => ({ app_id: doc.app_id, base_app_ver: doc.base_app_ver ?? null, files: cloneValue(doc.files ?? {}), manifest: cloneValue(doc.manifest_fields ?? {}), updated_at: doc.updated_at_ms ?? null });
+  const draftDoc = (appId) => visible(mirrorGet('app_drafts', draftId(appId)));
+  // Entwurfsinhalt in den lokalen CAS (IDB artifacts); Rückgabe sha256.
+  async function storeDraftContent(appId, path, content) {
+    const hash = await sha256Hex(content);
+    await db.tx((t) => t.put('artifacts', { hash, content, app_id: appId, app_ver: 'draft', path, draft: true, size: contentBytes(content), stored_at: Date.now() }));
+    return hash;
+  }
+  const draftContent = async (hash) => (await db.get('artifacts', hash))?.content ?? readArtifactContent(hash);
+  // K-1/K-1b-Entwürfe in IDB meta `draft:<app>` (Inhalte inline) einmalig nach app_drafts überführen.
+  async function migrateLegacyDraft(appId) {
+    const old = await db.get('meta', `draft:${appId}`);
+    if (!old || draftDoc(appId)) { if (old) await db.tx((t) => t.del('meta', `draft:${appId}`)); return; }
+    const files = {};
+    for (const [p, c] of Object.entries(old.files ?? {})) files[p] = c === null ? null : await storeDraftContent(appId, p, c);
+    const d = Object.prototype.hasOwnProperty.call(old, 'base_app_ver') ? { app_id: appId, base_app_ver: old.base_app_ver, files, manifest: old.manifest ?? {} } : { ...freshDraft(appId), files };
+    await writeDraft(appId, d);
+    await db.tx((t) => t.del('meta', `draft:${appId}`));
+  }
+  /** Eigener Entwurf (files = Hashes) oder null. */
   async function draftOf(appId) {
-    const d = await db.get('meta', draftKey(appId));
-    if (!d) return null;
-    // K-1-Zeile ({files, collections}) ohne Basis: Basis = aktive Version, Manifest leer.
-    if (!Object.prototype.hasOwnProperty.call(d, 'base_app_ver')) return { ...freshDraft(appId), files: d.files ?? {} };
-    return d;
+    await migrateLegacyDraft(appId);
+    const doc = draftDoc(appId);
+    return doc ? docToDraft(doc) : null;
   }
   // Wirksame Manifest-Verweise des Entwurfs: setManifest-Felder vor Basis-Manifest
   function effectiveRefs(appId, d) {
@@ -1275,16 +1310,19 @@ export function createKernel(opts = {}) {
     if (!hash) throw new CtoxError('not_found', `${path} nicht in ${appId}@${ver}`);
     return readArtifactContent(hash);
   }
-  // Lese-Ändere-Schreib-Schritt auf dem eigenen Entwurf in EINER Transaktion (Mehr-Tab: kein verlorenes Update).
+  function writeDraft(appId, d) {
+    const doc = { id: draftId(appId), app_id: appId, user_id: actor.id, base_app_ver: d.base_app_ver ?? null, files: d.files, manifest_fields: d.manifest ?? {}, updated_at_ms: Date.now() };
+    return localWrite(PLATFORM_APP, 'put', 'app_drafts', doc.id, doc).local;
+  }
+  // Lese-Ändere-Schreib-Schritt auf dem eigenen Entwurf: Spiegel lesen, ändern und optimistisch schreiben geschieht
+  // synchron (localWrite.prepare), damit parallele Aufrufe (auch anderer Tabs über den Spiegel) kein Update verlieren.
   async function draftMutate(appId, mutate) {
     requirePerm('apps.source.edit');
-    await db.tx(async (t) => {
-      const stored = await t.get('meta', draftKey(appId));
-      const d = !stored ? freshDraft(appId) : Object.prototype.hasOwnProperty.call(stored, 'base_app_ver') ? stored : { ...freshDraft(appId), files: stored.files ?? {} };
-      mutate(d);
-      d.updated_at = Date.now();
-      await t.put('meta', d);
-    });
+    await migrateLegacyDraft(appId);
+    const doc = draftDoc(appId);
+    const d = doc ? docToDraft(doc) : freshDraft(appId);
+    mutate(d);
+    await writeDraft(appId, d);
   }
   async function baseSchemaOf(appId, base) {
     if (!base) return { collections: {}, migrations: {} };
@@ -1298,7 +1336,7 @@ export function createKernel(opts = {}) {
       const d = await draftOf(appId);
       if (d && Object.prototype.hasOwnProperty.call(d.files, path)) {
         if (d.files[path] === null) throw new CtoxError('not_found', `${path} im Entwurf gelöscht`);
-        return d.files[path];
+        return draftContent(d.files[path]);
       }
       const base = viewBase(d);
       if (!base) throw new CtoxError('not_found', `${path} nicht vorhanden (neue App ohne Basis)`);
@@ -1327,15 +1365,18 @@ export function createKernel(opts = {}) {
         async info() {
           requirePerm('apps.source.view');
           const d = await draftOf(appId);
-          return d ? { base_app_ver: d.base_app_ver, files: cloneValue(d.files), manifest: cloneValue(d.manifest ?? {}), updated_at: d.updated_at ?? d.created_at } : null;
+          if (!d) return null;
+          const files = {};
+          for (const [p, h] of Object.entries(d.files)) files[p] = h === null ? null : await draftContent(h);
+          return { base_app_ver: d.base_app_ver, files, manifest: d.manifest, updated_at: d.updated_at };
         },
         // Text oder Bytes (Binärdateien wie PNG-Icons bleiben Bytes, Hash beim publish über die Bytes)
         async write(path, content) {
           requirePerm('apps.source.edit');
           if (typeof path !== 'string' || !path || content == null) throw new CtoxError('invalid', 'path und Inhalt nötig', { path: 'path' });
           noManifestFile(path);
-          const value = await artifactContent(content);
-          await draftMutate(appId, (d) => { d.files[path] = value; });
+          const hash = await storeDraftContent(appId, path, await artifactContent(content));
+          await draftMutate(appId, (d) => { d.files[path] = hash; });
         },
         // A7
         async remove(path) {
@@ -1352,9 +1393,10 @@ export function createKernel(opts = {}) {
           const paths = await overlayPaths();
           if (!paths.has(from)) throw new CtoxError('not_found', `${from} nicht vorhanden`, { path: 'from' });
           if (paths.has(to)) throw new CtoxError('conflict', `${to} existiert bereits`, { path: 'to' });
-          const content = await readOverlay(from);
+          const cur = await draftOf(appId);
+          const hash = cur && Object.prototype.hasOwnProperty.call(cur.files, from) ? cur.files[from] : versionDoc(appId, viewBase(cur))?.manifest?.files?.[from];
           await draftMutate(appId, (d) => {
-            d.files[to] = content;
+            d.files[to] = hash;
             d.files[from] = null;
             // §16.26: Verweise im Manifest (Einstieg, Handler, Styles) wandern mit
             const refs = effectiveRefs(appId, d);
@@ -1382,13 +1424,15 @@ export function createKernel(opts = {}) {
           const parsed = parseCollectionsFile(content);
           const obj = typeof content === 'string' ? JSON.parse(content) : content;
           const text = `${JSON.stringify(obj, null, 2)}\n`;
-          await draftMutate(appId, (d) => { d.files[SCHEMA_FILE] = text; });
+          const hash = await storeDraftContent(appId, SCHEMA_FILE, text);
+          await draftMutate(appId, (d) => { d.files[SCHEMA_FILE] = hash; });
           const base = (await draftOf(appId))?.base_app_ver ?? null;
           return { base_app_ver: base, diff: classifyCollections(await baseSchemaOf(appId, base), parsed, { baseVer: base }) };
         },
         async discard() {
           requirePerm('apps.source.edit');
-          await db.tx((t) => t.del('meta', draftKey(appId)));
+          await migrateLegacyDraft(appId);
+          if (draftDoc(appId)) await localWrite(PLATFORM_APP, 'delete', 'app_drafts', draftId(appId), null).local;
         },
         async rebase(ver) {
           requirePerm('apps.source.edit');
@@ -1408,8 +1452,10 @@ export function createKernel(opts = {}) {
               return;
             }
             const base = Object.prototype.hasOwnProperty.call(o ?? {}, 'base_app_ver') ? o.base_app_ver : d.base_app_ver;
-            const r = await callLeader('publishDraft', [appId, base ?? null, d.files, d.manifest ?? {}]);
-            if (r.status !== 'rejected') await db.tx((t) => t.del('meta', draftKey(appId))); // nur der eigene Entwurf
+            const files = {};
+            for (const [p, h] of Object.entries(d.files)) files[p] = h === null ? null : await draftContent(h);
+            const r = await callLeader('publishDraft', [appId, base ?? null, files, d.manifest ?? {}]);
+            if (r.status !== 'rejected') await localWrite(PLATFORM_APP, 'delete', 'app_drafts', draftId(appId), null).local; // nur der eigene Entwurf
             resolveResult(r);
           })();
           local.catch((e) => resolveResult({ status: 'rejected', reason: e?.code ?? 'local_error', detail: String(e?.message ?? e) }));
