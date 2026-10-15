@@ -309,7 +309,7 @@ impl ClockReply {
     }
 }
 /// Exact signed bytes for the P5 reliable message payload. Receivers verify these
-/// bytes BEFORE parsing business values; JS number/stringify rules cannot change the signature.
+/// bytes BEFORE dispatching business values; JS number/stringify rules cannot change the signature.
 /// The domain prefix is part of payload. P5 owns framing and negotiated byte budgets.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

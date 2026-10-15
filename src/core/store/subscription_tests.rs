@@ -26,11 +26,17 @@ impl ReadAuthority for NativePolicy {
     }
 }
 impl WriteAuthority for NativePolicy {
-    fn authorize(&self, _: &Transaction<'_>, participant: &str, _: &Write) -> rusqlite::Result<()> {
-        if participant != "alice" {
-            return Err(invalid("forbidden"));
-        }
-        Ok(())
+    fn authorize(
+        &self,
+        _: &Transaction<'_>,
+        participant: &str,
+        _: &Write,
+    ) -> rusqlite::Result<WritePermission> {
+        Ok(if participant == "alice" {
+            WritePermission::Permit
+        } else {
+            WritePermission::Reject("forbidden".into())
+        })
     }
     fn validate_document(
         &self,
@@ -38,11 +44,12 @@ impl WriteAuthority for NativePolicy {
         _: &str,
         _: &crate::schema::Collection,
         doc: &Value,
-    ) -> rusqlite::Result<()> {
-        if !doc["v"].is_number() {
-            return Err(invalid("v must be numeric"));
-        }
-        Ok(())
+    ) -> rusqlite::Result<WritePermission> {
+        Ok(if doc["v"].is_number() {
+            WritePermission::Permit
+        } else {
+            WritePermission::Reject("invalid_document".into())
+        })
     }
 }
 fn definition(name: &str) -> crate::schema::CollectionDefinition {
@@ -288,7 +295,11 @@ async fn initial_changes_move_forward_and_retained_commit_wakes_the_identical_li
         &live
     );
     let mut broken = frame.clone();
-    broken.payload[30] ^= 1;
+    broken.payload = String::from_utf8(broken.payload)
+        .unwrap()
+        .replace("\"core_sent_at_ms\":1234", "\"core_sent_at_ms\":1235")
+        .into_bytes();
+    assert_ne!(broken.payload, frame.payload);
     assert!(broken.verify(&binding, 1_000_000, &key).is_err());
     let mut other_binding = binding.clone();
     other_binding.scope_hash = "another".into();
@@ -311,6 +322,40 @@ async fn initial_changes_move_forward_and_retained_commit_wakes_the_identical_li
         .next_page(1, Arc::new(NativePolicy), &key, || 0)
         .await
         .is_err());
+    // Even an incorrectly supplied equal generation cannot bind another database to this writer.
+    let other_db = DbId::new(dir.path().join("foreign.sqlite")).unwrap();
+    let other_writer = Registry
+        .open(
+            other_db.clone(),
+            WriterOptions {
+                configure: Some(Arc::new(|c| {
+                    ConnectionConfig::default().apply_writer(c)?;
+                    let tx = c.unchecked_transaction()?;
+                    crate::schema::create_collection(&tx, &definition("items"))?;
+                    tx.commit()?;
+                    Ok(())
+                })),
+                head_seq: None,
+            },
+        )
+        .unwrap();
+    other_writer.ready().await.unwrap();
+    let other_pool = ReadPool::for_database(
+        &other_db,
+        writer.generation(),
+        ConnectionConfig::default(),
+        budget,
+    )
+    .await
+    .unwrap();
+    let mut mismatched =
+        Subscription::new(other_pool.clone(), &writer, sub.key().clone(), None).unwrap();
+    assert!(mismatched
+        .next_page(1, Arc::new(NativePolicy), &key, || 0)
+        .await
+        .is_err());
+    other_pool.shutdown().await.unwrap();
+    other_writer.shutdown().await.unwrap();
     readers.shutdown().await.unwrap();
     writer.shutdown().await.unwrap();
 }
@@ -452,6 +497,36 @@ fn operation_replay_chain_expiry_and_remove_are_atomic_and_payload_free() {
             .reason
             .as_deref(),
         Some("conflict")
+    );
+    let mut denied = put(11, None);
+    denied.id = "denied".into();
+    let refusal = apply_write(&tx, "bob", &denied, NOW + 11, &NativePolicy).unwrap();
+    assert_eq!(refusal.status, WriteStatus::Rejected);
+    assert_eq!(refusal.reason.as_deref(), Some("forbidden"));
+    assert_eq!(
+        apply_write(&tx, "bob", &denied, NOW + 12, &NativePolicy).unwrap(),
+        refusal
+    );
+    let mut stale_delete = put(12, created.rev.clone());
+    stale_delete.op = WriteOp::Delete;
+    stale_delete.body = None;
+    stale_delete.schema_ver = 0;
+    stale_delete.app_ver = "old".into();
+    assert_eq!(
+        apply_write(&tx, "alice", &stale_delete, NOW + 12, &NativePolicy)
+            .unwrap()
+            .status,
+        WriteStatus::Migrated
+    );
+    let mut invalid = put(13, None);
+    invalid.id = "invalid".into();
+    invalid.body = Some(json!({"v":"wrong"}));
+    assert_eq!(
+        apply_write(&tx, "alice", &invalid, NOW + 13, &NativePolicy)
+            .unwrap()
+            .reason
+            .as_deref(),
+        Some("invalid_document")
     );
     let before = change_log::head(&tx).unwrap();
     purge_operations(&tx, NOW + OP_HORIZON_MS + 100, 500).unwrap();

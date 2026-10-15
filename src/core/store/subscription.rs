@@ -134,9 +134,20 @@ impl Subscription {
         let key = self.key.clone();
         let cursor = self.cursor;
         let epoch = self.epoch.clone();
+        let expected_database = self.writer.db_id().path().to_path_buf();
         let (page, docs) = self
             .reader
             .read(move |tx| {
+                let file: String = tx.query_row(
+                    "SELECT file FROM pragma_database_list WHERE name='main'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                let actual_database = std::fs::canonicalize(&file)
+                    .map_err(|_| invalid("reader database identity unavailable"))?;
+                if actual_database != expected_database {
+                    return Err(invalid("reader database differs from writer owner"));
+                }
                 authority.authorize(tx, &key)?;
                 let page = change_log::read_page(tx, &key.collection, key.gen, cursor, limit)?;
                 if epoch.as_ref().is_some_and(|e| e != &page.epoch) {
@@ -209,13 +220,18 @@ impl Subscription {
 
 /// Native authority is mandatory, including replay and removes. It may enforce
 /// write_guard/schema validation and resolve old-schema input through the owned migration runner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WritePermission {
+    Permit,
+    Reject(String),
+}
 pub trait WriteAuthority: Send + Sync {
     fn authorize(
         &self,
         tx: &Transaction<'_>,
         participant: &str,
         request: &Write,
-    ) -> rusqlite::Result<()>;
+    ) -> rusqlite::Result<WritePermission>;
     /// Trusted semantic migration seam. None rejects stale schema/generation input.
     /// Implementations must use already prepared, revision-bound output; no I/O or JS in the writer.
     fn validate_document(
@@ -224,12 +240,13 @@ pub trait WriteAuthority: Send + Sync {
         participant: &str,
         collection: &crate::schema::Collection,
         document: &Value,
-    ) -> rusqlite::Result<()>;
+    ) -> rusqlite::Result<WritePermission>;
     fn migrate(
         &self,
         _tx: &Transaction<'_>,
         _participant: &str,
         _request: &Write,
+        _resolved_base_rev: Option<&str>,
         _current: &crate::schema::Collection,
     ) -> rusqlite::Result<Option<Migration>> {
         Ok(None)
@@ -305,7 +322,7 @@ pub fn apply_write(
         if participant.is_empty() || request.id.is_empty() || request.gen == 0 {
             return Err(invalid("invalid write binding"));
         }
-        authority.authorize(tx, participant, request)?;
+        let permission = authority.authorize(tx, participant, request)?;
         let issued = operation_time(&request.op_id)?;
         if issued > now_ms.saturating_add(300_000) {
             return Ok(rejected(request, "invalid_time"));
@@ -324,6 +341,11 @@ pub fn apply_write(
                 return Ok(rejected(request, "expired"));
             }
             return serde_json::from_str(&result).map_err(|e| invalid(e.to_string()));
+        }
+        if let WritePermission::Reject(reason) = permission {
+            let result = rejected(request, &reason);
+            remember(tx, participant, request, &result, now_ms)?;
+            return Ok(result);
         }
         let mut base = request.base_rev.clone();
         if let Some(previous) = &request.prev_op_id {
@@ -378,7 +400,7 @@ pub fn apply_write(
                 archived_ref: None,
             })
         } else if stale {
-            authority.migrate(tx, participant, request, &current)?
+            authority.migrate(tx, participant, request, base.as_deref(), &current)?
         } else {
             None
         };
@@ -474,7 +496,13 @@ pub fn apply_write(
                 remember(tx, participant, request, &result, now_ms)?;
                 return Ok(result);
             }
-            authority.validate_document(tx, participant, &current, &document)?;
+            if let WritePermission::Reject(reason) =
+                authority.validate_document(tx, participant, &current, &document)?
+            {
+                let result = rejected(request, &reason);
+                remember(tx, participant, request, &result, now_ms)?;
+                return Ok(result);
+            }
             // Schemas operate on business JSON; id/rev/deleted are authoritative table columns.
             let json = serde_json::to_string(&mut document).map_err(|e| invalid(e.to_string()))?;
             tx.execute(&format!("INSERT INTO {table}(id,rev,schema_ver,data,deleted) VALUES(?1,?2,?3,?4,0)
