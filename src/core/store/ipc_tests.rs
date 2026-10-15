@@ -577,3 +577,45 @@ async fn client_rejects_mismatched_correlation_and_oversized_responses() {
         fs::remove_file(&path).unwrap();
     }
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn full_unix_listen_backlog_cannot_outlive_the_connect_deadline() {
+    use std::os::fd::AsRawFd;
+    unsafe extern "C" {
+        fn listen(fd: i32, backlog: i32) -> i32;
+    }
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("backlog.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    assert_eq!(unsafe { listen(listener.as_raw_fd(), 1) }, 0);
+    let (send, receive) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        let mut sockets = Vec::new();
+        let mut timed_out = false;
+        for _ in 0..8 {
+            match unix::connect_path(
+                &path,
+                Instant::now() + Duration::from_millis(50),
+                &AtomicBool::new(false),
+                &Cancellation::default(),
+            ) {
+                Ok(socket) => sockets.push(socket),
+                Err(error) => {
+                    timed_out = error.kind() == io::ErrorKind::TimedOut;
+                    break;
+                }
+            }
+        }
+        let _ = send.send((sockets.len(), timed_out));
+    });
+    // A regression to blocking connect fails instead of hanging the test suite:
+    // close this listener before joining a stalled fixture worker.
+    let result = receive.recv_timeout(Duration::from_secs(2));
+    drop(listener);
+    worker.join().unwrap();
+    let (connected, timed_out) =
+        result.expect("connect exceeded its deadline behind a full backlog");
+    assert!(connected > 0);
+    assert!(timed_out, "fixture did not reach a bounded full backlog");
+}

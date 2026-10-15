@@ -8,7 +8,7 @@ impl CurrentAuthority for Policy {
         &self,
         tx: &Transaction<'_>,
         publication: &Publication,
-    ) -> Result<AuthorityPermit, Rejection> {
+    ) -> Result<AuthorityPermit, AuthorityError> {
         let allowed = tx
             .query_row(
                 "SELECT allowed FROM policy WHERE subject=?",
@@ -19,7 +19,7 @@ impl CurrentAuthority for Policy {
         if allowed {
             Ok(AuthorityPermit::holding(()))
         } else {
-            Err(Rejection::Revoked)
+            Err(AuthorityError::Rejected(Rejection::Revoked))
         }
     }
 }
@@ -481,7 +481,11 @@ impl Drop for PermitDrop {
 }
 struct FencedAuthority(Arc<AtomicBool>);
 impl CurrentAuthority for FencedAuthority {
-    fn acquire(&self, _: &Transaction<'_>, _: &Publication) -> Result<AuthorityPermit, Rejection> {
+    fn acquire(
+        &self,
+        _: &Transaction<'_>,
+        _: &Publication,
+    ) -> Result<AuthorityPermit, AuthorityError> {
         self.0.store(true, Ordering::Release);
         Ok(AuthorityPermit::holding(PermitDrop(self.0.clone())))
     }
@@ -578,4 +582,64 @@ async fn claim_queries_use_ordered_indexes_and_receipt_compaction_is_bounded() {
     );
     assert_eq!(rows(&a, "_publication_inbox").await, 344);
     a.shutdown().await.unwrap();
+}
+
+struct BusyAuthority(Arc<AtomicBool>);
+impl CurrentAuthority for BusyAuthority {
+    fn acquire(
+        &self,
+        tx: &Transaction<'_>,
+        publication: &Publication,
+    ) -> Result<AuthorityPermit, AuthorityError> {
+        if self.0.load(Ordering::Acquire) {
+            Err(AuthorityError::Unavailable)
+        } else {
+            Policy.acquire(tx, publication)
+        }
+    }
+}
+#[tokio::test]
+async fn unavailable_authority_retries_without_waiting_or_marking_a_permanent_denial() {
+    let d = tempfile::tempdir().unwrap();
+    let a = open(&d.path().join("a")).await;
+    let b = open(&d.path().join("b")).await;
+    staged(&a, message("one", "b")).await;
+    let busy = Arc::new(AtomicBool::new(true));
+    let receiver = || Receiver {
+        authority: Arc::new(BusyAuthority(busy.clone())),
+        apply: handler(),
+    };
+    assert_eq!(
+        deliver_one(
+            &a,
+            &b,
+            "b".into(),
+            JobOptions::default(),
+            receiver(),
+            100,
+            RetryPolicy::default()
+        )
+        .await
+        .unwrap(),
+        Delivery::Retrying
+    );
+    assert_eq!(rows(&b, "effects").await, 0);
+    busy.store(false, Ordering::Release);
+    assert_eq!(
+        deliver_one(
+            &a,
+            &b,
+            "b".into(),
+            JobOptions::default(),
+            receiver(),
+            350,
+            RetryPolicy::default()
+        )
+        .await
+        .unwrap(),
+        Delivery::Applied
+    );
+    assert_eq!(rows(&b, "effects").await, 1);
+    a.shutdown().await.unwrap();
+    b.shutdown().await.unwrap();
 }

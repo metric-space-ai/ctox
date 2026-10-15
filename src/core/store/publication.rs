@@ -66,12 +66,20 @@ impl AuthorityPermit {
         }
     }
 }
+/// Unavailable is retryable: guard acquisition must not block a writer while
+/// another authority/store queue needs to make progress.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthorityError {
+    Rejected(Rejection),
+    Unavailable,
+}
+
 pub trait CurrentAuthority: Send + Sync + 'static {
     fn acquire(
         &self,
         tx: &Transaction<'_>,
         publication: &Publication,
-    ) -> Result<AuthorityPermit, Rejection>;
+    ) -> Result<AuthorityPermit, AuthorityError>;
 }
 pub type Apply =
     Arc<dyn Fn(&Transaction<'_>, &Publication) -> Result<(), StoreError> + Send + Sync>;
@@ -263,7 +271,8 @@ async fn apply_claim(
         // policy snapshot. The permit stays alive through the outer commit.
         let permit = match authority.acquire(tx, &claim.publication) {
             Ok(permit) => permit,
-            Err(reason) => return Ok(TargetResult { delivery: Delivery::DeadLetter(reason), _permit: None }),
+            Err(AuthorityError::Unavailable) => return Err(StoreError::Busy),
+            Err(AuthorityError::Rejected(reason)) => return Ok(TargetResult { delivery: Delivery::DeadLetter(reason), _permit: None }),
         };
         let publication = &claim.publication;
         let floor: i64 = tx.query_row("SELECT accept_since_ms FROM _publication_horizon WHERE id=1", [], |r| r.get(0))?;
