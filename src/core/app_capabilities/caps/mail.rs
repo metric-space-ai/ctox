@@ -223,6 +223,62 @@ pub fn send_once(
         .map_err(|_| CtoxError::uncertain())?;
     Ok(receipt)
 }
+pub(super) struct Sender {
+    pub address: String,
+    pub provider: Option<String>,
+    pub display_name: Option<String>,
+}
+/// Core policy authorizes the requested account before entry. Personal accounts
+/// additionally require ownership/sharing; the instance identity must match its
+/// configured address exactly, never the native arbitrary-sender fallback.
+pub(super) fn resolve_sender(
+    root: &Path,
+    ctx: &CapCallContext,
+    requested: &str,
+) -> Result<Sender, CtoxError> {
+    if let Some(account) = crate::communication::email_accounts::load_accounts(root)
+        .map_err(native_error)?
+        .into_iter()
+        .find(|a| a.address.eq_ignore_ascii_case(requested))
+    {
+        if account.owner_user_id != ctx.actor.id
+            && !account
+                .shared_user_ids
+                .as_ref()
+                .is_some_and(|ids| ids.contains(&ctx.actor.id))
+        {
+            return Err(CtoxError::new(
+                ErrorCode::Forbidden,
+                "mail account is not shared with actor",
+            ));
+        }
+        return Ok(Sender {
+            address: account.address,
+            provider: Some(account.provider),
+            display_name: Some(account.display_name),
+        });
+    }
+    let runtime = crate::communication::gateway::runtime_settings_from_root(
+        root,
+        crate::communication::gateway::CommunicationAdapterKind::Email,
+    );
+    let instance = runtime
+        .get("CTO_EMAIL_ADDRESS")
+        .map(String::as_str)
+        .unwrap_or("")
+        .trim();
+    if instance.is_empty() || !instance.eq_ignore_ascii_case(requested) {
+        return Err(CtoxError::new(
+            ErrorCode::NotFound,
+            "configured mail account not found",
+        ));
+    }
+    Ok(Sender {
+        address: instance.to_owned(),
+        provider: runtime.get("CTO_EMAIL_PROVIDER").cloned(),
+        display_name: None,
+    })
+}
 pub(super) fn send(
     root: &Path,
     blobs: &dyn blob::BlobAccess,
@@ -231,23 +287,7 @@ pub(super) fn send(
 ) -> Result<Value, CtoxError> {
     let request: SendRequest = decode(args)?;
     request.validate()?;
-    // Never fall back to instance credentials for an arbitrary sender.
-    let account = crate::communication::email_accounts::load_accounts(root)
-        .map_err(native_error)?
-        .into_iter()
-        .find(|a| a.address.eq_ignore_ascii_case(&request.account_id))
-        .ok_or_else(|| CtoxError::new(ErrorCode::NotFound, "configured mail account not found"))?;
-    if account.owner_user_id != ctx.actor.id
-        && !account
-            .shared_user_ids
-            .as_ref()
-            .is_some_and(|ids| ids.contains(&ctx.actor.id))
-    {
-        return Err(CtoxError::new(
-            ErrorCode::Forbidden,
-            "mail account is not shared with actor",
-        ));
-    }
+    let account = resolve_sender(root, ctx, &request.account_id)?;
     let directory = root.join("runtime/capability-scratch");
     let mut files = Vec::new();
     if !request.attachments.is_empty() {
@@ -277,12 +317,12 @@ pub(super) fn send(
         let native = crate::communication::adapters::EmailSendCommandRequest {
             db_path: &db,
             sender_email: &account.address,
-            provider: Some(&account.provider),
+            provider: account.provider.as_deref(),
             profile_json: None,
             thread_key: &thread,
             to: &request.to,
             cc: &request.cc,
-            sender_display: Some(&account.display_name),
+            sender_display: account.display_name.as_deref(),
             subject: &request.subject,
             body: &request.text,
             body_html: request.html.as_deref(),

@@ -3,7 +3,7 @@
 import datetime, hashlib, json, os, pathlib, re, signal, subprocess, sys, time
 ROOT=pathlib.Path.cwd()
 SOURCE=ROOT/"src/core/app_capabilities/caps"
-OUT=pathlib.Path(os.environ["TMPDIR"])/("cap2-proofs-"+datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
+OUT=pathlib.Path(os.environ["CARGO_TARGET_DIR"])/("cap2-proofs-"+datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
 OUT.mkdir(parents=True,exist_ok=False)
 # Leave time for durable source publication before this slice's hard stop.
 DEADLINE=datetime.datetime.fromisoformat(sys.argv[1]).timestamp() if len(sys.argv)>1 else time.time()+2700
@@ -45,10 +45,20 @@ PROOFS=[
  ("mail-query-scope","mail.rs",re.escape("(?2='[]' OR id IN (SELECT value FROM json_each(?2)))"),"(1=1)","mail_reads_contract"),
  ("wire-envelope","office.rs",re.escape('json!({"payload":args})'),"args","transport_contract"),
  ("dom-limit","doc_extract.rs",re.escape(".take(request.limit)"),".take(1000)","document_boundary_contract"),
+ ("sender-identity","mail.rs",re.escape("if instance.is_empty() || !instance.eq_ignore_ascii_case(requested) {"),"if false {","mail_delivery_once_contract"),
 ]
+SELECTED=set(sys.argv[2].split(",")) if len(sys.argv)>2 else None
+HASH_ONLY=len(sys.argv)>3 and sys.argv[3]=="--restore-hash-only"
+if SELECTED:
+    known={proof[0] for proof in PROOFS}
+    if not SELECTED<=known: raise RuntimeError("unknown mutation selector")
+    PROOFS=[proof for proof in PROOFS if proof[0] in SELECTED]
 results=[]
+canonical_exit=None
+restored_exit=None
 try:
     code,output=run("baseline","app_capabilities::cap2::tests")
+    canonical_exit=code
     if code: print(output[-14000:],flush=True);raise RuntimeError("canonical baseline failed")
     print("BASELINE GREEN",flush=True)
     for label,filename,pattern,replacement,suffix in PROOFS:
@@ -72,9 +82,13 @@ try:
                 raise RuntimeError(label+": mutation survived or was not an assertion failure")
         finally:path.write_bytes(ORIGINAL[path])
     if digest()!=original_digest:raise RuntimeError("source restoration hash mismatch")
-    code,output=run("restored","app_capabilities::cap2::tests")
-    if code: print(output[-14000:],flush=True);raise RuntimeError("restored canonical checks failed")
-    print("RESTORED GREEN; source hashes unchanged",flush=True)
+    if HASH_ONLY:
+        print("RESTORED HASHES MATCH the green canonical baseline; no additional restored run requested",flush=True)
+    else:
+        code,output=run("restored","app_capabilities::cap2::tests")
+        restored_exit=code
+        if code: print(output[-14000:],flush=True);raise RuntimeError("restored canonical checks failed")
+        print("RESTORED GREEN; source hashes unchanged",flush=True)
 finally:
     for path,data in ORIGINAL.items():path.write_bytes(data)
-    (OUT/"proofs.json").write_text(json.dumps({"proofs":results,"source_sha256":digest(),"restored":digest()==original_digest},indent=2)+"\n")
+    (OUT/"proofs.json").write_text(json.dumps({"proofs":results,"source_sha256":digest(),"restored":digest()==original_digest,"canonical_exit":canonical_exit,"restored_exit":restored_exit,"hash_only":HASH_ONLY},indent=2)+"\n")

@@ -101,7 +101,7 @@ pub static ROUTES: &[NativeRoute] = &[
         "fetch",
         "cap.web.fetch",
         "ctox_web_stack::run_ctox_web_read_tool",
-        "src/tools/web-stack/src/web_search.rs:845",
+        "workjet@b4468dee/native/web-stack/src/web_search.rs:877",
     ),
     route(
         "dataframe",

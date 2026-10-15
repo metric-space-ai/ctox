@@ -443,6 +443,24 @@ fn app_capabilities_cap2_mail_delivery_once_contract() {
         );
     }
     {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = Host::new().ctx;
+        let mut settings = std::collections::BTreeMap::new();
+        settings.insert("CTO_EMAIL_ADDRESS".into(), "instance@example.test".into());
+        settings.insert("CTO_EMAIL_PROVIDER".into(), "imap".into());
+        crate::inference::runtime_env::save_runtime_env_map(root.path(), &settings).unwrap();
+        let sender = mail::resolve_sender(root.path(), &ctx, "instance@example.test").unwrap();
+        assert_eq!(sender.address, "instance@example.test");
+        assert_eq!(sender.provider.as_deref(), Some("imap"));
+        assert_eq!(
+            mail::resolve_sender(root.path(), &ctx, "unconfigured@example.test")
+                .err()
+                .unwrap()
+                .code,
+            ErrorCode::NotFound
+        );
+    }
+    {
         use std::sync::{
             atomic::{AtomicUsize, Ordering},
             Arc, Barrier,
