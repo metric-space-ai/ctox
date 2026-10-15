@@ -3,7 +3,14 @@ const evidence=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 const failures=[];
 if (!evidence.terminal || !evidence.measured) failures.push('measurement incomplete: '+(evidence.error||''));
 if (!evidence.relayProof?.length || !evidence.measurements?.relayAlwaysObserved) failures.push('relay not verified');
-if (evidence.config.peers !== 3) failures.push('requires 3 peers');
+if (evidence.config.peers !== 3 || evidence.browsers?.length !== 3) failures.push('requires 3 measured peers');
+if (evidence.config.dropMode === 'channel' && evidence.config.durationSeconds === 600) {
+ for (const browser of evidence.browsers || []) {
+  const applied = browser.events.filter(e => e.kind === 'fault_applied' && e.mode === 'channel').length;
+  const live = browser.events.filter(e => e.kind === 'connected').length;
+  if (applied < 19 || live < 20) failures.push(browser.slot+':missing channel faults or live reconnects');
+ }
+}
 if (evidence.nativeMetadataOverflow || evidence.browsers?.some(b => b.counters?.metadataOverflow))
   failures.push('measurement metadata overflow');
 if (evidence.config.durationSeconds === 600 && evidence.injectedDisconnectsPerBrowser < 19)
