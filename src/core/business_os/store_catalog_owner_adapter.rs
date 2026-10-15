@@ -234,35 +234,44 @@ pub fn project(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn real_sink_preserves_schema_zero_and_emits_hard_delete() -> Result<(), StoreError> {
-        let mut conn = rusqlite::Connection::open_in_memory()?;
-        let tx = conn.transaction()?;
-        tx.execute_batch(
-            "CREATE TABLE rx_docs(id TEXT PRIMARY KEY,revision TEXT,deleted INTEGER,data TEXT)",
+    #[tokio::test]
+    async fn real_sink_preserves_schema_zero_and_emits_hard_delete() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let writer = Registry.open(
+            DbId::new(dir.path().join("sink.sqlite3"))?,
+            WriterOptions::default(),
         )?;
-        let binding = RxdbTable {
-            collection: "docs".into(),
-            table: "rx_docs".into(),
-            generation: 1,
-            schema_version: 0,
-            app_version: "base".into(),
-        };
-        tx.execute(
-            "INSERT INTO rx_docs VALUES('doc','1-r',0,'{\"id\":\"doc\"}')",
-            [],
-        )?;
-        rxdb_schema_adapter::install(&tx, &binding, &CanonicalChangeLog)?;
-        assert!(rxdb_schema_adapter::backfill(&tx, &binding.table, None)?.is_none());
-        let inserted = change_log::read_page(&tx, "docs", 1, 0, 10)?;
-        assert_eq!(inserted.docs[0].schema_ver, 0);
-        assert_eq!(inserted.docs[0].rev, "1-r");
-        tx.execute("DELETE FROM rx_docs WHERE id='doc'", [])?;
-        let removed = change_log::read_page(&tx, "docs", 1, inserted.cursor_to, 10)?;
-        assert_eq!(removed.docs[0].op, change_log::Operation::Delete);
-        assert!(removed.docs[0].seq > inserted.cursor_to);
-        assert!(removed.docs[0].body.is_none());
-        tx.commit()?;
+        writer.ready().await?;
+        writer
+            .submit(WriteJob::new(JobOptions::default(), |tx| {
+                tx.execute_batch(
+                "CREATE TABLE rx_docs(id TEXT PRIMARY KEY,revision TEXT,deleted INTEGER,data TEXT)",
+            )?;
+                let binding = RxdbTable {
+                    collection: "docs".into(),
+                    table: "rx_docs".into(),
+                    generation: 1,
+                    schema_version: 0,
+                    app_version: "base".into(),
+                };
+                tx.execute(
+                    "INSERT INTO rx_docs VALUES('doc','1-r',0,'{\"id\":\"doc\"}')",
+                    [],
+                )?;
+                rxdb_schema_adapter::install(tx, &binding, &CanonicalChangeLog)?;
+                assert!(rxdb_schema_adapter::backfill(tx, &binding.table, None)?.is_none());
+                let inserted = change_log::read_page(tx, "docs", 1, 0, 10)?;
+                assert_eq!(inserted.docs[0].schema_ver, 0);
+                assert_eq!(inserted.docs[0].rev, "1-r");
+                tx.execute("DELETE FROM rx_docs WHERE id='doc'", [])?;
+                let removed = change_log::read_page(tx, "docs", 1, inserted.cursor_to, 10)?;
+                assert_eq!(removed.docs[0].op, change_log::Operation::Delete);
+                assert!(removed.docs[0].seq > inserted.cursor_to);
+                assert!(removed.docs[0].body.is_none());
+                Ok(())
+            }))?
+            .await?;
+        writer.shutdown().await?;
         Ok(())
     }
     use ctox_store::{registry::Registry, writer::WriterOptions};
