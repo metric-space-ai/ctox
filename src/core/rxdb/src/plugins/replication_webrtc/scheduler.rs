@@ -538,6 +538,10 @@ impl NativeSendScheduler {
         bytes: &[u8],
         publication: Option<Arc<dyn WebRTCPublicationGuard>>,
     ) -> RxResult<()> {
+        // Never allocate a session sequence for data that cannot be reframed.
+        if bytes.len() > MAX_MESSAGE {
+            return Err(failure("V4 message exceeds negotiated size limit"));
+        }
         if *self.drain.borrow() {
             return Err(failure("V4 scheduler is draining"));
         }
@@ -1096,9 +1100,9 @@ mod native_tests {
     #[tokio::test]
     async fn v4_session_native_replays_after_channel_loss_and_acks_while_application_is_busy() {
         tokio::time::timeout(Duration::from_secs(5), async {
-            let state =
-                ReliableSession::new("native-session".into(), ADMISSION[..6].try_into().unwrap())
-                    .unwrap();
+            let mut limits: [usize; 6] = ADMISSION[..6].try_into().unwrap();
+            limits[1] = 2 * MAX_MESSAGE;
+            let state = ReliableSession::new("native-session".into(), limits).unwrap();
             let remote = state.hello();
             let first = SessionBinding::attach(state.clone(), &remote).unwrap();
             let old: Vec<_> = (0..7).map(Channel::new).collect();
@@ -1111,6 +1115,17 @@ mod native_tests {
             )
             .await
             .unwrap();
+            assert!(sender
+                .send(Lane::Commands, WireSeq(98), &vec![0; MAX_MESSAGE + 1], None)
+                .await
+                .is_err());
+            assert!(
+                state
+                    .replay(first.generation, Lane::Commands)
+                    .unwrap()
+                    .is_empty(),
+                "unencodable data must never consume a sequence or retention budget"
+            );
             sender
                 .send(Lane::Commands, WireSeq(99), b"survive loss", None)
                 .await
@@ -1130,6 +1145,17 @@ mod native_tests {
             )
             .await
             .unwrap();
+            assert!(resumed
+                .replay_pending(&|_, _, _| Err(new_rx_error(
+                    "ctox_webrtc_publication_denied",
+                    None
+                )))
+                .await
+                .is_err());
+            assert!(
+                channels[1].sent.lock().is_empty(),
+                "replay requires fresh publication authority"
+            );
             resumed
                 .replay_pending(&|lane, id, body| {
                     assert_eq!(lane, Lane::Commands);
