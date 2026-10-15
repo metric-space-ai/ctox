@@ -3448,7 +3448,7 @@ function renderCenter() {
   if (status) {
     // <details>-Zustand ueberlebt den Neuaufbau (gleiche Falle wie im Detail).
     const openDisclosures = new Set([...status.querySelectorAll('details[open][data-disclosure]')].map((node) => node.dataset.disclosure));
-    setzeHtmlWennGeaendert(status, `${renderCampaignProgress(campaignProgress)}${renderUnvollstaendigerImport(state.selectedCampaign)}${renderCampaignRecipientExclusions(state.selectedCampaign)}`);
+    setzeHtmlWennGeaendert(status, `${renderCampaignProgress(campaignProgress)}${renderUnvollstaendigerImport(state.selectedCampaign)}`);
     openDisclosures.forEach((key) => {
       const node = status.querySelector(`details[data-disclosure="${key}"]`);
       if (node) node.open = true;
@@ -3498,27 +3498,9 @@ function renderCenter() {
   if (headerCheckbox) headerCheckbox.indeterminate = someVisibleSelected;
 }
 
-function campaignRecipientExclusions(campaign) {
-  const rows = [];
-  const removedKeys = new Set();
-  for (const [leadId, notices] of state.recipientRemovalNotices) {
-    for (const notice of notices || []) removedKeys.add(recipientEligibilityKey(leadId, notice.contact?.id));
-  }
-  for (const lead of campaignLeads(campaign)) {
-    for (const contact of lead.contacts || []) {
-      const decision = currentContactEligibility(lead, contact);
-      if (decision.status === 'free') continue;
-      rows.push({
-        lead,
-        contact,
-        decision,
-        removed: removedKeys.has(recipientEligibilityKey(lead.id, contact.id)),
-      });
-    }
-  }
-  return rows;
-}
-
+// Kein Sammelfeld „gesperrt · ungeprüft · Prüfung wiederholen“ mehr (Owner 15.10.2026:
+// „wenn einer gesperrt ist, dann darf er nicht ausgewählt werden“). Der Sperrvermerk
+// steht am Kontakt in der Empfängerauswahl, der Kontakt ist dort nicht wählbar.
 function renderUnvollstaendigerImport(campaign) {
   const job = unvollstaendigerImport(campaign);
   if (!job) return '';
@@ -3529,83 +3511,6 @@ function renderUnvollstaendigerImport(campaign) {
     <button class="ctox-button" data-action="resume-import" data-import-id="${escapeHtml(job.id)}">Fortsetzen</button>
   </div>`;
 }
-function renderCampaignRecipientExclusions(campaign) {
-  const cached = new Set(state.leads.map(lead => lead.id));
-  const missing = campaignListLeads(campaign).filter(lead => !cached.has(lead.id)).length;
-  const notice = missing ? `<div class="leadgen-recipient-exclusions is-pending is-compact" role="status"><span>Kontaktdaten von ${missing} Leads werden erst bei Auswahl oder Prüfung geladen.</span><button class="ctox-button" data-action="recheck-sellify">Kontakte prüfen</button></div>` : '';
-  return notice + renderLoadedCampaignRecipientExclusions(campaign);
-}
-function renderLoadedCampaignRecipientExclusions(campaign) {
-  const rows = campaignRecipientExclusions(campaign);
-  if (!rows.length) return '';
-  // Owner-Befund 03.09.: Das Feld nannte einen Systemzustand und keine
-  // Aufgabe — 48 Zeilen, derselbe Name mehrfach, Kontakte fremder Firmen,
-  // und keine Handlung. Ein Kontakt, der geprueft werden MUSS, ist eine
-  // Aufgabe; ein Abgleich, der nicht laufen KANN, ist genau eine Meldung mit
-  // genau einem Knopf.
-  const seen = new Set();
-  const unique = [];
-  for (const row of rows) {
-    const name = personDisplayName(row.contact) || '';
-    const key = `${row.lead.id}|${name.toLowerCase()}|${String(row.contact?.person_email || '').toLowerCase()}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(row);
-  }
-  const pending = unique.filter((row) => row.decision.pending === true
-    || /nicht prüfbar|wird geprüft/i.test(String(row.decision.label || '')));
-  const blocked = unique.filter((row) => !pending.includes(row));
-  if (!blocked.length) {
-    // Nichts ist ausgeschlossen — die Pruefung konnte nur nicht laufen.
-    // Laufende Pruefung von ausgebliebener Antwort unterscheiden: eine Pruefung
-    // dauert gemessen bis 75 Sekunden. "Hat nicht geantwortet" waehrend sie noch
-    // laeuft las sich wie ein Defekt.
-    const laeuft = unique.some((row) => state.recipientEligibilityBusy.has(row.lead?.id));
-    const zeitueberschritten = unique.filter((row) => state.recipientEligibilityTimedOut.has(row.lead?.id)).length;
-    // Rundgang 11.09.2026: der rote Kasten nahm in schmalen Fenstern die ganze
-    // Leadliste ein. Eine Zeile reicht; die Begruendung steht im Hinweistext.
-    const erklaerung = 'Solange ein Kontakt nicht gegen Sellify geprüft ist, bleibt er für die Übergabe gesperrt – ohne Prüfung darf niemand angeschrieben werden. '
-      + (laeuft ? 'Die Prüfung dauert je Lead bis zu 90 Sekunden.' : '');
-    const text = laeuft
-      ? `Sperrvermerk-Prüfung läuft · ${unique.length} Kontakt${unique.length === 1 ? '' : 'e'}`
-      : zeitueberschritten
-        ? `Sperrvermerk-Prüfung ohne Antwort · ${zeitueberschritten} Kontakt${zeitueberschritten === 1 ? '' : 'e'}`
-        : `Sperrvermerk-Prüfung ausstehend · ${unique.length} Kontakt${unique.length === 1 ? '' : 'e'}`;
-    return `<div class="leadgen-recipient-exclusions is-pending is-compact" role="status" title="${escapeHtml(erklaerung)}">
-      <span>${escapeHtml(text)}</span>
-      <button class="ctox-button" data-action="recheck-sellify"${laeuft ? ' disabled' : ''}>${laeuft ? 'Prüfung läuft …' : 'Jetzt prüfen'}</button>
-    </div>`;
-  }
-  const foreign = unique.filter((row) => {
-    const company = String(row.contact?.company || row.contact?.firma_name || '').trim().toLowerCase();
-    return company && company !== String(row.lead?.name || '').trim().toLowerCase();
-  });
-  const shown = blocked.slice(0, 5);
-  // "gesperrt" und "zu prüfen" getrennt zaehlen (Klicktest P2 V9) und eine
-  // laufende Pruefung auch in dieser Form zeigen (PRG-02a).
-  const hartGesperrt = blocked.filter((row) => row.decision?.status === 'blocked').length;
-  const zuPruefen = blocked.length - hartGesperrt;
-  const pruefungLaeuft = unique.some((row) => state.recipientEligibilityBusy.has(row.lead?.id));
-  const teile = [
-    hartGesperrt ? `${hartGesperrt} Kontakt${hartGesperrt === 1 ? '' : 'e'} gesperrt` : '',
-    zuPruefen ? `${zuPruefen} zu prüfen` : '',
-    pending.length ? `${pending.length} ungeprüft` : '',
-    pruefungLaeuft ? 'Prüfung läuft …' : '',
-  ].filter(Boolean);
-  return `<details class="leadgen-recipient-exclusions" data-disclosure="recipient-exclusions">
-    <summary>${escapeHtml(teile.join(' · '))}</summary>
-    <ul>${shown.map(({ lead, contact, decision, removed }) => `<li>
-      <strong>${escapeHtml(personDisplayName(contact) || tr('contact', 'Kontakt'))}</strong>
-      <span>${escapeHtml(lead.name)} · ${escapeHtml(decision.label)}${removed ? ' · abgewählt' : ''}</span>
-      ${decision.originalRemark ? `<q>${escapeHtml(decision.originalRemark)}</q>` : `<span>${escapeHtml(decision.reason || '')}</span>`}
-    </li>`).join('')}</ul>
-    ${blocked.length > shown.length ? `<p>… und ${blocked.length - shown.length} weitere.</p>` : ''}
-    ${pending.length ? `<p>${pending.length} Kontakt${pending.length === 1 ? '' : 'e'} konnten nicht geprüft werden.
-      <button class="ctox-button" data-action="recheck-sellify"${pruefungLaeuft ? ' disabled' : ''}>${pruefungLaeuft ? 'Prüfung läuft …' : 'Prüfung wiederholen'}</button></p>` : ''}
-    ${foreign.length ? `<p role="status">${foreign.length} Kontakt${foreign.length === 1 ? '' : 'e'} gehören laut Datensatz zu einer anderen Firma als der Lead — bitte im Lead prüfen.</p>` : ''}
-  </details>`;
-}
-
 function renderCampaignProgress(progress) {
   // Owner-Vorgabe 31.08.: Die Leiste ist ein LAUF-Monitor, kein Dauerzustand.
   // Ohne aktive Recherche ist sie ueberfluessig und verschwindet.
@@ -14404,7 +14309,6 @@ export const __leadgenOutboundTestHooks = {
   normalizeProtectionText,
   repairLeadRecipientSelections,
   refreshLeadRecipientEligibility,
-  renderCampaignRecipientExclusions,
   adapterCommandRecordPatch,
   adapterReady,
   campaignResearchProgress,
