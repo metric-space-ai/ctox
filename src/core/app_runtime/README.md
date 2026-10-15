@@ -82,11 +82,13 @@ nachträglich gespeicherte Callback-Bindung liefert uncertain, kein Replay.
 `RegistryRouter` konsumiert das CAP-1-Protokoll cap.invoke/cap.result und die
 produktive Registry samt Policy, Fence und Audit. Der native Descriptor bestimmt
 Namespace, Funktion und geschlossenes Argumentformat. Nicht installierte
-Funktionen liefern unavailable. agent.task.enqueue ist der registrierte
-Action-Adapter und benötigt dessen action; keine eigene Capability-Abkürzung.
-ctx.model und ctx.http benötigen die nativen Registry-Deskriptoren model.invoke
-bzw. http.invoke (Request als payload). Fehlen diese, folgt unavailable; der
-Runtime-Adapter ersetzt sie nicht durch eine fremde Capability oder Netzroute.
+Funktionen liefern unavailable. agent.task.enqueue benötigt einen echten
+generischen Core-Task-Vertrag; der alte app-spezifische Action-Adapter wird
+nicht als Ersatz angeboten.
+ctx.model und ctx.http benötigen die nativen Registry-Routen model.run
+bzw. net.http.fetch. Flache Handler-Argumente werden intern in das geschlossene
+CAP-Protokoll übersetzt. Fehlen Routen, folgt unavailable; kein Capability-
+oder Netz-Ausweichpfad.
 
 Diese Bibliothek aktiviert sich nicht selbst im Daemon. Core-Bootstrap,
 konkrete StoreCodec/CoreAuthority-Implementierung und Feed-/Timer-Anschluss
@@ -104,6 +106,10 @@ Zur Laufzeit wird die hashadressierte Binärdatei mit Eigentümerrechten
 materialisiert und erneut gegen die eingebetteten Bytes geprüft.
 Kein Node aus PATH, kein Produktionsdownload, keine Runtime-Umgebungsschalter.
 Ohne eingebettetes Node schlägt der produktive Konstruktor geschlossen fehl.
+
+Im Root-Paket aktiviert `--features app-runtime-node` diesen Build-Eingang.
+`app_runtime/build.rs` kopiert ihn nach OUT_DIR/app-node; die Bibliothek bindet
+genau diesen Output mit include_bytes! ein.
 
 Node >=25 mit Netz-Permissions startet mit leerer Umgebung, --permission ohne
 allow-Liste und --max-old-space-size=256. Der Core vererbt nur private
@@ -131,12 +137,12 @@ Core-Callbacks bleiben kurz und dürfen nicht synchron denselben Pool aufrufen.
 
 Ausschließlich in der zugewiesenen Linux-Lane:
 ```sh
-ctox-prep.sh &&
-cargo check --manifest-path src/core/app_runtime/Cargo.toml &&
-bash src/core/app_runtime/verify.sh bundle &&
-python3 src/core/app_runtime/mutation-proof.py \
-  --out "$CARGO_TARGET_DIR/app-runtime-mutation-proof"
+python3 src/core/app_runtime/verify-rt2.py
 ```
+Der Treiber unterstützt auch Lane-Python vor 3.11. Er richtet den Node-Buildinput
+ein, löst notwendige Lock-Ergänzungen ohne Änderung vorhandener Paketversionen
+auf und prüft danach mit --locked. Anschließend prüft er den echten nativen
+Registry-Adapter im Root-Paket; ctox-prep.sh läuft dort vor Cargo.
 Der Prüfer provisioniert ausschließlich für Entwicklung das hashgeprüfte
 Node-Archiv. Der Mutationslauf verändert gezielt Vertragssicherungen, verlangt
 einen passenden roten Assertion-Test und stellt alle Dateien wieder her.
@@ -164,6 +170,23 @@ Der Core übergibt seinen bestehenden `CoreRuntimeHost` mit Writer, ReadPool,
 aktueller Autorität und CAP-Registry. Publish-/Remove-/Change-/Completion-Hooks
 dürfen erst nach dem Core-Commit aufgerufen werden. Diese Bibliothek registriert
 sich nicht selbst im Daemon und ersetzt keinen fehlenden Store-/Policy-Adapter.
+
+`registration::AppRuntimeRegistration::start(root, AppRuntimeInputs)` bündelt
+die begrenzten asynchronen Einstiege, den PT1M-Timer und den Shutdown-Drain.
+Der Core muss seinen Post-Commit-Feed vor dem Aktivierungs-Snapshot abonnieren
+und danach den geklonten Ingress behalten. Sein tatsächlicher Dienststart muss
+diese Registrierung explizit aufrufen; ein Komponententest beweist das nicht.
+
+`ingress.command_completed(binding, command_id, outcome)` erhält die ursprünglich
+vom Core behaltene Quellbindung. on_complete/on_failed nennen eigene Handler-
+Befehlstypen; cancelled führt zu on_failed. Der Callback bleibt an die
+auslösende App-Version gebunden, trägt workspace_refs und wird dauerhaft
+höchstens einmal je command_id beansprucht. Sender und Empfänger fremder
+Befehle benötigen aktuelle commands_out/commands_in und das Ziel-Befehlsrecht
+des auslösenden Nutzers; eine Quell-Lease wird nie zur Ziel-Executor-Lease.
+
+`ctox:shared/<pfad>` wird pro Aufruf gegen die aktive Shell-Version fixiert.
+Nur deklarierte shared_exports mit gültigem CAS-Hash werden geladen.
 
 Der Produktionskonstruktor `CoreRuntimeHost::with_native_registry` verwendet
 `CoreCapabilityHost`: Identität aus der behaltenen Core-Invocation, aktuelle

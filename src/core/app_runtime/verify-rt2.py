@@ -8,7 +8,6 @@ import re
 import signal
 import subprocess
 import time
-import tomllib
 
 root = Path(__file__).resolve().parents[3]
 os.chdir(root)
@@ -73,11 +72,36 @@ def mutate(label, path, before, after, suffix, root_test=False):
         path.write_bytes(original)
     named(label+"-restored", suffix, root_test)
 
-run("component", ["bash", str(runtime / "verify.sh"), "bundle"])
+def lock_packages(path):
+    # Lane Python may predate 3.11/tomllib. Cargo's generated package identity
+    # fields are single-line quoted strings; never parse dependency arrays.
+    packages = set()
+    for block in re.split(r"(?m)^\[\[package\]\]\s*$", path.read_text())[1:]:
+        fields = {}
+        for field in ("name", "version", "source"):
+            match = re.search(r'^' + field + r' = ("[^"\n]*")$', block, re.M)
+            if match:
+                fields[field] = json.loads(match[1])
+        assert "name" in fields and "version" in fields, "invalid Cargo.lock package identity"
+        packages.add((fields["name"], fields["version"], fields.get("source")))
+    assert packages, "empty Cargo.lock package selection"
+    return packages
+
+run("node-prepare", ["bash", str(runtime / "verify.sh"), "prepare"])
 env["CTOX_APP_RUNTIME_NODE_BUNDLE"] = str(node)
 env["CTOX_APP_RUNTIME_TEST_NODE"] = str(node)
 env["CTOX_APP_RUNTIME_TEST_ROOT"] = str(target / "ipc-tests")
+old_runtime = lock_packages(runtime / "Cargo.lock")
+run("runtime-lock-check", ["cargo", "check", "--manifest-path", str(runtime / "Cargo.toml"), "--features", "bundled-node"])
+new_runtime = lock_packages(runtime / "Cargo.lock")
+assert old_runtime <= new_runtime, "runtime lock changed existing package versions; review required"
+(proof / "runtime-lock-added.json").write_text(json.dumps(sorted(new_runtime-old_runtime,key=str),indent=2))
+run("component", ["bash", str(runtime / "verify.sh"), "bundle"])
 
+mutate("active-command-version", runtime / "service.rs",
+       '.is_some_and(|release| release.version == version)',
+       '.is_some_and(|_| true)',
+       "completion_uses_original_cas_export_and_is_at_most_once_across_versions")
 mutate("sender-export", runtime / "ipc.rs",
        'sender["commands_out"]', 'serde_json::json!([{"app":to,"type":kind}])',
        "core_foreign_command_requires_current_bilateral_exports_and_user_policy_before_writer_effect")
@@ -92,13 +116,10 @@ mutate("publish-hook", runtime / "registration.rs",
        'daemon.removed(app).await.map(|_|Value::Null)',
        "registered_core_ingress_hotplugs_late_cas_app_and_drains_before_writer_shutdown")
 
-old_lock = tomllib.loads(Path("Cargo.lock").read_text())
+old = lock_packages(Path("Cargo.lock"))
 run("core-prep", ["ctox-prep.sh"])
 run("core-check", ["cargo","check","-p","ctox","--features","app-runtime-node"])
-new_lock = tomllib.loads(Path("Cargo.lock").read_text())
-key = lambda p: (p["name"],p["version"],p.get("source"))
-old = {key(p) for p in old_lock["package"]}
-new = {key(p) for p in new_lock["package"]}
+new = lock_packages(Path("Cargo.lock"))
 assert old <= new, "foreign package removals/version changes need review"
 (proof / "lock-added.json").write_text(json.dumps(sorted(new-old,key=str),indent=2))
 named("native-bridge", "native_registry_bridge_preserves_core_fence_and_executes_real_cap2", True)

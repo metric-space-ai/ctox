@@ -1334,7 +1334,18 @@ fn completion_uses_original_cas_export_and_is_at_most_once_across_versions() {
         .unwrap();
     let task = receipt["task_id"].as_str().unwrap();
     assert_eq!(f.raw("ctox_queue_tasks")[0]["id"], task);
+    let failed = service
+        .command(command("app", "v1", "cmd-failed", Value::Null), fence())
+        .unwrap();
     service.published("app", "v2").unwrap();
+    assert!(service
+        .command(
+            command("app", "v1", "late-old-version", Value::Null),
+            fence()
+        )
+        .unwrap_err()
+        .to_string()
+        .starts_with("conflict:"));
     let binding = f.binding();
     assert_eq!(
         service
@@ -1349,9 +1360,6 @@ fn completion_uses_original_cas_export_and_is_at_most_once_across_versions() {
         "skipped"
     );
     assert_eq!(f.raw("rows")[0]["answer"], "ok");
-    let failed = service
-        .command(command("app", "v1", "cmd-failed", Value::Null), fence())
-        .unwrap();
     assert_eq!(
         service
             .completed(
