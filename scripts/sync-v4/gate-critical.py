@@ -3,7 +3,7 @@
 
 Default: critical audit + store/CAP/transport/kernel contracts. --scope and
 --only-file permit narrow lane runs; such runs are explicitly labelled partial.
-Logs and a machine-readable result stay under the lane TMPDIR (or --evidence).
+Logs and a machine-readable result stay beside the lane target cache (or --evidence).
 """
 import argparse
 import collections
@@ -53,8 +53,8 @@ def python_worker(file, names):
         selected.extend(matches)
     require(selected, "no Python tests selected")
     result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(selected))
-    require(result.wasSuccessful() and not result.skipped and result.testsRun == len(selected),
-            "critical Python tests failed, skipped or did not execute")
+    require(result.wasSuccessful() and not result.skipped and not result.expectedFailures and result.testsRun == len(selected),
+            "critical Python tests failed, skipped, expected-failed or did not execute")
 
 
 class Gate:
@@ -68,6 +68,8 @@ class Gate:
         print("RUN " + label, flush=True)
         log = self.evidence / (label + ".log")
         with log.open("w") as output:
+            output.write("COMMAND " + json.dumps(command) + "\n")
+            output.flush()
             process = subprocess.run(command, cwd=ROOT, stdout=output, stderr=subprocess.STDOUT)
         text = log.read_text(errors="replace")
         require(process.returncode == 0, f"{label}: exit {process.returncode}; evidence {log}\n{text[-6000:]}")
@@ -111,7 +113,9 @@ class Gate:
         command = ["cargo", "test", "--locked", "--jobs", "2", "--manifest-path", manifest,
                    "-p", package, *flag]
         listing = self.run(label + "-list", command + ["--", "--list", "--format=terse"])
-        available = re.findall(r"^(.+): test$", listing, re.M)
+        # Duplicate #[test] attributes can list the same fully qualified name
+        # twice. One exact harness filter still executes every such instance.
+        available = sorted(set(re.findall(r"^(.+): test$", listing, re.M)))
         if selectors is None:
             selected = [n for n in available if prefix is None or prefix in n]
         else:
@@ -137,7 +141,10 @@ class Gate:
             require(patterns, label + ": empty Node selection")
             command += ["--test-name-pattern=(?:^| )(?:(?:" + ")|(?:".join(patterns) + "))$"]
         output = self.run(label, command + files)
-        passed = [json.loads(line) for line in re.findall(r"^# v4_case (.+)$", output, re.M)]
+        allowed = {(ROOT / file).resolve() for file in files}
+        passed = [case for line in re.findall(r"^# v4_case (.+)$", output, re.M)
+                  if (case := json.loads(line)).get("file")
+                  and Path(case["file"]).resolve() in allowed]
         require(passed, label + ": no executed passing Node cases (file wrappers are not cases)")
         for name, pattern in zip(selectors or [], patterns or []):
             require(any(re.fullmatch(pattern, item["name"]) for item in passed),
@@ -208,7 +215,13 @@ def main():
         return
     os.environ["CARGO_TERM_COLOR"] = "never"
     os.environ["RUST_TEST_THREADS"] = "2"
-    evidence = args.evidence or Path(tempfile.mkdtemp(prefix="v4-critical-"))
+    if args.evidence is not None:
+        evidence = args.evidence
+    else:
+        require("CARGO_TARGET_DIR" in os.environ, "set --evidence outside the provisioned build lane")
+        artifact_root = Path(os.environ["CARGO_TARGET_DIR"]).resolve().parent.parent / "artifacts"
+        artifact_root.mkdir(parents=True, exist_ok=True)
+        evidence = Path(tempfile.mkdtemp(prefix="v4-critical-", dir=artifact_root))
     gate = Gate(evidence)
     status, error = "failed", None
     try:
