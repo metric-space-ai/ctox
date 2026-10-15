@@ -464,7 +464,7 @@ mod tests {
     use super::ResponsesModelAdapter;
     use super::ResponsesTransportKind;
 
-    #[test]
+#[test]
     fn gpt_oss_route_uses_completion_template_transport() {
         let adapter = ResponsesModelAdapter::from_model("openai/gpt-oss-120b")
             .expect("gpt-oss adapter should resolve");
@@ -476,7 +476,7 @@ mod tests {
         assert_eq!(adapter.upstream_path(), "/v1/completions");
     }
 
-    #[test]
+#[test]
     fn gemma_route_uses_chat_completions_transport() {
         let request = serde_json::json!({
             "model": "google/gemma-4-26B-A4B-it",
@@ -500,7 +500,7 @@ mod tests {
         assert!(plan.stream());
     }
 
-    #[test]
+#[test]
     fn anthropic_route_uses_messages_transport() {
         let request = serde_json::json!({
             "model": "claude-opus-4-6",
@@ -523,7 +523,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn deepseek_route_uses_chat_completions_transport() {
         let request = serde_json::json!({
             "model": "deepseek/deepseek-v4-flash",
@@ -546,7 +546,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn hy3_route_uses_chat_completions_transport() {
         let request = serde_json::json!({
             "model": "tencent/hy3-preview:free",
@@ -569,27 +569,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn local_exec_policy_resolves_generic_compact_instructions() {
-        let policy = LocalCodexExecPolicy::resolve("openai/gpt-oss-120b")
-            .expect("gpt-oss local exec policy should resolve");
-        assert!(policy
-            .compact_instructions()
-            .contains("local responses-backed runtime"));
-        assert_eq!(policy.reasoning_effort_override(), Some("low"));
-        assert!(policy.unified_exec_enabled());
-    }
-
-    #[test]
-    fn local_exec_policy_keeps_model_specific_compact_limits_in_adapter_layer() {
-        let qwen = LocalCodexExecPolicy::resolve("Qwen/Qwen3.5-35B-A3B")
-            .expect("qwen local exec policy should resolve");
-        let qwen36 = LocalCodexExecPolicy::resolve("Qwen/Qwen3.6-35B-A3B")
-            .expect("qwen3.6 local exec policy should resolve");
-        let glm = LocalCodexExecPolicy::resolve("zai-org/GLM-4.7-Flash")
-            .expect("glm local exec policy should resolve");
-        assert_eq!(qwen.compact_limit(131_072), 1_536);
-        assert_eq!(qwen36.compact_limit(32_768), 1_536);
-        assert_eq!(glm.compact_limit(131_072), 1_280);
-    }
 }

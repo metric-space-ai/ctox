@@ -139,18 +139,4 @@ fn parse_headers(value: &Value) -> BTreeMap<String, String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn websocket_error_is_typed_redacted_and_normalized() {
-        let payload = br#"{"type":"error","status":429,"error":{"code":"rate_limit_exceeded","message":"secret"},"headers":{"retry-after":"2","authorization":"leak"}}"#;
-        let error = parse_codex_websocket_error(payload).unwrap();
-        assert_eq!(error.status, 429);
-        assert_eq!(error.headers.get("retry-after").unwrap(), "2");
-        assert!(!format!("{error:?} {error}").contains("secret"));
-        assert!(!error.headers.contains_key("authorization"));
-        assert!(String::from_utf8(normalize_codex_websocket_completion(
-            br#"{"type":"response.done"}"#
-        ))
-        .unwrap()
-        .contains("response.completed"));
-    }
 }

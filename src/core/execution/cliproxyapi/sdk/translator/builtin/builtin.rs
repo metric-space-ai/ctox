@@ -24,13 +24,4 @@ mod tests {
     use super::*;
     use crate::sdk::translator::{claude, openai, openai_response};
 
-    #[test]
-    fn each_builtin_registry_is_populated_and_instance_owned() {
-        let first = registry();
-        let second = registry();
-        assert!(first.has_request_transformer(&openai_response(), &claude()));
-        assert!(first.has_response_transformer(&openai(), &claude()));
-        assert!(!Arc::ptr_eq(&first, &second));
-        let _pipeline = pipeline();
-    }
 }

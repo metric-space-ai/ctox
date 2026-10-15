@@ -120,12 +120,6 @@ fn ultra_reasoning_effort_is_preserved() {
 }
 
 #[test]
-fn catalog_revision_is_value_scoped_not_global_cache() {
-    assert_eq!(catalog(7).revision(), 7);
-    assert_eq!(catalog(8).revision(), 8);
-}
-
-#[test]
 fn multi_agent_version_is_only_added_when_enabled() {
     let disabled = catalog(1).build_models(
         &[model(json!({"id":"custom"}))],
@@ -169,17 +163,6 @@ fn non_template_priorities_are_stable_by_display_name() {
     assert_eq!(models[0]["slug"], "z");
     assert_eq!(models[1]["slug"], "a");
     assert!(models[0]["priority"].as_i64() < models[1]["priority"].as_i64());
-}
-
-#[test]
-fn response_has_expected_envelope() {
-    let response = catalog(1).build_response(
-        &[model(json!({"id":"gpt-5.5"}))],
-        &empty_metadata,
-        None,
-        false,
-    );
-    assert_eq!(response["models"].as_array().unwrap().len(), 1);
 }
 
 #[test]

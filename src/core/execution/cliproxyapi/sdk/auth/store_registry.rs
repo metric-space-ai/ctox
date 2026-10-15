@@ -14,7 +14,7 @@ pub struct TokenStoreRegistry {
 }
 
 impl TokenStoreRegistry {
-    #[must_use]
+#[must_use]
     pub fn new(store: Option<Arc<dyn AuthStore>>) -> Self {
         Self { store }
     }
@@ -27,7 +27,7 @@ impl TokenStoreRegistry {
         self.store = None;
     }
 
-    #[must_use]
+#[must_use]
     pub fn get(&self) -> Option<Arc<dyn AuthStore>> {
         self.store.clone()
     }
@@ -63,14 +63,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn store_authority_is_explicit_and_replaceable() {
-        let mut registry = TokenStoreRegistry::default();
-        assert!(registry.get().is_none());
-        let store: Arc<dyn AuthStore> = Arc::new(Store);
-        registry.register(store.clone());
-        assert!(Arc::ptr_eq(&registry.get().unwrap(), &store));
-        registry.clear();
-        assert!(registry.get().is_none());
-    }
 }

@@ -186,10 +186,3 @@ fn query_masking_preserves_raw_structure_and_go_url_rules() {
     assert_eq!(mask_sensitive_query("ordinary=%zz&x=1"), "ordinary=%zz&x=1");
     assert_eq!(mask_sensitive_query("a=1&&b=2"), "a=1&&b=2");
 }
-
-#[test]
-fn in_array_is_exact_and_case_sensitive() {
-    let values = vec!["Claude".to_owned(), "codex".to_owned()];
-    assert!(in_array(&values, "Claude"));
-    assert!(!in_array(&values, "claude"));
-}

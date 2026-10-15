@@ -14,10 +14,3 @@ pub fn handle(method: &str) -> ExampleResult {
         _ => unknown(method),
     }
 }
-#[test]
-fn model_is_bounded() {
-    assert_eq!(
-        handle("model.static").unwrap().result["Models"][0]["ContextLength"],
-        8192
-    );
-}

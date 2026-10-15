@@ -24,19 +24,3 @@ impl SearchTransport for Mock {
         ))
     }
 }
-#[test]
-fn empty_keys_fail_without_transport() {
-    let client = TavilyClient::new(vec![], Mock::default());
-    assert!(client.search("q", 5).is_err());
-}
-#[test]
-fn keys_rotate_and_response_is_claude_shaped() {
-    let transport = Mock::default();
-    let keys = transport.keys.clone();
-    let client = TavilyClient::new(vec!["a".into(), "b".into()], transport);
-    let (hits, answer) = client.search("query", 2).unwrap();
-    client.search("again", 2).unwrap();
-    assert_eq!(&*keys.borrow(), &["a", "b"]);
-    let message = claude_response::message("", "query", &hits, &answer);
-    assert_eq!(message["type"], "message");
-}

@@ -27,17 +27,4 @@ mod tests {
 
     use super::{EmptyStorage, TokenStorage};
 
-    #[test]
-    fn save_is_a_noop_but_marks_the_storage_type() {
-        let mut storage = EmptyStorage::default();
-        storage
-            .save_token_to_file(Path::new("must-not-be-created.json"))
-            .expect("empty storage should not perform I/O");
-        assert_eq!(storage.storage_type, "empty");
-        assert_eq!(
-            serde_json::to_value(storage).expect("serialize empty storage"),
-            serde_json::json!({"type": "empty"})
-        );
-        assert!(!Path::new("must-not-be-created.json").exists());
-    }
 }

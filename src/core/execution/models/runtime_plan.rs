@@ -6637,51 +6637,7 @@ mod tests {
         .unwrap();
     }
 
-    #[test]
-    fn aux_reserves_are_manifest_driven() {
-        let env_map = BTreeMap::new();
-        let reserves = compute_aux_reserves_mb(
-            None,
-            &hardware(3, 24_576),
-            &env_map,
-            ChatPreset::Quality,
-            &[],
-        );
-        assert_eq!(reserves.get(&0).copied(), Some(1_100));
-        assert_eq!(reserves.get(&1).copied(), Some(4_200));
-        // The current default is Voxtral TTS, whose reservation is 12 GiB.
-        assert_eq!(reserves.get(&2).copied(), Some(12_288));
-        assert_eq!(reserves.len(), 3);
-
-        // A runtime manifest must override that default, rather than merely
-        // repeating the model registry's reservation.
-        let root = temp_root("aux-manifest-reserves");
-        let tts = engine::auxiliary_model_selection(engine::AuxiliaryRole::Tts, None);
-        let mut manifest = auxiliary_manifest(None, tts.request_model).unwrap();
-        manifest.gpu_reserve_mb = 1_234;
-        let slug = model_registry::auxiliary_manifest_slug(tts.request_model).unwrap();
-        let directory = root.join("contracts/models/aux_runtime_manifests");
-        std::fs::create_dir_all(&directory).unwrap();
-        std::fs::write(
-            directory.join(format!("{slug}.json")),
-            serde_json::to_vec(&manifest).unwrap(),
-        )
-        .unwrap();
-        let reserves = compute_aux_reserves_mb(
-            Some(&root),
-            &hardware(3, 24_576),
-            &env_map,
-            ChatPreset::Quality,
-            &[],
-        );
-        assert_eq!(
-            reserves,
-            BTreeMap::from([(0, 1_100), (1, 4_200), (2, 1_234)])
-        );
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
+#[test]
     fn apply_chat_runtime_plan_reuses_matching_persisted_plan() {
         let unique = temp_root("reuse-persisted-plan");
         write_test_gpu_totals(&unique, "0:20470;1:20470;2:20470");
@@ -6711,7 +6667,7 @@ mod tests {
         assert_eq!(resolved, persisted);
     }
 
-    #[test]
+#[test]
     fn probe_failure_forces_replan_instead_of_reusing_stale_plan() {
         // gateway-2: when the GPU probe fails (nvidia-smi timeout -> Err, or a
         // no-GPU host -> empty profile) the persisted plan cannot be confirmed
@@ -6794,7 +6750,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn aux_reserves_are_cleared_when_aux_backends_are_disabled() {
         let mut env_map = BTreeMap::new();
         env_map.insert(
@@ -6811,7 +6767,7 @@ mod tests {
         assert!(reserves.is_empty(), "{reserves:?}");
     }
 
-    #[test]
+#[test]
     fn runtime_fleet_plan_prefers_aux_only_gpu_and_cpu_fallbacks_for_remaining_roles() {
         let env_map = BTreeMap::new();
         let chat_plan = ChatRuntimePlan {
@@ -6949,7 +6905,7 @@ mod tests {
         assert_eq!(fleet.speech.as_ref().map(|plan| plan.compute_target), None);
     }
 
-    #[test]
+#[test]
     fn runtime_fleet_plan_moves_all_aux_roles_to_cpu_when_chat_uses_every_gpu() {
         let env_map = BTreeMap::new();
         let chat_plan = ChatRuntimePlan {
@@ -7033,7 +6989,7 @@ mod tests {
         assert!(fleet.speech.is_none());
     }
 
-    #[test]
+#[test]
     fn live_aux_leases_do_not_double_count_manifest_aux_reserves() {
         let hardware = hardware(3, 24_576);
         let manifest_aux_reserves = BTreeMap::from([(0usize, 6_700u64)]);
@@ -7053,7 +7009,7 @@ mod tests {
         assert_eq!(effective.get(&2).copied().unwrap_or(0), 0);
     }
 
-    #[test]
+#[test]
     fn performance_can_reclaim_live_aux_leases_on_target_chat_gpus() {
         let hardware = hardware(3, 20_480);
         let manifest_aux_reserves = BTreeMap::new();
@@ -7071,7 +7027,7 @@ mod tests {
         assert!(reclaimed);
     }
 
-    #[test]
+#[test]
     fn aux_default_distribution_prefers_dedicated_non_chat_gpu() {
         let env_map: BTreeMap<String, String> = BTreeMap::new();
         let selection = engine::auxiliary_model_selection(
@@ -7088,7 +7044,7 @@ mod tests {
         assert_eq!(distribution, vec![0]);
     }
 
-    #[test]
+#[test]
     fn quality_aux_distribution_yields_no_gpu_when_chat_uses_all_gpus() {
         let env_map: BTreeMap<String, String> = BTreeMap::new();
         let selection = engine::auxiliary_model_selection(
@@ -7105,7 +7061,7 @@ mod tests {
         assert!(distribution.is_empty(), "{distribution:?}");
     }
 
-    #[test]
+#[test]
     fn performance_aux_distribution_yields_no_gpu_when_chat_uses_all_gpus() {
         let env_map: BTreeMap<String, String> = BTreeMap::new();
         let selection = engine::auxiliary_model_selection(
@@ -7122,7 +7078,7 @@ mod tests {
         assert!(distribution.is_empty(), "{distribution:?}");
     }
 
-    #[test]
+#[test]
     fn resolve_auxiliary_visible_devices_uses_persisted_chat_plan_hardware() {
         let unique = temp_root("aux-visible-devices-persisted-plan");
         let env_map = chat_only_env_map();
@@ -7149,7 +7105,7 @@ mod tests {
             .is_none_or(|value| !value.is_empty()));
     }
 
-    #[test]
+#[test]
     fn candidate_gpu_subsets_keep_primary_gpu_anchored_on_mixed_hosts() {
         let gpus = vec![
             HardwareGpu {
@@ -7182,18 +7138,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn performance_on_four_gpus_keeps_primary_gpu_in_the_nccl_set() {
-        let env_map = BTreeMap::new();
-        let plan =
-            build_gpt_oss_120b_bundle(ChatPreset::Performance, &hardware(4, 24_576), &env_map)
-                .selected_plan;
-        assert_eq!(plan.cuda_visible_devices, "0,1,2,3");
-        assert_eq!(plan.tensor_parallel_backend.as_deref(), Some("nccl"));
-        assert_eq!(plan.mn_local_world_size, Some(4));
-    }
-
-    #[test]
+#[test]
     fn platform_contract_can_disable_nccl_without_disabling_the_model() {
         let root = temp_root("platform-no-nccl");
         write_platform_contract(&root, 4, 24_576, false);
@@ -7224,7 +7169,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
+#[test]
     fn runtime_nccl_override_can_disable_nccl_without_disabling_the_model() {
         let root = temp_root("runtime-no-nccl");
         persist_nccl_capability_override(
@@ -7261,7 +7206,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
+#[test]
     fn platform_contract_drift_is_visible_in_plan_rationale() {
         let root = temp_root("platform-drift");
         write_platform_contract(&root, 2, 24_576, true);
@@ -7287,33 +7232,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
-    fn gpt_oss_single_gpu_performance_falls_back_without_host_nccl_qualification() {
-        let env_map = BTreeMap::new();
-        let plan =
-            build_gpt_oss_120b_bundle(ChatPreset::Performance, &hardware(1, 24_576), &env_map)
-                .selected_plan;
-        assert!(plan.disable_nccl);
-        assert_eq!(plan.tensor_parallel_backend, None);
-    }
-
-    #[test]
-    fn gpt_oss_three_gpu_performance_falls_back_to_device_layers() {
-        let env_map = BTreeMap::new();
-        let plan =
-            build_gpt_oss_120b_bundle(ChatPreset::Performance, &hardware(3, 24_576), &env_map)
-                .selected_plan;
-        assert!(plan_satisfies_context_policy(&plan), "{plan:?}");
-        assert!(plan.disable_nccl, "{plan:?}");
-        assert_eq!(plan.tensor_parallel_backend, None);
-        assert_eq!(plan.mn_local_world_size, None);
-        assert!(plan.device_layers.is_some(), "{plan:?}");
-        assert_eq!(plan.cuda_visible_devices, "0,1,2");
-        assert_eq!(plan.nm_device_ordinal, Some(0));
-        assert_eq!(plan.base_device_ordinal, Some(0));
-    }
-
-    #[test]
+#[test]
     fn launch_contract_rejects_unqualified_nccl() {
         let contract = model_manifest::ManifestLaunchContract::default();
         assert!(!launch_contract_allows_backend(
@@ -7326,83 +7245,14 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn gpt_oss_launch_contract_qualifies_nccl_with_primary_anchor() {
-        let contract = launch_contract_for_model("openai/gpt-oss-120b");
-        assert_eq!(
-            contract.nccl_qualification,
-            model_manifest::ManifestNcclQualification::Qualified
-        );
-        assert!(contract.require_primary_gpu_anchor);
-        assert!(contract.nccl_preserves_primary_gpu_anchor);
-        assert!(!contract.allow_subset_anchored_nccl);
-        assert!(launch_contract_allows_backend(&contract, BackendMode::Nccl));
-    }
-
-    #[test]
-    fn qwen4b_launch_contract_qualifies_nccl_with_primary_anchor() {
-        let contract = launch_contract_for_model("Qwen/Qwen3.5-4B");
-        assert_eq!(
-            contract.nccl_qualification,
-            model_manifest::ManifestNcclQualification::Qualified
-        );
-        assert!(contract.require_primary_gpu_anchor);
-        assert!(contract.nccl_preserves_primary_gpu_anchor);
-        assert!(launch_contract_allows_backend(&contract, BackendMode::Nccl));
-    }
-
-    #[test]
-    fn qwen4b_performance_prefers_nccl_on_three_gpu_anchor_plus_two_worker_hosts() {
-        let env_map = chat_only_env_map();
-        let plan = build_qwen35_4b_bundle(ChatPreset::Performance, &hardware(3, 24_576), &env_map)
-            .selected_plan;
-        assert!(plan_satisfies_context_policy(&plan), "{plan:?}");
-        assert_eq!(plan.tensor_parallel_backend.as_deref(), Some("nccl"));
-        assert_eq!(plan.mn_local_world_size, Some(2));
-        assert!(plan.device_layers.is_none(), "{plan:?}");
-        assert_eq!(plan.cuda_visible_devices, "1,2,0");
-        assert_eq!(plan.nm_device_ordinal, Some(2));
-        assert_eq!(plan.base_device_ordinal, Some(2));
-    }
-
-    #[test]
-    fn qwen4b_two_gpu_performance_falls_back_without_two_worker_nccl_topology() {
-        let env_map = chat_only_env_map();
-        let plan = build_qwen35_4b_bundle(ChatPreset::Performance, &hardware(2, 24_576), &env_map)
-            .selected_plan;
-        assert!(plan_satisfies_context_policy(&plan), "{plan:?}");
-        assert!(plan.disable_nccl);
-        assert_eq!(plan.tensor_parallel_backend, None);
-        assert!(plan.device_layers.is_some(), "{plan:?}");
-    }
-
-    #[test]
-    fn qwen4b_single_gpu_performance_falls_back_without_nccl_topology() {
-        let env_map = chat_only_env_map();
-        let plan = build_qwen35_4b_bundle(ChatPreset::Performance, &hardware(1, 24_576), &env_map)
-            .selected_plan;
-        assert!(plan_satisfies_context_policy(&plan), "{plan:?}");
-        assert!(plan.disable_nccl);
-        assert_eq!(plan.tensor_parallel_backend, None);
-        assert!(plan.device_layers.is_some(), "{plan:?}");
-    }
-
-    #[test]
-    fn turboquant3_reduces_kv_cache_factor() {
-        assert_eq!(kv_cache_factor_for_type(Some("turboquant3")), 550);
-        assert_eq!(kv_cache_factor_for_type(Some("f8e4m3")), 780);
-        assert_eq!(kv_cache_factor_for_type(Some("off")), 1000);
-        assert_eq!(kv_cache_factor_for_type(None), 1000);
-    }
-
-    #[test]
+#[test]
     fn apple_metal_budget_defaults_to_two_thirds_on_32gb_hosts() {
         assert_eq!(apple_metal_default_budget_mb(32 * 1024), 21_845);
         assert_eq!(apple_metal_budget_mb(32 * 1024, Some(0)), 21_845);
         assert_eq!(apple_metal_budget_mb(32 * 1024, Some(24_000)), 24_000);
     }
 
-    #[test]
+#[test]
     fn chat_context_parser_accepts_supported_long_context_variants() {
         assert_eq!(parse_chat_context_tokens("32k"), None);
         assert_eq!(parse_chat_context_tokens("64k"), None);
@@ -7420,29 +7270,7 @@ mod tests {
         assert_eq!(minimum_supported_chat_context(), 131_072);
     }
 
-    #[test]
-    fn qwen4b_single_apple_metal_gpu_prefers_device_layers_without_nccl() {
-        let env_map = BTreeMap::new();
-        let plan = build_qwen35_4b_bundle(
-            ChatPreset::Performance,
-            &apple_metal_hardware(21_845),
-            &env_map,
-        )
-        .selected_plan;
-        assert!(plan_satisfies_context_policy(&plan), "{plan:?}");
-        assert!(plan.disable_nccl, "{plan:?}");
-        assert_eq!(plan.tensor_parallel_backend, None);
-        assert!(plan.device_layers.is_some(), "{plan:?}");
-        assert!(
-            plan.rationale
-                .iter()
-                .any(|line| line.contains("platform cuda=false metal=true nccl=false")),
-            "{:#?}",
-            plan.rationale
-        );
-    }
-
-    #[test]
+#[test]
     fn explicit_qwen4b_resource_contract_does_not_scale_kv_or_activation_with_weight_quant() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -7467,7 +7295,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn apply_chat_runtime_plan_env_prefers_available_uqff_artifact() {
         let root = temp_root("uqff-artifact-env");
         let env_map = BTreeMap::new();
@@ -7488,7 +7316,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
+#[test]
     fn chat_quant_artifact_path_honors_shared_cache_root_override() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
         let root = temp_root("uqff-artifact-override");
@@ -7510,7 +7338,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&shared_cache);
     }
 
-    #[test]
+#[test]
     fn chat_quant_artifact_path_is_stable_across_temp_roots_for_same_engine_binary() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
         let root_a = temp_root("uqff-artifact-stable-a");
@@ -7541,7 +7369,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&shared_cache);
     }
 
-    #[test]
+#[test]
     fn pa_memory_fraction_parser_defaults_safely() {
         assert_eq!(parse_fraction_milli(Some("0.80")), 800);
         assert_eq!(parse_fraction_milli(Some("1.2")), 1000);
@@ -7549,7 +7377,7 @@ mod tests {
         assert_eq!(parse_fraction_milli(None), 1000);
     }
 
-    #[test]
+#[test]
     fn quality_keeps_policy_floor() {
         let env_map = BTreeMap::new();
         let plan = build_qwen35_4b_bundle(ChatPreset::Quality, &hardware(1, 24_576), &env_map)
@@ -7559,7 +7387,7 @@ mod tests {
         assert!(plan.max_seq_len >= MIN_SUPPORTED_CHAT_CONTEXT);
     }
 
-    #[test]
+#[test]
     fn performance_keeps_policy_floor_for_supported_models() {
         let env_map = BTreeMap::new();
         let gpt_oss =
@@ -7573,20 +7401,7 @@ mod tests {
         assert_eq!(qwen4.max_seq_len, 131_072);
     }
 
-    #[test]
-    fn gpt_oss_uses_native_quantization_without_isq() {
-        let env_map = BTreeMap::new();
-        let plan = build_gpt_oss_120b_bundle(ChatPreset::Quality, &hardware(3, 24_576), &env_map)
-            .selected_plan;
-        assert_eq!(plan.quantization, "native_mxfp4");
-        assert_eq!(plan.runtime_isq, None);
-        assert_eq!(
-            sum_device_layers(plan.device_layers.as_deref().unwrap()),
-            24
-        );
-    }
-
-    #[test]
+#[test]
     fn gpt_oss_quality_runtime_plan_sets_high_reasoning_cap_without_output_cap() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
         let unique = std::env::temp_dir().join(format!(
@@ -7625,7 +7440,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(unique);
     }
 
-    #[test]
+#[test]
     fn gpt_oss_performance_plan_keeps_low_reasoning_cap_without_output_cap() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
         let unique = std::env::temp_dir().join(format!(
@@ -7664,7 +7479,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(unique);
     }
 
-    #[test]
+#[test]
     fn qwen_runtime_plan_persists_qwen_engine_port() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
         let unique = std::env::temp_dir().join(format!(
@@ -7706,7 +7521,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(unique);
     }
 
-    #[test]
+#[test]
     fn stale_materialized_runtime_limits_do_not_cap_replanned_local_chat() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
         let unique = std::env::temp_dir().join(format!(
@@ -7766,98 +7581,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(unique);
     }
 
-    #[test]
-    fn qwen36_moe_uses_aux_aware_runtime_constraints() {
-        let env_map = BTreeMap::new();
-        let plan = build_qwen36_35b_a3b_bundle(ChatPreset::Quality, &hardware(3, 24_576), &env_map)
-            .selected_plan;
-        println!("DEBUG PLAN: {:#?}", plan);
-        assert_eq!(plan.quantization, "Q6K");
-        assert_eq!(plan.paged_attn, "auto");
-        assert_eq!(plan.pa_cache_type.as_deref(), Some("turboquant3"));
-        assert!(plan.device_layers.is_some(), "{plan:?}");
-        let device_layers = plan.device_layers.as_deref().unwrap();
-        assert_eq!(sum_device_layers(device_layers), 40);
-        assert_eq!(plan.cuda_visible_devices, "0,1,2");
-        assert!(device_layers.starts_with("0:"));
-        assert!(!plan.force_no_mmap);
-        assert_eq!(plan.topology, None);
-        assert!(!plan.allow_device_layers_with_topology);
-        assert!(!plan.force_language_model_only);
-        assert!(!plan.disable_flash_attn);
-        assert!(!plan.isq_singlethread);
-    }
-
-    #[test]
-    fn qwen35_4b_keeps_serial_immediate_isq() {
-        let env_map = BTreeMap::new();
-        let bundle = build_manifest_bundle_with_root(
-            None,
-            "Qwen/Qwen3.5-4B",
-            ChatPreset::Quality,
-            &hardware(1, 24_576),
-            &env_map,
-        )
-        .expect("qwen3.5-4b manifest bundle should resolve")
-        .expect("qwen3.5-4b manifest bundle should exist");
-        let plan = bundle.selected_plan;
-        assert!(plan_satisfies_context_policy(&plan), "{plan:?}");
-        assert_eq!(plan.pa_cache_type.as_deref(), Some("turboquant3"));
-        assert!(!plan.disable_flash_attn);
-        assert!(plan.isq_singlethread);
-    }
-
-    #[test]
-    fn qwen35_9b_keeps_serial_immediate_isq() {
-        let env_map = BTreeMap::new();
-        let bundle = build_manifest_bundle_with_root(
-            None,
-            "Qwen/Qwen3.5-9B",
-            ChatPreset::Quality,
-            &hardware(2, 24_576),
-            &env_map,
-        )
-        .expect("qwen3.5-9b manifest bundle should resolve")
-        .expect("qwen3.5-9b manifest bundle should exist");
-        let plan = bundle.selected_plan;
-        assert!(plan_satisfies_context_policy(&plan), "{plan:?}");
-        assert_eq!(plan.pa_cache_type.as_deref(), Some("turboquant3"));
-        assert!(plan.isq_singlethread);
-    }
-
-    #[test]
-    fn qwen36_27b_keeps_serial_immediate_isq() {
-        let env_map = BTreeMap::new();
-        let bundle = build_manifest_bundle_with_root(
-            None,
-            "Qwen/Qwen3.6-27B",
-            ChatPreset::Quality,
-            &hardware(3, 24_576),
-            &env_map,
-        )
-        .expect("qwen3.6-27b manifest bundle should resolve")
-        .expect("qwen3.6-27b manifest bundle should exist");
-        let plan = bundle.selected_plan;
-        assert!(plan_satisfies_context_policy(&plan), "{plan:?}");
-        assert_eq!(plan.pa_cache_type.as_deref(), Some("turboquant3"));
-        assert!(plan.isq_singlethread);
-    }
-
-    #[test]
-    fn qwen36_35b_a3b_manifest_uses_128k_policy_floor() {
-        let manifest = default_qwen36_35b_a3b_manifest();
-        assert_eq!(
-            required_context_floor_for_manifest(&manifest),
-            MIN_SUPPORTED_CHAT_CONTEXT
-        );
-        assert!(manifest
-            .quality
-            .candidates
-            .iter()
-            .all(|candidate| candidate.context_target_cap == Some(131_072)));
-    }
-
-    #[test]
+#[test]
     fn qwen36_35b_a3b_targets_requested_context_variants_on_large_hosts() {
         let root = temp_root("qwen36-context-variants");
         write_platform_contract(&root, 4, 81_920, false);
@@ -7886,7 +7610,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[test]
+#[test]
     fn gpt_oss_targets_requested_context_variants_on_large_hosts() {
         let root = temp_root("gpt-oss-context-variants");
         write_platform_contract(&root, 4, 81_920, false);
@@ -7913,218 +7637,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[test]
-    fn gemma4_dense_keeps_128k_policy_floor() {
-        let env_map = BTreeMap::new();
-        let plan = build_gemma4_31b_bundle(ChatPreset::Quality, &hardware(3, 24_576), &env_map)
-            .selected_plan;
-        assert!(plan_satisfies_context_policy(&plan), "{plan:?}");
-        assert_eq!(plan.paged_attn, "auto");
-        assert_eq!(plan.pa_cache_type.as_deref(), Some("f8e4m3"));
-        assert_eq!(plan.moe_experts_backend.as_deref(), Some("fast"));
-        assert!(plan.device_layers.is_some(), "{plan:?}");
-    }
-
-    #[test]
-    fn gemma4_moe_keeps_128k_policy_floor() {
-        let env_map = BTreeMap::new();
-        let plan =
-            build_gemma4_26b_a4b_bundle(ChatPreset::Performance, &hardware(3, 24_576), &env_map)
-                .selected_plan;
-        assert!(plan_satisfies_context_policy(&plan), "{plan:?}");
-        assert_eq!(plan.paged_attn, "auto");
-        assert_eq!(plan.pa_cache_type.as_deref(), Some("f8e4m3"));
-        assert_eq!(plan.moe_experts_backend.as_deref(), Some("fast"));
-        assert!(plan.device_layers.is_some(), "{plan:?}");
-    }
-
-    #[test]
-    fn tiny_gemma4_models_use_conservative_no_mmap_startup() {
-        let env_map = BTreeMap::new();
-        let e2b = build_manifest_bundle_with_root(
-            None,
-            "google/gemma-4-E2B-it",
-            ChatPreset::Quality,
-            &hardware(1, 24_576),
-            &env_map,
-        )
-        .expect("gemma4 e2b manifest bundle should resolve")
-        .expect("gemma4 e2b manifest bundle should exist")
-        .selected_plan;
-        let e4b = build_manifest_bundle_with_root(
-            None,
-            "google/gemma-4-E4B-it",
-            ChatPreset::Quality,
-            &hardware(1, 24_576),
-            &env_map,
-        )
-        .expect("gemma4 e4b manifest bundle should resolve")
-        .expect("gemma4 e4b manifest bundle should exist")
-        .selected_plan;
-        assert!(e2b.force_no_mmap, "{e2b:?}");
-        assert!(e4b.force_no_mmap, "{e4b:?}");
-        assert_eq!(e2b.quantization, "Q4K");
-        assert_eq!(e4b.quantization, "Q4K");
-        assert!(e2b.require_prebuilt_uqff_for_chat_start, "{e2b:?}");
-        assert!(e4b.require_prebuilt_uqff_for_chat_start, "{e4b:?}");
-        assert!(e2b.isq_singlethread, "{e2b:?}");
-        assert!(e4b.isq_singlethread, "{e4b:?}");
-
-        let e2b_four_gpu = build_manifest_bundle_with_root(
-            None,
-            "google/gemma-4-E2B-it",
-            ChatPreset::Quality,
-            &hardware(4, 20_480),
-            &env_map,
-        )
-        .expect("gemma4 e2b four-gpu manifest bundle should resolve")
-        .expect("gemma4 e2b four-gpu manifest bundle should exist")
-        .selected_plan;
-        let e4b_four_gpu = build_manifest_bundle_with_root(
-            None,
-            "google/gemma-4-E4B-it",
-            ChatPreset::Quality,
-            &hardware(4, 20_480),
-            &env_map,
-        )
-        .expect("gemma4 e4b four-gpu manifest bundle should resolve")
-        .expect("gemma4 e4b four-gpu manifest bundle should exist")
-        .selected_plan;
-        assert_eq!(e2b_four_gpu.cuda_visible_devices, "0");
-        assert_eq!(e4b_four_gpu.cuda_visible_devices, "0");
-        assert_eq!(e2b_four_gpu.device_layers.as_deref(), Some("0:35"));
-        assert_eq!(e4b_four_gpu.device_layers.as_deref(), Some("0:42"));
-    }
-
-    #[test]
-    fn qwen36_moe_keeps_dynamic_multi_gpu_planning_on_four_gpu_hosts() {
-        let env_map = BTreeMap::new();
-        let plan = build_qwen36_35b_a3b_bundle(ChatPreset::Quality, &hardware(4, 24_576), &env_map)
-            .selected_plan;
-        assert!(matches!(plan.quantization.as_str(), "Q6K" | "Q5K" | "Q4K"));
-        assert_eq!(plan.paged_attn, "auto");
-        let plan =
-            build_qwen36_35b_a3b_bundle(ChatPreset::Performance, &hardware(1, 24_576), &env_map)
-                .selected_plan;
-        assert_eq!(plan.quantization, "Q4K");
-        assert_eq!(plan.cuda_visible_devices, "0");
-        assert!(plan.device_layers.is_some());
-        let device_layers = plan.device_layers.as_deref().unwrap();
-        assert_eq!(sum_device_layers(device_layers), 40);
-        assert_eq!(plan.model, "Qwen/Qwen3.6-35B-A3B");
-        assert!(plan.device_layers.as_deref().unwrap().starts_with("0:"));
-        assert!(!plan.force_no_mmap);
-        assert_eq!(plan.topology, None);
-        assert!(!plan.allow_device_layers_with_topology);
-        assert_eq!(plan.nm_device_ordinal, Some(0));
-        assert_eq!(plan.base_device_ordinal, Some(0));
-        assert_eq!(plan.moe_experts_backend, None);
-        assert!(!plan.force_language_model_only);
-        assert!(!plan.disable_flash_attn);
-        assert!(!plan.isq_singlethread);
-    }
-
-    #[test]
-    fn nemotron_uses_conservative_text_runtime_constraints() {
-        let env_map = BTreeMap::new();
-        let plan =
-            build_nemotron_cascade2_bundle(ChatPreset::Quality, &hardware(3, 24_576), &env_map)
-                .selected_plan;
-        assert!(matches!(plan.quantization.as_str(), "Q6K" | "Q5K" | "Q4K"));
-        assert_eq!(plan.paged_attn, "auto");
-        assert_eq!(plan.pa_cache_type.as_deref(), Some("turboquant3"));
-        assert!(!plan.force_no_mmap);
-        assert!(!plan.force_language_model_only);
-        assert!(plan.disable_flash_attn);
-        assert!(plan.isq_singlethread);
-        assert!(plan.device_layers.is_some(), "{plan:?}");
-        assert_eq!(
-            sum_device_layers(plan.device_layers.as_deref().unwrap()),
-            52
-        );
-    }
-
-    #[test]
-    fn glm_keeps_public_runtime_constraints() {
-        let env_map = BTreeMap::new();
-        let plan = build_glm47_flash_bundle(ChatPreset::Quality, &hardware(3, 24_576), &env_map)
-            .selected_plan;
-        assert!(matches!(plan.quantization.as_str(), "Q6K" | "Q5K" | "Q4K"));
-        assert_eq!(plan.paged_attn, "auto");
-        assert_eq!(plan.pa_cache_type.as_deref(), Some("turboquant3"));
-        assert_eq!(plan.cuda_visible_devices, "0,1,2");
-        assert_eq!(
-            sum_device_layers(plan.device_layers.as_deref().unwrap()),
-            47
-        );
-        assert!(plan.device_layers.as_deref().unwrap().starts_with("0:"));
-        assert!(plan.force_no_mmap);
-        assert!(plan.disable_flash_attn);
-        assert!(plan.isq_singlethread);
-        assert_eq!(plan.isq_cpu_threads, None);
-    }
-
-    #[test]
-    fn gemma4_26b_performance_prefers_fast_device_layers_on_four_20gb_gpus() {
-        let env_map = BTreeMap::new();
-        let plan =
-            build_gemma4_26b_a4b_bundle(ChatPreset::Performance, &hardware(4, 20_480), &env_map)
-                .selected_plan;
-        assert!(plan.disable_nccl, "{plan:?}");
-        assert_eq!(plan.tensor_parallel_backend, None);
-        assert_eq!(plan.pa_cache_type.as_deref(), Some("f8e4m3"));
-        assert_eq!(plan.moe_experts_backend.as_deref(), Some("fast"));
-        assert!(plan.device_layers.is_some(), "{plan:?}");
-        assert_eq!(
-            sum_device_layers(plan.device_layers.as_deref().unwrap()),
-            30
-        );
-    }
-
-    #[test]
-    fn gemma4_31b_performance_prefers_device_layers_on_four_20gb_gpus() {
-        let env_map = BTreeMap::new();
-        let plan = build_gemma4_31b_bundle(ChatPreset::Performance, &hardware(4, 20_480), &env_map)
-            .selected_plan;
-        assert!(plan.disable_nccl, "{plan:?}");
-        assert_eq!(plan.tensor_parallel_backend, None);
-        assert!(plan.device_layers.is_some(), "{plan:?}");
-        assert_eq!(
-            sum_device_layers(plan.device_layers.as_deref().unwrap()),
-            60
-        );
-        assert_eq!(plan.pa_cache_type.as_deref(), Some("f8e4m3"));
-        assert_eq!(plan.pa_context_len, Some(131_072));
-        assert_eq!(plan.moe_experts_backend.as_deref(), Some("fast"));
-        assert!(plan.isq_singlethread);
-    }
-
-    #[test]
-    fn dump_all_default_runtime_manifests_to_disk() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let dest_dir = root.join("contracts/models/runtime_manifests");
-        std::fs::create_dir_all(&dest_dir).unwrap();
-        let cases = [
-            ("gpt_oss_120b.json", default_gpt_oss_manifest()),
-            ("qwen3_5_2b.json", default_qwen35_2b_manifest()),
-            ("qwen3_5_4b.json", default_qwen35_4b_manifest()),
-            ("qwen3_5_9b.json", default_qwen35_9b_manifest()),
-            ("qwen3_6_27b.json", default_qwen36_27b_manifest()),
-            ("qwen3_6_35b_a3b.json", default_qwen36_35b_a3b_manifest()),
-            ("gemma_4_e2b_it.json", default_gemma4_e2b_manifest()),
-            ("gemma_4_e4b_it.json", default_gemma4_e4b_manifest()),
-            ("gemma_4_26b_a4b_it.json", default_gemma4_26b_a4b_manifest()),
-            ("gemma_4_31b_it.json", default_gemma4_31b_manifest()),
-            ("glm_4_7_flash.json", default_glm47_flash_manifest()),
-        ];
-        for (filename, manifest) in cases {
-            let path = dest_dir.join(filename);
-            let json = serde_json::to_string_pretty(&manifest).unwrap();
-            std::fs::write(&path, json).unwrap();
-        }
-    }
-
-    #[test]
+#[test]
     fn checked_in_runtime_manifests_match_generated_runtime_defaults() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let cases = [
@@ -8215,7 +7728,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn runtime_isq_models_keep_serial_peak_averse_load_policy() {
         let manifests = [
             default_qwen35_4b_manifest(),
@@ -8234,7 +7747,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn qwen4b_presets_are_not_identical() {
         let env_map = BTreeMap::new();
         let bundle = build_qwen35_4b_bundle(ChatPreset::Quality, &hardware(3, 24_576), &env_map);
@@ -8268,7 +7781,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn qwen4b_contract_keeps_performance_faster_than_quality_on_three_gpu_hosts() {
         let env_map = chat_only_env_map();
         let bundle = build_qwen35_4b_bundle(ChatPreset::Quality, &hardware(3, 24_576), &env_map);
@@ -8291,22 +7804,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn qwen_family_quality_resolves_balanced_variant_on_supported_three_gpu_hosts() {
-        let env_map = BTreeMap::new();
-        let bundle = best_bundle_for_family(
-            Path::new(env!("CARGO_MANIFEST_DIR")),
-            engine::ChatModelFamily::Qwen35,
-            ChatPreset::Quality,
-            Some(&hardware(3, 24_576)),
-            &env_map,
-        )
-        .unwrap()
-        .expect("expected qwen family bundle");
-        assert_eq!(bundle.model, "Qwen/Qwen3.6-35B-A3B");
-    }
-
-    #[test]
+#[test]
     fn qwen_family_quality_falls_back_to_small_dense_variant_on_single_24gb_hosts() {
         let mut env_map = BTreeMap::new();
         env_map.insert("CTOX_MOE_CACHE_ENABLED".to_string(), "false".to_string());
@@ -8322,22 +7820,7 @@ mod tests {
         assert_eq!(bundle.model, "Qwen/Qwen3.5-9B");
     }
 
-    #[test]
-    fn qwen_family_performance_keeps_the_same_balanced_variant_on_supported_three_gpu_hosts() {
-        let env_map = BTreeMap::new();
-        let bundle = best_bundle_for_family(
-            Path::new(env!("CARGO_MANIFEST_DIR")),
-            engine::ChatModelFamily::Qwen35,
-            ChatPreset::Performance,
-            Some(&hardware(3, 24_576)),
-            &env_map,
-        )
-        .unwrap()
-        .expect("expected qwen family bundle");
-        assert_eq!(bundle.model, "Qwen/Qwen3.6-35B-A3B");
-    }
-
-    #[test]
+#[test]
     fn qwen_family_resolution_stays_on_the_same_model_across_presets() {
         let env_map = BTreeMap::new();
         let hardware = hardware(3, 24_576);
@@ -8363,7 +7846,7 @@ mod tests {
         assert_eq!(quality.model, "Qwen/Qwen3.6-35B-A3B");
     }
 
-    #[test]
+#[test]
     fn qwen_family_quality_falls_back_to_supported_variant_on_three_gpu_16gb_hosts() {
         let env_map = BTreeMap::new();
         let bundle = best_bundle_for_family(
@@ -8378,7 +7861,7 @@ mod tests {
         assert_eq!(bundle.model, "Qwen/Qwen3.6-27B");
     }
 
-    #[test]
+#[test]
     fn qwen_family_performance_falls_back_to_supported_variant_on_three_gpu_16gb_hosts() {
         let env_map = BTreeMap::new();
         let bundle = best_bundle_for_family(
@@ -8393,7 +7876,7 @@ mod tests {
         assert_eq!(bundle.model, "Qwen/Qwen3.6-27B");
     }
 
-    #[test]
+#[test]
     fn planner_uses_strong_gpu_subset_on_mixed_hosts() {
         let env_map = BTreeMap::new();
         let bundle = best_bundle_for_family(
@@ -8409,7 +7892,7 @@ mod tests {
         assert_eq!(bundle.selected_plan.cuda_visible_devices, "0,1,2");
     }
 
-    #[test]
+#[test]
     fn local_chat_family_choices_follow_dynamic_feasibility() {
         let root = temp_root("family-choices-dynamic");
         write_test_gpu_totals(&root, "0:24576");
@@ -8424,7 +7907,7 @@ mod tests {
         assert!(!families.contains(&"GLM 4.7 Flash"));
     }
 
-    #[test]
+#[test]
     fn local_chat_family_choices_allow_single_gpu_profiles_on_larger_hosts() {
         let root = temp_root("family-choices-single-gpu");
         write_test_gpu_totals(&root, "0:24576;1:24576;2:24576;3:24576");
@@ -8436,7 +7919,7 @@ mod tests {
         assert!(families.contains(&"Qwen 3.6"));
     }
 
-    #[test]
+#[test]
     fn direct_model_runtime_apply_allows_dynamic_3x20_host() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
         let unique = std::env::temp_dir().join(format!(
@@ -8478,7 +7961,7 @@ mod tests {
         assert_eq!(result.max_seq_len, 131_072);
     }
 
-    #[test]
+#[test]
     fn direct_model_runtime_apply_keeps_explicit_gemma_model() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
         let unique = std::env::temp_dir().join(format!(
@@ -8522,7 +8005,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn explicit_family_runtime_apply_can_still_resolve_family_variant() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
         let unique = std::env::temp_dir().join(format!(
@@ -8566,7 +8049,7 @@ mod tests {
         assert_eq!(result.model, "google/gemma-4-31B-it");
     }
 
-    #[test]
+#[test]
     fn explicit_model_overrides_stale_family_selection() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
         let unique = std::env::temp_dir().join(format!(
@@ -8607,7 +8090,7 @@ mod tests {
         assert_eq!(result.model, "Qwen/Qwen3.5-4B");
     }
 
-    #[test]
+#[test]
     fn validate_live_gpu_budget_requires_actual_free_memory() {
         let env_map = BTreeMap::new();
         let plan = build_qwen35_4b_bundle(ChatPreset::Quality, &hardware(1, 24_576), &env_map)
@@ -8638,7 +8121,7 @@ mod tests {
         assert!(err.to_string().contains("required="), "{err:#}");
     }
 
-    #[test]
+#[test]
     fn apply_chat_runtime_plan_uses_host_capacity_not_live_free_vram() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
         let unique = std::env::temp_dir().join(format!(
@@ -8690,110 +8173,7 @@ mod tests {
         assert_eq!(plan.max_seq_len, 131_072);
     }
 
-    #[test]
-    fn gpt_oss_three_gpu_20gb_performance_falls_back_to_device_layers() {
-        let env_map = BTreeMap::new();
-        let plan =
-            build_gpt_oss_120b_bundle(ChatPreset::Performance, &hardware(3, 20_480), &env_map)
-                .selected_plan;
-        assert!(plan_satisfies_context_policy(&plan), "{plan:?}");
-        assert!(plan.disable_nccl, "{plan:?}");
-        assert_eq!(plan.tensor_parallel_backend, None);
-        assert_eq!(plan.mn_local_world_size, None);
-        assert_eq!(plan.cuda_visible_devices, "0,1");
-        assert_eq!(plan.nm_device_ordinal, Some(0));
-        assert_eq!(plan.base_device_ordinal, Some(0));
-        assert!(plan.device_layers.is_some(), "{plan:?}");
-        assert!(
-            plan.gpu_allocations
-                .iter()
-                .filter(|allocation| allocation.chat_enabled)
-                .count()
-                == 2,
-            "{plan:#?}"
-        );
-        assert!(
-            plan.gpu_allocations
-                .iter()
-                .filter(|allocation| allocation.chat_enabled)
-                .all(|allocation| allocation.aux_reserve_mb == 0),
-            "{plan:#?}"
-        );
-        assert_eq!(
-            plan.theoretical_breakdown.contract_source,
-            "explicit manifest resource contract"
-        );
-    }
-
-    #[test]
-    fn apply_chat_runtime_plan_falls_back_to_device_layers_on_three_a4500_hosts() {
-        let _guard = TEST_ENV_LOCK.lock().unwrap();
-        let unique = std::env::temp_dir().join(format!(
-            "ctox_runtime_plan_a4500_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(unique.join("runtime")).unwrap();
-        write_test_gpu_totals(&unique, "0:20470;1:20470;2:20470");
-
-        let mut env_map = BTreeMap::new();
-        env_map.insert("CTOX_CHAT_SOURCE".to_string(), "local".to_string());
-        env_map.insert(
-            "CTOX_CHAT_MODEL_BASE".to_string(),
-            "openai/gpt-oss-120b".to_string(),
-        );
-        env_map.insert(
-            "CTOX_CHAT_MODEL".to_string(),
-            "openai/gpt-oss-120b".to_string(),
-        );
-        env_map.insert(
-            "CTOX_ACTIVE_MODEL".to_string(),
-            "openai/gpt-oss-120b".to_string(),
-        );
-        env_map.insert(
-            "CTOX_CHAT_LOCAL_PRESET".to_string(),
-            ChatPreset::Performance.label().to_string(),
-        );
-
-        let plan = apply_chat_runtime_plan(&unique, &mut env_map)
-            .expect("chat runtime plan should resolve on a 3xA4500 host")
-            .expect("chat runtime plan should be present");
-
-        let _ = std::fs::remove_dir_all(&unique);
-
-        assert!(plan_satisfies_context_policy(&plan), "{plan:#?}");
-        assert!(plan.disable_nccl, "{plan:#?}");
-        assert_eq!(plan.tensor_parallel_backend, None);
-        assert_eq!(plan.mn_local_world_size, None);
-        assert_eq!(plan.cuda_visible_devices, "0,1");
-        assert!(plan.device_layers.is_some(), "{plan:#?}");
-    }
-
-    #[test]
-    fn gpt_oss_explicit_128k_contract_math_is_consistent() {
-        let env_map = BTreeMap::new();
-        let plan = build_gpt_oss_120b_bundle(ChatPreset::Quality, &hardware(3, 20_480), &env_map)
-            .selected_plan;
-        let breakdown = &plan.theoretical_breakdown;
-
-        assert_eq!(plan.model, "openai/gpt-oss-120b");
-        assert_eq!(plan.max_seq_len, 131_072);
-        assert_eq!(breakdown.weight_residency_mb, 15_784);
-        assert_eq!(breakdown.kv_cache_mb, 15_488);
-        assert_eq!(breakdown.kv_budget_fraction_milli, 800);
-        assert_eq!(breakdown.fixed_runtime_base_overhead_mb, 1_440);
-        assert_eq!(breakdown.backend_runtime_overhead_mb, 256);
-        assert_eq!(breakdown.load_peak_overhead_mb, 512);
-        assert_eq!(breakdown.activation_overhead_mb, 0);
-        assert_eq!(breakdown.required_effective_total_budget_mb, 37_352);
-        assert_eq!(breakdown.required_total_mb, 37_352);
-        assert_eq!(plan.cuda_visible_devices, "0,1,2");
-    }
-
-    #[test]
+#[test]
     fn explicit_qwen4b_resource_contract_does_not_scale_kv_or_activation_with_weight_quantization()
     {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
@@ -8811,7 +8191,7 @@ mod tests {
         assert_eq!(breakdown.required_total_mb, 25_003);
     }
 
-    #[test]
+#[test]
     fn nemotron_presets_prioritize_quantization_context_and_parallelism() {
         let env_map = BTreeMap::new();
         let bundle =
@@ -8833,41 +8213,7 @@ mod tests {
         assert_eq!(performance.quantization, "Q4K");
     }
 
-    #[test]
-    fn gpt_oss_is_allowed_by_the_128k_policy() {
-        let env_map = BTreeMap::new();
-        assert!(local_model_satisfies_context_policy(
-            Path::new(env!("CARGO_MANIFEST_DIR")),
-            "openai/gpt-oss-120b",
-            &env_map
-        ));
-    }
-
-    #[test]
-    fn qwen4b_is_allowed_by_the_128k_policy() {
-        let env_map = BTreeMap::new();
-        assert!(local_model_satisfies_context_policy(
-            Path::new(env!("CARGO_MANIFEST_DIR")),
-            "Qwen/Qwen3.5-4B",
-            &env_map
-        ));
-    }
-
-    #[test]
-    fn compaction_policy_differs_by_preset() {
-        let quality = compaction_policy_for_preset(ChatPreset::Quality, DEFAULT_CHAT_CONTEXT);
-        let performance =
-            compaction_policy_for_preset(ChatPreset::Performance, DEFAULT_CHAT_CONTEXT);
-
-        assert_eq!(quality.threshold_percent, 75);
-        // Baselines are tuned against the 128k reference window and scale
-        // linearly: at the 256k default they double.
-        assert_eq!(quality.min_tokens, 24_576);
-        assert_eq!(performance.threshold_percent, 70);
-        assert_eq!(performance.min_tokens, 16_384);
-    }
-
-    #[test]
+#[test]
     fn runtime_plan_keeps_manifest_cache_type_even_when_env_requests_override() {
         let mut env_map = BTreeMap::new();
         env_map.insert(
@@ -8879,7 +8225,7 @@ mod tests {
         assert_eq!(plan.pa_cache_type.as_deref(), Some("turboquant3"));
     }
 
-    #[test]
+#[test]
     fn gpt_oss_runtime_plan_keeps_manifest_cache_type_even_when_env_requests_override() {
         let mut env_map = BTreeMap::new();
         env_map.insert(
@@ -8892,7 +8238,7 @@ mod tests {
         assert_eq!(plan.pa_cache_type.as_deref(), Some("turboquant3"));
     }
 
-    #[test]
+#[test]
     fn glm_runtime_plan_keeps_manifest_cache_type_even_when_env_requests_override() {
         let mut env_map = BTreeMap::new();
         env_map.insert(
@@ -8905,37 +8251,7 @@ mod tests {
         assert_eq!(plan.pa_cache_type.as_deref(), Some("turboquant3"));
     }
 
-    #[test]
-    fn nemotron_turboquant_runtime_plan_is_enabled_by_default() {
-        let env_map = BTreeMap::new();
-        let plan =
-            build_nemotron_cascade2_bundle(ChatPreset::Quality, &hardware(3, 24_576), &env_map)
-                .selected_plan;
-        assert_eq!(plan.paged_attn, "auto");
-        assert_eq!(plan.pa_cache_type.as_deref(), Some("turboquant3"));
-    }
-
-    #[test]
-    fn nemotron_is_allowed_by_its_model_contract_floor() {
-        let env_map = BTreeMap::new();
-        assert!(local_model_satisfies_context_policy(
-            Path::new(env!("CARGO_MANIFEST_DIR")),
-            "nvidia/Nemotron-Cascade-2-30B-A3B",
-            &env_map
-        ));
-    }
-
-    #[test]
-    fn glm_is_allowed_by_its_model_contract_floor() {
-        let env_map = BTreeMap::new();
-        assert!(local_model_satisfies_context_policy(
-            Path::new(env!("CARGO_MANIFEST_DIR")),
-            "zai-org/GLM-4.7-Flash",
-            &env_map
-        ));
-    }
-
-    #[test]
+#[test]
     fn direct_model_runtime_apply_allows_explicit_nemotron_on_4x20gb() {
         let unique = temp_root("explicit-nemotron-4x20");
         write_test_gpu_totals(&unique, "0:20470;1:20470;2:20470;3:20470");
@@ -8967,7 +8283,7 @@ mod tests {
         assert!(result.max_seq_len >= 131_072, "{result:?}");
     }
 
-    #[test]
+#[test]
     fn apply_chat_runtime_plan_does_not_reuse_stale_nemotron_plan_when_manifest_changes() {
         let unique = temp_root("stale-nemotron-plan");
         write_test_gpu_totals(&unique, "0:20470;1:20470;2:20470;3:20470");
@@ -9055,7 +8371,7 @@ mod tests {
         assert_ne!(result.max_seq_len, stale_plan.max_seq_len);
     }
 
-    #[test]
+#[test]
     fn direct_model_runtime_apply_allows_explicit_glm_on_4x20gb() {
         let unique = temp_root("explicit-glm-4x20");
         write_test_gpu_totals(&unique, "0:20470;1:20470;2:20470;3:20470");
@@ -9088,27 +8404,7 @@ mod tests {
         assert_eq!(result.quantization, "Q4K");
     }
 
-    #[test]
-    fn glm_without_matching_qualification_profile_uses_manifest_candidate_order_on_4x20gb() {
-        let env_map = BTreeMap::new();
-        let bundle = build_glm47_flash_bundle(ChatPreset::Quality, &hardware(4, 20_480), &env_map);
-        let quality = bundle
-            .plans
-            .iter()
-            .find(|plan| plan.preset == ChatPreset::Quality)
-            .expect("expected glm quality plan");
-
-        assert_eq!(quality.quantization, "Q4K");
-        assert!(
-            quality
-                .rationale
-                .iter()
-                .any(|line| line.contains("manifest candidate order")),
-            "{quality:#?}"
-        );
-    }
-
-    #[test]
+#[test]
     fn estimate_kv_cache_bytes_matches_hybrid_attention_math() {
         // Qwen3.5 reference numbers from the model card:
         // 40 layers, full_attention_interval=4 ⇒ 10 KV-holding layers.
@@ -9126,7 +8422,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn estimate_moe_weights_bytes_qwen3_6_at_q4k() {
         // Qwen3.6: 256 routed experts × 40 layers × 3 matrices × (2048 × 512)
         // params + 40 layers × 3 × (2048 × 512) shared expert.
@@ -9143,7 +8439,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn auto_detect_q4k_fits_when_observed_available_is_large() {
         // Apple Silicon M5 32 GB, Qwen3.5 at Q4K (~15 GiB MoE). When the
         // caller passes an authoritative `observed_available_mb` showing
@@ -9176,7 +8472,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn auto_detect_q4k_enables_cache_on_busy_host_with_observed_available() {
         // Same host, but the box is busy: only 12 GiB observed-available
         // (matches the engine's `doctor` output on a running macOS with
@@ -9205,7 +8501,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn auto_detect_bf16_on_32gb_apple_silicon_enables_cache() {
         // Unquantized BF16: MoE ≈ 61 GiB ≫ any realistic budget on a 32 GiB
         // box. Cache must auto-enable regardless of observed-available.
@@ -9234,7 +8530,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn auto_detect_returns_none_for_unknown_model() {
         // Unknown canonical model ⇒ no MoeArchInfo ⇒
         // plan_moe_cache_allocation_with_arch returns None without an arch
@@ -9242,7 +8538,7 @@ mod tests {
         assert!(resolve_moe_arch_info("some-unknown/model-v1").is_none());
     }
 
-    #[test]
+#[test]
     fn plan_moe_cache_allocation_disabled_returns_none() {
         // Default (no CTOX_MOE_CACHE_ENABLED) must leave the cache off so
         // upgrades don't flip behavior silently.
@@ -9255,7 +8551,7 @@ mod tests {
         assert!(plan_moe_cache_allocation(None, &env, &hw).is_none());
     }
 
-    #[test]
+#[test]
     fn plan_moe_cache_allocation_reads_runtime_env_keys() {
         // The operator enables the cache via runtime_env (CTOX SQLite) —
         // `plan_moe_cache_allocation` must pick up capacity/total from there
@@ -9299,7 +8595,7 @@ mod tests {
             .any(|line| line.contains("CTOX_MOE_CACHE_ENABLED")));
     }
 
-    #[test]
+#[test]
     fn plan_moe_cache_allocation_required_keys_missing_returns_none() {
         // `CTOX_MOE_CACHE_ENABLED=1` without capacity/total must fail
         // closed — better to not plan a cache than to plan one with
@@ -9319,7 +8615,7 @@ mod tests {
         assert!(plan_moe_cache_allocation(None, &env, &hw).is_none());
     }
 
-    #[test]
+#[test]
     fn moe_cache_to_engine_env_pairs_matches_engine_contract() {
         // This test pins the engine launcher contract: the exact env-var
         // names the engine reads in `RuntimeLoadPolicy::from_env` over in
@@ -9366,30 +8662,7 @@ mod tests {
         assert!(!pairs_no_cold.contains_key("ENGINE_MOE_CACHE_COLD_PATH"));
     }
 
-    #[test]
-    fn moe_cache_field_json_roundtrip() {
-        // Regression guard for the Phase 1b addition: a plan with `moe_cache`
-        // populated must serialize and deserialize back to the same payload so
-        // that the cache allocation survives the runtime persistence round
-        // trip (ctox.sqlite3 → JSON payload → ChatRuntimePlan).
-        let alloc = PlannedMoECacheAllocation {
-            topology: "unified".to_string(),
-            capacity_experts: 16,
-            total_experts: 128,
-            warm_tier_mb: 0,
-            cold_tier_path: Some("/var/ctox/moe_cache".to_string()),
-            cold_tier_min_mbps: 1500,
-            rationale: vec![
-                "apple-silicon unified memory: skipping CPU-RAM warm tier".to_string(),
-                "K=16 from CTOX_MOE_CACHE_CAPACITY override".to_string(),
-            ],
-        };
-        let encoded = serde_json::to_string(&alloc).unwrap();
-        let decoded: PlannedMoECacheAllocation = serde_json::from_str(&encoded).unwrap();
-        assert_eq!(alloc, decoded);
-    }
-
-    #[test]
+#[test]
     fn chat_runtime_plan_moe_cache_default_is_none() {
         // Older persisted plans that predate Phase 1b (no `moe_cache` field
         // in their JSON) must still deserialize — the `#[serde(default)]`

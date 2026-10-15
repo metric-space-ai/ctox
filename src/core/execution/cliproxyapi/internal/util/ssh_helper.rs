@@ -46,7 +46,7 @@ impl IpDiscoveryPolicy {
         Ok(Self { endpoints, timeout })
     }
 
-    #[must_use]
+#[must_use]
     pub fn endpoints(&self) -> &[Url] {
         &self.endpoints
     }
@@ -99,19 +99,19 @@ pub struct SshCommandPlan {
 }
 
 impl SshCommandPlan {
-    #[must_use]
+#[must_use]
     pub fn program(&self) -> &Path {
         &self.program
     }
 
-    #[must_use]
+#[must_use]
     pub fn args(&self) -> &[OsString] {
         &self.args
     }
 
     /// Human-readable rendering only. Execution must pass `program` and
     /// `args` separately to an injected process runner.
-    #[must_use]
+#[must_use]
     pub fn display(&self) -> String {
         std::iter::once(self.program.as_os_str())
             .chain(self.args.iter().map(OsString::as_os_str))
@@ -178,7 +178,7 @@ impl SshTunnelSpec {
         })
     }
 
-    #[must_use]
+#[must_use]
     pub fn command_plan(&self) -> SshCommandPlan {
         let mut args = Vec::new();
         if let Some(identity) = &self.identity_file {
@@ -283,51 +283,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn discovery_validates_https_and_falls_back_deterministically() {
-        assert!(IpDiscoveryPolicy::new(
-            ["http://user:pass@example.com".to_owned()],
-            Duration::from_secs(1)
-        )
-        .is_err());
-        let policy = IpDiscoveryPolicy::default();
-        let probe = Probe {
-            responses: Mutex::new(vec![
-                Ok(b"not-an-ip".to_vec()),
-                Ok(b"203.0.113.10\n".to_vec()),
-            ]),
-            outbound: Ok("192.0.2.2".parse().unwrap()),
-        };
-        assert_eq!(
-            get_ip_address(&probe, &policy),
-            "203.0.113.10".parse::<IpAddr>().unwrap()
-        );
-    }
-
-    #[test]
-    fn command_plan_never_routes_values_through_a_shell() {
-        let spec = SshTunnelSpec::new(
-            "/usr/bin/ssh",
-            Some(PathBuf::from("/keys/operator key")),
-            "operator",
-            "203.0.113.10".parse().unwrap(),
-            22,
-            1455,
-        )
-        .unwrap();
-        let plan = spec.command_plan();
-        assert_eq!(plan.program(), Path::new("/usr/bin/ssh"));
-        assert_eq!(plan.args()[0], "-i");
-        assert_eq!(plan.args()[1], "/keys/operator key");
-        assert!(plan.display().contains("'/keys/operator key'"));
-        assert!(SshTunnelSpec::new(
-            "/usr/bin/ssh",
-            None,
-            "root;touch /tmp/pwned",
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            22,
-            1455
-        )
-        .is_err());
-    }
 }

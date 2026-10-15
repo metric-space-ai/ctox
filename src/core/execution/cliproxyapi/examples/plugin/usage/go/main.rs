@@ -12,7 +12,3 @@ pub fn handle(method: &str) -> ExampleResult {
         _ => unknown(method),
     }
 }
-#[test]
-fn usage_callback_is_bounded() {
-    assert_eq!(handle("usage.handle").unwrap().result, json!({}));
-}

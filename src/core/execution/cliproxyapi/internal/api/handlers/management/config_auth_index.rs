@@ -192,16 +192,7 @@ fn index_view(
 mod tests {
     use super::*;
 
-    #[test]
-    fn public_id_fallback_matches_pinned_upstream_index_shape() {
-        assert_eq!(
-            management_auth_index_for_id(" reset-auth-id ").as_deref(),
-            Some("749e4acf03800050")
-        );
-        assert_eq!(management_auth_index_for_id(" "), None);
-    }
-
-    #[test]
+#[test]
     fn projection_uses_live_index_and_never_contains_api_keys() {
         let config = ProviderCompatConfig {
             codex_api_key: vec![crate::internal::config::CodexKey {

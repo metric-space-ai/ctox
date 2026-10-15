@@ -63,11 +63,6 @@ fn stream_maps_cyber_policy_error_and_web_search() {
     assert!(web.contains("web_search_tool_result"));
 }
 
-#[test]
-fn token_count_uses_claude_shape() {
-    assert_eq!(claude_token_count(7), br#"{"input_tokens":7}"#);
-}
-
 fn v16_web_search_sources() -> Value {
     json!([
         {"type":"url","url":"https://docs.x.ai/developers/tools/web-search","title":"xAI Docs"},

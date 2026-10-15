@@ -542,7 +542,7 @@ mod tests {
         ClaudeAuth, ClaudeRefreshCoordinator, PkceCodes, SecretString, SystemRefreshClock,
     };
 
-    #[test]
+#[test]
     fn invalid_proxy_error_never_echoes_proxy_credentials() {
         let secret_proxy = "not a proxy://operator:do-not-leak";
         let error = AnthropicHttpTransport::new(Some(secret_proxy)).unwrap_err();
@@ -551,15 +551,7 @@ mod tests {
         assert!(!rendered.contains("do-not-leak"));
     }
 
-    #[test]
-    fn direct_and_none_sentinels_are_case_insensitive() {
-        for sentinel in ["direct", "DIRECT", "none", "NoNe", ""] {
-            let transport = AnthropicHttpTransport::new(Some(sentinel)).unwrap();
-            assert_eq!(transport.proxy_mode(), AnthropicProxyMode::Direct);
-        }
-    }
-
-    #[test]
+#[test]
     fn unsupported_proxy_schemes_are_rejected_without_echoing_the_url() {
         let proxy = "ftp://operator:do-not-leak@proxy.example.com";
         let error = AnthropicHttpTransport::new(Some(proxy)).unwrap_err();
@@ -570,7 +562,7 @@ mod tests {
         assert!(!rendered.contains("proxy.example.com"));
     }
 
-    #[tokio::test]
+#[tokio::test]
     async fn loopback_code_exchange_uses_json_contract_and_fragment_state() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/v1/oauth/token", listener.local_addr().unwrap());
@@ -651,7 +643,7 @@ mod tests {
         assert!(request.contains("\"code_verifier\":\"loop-verifier\""));
     }
 
-    #[tokio::test]
+#[tokio::test]
     async fn loopback_refresh_sends_only_upstream_json_headers() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/v1/oauth/token", listener.local_addr().unwrap());

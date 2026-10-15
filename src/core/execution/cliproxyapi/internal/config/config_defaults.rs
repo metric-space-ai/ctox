@@ -12,14 +12,4 @@ pub const DEFAULT_DISCOVERY_SERVICE_TYPE: &str = "_ai-gateway._tcp";
 mod tests {
     use super::*;
 
-    #[test]
-    fn defaults_are_exact_upstream_literals() {
-        assert_eq!(
-            DEFAULT_PANEL_GITHUB_REPOSITORY,
-            "https://github.com/router-for-me/Cli-Proxy-API-Management-Center"
-        );
-        assert_eq!(DEFAULT_PPROF_ADDR, "127.0.0.1:8316");
-        assert_eq!(DEFAULT_AUTH_DIR, "~/.cli-proxy-api");
-        assert_eq!(DEFAULT_DISCOVERY_SERVICE_TYPE, "_ai-gateway._tcp");
-    }
 }

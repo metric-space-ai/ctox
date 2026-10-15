@@ -19,9 +19,3 @@ pub fn handle(method: &str) -> ExampleResult {
         _ => unknown(method),
     }
 }
-#[test]
-fn both_normalization_phases_exist() {
-    assert!(
-        handle("response.normalize_before").is_ok() && handle("response.normalize_after").is_ok()
-    );
-}

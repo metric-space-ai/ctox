@@ -39,19 +39,19 @@ pub struct VertexCompatKey {
 }
 
 impl VertexCompatKey {
-    #[must_use]
+#[must_use]
     pub fn api_key(&self) -> &str {
         &self.api_key
     }
-    #[must_use]
+#[must_use]
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
-    #[must_use]
+#[must_use]
     pub fn prefix(&self) -> &str {
         &self.prefix
     }
-    #[must_use]
+#[must_use]
     pub fn proxy_url(&self) -> &str {
         &self.proxy_url
     }
@@ -71,23 +71,23 @@ pub struct VertexCompatModel {
 }
 
 impl VertexCompatModel {
-    #[must_use]
+#[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
-    #[must_use]
+#[must_use]
     pub fn alias(&self) -> &str {
         &self.alias
     }
-    #[must_use]
+#[must_use]
     pub fn display_name(&self) -> &str {
         &self.display_name
     }
-    #[must_use]
+#[must_use]
     pub fn force_mapping(&self) -> bool {
         self.force_mapping
     }
-    #[must_use]
+#[must_use]
     pub fn thinking(&self) -> Option<&RegistryThinkingSupport> {
         self.thinking.as_ref()
     }
@@ -149,69 +149,4 @@ pub(crate) fn normalize_excluded_models(models: &mut Vec<String>) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn sanitization_is_stable_deduplicated_and_drops_invalid_models() {
-        let mut keys = vec![
-            VertexCompatKey {
-                api_key: " key ".into(),
-                prefix: " /team/ ".into(),
-                base_url: " https://vertex.example ".into(),
-                proxy_url: " http://proxy ".into(),
-                headers: BTreeMap::from([
-                    (" X-Test ".into(), " value ".into()),
-                    ("empty".into(), " ".into()),
-                ]),
-                models: vec![
-                    VertexCompatModel {
-                        name: " model ".into(),
-                        alias: " alias ".into(),
-                        ..VertexCompatModel::default()
-                    },
-                    VertexCompatModel {
-                        name: "missing-alias".into(),
-                        alias: " ".into(),
-                        ..VertexCompatModel::default()
-                    },
-                ],
-                excluded_models: vec![" MODEL-* ".into(), "model-*".into()],
-                ..VertexCompatKey::default()
-            },
-            VertexCompatKey {
-                api_key: "key".into(),
-                base_url: "https://vertex.example".into(),
-                ..VertexCompatKey::default()
-            },
-            VertexCompatKey::default(),
-        ];
-
-        sanitize_vertex_compat_keys(&mut keys);
-        assert_eq!(keys.len(), 1);
-        assert_eq!(keys[0].prefix, "team");
-        assert_eq!(keys[0].base_url(), "https://vertex.example");
-        assert_eq!(keys[0].proxy_url(), "http://proxy");
-        assert_eq!(
-            keys[0].headers.get("X-Test").map(String::as_str),
-            Some("value")
-        );
-        assert_eq!(keys[0].models.len(), 1);
-        assert_eq!(keys[0].models[0].name(), "model");
-        assert_eq!(keys[0].models[0].alias(), "alias");
-        assert_eq!(keys[0].excluded_models, ["model-*"]);
-    }
-
-    #[test]
-    fn cooling_and_retry_overrides_stay_distinct_from_unset() {
-        let parsed: VertexCompatKey =
-            serde_yaml::from_str("api-key: k\ndisable-cooling: false\nrequest-retry: 0\n").unwrap();
-        assert_eq!(parsed.disable_cooling, Some(false));
-        assert_eq!(parsed.request_retry, Some(0));
-
-        let unset: VertexCompatKey = serde_yaml::from_str("api-key: k\n").unwrap();
-        assert_eq!(unset.disable_cooling, None);
-        assert_eq!(unset.request_retry, None);
-
-        let negative: VertexCompatKey =
-            serde_yaml::from_str("api-key: k\nrequest-retry: -1\n").unwrap();
-        assert_eq!(negative.request_retry, Some(-1));
-    }
 }

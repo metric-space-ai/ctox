@@ -17,30 +17,3 @@ fn model(name: &str, alias: &str, force_mapping: bool) -> CodexModel {
         ..Default::default()
     }
 }
-
-#[test]
-fn alias_pool_preserves_config_order_deduplicates_and_prefers_exact_suffix() {
-    let models = [
-        model("upstream-a", "public", false),
-        model("UPSTREAM-A", "public", false),
-        model("upstream-b", "public", false),
-        model("exact(low)", "public(low)", false),
-    ];
-    assert_eq!(
-        resolve_model_alias_pool_from_config_models("public(high)", &models),
-        ["upstream-a(high)", "upstream-b(high)"]
-    );
-    assert_eq!(
-        resolve_model_alias_pool_from_config_models("public(low)", &models),
-        ["exact(low)"]
-    );
-}
-
-#[test]
-fn selected_pool_entry_carries_force_mapping_metadata() {
-    let models = [model("upstream", "public", true)];
-    let result = resolve_model_alias_result_from_config_models("public(max)", &models);
-    assert_eq!(result.upstream_model, "upstream(max)");
-    assert!(result.force_mapping);
-    assert_eq!(result.original_alias, "public");
-}

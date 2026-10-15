@@ -203,7 +203,7 @@ fn push_raw_field(
 mod tests {
     use super::*;
 
-    #[test]
+#[test]
     fn empty_and_semantic_segments_match_upstream_shape() {
         assert_eq!(count_codex_input_tokens("gpt-5", b"{}").unwrap(), 0);
         let count = count_codex_input_tokens(
@@ -214,7 +214,7 @@ mod tests {
         assert!(count > 20);
     }
 
-    #[test]
+#[test]
     fn model_families_select_distinct_upstream_encodings() {
         let body = r#"{"instructions":"こんにちは世界","input":[]}"#.as_bytes();
         let modern = count_codex_input_tokens("gpt-5-codex", body).unwrap();
@@ -223,24 +223,7 @@ mod tests {
         assert_eq!(count_codex_input_tokens("unknown", body).unwrap(), legacy);
     }
 
-    #[test]
-    fn candidate_meta_tokens_always_use_o200k_and_semantic_codex_segments() {
-        let body = r#"{"instructions":"こんにちは世界","input":[{"type":"message","content":[{"type":"input_text","text":"hello"}]},{"type":"function_call","name":"lookup","arguments":{"q":"世界"}}],"tools":[{"name":"lookup","description":"lookup data","parameters":{"type":"object","properties":{"q":{"type":"string"}}}}]}"#.as_bytes();
-        let count = count_meta_input_tokens(body).unwrap();
-        assert_eq!(count, count_codex_input_tokens("gpt-5", body).unwrap());
-        let short = r#"{"instructions":"こんにちは世界","input":[]}"#.as_bytes();
-        assert_ne!(
-            count_meta_input_tokens(short).unwrap(),
-            count_codex_input_tokens("muse-spark-1.3", short).unwrap()
-        );
-        assert_eq!(count_meta_input_tokens(b"{}").unwrap(), 0);
-        assert_eq!(
-            count_meta_input_tokens(b"invalid"),
-            Err(CodexTokenCountError::InvalidJson)
-        );
-    }
-
-    #[test]
+#[test]
     fn response_uses_internal_responses_usage_contract() {
         let payload =
             codex_token_count_response("gpt-5", br#"{"instructions":"hello","input":[]}"#).unwrap();

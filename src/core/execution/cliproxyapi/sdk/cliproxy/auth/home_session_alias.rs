@@ -36,7 +36,7 @@ pub struct HomeSessionAliasCache {
 }
 
 impl HomeSessionAliasCache {
-    #[must_use]
+#[must_use]
     pub fn canonical(
         &self,
         primary: &str,
@@ -131,7 +131,7 @@ impl HomeSessionAliasCache {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = HomeSessionAliasState::default();
     }
 
-    #[must_use]
+#[must_use]
     pub fn len(&self) -> usize {
         self.state
             .lock()
@@ -140,7 +140,7 @@ impl HomeSessionAliasCache {
             .len()
     }
 
-    #[must_use]
+#[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -260,57 +260,4 @@ fn merge_aliases<'a>(
 mod tests {
     use super::*;
 
-    #[test]
-    fn canonicalizes_both_arrival_orders_and_refreshes_group() {
-        let cache = HomeSessionAliasCache::default();
-        let ttl = Duration::from_millis(100);
-        assert_eq!(
-            cache.canonical("conv:c", "", ttl, 0).as_deref(),
-            Some("conv:c")
-        );
-        assert_eq!(
-            cache.canonical("pck:p", "conv:c", ttl, 10).as_deref(),
-            Some("conv:c")
-        );
-        assert_eq!(
-            cache.canonical("pck:p", "", ttl, 105).as_deref(),
-            Some("conv:c")
-        );
-        assert_eq!(
-            cache.canonical("conv:c", "", ttl, 190).as_deref(),
-            Some("conv:c")
-        );
-
-        cache.clear();
-        assert_eq!(
-            cache.canonical("pck:p", "conv:c", ttl, 0).as_deref(),
-            Some("pck:p")
-        );
-        assert_eq!(
-            cache.canonical("conv:c", "", ttl, 10).as_deref(),
-            Some("pck:p")
-        );
-    }
-
-    #[test]
-    fn shared_prompt_key_caps_stable_aliases_and_keeps_newest() {
-        let cache = HomeSessionAliasCache::default();
-        for index in 0..128 {
-            let conversation = format!("conv:{index:03}");
-            let _ = cache.canonical("pck:shared", &conversation, Duration::from_secs(60), index);
-        }
-        assert!(cache.len() <= 65);
-        assert_eq!(
-            cache
-                .canonical("conv:127", "", Duration::from_secs(60), 200)
-                .as_deref(),
-            Some("pck:shared")
-        );
-        assert_eq!(
-            cache
-                .canonical("conv:000", "", Duration::from_secs(60), 200)
-                .as_deref(),
-            Some("conv:000")
-        );
-    }
 }

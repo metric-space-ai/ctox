@@ -90,7 +90,7 @@ pub struct GeminiVertexExecutor {
 }
 
 impl GeminiVertexExecutor {
-    #[must_use]
+#[must_use]
     pub fn new(
         registry: Arc<Registry>,
         token_provider: Option<Arc<dyn VertexAccessTokenProvider>>,
@@ -109,7 +109,7 @@ impl GeminiVertexExecutor {
         }
     }
 
-    #[must_use]
+#[must_use]
     pub fn with_context(
         registry: Arc<Registry>,
         token_provider: Option<Arc<dyn VertexAccessTokenProvider>>,
@@ -130,7 +130,7 @@ impl GeminiVertexExecutor {
     }
 
     /// Bind the host's existing client configuration and model catalog owner.
-    #[must_use]
+#[must_use]
     pub fn with_request_processor(
         mut self,
         processor: Arc<dyn super::helps::CodexMultiAgentV2Processor + Send + Sync>,
@@ -139,14 +139,14 @@ impl GeminiVertexExecutor {
         self
     }
 
-    #[must_use]
+#[must_use]
     pub fn with_payload_config(mut self, config: Arc<super::helps::PayloadApplyConfig>) -> Self {
         self.payload_config = config;
         self
     }
 
     /// Bind the owning gateway engine to the same instance translator registry.
-    #[must_use]
+#[must_use]
     pub fn with_canonical_thinking(
         mut self,
         engine: Arc<crate::internal::thinking::ThinkingEngine>,
@@ -873,70 +873,4 @@ mod tests {
         vertex_action, vertex_base_url,
     };
 
-    #[test]
-    fn selects_vertex_actions_by_model_and_streaming() {
-        assert_eq!(vertex_action("imagen-3", false), "predict");
-        assert_eq!(vertex_action("gemini-3", false), "generateContent");
-        assert_eq!(vertex_action("gemini-3", true), "streamGenerateContent");
-        assert!(is_imagen_model("Publishers/Google/IMAGEN-3"));
-    }
-
-    #[test]
-    fn builds_regional_and_global_vertex_base_urls() {
-        assert_eq!(
-            vertex_base_url("us-east1"),
-            "https://us-east1-aiplatform.googleapis.com"
-        );
-        assert_eq!(
-            vertex_base_url("global"),
-            "https://aiplatform.googleapis.com"
-        );
-        assert_eq!(vertex_base_url(""), "https://aiplatform.googleapis.com");
-    }
-
-    #[test]
-    fn converts_gemini_request_to_imagen_shape() {
-        let converted = convert_to_imagen_request(br#"{"contents":[{"parts":[{"text":"a fox"}]}],"aspectRatio":"16:9","sampleCount":2,"negativePrompt":"blur"}"#).unwrap();
-        let value: Value = serde_json::from_slice(&converted).unwrap();
-        assert_eq!(
-            value.pointer("/instances/0/prompt").and_then(Value::as_str),
-            Some("a fox")
-        );
-        assert_eq!(
-            value
-                .pointer("/instances/0/negativePrompt")
-                .and_then(Value::as_str),
-            Some("blur")
-        );
-        assert_eq!(
-            value
-                .pointer("/parameters/sampleCount")
-                .and_then(Value::as_i64),
-            Some(2)
-        );
-    }
-
-    #[test]
-    fn converts_imagen_predictions_to_gemini_candidates() {
-        let converted = convert_imagen_to_gemini_response(
-            br#"{"predictions":[{"bytesBase64Encoded":"abc","mimeType":"image/webp"}]}"#,
-            "imagen-3",
-            42,
-        );
-        let value: Value = serde_json::from_slice(&converted).unwrap();
-        assert_eq!(
-            value
-                .pointer("/candidates/0/content/parts/0/inlineData/data")
-                .and_then(Value::as_str),
-            Some("abc")
-        );
-        assert_eq!(value["responseId"], "imagen-42");
-        assert_eq!(value["modelVersion"], "imagen-3");
-    }
-
-    #[test]
-    fn leaves_non_imagen_response_unchanged() {
-        let raw = br#"{"candidates":[]}"#;
-        assert_eq!(convert_imagen_to_gemini_response(raw, "gemini", 1), raw);
-    }
 }

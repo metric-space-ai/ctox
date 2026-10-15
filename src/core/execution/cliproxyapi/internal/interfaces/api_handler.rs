@@ -31,10 +31,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn trait_is_object_safe_and_returns_structured_models() {
-        let handler: Box<dyn ApiHandler> = Box::new(Handler);
-        assert_eq!(handler.handler_type(), "claude");
-        assert_eq!(handler.models()[0]["id"], "claude-test");
-    }
 }

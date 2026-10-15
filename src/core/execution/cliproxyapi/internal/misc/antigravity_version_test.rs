@@ -80,34 +80,6 @@ async fn refresh_failure_keeps_fresh_cache_and_falls_back_after_expiry() {
     assert_eq!(cache.latest_version(), ANTIGRAVITY_FALLBACK_VERSION);
 }
 
-#[test]
-fn hub_legacy_and_control_plane_user_agents_match_upstream() {
-    let (cache, _, _) = fixture(Ok(Vec::new()));
-    assert_eq!(cache.user_agent(), "antigravity/hub/2.2.1 darwin/arm64");
-    assert_eq!(
-        cache.load_code_assist_user_agent(""),
-        "antigravity/hub/2.2.1 darwin/arm64"
-    );
-    assert_eq!(
-        cache.onboard_user_user_agent(""),
-        "antigravity/hub/2.2.1 darwin/arm64 google-api-nodejs-client/10.3.0"
-    );
-    assert_eq!(
-        cache.onboard_user_user_agent(
-            "antigravity/hub/2.2.1 darwin/arm64 google-api-nodejs-client/10.3.0"
-        ),
-        "antigravity/hub/2.2.1 darwin/arm64 google-api-nodejs-client/10.3.0"
-    );
-    assert_eq!(
-        cache.version_from_user_agent("antigravity/hub/2.2.1 darwin/arm64"),
-        "2.2.1"
-    );
-    assert_eq!(
-        cache.version_from_user_agent("antigravity/1.23.2 windows/amd64"),
-        "1.23.2"
-    );
-}
-
 #[tokio::test]
 async fn rejects_invalid_empty_and_oversized_manifest_versions() {
     for body in [

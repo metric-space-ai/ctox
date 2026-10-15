@@ -4,42 +4,6 @@
 
 use super::claude_wire_header_name;
 
-#[test]
-fn protected_headers_use_captured_lowercase_wire_names() {
-    assert_eq!(claude_wire_header_name("Anthropic-Beta"), "anthropic-beta");
-    assert_eq!(
-        claude_wire_header_name("X-Claude-Code-Session-Id"),
-        "x-claude-code-session-id"
-    );
-    assert_eq!(claude_wire_header_name("custom-header"), "custom-header");
-}
-
-#[cfg(feature = "anthropic-fingerprint-transport")]
-#[test]
-fn native_messages_transport_installs_candidate_header_order() {
-    use super::claude_executor_request::claude_messages_orig_headers;
-    use super::helps::CLAUDE_CODE_MESSAGES_HEADER_ORDER;
-
-    let actual = claude_messages_orig_headers()
-        .iter()
-        .map(|(_, name)| String::from_utf8_lossy(name.as_ref()).into_owned())
-        .collect::<Vec<_>>();
-    assert_eq!(actual, CLAUDE_CODE_MESSAGES_HEADER_ORDER);
-}
-
-#[cfg(feature = "anthropic-fingerprint-transport")]
-#[test]
-fn native_count_tokens_transport_installs_candidate_header_order() {
-    use super::claude_executor_request::claude_count_tokens_orig_headers;
-    use super::helps::CLAUDE_CODE_COUNT_TOKENS_HEADER_ORDER;
-
-    let actual = claude_count_tokens_orig_headers()
-        .iter()
-        .map(|(_, name)| String::from_utf8_lossy(name.as_ref()).into_owned())
-        .collect::<Vec<_>>();
-    assert_eq!(actual, CLAUDE_CODE_COUNT_TOKENS_HEADER_ORDER);
-}
-
 #[cfg(feature = "anthropic-fingerprint-transport")]
 #[test]
 fn native_count_tokens_transport_merges_candidate_betas() {

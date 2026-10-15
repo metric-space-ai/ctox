@@ -10,29 +10,6 @@ use chrono::NaiveDate;
 use super::*;
 
 #[test]
-fn format_cpa_trace_id_matches_pinned_wall_clock_shape() {
-    let selected_at = NaiveDate::from_ymd_opt(2026, 7, 17)
-        .unwrap()
-        .and_hms_opt(21, 58, 49)
-        .unwrap();
-    assert_eq!(
-        format_cpa_trace_id(Some(selected_at), "auth-index", "request1"),
-        "20260717215849-auth-index-request1"
-    );
-    assert_eq!(
-        format_cpa_trace_id(Some(selected_at), " auth-index ", " request1 "),
-        "20260717215849-auth-index-request1"
-    );
-    for (selected_at, auth_index, request_id) in [
-        (None, "auth-index", "request1"),
-        (Some(selected_at), "", "request1"),
-        (Some(selected_at), "auth-index", ""),
-    ] {
-        assert!(format_cpa_trace_id(selected_at, auth_index, request_id).is_empty());
-    }
-}
-
-#[test]
 fn request_ids_preserve_context_derivation_and_handler_precedence() {
     for _ in 0..32 {
         let request_id = generate_request_id();

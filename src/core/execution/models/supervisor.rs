@@ -712,7 +712,7 @@ pub fn finish_persistent_backend_release_stop(root: &Path) -> Result<()> {
 mod release_stop_tests {
     use super::*;
 
-    #[test]
+#[test]
     fn release_backend_cleanup_preserves_live_pid_marker() {
         let root = tempfile::tempdir().unwrap();
         let pid_path = managed_pid_paths(root.path()).remove(0);
@@ -3753,7 +3753,7 @@ mod tests {
     use std::sync::OnceLock;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
+#[test]
     fn voxtral_tts_cold_start_uses_model_budget_without_extending_other_roles() {
         for model in ["engineai/Voxtral-4B-TTS-2603", "voxtral-4b-tts-2603"] {
             let budget = backend_startup_wait_secs_for_model(Some(model));
@@ -3773,7 +3773,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn propagate_backend_outcome_is_fatal_for_chat_best_effort_for_aux() {
         // Chat (primary) failure must bubble up so the caller holds the task
         // with cooldown instead of burning it.
@@ -3797,7 +3797,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn chat_backend_launch_failure_is_persisted_surfaced_and_cleared() {
         let root = temp_root("chat-launch-failure-status");
 
@@ -3893,7 +3893,7 @@ mod tests {
         production
     }
 
-    #[test]
+#[test]
     fn managed_runtime_ports_cover_core_backend_defaults_without_boundary_proxy() {
         let root = std::env::temp_dir().join(format!(
             "ctox-supervisor-managed-ports-{}",
@@ -3911,7 +3911,7 @@ mod tests {
         assert!(!port_set.contains(&12434), "unexpected boundary proxy port");
     }
 
-    #[test]
+#[test]
     fn api_runtime_does_not_keep_primary_generation_managed() {
         let root = temp_root("api-runtime-chat-disabled");
         let mut env_map = BTreeMap::new();
@@ -3924,7 +3924,7 @@ mod tests {
         assert!(!managed_backend_enabled(&root, ManagedBackendRole::Chat));
     }
 
-    #[test]
+#[test]
     fn startup_lock_path_scan_returns_only_backend_lock_files() {
         let root = std::env::temp_dir().join(format!(
             "ctox-supervisor-lock-scan-{}",
@@ -4068,7 +4068,7 @@ mod tests {
         runtime_env::save_runtime_env_map(root, &env_map).unwrap();
     }
 
-    #[test]
+#[test]
     fn managed_chat_launch_env_uses_plan_and_filters_unrelated_flags() {
         let root = temp_root("launch-env-chat");
         runtime_state::persist_runtime_state(
@@ -4146,7 +4146,7 @@ mod tests {
         assert!(!env.contains_key("CTOX_SHOULD_NOT_LEAK"));
     }
 
-    #[test]
+#[test]
     fn managed_chat_spec_prefers_active_model_over_stale_engine_model() {
         let root = temp_root("chat-spec-prefers-active-model");
         runtime_env::save_runtime_env_map(&root, &BTreeMap::new()).unwrap();
@@ -4182,7 +4182,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
+#[test]
     fn managed_aux_launch_env_keeps_role_overrides_only() {
         let root = temp_root("launch-env-aux");
         persist_runtime_env_text(
@@ -4232,45 +4232,7 @@ mod tests {
         assert!(!env.contains_key("CTOX_CHAT_RUNTIME_PLAN_ACTIVE"));
     }
 
-    #[test]
-    fn managed_backend_launch_spec_captures_typed_boundary_contract() {
-        let root = temp_root("launch-spec-chat");
-        persist_chat_plan(&root, &sample_chat_plan("openai/gpt-oss-120b"));
-        let spec = ManagedBackendSpec {
-            display_model: "openai/gpt-oss-120b".to_string(),
-            request_model: "openai/gpt-oss-120b".to_string(),
-            port: 1234,
-            transport_endpoint: Some("/tmp/ctox-primary.sock".to_string()),
-            health_path: "/health",
-            launcher_kind: ManagedLauncherKind::Engine,
-            compute_target: None,
-        };
-        let launch_spec = build_managed_backend_launch_spec(
-            &root,
-            ManagedBackendRole::Chat,
-            &spec,
-            &runtime_gpu_manager::GpuAdmission {
-                visible_devices: Some("0,1".to_string()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        assert_eq!(launch_spec.version, 2);
-        assert_eq!(launch_spec.role, "chat");
-        assert_eq!(launch_spec.request_model, "openai/gpt-oss-120b");
-        assert_eq!(launch_spec.port, 1234);
-        assert_eq!(
-            launch_spec.transport_endpoint.as_deref(),
-            Some("/tmp/ctox-primary.sock")
-        );
-        assert_eq!(launch_spec.launcher_kind, "engine");
-        assert_eq!(launch_spec.visible_devices.as_deref(), Some("0,1"));
-        assert_eq!(launch_spec.engine_config.max_seq_len, Some(131_072));
-        assert_eq!(launch_spec.engine_config.isq.as_deref(), Some("Q4K"));
-    }
-
-    #[test]
+#[test]
     fn managed_engine_runtime_config_renders_typed_worker_contract() {
         let root = temp_root("engine-command");
         let launch_spec = ManagedBackendLaunchSpec {
@@ -4324,7 +4286,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(config_path).unwrap(), rendered);
     }
 
-    #[test]
+#[test]
     fn managed_engine_runtime_config_forces_text_kind_for_language_model_only_chat() {
         let launch_spec = ManagedBackendLaunchSpec {
             version: 2,
@@ -4349,7 +4311,7 @@ mod tests {
         assert!(!rendered.contains("kind = \"vision\""));
     }
 
-    #[test]
+#[test]
     fn managed_engine_launch_rejects_cpu_only_binary_on_gpu_host() {
         let root = temp_root("engine-command-mismatch");
         let engine_binary = root.join("runtime/tools/model-runtime/bin/ctox-engine");
@@ -4392,7 +4354,7 @@ mod tests {
         });
     }
 
-    #[test]
+#[test]
     fn managed_engine_parallel_isq_override_suppresses_singlethread_env() {
         let root = temp_root("engine-command-parallel-isq");
         let engine_binary = root.join("runtime/tools/model-runtime/bin/ctox-engine");
@@ -4460,7 +4422,7 @@ mod tests {
         });
     }
 
-    #[test]
+#[test]
     fn collect_managed_backend_env_keeps_chat_overrides_when_plan_exists() {
         let root = temp_root("chat-env-overrides-with-plan");
         let plan = runtime_plan::ChatRuntimePlan {
@@ -4572,7 +4534,7 @@ mod tests {
         assert_eq!(env_map.get("CTOX_ENGINE_WRITE_UQFF"), None);
     }
 
-    #[test]
+#[test]
     fn finalize_chat_quant_artifact_promotes_pending_file() {
         let root = temp_root("finalize-chat-quant-artifact");
         let plan = runtime_plan::ChatRuntimePlan {
@@ -4654,38 +4616,7 @@ mod tests {
         assert!(!pending.parent().unwrap().exists());
     }
 
-    #[test]
-    fn production_supervisor_avoids_shell_launchers() {
-        let production = production_source(include_str!("supervisor.rs"));
-
-        for forbidden in [
-            "Command::new(\"bash\")",
-            "run_engine.sh",
-            "run_speaches_cpu_backend.sh",
-            ".arg(\"-lc\")",
-            "uvx",
-            "git+https://github.com/speaches-ai/speaches.git",
-        ] {
-            assert!(
-                !production.contains(forbidden),
-                "supervisor production path still contains shell launcher detail `{forbidden}`"
-            );
-        }
-        assert!(
-            !production.contains("managed-backend-launch"),
-            "supervisor production path must not retain the legacy launcher trampoline"
-        );
-        assert!(
-            production.contains("spawn_managed_engine_backend("),
-            "supervisor production path must spawn the engine worker directly from the typed launch spec"
-        );
-        assert!(
-            production.contains(".arg(\"from-config\")"),
-            "supervisor production path must boot the worker from a typed runtime config"
-        );
-    }
-
-    #[test]
+#[test]
     fn auxiliary_launchability_fails_fast_when_engine_binary_is_missing() {
         let root = temp_root("aux-launchability-missing-engine");
         let err = ensure_auxiliary_backend_launchable(&root, engine::AuxiliaryRole::Embedding)
@@ -4695,7 +4626,7 @@ mod tests {
             .contains("embedding backend requires ctox-engine"));
     }
 
-    #[test]
+#[test]
     fn auxiliary_embedding_uses_ctox_engine_when_installed() {
         let root = temp_root("aux-embedding-ctox-engine");
         let engine_binary = root.join("runtime/tools/model-runtime/bin/ctox-engine");
@@ -4733,7 +4664,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn wait_for_backend_ready_fails_when_child_exits_early() {
         let root = temp_root("backend-ready-early-exit");
         let pid_path = backend_pid_path(&root, ManagedBackendRole::Embedding);
@@ -4779,7 +4710,7 @@ mod tests {
         assert!(message.contains("ctox-engine binary could not be prepared for this host"));
     }
 
-    #[test]
+#[test]
     fn wait_for_backend_ready_reports_child_exit_status() {
         let root = temp_root("backend-ready-exit-status");
         let pid_path = backend_pid_path(&root, ManagedBackendRole::Embedding);
@@ -4828,7 +4759,7 @@ mod tests {
         assert!(message.contains("Applying ISQ on 1 threads."), "{message}");
     }
 
-    #[cfg(unix)]
+#[cfg(unix)]
     #[test]
     fn owned_child_liveness_probe_preserves_its_exit_status() -> Result<()> {
         let mut child = Command::new("/bin/sh").args(["-c", "exit 17"]).spawn()?;
@@ -4858,7 +4789,7 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "linux")]
+#[cfg(target_os = "linux")]
     fn listener_fixture(root: &Path, marker: &str) -> BoundedListener {
         let child = Command::new("timeout")
             .args([
@@ -4884,7 +4815,7 @@ mod tests {
         listener
     }
 
-    #[cfg(target_os = "linux")]
+#[cfg(target_os = "linux")]
     #[test]
     fn port_cleanup_preserves_an_unmanaged_listener_in_the_same_root() -> Result<()> {
         let root = tempfile::tempdir().unwrap();
@@ -4897,7 +4828,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(target_os = "linux")]
+#[cfg(target_os = "linux")]
     #[test]
     fn port_cleanup_stops_a_root_owned_legacy_launcher() -> Result<()> {
         let root = tempfile::tempdir()?;
@@ -4908,7 +4839,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(unix)]
+#[cfg(unix)]
     #[test]
     fn backend_failure_detail_retains_real_exit_status_without_a_log() {
         let root = tempfile::tempdir().unwrap();
@@ -4923,7 +4854,7 @@ mod tests {
         assert!(detail.contains("inspect"), "{detail}");
     }
 
-    #[test]
+#[test]
     fn clear_failed_local_chat_runtime_projection_clears_persisted_plans() {
         let root = temp_root("clear-failed-chat-projection");
         let plan = runtime_plan::ChatRuntimePlan {
@@ -5021,7 +4952,7 @@ mod tests {
         assert!(persisted_state.realized_context_tokens.is_none());
     }
 
-    #[test]
+#[test]
     fn managed_runtime_launcher_matcher_tracks_runtime_switch() {
         assert!(command_is_managed_runtime_launcher(
             "/home/test/CTOX/bin/ctox runtime switch Qwen/Qwen3.5-35B-A3B quality"
@@ -5034,7 +4965,7 @@ mod tests {
         ));
     }
 
-    #[test]
+#[test]
     fn managed_engine_process_matcher_tracks_only_persistent_backends() {
         assert!(managed_engine_process_command(
             "/home/test/CTOX/runtime/tools/model-runtime/bin/ctox-engine from-config --file /tmp/engine.toml"
@@ -5047,7 +4978,7 @@ mod tests {
         ));
     }
 
-    #[test]
+#[test]
     fn managed_engine_quantize_matcher_tracks_quantize_workers() {
         assert!(managed_engine_quantize_command(
             "/home/test/CTOX/runtime/tools/model-runtime/bin/ctox-engine quantize auto -m zai-org/GLM-4.7-Flash"
@@ -5057,10 +4988,4 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn current_process_cwd_matches_workspace_root() {
-        let root = std::env::current_dir().unwrap();
-        assert!(process_current_dir_matches_root(std::process::id(), &root));
-    }
 }

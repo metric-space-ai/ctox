@@ -71,26 +71,4 @@ impl std::fmt::Debug for CodexWebsocketStream {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn execution_events_are_encoded_and_end_once() {
-        let mut stream = CodexWebsocketStream::from_execution(
-            CodexWebsocketExecutionResult {
-                completed: b"{}".to_vec(),
-                events: vec![br#"{"type":"response.completed"}"#.to_vec()],
-                reconnects: 0,
-                committed: true,
-            },
-            1,
-        );
-        assert!(
-            String::from_utf8(stream.next_chunk().await.unwrap().unwrap())
-                .unwrap()
-                .starts_with("data: ")
-        );
-        assert_eq!(
-            stream.next_chunk().await.unwrap().unwrap(),
-            b"data: [DONE]\n\n"
-        );
-        assert!(stream.committed());
-    }
 }

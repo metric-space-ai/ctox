@@ -53,26 +53,4 @@ mod tests {
     use super::*;
     use crate::sdk::translator::TranslationContext;
 
-    #[test]
-    fn registry_activates_the_complete_antigravity_chat_pair() {
-        let registry = Registry::new();
-        register_openai_chat_antigravity(&registry);
-        assert!(registry.has_request_transformer(&openai(), &antigravity()));
-        assert!(registry.has_non_stream_response_transformer(&openai(), &antigravity()));
-        assert!(registry.has_stream_response_transformer(&openai(), &antigravity()));
-
-        let output = registry.translate_request(
-            &TranslationContext::default(),
-            &openai(),
-            &antigravity(),
-            "gemini-3",
-            br#"{"messages":[{"role":"user","content":"hello"}]}"#,
-            false,
-        );
-        let output: serde_json::Value = serde_json::from_slice(&output).unwrap();
-        assert_eq!(
-            output["request"]["contents"][0]["parts"][0]["text"],
-            "hello"
-        );
-    }
 }

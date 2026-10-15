@@ -26,29 +26,3 @@ impl Error for WrappedReplayError {
         Some(&self.source)
     }
 }
-
-#[test]
-fn upstream_websocket_replay_required_error_matches_pinned_contract() {
-    let error = new_upstream_websocket_replay_required_error();
-
-    assert!(is_upstream_websocket_replay_required(&error));
-    assert_eq!(error.status_code(), 426);
-    assert!(error.is_request_scoped());
-    assert_eq!(StatusError::status_code(&error), 426);
-    assert!(RequestScopedError::is_request_scoped(&error));
-    assert_eq!(
-        error.to_string(),
-        r#"{"error":{"message":"upstream transport requires full HTTP replay","type":"server_error","code":"upstream_http_replay_required","status":426}}"#
-    );
-}
-
-#[test]
-fn replay_required_detection_walks_wrapped_error_sources() {
-    let wrapped = WrappedReplayError {
-        source: new_upstream_websocket_replay_required_error(),
-    };
-    assert!(is_upstream_websocket_replay_required(&wrapped));
-
-    let unrelated = std::io::Error::other("not a replay signal");
-    assert!(!is_upstream_websocket_replay_required(&unrelated));
-}

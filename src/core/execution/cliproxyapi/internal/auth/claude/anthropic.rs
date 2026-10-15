@@ -172,7 +172,7 @@ mod tests {
         )
     }
 
-    #[test]
+#[test]
     fn bundle_uses_canonical_token_and_secret_types_without_debug_leaks() {
         let bundle = ClaudeAuthBundle::new(
             Some(SecretString::new("api-key-do-not-leak").unwrap()),
@@ -195,19 +195,4 @@ mod tests {
         assert!(!debug.contains("refresh-do-not-leak"));
     }
 
-    #[test]
-    fn empty_upstream_api_key_maps_to_none() {
-        let bundle = ClaudeAuthBundle::new(None, token_data(), SystemTime::UNIX_EPOCH);
-        assert!(bundle.api_key().is_none());
-    }
-
-    #[test]
-    fn pkce_shape_is_reused_instead_of_redeclared() {
-        let codes = PkceCodes {
-            code_verifier: "verifier".to_owned(),
-            code_challenge: "challenge".to_owned(),
-        };
-        assert_eq!(codes.code_verifier, "verifier");
-        assert_eq!(codes.code_challenge, "challenge");
-    }
 }

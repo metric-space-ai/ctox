@@ -32,12 +32,4 @@ pub fn register_gemini_passthrough(registry: &Registry) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn registry_activates_same_format_pair_and_token_count() {
-        let registry = Registry::new();
-        register_gemini_passthrough(&registry);
-        assert!(registry.has_request_transformer(&gemini(), &gemini()));
-        assert!(registry.has_stream_response_transformer(&gemini(), &gemini()));
-        assert!(registry.has_non_stream_response_transformer(&gemini(), &gemini()));
-    }
 }

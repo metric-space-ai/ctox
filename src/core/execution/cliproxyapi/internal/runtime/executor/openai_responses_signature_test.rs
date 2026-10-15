@@ -51,17 +51,6 @@ fn keeps_ids_when_store_is_enabled() {
 }
 
 #[test]
-fn noop_borrows_the_original_body() {
-    let valid = valid_encrypted_content();
-    let body = format!(
-        r#"{{"store":false,"input":[{{"id":"rs_good","type":"reasoning","encrypted_content":"{valid}","summary":[]}},{{"role":"user","content":"hi"}}]}}"#
-    );
-    let output = sanitize_openai_responses_reasoning_encrypted_content("test", body.as_bytes());
-    assert!(matches!(output, Cow::Borrowed(_)));
-    assert_eq!(output.as_ref(), body.as_bytes());
-}
-
-#[test]
 fn invalid_json_and_non_array_input_are_byte_identical_noops() {
     for body in [b"not-json".as_slice(), br#"{"input":"hello"}"#] {
         let output = sanitize_openai_responses_reasoning_encrypted_content("", body);

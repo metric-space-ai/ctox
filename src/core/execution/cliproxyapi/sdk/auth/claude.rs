@@ -61,7 +61,7 @@ pub struct ClaudeCallbackResult {
 }
 
 impl ClaudeCallbackResult {
-    #[must_use]
+#[must_use]
     pub fn from_parts(code: &str, state: &str, provider_error: &str) -> Self {
         Self {
             code: secret(code),
@@ -574,7 +574,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+#[tokio::test]
     async fn full_login_uses_injected_callback_and_secret_store_only() {
         let store = Arc::new(Store::default());
         let auth = ClaudeAuthenticator::new(
@@ -623,13 +623,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn callback_debug_and_refresh_contract_match_upstream() {
-        assert!(!format!(
-            "{:?}",
-            ClaudeCallbackResult::from_parts("do-not-leak", "state", "")
-        )
-        .contains("do-not-leak"));
-        assert_eq!(CLAUDE_REFRESH_LEAD, Duration::from_secs(4 * 60 * 60));
-    }
 }

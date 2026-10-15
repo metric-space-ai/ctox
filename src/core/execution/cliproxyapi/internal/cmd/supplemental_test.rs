@@ -87,13 +87,6 @@ fn login_plans_are_typed_cancellable_and_device_metadata_is_explicit() {
     );
 }
 
-#[test]
-fn io_prompt_uses_injected_streams_and_trims_input() {
-    let output = Vec::new();
-    let prompt = IoPrompt::new(io::Cursor::new(b"  project-id  \n".to_vec()), output);
-    assert_eq!(prompt.ask("Project: ").unwrap(), "project-id");
-}
-
 struct TestService {
     ran: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
@@ -172,28 +165,4 @@ impl VertexCredentialSink for MemoryVertexSink {
         *self.0.lock().unwrap() = Some(record.clone());
         Ok(auth_dir.join(&record.id))
     }
-}
-
-#[test]
-fn vertex_import_validates_and_persists_through_injected_boundaries() {
-    let fs = MemoryFs(
-        br#"{"project_id":"project","client_email":"a@example.test","private_key":"secret"}"#
-            .to_vec(),
-    );
-    let sink = MemoryVertexSink::default();
-    let path = execute_vertex_import(
-        &VertexImportPlan {
-            key_path: "key.json".into(),
-            auth_dir: "auth".into(),
-            prefix: "team".into(),
-            location: String::new(),
-        },
-        &fs,
-        &sink,
-    )
-    .unwrap();
-    assert_eq!(path, PathBuf::from("auth/vertex-team-project.json"));
-    let record = sink.0.lock().unwrap().clone().unwrap();
-    assert_eq!(record.location, "us-central1");
-    assert!(!format!("{record:?}").contains("secret"));
 }

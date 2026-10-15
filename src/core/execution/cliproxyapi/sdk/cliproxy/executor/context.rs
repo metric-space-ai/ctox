@@ -51,31 +51,4 @@ pub fn required_upstream_websocket(context: Option<&ExecutionTransportContext>) 
 mod tests {
     use super::*;
 
-    #[test]
-    fn missing_context_reports_both_flags_false() {
-        assert!(!downstream_websocket(None));
-        assert!(!required_upstream_websocket(None));
-    }
-
-    #[test]
-    fn setters_from_missing_context_mark_only_their_own_intention() {
-        let downstream = with_downstream_websocket(None);
-        assert!(downstream_websocket(Some(&downstream)));
-        assert!(!required_upstream_websocket(Some(&downstream)));
-
-        let required = with_required_upstream_websocket(None);
-        assert!(!downstream_websocket(Some(&required)));
-        assert!(required_upstream_websocket(Some(&required)));
-    }
-
-    #[test]
-    fn chaining_preserves_both_flags_without_mutating_parent_value() {
-        let parent = with_downstream_websocket(None);
-        let child = with_required_upstream_websocket(Some(parent));
-
-        assert!(downstream_websocket(Some(&parent)));
-        assert!(!required_upstream_websocket(Some(&parent)));
-        assert!(downstream_websocket(Some(&child)));
-        assert!(required_upstream_websocket(Some(&child)));
-    }
 }

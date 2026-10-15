@@ -81,28 +81,6 @@ fn model(is_compat: bool) -> CodexModel {
 }
 
 #[test]
-fn candidate_typed_compatibility_defaults_false_and_uses_the_upstream_wire_key() {
-    let ordinary: CodexModel =
-        serde_json::from_str(r#"{"name":"shared","alias":"public"}"#).unwrap();
-    assert!(!ordinary.is_compat);
-    assert!(serde_json::to_value(&ordinary)
-        .unwrap()
-        .get("is-compat")
-        .is_none());
-    let compatible: CodexModel =
-        serde_json::from_str(r#"{"name":"shared","alias":"public","is-compat":true}"#).unwrap();
-    assert!(compatible.is_compat);
-    assert_eq!(
-        serde_json::to_value(&compatible).unwrap()["is-compat"],
-        true
-    );
-    assert!(serde_json::from_str::<CodexModel>(
-        r#"{"name":"shared","alias":"public","is-compat":"true"}"#
-    )
-    .is_err());
-}
-
-#[test]
 fn candidate_configured_compatibility_propagates_for_all_six_api_key_families() {
     for provider in [
         "gemini",

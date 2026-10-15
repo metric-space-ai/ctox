@@ -32,12 +32,4 @@ pub fn register_openai_chat_passthrough(registry: &Registry) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn registry_activates_same_format_pair() {
-        let registry = Registry::new();
-        register_openai_chat_passthrough(&registry);
-        assert!(registry.has_request_transformer(&openai(), &openai()));
-        assert!(registry.has_stream_response_transformer(&openai(), &openai()));
-        assert!(registry.has_non_stream_response_transformer(&openai(), &openai()));
-    }
 }

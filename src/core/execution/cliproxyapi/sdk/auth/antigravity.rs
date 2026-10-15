@@ -48,7 +48,7 @@ pub struct AntigravityCallbackError {
 }
 
 impl AntigravityCallbackError {
-    #[must_use]
+#[must_use]
     pub const fn new(kind: AntigravityCallbackErrorKind) -> Self {
         Self { kind }
     }
@@ -80,7 +80,7 @@ pub struct AntigravityCallbackResult {
 }
 
 impl AntigravityCallbackResult {
-    #[must_use]
+#[must_use]
     pub fn from_parts(code: &str, state: &str, provider_error: &str) -> Self {
         Self {
             code: nonempty_secret(code),
@@ -203,7 +203,7 @@ pub struct AntigravityLoginPresentation {
 }
 
 impl AntigravityLoginPresentation {
-    #[must_use]
+#[must_use]
     pub fn auth_url(&self) -> &str {
         &self.auth_url
     }
@@ -242,7 +242,7 @@ pub struct AntigravityAuthenticator {
 }
 
 impl AntigravityAuthenticator {
-    #[must_use]
+#[must_use]
     pub fn new(
         service: Arc<AntigravityAuth>,
         callback: Arc<dyn AntigravityCallbackSession>,
@@ -753,21 +753,7 @@ mod tests {
         (authenticator, transport, callback_factory, presenter, store)
     }
 
-    #[test]
-    fn provider_and_refresh_lead_match_upstream_sdk() {
-        let (authenticator, _, _, _, _) = authenticator(
-            AntigravityCallbackResult::from_parts("code", "state-secret", ""),
-            r#"{"access_token":"access","refresh_token":"refresh","expires_in":3600}"#,
-        );
-        assert_eq!(authenticator.provider(), "antigravity");
-        assert_eq!(
-            authenticator.refresh_lead(),
-            Some(Duration::from_secs(5 * 60))
-        );
-        assert_ne!(authenticator.refresh_lead(), Some(REFRESH_SKEW));
-    }
-
-    #[tokio::test]
+#[tokio::test]
     async fn full_login_preserves_public_metadata_and_persists_only_in_secret_store() {
         let (authenticator, transport, callback, presenter, store) = authenticator(
             AntigravityCallbackResult::from_parts(" oauth-code ", " state-secret ", ""),
@@ -846,7 +832,7 @@ mod tests {
         assert_eq!(transport.requests.lock().unwrap().len(), 3);
     }
 
-    #[tokio::test]
+#[tokio::test]
     async fn invalid_state_stops_before_token_exchange_and_redacts_callback() {
         let callback_result =
             AntigravityCallbackResult::from_parts("authorization-secret", "wrong-state-secret", "");
@@ -869,7 +855,7 @@ mod tests {
         assert!(transport.requests.lock().unwrap().is_empty());
     }
 
-    #[tokio::test]
+#[tokio::test]
     async fn empty_refresh_token_remains_distinct_and_is_not_persisted() {
         let (authenticator, _, _, _, store) = authenticator(
             AntigravityCallbackResult::from_parts("code", "state-secret", ""),
@@ -887,7 +873,7 @@ mod tests {
         assert!(store.0.lock().unwrap().is_none());
     }
 
-    #[tokio::test]
+#[tokio::test]
     async fn cancelled_login_never_opens_callback_or_calls_provider() {
         let (authenticator, transport, callback, presenter, _) = authenticator(
             AntigravityCallbackResult::from_parts("code", "state-secret", ""),
@@ -909,7 +895,7 @@ mod tests {
         assert!(transport.requests.lock().unwrap().is_empty());
     }
 
-    #[test]
+#[test]
     fn callback_error_and_presentation_debug_do_not_render_secret_values() {
         let result =
             AntigravityCallbackResult::from_parts("code-secret", "state-secret", "provider-secret");

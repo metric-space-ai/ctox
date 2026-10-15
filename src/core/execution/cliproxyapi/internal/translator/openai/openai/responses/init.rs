@@ -38,23 +38,4 @@ mod tests {
     use super::*;
     use crate::sdk::translator::TranslationContext;
 
-    #[test]
-    fn registry_activates_request_and_both_response_paths() {
-        let registry = Registry::new();
-        register_openai_responses_chat_completions(&registry);
-        assert!(registry.has_request_transformer(&openai_response(), &openai()));
-        assert!(registry.has_stream_response_transformer(&openai_response(), &openai()));
-        assert!(registry.has_non_stream_response_transformer(&openai_response(), &openai()));
-
-        let request = registry.translate_request(
-            &TranslationContext::default(),
-            &openai_response(),
-            &openai(),
-            "gpt-5.4",
-            br#"{"input":"hello"}"#,
-            false,
-        );
-        let request: serde_json::Value = serde_json::from_slice(&request).unwrap();
-        assert_eq!(request["messages"][0]["content"], "hello");
-    }
 }

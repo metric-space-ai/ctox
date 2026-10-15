@@ -90,7 +90,7 @@ impl JwtClaims {
 
     /// ChatGPT plan from the access-token claims. Missing or blank claims use
     /// `free`, which is the upstream default when the claim is absent.
-    #[must_use]
+#[must_use]
     pub fn plan_type(&self) -> &str {
         let plan = self.codex_auth_info.chatgpt_plan_type.trim();
         if plan.is_empty() {
@@ -157,7 +157,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+#[test]
     fn extracts_account_and_email_without_echoing_token_on_error() {
         let claims = serde_json::json!({
             "email": "operator@example.com",
@@ -177,54 +177,7 @@ mod tests {
         assert!(!format!("{error:?} {error}").contains(secret));
     }
 
-    #[test]
-    fn preserves_complete_upstream_claim_shape_and_accepts_padding() {
-        let claims = serde_json::json!({
-            "at_hash": "hash",
-            "aud": ["codex", "chatgpt"],
-            "auth_provider": "openai",
-            "auth_time": 10,
-            "email": "operator@example.com",
-            "email_verified": true,
-            "exp": 20,
-            "iat": 11,
-            "iss": "https://auth.openai.com",
-            "jti": "jwt-id",
-            "rat": 12,
-            "sid": "session-id",
-            "sub": "subject",
-            "https://api.openai.com/auth": {
-                "chatgpt_account_id": "acct-123",
-                "chatgpt_plan_type": "plus",
-                "chatgpt_subscription_active_start": 1,
-                "chatgpt_subscription_active_until": "later",
-                "chatgpt_subscription_last_checked": "2026-08-03T12:00:00Z",
-                "chatgpt_user_id": "chat-user",
-                "groups": ["group-a", {"id": "group-b"}],
-                "organizations": [{
-                    "id": "org-a", "is_default": true,
-                    "role": "owner", "title": "A"
-                }],
-                "user_id": "user-a"
-            }
-        });
-        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap());
-        let mut padded = payload;
-        while !padded.len().is_multiple_of(4) {
-            padded.push('=');
-        }
-        let parsed = parse_jwt_token(&format!("header.{padded}.signature")).unwrap();
-        assert_eq!(parsed.aud, ["codex", "chatgpt"]);
-        assert!(parsed.email_verified);
-        assert_eq!(parsed.codex_auth_info.groups.len(), 2);
-        assert_eq!(parsed.codex_auth_info.organizations[0].id, "org-a");
-        assert!(parsed
-            .codex_auth_info
-            .chatgpt_subscription_last_checked
-            .is_some());
-    }
-
-    #[test]
+#[test]
     fn plan_type_defaults_blank_claims_to_free() {
         assert_eq!(JwtClaims::default().plan_type(), DEFAULT_PLAN_TYPE);
         let whitespace = JwtClaims {

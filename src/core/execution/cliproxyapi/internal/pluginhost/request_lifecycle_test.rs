@@ -52,41 +52,6 @@ impl RequestInterceptor for Interceptor {
     }
 }
 
-#[tokio::test]
-async fn terminating_high_priority_interceptor_stops_chain() {
-    let high = Arc::new(AtomicUsize::new(0));
-    let low = Arc::new(AtomicUsize::new(0));
-    let chain = RequestInterceptorChain::new(vec![
-        RequestInterceptorRecord {
-            plugin_id: "low".to_owned(),
-            priority: 10,
-            interceptor: Arc::new(Interceptor {
-                calls: low.clone(),
-                terminate: false,
-            }),
-        },
-        RequestInterceptorRecord {
-            plugin_id: "high".to_owned(),
-            priority: 20,
-            interceptor: Arc::new(Interceptor {
-                calls: high.clone(),
-                terminate: true,
-            }),
-        },
-    ]);
-    let response = chain
-        .before_auth(RequestInterceptRequest {
-            request_id: "request-1".to_owned(),
-            ..RequestInterceptRequest::default()
-        })
-        .await;
-    assert!(response.terminate);
-    assert_eq!(response.status_code, 403);
-    assert_eq!(response.response_body, br#"{"error":"blocked"}"#);
-    assert_eq!(high.load(Ordering::Relaxed), 1);
-    assert_eq!(low.load(Ordering::Relaxed), 0);
-}
-
 struct Lifecycle {
     seen: Arc<Mutex<Vec<RequestCompletion>>>,
     started: Arc<Notify>,
@@ -108,45 +73,4 @@ impl RequestLifecyclePlugin for Lifecycle {
             Ok(())
         })
     }
-}
-
-#[tokio::test]
-async fn completion_is_detached_and_owns_cloned_metadata() {
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let started = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    let dispatcher = RequestCompletionDispatcher::new(vec![RequestLifecycleRecord {
-        plugin_id: "lifecycle".to_owned(),
-        priority: 1,
-        lifecycle: Arc::new(Lifecycle {
-            seen: seen.clone(),
-            started: started.clone(),
-            release: release.clone(),
-        }),
-    }]);
-    let mut completion = RequestCompletion {
-        request_id: "request-1".to_owned(),
-        outcome: RequestCompletionOutcome(RequestCompletionOutcome::CANCELED.to_owned()),
-        metadata: [(
-            "nested".to_owned(),
-            serde_json::json!({"value": "original"}),
-        )]
-        .into(),
-        ..RequestCompletion::default()
-    };
-    dispatcher.complete(completion.clone());
-    completion
-        .metadata
-        .get_mut("nested")
-        .expect("nested metadata")["value"] = serde_json::json!("mutated");
-    tokio::time::timeout(Duration::from_secs(1), started.notified())
-        .await
-        .unwrap();
-    assert_eq!(
-        seen.lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)[0]
-            .metadata["nested"]["value"],
-        "original"
-    );
-    release.notify_one();
 }

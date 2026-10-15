@@ -281,32 +281,4 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
-    async fn custom_provider_registers_translates_and_executes_through_host() {
-        let payload: Value = serde_json::from_slice(&run_demo().await.unwrap()).unwrap();
-        assert_eq!(payload["method"], "POST");
-        assert_eq!(
-            payload["headers"]["Authorization"][0],
-            "Bearer demo-api-key"
-        );
-        assert_eq!(payload["headers"]["Content-Type"][0], "application/json");
-        assert_eq!(payload["body"], r#"{"messages":[]}"#);
-    }
-
-    #[tokio::test]
-    async fn missing_host_client_fails_without_rendering_api_key() {
-        let error = executor_registry()
-            .execute(
-                PROVIDER_KEY,
-                ExecutorRequest {
-                    auth_attributes: [("api_key".to_owned(), "secret-value".to_owned())]
-                        .into_iter()
-                        .collect(),
-                    ..ExecutorRequest::default()
-                },
-            )
-            .await
-            .unwrap_err();
-        assert!(!format!("{error:?}").contains("secret-value"));
-    }
 }

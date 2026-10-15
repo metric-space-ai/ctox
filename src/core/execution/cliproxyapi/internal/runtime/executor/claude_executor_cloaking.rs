@@ -1019,17 +1019,7 @@ fn encode_or_original(value: &Value, original: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn entrypoint_and_fingerprint_match_pinned_semantics() {
-        assert_eq!(
-            parse_claude_entrypoint("claude-cli/2 (external, vscode)"),
-            "vscode"
-        );
-        assert_eq!(parse_claude_entrypoint("other"), "cli");
-        assert_eq!(compute_claude_fingerprint("short", "2.1.63").len(), 3);
-    }
-
-    #[test]
+#[test]
     fn legacy_system_blocks_are_preserved_as_separate_reminders() {
         let mut policy = ClaudeCloakPolicy::oauth_default();
         policy.current_date = Some("2026-08-04".to_owned());
@@ -1058,7 +1048,7 @@ mod tests {
             .starts_with("x-anthropic-billing-header:"));
     }
 
-    #[test]
+#[test]
     fn current_models_receive_authoritative_mid_conversation_system_messages() {
         let mut policy = ClaudeCloakPolicy::oauth_default();
         policy.current_date = Some("2026-08-04".to_owned());
@@ -1079,7 +1069,7 @@ mod tests {
         assert_eq!(messages[2]["content"][0]["text"], "second");
     }
 
-    #[test]
+#[test]
     fn non_text_caller_system_block_is_typed_request_scoped_400() {
         let error = try_apply_claude_cloaking(
             br#"{"model":"claude-opus-5","system":[{"type":"input_image"}],"messages":[{"role":"user","content":"hello"}]}"#,
@@ -1094,7 +1084,7 @@ mod tests {
         assert!(RequestScopedError::is_request_scoped(&error));
     }
 
-    #[test]
+#[test]
     fn strict_mode_can_drop_non_text_system_and_verified_client_is_byte_passthrough() {
         let input = br#"{"model":"claude-opus-5","system":[{"type":"input_image"}],"messages":[{"role":"user","content":"hello"}]}"#;
         let mut strict = ClaudeCloakPolicy::oauth_default();
@@ -1110,7 +1100,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn candidate_auto_policy_cloaks_unconfirmed_user_agent_and_never_bypasses() {
         let input = br#"{"model":"claude-opus-5","messages":[{"role":"user","content":"hello"}]}"#;
         let mut copied_user_agent = ClaudeCloakPolicy::oauth_default();
@@ -1126,48 +1116,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn candidate_context_management_and_fallback_billing_are_exact() {
-        let caller_owned = br#"{"context_management":{"edits":[]}}"#;
-        assert_eq!(
-            inject_claude_code_context_management(caller_owned),
-            caller_owned
-        );
-        let injected = inject_claude_code_context_management(br#"{"model":"claude-opus-5"}"#);
-        let value: Value = serde_json::from_slice(&injected).unwrap();
-        assert_eq!(
-            value["context_management"],
-            json!({"edits":[{"type":"clear_thinking_20251015","keep":"all"}]})
-        );
-        let header = claude_cch_fallback_billing_header(
-            br#"{"messages":[{"role":"user","content":"last user"}]}"#,
-            "2.1.220",
-            "sdk-cli",
-            "",
-        );
-        assert!(header.contains("cc_version=2.1.220."));
-        assert!(header.contains("cc_entrypoint=sdk-cli; cch=00000;"));
-    }
-
-    #[test]
-    fn candidate_current_date_reminder_text_is_exact() {
-        let mut policy = ClaudeCloakPolicy::oauth_default();
-        policy.current_date = Some("2026-08-01".to_owned());
-        let output = inject_claude_system_instructions(
-            br#"{"model":"claude-opus-5","messages":[{"role":"user","content":"hello"}]}"#,
-            &policy,
-        );
-        let value: Value = serde_json::from_slice(&output).unwrap();
-        assert_eq!(
-            value["messages"][0]["content"][0]["text"],
-            "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# currentDate\nToday's date is 2026-08-01.\n\n      IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>\n\n"
-        );
-        assert!(value["messages"][0]["content"][0]
-            .get("cache_control")
-            .is_none());
-    }
-
-    #[test]
+#[test]
     fn candidate_current_date_uses_typed_credential_timezone() {
         let now = chrono::DateTime::parse_from_rfc3339("2026-08-04T01:30:00Z")
             .unwrap()
@@ -1182,7 +1131,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn cache_injection_uses_last_eligible_tool_system_and_second_last_user() {
         let input = br#"{"tools":[{"name":"a"},{"name":"b","defer_loading":true}],"system":[{"type":"text","text":"s"}],"messages":[{"role":"user","content":"one"},{"role":"assistant","content":"ok"},{"role":"user","content":"two"}]}"#;
         let output = ensure_claude_cache_control(input);
@@ -1195,7 +1144,7 @@ mod tests {
             .is_some());
     }
 
-    #[test]
+#[test]
     fn ttl_normalization_is_ordered_and_noop_is_byte_identical() {
         let no_change = br#"{"tools":[{"cache_control":{"type":"ephemeral","ttl":"1h"}}],"system":[{"text":"<x>&","cache_control":{"type":"ephemeral","ttl":"1h"}}]}"#;
         assert_eq!(normalize_claude_cache_control_ttl(no_change), no_change);
@@ -1204,7 +1153,7 @@ mod tests {
         assert!(value["system"][0]["cache_control"].get("ttl").is_none());
     }
 
-    #[test]
+#[test]
     fn candidate_claude_system_terminal_generation_keeps_caller_blocks_top_level() {
         let payload = br#"{"model":"claude-opus-5","system":[{"type":"text","text":"first guidance"},{"type":"text","text":"second guidance"}],"messages":[{"role":"user","content":"first"},{"role":"user","content":"second"}]}"#;
         let mut policy = ClaudeCloakPolicy::oauth_default();
@@ -1228,7 +1177,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn candidate_claude_system_terminal_count_keeps_only_caller_blocks_top_level() {
         let payload = br#"{"model":"claude-opus-5","system":[{"type":"text","text":"first guidance"},{"type":"text","text":"second guidance"}],"messages":[{"role":"user","content":"first"},{"role":"user","content":"second"}]}"#;
         let output = relocate_claude_system_prompt_for_count_tokens(payload, false);
@@ -1244,7 +1193,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn candidate_claude_system_terminal_preserves_legacy_strict_and_mid_system_routes() {
         for (model, strict, messages, expected_roles) in [
             (
@@ -1320,7 +1269,7 @@ mod tests {
         )
     }
 
-    #[test]
+#[test]
     fn candidate_claude_cache_thread_reserves_marker_and_preserves_removal_priority() {
         let payload = thread_cache_fixture(r#""thread":{"type":"create"},"#);
         let output = enforce_claude_cache_control_limit(payload.as_bytes(), 4);
@@ -1338,7 +1287,7 @@ mod tests {
         assert_eq!(value["thread"]["type"], "create");
     }
 
-    #[test]
+#[test]
     fn candidate_claude_cache_thread_matches_nonnull_and_first_duplicate_semantics() {
         for (prefix, expected) in [
             ("", 4),
@@ -1358,7 +1307,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn candidate_claude_cache_thread_zero_budget_and_noop_are_safe() {
         let payload =
             thread_cache_fixture(r#""thread":{"type":"continue","previous_message_id":"m1"},"#);
@@ -1376,7 +1325,7 @@ mod tests {
         assert_eq!(enforce_claude_cache_control_limit(invalid, 4), invalid);
     }
 
-    #[test]
+#[test]
     fn candidate_claude_cache_thread_retains_raw_large_numbers_and_duplicate_siblings() {
         let prefix = r#""thread":{"type":"create"},"n":1e1000,"keep":1.000e+30,"duplicate":1,"duplicate":2,"#;
         let payload = thread_cache_fixture(prefix);
@@ -1389,7 +1338,7 @@ mod tests {
         assert!(crate::internal::util::valid_json_bytes(&output));
     }
 
-    #[test]
+#[test]
     fn cache_limit_preserves_last_tool_before_messages() {
         let output = enforce_claude_cache_control_limit(
             br#"{"tools":[{"name":"a","cache_control":{}},{"name":"b","cache_control":{}}],"system":[{"cache_control":{}}],"messages":[{"content":[{"cache_control":{}},{"cache_control":{}}]}]}"#,

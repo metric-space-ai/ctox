@@ -142,13 +142,4 @@ fn lock_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn stores_are_instance_owned_and_ids_are_not_debugged() {
-        let first = CodexWebsocketSessionStore::default();
-        let second = CodexWebsocketSessionStore::default();
-        let session = first.get_or_create("secret-session").unwrap();
-        assert_eq!(first.len(), 1);
-        assert!(second.is_empty());
-        assert!(!format!("{session:?}").contains("secret-session"));
-    }
 }

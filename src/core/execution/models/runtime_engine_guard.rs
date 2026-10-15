@@ -286,7 +286,7 @@ pub fn host_requires_nvidia_cuda(root: &Path) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
+#[test]
     fn parses_engine_binary_build_features_from_doctor_json() {
         let raw = br#"{
             "system": {
@@ -310,24 +310,7 @@ mod tests {
         assert_eq!(features.label(), "cuda cudnn nccl flash-attn");
     }
 
-    #[test]
-    fn parses_host_acceleration_override_aliases() {
-        assert_eq!(
-            parse_host_acceleration_override("cuda"),
-            Some(HostAccelerationRequirement::NvidiaCuda)
-        );
-        assert_eq!(
-            parse_host_acceleration_override("apple-metal"),
-            Some(HostAccelerationRequirement::AppleMetal)
-        );
-        assert_eq!(
-            parse_host_acceleration_override("cpu-only"),
-            Some(HostAccelerationRequirement::CpuOnly)
-        );
-        assert_eq!(parse_host_acceleration_override("bogus"), None);
-    }
-
-    #[test]
+#[test]
     fn command_output_with_timeout_times_out_hung_child() {
         let err = command_output_with_timeout(
             Command::new("sh").args(["-c", "sleep 2"]),

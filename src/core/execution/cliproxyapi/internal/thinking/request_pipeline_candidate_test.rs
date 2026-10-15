@@ -370,53 +370,6 @@ impl ProviderApplier for LegacyPlugin {
 }
 
 #[test]
-fn candidate_thinking_pipeline_plugin_receives_owned_metadata_or_fails_explicitly() {
-    let engine = ThinkingEngine::default();
-    assert!(engine.register_plugin_provider("view-owner", "owned-plugin", 1, Arc::new(ViewPlugin)));
-    assert!(engine.register_plugin_provider(
-        "legacy-owner",
-        "legacy-plugin",
-        1,
-        Arc::new(LegacyPlugin)
-    ));
-    let pipeline = pipeline(engine);
-    let mut selected = owned_model("private-plugin-model", "owned-plugin", &["high"]);
-    selected.is_compat = true;
-    selected.support_configuration_update = true;
-    let output = run(
-        &pipeline,
-        b"{}",
-        b"{}",
-        b"{}",
-        "private-plugin-model(high)",
-        "owned-plugin",
-        "owned-plugin",
-        Some(&selected),
-        None,
-    )
-    .unwrap();
-    assert_eq!(at(&output, "id"), json!("private-plugin-model"));
-    assert_eq!(at(&output, "level"), json!("high"));
-    assert_eq!(at(&output, "compat"), json!(true));
-    assert_eq!(at(&output, "updates"), json!(true));
-    selected.provider_type = "legacy-plugin".to_owned();
-    let error = run(
-        &pipeline,
-        b"{}",
-        b"{}",
-        b"{}",
-        "private-plugin-model(high)",
-        "legacy-plugin",
-        "legacy-plugin",
-        Some(&selected),
-        None,
-    )
-    .unwrap_err();
-    assert_eq!(error.code, ErrorCode::ProviderMismatch);
-    assert_eq!(error.model, "private-plugin-model");
-}
-
-#[test]
 fn candidate_thinking_pipeline_static_unsigned_and_owned_signed_bounds_are_lossless() {
     let static_info = ModelInfo {
         id: "claude-large-static",

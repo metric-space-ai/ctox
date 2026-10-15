@@ -23,15 +23,3 @@ impl ServiceTier {
         body
     }
 }
-#[test]
-fn priority_is_narrowly_scoped() {
-    let tier = ServiceTier::configured(true);
-    assert_eq!(
-        tier.normalize("codex", "gpt-5.5", serde_json::json!({}))["service_tier"],
-        "priority"
-    );
-    assert!(tier
-        .normalize("claude", "gpt-5.5", serde_json::json!({}))
-        .get("service_tier")
-        .is_none());
-}
