@@ -17,6 +17,11 @@ import {
   cronForTopic,
   issueLabel,
   issueWindow,
+  digestOf,
+  withDigest,
+  digestActive,
+  cronForDigest,
+  issueNodeLabel,
   normalizeStoryUrl,
   issuesForTopic,
   mergeIntoAccountSource,
@@ -246,4 +251,26 @@ test('issue window runs since the previous issue and lists covered links', () =>
   assert.equal(command.payload.window_start_ms, window.startMs);
   assert.deepEqual(command.payload.covered_urls, ['cohere.com/blog/new']);
   assert.match(command.payload.instruction, /Zeitfenster: nur Meldungen/);
+});
+
+test('weekly digest rides on a daily topic with its own schedule', () => {
+  const topic = normalizeTopic({ id: 't1', title: 'KI', cadence: 'daily', run_time: '07:00' });
+  assert.deepEqual(digestOf(topic), { enabled: false, weekday: 5, run_time: '17:00' });
+  const on = withDigest(topic, { enabled: true, weekday: 0, run_time: '18:30' });
+  assert.equal(digestActive(on), true);
+  assert.equal(cronForDigest(on), '30 18 * * 0');
+  assert.equal(digestActive({ ...on, cadence: 'weekly' }), false);
+  assert.equal(digestActive({ ...on, enabled: false }), false);
+  const command = buildScheduleCommand(on, { digest: true });
+  assert.equal(command.payload.mode, 'digest');
+  assert.equal(command.payload.cron_expr, '30 18 * * 0');
+  assert.equal(command.payload.enabled, true);
+  assert.equal(buildScheduleCommand(on).payload.cron_expr, '0 7 * * *');
+  assert.equal(buildScheduleCommand(on).payload.mode, undefined);
+  const off = buildScheduleCommand(withDigest(on, { enabled: false }), { digest: true });
+  assert.equal(off.payload.enabled, false);
+  const today = new Date('2026-10-16T12:00:00Z');
+  const digestIssue = { issue_date: '2026-10-16', payload: { kind: 'weekly_digest' } };
+  assert.match(issueNodeLabel(digestIssue, [digestIssue], 'de', today), /^Woche · /);
+  assert.match(issueNodeLabel(digestIssue, [digestIssue], 'en', today), /^Week · /);
 });

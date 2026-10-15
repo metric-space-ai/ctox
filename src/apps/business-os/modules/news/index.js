@@ -10,6 +10,9 @@ import {
   buildAdapterCommand,
   buildAuthCommand,
   buildGenerateCommand,
+  digestActive,
+  digestOf,
+  withDigest,
   issueWindow,
   buildScheduleCommand,
   categoryCounts,
@@ -122,6 +125,15 @@ const labels = {
     weekly: '{1} {0}',
     deadline: 'Stichtag {0}',
     manual: 'Manuell',
+    digestLabel: 'Wochenzusammenfassung',
+    digestHint: 'Fasst die Tagesausgaben der Woche zu Top-Meldungen und Trends zusammen, ohne neue Recherche.',
+    digestWeekday: 'Wochentag',
+    digestTime: 'Uhrzeit',
+    digestSavedOn: 'Wochenzusammenfassung {0} {1} gespeichert',
+    digestSavedOff: 'Wochenzusammenfassung ausgeschaltet',
+    undo: 'Rückgängig',
+    undone: 'Rückgängig gemacht',
+    digestCadence: '{0} · Woche {1}',
   },
   en: {
     topicsTitle: 'Topics',
@@ -201,6 +213,15 @@ const labels = {
     weekly: '{1} {0}',
     deadline: 'Deadline {0}',
     manual: 'Manual',
+    digestLabel: 'Weekly digest',
+    digestHint: "Sums up the week's daily issues into top stories and trends, without new research.",
+    digestWeekday: 'Weekday',
+    digestTime: 'Time',
+    digestSavedOn: 'Weekly digest {0} {1} saved',
+    digestSavedOff: 'Weekly digest turned off',
+    undo: 'Undo',
+    undone: 'Undone',
+    digestCadence: '{0} · week {1}',
   },
 };
 
@@ -405,6 +426,7 @@ function wireEvents() {
   els.form?.querySelector('[name="cadence"]')?.addEventListener('change', syncCadenceFields);
   // Instant save: every committed field change of a saved topic persists.
   els.form?.addEventListener('change', (event) => {
+    if (event.target.closest?.('[data-digest-input]')) { onDigestChange(); return; }
     if (event.target?.dataset?.action === 'toggle-source') return;
     if (event.target === els.newSourceKind || event.target === els.newSourceValue) return;
     if (event.target?.closest?.('[data-digest-undo], [data-panel="digest"]')) return;
@@ -449,6 +471,7 @@ function onClick(event) {
     'close-drawer': closeDrawer,
     'save-topic': saveTopic,
     'drawer-undo': undoDrawerChange,
+    'digest-undo': undoDigest,
     'delete-topic': deleteTopic,
     'drawer-tab': () => setDrawerTab(target.dataset.tab),
     'add-source': addDraftSource,
@@ -499,6 +522,21 @@ function render() {
 }
 
 function cadenceLabel(topic) {
+  const base = baseCadenceLabel(topic);
+  if (!digestActive(topic)) return base;
+  const digest = digestOf(topic);
+  return t('digestCadence', base, `${weekdayShort(digest.weekday)} ${digest.run_time}`);
+}
+
+function weekdayShort(weekday) {
+  return new Date(2024, 0, 7 + (Number(weekday) || 0)).toLocaleDateString(state.lang === 'en' ? 'en-US' : 'de-DE', { weekday: 'short' }).replace('.', '');
+}
+
+function weekdayLong(weekday) {
+  return new Date(2024, 0, 7 + (Number(weekday) || 0)).toLocaleDateString(state.lang === 'en' ? 'en-US' : 'de-DE', { weekday: 'long' });
+}
+
+function baseCadenceLabel(topic) {
   if (topic.cadence === 'daily') return t('daily', topic.run_time);
   if (topic.cadence === 'weekly') {
     const day = new Date(2024, 0, 7 + (Number(topic.weekday) || 0)).toLocaleDateString(state.lang === 'en' ? 'en-US' : 'de-DE', { weekday: 'short' }).replace('.', '');
@@ -933,6 +971,7 @@ function openDrawer(topic) {
   deleteButton.classList.remove('is-danger');
   deleteButton.setAttribute('title', t('deleteTopic'));
   deleteButton.setAttribute('aria-label', t('deleteTopic'));
+  renderDigestField();
   syncCadenceFields();
   syncSourcePlaceholder();
   setDrawerTab('topic');
@@ -985,6 +1024,108 @@ function syncCadenceFields() {
     deadline: cadence === 'deadline',
   };
   els.form?.querySelectorAll('[data-cadence-field]').forEach((field) => { field.hidden = !visible[field.dataset.cadenceField]; });
+  const digestField = els.form?.querySelector('[data-digest-field]');
+  if (digestField) digestField.hidden = cadence !== 'daily';
+}
+
+// --- Weekly digest (instant save + undo) ----------------------------------
+
+const DIGEST_UNDO_MS = 8000;
+
+function renderDigestField() {
+  const host = els.form?.querySelector('[data-digest-field]');
+  if (!host || !state.drawer) return;
+  const digest = digestOf(state.drawer.topic);
+  const days = [1, 2, 3, 4, 5, 6, 0]
+    .map((day) => `<option value="${day}"${day === digest.weekday ? ' selected' : ''}>${esc(weekdayLong(day))}</option>`)
+    .join('');
+  host.innerHTML = `
+    <label class="news-check"><input type="checkbox" data-digest-input="enabled"${digest.enabled ? ' checked' : ''} /> <span>${esc(t('digestLabel'))}</span></label>
+    <p class="news-digest-hint">${esc(t('digestHint'))}</p>
+    <div class="news-field-grid" data-digest-schedule${digest.enabled ? '' : ' hidden'}>
+      <div>
+        <label class="ctox-field-label" for="news-digest-weekday">${esc(t('digestWeekday'))}</label>
+        <select class="ctox-select" id="news-digest-weekday" data-digest-input="weekday">${days}</select>
+      </div>
+      <div>
+        <label class="ctox-field-label" for="news-digest-time">${esc(t('digestTime'))}</label>
+        <input class="ctox-input" id="news-digest-time" type="time" data-digest-input="run_time" value="${esc(digest.run_time)}" />
+      </div>
+    </div>
+    <div class="news-undo" data-digest-undo hidden>
+      <span data-digest-undo-text></span>
+      <button class="ctox-button" type="button" data-action="digest-undo">${esc(t('undo'))}</button>
+    </div>`;
+}
+
+function readDigestField() {
+  const host = els.form?.querySelector('[data-digest-field]');
+  return {
+    enabled: Boolean(host?.querySelector('[data-digest-input="enabled"]')?.checked),
+    weekday: Number(host?.querySelector('[data-digest-input="weekday"]')?.value ?? 5),
+    run_time: host?.querySelector('[data-digest-input="run_time"]')?.value || '17:00',
+  };
+}
+
+async function onDigestChange() {
+  if (!state.drawer) return;
+  const previous = digestOf(state.drawer.topic);
+  const next = readDigestField();
+  if (JSON.stringify(previous) === JSON.stringify(digestOf({ payload: { digest: next } }))) return;
+  const saved = await applyDigest(next);
+  if (!saved) return;
+  showDigestUndo(previous, next);
+}
+
+// Persisted topics save at once; a new topic keeps it in the draft until
+// the topic itself is created.
+async function applyDigest(digest) {
+  const drawer = state.drawer;
+  if (!drawer) return false;
+  drawer.topic = withDigest(drawer.topic, digest);
+  if (drawer.persisted) {
+    const topics = collection(COLLECTIONS.topics);
+    const stored = state.topics.find((item) => item.id === drawer.topic.id);
+    if (!topics || !stored) { notify('error', t('saveFailed')); return false; }
+    const topic = withDigest(stored, digest);
+    try {
+      await topics.upsert(topic);
+    } catch (error) {
+      notify('error', t('saveFailed'), error?.message);
+      return false;
+    }
+    dispatch(buildScheduleCommand(topic, { digest: true })).catch((error) => notify('error', t('commandFailed'), error?.message));
+  }
+  const schedule = els.form?.querySelector('[data-digest-schedule]');
+  if (schedule) schedule.hidden = !digestOf(drawer.topic).enabled;
+  return true;
+}
+
+function showDigestUndo(previous, next) {
+  const bar = els.form?.querySelector('[data-digest-undo]');
+  if (!bar || !state.drawer) return;
+  const text = next.enabled
+    ? t('digestSavedOn', weekdayLong(next.weekday), next.run_time)
+    : t('digestSavedOff');
+  bar.querySelector('[data-digest-undo-text]').textContent = text;
+  bar.hidden = false;
+  state.drawer.digestUndo = previous;
+  clearTimeout(state.digestUndoTimer);
+  state.digestUndoTimer = setTimeout(() => {
+    bar.hidden = true;
+    if (state.drawer) state.drawer.digestUndo = null;
+  }, DIGEST_UNDO_MS);
+}
+
+async function undoDigest() {
+  const previous = state.drawer?.digestUndo;
+  if (!previous) return;
+  clearTimeout(state.digestUndoTimer);
+  state.drawer.digestUndo = null;
+  if (await applyDigest(previous)) {
+    renderDigestField();
+    notify('success', t('undone'));
+  }
 }
 
 function syncSourcePlaceholder() {
@@ -1163,6 +1304,10 @@ async function persistDrawer(topic, sourceList = state.drawer?.sources || [], re
   if (scheduleChanged) {
     dispatch(buildScheduleCommand(topic)).catch((error) => notify('error', t('commandFailed'), error?.message));
   }
+  // The digest follows the topic: only a daily, active topic keeps it.
+  if (digestActive(topic) !== Boolean(previous && digestActive(previous)) || (digestActive(topic) && !previous)) {
+    dispatch(buildScheduleCommand(topic, { digest: true })).catch((error) => notify('error', t('commandFailed'), error?.message));
+  }
   return true;
 }
 
@@ -1260,6 +1405,7 @@ async function deleteTopic() {
   }
   try {
     await dispatch(buildScheduleCommand(topic, { deleted: true }));
+    if (digestOf(topic).enabled) await dispatch(buildScheduleCommand(topic, { deleted: true, digest: true }));
   } catch (error) {
     notify('error', t('commandFailed'), error?.message);
     return;
@@ -1313,6 +1459,7 @@ function importTopics() {
         idMap.set(raw.id, topic.id);
         await topics.upsert(topic);
         dispatch(buildScheduleCommand(topic)).catch(() => {});
+        if (digestActive(topic)) dispatch(buildScheduleCommand(topic, { digest: true })).catch(() => {});
       }
       for (const raw of Array.isArray(data.sources) ? data.sources : []) {
         const topicId = idMap.get(raw.topic_id);

@@ -21,7 +21,9 @@ categories, `max_posts`. `payload.record_snapshot.sources` — the enabled
 sources of this topic. `payload.issue_id`, `payload.issue_date`,
 `payload.previous_issue_id`, `payload.window_start` (ISO time; nothing older
 belongs in the issue) and `payload.covered_urls` (primary links earlier issues
-of this topic already carried). Only these sources plus open web search are in
+of this topic already carried). `payload.mode` is `weekly_digest` for the
+weekly summary of a daily topic; then follow "Weekly digest" below instead
+of collecting. Only these sources plus open web search are in
 scope; do not invent sources the topic did not configure, except to confirm or
 complete a story found through them.
 
@@ -193,6 +195,26 @@ otherwise the last 24 hours for daily topics and 7 days for weekly ones.
     parentheses, no lists of products), each with the `discussion_count` you
     measured and the `post_index` of its post. Parenthetical additions are cut
     by the writeback.
+
+## Weekly digest (`payload.mode: weekly_digest`)
+
+The digest re-tells the week from the topic's own daily issues; it is not a
+new research run.
+
+- Input is `payload.digest_posts` (the week's daily posts, strongest first,
+  with their links, dates and counts). Read nothing else: no source reads,
+  no web search. A post whose primary link is not among the week's posts is
+  dropped by the writeback (`not_in_week`).
+- Merge posts that tell the same story across days into one post; keep the
+  original primary source as `link_card` and its `published_at`, and say in the
+  body how the story developed during the week.
+- Pick the top stories of the week (at most `record_snapshot.topic.max_posts`)
+  by relevance to the topic prompt first, measured attention second.
+- `intro` says what happened this week and why it mattered; the editorial
+  rules above (substance, categories, poster, titles) apply unchanged.
+- `trends` are the three to five themes of the week with summed
+  `discussion_count`; `summary` is two or three sentences on the week.
+- Reply with the same `ctox.news.issue.v1` object; `source_report` stays empty.
 
 ## Reply contract — `ctox.news.issue.v1`
 
