@@ -431,10 +431,9 @@ test('Shell-Kernel: apps mit Aktivierungszustand, source.* rechtegeprüft, draft
   assert.deepEqual(await s.list(), ['README.md', 'index.js']);
   assert.equal(await s.read('README.md'), '# Leads');
   await s.draft.write('README.md', '# Leads v2');
-  await s.draft.setCollections({ leads: { add: ['score'] } });
   assert.equal(await s.read('README.md'), '# Leads v2', 'Entwurf überlagert');
   const stale = await s.draft.publish({ base_app_ver: '0' }).result;
-  assert.deepEqual(stale, { status: 'rejected', reason: 'stale_base' });
+  assert.deepEqual([stale.status, stale.reason], ['rejected', 'stale_base']);
   const pub = await s.draft.publish({ base_app_ver: '1' }).result;
   assert.equal(pub.status, 'accepted');
   await until(() => sk.apps.get()[0].activated_ver === pub.rev);

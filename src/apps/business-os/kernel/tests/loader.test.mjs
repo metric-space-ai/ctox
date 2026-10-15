@@ -16,7 +16,7 @@ test('loader follows shell activation, persists snapshot and falls back on faile
  }
  assert.equal(loader.shellVersion,'2');assert.deepEqual(calls.find(x=>x[0]==='start2')[1],{draft:'kept'});
  assert.ok(loader.kernel.statusZone.get().some(x=>x.code==='shell.swap_failed'));
- assert.equal((await loader.kernel.sim.windowState()).find(x=>x.key==='shell').snapshot.draft,'second');
+ assert.equal((await loader.kernel.windowState.get('shell')).draft,'second');
  await loader.close();
 });
 test('artifact URLs are versioned and reject path traversal',()=>{

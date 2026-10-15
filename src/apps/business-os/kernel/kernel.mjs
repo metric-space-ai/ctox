@@ -1,4 +1,4 @@
-import { artifactUrl, utf8Base64 } from './artifact-url.mjs';
+import { artifactUrl, utf8Base64, bytesBase64 } from './artifact-url.mjs';
 import { takeoverV3Database } from './migrate-v3.mjs';
 import { snapshotBytes } from './snapshot.mjs';
 import { evictCollection, reclaimCache, CLIENT_CACHE_BUDGET } from './cache.mjs';
@@ -10,12 +10,75 @@ import { CtoxError, StaleLeader, cloneValue, deepFreeze, deepEqual, jsonEq, live
 import { compileQuery, runCompiledQuery, normalizeJson, validateSchema } from './app-api.mjs';
 import { openBackend, deleteBackend } from './store-idb-v5.mjs';
 import { emptyBase, byOpId, docKey, nsName, applyOp, recompute } from './outbox.mjs';
+import { SCHEMA_FILE, parseCollectionsFile, classifyCollections, applyMigrationSteps, manifestCollectionsToParsed, parsedToManifestCollections } from './schema-diff.mjs';
 export { CtoxError, uuidv7, sha256Hex, sha256Js } from './values.mjs';
 export { compileQuery, runCompiledQuery } from './app-api.mjs';
+export { SCHEMA_FILE, parseCollectionsFile, classifyCollections, applyMigrationSteps } from './schema-diff.mjs';
 export { createShellKernel } from './shell-api.mjs';
 export const APP_API_VERSION = '4.0';
 const SNAPSHOT_MAX_BYTES = 1024 * 1024;
-const SYSTEM_COLLECTIONS = new Set(['business_commands', 'files', 'business_apps', 'business_app_versions']);
+const SYSTEM_COLLECTIONS = new Set(['business_commands', 'files', 'business_apps', 'business_app_versions', 'shell_preferences']);
+// §16.19 Nr. 6: Shell-Layoutfelder im Manifest; fehlende Felder sind null.
+export const LAYOUT_KEYS = Object.freeze(['icon_asset', 'icon_svg', 'category', 'frame_palette', 'default_width', 'default_height', 'min_width', 'min_height', 'presentation']);
+export function normalizeLayout(l) {
+  const out = {};
+  for (const k of LAYOUT_KEYS) out[k] = l?.[k] ?? null;
+  return out;
+}
+// §16.19 Nr. 3 / §16.17: Plattform-Collections (Eigentum ctox-platform). Schema aus
+// docs/v4-manifests/ctox-platform.manifest.json; eine Zeile je Nutzer, Rechte nur der eigene Nutzer.
+const PLATFORM_SCHEMAS = Object.freeze({
+  shell_preferences: deepFreeze({
+    primaryKey: 'id', type: 'object', additionalProperties: false, required: ['id'], indexes: ['user_id'],
+    properties: {
+      id: { type: 'string', maxLength: 180 }, user_id: { type: 'string' },
+      pins: { type: 'array', items: { type: 'string' } }, launcher_order: { type: 'array', items: { type: 'string' } },
+      settings: { type: 'object', additionalProperties: true }, updated_at_ms: { type: 'number' },
+    },
+  }),
+});
+const OWN_ROW_COLLECTIONS = new Set(['shell_preferences']);
+// Tab-Identität für window_state: überlebt Neuladen desselben Tabs (sessionStorage), sonst je Kernel neu.
+function sessionTabKey() {
+  try {
+    const ss = globalThis.sessionStorage;
+    if (ss) {
+      let k = ss.getItem('ctox-tab-key');
+      if (!k) { k = uuidv7(); ss.setItem('ctox-tab-key', k); }
+      return k;
+    }
+  } catch { /* kein sessionStorage */ }
+  return uuidv7();
+}
+// §16.19 Nr. 6 / Befund K-1b: Artefakte sind Bytes. Text bleibt string (UTF-8), Binärinhalt wird Uint8Array;
+// der Hash läuft immer über die Bytes, nie über String(content) ("[object Blob]").
+export async function artifactContent(content) {
+  if (typeof content === 'string') return content;
+  if (isBlob(content)) return new Uint8Array(await content.arrayBuffer());
+  if (content instanceof ArrayBuffer) return new Uint8Array(content.slice(0));
+  if (ArrayBuffer.isView(content)) return new Uint8Array(content.buffer.slice(content.byteOffset, content.byteOffset + content.byteLength));
+  throw new CtoxError('invalid', 'Artefaktinhalt muss string, Blob, ArrayBuffer oder Uint8Array sein', { path: 'files' });
+}
+const MIME_BY_EXT = Object.freeze({
+  js: 'text/javascript', mjs: 'text/javascript', css: 'text/css', json: 'application/json', html: 'text/html', md: 'text/markdown',
+  txt: 'text/plain', svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
+  ico: 'image/x-icon', woff: 'font/woff', woff2: 'font/woff2', wasm: 'application/wasm',
+});
+export function artifactMime(path) {
+  const ext = /\.([a-z0-9]+)$/i.exec(String(path ?? ''))?.[1]?.toLowerCase();
+  return MIME_BY_EXT[ext] ?? 'application/octet-stream';
+}
+const MANIFEST_FILE = 'manifest.json';
+// Migrationsfunktion (migrate_fn) aus Entwurfstext laden: Blob-URL im Browser, sonst data:-URL.
+async function importModuleText(text) {
+  let url, revoke = null;
+  if (typeof window !== 'undefined' && typeof URL.createObjectURL === 'function' && hasBlob) { url = URL.createObjectURL(new Blob([text], { type: 'text/javascript' })); revoke = url; }
+  else url = `data:text/javascript;base64,${utf8Base64(text)}`;
+  try { return await import(/* @vite-ignore */ url); } finally { if (revoke) URL.revokeObjectURL(revoke); }
+}
+// Vom Kern berechnete bzw. geschützte Manifest-Felder: weder per setManifest änderbar noch vom Basis-Manifest geerbt.
+const MANIFEST_FIELDS_PROTECTED = new Set(['app_id', 'app_ver', 'files', 'generations', 'retires', 'provenance', 'author', 'created_at']);
+const MANIFEST_FIELDS_COMPUTED = new Set([...MANIFEST_FIELDS_PROTECTED, 'title', 'entry', 'handlers', 'capabilities_required', 'min_app_api', 'layout', 'styles', 'collections']);
 export function createKernel(opts = {}) {
   const instanceId = opts.instanceId;
   const userId = opts.userId ?? opts.actor?.id;
@@ -32,6 +95,7 @@ export function createKernel(opts = {}) {
   const lastUsed = new Map();
   let transportConnected = false;
   const remountTimeoutMs = opts.remountTimeoutMs ?? 10000;
+  const tabKey = opts.tabKey ?? sessionTabKey();
   const capabilities = new Set(opts.capabilities ?? []);
   const tabId = uuidv7();
   const channelName = `ctox-kernel:${dbName}`;
@@ -262,6 +326,8 @@ export function createKernel(opts = {}) {
     get: zoneLive.get,
     subscribe: zoneLive.subscribe,
     forApp: (appId) => makeLive(['status'], () => zone.filter((e) => e.app_id === appId)),
+    /** Eigene Einträge der Shell (source 'shell', §16.19 Nr. 1). */
+    report: (appId, item) => zoneReport(appId, item, 'shell'),
     clear: (appId, code) => zoneClear(appId, code),
   };
 
@@ -317,7 +383,7 @@ export function createKernel(opts = {}) {
         actor: (next) => { if(next.id !== userId)throw new CtoxError('forbidden','Actor identity mismatch');actor={...actor,...next};notify('actor'); },
       });
     }
-    for (const collection of new Set(['business_apps', 'business_app_versions', 'business_commands', 'files', ...mirror.keys()])) await subscribeCollection(collection);
+    for (const collection of new Set(['business_apps', 'business_app_versions', 'business_commands', 'files', 'shell_preferences', ...mirror.keys()])) await subscribeCollection(collection);
     netChanged();scheduleCacheBudget();
     track(deliver());
     schedulePump();
@@ -427,6 +493,7 @@ export function createKernel(opts = {}) {
       guardAlive();
       if (typeof collection !== 'string' || !collection) throw new CtoxError('invalid', 'collection fehlt', { path: 'collection' });
       if (typeof id !== 'string' || !id) throw new CtoxError('invalid', 'id (string) fehlt', { path: 'id' });
+      if (!ownRowOk(collection, id)) throw new CtoxError('forbidden', `${collection}: nur die eigene Zeile (id = actor.id)`, { path: 'id' });
       const ns = resolveNs(app, collection);
       let clean = null;
       if (op === 'put') {
@@ -679,7 +746,9 @@ export function createKernel(opts = {}) {
     }
     return deepFreeze(result);
   }
-  function schemaFor(app, collection) { return versionDoc(app.id, app.ver)?.manifest?.collections?.[collection]?.schema ?? null; }
+  function schemaFor(app, collection) { return PLATFORM_SCHEMAS[collection] ?? versionDoc(app.id, app.ver)?.manifest?.collections?.[collection]?.schema ?? null; }
+  // §16.19 Nr. 3: shell_preferences – eine Zeile je Nutzer (id = actor.id), lesen und schreiben nur die eigene.
+  function ownRowOk(collection, id) { return !OWN_ROW_COLLECTIONS.has(collection) || id === actor.id; }
 
   async function publishInternal(appId, ver, o = {}) {
     if (publishing.has(appId)) throw new CtoxError('conflict', `Veröffentlichung von ${appId} läuft bereits (busy)`);
@@ -691,12 +760,12 @@ export function createKernel(opts = {}) {
       const prevManifest = appDoc ? versionDoc(appId, appDoc.active_ver)?.manifest : null;
       const files = o.files ?? {};
       const fileHashes = {};
-      for (const [path, content] of Object.entries(files)) {
-        const text = typeof content === 'string' ? content : String(content);
-        const hash = await sha256Hex(text);
+      for (const [path, raw] of Object.entries(files)) {
+        const content = await artifactContent(raw); // Binärdateien (PNG …) bleiben Bytes
+        const hash = await sha256Hex(content);
         fileHashes[path] = hash;
         if(!fakeCore)throw new CtoxError('unavailable','Publishing requires core publication transport');
-        fakeCore.putArtifact(hash,text);
+        fakeCore.putArtifact(hash,content);
       }
       const generations = { ...(prevManifest?.generations ?? {}) };
       for (const c of o.incompatible ?? []) {
@@ -717,8 +786,10 @@ export function createKernel(opts = {}) {
         app_id: appId, app_ver: ver, files: fileHashes, entry: o.entry ?? 'index.js',
         collections: o.collections ?? prevManifest?.collections ?? {}, generations,
         handlers: o.handlers ?? {}, min_app_api: o.minAppApi ?? '4.0',
+        layout: normalizeLayout(o.layout ?? prevManifest?.layout), styles: [...(o.styles ?? prevManifest?.styles ?? [])],
         capabilities_required: o.capabilitiesRequired ?? [],
         provenance: { base_release: null, base_hash: null, locally_modified: !!o.locallyModified },
+        ...(o.manifestExtra ?? {}),
         author: actor.id, created_at: new Date().toISOString(),
       };
       await corePush('business_app_versions', [{ id: `${appId}@${ver}`, app_id: appId, app_ver: ver, manifest, migrated_at_seq: M }]);
@@ -755,7 +826,7 @@ export function createKernel(opts = {}) {
       const cached=await db.get('artifacts',hash);
       if(cached && await sha256Hex(cached.content)===hash)continue;
       await waitUntil(() => link.state === 'online' || closed);
-      const content = await transport.artifact(hash).catch(()=>null);
+      const content = await transport.artifact(hash).then(artifactContent).catch(()=>null);
       const src = content == null ? null : {content};
       if (!src) { await setActivation(appId, { target_ver: ver, state: 'failed', error: `artifact_missing:${path}` }); return; }
       if ((await sha256Hex(src.content)) !== hash) { await setActivation(appId, { target_ver: ver, state: 'failed', error: `hash_mismatch:${path}` }); return; }
@@ -776,7 +847,9 @@ export function createKernel(opts = {}) {
     await waitUntil(() => dataReady() || superseded() || closed || !isLeader);
     if (superseded() || closed || !isLeader) return;
     await setActivation(appId, { target_ver: ver, state: 'data-ready' });
-    await setActivation(appId, { target_ver: ver, activated_ver: ver, previous_ver: activations.get(appId)?.activated_ver ?? null, state: 'activated', at_seq: checkpoint });
+    const prevAct = activations.get(appId);
+    const good = [...(prevAct?.good_vers ?? []).filter((v) => v !== ver), ver].slice(-10); // §16.19 Nr. 2: Rückfallziele
+    await setActivation(appId, { target_ver: ver, activated_ver: ver, previous_ver: prevAct?.activated_ver ?? null, good_vers: good, state: 'activated', at_seq: checkpoint });
   }
   function compareVer(a, b) {
     const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
@@ -792,7 +865,7 @@ export function createKernel(opts = {}) {
       await bumpLocalSeq(t);
       return v;
     });
-    await transport.appActivation({ app_id: appId, app_ver: value.target_ver, state: value.state, at_seq: checkpoint });
+    await transport.appActivation({ app_id: appId, app_ver: value.target_ver, state: value.state, at_seq: checkpoint, ...(value.state === 'failed' && value.error ? { error: value.error } : {}) });
     simRecord.activationReports.push({ app_id: appId, app_ver: value.target_ver, state: value.state, at_seq: checkpoint, error: value.error ?? undefined });
     applyActivationLocal(value, true);
     post({ type: 'activation', value });
@@ -857,7 +930,7 @@ export function createKernel(opts = {}) {
       url = URL.createObjectURL(new Blob([art.content], { type: 'text/javascript' }));
       revoke = url;
     } else {
-      url = `data:text/javascript;base64,${utf8Base64(art.content)}`;
+      url = `data:text/javascript;base64,${typeof art.content === 'string' ? utf8Base64(art.content) : bytesBase64(art.content)}`;
     }
     try {
       const mod = await import(/* @vite-ignore */ url);
@@ -934,7 +1007,7 @@ export function createKernel(opts = {}) {
       zoneReport(m.appId, { level: 'error', code: 'app.remount_failed', text: `Version ${newVer} startet nicht (${err?.message ?? err}); vorherige Version ${oldVer} läuft`, ref: newVer }, 'kernel');
       const r = await withTimeout(mountVersion(m.root, m.appId, oldVer, { restored: cloneValue(snap) }),remountTimeoutMs);
       Object.assign(m, { ver: oldVer, handle: r.handle, api: r.api });
-      try { await callLeader('revertActivation', [m.appId, oldVer, newVer, String(err?.message ?? err)]); } catch (e) { console.error('[ctox-kernel] revert', e); }
+      try { await reportFailed(m.appId, newVer, `mount_failed: ${String(err?.message ?? err)}`); } catch (e) { console.error('[ctox-kernel] reportFailed', e); }
     }
     notify('mounts');
   }
@@ -1085,11 +1158,11 @@ export function createKernel(opts = {}) {
         const ns = resolveNs(app, collection);
         lastUsed.set(ns,Date.now());
         if(evicted.has(ns)){if(isLeader)track(subscribeCollection(ns,'P1'));else post({type:'subscribe',collection:ns});}
-        return makeLive([`c:${ns}`], () => {
+        return makeLive([`c:${ns}`, 'actor'], () => {
           const m = mirror.get(ns);
           if (!m) return [];
           const docs = [];
-          for (const r of m.values()) if (r.data != null && !r.deleted) docs.push(withDefaults(app,collection,r.data));
+          for (const r of m.values()) if (r.data != null && !r.deleted && ownRowOk(ns, r.id)) docs.push(withDefaults(app,collection,r.data));
           return runCompiledQuery(docs, cq);
         });
       },
@@ -1097,7 +1170,7 @@ export function createKernel(opts = {}) {
         const ns = resolveNs(app, collection);
         lastUsed.set(ns,Date.now());
         if(evicted.has(ns)){if(isLeader)track(subscribeCollection(ns,'P1'));else post({type:'subscribe',collection:ns});}
-        return makeLive([`c:${ns}`], () => withDefaults(app,collection,visible(mirrorGet(ns,id))));
+        return makeLive([`c:${ns}`, 'actor'], () => (ownRowOk(ns, id) ? withDefaults(app,collection,visible(mirrorGet(ns,id))) : null));
       },
       put(collection, doc) { return localWrite(app, 'put', collection, doc?.id, doc); },
       patch(collection, id, patch) { return localWrite(app, 'patch', collection, id, patch); },
@@ -1147,84 +1220,254 @@ export function createKernel(opts = {}) {
     const a = await db.get('artifacts', hash);
     if (a) return a.content;
     const content = await transport.artifact(hash);
-    if (content != null) return content;
+    if (content != null) return artifactContent(content);
     throw new CtoxError('not_found', `Artefakt ${hash} fehlt`);
   }
-  async function getDraft(appId) { return (await db.get('meta', `draft:${appId}`)) ?? { key: `draft:${appId}`, app_id: appId, files: {}, collections: null }; }
+  // ---- Quelltext-API (§10.2a Nr. 7, §16.22 A1–A9, §16.26) ----
+  // Entwurf je (App, Nutzer): die IDB gehört genau einem (Instanz, Nutzer) (§16.7), Zeile meta `draft:<app>`.
+  // files: Pfad → Inhalt (Text oder Bytes), null = im Entwurf gelöscht. manifest.json ist keine Datei; Manifest-Felder
+  // nur über draft.setManifest. Gleiche Regeln wie der Stub (kernel.source(appId) dort).
+  const draftKey = (appId) => `draft:${appId}`;
+  const activeVerOf = (appId) => visible(mirrorGet('business_apps', appId))?.active_ver ?? null;
+  const asText = (c) => (typeof c === 'string' ? c : new TextDecoder().decode(c));
+  function noManifestFile(path, field = 'path') {
+    if (path === MANIFEST_FILE) throw new CtoxError('invalid', 'manifest.json ist im Entwurf keine Datei – Felder über draft.setManifest (§16.26)', { path: field });
+  }
+  function freshDraft(appId) {
+    const base = activeVerOf(appId);
+    const d = { key: draftKey(appId), app_id: appId, user_id: userId, base_app_ver: base, files: {}, manifest: {}, created_at: Date.now() };
+    // §16.26: eine Basisdatei manifest.json wird beim Anlegen des Entwurfs verworfen
+    if (base && versionDoc(appId, base)?.manifest?.files?.[MANIFEST_FILE]) d.files[MANIFEST_FILE] = null;
+    return d;
+  }
+  async function draftOf(appId) {
+    const d = await db.get('meta', draftKey(appId));
+    if (!d) return null;
+    // K-1-Zeile ({files, collections}) ohne Basis: Basis = aktive Version, Manifest leer.
+    if (!Object.prototype.hasOwnProperty.call(d, 'base_app_ver')) return { ...freshDraft(appId), files: d.files ?? {} };
+    return d;
+  }
+  // Wirksame Manifest-Verweise des Entwurfs: setManifest-Felder vor Basis-Manifest
+  function effectiveRefs(appId, d) {
+    const baseMan = d?.base_app_ver ? versionDoc(appId, d.base_app_ver)?.manifest : null;
+    const m = d?.manifest ?? {};
+    return {
+      entry: m.entry ?? baseMan?.entry ?? 'index.js',
+      handlers: { ...(m.handlers ?? baseMan?.handlers ?? {}) },
+      styles: [...(m.styles ?? baseMan?.styles ?? [])],
+    };
+  }
+  async function readVersionFile(appId, ver, path) {
+    const hash = versionDoc(appId, ver)?.manifest?.files?.[path];
+    if (!hash) throw new CtoxError('not_found', `${path} nicht in ${appId}@${ver}`);
+    return readArtifactContent(hash);
+  }
+  // Lese-Ändere-Schreib-Schritt auf dem eigenen Entwurf in EINER Transaktion (Mehr-Tab: kein verlorenes Update).
+  async function draftMutate(appId, mutate) {
+    requirePerm('apps.source.edit');
+    await db.tx(async (t) => {
+      const stored = await t.get('meta', draftKey(appId));
+      const d = !stored ? freshDraft(appId) : Object.prototype.hasOwnProperty.call(stored, 'base_app_ver') ? stored : { ...freshDraft(appId), files: stored.files ?? {} };
+      mutate(d);
+      d.updated_at = Date.now();
+      await t.put('meta', d);
+    });
+  }
+  async function baseSchemaOf(appId, base) {
+    if (!base) return { collections: {}, migrations: {} };
+    const man = versionDoc(appId, base)?.manifest;
+    if (man?.files?.[SCHEMA_FILE]) return parseCollectionsFile(asText(await readArtifactContent(man.files[SCHEMA_FILE])));
+    return manifestCollectionsToParsed(man?.collections);
+  }
   function sourceApi(appId) {
-    const activeVer = () => visible(mirrorGet('business_apps', appId))?.active_ver ?? null;
+    const viewBase = (d) => (d ? d.base_app_ver : activeVerOf(appId));
+    async function readOverlay(path) {
+      const d = await draftOf(appId);
+      if (d && Object.prototype.hasOwnProperty.call(d.files, path)) {
+        if (d.files[path] === null) throw new CtoxError('not_found', `${path} im Entwurf gelöscht`);
+        return d.files[path];
+      }
+      const base = viewBase(d);
+      if (!base) throw new CtoxError('not_found', `${path} nicht vorhanden (neue App ohne Basis)`);
+      return readVersionFile(appId, base, path);
+    }
+    async function overlayPaths() {
+      const d = await draftOf(appId);
+      const base = viewBase(d);
+      const paths = new Set(Object.keys(base ? versionDoc(appId, base)?.manifest?.files ?? {} : {}));
+      for (const [p, t] of Object.entries(d?.files ?? {})) { if (t === null) paths.delete(p); else paths.add(p); }
+      return paths;
+    }
     return Object.freeze({
       async list(ver) {
         requirePerm('apps.source.view');
-        const v = ver ?? activeVer();
-        const files = Object.keys(versionDoc(appId, v)?.manifest?.files ?? {});
-        if (ver === undefined) for (const p of Object.keys((await getDraft(appId)).files)) if (!files.includes(p)) files.push(p);
-        return files.sort();
+        if (ver !== undefined) return Object.keys(versionDoc(appId, ver)?.manifest?.files ?? {}).sort();
+        return [...await overlayPaths()].sort();
       },
       async read(path, ver) {
         requirePerm('apps.source.view');
-        if (ver === undefined) { const d = await getDraft(appId); if (path in d.files) return d.files[path]; }
-        const hash = versionDoc(appId, ver ?? activeVer())?.manifest?.files?.[path];
-        if (!hash) throw new CtoxError('not_found', `${path} nicht in ${appId}@${ver ?? activeVer()}`);
-        return readArtifactContent(hash);
+        if (ver !== undefined) return readVersionFile(appId, ver, path);
+        return readOverlay(path);
       },
       draft: Object.freeze({
-        async write(path, text) {
-          requirePerm('apps.source.edit');
-          if (typeof path !== 'string' || !path || typeof text !== 'string') throw new CtoxError('invalid', 'path und text (string) nötig');
-          const d = await getDraft(appId);
-          d.files[path] = text;
-          await db.tx((t) => t.put('meta', d));
+        // A4
+        async info() {
+          requirePerm('apps.source.view');
+          const d = await draftOf(appId);
+          return d ? { base_app_ver: d.base_app_ver, files: cloneValue(d.files), manifest: cloneValue(d.manifest ?? {}), updated_at: d.updated_at ?? d.created_at } : null;
         },
-        async setCollections(schemaDiff) {
+        // Text oder Bytes (Binärdateien wie PNG-Icons bleiben Bytes, Hash beim publish über die Bytes)
+        async write(path, content) {
           requirePerm('apps.source.edit');
-          const d = await getDraft(appId);
-          d.collections = cloneValue(schemaDiff);
-          await db.tx((t) => t.put('meta', d));
+          if (typeof path !== 'string' || !path || content == null) throw new CtoxError('invalid', 'path und Inhalt nötig', { path: 'path' });
+          noManifestFile(path);
+          const value = await artifactContent(content);
+          await draftMutate(appId, (d) => { d.files[path] = value; });
         },
-        publish({ base_app_ver } = {}) {
+        // A7
+        async remove(path) {
+          requirePerm('apps.source.edit');
+          noManifestFile(path);
+          if (!(await overlayPaths()).has(path)) throw new CtoxError('not_found', `${path} nicht vorhanden`, { path: 'path' });
+          await draftMutate(appId, (d) => { d.files[path] = null; });
+        },
+        async rename(from, to) {
+          requirePerm('apps.source.edit');
+          if (typeof to !== 'string' || !to) throw new CtoxError('invalid', 'Zielpfad fehlt', { path: 'to' });
+          noManifestFile(from, 'from');
+          noManifestFile(to, 'to');
+          const paths = await overlayPaths();
+          if (!paths.has(from)) throw new CtoxError('not_found', `${from} nicht vorhanden`, { path: 'from' });
+          if (paths.has(to)) throw new CtoxError('conflict', `${to} existiert bereits`, { path: 'to' });
+          const content = await readOverlay(from);
+          await draftMutate(appId, (d) => {
+            d.files[to] = content;
+            d.files[from] = null;
+            // §16.26: Verweise im Manifest (Einstieg, Handler, Styles) wandern mit
+            const refs = effectiveRefs(appId, d);
+            if (refs.entry === from) d.manifest.entry = to;
+            if (Object.values(refs.handlers).includes(from)) d.manifest.handlers = Object.fromEntries(Object.entries(refs.handlers).map(([type, p]) => [type, p === from ? to : p]));
+            if (refs.styles.includes(from)) d.manifest.styles = refs.styles.map((x) => (x === from ? to : x));
+          });
+        },
+        // A5: einzige Quelle der Manifest-Felder im Entwurf; null entfernt ein Feld (dann gilt wieder die Basis)
+        async setManifest(fields) {
+          requirePerm('apps.source.edit');
+          if (!isPlainObject(fields)) throw new CtoxError('invalid', 'setManifest braucht ein Objekt', { path: '' });
+          for (const k of Object.keys(fields)) if (MANIFEST_FIELDS_PROTECTED.has(k)) throw new CtoxError('invalid', `Manifest-Feld ${k} ist nicht änderbar`, { path: k });
+          const clean = normalizeJson(fields, '');
+          await draftMutate(appId, (d) => {
+            const { handlers, ...rest } = clean;
+            d.manifest = mergePatch(d.manifest ?? {}, rest);
+            // handlers gegen die wirksame Karte (Basis + Entwurf) patchen, damit null auch Basis-Handler entfernt
+            if (handlers !== undefined) d.manifest.handlers = handlers === null ? {} : mergePatch(effectiveRefs(appId, d).handlers, handlers);
+          });
+        },
+        // A6/A9: vollständiger collections.schema.json-Inhalt; liefert den Diff gegen die Entwurfsbasis
+        async setCollections(content) {
+          requirePerm('apps.source.edit');
+          const parsed = parseCollectionsFile(content);
+          const obj = typeof content === 'string' ? JSON.parse(content) : content;
+          const text = `${JSON.stringify(obj, null, 2)}\n`;
+          await draftMutate(appId, (d) => { d.files[SCHEMA_FILE] = text; });
+          const base = (await draftOf(appId))?.base_app_ver ?? null;
+          return { base_app_ver: base, diff: classifyCollections(await baseSchemaOf(appId, base), parsed, { baseVer: base }) };
+        },
+        async discard() {
+          requirePerm('apps.source.edit');
+          await db.tx((t) => t.del('meta', draftKey(appId)));
+        },
+        async rebase(ver) {
+          requirePerm('apps.source.edit');
+          if (ver !== null && !versionDoc(appId, ver)) throw new CtoxError('not_found', `Version ${appId}@${ver} unbekannt`, { path: 'ver' });
+          await draftMutate(appId, (d) => { d.base_app_ver = ver; });
+        },
+        // A2/A3: base_app_ver = null → neue App; ohne Angabe gilt die Basis des Entwurfs
+        publish(o = {}) {
           let resolveResult;
           const result = new Promise((r) => { resolveResult = r; });
           const local = (async () => {
             guardAlive();
             if (!hasPerm('apps.source.edit')) { resolveResult({ status: 'rejected', reason: 'forbidden' }); return; }
-            const d = await getDraft(appId);
-            const r = await callLeader('publishDraft', [appId, base_app_ver ?? null, d.files, d.collections]);
-            if (r.status !== 'rejected') await db.tx((t) => t.put('meta', { key: `draft:${appId}`, app_id: appId, files: {}, collections: null }));
+            const d = await draftOf(appId);
+            if (!d || (!Object.keys(d.files).length && !Object.keys(d.manifest ?? {}).length)) {
+              resolveResult({ status: 'rejected', reason: 'invalid', detail: 'leerer Entwurf' });
+              return;
+            }
+            const base = Object.prototype.hasOwnProperty.call(o ?? {}, 'base_app_ver') ? o.base_app_ver : d.base_app_ver;
+            const r = await callLeader('publishDraft', [appId, base ?? null, d.files, d.manifest ?? {}]);
+            if (r.status !== 'rejected') await db.tx((t) => t.del('meta', draftKey(appId))); // nur der eigene Entwurf
             resolveResult(r);
           })();
-          local.catch((e) => resolveResult({ status: 'rejected', reason: e?.code ?? 'local_error' }));
+          local.catch((e) => resolveResult({ status: 'rejected', reason: e?.code ?? 'local_error', detail: String(e?.message ?? e) }));
           return { local: local.catch(() => {}), result, cancel: () => false };
         },
       }),
     });
   }
-  const appsLive = makeLive(['c:business_apps', 'activation', 'actor'], () => {
+  const appsLive = makeLive(['c:business_apps', 'c:business_app_versions', 'activation', 'actor'], () => {
     const out = [];
     for (const r of mirror.get('business_apps')?.values() ?? []) {
       const d = visible(r);
       if (!d) continue;
       if (Array.isArray(d.roles) && !d.roles.includes(actor.role)) continue;
       const a = activations.get(d.id);
-      out.push({ id: d.id, title: d.title ?? d.id, active_ver: d.active_ver, activated_ver: a?.activated_ver ?? null, state: a?.state ?? 'received', target_ver: a?.target_ver ?? null, error: a?.error ?? null });
+      // §16.19 Nr. 6: layout/styles der laufenden (sonst der veröffentlichten) Version
+      const man = versionDoc(d.id, a?.activated_ver ?? d.active_ver)?.manifest ?? versionDoc(d.id, d.active_ver)?.manifest;
+      out.push({
+        id: d.id, title: d.title ?? d.id, active_ver: d.active_ver, activated_ver: a?.activated_ver ?? null, state: a?.state ?? 'received',
+        target_ver: a?.target_ver ?? null, error: a?.error ?? null, layout: normalizeLayout(man?.layout), styles: [...(man?.styles ?? [])],
+      });
     }
     return out.sort((x, y) => (x.id < y.id ? -1 : 1));
   });
+  // window_state (§16.19 Nr. 3): je Tab (tabKey) und Nutzer (DB je Nutzer), überlebt Neuladen desselben Tabs
+  const windowStateKey = (key) => {
+    if (typeof key !== 'string' || !key) throw new CtoxError('invalid', 'key fehlt', { path: 'key' });
+    return `tab:${tabKey}:${key}`;
+  };
+  async function windowStateDelete(key) { guardAlive(); const k = windowStateKey(key); await db.tx((t) => t.del('window_state', k)); }
+  const windowStateApi = Object.freeze({
+    async get(key) {
+      guardAlive();
+      const r = await db.get('window_state', windowStateKey(key));
+      return r ? r.value : null;
+    },
+    async put(key, value) {
+      guardAlive();
+      const k = windowStateKey(key);
+      let v;
+      try { v = structuredClone(value); } catch { throw new CtoxError('invalid', 'Wert nicht structured-clone-fähig', { path: 'value' }); }
+      await db.tx((t) => t.put('window_state', { key: k, tab_key: tabKey, user_id: userId, value: v, at: Date.now() }));
+    },
+    delete: windowStateDelete,
+    del: windowStateDelete,
+  });
+  // §16.19 Nr. 2: Version für diesen Client failed, Zeiger zurück auf die letzte funktionierende, app_activation failed.
+  function reportFailed(appId, ver, reason) {
+    guardAlive();
+    if (typeof appId !== 'string' || !appId || ver == null || ver === '') return Promise.reject(new CtoxError('invalid', 'appId und ver nötig', { path: 'appId' }));
+    return callLeader('reportFailed', [appId, String(ver), String(reason ?? 'failed')]);
+  }
   const shellApi = Object.freeze({
     apps: appsLive,
     activation: Object.freeze({
       get: (appId) => makeLive(['activation'], () => (activations.has(appId) ? { ...activations.get(appId) } : null)),
       onChange(cb) { activationListeners.add(cb); return () => activationListeners.delete(cb); },
+      reportFailed,
     }),
     metrics: metricsLive,
     leader: leaderLive,
+    status: statusZone,
+    /** @deprecated seit §16.19 – Alias für `status`. */
     statusZone,
+    windowState: windowStateApi,
     artifacts: Object.freeze({
       async read(hash) {
         guardAlive();
         const a = await db.get('artifacts', hash);
         if (!a) throw new CtoxError('not_found', `Artefakt ${hash} nicht lokal`);
-        return new Blob([a.content], { type: a.path?.endsWith('.js') || a.path?.endsWith('.mjs') ? 'text/javascript' : 'text/plain' });
+        return new Blob([a.content], { type: artifactMime(a.path) }); // Bytes unverändert, Typ nach Endung (PNG → image/png)
       },
       async manifest(appId, ver) { return versionDoc(appId, ver)?.manifest ?? null; },
     }),
@@ -1289,21 +1532,73 @@ export function createKernel(opts = {}) {
       await (remountChains.get(appId) ?? Promise.resolve());
       return activations.has(appId) ? { ...activations.get(appId) } : null;
     },
-    async publishDraft(appId, baseAppVer, draftFiles, collections) {
-      const appDoc = visible(mirrorGet('business_apps', appId));
-      if ((appDoc?.active_ver ?? null) !== baseAppVer) return { status: 'rejected', reason: 'stale_base' };
-      if (publishing.has(appId)) return { status: 'rejected', reason: 'busy' };
-      const base = versionDoc(appId, baseAppVer)?.manifest;
+    // §16.22 A2/A3/A6/A9 + §16.26 + Befund B4. Im Leiter, weil der Test-Core hier die Veröffentlichung simuliert.
+    async publishDraft(appId, base, draftFiles, draftManifest) {
+      const reject = (reason, detail) => ({ status: 'rejected', reason, ...(detail ? { detail } : {}) });
+      const active = activeVerOf(appId);
+      if ((active ?? null) !== (base ?? null)) {
+        return reject('stale_base', base == null ? `App ${appId} existiert bereits (aktiv: ${active})` : `Basis ${base} ist nicht mehr aktiv (aktiv: ${active ?? '–'})`);
+      }
+      if (publishing.has(appId)) return reject('busy', `Veröffentlichung von ${appId} läuft`);
+      const baseManifest = base ? versionDoc(appId, base)?.manifest : null;
       const files = {};
-      for (const [p, h] of Object.entries(base?.files ?? {})) files[p] = await readArtifactContent(h);
-      Object.assign(files, draftFiles);
-      const head = fakeCore?.head ?? '0';
-      const ver = `s${BigInt(head) + 1n}`;
-      await publishInternal(appId, ver, { files, collections: collections ?? undefined, entry: base?.entry, baseAppVer });
-      return { status: 'accepted', rev: ver };
+      for (const [p, h] of Object.entries(baseManifest?.files ?? {})) files[p] = await readArtifactContent(h);
+      for (const [p, t] of Object.entries(draftFiles ?? {})) { if (t === null) delete files[p]; else files[p] = t; }
+      delete files[MANIFEST_FILE]; // §16.26: keine Datei, nur setManifest-Felder zählen
+      if (!Object.keys(files).length) return reject('invalid', 'leerer Entwurf');
+      const mf = { ...(draftManifest ?? {}) };
+      // §16.26: Verweise aus dem tatsächlichen Entwurfsstand prüfen
+      const entry = mf.entry ?? baseManifest?.entry ?? 'index.js';
+      const handlers = { ...(mf.handlers ?? baseManifest?.handlers ?? {}) };
+      for (const [type, path] of Object.entries(handlers)) if (path === null) delete handlers[type];
+      const styles = mf.styles ?? baseManifest?.styles ?? [];
+      const dangling = [];
+      if (files[entry] === undefined) dangling.push(`entry → ${entry}`);
+      for (const [type, path] of Object.entries(handlers)) if (files[path] === undefined) dangling.push(`handlers.${type} → ${path}`);
+      for (const path of styles) if (files[path] === undefined) dangling.push(`styles → ${path}`);
+      if (dangling.length) return reject('invalid', `Verweis auf fehlende Datei: ${dangling.join(', ')}`);
+      let parsedBase, parsedNext;
+      try {
+        parsedBase = await baseSchemaOf(appId, base);
+        parsedNext = files[SCHEMA_FILE] !== undefined ? parseCollectionsFile(asText(files[SCHEMA_FILE])) : parsedBase;
+      } catch (e) { return reject('invalid', e.message); }
+      const diff = classifyCollections(parsedBase, parsedNext, { baseVer: base });
+      const missing = diff.filter((x) => x.needsMigration && (!x.migration || (x.migration.migrate_fn && files[x.migration.migrate_fn] === undefined))).map((x) => x.name);
+      if (missing.length) return reject('invalid', `Migration fehlt: ${missing.join(', ')}`);
+      const migrate = {};
+      for (const x of diff.filter((y) => y.kind === 'generation')) {
+        if (Array.isArray(x.migration.steps)) { const steps = x.migration.steps; migrate[x.name] = (doc) => applyMigrationSteps(doc, steps); continue; }
+        let fn;
+        try { fn = (await importModuleText(asText(files[x.migration.migrate_fn]))).default; } catch (e) { return reject('invalid', `${x.migration.migrate_fn}: ${e.message}`); }
+        if (typeof fn !== 'function') return reject('invalid', `${x.migration.migrate_fn}: kein default export`);
+        migrate[x.name] = fn;
+      }
+      // Befund B4: ALLE nicht berechneten Felder des Basis-Manifests erben (triggers, command_rights,
+      // foreign_collections, exports, row_filters, write_guard, …); im Entwurf gesetzte Felder gehen vor.
+      const manifestExtra = {};
+      for (const [k, v] of Object.entries(baseManifest ?? {})) if (!MANIFEST_FIELDS_COMPUTED.has(k)) manifestExtra[k] = cloneValue(v);
+      for (const [k, v] of Object.entries(mf)) if (!MANIFEST_FIELDS_COMPUTED.has(k)) manifestExtra[k] = cloneValue(v);
+      const ver = `s${BigInt(fakeCore?.head ?? '0') + 1n}`;
+      try {
+        await publishInternal(appId, ver, {
+          files, entry, title: mf.title,
+          collections: parsedToManifestCollections(parsedNext), incompatible: diff.filter((x) => x.kind === 'generation').map((x) => x.name),
+          migrate, handlers, styles, capabilitiesRequired: mf.capabilities_required ?? baseManifest?.capabilities_required,
+          minAppApi: mf.min_app_api ?? baseManifest?.min_app_api, layout: mf.layout,
+          manifestExtra, locallyModified: true, baseAppVer: base ?? null,
+        });
+      } catch (e) {
+        const msg = String(e?.message ?? e);
+        return reject(msg.includes('stale_base') ? 'stale_base' : msg.includes('busy') ? 'busy' : (e?.code ?? 'unavailable'), msg);
+      }
+      return { status: 'accepted', rev: ver, diff: diff.map(({ name, kind }) => ({ name, kind })) };
     },
-    async revertActivation(appId, oldVer, newVer, msg) {
-      await setActivation(appId, { activated_ver: oldVer, target_ver: newVer, state: 'failed', error: `mount_failed: ${msg}` });
+    async reportFailed(appId, ver, reason) {
+      const cur = activations.get(appId) ?? {};
+      const good = (cur.good_vers ?? []).filter((v) => v !== ver);
+      const lastGood = cur.activated_ver && cur.activated_ver !== ver ? cur.activated_ver : good.at(-1) ?? null;
+      const v = await setActivation(appId, { target_ver: ver, activated_ver: lastGood, good_vers: good, state: 'failed', error: `reported: ${reason}` });
+      return { ...v };
     },
   };
   const forward = (name) => (...args) => callLeader(name, args);
@@ -1347,7 +1642,7 @@ export function createKernel(opts = {}) {
         }
       }
       snap = checkSnapshot('shell', snap);
-      await db.tx((t) => t.put('window_state', { key: 'shell', app_id: 'shell', snapshot: snap ?? null, at: Date.now() }));
+      await windowStateApi.put('shell', snap ?? null); // §16.19 Nr. 3: Shell-Snapshot je Tab unter windowState 'shell'
       try {
         await withTimeout(Promise.resolve().then(() => nextShellModule.startShell(kernel, { restored: cloneValue(snap) })), remountTimeoutMs,
           () => { try { nextShellModule.stopShell?.(); } catch { /* egal */ } });
@@ -1377,6 +1672,8 @@ export function createKernel(opts = {}) {
     async inspect(collection, id) { return db.get('docs', [collection, id]); },
     outbox: async () => (await db.all('outbox')).sort(byOpId),
     archiveLocal: async () => db.all('archive_local'),
+    windowStateRows: async () => db.all('window_state'),
+    /** @deprecated seit §16.19 – Alias für `windowStateRows`. */
     windowState: async () => db.all('window_state'),
     coreHead: async () => Number(fakeCore?.head ?? '0'),
     get checkpoint() { return checkpoint; },
@@ -1446,9 +1743,20 @@ export function createKernel(opts = {}) {
     instanceId, userId, dbName, tabId, ready,
     get isLeader() { return isLeader; },
     get storageKind() { return db?.kind ?? null; },
+    tabKey,
     appApi: (appId, appVer) => makeAppApi(appId, appVer),
     statusZone,
     shell: shellApi,
+    // Shell-Kernel-Objekte direkt am Kernel (dieselben Objekte wie kernel.shell.*), wie im Stub
+    apps: shellApi.apps,
+    activation: shellApi.activation,
+    metrics: shellApi.metrics,
+    leader: shellApi.leader,
+    status: shellApi.status,
+    windowState: shellApi.windowState,
+    artifacts: shellApi.artifacts,
+    source: shellApi.source,
+    identity: shellApi.identity,
     shellApi: () => shellApi,
     sim,
     receivePage,
