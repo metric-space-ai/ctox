@@ -463,17 +463,21 @@ pub fn run_turn<S: StreamSink>(
     // config explicitly.
     let cfg = ctx.gen_config;
     let mut all_out: Vec<i32> = Vec::with_capacity(prompt_ids.len() + max_out);
-    let stats = run_dflash_gen_loop(
-        ctx.target_weights,
-        ctx.draft_weights,
-        ctx.target_cache,
-        ctx.backend,
-        &prompt_ids,
-        max_out as i32,
-        &mut all_out,
-        cfg,
-        cached_input_tokens,
-    )
+    // SAFETY: the server owns the live backend and keeps its weights/cache
+    // borrowed for this complete generation call.
+    let stats = unsafe {
+        run_dflash_gen_loop(
+            ctx.target_weights,
+            ctx.draft_weights,
+            ctx.target_cache,
+            ctx.backend,
+            &prompt_ids,
+            max_out as i32,
+            &mut all_out,
+            cfg,
+            cached_input_tokens,
+        )
+    }
     .map_err(|e| anyhow!("run_dflash_gen_loop: {e}"))?;
     tracing::info!(
         input_tokens,

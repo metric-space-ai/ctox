@@ -340,7 +340,7 @@ pub fn build_ddtree(
     // Build ancestor-only visibility mask (flat row-major, (1+n)²).
     let n = (1 + tree.n_nodes) as usize;
     tree.visibility = vec![0_u8; n * n];
-    tree.visibility[0 * n + 0] = 1; // root sees itself
+    tree.visibility[0] = 1; // root sees itself
     for i in 1..n {
         let p = tree.parents[i] as usize;
         // Inherit parent's row up to column i-1, then mark self at col i.

@@ -131,7 +131,8 @@ fn main() -> Result<()> {
         Q_LEN
     };
     let mut cache = TargetCache::default();
-    if !create_target_cache(&w, args.max_ctx, max_verify_tokens_eff, backend, &mut cache) {
+    if !unsafe { create_target_cache(&w, args.max_ctx, max_verify_tokens_eff, backend, &mut cache) }
+    {
         free_draft_weights(&mut dw);
         free_target_weights(&mut w);
         unsafe { sys::ggml_backend_free(backend) };
@@ -151,17 +152,19 @@ fn main() -> Result<()> {
         ddtree_chain_seed: !args.ddtree_no_chain_seed,
         stop_token_id: None,
     };
-    let stats: RunStats = match run_dflash_gen_loop(
-        &w,
-        &dw,
-        &mut cache,
-        backend,
-        &prompt,
-        args.n_gen,
-        &mut out_all,
-        cfg,
-        0,
-    ) {
+    let stats: RunStats = match unsafe {
+        run_dflash_gen_loop(
+            &w,
+            &dw,
+            &mut cache,
+            backend,
+            &prompt,
+            args.n_gen,
+            &mut out_all,
+            cfg,
+            0,
+        )
+    } {
         Ok(s) => s,
         Err(e) => {
             free_target_cache(&mut cache);
