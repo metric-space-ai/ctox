@@ -1201,7 +1201,8 @@ fn sanitize_person_status(
 ) -> Result<(FieldStatus, Vec<String>), String> {
     let mut notes = Vec::new();
     if status.status != "verified" {
-        if research_value_is_populated(&status.value) {
+        if research_value_is_populated(&status.value) && !keeps_unconfirmed_address(field, &status)
+        {
             notes.push("Wert auf nicht-verifiziertem Feld entfernt".to_string());
             status.value = Value::Null;
         }
@@ -1290,6 +1291,27 @@ fn sanitize_person_status(
         ));
     }
     Ok((status, notes))
+}
+
+/// The owner's research instructions (step 4b): a person address built from
+/// the company's demonstrable pattern whose validation stays open (catch-all,
+/// unknown, validator blocked) is entered as the best variant and reported as
+/// needing review. It is `action_required` with the address as value; the
+/// value is kept so the contact carries it and the native validation can
+/// re-check it. A conflict between sources still carries no value.
+fn keeps_unconfirmed_address(field: &str, status: &FieldStatus) -> bool {
+    field == "person_email"
+        && status.status == "action_required"
+        && !status
+            .reason
+            .trim_start()
+            .to_ascii_lowercase()
+            .starts_with("conflict")
+        && status
+            .value
+            .as_str()
+            .map(str::trim)
+            .is_some_and(|value| value.contains('@') && !value.contains(char::is_whitespace))
 }
 
 /// Minimal check for a chat assignment (the gap task checks through
@@ -1409,8 +1431,60 @@ fn project_person_field_status(lead: &mut Value) {
         if combined.is_empty() {
             continue;
         }
+        fill_empty_contact_values(contact, &combined);
         let merged = merge_field_status(contact.get("field_status"), Value::Object(combined));
         contact["field_status"] = merged;
+    }
+}
+
+/// Contact fields the app and the export read a person's value from.
+const CONTACT_VALUE_FIELDS: &[&str] = &[
+    "person_email",
+    "person_telefon",
+    "person_linkedin",
+    "person_xing",
+    "person_position",
+    "person_funktion",
+    "person_titel",
+    "person_geschlecht",
+];
+
+/// A verified status delivered for a person who is already a contact carries
+/// its value only in `result.person_field_status`; the projection used to copy
+/// the status but not the value, so the contact field stayed empty and the app
+/// and the export showed nothing (15.10.2026: a research verified
+/// h.scheske@… with a quote from the company page; the contact had no
+/// e-mail). An empty contact field takes the verified value; a value the
+/// contact already carries is never overwritten here.
+fn fill_empty_contact_values(contact: &mut Value, statuses: &Map<String, Value>) {
+    for field in CONTACT_VALUE_FIELDS {
+        let Some(status) = statuses.get(*field) else {
+            continue;
+        };
+        let verified = status.get("status").and_then(Value::as_str) == Some("verified");
+        // A pattern address that awaits review fills an empty e-mail field
+        // too (see keeps_unconfirmed_address); its status says "prüfen".
+        let unconfirmed_address = *field == "person_email"
+            && status.get("status").and_then(Value::as_str) == Some("action_required");
+        if !verified && !unconfirmed_address {
+            continue;
+        }
+        let Some(value) = status
+            .get("value")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let current = contact
+            .get(*field)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        if current.is_empty() {
+            contact[*field] = Value::String(value.to_string());
+        }
     }
 }
 
@@ -4685,6 +4759,10 @@ mod tests {
             lead["contacts"][1]["field_status"]["person_email"]["person_key"],
             "B"
         );
+        // The verified value reaches the contact field the app reads; the
+        // no_match of A leaves A's field empty.
+        assert_eq!(lead["contacts"][1]["person_email"], "b@firma.test");
+        assert!(lead["contacts"][0].get("person_email").is_none());
         assert_eq!(
             lead["contacts"][2]["field_status"]["person_geschlecht"]["status"],
             "no_match"
@@ -4702,6 +4780,62 @@ mod tests {
             lead["contacts"][1]["field_status"]["person_email"]["status"],
             "verified"
         );
+    }
+
+    #[test]
+    fn unconfirmed_pattern_address_is_kept_and_reaches_the_contact() {
+        let requested = vec!["person_email".to_string()];
+        let mut lead = serde_json::json!({
+            "contacts": [{"id": "a", "person_key": "A"}, {"id": "b", "person_key": "B"}]
+        });
+        let incoming = serde_json::json!({
+            "A": {"person_email": {"status": "action_required", "value": "anna.alt@firma.test",
+                  "reason": "Musteradresse vorname.nachname@firma.test, Domain catch-all",
+                  "sources": [email_source("A", "bob.bau@firma.test")]}},
+            "B": {"person_email": {"status": "action_required", "value": "b@firma.test",
+                  "reason": "conflict: website vs leadfeeder", "sources": []}}
+        });
+        let rejections = apply_person_field_status(
+            &mut lead,
+            &incoming,
+            &BTreeMap::new(),
+            &requested,
+            &no_crm(),
+            None,
+        );
+        assert!(
+            !rejections
+                .iter()
+                .any(|line| line.contains("[A]") && line.contains("Wert")),
+            "{rejections:?}"
+        );
+        assert_eq!(
+            lead["person_field_status"]["A"]["person_email"]["value"],
+            "anna.alt@firma.test"
+        );
+        assert_eq!(
+            lead["person_field_status"]["B"]["person_email"]["value"],
+            Value::Null
+        );
+        project_person_field_status(&mut lead);
+        assert_eq!(lead["contacts"][0]["person_email"], "anna.alt@firma.test");
+        assert_eq!(
+            lead["contacts"][0]["field_status"]["person_email"]["status"],
+            "action_required"
+        );
+        assert!(lead["contacts"][1].get("person_email").is_none());
+    }
+
+    #[test]
+    fn projection_never_overwrites_a_contact_value() {
+        let mut lead = serde_json::json!({
+            "contacts": [{"id": "a", "person_key": "A", "person_email": "a@firma.test"}],
+            "person_field_status": {"A": {"person_email": {"status": "verified", "value": "x@firma.test"},
+                                          "person_telefon": {"status": "no_match", "value": "+49 1"}}}
+        });
+        project_person_field_status(&mut lead);
+        assert_eq!(lead["contacts"][0]["person_email"], "a@firma.test");
+        assert!(lead["contacts"][0].get("person_telefon").is_none());
     }
 
     #[test]

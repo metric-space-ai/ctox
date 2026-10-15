@@ -696,7 +696,7 @@ fn run_external_review_legs(
 
     let mut prompt = build_review_prompt(request, reasons);
     if is_lead_research_review(request) {
-        if let Some(table) = lead_research_stored_result(root, &request.task_prompt) {
+        if let Some(table) = lead_research_stored_result(root, request) {
             prompt.push_str(&table);
         }
     }
@@ -901,17 +901,46 @@ fn lead_id_from_task_prompt(task_prompt: &str) -> Option<&str> {
         .then_some(id)
 }
 
-/// The lead's stored research result as a compact table for the reviewer.
+/// The lead's stored research result for the reviewer.
 /// Without it the reviewer spent most of its budget rediscovering the RxDB
 /// schema with raw sqlite3 (07.10.2026: ~430 sqlite3 calls per hour on one
 /// tenant, the review took ~40 % of all model calls in the worker slots).
-fn lead_research_stored_result(root: &Path, task_prompt: &str) -> Option<String> {
-    let lead_id = lead_id_from_task_prompt(task_prompt)?;
+///
+/// The authoritative part is the compact lead read-back: the same view the
+/// worker receives from `business_os.get_record` and with every writeback
+/// receipt. Judging a report against a different shape (lead-level
+/// `field_status` only, no contacts) rejected correct reports five times in a
+/// row as "contradicting the stored lead" (customer tenant, 14.10.2026). The
+/// company quote table below it serves spot-checks only.
+fn lead_research_stored_result(root: &Path, request: &CompletionReviewRequest) -> Option<String> {
+    let lead_id = lead_id_from_task_prompt(&request.task_prompt)?;
     let lead = crate::business_os::store::load_outbound_lead_document(root, lead_id).ok()??;
-    Some(render_lead_research_stored_result(lead_id, &lead))
+    let readback = crate::business_os::outbound_lead_readback::compact_lead_readback_for_store(
+        root, lead_id, &lead,
+    )
+    .ok()?;
+    Some(render_lead_research_stored_result(
+        lead_id,
+        &lead,
+        &readback,
+        &lead_research_report_text(request),
+    ))
 }
 
-fn render_lead_research_stored_result(lead_id: &str, lead: &serde_json::Value) -> String {
+fn lead_research_report_text(request: &CompletionReviewRequest) -> String {
+    if request.artifact_text.trim().is_empty() {
+        request.preview.clone()
+    } else {
+        request.artifact_text.clone()
+    }
+}
+
+fn render_lead_research_stored_result(
+    lead_id: &str,
+    lead: &serde_json::Value,
+    readback: &serde_json::Value,
+    report: &str,
+) -> String {
     fn clip(text: &str, max: usize) -> String {
         let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
         if flat.chars().count() <= max {
@@ -927,8 +956,24 @@ fn render_lead_research_stored_result(lead_id: &str, lead: &serde_json::Value) -
     };
     let mut out = format!(
         "\n\nStored lead result (authoritative; lead {lead_id}, research_status {}):\n\
+Compact lead read-back ({}; the worker reads this same view from business_os.get_record and every writeback receipt):\n{}\n",
+        text(lead.get("research_status")),
+        crate::business_os::outbound_lead_readback::COMPACT_LEAD_READBACK_VIEW,
+        serde_json::to_string(readback).unwrap_or_else(|_| "{}".to_string()),
+    );
+    let unstored =
+        crate::business_os::outbound_lead_readback::report_emails_not_stored(report, readback);
+    if unstored.is_empty() {
+        out.push_str("Deterministic read-back check: every e-mail address named in the report is stored on the lead.\n");
+    } else {
+        out.push_str(&format!(
+            "Deterministic read-back check: e-mail address(es) named in the report but stored nowhere on the lead: {}\n",
+            unstored.join(", ")
+        ));
+    }
+    out.push_str(
+        "\nCompany field quotes for spot-checks (person fields are per contact in the read-back above):\n\
 field | status | value | sources (provider: quote) | reason | attempts\n",
-        text(lead.get("research_status"))
     );
     let Some(fields) = lead
         .get("field_status")
@@ -938,6 +983,9 @@ field | status | value | sources (provider: quote) | reason | attempts\n",
         return out;
     };
     for (field, entry) in fields {
+        if field.starts_with("person_") {
+            continue;
+        }
         let sources = entry
             .get("sources")
             .and_then(serde_json::Value::as_array)
@@ -1186,8 +1234,8 @@ Internal artifact review gate:\n\
         "\
 Outbound lead research completion gate (replaces required review work steps 1-6 for this task type; the server already enforced the writeback contract):\n\
 - the lead's stored result is appended below as `Stored lead result` (read from the store when this review started); judge from it and do not query any database. Only if that block is missing, read it once: `sqlite3 -readonly <state>/business-os-rxdb.sqlite3 \"select json_extract(data,'$.research_status'), json_extract(data,'$.field_status') from ctox_business_os__outbound_lead_generation_leads__v0 where id='<lead_id>'\"` (lead id is in the task prompt, e.g. [lead_abc])\n\
-- compare the worker's final answer against that field_status: counts of verified / no_match / action_required fields, named persons and e-mails must match; FAIL on a claimed value that is not stored\n\
-- spot-check at most three verified fields: the quote must name the value; open the source URL with ctox_web_read only if the quote is ambiguous\n\
+- compare the worker's final answer against the compact lead read-back in that block (the same view the worker reads back): counts (company, contacts, total, fields answered/open), named persons, their functions, e-mails, e-mail checks, profiles and statuses must match it; FAIL on a claimed value or status that is not stored and on a count that differs from it\n\
+- spot-check at most three verified company fields in the quote table: the quote must name the value; open the source URL with ctox_web_read only if the quote is ambiguous\n\
 - quality: a verified register field (name, address, management, revenue, employees, WZ code) backed by a single source without a `single source:` reason is a finding (rework), not a FAIL by itself\n\
 - no_match is acceptable only with attempts listing the sources asked; a field left open after a source failure must be action_required\n\
 - finish within about five tool calls; do not read skill files, workspaces, queue, mission, continuity, communication or meeting state for this task\n\
@@ -2433,12 +2481,59 @@ mod tests {
                     "reason": "no fax published"}
             }
         });
-        let table = render_lead_research_stored_result("lead_1", &lead);
+        let readback = crate::business_os::outbound_lead_readback::compact_lead_readback(&lead);
+        let table = render_lead_research_stored_result("lead_1", &lead, &readback, "");
         assert!(table.contains("research_status needs_review"));
+        assert!(table.contains("compact_lead_readback_v1"));
+        assert!(table.contains(r#""umsatz":["verified","6,26M","dnbhoovers.com"]"#));
+        assert!(table.contains("every e-mail address named in the report is stored"));
         assert!(table.contains(
             "umsatz | verified | 6,26M | dnbhoovers.com: D&B Hoovers revenue EUR: 6,26M |  | 0"
         ));
         assert!(table.contains("firma_fax | no_match |  |  | no fax published | 2"));
+    }
+
+    #[test]
+    fn lead_research_review_judges_contacts_from_the_same_compact_readback() {
+        let lead = serde_json::json!({
+            "id": "lead_1",
+            "research_status": "needs_review",
+            "field_status": {
+                "firma_name": {"status": "verified", "value": "Example GmbH",
+                    "sources": [{"source_id": "example.org", "quote": "Example GmbH"}]},
+                // Lead-level person entries mirror single contacts; they are
+                // not a second, contradicting contact list for the reviewer.
+                "person_email": {"status": "verified", "value": "a.berg@example.org",
+                    "person_key": "p-a", "sources": [{"source_id": "example.org", "quote": "a.berg@example.org"}]}
+            },
+            "contacts": [
+                {"person_key": "p-a", "id": "c1", "name": "Anna Berg", "email": "a.berg@example.org",
+                 "field_status": {"person_email": {"status": "verified", "value": "a.berg@example.org",
+                    "sources": [{"source_id": "example.org", "quote": "a.berg@example.org"}]}}},
+                {"person_key": "p-b", "id": "c2", "name": "Bernd Cole", "email": "",
+                 "field_status": {"person_email": {"status": "action_required", "value": null,
+                    "sources": [], "reason": "catch-all"}}}
+            ]
+        });
+        let readback = crate::business_os::outbound_lead_readback::compact_lead_readback(&lead);
+        let faithful = "Anna Berg: a.berg@example.org (verified). Bernd Cole: e-mail offen.";
+        let table = render_lead_research_stored_result("lead_1", &lead, &readback, faithful);
+        assert!(table.contains("every e-mail address named in the report is stored"));
+        assert!(table.contains(r#""name":"Bernd Cole""#));
+        assert!(!table.contains("person_email | verified"));
+        let contradicting = "Bernd Cole: b.cole@example.org verified.";
+        let table = render_lead_research_stored_result("lead_1", &lead, &readback, contradicting);
+        assert!(table.contains("stored nowhere on the lead: b.cole@example.org"));
+        let gate = build_review_prompt(
+            &CompletionReviewRequest {
+                source_label: "queue".to_string(),
+                bound_skill: Some("outbound-lead-generation-research".to_string()),
+                ..CompletionReviewRequest::default()
+            },
+            &[],
+        );
+        assert!(gate.contains("compact lead read-back"));
+        assert!(gate.contains("FAIL on a claimed value or status that is not stored"));
     }
 
     #[test]

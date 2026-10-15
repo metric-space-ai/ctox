@@ -55,6 +55,7 @@ pub mod office_engine;
 pub(crate) mod office_staging_repair;
 pub(crate) mod outbound_field_review;
 pub(crate) mod outbound_lead_import;
+pub(crate) mod outbound_lead_readback;
 mod outbound_update_digest;
 mod person_research_command;
 mod person_research_gap_closure;

@@ -2824,6 +2824,34 @@ fn classify_successful_run_with_transient_words_in_stderr_as_succeeded() {
 }
 
 #[test]
+fn busy_target_waits_for_the_live_run_instead_of_failing() {
+    let dir = tempfile::tempdir().expect("temp workspace");
+    let lock_path = dir.path().join(".run.lock");
+    std::fs::write(
+        &lock_path,
+        serde_json::to_string(&json!({"target_key": "t", "pid": process_id()})).unwrap(),
+    )
+    .expect("write live lock");
+    // Without a wait budget a live holder still fails at once.
+    match acquire_target_run_lock_waiting(dir.path(), "t", std::time::Duration::ZERO) {
+        Ok(_) => panic!("live lock must hold without a wait budget"),
+        Err(err) => assert!(err.to_string().contains("already has an active run")),
+    }
+    // The holder finishes while the second run waits: the second run proceeds.
+    let release = lock_path.clone();
+    let finisher = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        std::fs::remove_file(release).expect("holder releases its lock");
+    });
+    let started = std::time::Instant::now();
+    let lock = acquire_target_run_lock_waiting(dir.path(), "t", std::time::Duration::from_secs(10))
+        .expect("waiting run acquires the released target");
+    assert!(started.elapsed() >= std::time::Duration::from_millis(600));
+    finisher.join().unwrap();
+    drop(lock);
+}
+
+#[test]
 fn stale_run_lock_from_dead_process_is_reclaimed() {
     let dir = tempfile::tempdir().expect("temp workspace");
     // A live holder (this process) keeps the lock.

@@ -3764,15 +3764,38 @@ var CtoxIndexedDbCollection = class {
     };
   }
   async replicationCheckpointStatus(schemaHash2 = null) {
-    const tx = this.db.transaction([DOCUMENT_STORE, COLLECTION_SCHEMA_MARKER_STORE], "readwrite");
-    const done = idbTransactionDone(tx);
-    done.catch(() => {
-    });
-    const marker = await localCheckpointMarker(tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE), this.name);
-    const index = tx.objectStore(DOCUMENT_STORE).index("collectionLwtId");
-    const range = IDBKeyRange.bound([this.name, 0, ""], [this.name, Number.MAX_SAFE_INTEGER, "\uFFFF"], false, false);
-    const record = await firstCursorValue(index.openCursor(range, "prev"));
-    await done;
+    const readSnapshot = async () => {
+      const tx = this.db.transaction([DOCUMENT_STORE, COLLECTION_SCHEMA_MARKER_STORE], "readonly");
+      const done = idbTransactionDone(tx);
+      done.catch(() => {
+      });
+      const marker2 = await localCheckpointMarker(
+        tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE),
+        this.name,
+        { create: false }
+      );
+      if (!marker2) {
+        await done;
+        return null;
+      }
+      const index = tx.objectStore(DOCUMENT_STORE).index("collectionLwtId");
+      const range = IDBKeyRange.bound([this.name, 0, ""], [this.name, Number.MAX_SAFE_INTEGER, "\uFFFF"], false, false);
+      const record2 = await firstCursorValue(index.openCursor(range, "prev"));
+      await done;
+      return { marker: marker2, record: record2 };
+    };
+    let snapshot = await readSnapshot();
+    if (!snapshot) {
+      const tx = this.db.transaction(COLLECTION_SCHEMA_MARKER_STORE, "readwrite");
+      const done = idbTransactionDone(tx);
+      done.catch(() => {
+      });
+      await localCheckpointMarker(tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE), this.name);
+      await done;
+      snapshot = await readSnapshot();
+      if (!snapshot) throw new Error("Local checkpoint marker disappeared during initialization");
+    }
+    const { marker, record } = snapshot;
     if (!record) {
       return {
         source: "browser",
@@ -4624,7 +4647,7 @@ var ctoxIndexedDbStorageTestInternals = {
   shouldAcceptDocumentWrite,
   storedRecordForWrite
 };
-async function localCheckpointMarker(store, collection) {
+async function localCheckpointMarker(store, collection, { create = true } = {}) {
   const previous = await idbRequest(store.get(collection));
   if (previous?.localStoreGeneration !== void 0) {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(previous.localStoreGeneration) || !Number.isSafeInteger(previous.evictionGeneration) || previous.evictionGeneration < 0 || previous.evictionGeneration >= Number.MAX_SAFE_INTEGER) {
@@ -4632,6 +4655,7 @@ async function localCheckpointMarker(store, collection) {
     }
     return previous;
   }
+  if (!create) return null;
   const marker = {
     ...previous,
     collection,
@@ -7337,6 +7361,9 @@ var SHELL_BACKGROUND_QUERY_COLLECTIONS = /* @__PURE__ */ new Set([
   "business_chats"
 ]);
 var CLIENT_BACKGROUND_QUERY_STREAM_LIMIT = Math.max(1, Math.floor(CLIENT_QUERY_STREAM_LIMIT / 2));
+var CLIENT_QUERY_RATE_BURST = Math.max(1, CLIENT_QUERY_STREAM_LIMIT * 6);
+var CLIENT_QUERY_RATE_REFILL_PER_SECOND = 12;
+var CLIENT_QUERY_RATE_INTERVAL_MS = 1e3;
 function isBackgroundQuery(envelope) {
   return SHELL_BACKGROUND_QUERY_COLLECTIONS.has(String(envelope?.collectionName || ""));
 }
@@ -7380,6 +7407,37 @@ function createDemandLoadingTransport({
   const fileCollectors = /* @__PURE__ */ new Map();
   const rowsCollectors = /* @__PURE__ */ new Map();
   const queryStreamState = getGlobalQueryStreamState();
+  function scheduleQueryRateWake(delayMs) {
+    if (queryStreamState.rateTimer) return;
+    queryStreamState.rateTimer = setTimeout(() => {
+      queryStreamState.rateTimer = null;
+      drainReadyQueryRequests();
+    }, Math.max(1, delayMs));
+  }
+  function takeQueryRateToken() {
+    const peerId = String(resolvePeerId() || "");
+    if (!peerId) return false;
+    const now = Date.now();
+    let bucket = queryStreamState.rateBucket;
+    if (!bucket || bucket.peerId !== peerId) {
+      bucket = { peerId, tokens: CLIENT_QUERY_RATE_BURST, atMs: now };
+      queryStreamState.rateBucket = bucket;
+    }
+    const intervals = Math.floor((now - bucket.atMs) / CLIENT_QUERY_RATE_INTERVAL_MS);
+    if (intervals > 0) {
+      bucket.tokens = Math.min(
+        CLIENT_QUERY_RATE_BURST,
+        bucket.tokens + intervals * CLIENT_QUERY_RATE_REFILL_PER_SECOND
+      );
+      bucket.atMs += intervals * CLIENT_QUERY_RATE_INTERVAL_MS;
+    }
+    if (bucket.tokens <= 0) {
+      scheduleQueryRateWake(bucket.atMs + CLIENT_QUERY_RATE_INTERVAL_MS - now);
+      return false;
+    }
+    bucket.tokens -= 1;
+    return true;
+  }
   const cancelledQueryRequests = /* @__PURE__ */ new Map();
   const transportOwner = /* @__PURE__ */ Symbol("ctox-demand-transport-owner");
   const terminalTimeoutMs = Math.max(1, Number(collectorTimeoutMs) || DEFAULT_COLLECTOR_TIMEOUT_MS);
@@ -7684,7 +7742,7 @@ function createDemandLoadingTransport({
         });
       };
       const ready = Boolean(resolvePeerId());
-      if (ready && hasFreeQuerySlot(background)) run();
+      if (ready && hasFreeQuerySlot(background) && !queryStreamState.queue.some((entry) => entry.isReady()) && takeQueryRateToken()) run();
       else {
         const queuedBytes = queryStreamState.queue.reduce(
           (total, entry2) => total + Math.max(0, Number(entry2?.estimatedBytes) || 0),
@@ -7731,6 +7789,7 @@ function createDemandLoadingTransport({
           });
         };
         if (!ready) entry.waitForReady();
+        else drainReadyQueryRequests();
       }
     });
   }
@@ -7750,6 +7809,7 @@ function createDemandLoadingTransport({
       let index = queryStreamState.queue.findIndex((entry2) => !entry2.background && admissible(entry2));
       if (index < 0) index = queryStreamState.queue.findIndex((entry2) => entry2.background && admissible(entry2));
       if (index < 0) return;
+      if (!takeQueryRateToken()) return;
       const [entry] = queryStreamState.queue.splice(index, 1);
       entry.run();
     }
@@ -7759,6 +7819,12 @@ function createDemandLoadingTransport({
     let attempt = 0;
     for (; ; ) {
       if (cancellationReason()) throw createQueryCancelError(cancellationReason());
+      if (attempt > 0) {
+        while (resolvePeerId() && !takeQueryRateToken()) {
+          if (cancellationReason()) throw createQueryCancelError(cancellationReason());
+          await delay4(50);
+        }
+      }
       const requestId = attempt === 0 ? baseRequestId : `${baseRequestId}|retry-${attempt}`;
       try {
         return await requestQueryFetchOnce({ ...envelope, requestId }, cancellationReason);

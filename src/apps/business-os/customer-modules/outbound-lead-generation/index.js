@@ -48,13 +48,13 @@ import {
 // zusaetzlich Bundesanzeiger), Fax ueber Google, Steckbrief aus der Homepage
 // (25.09.2026). Umsatz/Mitarbeiter unveraendert.
 const SOURCE_DEFS = Object.freeze([
-  source('handelsregister.de', 'Handelsregister', 'https://www.handelsregister.de/', ['DE'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung', 'firma_prokura', 'person_vorname', 'person_nachname']),
-  source('bundesanzeiger.de', 'Bundesanzeiger', 'https://www.bundesanzeiger.de/', ['DE'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_ort', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung', 'firma_prokura', 'wz_code', 'umsatz', 'mitarbeiter']),
-  source('northdata.de', 'Northdata', 'https://www.northdata.de/', ['DE', 'AT', 'CH'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftsfuehrung', 'firma_prokura', 'umsatz', 'mitarbeiter', 'person_vorname', 'person_nachname', 'person_position']),
+  source('handelsregister.de', 'Handelsregister', 'https://www.handelsregister.de/', ['DE'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung', 'person_vorname', 'person_nachname']),
+  source('bundesanzeiger.de', 'Bundesanzeiger', 'https://www.bundesanzeiger.de/', ['DE'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_ort', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung', 'wz_code', 'umsatz', 'mitarbeiter']),
+  source('northdata.de', 'Northdata', 'https://www.northdata.de/', ['DE', 'AT', 'CH'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftsfuehrung', 'umsatz', 'mitarbeiter', 'person_vorname', 'person_nachname', 'person_position']),
   // Owner 23.09.2026: CompanyHouse nur ueber die offizielle GraphQL-API
   // (Zugangstoken aus der Premium-Mitgliedschaft), kein Scraping. Bis ein
   // Token hinterlegt ist, zeigt die Zeile "Zugang fehlt" statt "defekt".
-  source('companyhouse.de', 'CompanyHouse', 'https://www.companyhouse.de/', ['DE'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_geschaeftsfuehrung', 'firma_prokura', 'person_titel'], 'COMPANYHOUSE_API_TOKEN'),
+  source('companyhouse.de', 'CompanyHouse', 'https://www.companyhouse.de/', ['DE'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_geschaeftsfuehrung', 'person_titel'], 'COMPANYHOUSE_API_TOKEN'),
   source('dnbhoovers.com', 'D&B Hoovers', 'https://app.dnbhoovers.com/', ['DE', 'AT', 'CH'], ['firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftstaetigkeit', 'wz_code', 'umsatz', 'mitarbeiter'], 'DNB_HOOVERS_BROWSER_LOGIN'),
   source('leadfeeder.com', 'Leadfeeder', 'https://app.leadfeeder.com/f/200538/dashboard?organization_id=wmNE2MdyDk&full_view=false&tab=overview', ['DE', 'AT', 'CH'], ['firma_name', 'firma_domain', 'firma_homepage_fact_sheet', 'firma_geschaeftstaetigkeit', 'wz_code'], 'LEADFEEDER_BROWSER_LOGIN'),
   // Owner 18.09.2026: LinkedIn wird ueber den Bright Data "LinkedIn People
@@ -77,25 +77,26 @@ const SOURCE_DEFS = Object.freeze([
   // Sitzung session_expired_login_landing (Messung 22.09.2026). Ohne Zugangs-
   // verweis gab es in der App keinen Ort, den Login zu hinterlegen.
   source('rocketreach.com', 'RocketReach', 'https://rocketreach.co/', ['DE', 'AT', 'CH'], ['person_titel', 'person_vorname', 'person_nachname', 'person_funktion', 'person_position', 'person_email', 'person_telefon'], 'ROCKETREACH_BROWSER_LOGIN'),
-  source('firmenabc.at', 'FirmenABC', 'https://www.firmenabc.at/', ['AT'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_email', 'firma_domain', 'firma_telefon', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung', 'firma_prokura']),
-  source('moneyhouse.ch', 'Moneyhouse', 'https://www.moneyhouse.ch/', ['CH'], ['firma_name', 'firma_fruehere_namen', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_aktivitaetsstatus', 'firma_geschaeftsfuehrung', 'firma_prokura', 'person_vorname', 'person_nachname', 'person_position']),
-  source('zefix.ch', 'Zefix', 'https://www.zefix.ch/', ['CH'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung', 'firma_prokura']),
+  source('firmenabc.at', 'FirmenABC', 'https://www.firmenabc.at/', ['AT'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_email', 'firma_domain', 'firma_telefon', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung']),
+  source('moneyhouse.ch', 'Moneyhouse', 'https://www.moneyhouse.ch/', ['CH'], ['firma_name', 'firma_fruehere_namen', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_aktivitaetsstatus', 'firma_geschaeftsfuehrung', 'person_vorname', 'person_nachname', 'person_position']),
+  source('zefix.ch', 'Zefix', 'https://www.zefix.ch/', ['CH'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung']),
   source('experte.de', 'E-Mail-Prüfung', 'https://www.experte.de/email-pruefen', ['DE', 'AT', 'CH'], ['person_email_validation']),
   source('mailtester.com', 'MailTester', 'https://mailtester.com/', ['DE', 'AT', 'CH'], ['person_email_validation']),
   source('evi.gv.at', 'EVI – Amtsblatt Österreich', 'https://www.evi.gv.at/', ['AT'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftstaetigkeit']),
-  source('justizonline.gv.at', 'Firmenbuch / JustizOnline', 'https://justizonline.gv.at/jop/web/firmenbuchabfrage', ['AT'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung', 'firma_prokura']),
-  source('shab.ch', 'SHAB – Schweizerisches Handelsamtsblatt', 'https://www.shab.ch/#!/gazette', ['CH'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung', 'firma_prokura']),
+  source('justizonline.gv.at', 'Firmenbuch / JustizOnline', 'https://justizonline.gv.at/jop/web/firmenbuchabfrage', ['AT'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung']),
+  source('shab.ch', 'SHAB – Schweizerisches Handelsamtsblatt', 'https://www.shab.ch/#!/gazette', ['CH'], ['firma_name', 'firma_fruehere_namen', 'firma_aktivitaetsstatus', 'firma_anschrift', 'firma_plz', 'firma_ort', 'firma_land', 'firma_geschaeftstaetigkeit', 'firma_geschaeftsfuehrung']),
 ]);
 // Sellify ist keine Adapter-Quelle: keine Anmeldung, kein Scrape-Target.
 // Sie erscheint in der Quellenliste als interne Quelle und als Beleg an
 // jedem Feld, das aus dem eigenen CRM uebernommen wurde.
 const SELLIFY_SOURCE_ID = 'sellify';
 const SELLIFY_SOURCE_LABEL = 'Sellify (eigenes CRM)';
-// Owner-Vorgabe 31.08.: mindestens eine Person je Kategorie, in dieser
-// Reihenfolge (Prompt-Punkt 4).
+// Die sieben Ansprechpartner-Bereiche des Rechercheablaufs (Schritt 4), in
+// dieser Reihenfolge. Prokura wird gar nicht recherchiert, weder als Feld noch
+// als Bereich (Owner 15.10.2026: "keine Prokura mehr"). Die alte Liste mit
+// Prokura ging mit jedem Auftrag an den Agenten und uebersteuerte den Prompt.
 const PERSON_RESEARCH_PRIORITIES = Object.freeze([
-  'Geschäftsführung',
-  'Prokura',
+  'Gesamtverantwortung',
   'Finanzen',
   'Einkauf',
   'Supply Chain',
@@ -122,7 +123,6 @@ const RESEARCH_FIELDS = Object.freeze([
   'firma_geschaeftstaetigkeit',
   'firma_homepage_fact_sheet',
   'firma_geschaeftsfuehrung',
-  'firma_prokura',
   'wz_code',
   'umsatz',
   'mitarbeiter',
@@ -162,7 +162,6 @@ const GOVERNANCE_FIELDS = Object.freeze([
   'firma_umsatz_schaetzung',
   'firma_mitarbeiter_schaetzung',
   'firma_geschaeftsfuehrung',
-  'firma_prokura',
   'firma_email_domain_konflikt',
   'herkunft_import',
   'adressquelle',
@@ -253,7 +252,6 @@ const RESEARCH_FIELD_GROUPS = Object.freeze([
       ['firma_geschaeftstaetigkeit', 'Geschäftstätigkeit'],
       ['firma_homepage_fact_sheet', 'Homepage-Fact-Sheet / URL'],
       ['firma_geschaeftsfuehrung', 'Geschäftsführung'],
-      ['firma_prokura', 'Prokura'],
       ['firma_email_domain_konflikt', 'E-Mail-/Info-/Homepage-Domain'],
     ]),
   },
@@ -542,16 +540,16 @@ const REPLICATED_COLLECTIONS = Object.freeze([
 ]);
 const DEFAULT_RESEARCH_POLICY = [
   "0. Zuerst prüfen, ob Unternehmen und Ansprechpartner bereits in Sellify vorhanden sind. Der Sellify-Bestand ist der Ausgangswert jedes Feldes und zugleich eine Quelle. Er wird nur geändert, wenn eine externe Quelle etwas anderes belegt.",
-  "1. Identität und Registerdaten zuerst klären: Firmenname einschließlich früherer Namen und Umfirmierungen, Rechtsform, Aktivitätsstatus sowie Geschäftsführung und Prokura aus dem Register. Nur amtierende Geschäftsführer und Prokuristen übernehmen; Ausgeschiedene („nicht mehr Geschäftsführer“, „ausgeschieden“, „Prokura erloschen“) nie eintragen. Deutschland: Handelsregister, Northdata, Bundesanzeiger, CompanyHouse. Österreich: Firmenbuch/JustizOnline, FirmenABC, Northdata. Schweiz: Zefix/Handelsregister, SHAB, Moneyhouse, Northdata.",
+  "1. Identität und Registerdaten zuerst klären: Firmenname einschließlich früherer Namen und Umfirmierungen, Rechtsform, Aktivitätsstatus sowie Geschäftsführung aus dem Register. Nur amtierende Geschäftsführer übernehmen; Ausgeschiedene („nicht mehr Geschäftsführer“, „ausgeschieden“) nie eintragen. Prokura wird nicht recherchiert, weder als Feld noch als Ansprechpartner. Deutschland: Handelsregister, Northdata, Bundesanzeiger, CompanyHouse. Österreich: Firmenbuch/JustizOnline, FirmenABC, Northdata. Schweiz: Zefix/Handelsregister, SHAB, Moneyhouse, Northdata.",
   "2. Danach Website, Anschrift und Kommunikation: zuerst die Domain, weil Impressum und Unternehmensseite ohne sie nicht auffindbar sind. Dann Anschrift, PLZ, Ort, Länderkennzeichen, Firmen-E-Mail und Firmen-Telefon. Priorität der Adresssuche in allen drei Ländern: 1. Impressum der offiziellen Website, 2. FirmenABC (Österreich) bzw. Zefix (Schweiz) bzw. D&B Hoovers (Deutschland, Schweiz), 3. Northdata als letzte Quelle.",
   "2a. Besucheradresse und Postadresse: Nennt keine Quelle eine abweichende Besucher- oder Postadresse, sind beide gleich der Anschrift. Dann beide mit dem Wert und dem Beleg der Anschrift eintragen und als Begründung „keine abweichende Angabe gefunden“ vermerken. Nur eine ausdrücklich abweichende Angabe (z. B. „Besucheranschrift:“, „Postanschrift:“, „Lieferadresse“) wird getrennt geführt.",
   "2b. Optionale Felder wie Fax, Postfach und frühere Namen nur eintragen, wenn sie bei der Suche nach den anderen Feldern auftauchen. Für sie keine eigene Suche; ihr Fehlen blockiert nichts.",
   "3. Danach die Kennzahlen: WZ-Code, Umsatz, Mitarbeiter und Geschäftstätigkeit. WZ-Code in allen drei Ländern ausschließlich aus D&B Hoovers und/oder Leadfeeder; Deutschland zusätzlich Bundesanzeiger. Kennzahlen gehören zur exakten juristischen Person des Leads, nicht zum Konzern. Umsatz und Mitarbeiter mit Geschäftsjahr im Zitat; den jüngsten Jahresabschluss im Bundesanzeiger bevorzugen, D&B-Schätzwerte als Schätzung kennzeichnen. Die Geschäftstätigkeit über D&B Hoovers oder eine Google-Suche nach Unternehmensname und Tätigkeit klären; aus der Homepage einen Firmensteckbrief erstellen (Homepage-Fact-Sheet).",
-  "4. Zuletzt die Ansprechpartner: Vorname, Nachname, Funktion, Position, E-Mail, Telefon, LinkedIn und XING. Gesucht wird mindestens eine Person aus jeder dieser Kategorien, in dieser Reihenfolge: Geschäftsführung/Gesamtverantwortung, Prokura, Leitung Finanzen, Einkauf, Supply Chain Management, Operations, Technik, Entwicklung. Personen über die Namenssuche in LinkedIn und XING ansteuern, nicht über angeklickte Suchtreffer.",
+  "4. Zuletzt die Ansprechpartner: Vorname, Nachname, Funktion, Position, E-Mail, Telefon, LinkedIn und XING. Gesucht wird mindestens eine Person aus jeder dieser Kategorien, in dieser Reihenfolge: Geschäftsführung/Gesamtverantwortung, Leitung Finanzen, Einkauf, Supply Chain Management, Operations, Technik, Entwicklung. Personen über die Namenssuche in LinkedIn und XING ansteuern, nicht über angeklickte Suchtreffer.",
   "4a. Geschlecht und Titel jeder Person selbst bestimmen, nicht suchen: Das Geschlecht ergibt sich aus dem Vornamen (männlich/weiblich). Als Beleg die Quelle der Person mit dem Zitat, das ihren Vornamen nennt, und als Begründung „aus dem Vornamen abgeleitet“. Nur bei einem nicht eindeutigen Vornamen (z. B. Kim, Andrea im Ausland) das Feld als prüfbedürftig melden. Titel ist ein akademischer Titel, wenn eine Quelle ihn nennt (z. B. Dr., Prof., Dipl.-Ing.); sonst „Herr“ oder „Frau“ nach dem Geschlecht.",
   "4b. E-Mail der Person: Steht die Adresse wörtlich auf der Unternehmensseite oder in einer anderen Quelle, ist sie damit belegt. Sonst die Adresse aus dem Muster anderer bekannter Adressen derselben Firma bilden: Adressen anderer Mitarbeiter auf der Website, in Sellify, in Registern, Pressemitteilungen, Leadfeeder oder RocketReach (z. B. vorname.nachname@, v.nachname@, vorname@). Umlaute und ß wie im Muster umsetzen (ü → ue). Die gebildete Adresse über den Adapter experte-de prüfen, bei unklarem Ergebnis einmal über mailtester-com. Nur ein Ergebnis „gültig“ bzw. „zustellbar“ belegt die Adresse: dann die E-Mail eintragen mit dem Prüfergebnis als Beleg und der Musterquelle als zweitem Beleg, und das Ergebnis in E-Mail-Prüfung festhalten. Bei „ungültig“ das nächste plausible Muster prüfen, höchstens drei Varianten je Person. Bei „unbekannt“ oder Catch-All die beste Variante eintragen und als prüfbedürftig melden. Jede Adresse höchstens einmal je Prüfdienst; ist ein Dienst blockiert, das Feld als prüfbedürftig mit diesem Grund melden.",
   "4c. Telefon der Person: Durchwahl aus Website, Signatur, Pressemitteilung, Leadfeeder oder RocketReach. Ohne eigene Durchwahl bleibt das Feld leer; die Zentrale gehört in Firmen-Telefon, nicht zur Person.",
-  "5. Belegregel (Owner 07.10.2026: „Qualität geht immer vor Quantität. Wenn es nur eine Quelle gibt, ist die Recherche nicht gut, das sollte nur im Notfall sein.“): Für jedes Feld, das Dritte unabhängig prüfen können (Firmenname, Anschrift, PLZ, Ort, Länderkennzeichen, Aktivitätsstatus, frühere Namen, Geschäftstätigkeit, Geschäftsführung, Prokura, WZ-Code, Umsatz, Mitarbeiter), zwei unabhängige Quellen (verschiedene Anbieter) mit URL und wörtlichem Zitat, das den konkreten Wert nennt. Nur wenn nach allen dafür genannten Quellen nur eine den Wert belegt, den Wert mit Begründung „single source: …“ eintragen. So viele Quellen wie möglich, jede aber nur einmal. Zwei Seiten derselben Quelle sind eine Quelle, und Sellify allein belegt nichts. Eine Spanne (z. B. 11–100) belegt keinen Einzelwert.",
+  "5. Belegregel (Owner 07.10.2026: „Qualität geht immer vor Quantität. Wenn es nur eine Quelle gibt, ist die Recherche nicht gut, das sollte nur im Notfall sein.“): Für jedes Feld, das Dritte unabhängig prüfen können (Firmenname, Anschrift, PLZ, Ort, Länderkennzeichen, Aktivitätsstatus, frühere Namen, Geschäftstätigkeit, Geschäftsführung, WZ-Code, Umsatz, Mitarbeiter), zwei unabhängige Quellen (verschiedene Anbieter) mit URL und wörtlichem Zitat, das den konkreten Wert nennt. Nur wenn nach allen dafür genannten Quellen nur eine den Wert belegt, den Wert mit Begründung „single source: …“ eintragen. So viele Quellen wie möglich, jede aber nur einmal. Zwei Seiten derselben Quelle sind eine Quelle, und Sellify allein belegt nichts. Eine Spanne (z. B. 11–100) belegt keinen Einzelwert.",
   "5a. Selbstauskünfte wie Domain, Firmen-E-Mail, Firmen-Telefon, Fax, Postfach, Besucheradresse, Postadresse, Homepage-Fact-Sheet sowie alle Felder der Ansprechpartner belegt die Unternehmensseite (Impressum, Kontakt, Team) bzw. das Profil selbst, mit URL und wörtlichem Zitat. Einen so belegten Wert eintragen, niemals als nicht gefunden verwerfen mit der Begründung, er stehe nur auf der eigenen Website.",
   "5b. Werte in der Schreibweise der Quelle übernehmen, mit Umlauten und ß. Keine Umschrift: Nürnberg, nicht Nuernberg; Lechstraße, nicht Lechstrasse. Schweizer Adressen behalten ihr ss.",
   "5c. Belege als reine JSON-Liste senden: \"sources\": [ { … }, { … } ]. Kein Trägerobjekt wie {\"item\": [ … ]}. Das gilt auch für result.person_records und result.evidence.",
@@ -717,6 +715,7 @@ export async function mount(ctx) {
   globalThis.addEventListener('offline', handleOffline);
   globalThis.addEventListener('online', handleOnline);
   bindCollections();
+  holdLeadChannel(ctx);
   bindUi();
   // Zuerst zeichnen, dann laden. Am 03.09.2026 auf Kundeninstanz gemessen: vom
   // Seitenaufruf bis zur nutzbaren Oberflaeche vergingen 167 Sekunden, davon
@@ -754,6 +753,7 @@ export async function mount(ctx) {
   }, COMMAND_REFRESH_MS);
   return () => {
     state.uiMounted = false;
+    releaseLeadChannel();
     state.collectionReloader?.dispose();
     state.collectionReloader = null;
     state.collectionBindingGeneration = (state.collectionBindingGeneration || 0) + 1;
@@ -779,6 +779,45 @@ export async function mount(ctx) {
     ctx.host.classList.remove('outbound-lead-generation');
     ctx.host.replaceChildren();
   };
+}
+
+// Die Lead-Collection ist demand-only: jede Lese-Lease startete die Lead-
+// Replikation, und ihr Freigeben beendete sie wieder. Jeder Klick auf einen
+// Lead baute so den WebRTC-Kanal neu auf und wartete auf "query ready" - bis
+// zu 20 s fuer einen einzigen Datensatz (Kundeninstanz 15.10.2026), und ein Klick,
+// der den Kanal freigab, waehrend ein anderer Ladevorgang ihn noch brauchte,
+// endete in "WebRTC replication cancelled". Solange die App offen ist, haelt
+// sie deshalb selbst eine Lease; jedes Lesen nutzt den stehenden Kanal.
+const LEAD_CHANNEL_RETRY_MS = 10_000;
+function holdLeadChannel(ctx) {
+  releaseLeadChannel();
+  const holding = { lease: null, timer: null, released: false };
+  state.leadChannel = holding;
+  const acquire = () => {
+    if (holding.released || state.uiMounted === false) return;
+    Promise.resolve()
+      .then(() => ctx.sync?.leaseCollection?.('outbound_lead_generation_leads', 'outbound-module-open', { forceDirect: true }))
+      .then((lease) => {
+        if (!lease) return;
+        if (holding.released || state.uiMounted === false) { void lease.release?.().catch?.(() => {}); return; }
+        holding.lease = lease;
+      })
+      .catch(() => {
+        if (!holding.released) holding.timer = globalThis.setTimeout(acquire, LEAD_CHANNEL_RETRY_MS);
+      });
+  };
+  acquire();
+}
+
+function releaseLeadChannel() {
+  const holding = state.leadChannel;
+  if (!holding) return;
+  holding.released = true;
+  if (holding.timer) globalThis.clearTimeout(holding.timer);
+  const lease = holding.lease;
+  holding.lease = null;
+  state.leadChannel = null;
+  if (lease) void Promise.resolve(lease.release?.()).catch(() => {});
 }
 
 // P0-Selbstheilung (31.08.): Nach einem CTOX-Service-Neustart ist der
@@ -1602,7 +1641,7 @@ function quellenGlossar() {
 // (v32, 23.09. 13:13) trug weiter die alte Zwei-Quellen-Regel, der Agent liess
 // Registerfelder, WZ-Code und Land deshalb offen (25.09.2026). Ersetzt werden
 // nur die beiden alten Zeilen, wortgleich; jede eigene Fassung bleibt stehen.
-const VERALTETE_BELEGREGEL = Object.freeze(["5. Belegregel. Angaben, die Dritte unabhängig prüfen können, brauchen zwei unabhängige Quellen: firma_name, firma_anschrift, firma_plz, firma_ort, firma_land, firma_aktivitaetsstatus, firma_fruehere_namen, firma_geschaeftstaetigkeit, firma_geschaeftsfuehrung, firma_prokura, wz_code, umsatz, mitarbeiter. Zwei Seiten derselben Quelle sind eine Quelle, und Sellify allein belegt nichts.", "5a. Selbstauskünfte genügen mit EINER Quelle, weil es dafür keine zweite unabhängige geben kann: firma_domain, firma_email, firma_telefon, firma_fax, firma_postfach, firma_besucheranschrift, firma_postanschrift, firma_homepage_fact_sheet sowie alle person_-Felder. Beleg ist die Unternehmensseite (Impressum, Kontakt, Team) bzw. das Profil selbst, mit URL und wörtlichem Zitat. Einen so belegten Wert eintragen, niemals als no_match verwerfen mit der Begründung, er stehe nur auf der eigenen Website."]);
+const VERALTETE_BELEGREGEL = Object.freeze(["5. Belegregel. Angaben, die Dritte unabhängig prüfen können, brauchen zwei unabhängige Quellen: firma_name, firma_anschrift, firma_plz, firma_ort, firma_land, firma_aktivitaetsstatus, firma_fruehere_namen, firma_geschaeftstaetigkeit, firma_geschaeftsfuehrung, wz_code, umsatz, mitarbeiter. Zwei Seiten derselben Quelle sind eine Quelle, und Sellify allein belegt nichts.", "5a. Selbstauskünfte genügen mit EINER Quelle, weil es dafür keine zweite unabhängige geben kann: firma_domain, firma_email, firma_telefon, firma_fax, firma_postfach, firma_besucheranschrift, firma_postanschrift, firma_homepage_fact_sheet sowie alle person_-Felder. Beleg ist die Unternehmensseite (Impressum, Kontakt, Team) bzw. das Profil selbst, mit URL und wörtlichem Zitat. Einen so belegten Wert eintragen, niemals als no_match verwerfen mit der Begründung, er stehe nur auf der eigenen Website."]);
 function aktuelleBelegregel() {
   const zeilen = DEFAULT_RESEARCH_POLICY.split('\n');
   return [zeilen.find((z) => z.startsWith('5. Belegregel')), zeilen.find((z) => z.startsWith('5a. '))];
@@ -3304,7 +3343,28 @@ function adapterScriptText(adapter) {
   return definition ? JSON.stringify(sanitizeCommandResult(definition), null, 2) : '';
 }
 
+// Client first: die Leads der geoeffneten Kampagne liegen vollstaendig im
+// Browser, bevor jemand klickt. Vorher wurde jeder Lead erst beim Klick vom
+// Server geholt ("Details und Belege werden geladen ..." bis zu 20 s, Kundeninstanz
+// 15.10.2026). selectedLead() zeigt einen vorhandenen vollstaendigen Stand
+// sofort; ein neuerer Stand wird danach im Hintergrund nachgeladen.
+const CAMPAIGN_PREFETCH_LIMIT = 100;
+function prefetchCampaignLeads() {
+  const kampagne = state.selectedCampaign;
+  if (!kampagne || state.uiMounted === false || state.campaignPrefetchRunning) return;
+  const vorhanden = new Set(state.leads.map((row) => row.id));
+  const fehlend = campaignListLeads(kampagne).map((row) => row.id)
+    .filter((id) => id && !vorhanden.has(id)).slice(0, CAMPAIGN_PREFETCH_LIMIT);
+  if (!fehlend.length) return;
+  state.campaignPrefetchRunning = true;
+  ensureFullLeads(fehlend)
+    .then(() => { if (state.uiMounted !== false) renderDetail(); })
+    .catch(() => {})
+    .finally(() => { state.campaignPrefetchRunning = false; });
+}
+
 function renderCenter() {
+  queueMicrotask(prefetchCampaignLeads);
   const pane = state.ctx.host.querySelector('[data-leads-pane]');
   if (!pane) return;
   const statusFilter = state.leadStatusFilter;
@@ -10508,7 +10568,7 @@ async function researchLead(id, options = {}) {
         lead_id: lead.id,
         // Was der Agent über den Lead schon weiss (er hat keinen Record-Lesebefehl):
         lead_snapshot: { data: lead.data || {}, contacts: lead.contacts || [] },
-        company: lead.name,
+        company: researchCompanyName(lead),
         country: normalizedResearchCountry(lead.country),
         mode: researchMode,
         fields: nurFelder || activeResearchFields(),
@@ -12486,6 +12546,16 @@ function enabledPrivateResearchSources(sources = state.sources) {
     .sort();
 }
 
+// Firmenname fuer die Anbieter-Suche: der in den Lead-Daten belegte aktuelle
+// Name (firma_name) geht vor dem Listentitel. Kundeninstanz 14.10.2026: der Lead
+// "Kiesow Dr. Brinkmann" (2020 umfirmiert) wurde bei Leadfeeder und D&B nur
+// unter dem Altnamen gesucht (0 Treffer); unter dem aktuellen Namen lieferten
+// beide 20 Ansprechpartner.
+function researchCompanyName(lead) {
+  const current = String(lead?.data?.firma_name || '').trim();
+  return current || String(lead?.name || '').trim();
+}
+
 function normalizedResearchCountry(value) {
   const country = String(value || 'DE').trim().toUpperCase();
   if (['A', 'AT', 'AUT', 'AUSTRIA', 'ÖSTERREICH', 'OESTERREICH'].includes(country)) return 'AT';
@@ -13478,7 +13548,7 @@ function researchFieldReview(lead) {
 // Domain belegt und hing an „frühere Firmennamen fehlt", obwohl die Recherche
 // dokumentiert festgestellt hatte, dass es keine gibt. Ein sauber belegtes
 // „gibt es nicht" darf keine Freigabe blockieren.
-const FELDER_MIT_LEERER_ANTWORT = new Set(['firma_fruehere_namen', 'firma_prokura']);
+const FELDER_MIT_LEERER_ANTWORT = new Set(['firma_fruehere_namen']);
 function fieldAnsweredAsNone(lead, key) {
   if (!FELDER_MIT_LEERER_ANTWORT.has(key)) return false;
   const status = lead?.field_status?.[key];
@@ -13508,7 +13578,6 @@ function validationBlockerDetails(lead) {
     ['firma_geschaeftstaetigkeit', 'Geschäftstätigkeit'],
     ['firma_homepage_fact_sheet', 'Homepage-Fact-Sheet'],
     ['firma_geschaeftsfuehrung', 'Geschäftsführung'],
-    ['firma_prokura', 'Prokura oder explizit „keine gefunden“'],
     ['firma_email_domain_konflikt', 'E-Mail-/Domain-Konsistenz'],
     ['wz_code', 'WZ-Code'],
     ['firma_aufnahmeeignung', 'fachliche Eignung'],
@@ -13890,13 +13959,12 @@ function contactTabLead(lead) {
         const exact = PERSON_RESEARCH_PRIORITIES.findIndex((value) => role.includes(value.toLowerCase()));
         if (exact >= 0) return exact;
         if (/gesch[aä]ftsführ|managing director|\bceo\b|gesamtverantwort|vorstand/.test(role)) return 0;
-        if (/prokur|vertretungsberechtigt/.test(role)) return 1;
-        if (/finanz|\bcfo\b|controlling/.test(role)) return 2;
-        if (/einkauf|procurement|purchas/.test(role)) return 3;
-        if (/supply chain|\bscm\b|logistik/.test(role)) return 4;
-        if (/operations|betriebsleit|\bcoo\b/.test(role)) return 5;
-        if (/technik|technisch|\bcto\b|technical/.test(role)) return 6;
-        if (/entwicklung|f&e|r&d/.test(role)) return 7;
+        if (/finanz|\bcfo\b|controlling/.test(role)) return 1;
+        if (/einkauf|procurement|purchas/.test(role)) return 2;
+        if (/supply chain|\bscm\b|logistik/.test(role)) return 3;
+        if (/operations|betriebsleit|\bcoo\b/.test(role)) return 4;
+        if (/technik|technisch|\bcto\b|technical/.test(role)) return 5;
+        if (/entwicklung|f&e|r&d/.test(role)) return 6;
         return PERSON_RESEARCH_PRIORITIES.length;
       };
       return priority(left.contact) - priority(right.contact) || left.index - right.index;
@@ -14055,13 +14123,12 @@ function renderContactTabs(lead) {
     const exact = PERSON_RESEARCH_PRIORITIES.findIndex((value) => role.includes(value.toLowerCase()));
     if (exact >= 0) return exact;
     if (/gesch[aä]ftsführ|managing director|\bceo\b|gesamtverantwort|vorstand/.test(role)) return 0;
-    if (/prokur|vertretungsberechtigt/.test(role)) return 1;
-    if (/finanz|\bcfo\b|controlling/.test(role)) return 2;
-    if (/einkauf|procurement|purchas/.test(role)) return 3;
-    if (/supply chain|\bscm\b|logistik/.test(role)) return 4;
-    if (/operations|betriebsleit|\bcoo\b/.test(role)) return 5;
-    if (/technik|technisch|\bcto\b|technical/.test(role)) return 6;
-    if (/entwicklung|f&e|r&d/.test(role)) return 7;
+    if (/finanz|\bcfo\b|controlling/.test(role)) return 1;
+    if (/einkauf|procurement|purchas/.test(role)) return 2;
+    if (/supply chain|\bscm\b|logistik/.test(role)) return 3;
+    if (/operations|betriebsleit|\bcoo\b/.test(role)) return 4;
+    if (/technik|technisch|\bcto\b|technical/.test(role)) return 5;
+    if (/entwicklung|f&e|r&d/.test(role)) return 6;
     return PERSON_RESEARCH_PRIORITIES.length;
   };
   const groups = PERSON_RESEARCH_PRIORITIES.map((label) => ({ label, contacts: [] }));
