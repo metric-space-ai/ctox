@@ -952,7 +952,7 @@ impl Monday {
                     &[
                         ("user_id", s("Nutzer-ID, der benachrichtigt wird")),
                         ("target_id", s("ID des Ziels (Item, Board, Update …)")),
-                        ("target_type", choice("Art des Ziels", &["item", "board", "update", "group"])),
+                        ("target_type", choice("Art des Ziels", &["item", "board", "update"])),
                         ("text", s("Text der Benachrichtigung")),
                     ],
                     &["user_id", "target_id", "target_type", "text"],
@@ -1479,9 +1479,12 @@ impl Monday {
                 m.insert("userId".into(), json!(seg(args, "user_id")?));
                 m.insert("targetId".into(), json!(seg(args, "target_id")?));
                 let target = req_str(args, "target_type")?;
-                if !["item", "board", "update", "group"].contains(&target) {
-                    bail!("`target_type` must be item, board, update or group");
-                }
+                // monday's `NotificationTargetType` enum is `Project` (item/board) or `Post` (update).
+                let target = match target {
+                    "item" | "board" | "Project" => "Project",
+                    "update" | "Post" => "Post",
+                    _ => bail!("`target_type` must be item, board or update"),
+                };
                 m.insert("targetType".into(), json!(target));
                 m.insert("text".into(), json!(req_str(args, "text")?));
             }

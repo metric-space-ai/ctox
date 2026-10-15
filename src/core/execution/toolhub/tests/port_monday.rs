@@ -741,7 +741,7 @@ fn monday_actions_are_ported() {
             body_eq: ptrs([
                 ("/variables/userId", json!("4456778899")),
                 ("/variables/targetId", json!("9876543210")),
-                ("/variables/targetType", json!("item")),
+                ("/variables/targetType", json!("Project")),
                 ("/variables/text", json!("Please take a look")),
             ]),
             response_status: 200,
