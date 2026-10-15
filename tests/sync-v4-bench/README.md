@@ -98,6 +98,14 @@ is explicitly listed as unsupported rather than simulated with reliable data.
 Every 30 seconds all browser transports close, stay down one second, and reopen
 with a fresh peer generation. No application replay masks transport loss.
 This is an explicit connection-close test, not a silent-blackhole simulation.
+The default `--drop-mode factory` records full transport shutdown/recreation.
+For M3's automatic reconnect path use `--drop-mode channel --profiles 20`:
+only the main DataChannel closes, retaining the same peer factory and its
+real onclose/reconnect machinery. No application replay is added. Fault attempts,
+actual `fault_applied` events and `fault_target_not_open` are distinguishable;
+an already broken link is never counted as another successful channel fault.
+Use the same mode for baseline/candidate comparisons. Both modes can run all
+three RTT profiles; a single-profile run does not prove the omitted profiles.
 Reliable IDs accepted by send must match unique receiver IDs. Failed admission,
 missing send result, duplicates, accepted-but-unreceived and unexpected receipts
 are separate fields. A disconnect can legitimately reject send; those rejects

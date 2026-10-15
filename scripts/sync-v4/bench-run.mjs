@@ -12,6 +12,8 @@ const durationSeconds = Number(arg('--duration', String(scenario.durationSeconds
 if (!(durationSeconds >= 10 && durationSeconds <= 600 && peers >= 1 && peers <= 3)) throw new Error('Invalid bounded scenario size');
 if (durationSeconds < 600 && !process.argv.includes('--smoke')) throw new Error('Short run requires --smoke; never a 10min baseline');
 const lossPercent = Number(arg('--loss', String(scenario.oneWayPacketLossPercent)));
+const dropMode = arg('--drop-mode', 'factory');
+if (!['factory', 'channel'].includes(dropMode)) throw new Error('drop-mode must be factory or channel');
 if (!Number.isFinite(lossPercent) || lossPercent < 0 || lossPercent > 5) throw new Error('Loss must be in [0,5] percent');
 fs.mkdirSync(out, { recursive: true });
 
@@ -41,7 +43,7 @@ try {
   if (profiles.some(x => ![20, 150, 600].includes(x))) throw new Error('Only declared RTT profiles are allowed');
   for (const rttMs of profiles) {
     const profileOut = path.join(out, `rtt-${rttMs}`); fs.mkdirSync(profileOut, { recursive: true });
-    const config = { out: profileOut, durationSeconds, peers, rttMs, lossPercent,
+    const config = { out: profileOut, durationSeconds, peers, rttMs, lossPercent, dropMode,
       uid: process.getuid(), gid: process.getgid(), hostNetworkNamespace: fs.readlinkSync('/proc/self/ns/net'),
       nativeBin: path.resolve(arg('--native-bin', path.join(process.env.CARGO_TARGET_DIR || '', 'release/ctox-transport-bench-peer'))),
       nativeRevision: arg('--native-revision', manifest.sourceHead),
