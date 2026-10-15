@@ -3014,7 +3014,7 @@ impl WebRTCRsConnectionHandler {
         peer: &WebRTCRsConnection,
         transport: super::index_mod::hello::TransportSelection,
         binding: super::index_mod::scheduler::SessionBinding,
-        authorize: Arc<dyn Fn(super::index_mod::lanes::Lane, super::index_mod::hello::WireSeq, &[u8]) -> RxResult<Option<Arc<dyn WebRTCPublicationGuard>>> + Send + Sync>,
+        authorize: Arc<dyn Fn(super::index_mod::lanes::Lane, super::index_mod::hello::WireSeq, &[u8]) -> RxResult<Arc<dyn WebRTCPublicationGuard>> + Send + Sync>,
     ) -> RxResult<super::index_mod::scheduler::NativeSendScheduler> {
         self.activate_v4_sender(peer, transport, Some((binding, authorize))).await
     }
@@ -3023,7 +3023,7 @@ impl WebRTCRsConnectionHandler {
         &self,
         peer: &WebRTCRsConnection,
         transport: super::index_mod::hello::TransportSelection,
-        session: Option<(super::index_mod::scheduler::SessionBinding, Arc<dyn Fn(super::index_mod::lanes::Lane, super::index_mod::hello::WireSeq, &[u8]) -> RxResult<Option<Arc<dyn WebRTCPublicationGuard>>> + Send + Sync>)>,
+        session: Option<(super::index_mod::scheduler::SessionBinding, Arc<dyn Fn(super::index_mod::lanes::Lane, super::index_mod::hello::WireSeq, &[u8]) -> RxResult<Arc<dyn WebRTCPublicationGuard>> + Send + Sync>)>,
     ) -> RxResult<super::index_mod::scheduler::NativeSendScheduler> {
         let pc = {
             let _lifecycle = self.peer_lifecycle.lock();
@@ -3058,7 +3058,7 @@ impl WebRTCRsConnectionHandler {
                 let native = authorize(lane, id, bytes)?;
                 let _lifecycle = self.peer_lifecycle.lock();
                 if !self.is_current_connection(peer) { return Err(stale_connection_error(peer)); }
-                Ok(self.v4_publication(peer, native))
+                self.v4_publication(peer, Some(native)).ok_or_else(|| new_rx_error("ctox_webrtc_publication_denied", None))
             }).await?
         } else { super::index_mod::scheduler::NativeSendScheduler::create(&pc, transport).await? };
         {

@@ -342,7 +342,7 @@ impl NativeSendScheduler {
         pc: &Arc<dyn PeerConnection>,
         transport: TransportSelection,
         session: SessionBinding,
-        authorize: impl Fn(Lane, WireSeq, &[u8]) -> RxResult<Option<Arc<dyn WebRTCPublicationGuard>>>
+        authorize: impl Fn(Lane, WireSeq, &[u8]) -> RxResult<Arc<dyn WebRTCPublicationGuard>>
             + Send
             + Sync,
     ) -> RxResult<Self> {
@@ -359,7 +359,7 @@ impl NativeSendScheduler {
     }
     async fn replay_pending(
         &self,
-        authorize: &(impl Fn(Lane, WireSeq, &[u8]) -> RxResult<Option<Arc<dyn WebRTCPublicationGuard>>>
+        authorize: &(impl Fn(Lane, WireSeq, &[u8]) -> RxResult<Arc<dyn WebRTCPublicationGuard>>
               + Send
               + Sync),
     ) -> RxResult<()> {
@@ -378,8 +378,13 @@ impl NativeSendScheduler {
                 for message in messages {
                     let publication =
                         authorize(lane, message.value.application_id, &message.value.bytes)?;
-                    self.submit(Some(lane), message.seq, &message.value.bytes, publication)
-                        .await?;
+                    self.submit(
+                        Some(lane),
+                        message.seq,
+                        &message.value.bytes,
+                        Some(publication),
+                    )
+                    .await?;
                 }
                 Ok::<_, RxError>(())
             });
@@ -1097,6 +1102,13 @@ mod native_tests {
 
     use async_trait::async_trait;
     use webrtc::data_channel::{RTCDataChannelId, RTCDataChannelState};
+    struct PublicFixtureGuard;
+    impl WebRTCPublicationGuard for PublicFixtureGuard {
+        fn with_current(&self, publish: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()> {
+            publish()
+        }
+    }
+
     #[tokio::test]
     async fn v4_session_native_replays_after_channel_loss_and_acks_while_application_is_busy() {
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -1161,7 +1173,7 @@ mod native_tests {
                     assert_eq!(lane, Lane::Commands);
                     assert_eq!(id, WireSeq(99));
                     assert_eq!(body, b"survive loss");
-                    Ok(None)
+                    Ok(Arc::new(PublicFixtureGuard) as Arc<dyn WebRTCPublicationGuard>)
                 })
                 .await
                 .unwrap();
