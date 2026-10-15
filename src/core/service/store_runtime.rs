@@ -83,6 +83,8 @@ pub(crate) struct DaemonStores {
     databases: Arc<Mutex<HashMap<String, Database>>>,
     ipc: Option<DaemonIpc>,
     closing: Arc<AtomicBool>,
+    native_stores: Vec<super::store_rxdb::NativeStoreRegistration>,
+    runtime: Handle,
 }
 impl DaemonStores {
     /// Acquire process/lifecycle ownership BEFORE opening a database file.
@@ -93,7 +95,7 @@ impl DaemonStores {
             endpoint,
             Arc::new(Inspect {
                 databases: databases.clone(),
-                runtime,
+                runtime: runtime.clone(),
                 closing: closing.clone(),
             }),
         )?;
@@ -102,6 +104,8 @@ impl DaemonStores {
             databases,
             ipc: Some(ipc),
             closing,
+            native_stores: Vec::new(),
+            runtime,
         })
     }
 
@@ -179,6 +183,13 @@ impl DaemonStores {
         Ok(database)
     }
 
+    pub async fn install_native_rxdb(&mut self, database: Database) -> Result<(), StoreError> {
+        let native =
+            super::store_rxdb::RxdbJobs::install_native(database, self.runtime.clone()).await?;
+        self.native_stores.push(native);
+        Ok(())
+    }
+
     /// On a drain error the caller retains this owner and its daemon lease.
     /// Retry after the bounded outstanding job completes; never release the
     /// lifecycle lock and advertise offline maintenance while it is running.
@@ -186,6 +197,7 @@ impl DaemonStores {
         // Retire lookup/admission first. Existing jobs are then drained by the
         // pools/writers; retain the daemon lock until all file owners stop.
         self.closing.store(true, Ordering::Release);
+        self.native_stores.clear();
         let databases = self
             .databases
             .lock()

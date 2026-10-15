@@ -13,7 +13,9 @@ use rxdb::{
     },
 };
 use std::{
-    sync::{Arc, Mutex},
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, Mutex, OnceLock, Weak},
     time::{Duration, Instant},
 };
 use tokio::{
@@ -71,6 +73,42 @@ impl Drop for Forwarder {
     }
 }
 
+// Lookup is injection only. A missing, stopped or retired daemon owner never
+// falls back to opening the path supplied by a helper/CLI process.
+static NATIVE_STORES: OnceLock<Mutex<HashMap<PathBuf, Weak<RxdbJobs>>>> = OnceLock::new();
+pub(crate) struct NativeStoreRegistration {
+    path: PathBuf,
+    owner: Arc<RxdbJobs>,
+}
+impl Drop for NativeStoreRegistration {
+    fn drop(&mut self) {
+        let mut stores = NATIVE_STORES
+            .get_or_init(Mutex::default)
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if stores
+            .get(&self.path)
+            .is_some_and(|w| w.ptr_eq(&Arc::downgrade(&self.owner)))
+        {
+            stores.remove(&self.path);
+        }
+    }
+}
+pub(crate) async fn native_storage(path: PathBuf) -> Result<Arc<RxStorageSqlite>, StoreError> {
+    let id = tokio::task::spawn_blocking(move || ctox_store::DbId::new(path))
+        .await
+        .map_err(|_| StoreError::Panicked)??;
+    let jobs = NATIVE_STORES
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(id.path())
+        .and_then(Weak::upgrade)
+        .ok_or(StoreError::Closed)?;
+    jobs.database.writer.ready().await?;
+    Ok(jobs.storage())
+}
+
 pub(crate) struct RxdbJobs {
     database: Database,
     runtime: Handle,
@@ -80,6 +118,56 @@ pub(crate) struct RxdbJobs {
     admission: Arc<Semaphore>,
 }
 impl RxdbJobs {
+    /// Explicit composition-root registration. The guard is retired before the
+    /// owner drains; retaining it also retains the bridge's commit forwarder.
+    pub async fn install_native(
+        database: Database,
+        runtime: Handle,
+    ) -> Result<NativeStoreRegistration, StoreError> {
+        let schema = rxdb::rx_database_internal_store::build_internal_store_schema();
+        let definition = ctox_store::schema::CollectionDefinition {
+            name: rxdb::rx_storage_helper::INTERNAL_STORAGE_NAME.into(),
+            app_id: "ctox-rxdb-internal".into(),
+            schema_ver: u32::try_from(schema.version)
+                .map_err(|_| StoreError::Invalid("invalid internal schema version".into()))?,
+            schema_json: serde_json::to_value(schema)
+                .map_err(|_| StoreError::Invalid("internal schema encoding".into()))?,
+            class: "control".into(),
+            client_limit: 0,
+            byte_budget: 0,
+            rights_ver: 0,
+            app_ver: "rxdb-internal-schema-1".into(),
+        };
+        database
+            .writer
+            .submit(WriteJob::new(options(), move |tx| {
+                match ctox_store::schema::active_collection(tx, &definition.name)? {
+                    Some(existing) if existing.definition == definition => {}
+                    Some(_) => {
+                        return Err(StoreError::Invalid(
+                            "internal schema migration required".into(),
+                        ))
+                    }
+                    None => {
+                        ctox_store::schema::create_collection(tx, &definition)?;
+                    }
+                }
+                Ok(())
+            }))?
+            .await?;
+        let owner = Self::attach_canonical(database, runtime).await?;
+        let path = owner.database.writer.db_id().path().to_path_buf();
+        let mut stores = NATIVE_STORES
+            .get_or_init(Mutex::default)
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if stores.get(&path).and_then(Weak::upgrade).is_some() {
+            return Err(StoreError::AlreadyOwned);
+        }
+        stores.insert(path.clone(), Arc::downgrade(&owner));
+        Ok(NativeStoreRegistration { path, owner })
+    }
+
     pub async fn attach_canonical(
         database: Database,
         runtime: Handle,

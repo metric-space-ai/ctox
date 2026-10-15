@@ -241,6 +241,40 @@ async fn canonical_cutover_counts_restartable_import_and_refuses_double_activati
         }
         Ok(())
     })).await.unwrap();
+    // Commit exactly the first bounded page, retire the real file owner, and
+    // open it again: resume must use the durable cursor, not an in-memory one.
+    assert!(!database
+        .writer
+        .submit(WriteJob::new(JobOptions::default(), |tx| {
+            rxdb::storage::sqlite::sql::migrate_legacy_page(
+                tx,
+                "ctox_business_os__notes__v0",
+                "c_notes",
+                0,
+            )
+            .map_err(|_| StoreError::Invalid("fixture import failed".into()))
+        }))
+        .unwrap()
+        .await
+        .unwrap());
+    stores.shutdown().await.unwrap();
+    drop(database);
+    let mut stores = DaemonStores::start(
+        StoreEndpoint::UnixSocket {
+            path: dir.path().join("ipc/store.sock"),
+        },
+        Handle::current(),
+    )
+    .unwrap();
+    let database = stores
+        .register(
+            "sync",
+            DbId::new(dir.path().join("sync.sqlite3")).unwrap(),
+            true,
+            Arc::new(|_| Ok(())),
+        )
+        .await
+        .unwrap();
     let jobs = RxdbJobs::attach_canonical(database.clone(), Handle::current())
         .await
         .unwrap();
@@ -296,4 +330,52 @@ async fn canonical_cutover_counts_restartable_import_and_refuses_double_activati
     drop(storage);
     drop(jobs);
     stores.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn native_factory_requires_current_daemon_registration_without_raw_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sync.sqlite3");
+    assert!(native_storage(path.clone()).await.is_err());
+    assert!(!path.exists(), "unregistered native factory opened SQLite");
+    let mut stores = DaemonStores::start(
+        StoreEndpoint::UnixSocket {
+            path: dir.path().join("ipc/store.sock"),
+        },
+        Handle::current(),
+    )
+    .unwrap();
+    let database = stores
+        .register(
+            "sync",
+            DbId::new(&path).unwrap(),
+            true,
+            Arc::new(|_| Ok(())),
+        )
+        .await
+        .unwrap();
+    stores.install_native_rxdb(database).await.unwrap();
+    let storage = native_storage(path.clone()).await.unwrap();
+    assert!(storage.connection().is_err(), "raw-opener bypass");
+    let instance = create_storage_instance(
+        &storage,
+        RxStorageInstanceCreationParams {
+            database_instance_token: "native-proof".into(),
+            database_name: "ctox-business-os".into(),
+            collection_name: rxdb::rx_storage_helper::INTERNAL_STORAGE_NAME.into(),
+            schema: rxdb::rx_database_internal_store::build_internal_store_schema(),
+            options: HashMap::new(),
+            multi_instance: false,
+            dev_mode: false,
+            password: None,
+        },
+    )
+    .await
+    .unwrap();
+    instance.close().await.unwrap();
+    stores.shutdown().await.unwrap();
+    assert!(
+        native_storage(path).await.is_err(),
+        "retired generation still installed"
+    );
 }

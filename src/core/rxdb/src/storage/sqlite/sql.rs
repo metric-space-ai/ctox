@@ -159,18 +159,26 @@ pub fn migrate_legacy_page(
         }
     };
     let mut stmt=conn.prepare(&format!("SELECT id,revision,deleted,data FROM {} WHERE (?1 IS NULL OR id>?1) ORDER BY id LIMIT 500",quote_identifier(&archive))).map_err(sqlite_error)?;
-    let rows = stmt
-        .query_map([cursor.as_deref()], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, String>(3)?,
-            ))
-        })
-        .map_err(sqlite_error)?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(sqlite_error)?;
+    let mut cursor_rows = stmt.query([cursor.as_deref()]).map_err(sqlite_error)?;
+    let mut rows = Vec::new();
+    let mut bytes = 0usize;
+    let mut complete = false;
+    // A row cap alone can hold the writer for tens of MiB of lead documents.
+    // Read incrementally; do not materialize 500 large bodies before yielding.
+    while rows.len() < 500 && bytes < 1024 * 1024 {
+        let Some(row) = cursor_rows.next().map_err(sqlite_error)? else {
+            complete = true;
+            break;
+        };
+        let id: String = row.get(0).map_err(sqlite_error)?;
+        let rev: String = row.get(1).map_err(sqlite_error)?;
+        let deleted: i64 = row.get(2).map_err(sqlite_error)?;
+        let data: String = row.get(3).map_err(sqlite_error)?;
+        bytes = bytes.saturating_add(data.len());
+        rows.push((id, rev, deleted, data));
+    }
+    drop(cursor_rows);
+    drop(stmt);
     for (id, rev, deleted, data) in &rows {
         conn.execute(
             &format!(
@@ -188,7 +196,7 @@ pub fn migrate_legacy_page(
         .map_err(sqlite_error)?;
     }
     let total = copied + rows.len() as i64;
-    if rows.len() < 500 {
+    if complete {
         let source_count: i64 = conn
             .query_row(
                 &format!("SELECT COUNT(*) FROM {}", quote_identifier(&archive)),
@@ -226,7 +234,8 @@ fn read_table(table: &str) -> String {
         return quote_identifier(table);
     }
     let name = quote_identifier(table);
-    format!("(SELECT t.id,t.rev AS revision,t.deleted,COALESCE(json_extract(t.data,'$._meta.lwt'),0) AS lastWriteTime,json_set(COALESCE(t.data,json_object('id',t.id)),'$._rev',t.rev,'$._deleted',json(CASE t.deleted WHEN 1 THEN 'true' ELSE 'false' END),'$._attachments',json(COALESCE(json_extract(t.data,'$._attachments'),'{{}}')),'$._meta.lwt',COALESCE(json_extract(t.data,'$._meta.lwt'),0)) AS data FROM {name} t)")
+    let literal = quote_sql_literal(table);
+    format!("(SELECT t.id,t.rev AS revision,t.deleted,COALESCE(json_extract(t.data,'$._meta.lwt'),0) AS lastWriteTime,json_set(COALESCE(t.data,'{{}}'),'$.'||json_quote(COALESCE((SELECT COALESCE(json_extract(schema_json,'$.primaryKey.key'),json_extract(schema_json,'$.primaryKey')) FROM _collections WHERE table_name={literal} AND state='active'),'id')),t.id,'$._rev',t.rev,'$._deleted',json(CASE t.deleted WHEN 1 THEN 'true' ELSE 'false' END),'$._attachments',json(COALESCE(json_extract(t.data,'$._attachments'),'{{}}')),'$._meta.lwt',COALESCE(json_extract(t.data,'$._meta.lwt'),0)) AS data FROM {name} t)")
 }
 
 pub fn ensure_collection_table(conn: &Connection, table: &str) -> RxResult<()> {
