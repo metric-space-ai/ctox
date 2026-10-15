@@ -1281,47 +1281,80 @@ pub struct WebRTCRsConnectionHandler {
 
 impl WebRTCRsConnectionHandler {
     /// Install before any peer exists. Missing host authority never opts into V4.
-    pub fn configure_v4(&self, config: super::index_mod::v4_router::V4RouterConfig) -> RxResult<()> {
+    pub fn configure_v4(
+        &self,
+        config: super::index_mod::v4_router::V4RouterConfig,
+    ) -> RxResult<()> {
         let _lifecycle = self.peer_lifecycle.lock();
         if !self.peers.lock().is_empty() {
             return Err(new_rx_error("ctox_v4_configuration_after_connect", None));
         }
         let mut router = self.v4_router.lock();
-        if router.is_some() { return Err(new_rx_error("ctox_v4_already_configured", None)); }
-        *router = Some(Arc::new(super::index_mod::v4_router::V4ConnectionRouter::new(config)?));
+        if router.is_some() {
+            return Err(new_rx_error("ctox_v4_already_configured", None));
+        }
+        *router = Some(Arc::new(
+            super::index_mod::v4_router::V4ConnectionRouter::new(config)?,
+        ));
         Ok(())
     }
     fn v4_router(&self) -> Option<Arc<super::index_mod::v4_router::V4ConnectionRouter>> {
         self.v4_router.lock().clone()
     }
-    pub fn v4_snapshot(&self, peer: &WebRTCRsConnection)
-        -> Option<super::index_mod::connection_lifecycle::ConnectionSnapshot> {
+    pub fn v4_snapshot(
+        &self,
+        peer: &WebRTCRsConnection,
+    ) -> Option<super::index_mod::connection_lifecycle::ConnectionSnapshot> {
         self.v4_router().and_then(|router| router.snapshot(peer))
     }
-    pub(crate) fn publish_v4_error(&self, error: RxError) { self.error_subject.next(error); }
+    pub(crate) fn publish_v4_error(&self, error: RxError) {
+        self.error_subject.next(error);
+    }
     pub(crate) fn publish_v4_connected(&self, peer: WebRTCRsConnection) {
-        if self.is_peer_current(&peer) { self.connect_subject.next(peer); }
+        if self.is_peer_current(&peer) {
+            self.connect_subject.next(peer);
+        }
     }
-    pub(crate) fn track_v4_task(&self, peer: &WebRTCRsConnection, task: tokio::task::JoinHandle<()>) {
+    pub(crate) fn track_v4_task(
+        &self,
+        peer: &WebRTCRsConnection,
+        task: tokio::task::JoinHandle<()>,
+    ) {
         let mut peers = self.peers.lock();
-        if let Some(entry) = peers.get_mut(peer.peer_id()).filter(|e| e.generation == peer.generation()) {
+        if let Some(entry) = peers
+            .get_mut(peer.peer_id())
+            .filter(|e| e.generation == peer.generation())
+        {
             entry.tasks.push(task);
-        } else { task.abort(); }
+        } else {
+            task.abort();
+        }
     }
-    pub(crate) async fn send_v4_control(&self, peer: &WebRTCRsConnection,
-        frame: &super::index_mod::hello::HelloFrame) -> RxResult<()> {
+    pub(crate) async fn send_v4_control(
+        &self,
+        peer: &WebRTCRsConnection,
+        frame: &super::index_mod::hello::HelloFrame,
+    ) -> RxResult<()> {
         let data_channel = {
             let _lifecycle = self.peer_lifecycle.lock();
-            self.peers.lock().get(peer.peer_id())
+            self.peers
+                .lock()
+                .get(peer.peer_id())
                 .filter(|e| e.generation == peer.generation() && e.data_channel_open)
-                .and_then(|e| e.data_channel.clone()).ok_or_else(|| {
+                .and_then(|e| e.data_channel.clone())
+                .ok_or_else(|| {
                     transport_diagnostics().reject_not_ready(0);
                     stale_connection_error(peer)
                 })?
         };
-        let bytes = frame.encode().map_err(|_| new_rx_error("ctox_v4_invalid_hello", None))?;
-        let text = std::str::from_utf8(&bytes).map_err(|_| new_rx_error("ctox_v4_invalid_hello", None))?;
-        send_text_checked(&data_channel, text).await.map_err(|e| webrtc_error("send V4 control", e))
+        let bytes = frame
+            .encode()
+            .map_err(|_| new_rx_error("ctox_v4_invalid_hello", None))?;
+        let text =
+            std::str::from_utf8(&bytes).map_err(|_| new_rx_error("ctox_v4_invalid_hello", None))?;
+        send_text_checked(&data_channel, text)
+            .await
+            .map_err(|e| webrtc_error("send V4 control", e))
     }
     fn require_v4_live(&self, peer: &WebRTCRsConnection) -> RxResult<()> {
         if self.v4_router().is_some_and(|router| !router.is_live(peer)) {
@@ -2542,7 +2575,9 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
     }
 
     async fn close(&self) -> Result<(), RxError> {
-        if let Some(router) = self.v4_router() { router.drain().await; }
+        if let Some(router) = self.v4_router() {
+            router.drain().await;
+        }
         // Commit takes pending_offers before peer_lifecycle. Use the same
         // order here so close either observes and retires the committed peer,
         // or makes a later candidate commit fail without touching old state.
@@ -4561,7 +4596,8 @@ fn install_data_channel(
                     }
                     if let Some(router) = handler_for_task.v4_router() {
                         let peer = WebRTCRsConnection::new(peer_for_task.clone(), generation);
-                        if let Err(error) = router.connected(&handler_for_task, peer.clone()).await {
+                        if let Err(error) = router.connected(&handler_for_task, peer.clone()).await
+                        {
                             if error.code() != "ctox_v4_local_hello_failed" {
                                 handler_for_task.publish_v4_error(error);
                             }
@@ -4611,8 +4647,14 @@ fn install_data_channel(
                     };
                     if let Some(router) = handler_for_task.v4_router() {
                         let peer = WebRTCRsConnection::new(peer_for_task.clone(), generation);
-                        if matches!(value.get("type").and_then(Value::as_str), Some("hello" | "hello_ok" | "hello_reject")) || !router.is_live(&peer) {
-                            let _ = router.receive(&handler_for_task, &peer, text.as_bytes()).await;
+                        if matches!(
+                            value.get("type").and_then(Value::as_str),
+                            Some("hello" | "hello_ok" | "hello_reject")
+                        ) || !router.is_live(&peer)
+                        {
+                            let _ = router
+                                .receive(&handler_for_task, &peer, text.as_bytes())
+                                .await;
                             continue;
                         }
                     }

@@ -33,49 +33,104 @@ fn bulk_payload(bytes: usize) -> String {
     String::from_utf8(bytes).expect("ASCII fixture")
 }
 
-
-fn hello_template(nonce: String, device: String, seed: u8) -> rxdb::plugins::replication_webrtc::index_mod::hello::Hello {
-    use rxdb::plugins::replication_webrtc::index_mod::hello::*;
+fn hello_template(
+    nonce: String,
+    device: String,
+    seed: u8,
+) -> rxdb::plugins::replication_webrtc::index_mod::hello::Hello {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     use ring::signature::KeyPair;
-    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    use rxdb::plugins::replication_webrtc::index_mod::hello::*;
     // Synthetic public fixture keys, never product credentials.
     let key = ring::signature::Ed25519KeyPair::from_seed_unchecked(&[seed; 32]).unwrap();
-    Hello { protocol_ver: 4, bootstrap_ver: 1,
-        app_api_ver: ApiRange { min: "4.0".into(), max: "4.0".into() },
-        instance_id: "m3-fixture".into(), capabilities: vec!["bench".into()],
-        device_proof: DeviceProof { device_id: device, public_key: URL_SAFE_NO_PAD.encode(key.public_key().as_ref()),
-            signature: URL_SAFE_NO_PAD.encode(key.sign(nonce.as_bytes()).as_ref()), nonce },
-        scopes_wanted: vec![], transport: TransportOffer { codecs: vec![Codec::Gzip],
-            max_frame_bytes: 16384, fragmentation: true, reassembly: true } }
+    Hello {
+        protocol_ver: 4,
+        bootstrap_ver: 1,
+        app_api_ver: ApiRange {
+            min: "4.0".into(),
+            max: "4.0".into(),
+        },
+        instance_id: "m3-fixture".into(),
+        capabilities: vec!["bench".into()],
+        device_proof: DeviceProof {
+            device_id: device,
+            public_key: URL_SAFE_NO_PAD.encode(key.public_key().as_ref()),
+            signature: URL_SAFE_NO_PAD.encode(key.sign(nonce.as_bytes()).as_ref()),
+            nonce,
+        },
+        scopes_wanted: vec![],
+        transport: TransportOffer {
+            codecs: vec![Codec::Gzip],
+            max_frame_bytes: 16384,
+            fragmentation: true,
+            reassembly: true,
+        },
+    }
 }
 fn v4_config() -> rxdb::plugins::replication_webrtc::index_mod::v4_router::V4RouterConfig {
-    use rxdb::plugins::replication_webrtc::index_mod::{hello::*, connection_lifecycle::*, v4_router::*};
-    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     use ring::signature::KeyPair;
+    use rxdb::plugins::replication_webrtc::index_mod::{
+        connection_lifecycle::*, hello::*, v4_router::*,
+    };
     let hello = hello_template("N".repeat(43), "native-fixture".into(), 42);
     V4RouterConfig {
-        policy: HelloPolicy { instance_id: hello.instance_id, bootstrap_min: 1, bootstrap_max: 1,
-            app_api_ver: hello.app_api_ver, capabilities: hello.capabilities,
-            required_capabilities: vec!["bench".into()], transport: hello.transport },
+        policy: HelloPolicy {
+            instance_id: hello.instance_id,
+            bootstrap_min: 1,
+            bootstrap_max: 1,
+            app_api_ver: hello.app_api_ver,
+            capabilities: hello.capabilities,
+            required_capabilities: vec!["bench".into()],
+            transport: hello.transport,
+        },
         handshake_timeout: std::time::Duration::from_secs(10),
-        create_local_hello: Arc::new(|_, nonce| Box::pin(async move {
-            Ok(hello_template(nonce, "native-fixture".into(), 42))
-        })),
-        authenticate: Arc::new(|_, hello| Box::pin(async move {
-            let invalid = || HelloReject::new(RejectReason::AuthenticationFailed, "registered fixture device");
-            let slot = hello.device_proof.device_id.strip_prefix("browser").ok_or_else(invalid)?
-                .parse::<u8>().map_err(|_| invalid())?;
-            if slot > 2 { return Err(invalid()); }
-            let expected = ring::signature::Ed25519KeyPair::from_seed_unchecked(&[11 + slot; 32]).map_err(|_| invalid())?;
-            let public = URL_SAFE_NO_PAD.decode(&hello.device_proof.public_key).map_err(|_| invalid())?;
-            if public != expected.public_key().as_ref() { return Err(invalid()); }
-            let signature = URL_SAFE_NO_PAD.decode(&hello.device_proof.signature).map_err(|_| invalid())?;
-            ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public)
-                .verify(hello.device_proof.nonce.as_bytes(), &signature).map_err(|_| invalid())?;
-            Ok(AuthorizedSession { instance_id: hello.instance_id,
-                device_id: hello.device_proof.device_id, epoch: "m3-epoch".into(),
-                head_seq: WireSeq(0), scope_tokens: vec![], rights_ver: WireSeq(0) })
-        })),
+        create_local_hello: Arc::new(|_, nonce| {
+            Box::pin(async move { Ok(hello_template(nonce, "native-fixture".into(), 42)) })
+        }),
+        authenticate: Arc::new(|_, hello| {
+            Box::pin(async move {
+                let invalid = || {
+                    HelloReject::new(
+                        RejectReason::AuthenticationFailed,
+                        "registered fixture device",
+                    )
+                };
+                let slot = hello
+                    .device_proof
+                    .device_id
+                    .strip_prefix("browser")
+                    .ok_or_else(invalid)?
+                    .parse::<u8>()
+                    .map_err(|_| invalid())?;
+                if slot > 2 {
+                    return Err(invalid());
+                }
+                let expected =
+                    ring::signature::Ed25519KeyPair::from_seed_unchecked(&[11 + slot; 32])
+                        .map_err(|_| invalid())?;
+                let public = URL_SAFE_NO_PAD
+                    .decode(&hello.device_proof.public_key)
+                    .map_err(|_| invalid())?;
+                if public != expected.public_key().as_ref() {
+                    return Err(invalid());
+                }
+                let signature = URL_SAFE_NO_PAD
+                    .decode(&hello.device_proof.signature)
+                    .map_err(|_| invalid())?;
+                ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public)
+                    .verify(hello.device_proof.nonce.as_bytes(), &signature)
+                    .map_err(|_| invalid())?;
+                Ok(AuthorizedSession {
+                    instance_id: hello.instance_id,
+                    device_id: hello.device_proof.device_id,
+                    epoch: "m3-epoch".into(),
+                    head_seq: WireSeq(0),
+                    scope_tokens: vec![],
+                    rights_ver: WireSeq(0),
+                })
+            })
+        }),
     }
 }
 
@@ -190,13 +245,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
         if request["kind"] == "status" {
-            emit(json!({"kind":"status", "transport":handler.frame_transport_status_json(),
+            emit(
+                json!({"kind":"status", "transport":handler.frame_transport_status_json(),
                 "sendCounters": {
                     "reliable": rxdb::plugins::replication_webrtc::connection_handler_rs::send_result::transport_diagnostics().counters(
                         rxdb::plugins::replication_webrtc::connection_handler_rs::send_result::MessageClass::Reliable),
                     "realtime": rxdb::plugins::replication_webrtc::connection_handler_rs::send_result::transport_diagnostics().counters(
                         rxdb::plugins::replication_webrtc::connection_handler_rs::send_result::MessageClass::Realtime)
-                }}));
+                }}),
+            );
             continue;
         }
         if request["kind"] != "send" {
@@ -272,6 +329,8 @@ mod tests {
         assert!((config.authenticate)("peer".into(), spoofed).await.is_err());
         let mut bad_signature = hello_template("N".repeat(43), "browser0".into(), 11);
         bad_signature.device_proof.nonce = "M".repeat(43);
-        assert!((config.authenticate)("peer".into(), bad_signature).await.is_err());
+        assert!((config.authenticate)("peer".into(), bad_signature)
+            .await
+            .is_err());
     }
 }
