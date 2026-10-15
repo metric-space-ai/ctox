@@ -1,22 +1,24 @@
 //! One V4 sender per association, with strict 0–2 priority and byte DRR 8:3:1.
 //! No producer writes a V4 DataChannel directly. Session admission means bounded
 //! retention until delivery ACK; handoff counters report SCTP separately.
-use super::super::connection_handler_rs::send_result::{transport_diagnostics, MessageClass};
+use super::super::connection_handler_rs::send_result::{MessageClass, transport_diagnostics};
 use super::super::connection_handler_rs::send_under_publication;
 use super::super::webrtc_types::WebRTCPublicationGuard;
-use super::framing::{Framer, Reassembler, MAX_MESSAGE};
+use super::framing::{Framer, MAX_MESSAGE, Reassembler};
 use super::hello::{TransportSelection, WireSeq};
-use super::lanes::{Lane, ASSOCIATION_BUDGET, BULK_WEIGHTS, FRAME_BYTES, REALTIME_LABEL};
-use crate::rx_error::{new_rx_error, RxError, RxResult};
+use super::lanes::{ASSOCIATION_BUDGET, BULK_WEIGHTS, FRAME_BYTES, Lane, REALTIME_LABEL};
+use crate::rx_error::{RxError, RxResult, new_rx_error};
 use crate::rxjs_compat::{RxStream, RxSubject};
-use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
+use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, oneshot, Semaphore};
+use tokio::sync::{Semaphore, mpsc, oneshot};
 use webrtc::data_channel::{DataChannel, DataChannelEvent, RTCDataChannelInit};
 use webrtc::peer_connection::PeerConnection;
+#[path = "v4_scheduler/lane_artifacts.rs"]
+pub mod lane_artifacts;
 #[path = "session_resume.rs"]
 pub mod session_resume;
 use session_resume::{ReliableSession, SessionControl, SessionHello};
@@ -190,10 +192,23 @@ impl<T> SendQueue<T> {
     }
 }
 
-/// The adapter uses an empty-buffer event as the credit fence. Because there
-/// is exactly one outstanding frame per channel, even delayed events cannot
-/// credit bytes sent after the event. Seven channels cap aggregate data at
-/// 112 KiB; the remaining 16 KiB is reserved for association/control overhead.
+// Leave one physical frame for DCEP/association overhead. Each strict-priority
+// lane keeps a first frame of credit that lower-priority traffic cannot spend.
+const DATA_BUDGET: usize = ASSOCIATION_BUDGET - FRAME_BYTES;
+fn channel_window(channel: usize) -> usize {
+    if channel < 3 || channel == 6 {
+        2 * FRAME_BYTES
+    } else {
+        4 * FRAME_BYTES
+    }
+}
+fn channel_low(channel: usize) -> usize {
+    channel_window(channel) / 2
+}
+
+/// Conservative occupancy, refreshed from the native stream under its send
+/// lock. Notifications only wake the scheduler; an old low event cannot erase
+/// bytes admitted after it. Multiple frames use a bounded sliding window.
 #[derive(Default)]
 pub struct AssociationBudget {
     outstanding: [usize; 7],
@@ -202,20 +217,32 @@ impl AssociationBudget {
     pub fn reserve(&mut self, channel: usize, bytes: usize) -> bool {
         if channel >= 7
             || bytes > FRAME_BYTES
-            || self.outstanding[channel] != 0
-            || self.buffered().saturating_add(bytes) > ASSOCIATION_BUDGET
+            || self.outstanding[channel].saturating_add(bytes.max(1)) > channel_window(channel)
+            || self.buffered().saturating_add(bytes.max(1)) > self.ceiling(channel)
         {
             return false;
         }
-        self.outstanding[channel] = bytes.max(1);
+        self.outstanding[channel] += bytes.max(1);
         true
     }
+    fn ceiling(&self, channel: usize) -> usize {
+        let reserved: usize = self.outstanding[..channel.min(3)]
+            .iter()
+            .map(|bytes| FRAME_BYTES.saturating_sub(*bytes))
+            .sum();
+        DATA_BUDGET - reserved
+    }
     pub fn ready(&self, channel: usize) -> bool {
-        channel < 7 && self.outstanding[channel] == 0
+        channel < 7
+            && self.outstanding[channel] + FRAME_BYTES <= channel_window(channel)
+            && self.buffered() + FRAME_BYTES <= self.ceiling(channel)
     }
     pub fn drained(&mut self, channel: usize) {
+        self.observe(channel, 0);
+    }
+    fn observe(&mut self, channel: usize, bytes: usize) {
         if let Some(value) = self.outstanding.get_mut(channel) {
-            *value = 0;
+            *value = bytes;
         }
     }
     pub fn buffered(&self) -> usize {
@@ -343,8 +370,8 @@ impl NativeSendScheduler {
         transport: TransportSelection,
         session: SessionBinding,
         authorize: impl Fn(Lane, WireSeq, &[u8]) -> RxResult<Arc<dyn WebRTCPublicationGuard>>
-            + Send
-            + Sync,
+        + Send
+        + Sync,
     ) -> RxResult<Self> {
         tokio::time::timeout(SEND_TIMEOUT, async {
             let scheduler = Self::create_inner(pc, transport, Some(session)).await?;
@@ -359,9 +386,9 @@ impl NativeSendScheduler {
     }
     async fn replay_pending(
         &self,
-        authorize: &(impl Fn(Lane, WireSeq, &[u8]) -> RxResult<Arc<dyn WebRTCPublicationGuard>>
-              + Send
-              + Sync),
+        authorize: &(
+             impl Fn(Lane, WireSeq, &[u8]) -> RxResult<Arc<dyn WebRTCPublicationGuard>> + Send + Sync
+         ),
     ) -> RxResult<()> {
         let binding = self
             .session
@@ -467,15 +494,15 @@ impl NativeSendScheduler {
                 "V4 requires six reliable channels and one real-time channel",
             ));
         }
-        for channel in &channels {
-            // Zero is essential: a low event must prove that the previous
-            // frame is completely retired, not just below a per-channel cap.
+        for (index, channel) in channels.iter().enumerate() {
+            // Wake while credit remains. Read exact occupancy after waking;
+            // the notification itself never grants send credit.
             channel
-                .set_buffered_amount_low_threshold(0)
+                .set_buffered_amount_low_threshold(channel_low(index) as u32)
                 .await
                 .map_err(|e| failure(&e.to_string()))?;
             channel
-                .set_buffered_amount_high_threshold(FRAME_BYTES as u32)
+                .set_buffered_amount_high_threshold(channel_window(index) as u32)
                 .await
                 .map_err(|e| failure(&e.to_string()))?;
         }
@@ -816,9 +843,10 @@ async fn run(
     let mut realtime = VecDeque::new();
     let mut budget = AssociationBudget::default();
     let mut open = [false; 7];
-    // Retire the initial native DCEP OPEN before using its first data credit.
-    // Otherwise a delayed handshake-low event could credit a later data frame.
+    // An open channel has a readable native stream. Count its DCEP bytes too;
+    // it need not reach zero before a control or application frame can proceed.
     let mut initial_drain = [false; 7];
+    let mut armed_low: [usize; 7] = std::array::from_fn(channel_low);
     let startup_deadline = tokio::time::Instant::now() + SEND_TIMEOUT;
     let frame_limit = framer.frame_bytes();
     let mut drain_deadlines: [Option<tokio::time::Instant>; 7] = [None; 7];
@@ -836,7 +864,22 @@ async fn run(
             if let Some(binding) = &session {
                 binding.state.check_generation(binding.generation).map_err(|e| failure(&e.to_string()))?;
             }
-            if *drain.borrow() { closing = true; rx.close(); }
+            if *drain.borrow() && !closing {
+                closing = true; rx.close();
+                // Drain needs the final zero crossing as well as the normal
+                // early refill crossing; no timer-polled success receipt.
+                for channel in &channels { channel.set_buffered_amount_low_threshold(0).await.map_err(|e| failure(&e.to_string()))?; }
+                armed_low = [0; 7];
+            }
+            // Read exact stream occupancy before admitting more data. Small
+            // messages may never cross LOW, so no crossing event is guaranteed.
+            for (index, channel) in channels.iter().enumerate() {
+                if open[index] {
+                    let bytes = channel.buffered_amount().await.map_err(|e| failure(&e.to_string()))?;
+                    budget.observe(index, bytes);
+                    if bytes == 0 { drain_deadlines[index] = None; }
+                }
+            }
             if closing && rx.is_empty() && queue.queued_bytes() == 0 && realtime.is_empty() && budget.buffered() == 0 && delivery_bytes.iter().all(|n| *n == 0) { return Ok(()); }
             if drain_deadlines.iter().flatten().any(|t| *t <= tokio::time::Instant::now()) {
                 return Err(failure("V4 SCTP buffer did not drain before its deadline"));
@@ -918,6 +961,25 @@ async fn run(
                 // Poll events before another send so buffer notifications and
                 // high-priority arrivals are not starved by a ready bulk queue.
             }
+            // The aggregate can be full while every individual channel is
+            // below its static LOW. Arm a crossable edge on every occupied
+            // stream before sleeping, then re-read to cover release-before-arm.
+            // An event is a wake-up only; it never grants unobserved credit.
+            let mut credit_changed = false;
+            for (index, channel) in channels.iter().enumerate() {
+                let buffered = budget.outstanding[index];
+                if open[index] && buffered > 0 && !closing {
+                    let low = buffered.saturating_sub(FRAME_BYTES).max(1).min(buffered - 1);
+                    if armed_low[index] != low {
+                        channel.set_buffered_amount_low_threshold(low as u32).await.map_err(|e| failure(&e.to_string()))?;
+                        armed_low[index] = low;
+                    }
+                    let actual = channel.buffered_amount().await.map_err(|e| failure(&e.to_string()))?;
+                    credit_changed |= actual != buffered;
+                    budget.observe(index, actual);
+                    if actual == 0 { drain_deadlines[index] = None; }
+                }
+            }
             tokio::select! {
                 biased;
                 event = events.next() => {
@@ -935,8 +997,17 @@ async fn run(
                     };
                     let mut pending_delivery = None;
                     match event {
-                        Some(DataChannelEvent::OnOpen) => open[index] = true,
-                        Some(DataChannelEvent::OnBufferedAmountLow) => { initial_drain[index] = true; budget.drained(index); drain_deadlines[index] = None; },
+                        Some(DataChannelEvent::OnOpen) => {
+                            open[index] = true;
+                            initial_drain[index] = true;
+                            let bytes = channels[index].buffered_amount().await.map_err(|e| failure(&e.to_string()))?;
+                            budget.observe(index, bytes);
+                        },
+                        Some(DataChannelEvent::OnBufferedAmountLow) => {
+                            let bytes = channels[index].buffered_amount().await.map_err(|e| failure(&e.to_string()))?;
+                            budget.observe(index, bytes);
+                            if bytes == 0 { drain_deadlines[index] = None; }
+                        },
                         Some(DataChannelEvent::OnBufferedAmountHigh) => {},
                         Some(DataChannelEvent::OnMessage(message)) => {
                             if message.data.len() > frame_limit { return Err(failure("V4 incoming frame exceeds negotiated size")); }
@@ -974,10 +1045,10 @@ async fn run(
                     else { events.push(next_event(index, channels[index].clone())); }
                 }
                 message = rx.recv(), if !closing => match message { Some(message) => enqueue(&mut queue, &mut realtime, message), None => { closing = true; } },
-                _ = drain.changed(), if !closing => { closing = true; rx.close(); },
+                _ = drain.changed(), if !closing => {},
                 // A ready frame needs no timer or artificial 1-ms pause.
-                _ = tokio::task::yield_now(), if Lane::ALL.into_iter().any(|l| open[l.index()] && initial_drain[l.index()] && budget.ready(l.index()) && !queue.queues[l.index()].is_empty()) => {},
-                _ = tokio::time::sleep_until(drain_deadlines.iter().flatten().copied().min().unwrap_or_else(|| tokio::time::Instant::now() + SEND_TIMEOUT)), if budget.buffered() > 0 => return Err(failure("V4 SCTP buffer did not drain")),
+                _ = tokio::task::yield_now(), if credit_changed || Lane::ALL.into_iter().any(|l| open[l.index()] && initial_drain[l.index()] && budget.ready(l.index()) && !queue.queues[l.index()].is_empty()) || (open[6] && initial_drain[6] && budget.ready(6) && !realtime.is_empty()) => {},
+                _ = tokio::time::sleep_until(drain_deadlines.iter().flatten().copied().min().unwrap_or_else(|| tokio::time::Instant::now() + SEND_TIMEOUT)), if budget.buffered() > 0 => {},
                 _ = tokio::time::sleep_until(startup_deadline), if initial_drain.iter().any(|ready| !*ready) => return Err(failure("V4 channel setup did not drain")) ,
             }
         }
@@ -1052,6 +1123,22 @@ mod tests {
         assert_eq!(counts, [160, 30, 10]);
     }
     fn v4_scheduler_association_budget_covers_all_channels_and_waits_for_low() {
+        let mut reserved = AssociationBudget::default();
+        assert!(reserved.reserve(Lane::Live.index(), FRAME_BYTES));
+        assert!(reserved.reserve(Lane::InitialSync.index(), FRAME_BYTES));
+        for _ in 0..2 {
+            assert!(reserved.reserve(Lane::Transfer.index(), FRAME_BYTES));
+        }
+        assert!(
+            !reserved.reserve(Lane::Transfer.index(), 1),
+            "bulk consumed strict-priority reserve"
+        );
+        for lane in [Lane::Control, Lane::Commands, Lane::Interactive] {
+            assert!(
+                reserved.reserve(lane.index(), FRAME_BYTES),
+                "bulk blocked a strict-priority first frame"
+            );
+        }
         let mut budget = AssociationBudget::default();
         for i in 0..7 {
             assert!(budget.reserve(i, FRAME_BYTES));
@@ -1088,6 +1175,8 @@ mod native_tests {
         tokio::time::timeout(Duration::from_secs(5), async {
             v4_scheduler_native_large_command_preempts_bulk_and_receipt_waits_for_all_frames()
                 .await;
+            v4_shared_credit_arms_below_existing_stream_occupancy().await;
+            v4_control_preempts_queued_bulk_after_a_busy_handoff().await;
             v4_scheduler_native_bulk_admission_cannot_take_control_permits().await;
             v4_scheduler_native_cancelled_bulk_does_not_cancel_another_sender().await;
             v4_scheduler_native_counts_actual_handoff_even_when_guard_returns_an_error_after_it()
@@ -1127,10 +1216,12 @@ mod native_tests {
             )
             .await
             .unwrap();
-            assert!(sender
-                .send(Lane::Commands, WireSeq(98), &vec![0; MAX_MESSAGE + 1], None)
-                .await
-                .is_err());
+            assert!(
+                sender
+                    .send(Lane::Commands, WireSeq(98), &vec![0; MAX_MESSAGE + 1], None)
+                    .await
+                    .is_err()
+            );
             assert!(
                 state
                     .replay(first.generation, Lane::Commands)
@@ -1157,13 +1248,15 @@ mod native_tests {
             )
             .await
             .unwrap();
-            assert!(resumed
-                .replay_pending(&|_, _, _| Err(new_rx_error(
-                    "ctox_webrtc_publication_denied",
-                    None
-                )))
-                .await
-                .is_err());
+            assert!(
+                resumed
+                    .replay_pending(&|_, _, _| Err(new_rx_error(
+                        "ctox_webrtc_publication_denied",
+                        None
+                    )))
+                    .await
+                    .is_err()
+            );
             assert!(
                 channels[1].sent.lock().is_empty(),
                 "replay requires fresh publication authority"
@@ -1256,6 +1349,8 @@ mod native_tests {
         events: tokio::sync::Mutex<mpsc::UnboundedReceiver<DataChannelEvent>>,
         emit: mpsc::UnboundedSender<DataChannelEvent>,
         sent: Mutex<Vec<Vec<u8>>>,
+        buffered: std::sync::atomic::AtomicUsize,
+        low: std::sync::atomic::AtomicUsize,
         notify: tokio::sync::Notify,
         closed: std::sync::atomic::AtomicBool,
         block: std::sync::atomic::AtomicBool,
@@ -1276,6 +1371,8 @@ mod native_tests {
                 events: tokio::sync::Mutex::new(events),
                 emit,
                 sent: Mutex::new(Vec::new()),
+                buffered: std::sync::atomic::AtomicUsize::new(0),
+                low: std::sync::atomic::AtomicUsize::new(0),
                 notify: tokio::sync::Notify::new(),
                 closed: std::sync::atomic::AtomicBool::new(false),
                 block: std::sync::atomic::AtomicBool::new(false),
@@ -1298,9 +1395,18 @@ mod native_tests {
             .expect("physical handoff did not run");
         }
         fn drain(&self) {
-            self.emit
-                .send(DataChannelEvent::OnBufferedAmountLow)
-                .unwrap();
+            self.release(self.buffered.load(std::sync::atomic::Ordering::SeqCst));
+        }
+        fn release(&self, bytes: usize) {
+            let old = self
+                .buffered
+                .fetch_sub(bytes, std::sync::atomic::Ordering::SeqCst);
+            let low = self.low.load(std::sync::atomic::Ordering::SeqCst);
+            if old > low && old - bytes <= low {
+                self.emit
+                    .send(DataChannelEvent::OnBufferedAmountLow)
+                    .unwrap();
+            }
         }
     }
     #[async_trait]
@@ -1329,18 +1435,24 @@ mod native_tests {
         async fn ready_state(&self) -> webrtc::error::Result<RTCDataChannelState> {
             Ok(RTCDataChannelState::Open)
         }
+        async fn buffered_amount(&self) -> webrtc::error::Result<usize> {
+            Ok(self.buffered.load(std::sync::atomic::Ordering::SeqCst))
+        }
         async fn buffered_amount_high_threshold(&self) -> webrtc::error::Result<u32> {
             Ok(FRAME_BYTES as u32)
         }
         async fn set_buffered_amount_high_threshold(&self, n: u32) -> webrtc::error::Result<()> {
-            assert_eq!(n, FRAME_BYTES as u32);
+            assert_eq!(n, channel_window(self.id as usize) as u32);
             Ok(())
         }
         async fn buffered_amount_low_threshold(&self) -> webrtc::error::Result<u32> {
-            Ok(0)
+            Ok(self.low.load(std::sync::atomic::Ordering::SeqCst) as u32)
         }
         async fn set_buffered_amount_low_threshold(&self, n: u32) -> webrtc::error::Result<()> {
-            assert_eq!(n, 0);
+            assert!((n as usize) < channel_window(self.id as usize));
+            self.low
+                .store(n as usize, std::sync::atomic::Ordering::SeqCst);
+            self.notify.notify_waiters();
             Ok(())
         }
         async fn send(&self, bytes: bytes::BytesMut) -> webrtc::error::Result<()> {
@@ -1348,6 +1460,8 @@ mod native_tests {
                 self.entered.notify_one();
                 std::future::pending::<()>().await;
             }
+            self.buffered
+                .fetch_add(bytes.len(), std::sync::atomic::Ordering::SeqCst);
             self.sent.lock().push(bytes.to_vec());
             self.notify.notify_waiters();
             Ok(())
@@ -1374,6 +1488,17 @@ mod native_tests {
         })
         .unwrap()
     }
+    fn random_bytes(size: usize) -> Vec<u8> {
+        let mut seed = 0x6a09e667f3bcc909u64;
+        (0..size)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                seed as u8
+            })
+            .collect()
+    }
     async fn v4_scheduler_native_large_command_preempts_bulk_and_receipt_waits_for_all_frames() {
         let channels: Vec<_> = (0..7).map(Channel::new).collect();
         let scheduler = NativeSendScheduler::from_channels(
@@ -1389,40 +1514,179 @@ mod native_tests {
             let sender = scheduler.clone();
             tokio::spawn(async move {
                 sender
-                    .send(Lane::Transfer, WireSeq(1), &vec![7; 50_000], None)
+                    .send(Lane::Transfer, WireSeq(1), &random_bytes(120_000), None)
                     .await
             })
         };
-        channels[5].wait_sent(1).await;
-        assert!(!bulk.is_finished());
+        channels[5].wait_sent(4).await;
+        assert!(
+            !bulk.is_finished(),
+            "receipt preceded the remaining physical frames"
+        );
+        // A delayed low notification is only a wake-up, never fresh credit.
+        channels[5]
+            .emit
+            .send(DataChannelEvent::OnBufferedAmountLow)
+            .unwrap();
         let command = {
             let sender = scheduler.clone();
             tokio::spawn(async move {
                 sender
-                    .send(Lane::Commands, WireSeq(2), &vec![8; 30_000], None)
+                    .send(Lane::Commands, WireSeq(2), &random_bytes(50_000), None)
                     .await
             })
         };
-        channels[1].wait_sent(1).await;
+        channels[1].wait_sent(2).await;
         scheduler
             .send(Lane::Control, WireSeq(3), b"ack", None)
             .await
             .unwrap();
-        assert_eq!(channels[5].sent.lock().len(), 1);
+        assert_eq!(
+            channels[5].sent.lock().len(),
+            4,
+            "stale low credited in-flight bulk"
+        );
         assert!(!command.is_finished());
         channels[1].drain();
-        channels[1].wait_sent(2).await;
         command.await.unwrap().unwrap();
         assert!(!bulk.is_finished());
-        for n in 2..=4 {
-            channels[5].drain();
-            channels[5].wait_sent(n).await;
-        }
+        channels[1].drain();
+        channels[5].drain();
         bulk.await.unwrap().unwrap();
-        assert_eq!(scheduler.handoff_counters().handed_to_sctp, [7, 0]);
+        assert_eq!(scheduler.handoff_counters().handed_to_sctp, [13, 0]);
         assert!(
             scheduler.handoff_counters().buffered_upper_bound_peak <= ASSOCIATION_BUDGET as u64
         );
+    }
+    async fn v4_shared_credit_arms_below_existing_stream_occupancy() {
+        let channels: Vec<_> = (0..7).map(Channel::new).collect();
+        let scheduler = NativeSendScheduler::from_channels(
+            channels
+                .iter()
+                .map(|c| c.clone() as Arc<dyn DataChannel>)
+                .collect(),
+            framer(),
+        )
+        .await
+        .unwrap();
+        // Finish all bootstrap events before establishing the congested
+        // snapshot. Otherwise an unrelated late OnOpen/LOW wake can mask the
+        // lost partial-retirement edge (including under LOW=0).
+        for lane in Lane::ALL {
+            scheduler
+                .send(lane, WireSeq(0), b"ready", None)
+                .await
+                .unwrap();
+        }
+        scheduler.send_realtime(b"ready").await.unwrap();
+        for channel in &channels {
+            channel
+                .buffered
+                .store(0, std::sync::atomic::Ordering::SeqCst);
+        }
+        for (index, bytes) in [(3, 2 * FRAME_BYTES), (4, FRAME_BYTES), (5, FRAME_BYTES)] {
+            channels[index]
+                .buffered
+                .store(bytes, std::sync::atomic::Ordering::SeqCst);
+        }
+        let armed = channels[3].notify.notified();
+        tokio::pin!(armed);
+        armed.as_mut().enable();
+        let pending = {
+            let sender = scheduler.clone();
+            tokio::spawn(async move {
+                sender
+                    .send(Lane::Transfer, WireSeq(1), b"after-credit-release", None)
+                    .await
+            })
+        };
+        // Observe the arming operation, not its numerical value. This also
+        // waits for a deliberately mutated LOW=0 to be installed, rather than
+        // releasing credit before the scheduler even observes congestion.
+        tokio::time::timeout(Duration::from_millis(250), armed)
+            .await
+            .expect("aggregate credit needs a crossable native low edge");
+        assert!(
+            !pending.is_finished(),
+            "congested frame bypassed shared credit"
+        );
+        // Exactly one SCTP frame retires. Bytes remain outstanding: LOW=0 has
+        // no edge, whereas the production scheduler wakes and uses freed credit.
+        channels[3].release(FRAME_BYTES);
+        let delivered = tokio::time::timeout(Duration::from_millis(250), pending).await;
+        scheduler.close_now();
+        delivered
+            .expect("aggregate credit release did not wake the sender")
+            .unwrap()
+            .unwrap();
+        assert_eq!(channels[5].sent.lock().len(), 2);
+    }
+    async fn v4_control_preempts_queued_bulk_after_a_busy_handoff() {
+        let channels: Vec<_> = (0..7).map(Channel::new).collect();
+        let scheduler = NativeSendScheduler::from_channels(
+            channels
+                .iter()
+                .map(|c| c.clone() as Arc<dyn DataChannel>)
+                .collect(),
+            framer(),
+        )
+        .await
+        .unwrap();
+        for lane in [Lane::Control, Lane::Live, Lane::Transfer] {
+            scheduler
+                .send(lane, WireSeq(0), b"ready", None)
+                .await
+                .unwrap();
+            channels[lane.index()]
+                .buffered
+                .store(0, std::sync::atomic::Ordering::SeqCst);
+        }
+        channels[3]
+            .block
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        channels[5]
+            .block
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        channels[0]
+            .block
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let submit = |lane| {
+            let sender = scheduler.clone();
+            tokio::spawn(async move { sender.send(lane, WireSeq(0), b"queued", None).await })
+        };
+        let busy = submit(Lane::Live);
+        channels[3].entered.notified().await;
+        let bulk = submit(Lane::Transfer);
+        let control = submit(Lane::Control);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while scheduler.queue_budget[0].available_permits() == ADMISSION[0]
+                || scheduler.queue_budget[5].available_permits() == ADMISSION[5]
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("both competing producers must be admitted");
+        // Different bulk lanes preserve the real per-lane ordering mutex:
+        // the queued producer must not wait behind its own busy predecessor.
+        // The busy handoff is cancelled, not preempted mid-frame. At the next
+        // selection both lanes are ready. A second blocked bulk handoff must
+        // never win over already queued control, even if its FIFO arrived first.
+        busy.abort();
+        let _ = busy.await;
+        let clock = std::time::Instant::now();
+        let preempted =
+            tokio::time::timeout(Duration::from_millis(100), channels[0].entered.notified()).await;
+        eprintln!(
+            "SCHEDULER_PREEMPT elapsed_ms={}",
+            clock.elapsed().as_secs_f64() * 1000.0
+        );
+        control.abort();
+        bulk.abort();
+        let _ = control.await;
+        let _ = bulk.await;
+        scheduler.close_now();
+        preempted.expect("control waited behind queued bulk after frame boundary");
     }
     async fn v4_scheduler_native_bulk_admission_cannot_take_control_permits() {
         let channels: Vec<_> = (0..7).map(Channel::new).collect();
@@ -1463,11 +1727,11 @@ mod native_tests {
             let sender = scheduler.clone();
             tokio::spawn(async move {
                 sender
-                    .send(Lane::Transfer, WireSeq(1), &vec![7; 50_000], None)
+                    .send(Lane::Transfer, WireSeq(1), &random_bytes(120_000), None)
                     .await
             })
         };
-        channels[5].wait_sent(1).await;
+        channels[5].wait_sent(4).await;
         bulk.abort();
         let _ = bulk.await;
         scheduler
@@ -1479,7 +1743,7 @@ mod native_tests {
             .send(Lane::Control, WireSeq(3), b"control", None)
             .await
             .unwrap();
-        assert_eq!(channels[5].sent.lock().len(), 1);
+        assert_eq!(channels[5].sent.lock().len(), 4);
     }
     #[tokio::test(start_paused = true)]
     async fn v4_scheduler_native_drain_rejects_new_work_and_waits_for_sctp_retirement() {
@@ -1506,10 +1770,12 @@ mod native_tests {
             !draining.is_finished(),
             "drain cannot acknowledge bytes still owned by SCTP"
         );
-        assert!(scheduler
-            .send(Lane::Commands, WireSeq(2), b"too-late", None)
-            .await
-            .is_err());
+        assert!(
+            scheduler
+                .send(Lane::Commands, WireSeq(2), b"too-late", None)
+                .await
+                .is_err()
+        );
         channels[0].drain();
         tokio::time::timeout(Duration::from_secs(2), draining)
             .await
@@ -1545,15 +1811,19 @@ mod native_tests {
             .await
             .unwrap();
         scheduler.close_now();
-        assert!(retained
-            .send(Lane::Control, WireSeq(2), b"stale-clone", None)
-            .await
-            .is_err());
-        assert!(tokio::time::timeout(Duration::from_secs(2), pending)
-            .await
-            .unwrap()
-            .unwrap()
-            .is_err());
+        assert!(
+            retained
+                .send(Lane::Control, WireSeq(2), b"stale-clone", None)
+                .await
+                .is_err()
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), pending)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
         assert!(channels[5].sent.lock().is_empty());
     }
     struct DeniedAfterCallback;
@@ -1574,15 +1844,17 @@ mod native_tests {
         )
         .await
         .unwrap();
-        assert!(scheduler
-            .send(
-                Lane::Commands,
-                WireSeq(1),
-                b"handed-before-revocation",
-                Some(Arc::new(DeniedAfterCallback))
-            )
-            .await
-            .is_err());
+        assert!(
+            scheduler
+                .send(
+                    Lane::Commands,
+                    WireSeq(1),
+                    b"handed-before-revocation",
+                    Some(Arc::new(DeniedAfterCallback))
+                )
+                .await
+                .is_err()
+        );
         assert_eq!(channels[1].sent.lock().len(), 1);
         assert_eq!(scheduler.handoff_counters().attempted, [1, 0]);
         assert_eq!(scheduler.handoff_counters().handed_to_sctp, [1, 0]);
@@ -1606,15 +1878,17 @@ mod native_tests {
         )
         .await
         .unwrap();
-        assert!(scheduler
-            .send(
-                Lane::Commands,
-                WireSeq(1),
-                b"revoked",
-                Some(Arc::new(Denied))
-            )
-            .await
-            .is_err());
+        assert!(
+            scheduler
+                .send(
+                    Lane::Commands,
+                    WireSeq(1),
+                    b"revoked",
+                    Some(Arc::new(Denied))
+                )
+                .await
+                .is_err()
+        );
         assert!(channels[1].sent.lock().is_empty());
         scheduler
             .send(Lane::Control, WireSeq(2), b"still-live", None)
@@ -1665,6 +1939,9 @@ mod native_tests {
     #[tokio::test(start_paused = true)]
     async fn v4_scheduler_native_initial_dcep_low_cannot_credit_a_data_frame() {
         let channels: Vec<_> = (0..7).map(|id| Channel::with_initial(id, false)).collect();
+        channels[0]
+            .buffered
+            .store(channel_window(0), std::sync::atomic::Ordering::SeqCst);
         let scheduler = NativeSendScheduler::from_channels(
             channels
                 .iter()
@@ -1684,6 +1961,15 @@ mod native_tests {
         };
         tokio::time::sleep(Duration::from_millis(1)).await;
         assert!(channels[0].sent.lock().is_empty());
+        channels[0]
+            .emit
+            .send(DataChannelEvent::OnBufferedAmountLow)
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        assert!(
+            channels[0].sent.lock().is_empty(),
+            "stale DCEP low credited live data"
+        );
         channels[0].drain();
         pending.await.unwrap().unwrap();
         assert_eq!(channels[0].sent.lock().len(), 1);
