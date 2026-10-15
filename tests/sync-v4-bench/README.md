@@ -109,6 +109,18 @@ or from the native controller's offer to its ACK receipt (including stdio delay)
 
 under load. Successful samples, ACK timeouts and send failures must be considered
 together: low percentiles alone do not establish absence of starvation.
+Browser ACK matching times out after 10 seconds; native send completion after
+35 seconds. Late browser ACKs beyond that matching deadline do not turn a
+timeout into a successful ping. Those IDs remain without a successful ACK.
+After the matrix, run `node scripts/sync-v4/bench-summarize.mjs OWN_ARTIFACT_PATH`.
+This derives full offer-to-ACK latencies from raw timestamps on each sender's
+clock, including synchronous admission and ACKs in the bounded drain. It writes
+`derived-latency.json` beside each immutable raw result and prints a German
+table. The executor's `controlPingUnderLoadMs` instead counts ACKs completed
+inside the load interval (browser timing starts after its synchronous send).
+The derived table avoids censoring those slow tail completions or omitting
+synchronous admission. No successful ACK and unavailable drain timing stay
+explicitly absent rather than becoming zero.
 Throughput is useful body bytes received **inside the load interval**, decimal
 MB/s, aggregate across peers per direction. Wire byte counters include framing,
 protocol and ACK traffic. Drain receipts are available in reconciliation but
