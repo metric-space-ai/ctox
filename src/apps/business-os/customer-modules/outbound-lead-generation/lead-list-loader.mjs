@@ -46,6 +46,19 @@ export function readsLocally(collection) {
   return collection?.localReplicaComplete === true;
 }
 
+// Rows already stored in the browser, read straight from the local store. The
+// shell routes find().exec() to CTOX while localReplicaComplete is false; after
+// every reload or native restart that lasted until the pull drained, and a lead
+// detail hung on "werden geladen" although the lead was stored locally
+// (THESEN, 15.10.2026). Missing rows stay absent; callers fetch only those.
+export async function readStoredLeadRows(collection, ids) {
+  const store = collection?.storageCollection;
+  if (typeof store?.findDocumentsById !== 'function') return new Map();
+  const found = await store.findDocumentsById([...new Set(ids.filter(id => typeof id === 'string' && id))]);
+  return new Map(Object.entries(found || {})
+    .filter(([id, row]) => row && row.id === id && !row._deleted));
+}
+
 export async function loadLeadList(collection, previousRows = [], { pageSize = 200, signal } = {}) {
   const previous = new Map(previousRows.map(row => [row.id, row]));
   if (readsLocally(collection)) {

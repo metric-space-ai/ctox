@@ -26,7 +26,7 @@ function showBusinessConfirm(message, options = {}) { return shellConfirm(messag
 function showBusinessPrompt(message, options = {}) { return shellPrompt(message, { host: eigenesDialogZiel(), ...options }); }
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { createCollectionReloader } from './collection-reloader.mjs';
-import { loadLeadList, loadFullLeadRows, leadListRow, withLeadQueryAuthority } from './lead-list-loader.mjs';
+import { loadLeadList, loadFullLeadRows, leadListRow, readStoredLeadRows, withLeadQueryAuthority } from './lead-list-loader.mjs';
 import { captureResearchExport, openResearchSnapshot } from './current-state-export.mjs';
 import { optionalKeysForRequiredCheckbox } from './required-field-selection.mjs';
 import { readErrorEntry, visibleReadErrorKeys } from './read-error-grace.mjs';
@@ -1995,13 +1995,21 @@ async function ensureFullLeads(ids, { fresh = false } = {}) {
   const requested = [...new Set(ids.filter(Boolean))];
   const summaries = new Map(listLeads().map(row => [row.id, row]));
   const cached = new Map(state.leads.map(row => [row.id, row]));
-  const missing = requested.filter(id => fresh || !cached.has(id) || cached.get(id)._rev !== summaries.get(id)?._rev);
+  let missing = requested.filter(id => fresh || !cached.has(id) || cached.get(id)._rev !== summaries.get(id)?._rev);
   if (!missing.length) return requested.map(id => cached.get(id));
   const sequence = ++state.fullLeadReadSequence;
+  // Anzeige liest zuerst den lokalen Speicher (client first); nur fehlende oder
+  // veraltete Leads gehen an CTOX. Aktionen (fresh) lesen weiter autoritativ.
+  const stored = fresh ? new Map() : await readStoredLeadRows(state.collections.leads, missing);
+  const local = missing.map(id => stored.get(id))
+    // Der lokale Speicher fuehrt kein _rev; ein lokaler Lead gilt, solange die
+    // Listenzeile keine abweichende Revision meldet.
+    .filter(row => row && (!row._rev || !summaries.get(row.id)?._rev || summaries.get(row.id)._rev === row._rev));
+  missing = missing.filter(id => !local.some(row => row.id === id));
   // Ein Lesefenster (15 s) je Paket: alle 498 Leads einer Kampagne in einem
   // Fenster waren 63 Achter-Abfragen und liefen auf thesen (08.10.2026)
   // regelmaessig in "Daten konnten nicht rechtzeitig aus CTOX geladen werden".
-  const rows = [];
+  const rows = [...local];
   for (let offset = 0; offset < missing.length; offset += FULL_LEAD_READ_PACKAGE) {
     const paket = missing.slice(offset, offset + FULL_LEAD_READ_PACKAGE);
     rows.push(...await withLeadQueryAuthority(state.ctx.sync,
