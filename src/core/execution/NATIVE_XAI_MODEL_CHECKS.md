@@ -20,7 +20,9 @@ closed error class while discarding raw error bodies. Catalog preflights never
 become inference witnesses. Failed/incomplete HTTP 200 output is not success.
 
 Publication pins the encrypted OAuth generation and excludes shadow runtime
-configuration and concurrent encrypted-record writes during the bounded commit. Reads of encrypted metadata occur on preopened connections inside
+configuration. The actual capability issuer already excludes encrypted-record
+writes; publication reuses that fence with a preopened read-only metadata
+connection rather than recursively acquiring a secret-store writer. Reads of encrypted metadata occur on preopened connections inside
 the admitted issuer/Core/Policy fence, without network or credential decryption.
 Rotation, deletion, account/consumer revocation and model-policy changes retire
 results. Existing native auth ownership and mutation controls remain unchanged.

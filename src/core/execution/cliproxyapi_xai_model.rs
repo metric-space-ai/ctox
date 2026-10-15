@@ -83,7 +83,7 @@ impl NativeXaiPublicationCheck {
         no_override(&runtime)?;
         let secrets = Connection::open_with_flags(
             crate::secrets::resolve_db_path(root),
-            OpenFlags::SQLITE_OPEN_READ_WRITE,
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
         )?;
         secrets.busy_timeout(std::time::Duration::ZERO)?;
         let encrypted = encrypted(&secrets)?;
@@ -112,7 +112,9 @@ impl NativeXaiPublicationCheck {
             .secrets
             .try_lock()
             .map_err(|_| anyhow::anyhow!("native Grok credential metadata busy"))?;
-        let secrets = Transaction::new_unchecked(&secrets, TransactionBehavior::Immediate)?;
+        // The admitted issuer already reserves this encrypted store. Reuse
+        // that fence; another IMMEDIATE transaction here would reject every
+        // real consumer publication as SQLITE_BUSY.
         ensure!(
             encrypted(&secrets)? == self.encrypted,
             "native Grok credential changed"
@@ -238,11 +240,15 @@ mod tests {
         let writer = Connection::open(crate::secrets::resolve_db_path(root.path()))?;
         writer.busy_timeout(std::time::Duration::ZERO)?;
         let sql="UPDATE ctox_secret_records SET nonce_b64=nonce_b64||'x' WHERE scope=?1 AND secret_name=?2";
-        check.records(|| {
-            assert!(writer
-                .execute(sql, rusqlite::params![xai::SCOPE, xai::NAME])
-                .is_err());
-            Ok(())
+        // Same concrete encrypted-store fence as the actual capability signer.
+        // Connections were prepared outside it; metadata reads must not reenter.
+        crate::secrets::with_current_secret_value(root.path(), xai::SCOPE, xai::NAME, |_| {
+            check.records(|| {
+                assert!(writer
+                    .execute(sql, rusqlite::params![xai::SCOPE, xai::NAME])
+                    .is_err());
+                Ok(())
+            })
         })?;
         assert_eq!(
             writer.execute(sql, rusqlite::params![xai::SCOPE, xai::NAME])?,
