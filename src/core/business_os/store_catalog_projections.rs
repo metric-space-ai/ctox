@@ -12,6 +12,8 @@ use super::store::{
     update_module_catalog_stamp_hash, BusinessOsSession, BusinessOsSessionUser, ModuleManifest,
     TemplateManifest, MODULE_CATALOG_SOURCE_STAMP_FILE_LIMIT,
 };
+#[path = "store_catalog_owner_adapter.rs"]
+pub(crate) mod owner_adapter;
 use anyhow::Context;
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
@@ -439,62 +441,28 @@ fn refresh_module_catalog_after_schema_change(
 }
 
 fn write_module_catalog_projection_once(root: &Path) -> anyhow::Result<()> {
-    let mut document = module_catalog_for_rxdb(root)?;
-    let now = now_ms();
-    let revision = format!("{now}-ctox-module-catalog");
-    if let Some(object) = document.as_object_mut() {
-        // This writer intentionally bypasses RxCollection because it is also
-        // used during Business OS bring-up, before the native peer is ready.
-        // Keep the serialized data envelope in lockstep with the SQLite
-        // revision/lwt columns: RxCollection's document cache reads these
-        // fields from `data` and rejects legacy bare rows with DOC_CACHE_REV.
-        object.insert("_rev".to_string(), Value::String(revision.clone()));
-        object.insert(
-            "_meta".to_string(),
-            serde_json::json!({ "lwt": now as f64 }),
-        );
-        object.insert("_attachments".to_string(), serde_json::json!({}));
-        object.insert("_deleted".to_string(), Value::Bool(false));
-        object.insert("is_deleted".to_string(), Value::Bool(false));
-    }
-    let path = rxdb_store_path(root);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
-    }
-    let conn =
-        Connection::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
-    conn.busy_timeout(std::time::Duration::from_secs(10))?;
-    conn.execute_batch(
-        r#"
-        PRAGMA journal_mode = WAL;
-        PRAGMA busy_timeout = 10000;
-        CREATE TABLE IF NOT EXISTS "ctox_business_os__business_module_catalog__v0"(
-            id TEXT NOT NULL PRIMARY KEY UNIQUE,
-            revision TEXT,
-            deleted INTEGER NOT NULL CHECK (deleted IN (0, 1)),
-            lastWriteTime REAL NOT NULL,
-            data TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS "ctox_business_os__business_module_catalog__v0_lwt_id_idx"
-            ON "ctox_business_os__business_module_catalog__v0"(lastWriteTime, id);
-        CREATE INDEX IF NOT EXISTS "ctox_business_os__business_module_catalog__v0_deleted_lwt_id_idx"
-            ON "ctox_business_os__business_module_catalog__v0"(deleted, lastWriteTime, id);
-        "#,
-    )?;
-    conn.execute(
-        r#"
-        INSERT INTO "ctox_business_os__business_module_catalog__v0"
-            (id, revision, deleted, lastWriteTime, data)
-        VALUES ('module-catalog', ?1, 0, ?2, ?3)
-        ON CONFLICT(id) DO UPDATE SET
-            revision = excluded.revision,
-            deleted = 0,
-            lastWriteTime = excluded.lastWriteTime,
-            data = excluded.data
-        "#,
-        params![revision, now as f64, serde_json::to_string(&document)?],
-    )?;
+    let document = module_catalog_for_rxdb(root)?;
+    owner_adapter::CatalogOwner::for_path(&rxdb_store_path(root))?
+        .project(
+            document,
+            u64::try_from(now_ms()).context("catalog timestamp exceeds u64")?,
+        )?
+        .blocking_wait()?;
+    Ok(())
+}
+
+/// Async callers await commit without blocking a runtime worker. P3-15 shares
+/// this registration with the RxDB adapter; no fallback connection is opened.
+pub(crate) async fn project_module_catalog_with_owner(
+    owner: &owner_adapter::CatalogOwner,
+    document: Value,
+) -> anyhow::Result<()> {
+    owner
+        .project(
+            document,
+            u64::try_from(now_ms()).context("catalog timestamp exceeds u64")?,
+        )?
+        .await?;
     Ok(())
 }
 
