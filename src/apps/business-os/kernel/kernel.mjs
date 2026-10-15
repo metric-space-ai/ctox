@@ -926,12 +926,13 @@ export function createKernel(opts = {}) {
     try { await withTimeout(Promise.resolve().then(()=>m.handle.unmount()),remountTimeoutMs); } catch (e) { console.error('[ctox-kernel] unmount', e); }
     if(closed)return;
     try {
-      const r = await withTimeout(mountVersion(m.root, m.appId, newVer, { restored: cloneValue(snap) }), remountTimeoutMs, (late) => { try { late.handle.unmount(); } catch { /* egal */ } });
+      const r = await withTimeout(mountVersion(m.root, m.appId, newVer, { restored: cloneValue(snap) }), remountTimeoutMs, (late) => { try { Promise.resolve(late.handle.unmount()).catch(()=>{}); } catch {} });
       Object.assign(m, { ver: newVer, handle: r.handle, api: r.api });
       zoneClear(m.appId, 'app.remount_failed');
     } catch (err) {
+      if(closed)return;
       zoneReport(m.appId, { level: 'error', code: 'app.remount_failed', text: `Version ${newVer} startet nicht (${err?.message ?? err}); vorherige Version ${oldVer} läuft`, ref: newVer }, 'kernel');
-      const r = await mountVersion(m.root, m.appId, oldVer, { restored: cloneValue(snap) });
+      const r = await withTimeout(mountVersion(m.root, m.appId, oldVer, { restored: cloneValue(snap) }),remountTimeoutMs);
       Object.assign(m, { ver: oldVer, handle: r.handle, api: r.api });
       try { await callLeader('revertActivation', [m.appId, oldVer, newVer, String(err?.message ?? err)]); } catch (e) { console.error('[ctox-kernel] revert', e); }
     }

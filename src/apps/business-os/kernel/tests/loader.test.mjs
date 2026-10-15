@@ -43,3 +43,18 @@ test('a stalled old app snapshot and unmount cannot hold hot activation forever'
   assert.equal(m.ver,'2');assert.ok(k.statusZone.get().some(e=>e.code==='app.snapshot_failed'));await m.unmount();
  } finally {await k.close();}
 });
+
+test('close during a pending remount never restarts the old app and disposes a late mount',async()=>{
+ const {createStubKernel}=await import('../kernel.mjs');
+ const k=createStubKernel({instanceId:`close-remount-${process.pid}`,userId:'u',storage:'memory',multiTab:false,remountTimeoutMs:100});await k.ready;
+ let mounts=0,lateUnmounts=0,start,complete;
+ const started=new Promise(r=>start=r),pending=new Promise(r=>complete=r);
+ try {
+  await k.sim.publishAppVersion('notes','1',{module:{mount(){mounts++;return {unmount(){},snapshot:()=>({draft:'kept'})}}}});
+  await k.shell.mount({},'notes');
+  const publishing=k.sim.publishAppVersion('notes','2',{module:{mount(){start();return pending}}});
+  await started;await k.close();
+  complete({unmount(){lateUnmounts++}});await publishing;await new Promise(r=>setTimeout(r,5));
+  assert.equal(mounts,1);assert.equal(lateUnmounts,1);
+ } finally {await k.close();}
+});
