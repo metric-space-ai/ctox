@@ -78,7 +78,7 @@ Person fields: `person_geschlecht`, `person_titel`, `person_vorname`, `person_na
 - **Only current officers.** `firma_geschaeftsfuehrung`, `firma_prokura` and register persons take only people the source lists as current; anyone marked "nicht mehr", "ehemals", "ausgeschieden", "former" or with an end date is not a value (mention them in `reason` if relevant). The quote must show the current role.
 - `person_key`: Sellify persons keep their `sellify_person_id`; new ones get a stable key (`p-<nachname>-<vorname>`), never a URL; same name, different profile → two keys.
 - Sellify person who left: keep the key, function "… (ausgeschieden)", add the successor.
-- **E-mail**: published verbatim on the company site → verified by that page; else derive from the demonstrable pattern (a published or Sellify address of the domain); no pattern → `no_match`.
+- **E-mail**: published verbatim on the company site → verified by that page; else derive from the demonstrable pattern (a published or Sellify address of the domain); no pattern → `no_match`. A derived address the validator does not confirm (catch-all, unknown, validator blocked) is still entered as the best variant: `person_email` `action_required` with the address as `value`, the pattern source in `sources`, `reason` naming the verdict (research instructions step 4b).
 - **Validation is yours**: each address once with `experte-de` (else `mailtester-com`), `input: {"email": "…"}`; no second validator, no retry. → `person_email_validation` `verified`, value `valid`/`invalid`, quote = verdict. Validator blocked/unreachable → `action_required`, reason "validator <status>" (CTOX re-checks after the writeback). It proves deliverability, not employment.
 
 ## 7. Writeback recipe
