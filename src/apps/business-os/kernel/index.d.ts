@@ -183,7 +183,10 @@ export interface CtoxAppApi {
   remove(collection: string, id: string): WriteHandle;
   // Befehle – Dokument mit gepushtem Status
   /** opts.record_id (§16.19 Nr. 8): optionaler Bezug des Befehls auf einen Datensatz. */
-  command(type: string, payload: object, opts?: { record_id?: string }): CommandHandle;
+  /** opts.on_complete/on_failed: Rückruf-Befehlstypen der eigenen App (§16.39 Nr. 3), als Felder am Befehlsdokument.
+   *  §16.44: ctox.coding.turn {app_id, draft_id, base_draft_rev, prompt, model?, turn_id?}, ctox.coding.cancel {turn_id};
+   *  Ablehnung im write_result {status:'rejected', code, reason}. */
+  command(type: string, payload: object, opts?: { record_id?: string; on_complete?: string; on_failed?: string }): CommandHandle;
   // Priorität (E1) – reiner Hinweis
   setVisible(collections: string[]): void;
   // Zustand – nur an die Zustandszone der Shell (Anf. 27)
@@ -300,7 +303,20 @@ export type CollectionDiff = {
   migration: { from_ver: string; migrate_fn?: string; steps?: MigrationStep[] } | null;
 };
 /** §16.22 A4. files: Pfad → Text, null = im Entwurf gelöscht. */
-export type DraftInfo = { base_app_ver: string | null; files: Record<string, string | Uint8Array | null>; manifest: Record<string, unknown>; updated_at: number };
+export type DraftInfo = { base_app_ver: string | null; files: Record<string, string | Uint8Array | null>; manifest: Record<string, unknown>; updated_at: number ; /** Revision der app_drafts-Zeile im Core = base_draft_rev für ctox.coding.turn (§16.44). */ rev: string | null };
+/** §16.44: Plattform-Collection coding_turns/<turn_id> (schreibt nur der Core; messages/tool_events erst am Turn-Ende). */
+export type CodingTurn = {
+  id: string; app_id: string; draft_id: string; user_id: string; command_id: string; origin_app: string; base_draft_rev: string;
+  prompt: string; model: string | null;
+  state: 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'conflict';
+  messages: Array<{ role: 'user' | 'assistant'; text: string; at_ms: number }>;
+  tool_events: Array<{ kind: string; path?: string; at_ms: number }>;
+  draft_rev_after: string | null; changed_files: string[];
+  patch?: { ref: string; file_id: string };
+  error?: { status: 'failed'; code: string; reason: string; detail?: string };
+  callback: { on_complete: string | null; on_failed: string | null };
+  created_at_ms: number; updated_at_ms: number; finished_at_ms?: number;
+};
 
 /** §10.2a Nr. 7 + §16.22. Entwürfe je (App, Nutzer); im Kernel lokal in IDB meta `draft:<app>` (IDB je Instanz+Nutzer, §16.7). */
 export interface SourceApi {
@@ -452,6 +468,8 @@ export interface StubKernelOptions {
   deviceId?: string;
   /** Fake-Core: Gerätekennung für die deterministische device_id (Standard 'browser'). */
   deviceLabel?: string;
+  /** Fake-Core: Laufzeit des simulierten Coding-Agent-Turns (§16.44, Standard 60 ms). */
+  codingDelayMs?: number;
   /** false = Ein-Tab-Betrieb erzwingen. */
   multiTab?: boolean;
 }
