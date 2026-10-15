@@ -1,6 +1,6 @@
 //! Live Slack verification through the hub exec path.
 //! `CTOX_TOOLHUB_LIVE_SLACK_TOKEN=… cargo test --test live_slack -- --ignored --nocapture`
-//! Tools whose scope the token lacks (`missing_scope`) are reported, not failed.
+//! Tools whose scope the token lacks (`missing_scope`, or a bot not invited: `not_in_channel`) are reported, not failed.
 mod support;
 use ctox_toolhub::AuthSchemeKind;
 use serde_json::{json, Value};
@@ -13,7 +13,7 @@ fn live_all_read_actions() {
     let mut run = |tool: &str, args: Value| -> Value {
         match support::live_exec("slack", AuthSchemeKind::Bearer, tool, args).unwrap() {
             Ok(v) => { let s = v.to_string(); println!("LIVE PASS {tool}: {}", s.chars().take(160).collect::<String>()); v }
-            Err(e) if e.contains("missing_scope") || e.contains("not_allowed_token_type") => { println!("LIVE SCOPE {tool}: {}", e.chars().take(120).collect::<String>()); Value::Null }
+            Err(e) if e.contains("missing_scope") || e.contains("not_allowed_token_type") || e.contains("not_in_channel") => { println!("LIVE SCOPE {tool}: {}", e.chars().take(120).collect::<String>()); Value::Null }
             Err(e) => { println!("LIVE FAIL {tool}: {}", e.chars().take(300).collect::<String>()); fails.push(tool.to_string()); Value::Null }
         }
     };
