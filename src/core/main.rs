@@ -13,6 +13,7 @@ const APPSEC_PIPELINE_STAGE_RETRY_DELAY_SECONDS: i64 = 30;
 const APPSEC_PIPELINE_RETRY_VERSION: &str = "ctox.appsec.pipeline_retry.v1";
 
 mod api_costs;
+mod app_capabilities;
 mod appsec_state;
 mod authority_fence_metrics;
 mod autonomy;
