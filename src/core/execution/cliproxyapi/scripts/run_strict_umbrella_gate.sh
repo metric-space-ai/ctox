@@ -45,6 +45,9 @@ test -z "$(git -C "$upstream_dir" status --porcelain=v1 --untracked-files=all)" 
 }
 git -C "$upstream_dir" archive "$pin" | tar -x -C "$source_snapshot"
 
+module_scope="$output_dir/pinned-go-modules.json"
+bash "$crate_dir/scripts/write_pinned_go_module_scope.sh" "$upstream_dir" "$pin" "$module_scope"
+
 started_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 go_version=$(go version)
 rustc_version=$(rustc --version)
@@ -59,6 +62,8 @@ hash_file() {
         shasum -a 256 "$1" | awk '{print $1}'
     fi
 }
+
+module_scope_hash=$(hash_file "$module_scope")
 
 run_gate() {
     kind=$1
@@ -91,9 +96,7 @@ run_gate() {
           log: $log, output_sha256: $output_sha256}' >>"$entries"
 }
 
-module_count=0
-git -C "$upstream_dir" ls-tree -r --name-only "$pin" |
-    awk '$0 == "go.mod" || $0 ~ /\/go\.mod$/ { print }' | LC_ALL=C sort |
+jq -r '.modules[].go_mod' "$module_scope" |
 while IFS= read -r go_mod; do
     module=$(dirname "$go_mod")
     module_dir="$source_snapshot"
@@ -111,14 +114,14 @@ while IFS= read -r go_mod; do
         go test -mod=readonly -count=1 -p=1 -timeout=20m ./...
 done
 
-module_count=$(jq -s '[.[] | select(.kind == "go_module")] | length' "$entries")
-test "$module_count" -eq 23 || {
-    echo "strict umbrella expected 23 Go modules, got $module_count" >&2
-    exit 1
-}
-hydration_count=$(jq -s '[.[] | select(.kind == "go_hydration")] | length' "$entries")
-test "$hydration_count" -eq 23 || {
-    echo "strict umbrella expected 23 Go hydration gates, got $hydration_count" >&2
+jq -se -L "$crate_dir/scripts" --arg pin "$pin" --slurpfile scope "$module_scope" '
+  include "strict_go_module_scope";
+  select(($scope | length) == 1) |
+  {upstream_commit: $pin,
+   go_hydration: [.[] | select(.kind == "go_hydration") | {module: .subject}],
+   go_modules: [.[] | select(.kind == "go_module") | {module: .subject}]} |
+  go_module_entries_match($scope[0])' "$entries" >/dev/null || {
+    echo "strict umbrella Go module gates differ from the immutable pin inventory" >&2
     exit 1
 }
 
@@ -164,9 +167,10 @@ jq -s \
     --arg rustc_version "$rustc_version" \
     --arg cargo_version "$cargo_version" \
     --arg manifest_hash "$manifest_hash" \
+    --arg module_scope_hash "$module_scope_hash" \
     --arg hydrated_manifest_hash "$hydrated_manifest_hash" '
     {
-      schema: "ctox.cliproxyapi.strict-umbrella-receipt.v2",
+      schema: "ctox.cliproxyapi.strict-umbrella-receipt.v3",
       upstream_commit: $pin,
       upstream_clean_before: true,
       upstream_clean_after: true,
@@ -179,6 +183,8 @@ jq -s \
       source_manifest_sha256: $manifest_hash,
       hydrated_go_manifest: "hydrated-go-manifest.tsv",
       hydrated_go_manifest_sha256: $hydrated_manifest_hash,
+      go_module_scope_manifest: "pinned-go-modules.json",
+      go_module_scope_manifest_sha256: $module_scope_hash,
       go_hydration: [.[] | select(.kind == "go_hydration") | {module: .subject, status, command, log, output_sha256}],
       go_modules: [.[] | select(.kind == "go_module") | {module: .subject, status, command, log, output_sha256}],
       gates: [.[] | select(.kind == "rust_gate") | {name, status, command, log, output_sha256}]
