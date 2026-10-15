@@ -140,7 +140,19 @@ export async function start(config) {
   window.bench = {
     ready: () => peer.connections.get('native000001')?.v4Live === true,
     begin,
-    async drop() { record({ kind: 'injected_disconnect' }); peer.close(); await new Promise(r => setTimeout(r, 1000)); if (running) connect(); },
+    async drop() {
+      record({ kind: 'injected_disconnect', mode: config.dropMode || 'channel' });
+      if (config.dropMode === 'factory') {
+        peer.close(); record({ kind: 'fault_applied', mode: 'factory' });
+        await new Promise(r => setTimeout(r, 1000)); if (running) connect();
+      } else {
+        const channel = peer.connections.get('native000001')?.channel;
+        if (channel?.readyState === 'open') {
+          record({ kind: 'fault_applied', mode: 'channel' }); channel.close();
+        } else record({ kind: 'fault_target_not_open' });
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    },
     stop() { record({ kind: 'measurement_stop' }); running = false; for (const t of timers) clearInterval(t); },
     snapshot() { return { slot: config.slot, events, errors, samples, counters, maxBufferedBytes, maxFrameBytes,
       connections: [...peer.connections].map(([id, c]) => ({ id, connectionState: c.peer?.connectionState,
