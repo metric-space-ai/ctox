@@ -49,5 +49,9 @@ finally:
     source.write_bytes(original)
     record['source_restored']=source.read_bytes()==original
     record['terminal']=True;record['ended']=time.time();save()
+lock = root/'tests/sync-v4/p6-e55/Cargo.lock'
+if lock.exists():
+    (out/'Cargo.lock').write_bytes(lock.read_bytes())
+    record['lock_sha256']=hashlib.sha256(lock.read_bytes()).hexdigest();save()
 print('P6_E55_RESULT',str(out/'result.json'),flush=True)
 raise SystemExit(0 if record.get('qualified') and record.get('source_restored') else 1)
