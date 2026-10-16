@@ -81,7 +81,7 @@ def main(a):
         installed=out/'dress/install'
         proof=installed/'upgrade/installer.json'
         if proof.exists() and json.loads(proof.read_text()).get('roundtripExecuted'):
-            root=installed/'t'
+            root=installed/'tenant-m7'
             run('k24-target',['python3',here.parent/'k24/native-target-probe.py','--root',root,
                              '--release',release,'--output',out/'k24-target'],90,(0,1,2))
             result['k24Target']=json.loads((out/'k24-target/target.json').read_text())

@@ -151,6 +151,7 @@ def main():
         home = component/'home'
         home.mkdir(mode=0o700)
         env = dict(PATH=os.environ['PATH'], HOME=str(home), TMPDIR=os.environ['TMPDIR'], LANG='C.UTF-8',
+                   BUILD_LANE_BIN=os.environ['BUILD_LANE_BIN'],
                    XDG_CONFIG_HOME=str(home/'.config'), XDG_CACHE_HOME=str(home/'.cache'),
                    CTOX_ROOT=str(component), CTOX_STATE_ROOT=str(component/'runtime'))
         starts = []
