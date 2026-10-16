@@ -252,7 +252,17 @@ impl BrowserAdmission {
             rights_ver: authorized.rights_ver.0,
             expires: Instant::now() + Duration::from_secs(299),
             scopes,
+            tokens: authorized
+                .scope_tokens
+                .iter()
+                .map(|wire| {
+                    sync_rights::scope::SignedScope::from_wire(wire)
+                        .map(|token| (token.claims.scope_hash.clone(), token))
+                })
+                .collect::<Result<_, _>>()
+                .map_err(StoreError::Invalid)?,
             results: Mutex::new(None),
+            gap: Mutex::new(None),
         });
         let mut peers = self.peers.lock().map_err(|_| StoreError::Closed)?;
         peers.retain(|_, p| p.expires > Instant::now());
@@ -278,6 +288,50 @@ impl BrowserAdmission {
     pub(super) fn authority(&self) -> Arc<sync_rights::StoreRightsAuthority> {
         self.authority.clone()
     }
+    pub(super) fn with_write_fence<T>(
+        &self,
+        peer: &BrowserPeer,
+        collection: &str,
+        generation: u64,
+        op_id: &str,
+        before: Option<&serde_json::Value>,
+        after: Option<&serde_json::Value>,
+        effect: impl FnOnce() -> sync_rights::scope::Result<T>,
+    ) -> Result<T, sync_rights::OutboxError> {
+        let unavailable = || sync_rights::OutboxError::AuthorityUnavailable;
+        let hash = peer.scopes.get(collection).ok_or_else(unavailable)?;
+        let token = peer.tokens.get(hash).ok_or_else(unavailable)?;
+        let id = format!("browser-write:{}", uuid::Uuid::new_v4());
+        self.authority
+            .router
+            .subscribe(
+                &id,
+                sync_rights::Subscription {
+                    device_id: peer.device.clone(),
+                    actor_id: peer.user.clone(),
+                    role: peer.role.clone(),
+                    collection: collection.into(),
+                    generation,
+                },
+                token,
+                &self.key,
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|_| unavailable())?
+                    .as_secs(),
+            )
+            .map_err(|_| unavailable())?;
+        struct Registration<'a>(&'a sync_rights::RightsRouter, String);
+        impl Drop for Registration<'_> {
+            fn drop(&mut self) {
+                let _ = self.0.unsubscribe(&self.1);
+            }
+        }
+        let _registration = Registration(&self.authority.router, id.clone());
+        self.authority
+            .router
+            .with_outbox_commit(&id, op_id, before, after, effect)
+    }
 }
 pub(super) struct BrowserPeer {
     pub local: bool,
@@ -288,8 +342,19 @@ pub(super) struct BrowserPeer {
     pub rights_ver: u64,
     pub expires: Instant,
     pub scopes: HashMap<String, String>,
+    pub tokens: HashMap<String, sync_rights::scope::SignedScope>,
     pub results:
         Mutex<Option<tokio::sync::mpsc::Sender<rxdb::rx_error::RxResult<serde_json::Value>>>>,
+    pub gap: Mutex<Option<(u64, tokio::task::JoinHandle<()>)>>,
+}
+impl Drop for BrowserPeer {
+    fn drop(&mut self) {
+        if let Ok(slot) = self.gap.get_mut() {
+            if let Some((_, task)) = slot.take() {
+                task.abort();
+            }
+        }
+    }
 }
 fn digest(hello: &Hello) -> Result<[u8; 32], StoreError> {
     let bytes = HelloFrame::Hello(hello.clone())

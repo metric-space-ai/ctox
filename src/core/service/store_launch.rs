@@ -79,10 +79,11 @@ pub(super) fn response(
     let task = inputs.runtime.spawn(async move {
         let result = async {
             if local {
+                owners.browser_ingress_ready()?;
                 let context = crate::business_os::launch_context_v4::build_local(&owners)
                     .await
                     .map_err(|_| StoreError::Invalid("local launch unavailable".into()))?;
-                owners.ensure_browser_ingress().await?;
+                owners.browser_ingress_ready()?;
                 owners.instance_signer()?;
                 return Ok((
                     200,
@@ -99,6 +100,7 @@ pub(super) fn response(
                     b"{\"error\":\"authentication_required\"}".to_vec(),
                 ));
             };
+            owners.browser_ingress_ready()?;
             let context = build(&owners, &user).await?;
             // Recheck after builder awaits; no session/role snapshot is a grant.
             let current = authenticated_user(&owners, hash).await?;
@@ -116,7 +118,7 @@ pub(super) fn response(
                     b"{\"error\":\"authentication_required\"}".to_vec(),
                 ));
             }
-            owners.ensure_browser_ingress().await?;
+            owners.browser_ingress_ready()?;
             owners.instance_signer()?;
             let body = serde_json::to_vec(&context)
                 .map_err(|_| StoreError::Invalid("launch encoding unavailable".into()))?;

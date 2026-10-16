@@ -337,6 +337,16 @@ impl Foreground {
                 }
             }
         }
+        if let Err(error) = owner
+            .inputs
+            .browser_ingress
+            .get()
+            .ok_or(StoreError::Closed)?
+            .start_owned(&owner.inputs.runtime)
+        {
+            owner.shutdown().await?;
+            return Err(error);
+        }
         Ok(owner)
     }
     /// Stop app/command ingress and owned effects before closing writer admission.
@@ -401,6 +411,18 @@ pub(crate) async fn run(root: PathBuf) -> anyhow::Result<()> {
     #[cfg(unix)]
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut owner = Foreground::start(root.clone(), Handle::current()).await?;
+    // Network bring-up belongs to owner start, before the production HTTP
+    // listener is exposed. A failed peer is fatal and retains/drains its stores.
+    let browser_start = owner
+        .inputs
+        .browser_ingress
+        .get()
+        .ok_or(StoreError::Closed)?
+        .clone();
+    if let Err(error) = browser_start.wait_ready().await {
+        owner.drain().await?;
+        return Err(error.into());
+    }
     // E36: the ordinary daemon owns HTTP too. Read the established typed
     // runtime-store settings through its existing reader, never a CLI opener.
     let http_start = async {
@@ -466,16 +488,24 @@ pub(crate) async fn run(root: PathBuf) -> anyhow::Result<()> {
         "ctox v4 store daemon ready: Core/Sync owners and typed store IPC; engine bindings={}",
         owner.engines.len()
     );
+    let browser = owner
+        .inputs
+        .browser_ingress
+        .get()
+        .ok_or(StoreError::Closed)?
+        .clone();
     #[cfg(unix)]
     let signal_result = tokio::select! {
         result=tokio::signal::ctrl_c()=>result,
         _=terminate.recv()=>Ok(()),
         result=owner.wait_native_stopped()=>result,
+        result=browser.wait_failed()=>result,
     };
     #[cfg(not(unix))]
     let signal_result = tokio::select! {
         result=tokio::signal::ctrl_c()=>result,
         result=owner.wait_native_stopped()=>result,
+        result=browser.wait_failed()=>result,
     };
     // Retire the PID while the daemon lease is still held; a successor cannot
     // publish its own PID between our identity check and unlink.

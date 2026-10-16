@@ -323,6 +323,10 @@ mod tests {
             tokio::runtime::Handle::current(),
         )
         .await?;
+        assert!(
+            owner.inputs.browser_ingress.get().unwrap().owner_started(),
+            "HTTP was published before owner signaling start"
+        );
         assert!(matches!(
             ctox_store::registry::Registry
                 .open(owner.inputs.sync.writer.db_id().clone(), Default::default()),
@@ -422,6 +426,13 @@ mod tests {
             assert_eq!(bootstrap["instance_public_key"], expected.1);
             assert!(bootstrap.get("session").is_none());
             assert_eq!(get("/api/business-os/records")?.status(), 404);
+            // Readiness only: the first launch must never start/retry signaling.
+            let _ = client
+                .get(&format!(
+                    "http://{}/api/business-os/launch-context",
+                    listen.addr
+                ))
+                .call();
             let public = client
                 .get(&format!(
                     "http://{}/api/business-os/launch-context",
