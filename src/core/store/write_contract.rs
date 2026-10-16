@@ -12,6 +12,8 @@ use std::sync::Arc;
 
 #[path = "command_contract.rs"]
 mod command;
+#[path = "command_routes.rs"]
+pub mod routes;
 pub(super) use command::check_command_input;
 pub use command::{
     activate_command_projections, backfill_command_projections, command_document_schema,

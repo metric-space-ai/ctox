@@ -1,0 +1,52 @@
+{
+  "schema": "ctox.sync.v4.e25-methods.v1",
+  "methods": [
+    {
+      "method": "ctox.workjet.device.v1",
+      "route": "ctox.workjet.device.v1",
+      "native_handler": "src/core/business_os/rxdb_peer_workjet_devices.rs:122",
+      "lane": 1,
+      "test": "e25_kernel_command_to_native_completion",
+      "mutation": "remove exact route -> unknown_command"
+    },
+    {
+      "method": "ctox.workjet.grok.v1",
+      "route": "ctox.workjet.grok.v1",
+      "native_handler": "src/core/business_os/rxdb_peer_grok.rs:390",
+      "lane": 1,
+      "test": "e25_kernel_command_to_native_completion",
+      "mutation": "remove exact route -> unknown_command"
+    },
+    {
+      "method": "ctox.workjet.calendar.read.v1",
+      "route": "ctox.workjet.calendar.read.v1",
+      "native_handler": "src/core/business_os/rxdb_peer.rs:3168",
+      "lane": 1,
+      "test": "e25_kernel_command_to_native_completion",
+      "mutation": "remove exact route -> unknown_command"
+    },
+    {
+      "method": "ctox.browser.live.v1",
+      "route": "ctox.browser.live.v1",
+      "native_handler": "src/core/business_os/rxdb_peer.rs:3105",
+      "lane": 1,
+      "test": "e25_kernel_command_to_native_completion",
+      "mutation": "remove exact route -> unknown_command"
+    },
+    {
+      "method": "ctox.outbound.sellify_lookup.v1",
+      "route": "ctox.outbound.sellify_lookup.v1",
+      "native_handler": "src/core/business_os/rxdb_peer.rs:3122",
+      "lane": 1,
+      "test": "e25_kernel_command_to_native_completion",
+      "mutation": "remove exact route -> unknown_command"
+    }
+  ],
+  "already_commands": [
+    "ctox.workjet.project.supervisor.route.read.v1",
+    "ctox.workjet.project.supervisor.route.read.v2",
+    "ctox.workjet.project.supervisor.route.capabilities.v1",
+    "ctox.workjet.project.supervisor.route.capabilities.v2"
+  ],
+  "note": "Action discriminants inside a native payload are not additional requestNative method names."
+}
