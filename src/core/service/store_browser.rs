@@ -170,9 +170,6 @@ impl BrowserAdmission {
                         let ticket = tickets
                             .get(&hello.device_proof.nonce)
                             .ok_or("unknown or consumed browser ticket")?;
-                        if ticket.expires <= Instant::now() {
-                            return Err("expired browser ticket".into());
-                        }
                         if ticket.peer != peer
                             || ticket.user != actor.id
                             || ticket.role != actor.role
@@ -207,6 +204,9 @@ impl BrowserAdmission {
                             let token = sync_rights::scope::SignedScope { claims, signature };
                             token.verify(&owner.key, instance, &device, &scope, now)?;
                             tokens.push(token.to_wire()?);
+                        }
+                        if ticket.expires <= Instant::now() {
+                            return Err("expired browser ticket".into());
                         }
                         let local = ticket.local;
                         // Linearization: no await between current-user/rights validation,
@@ -250,7 +250,7 @@ impl BrowserAdmission {
             device: authorized.device_id.clone(),
             epoch: authorized.epoch.clone(),
             rights_ver: authorized.rights_ver.0,
-            expires: Instant::now() + Duration::from_secs(300),
+            expires: Instant::now() + Duration::from_secs(299),
             scopes,
             results: Mutex::new(None),
         });

@@ -135,7 +135,12 @@ impl BrowserIngress {
             ice_servers: config
                 .ice_servers
                 .into_iter()
-                .map(serde_json::from_value)
+                .map(|mut value| {
+                    if let Some(url) = value["urls"].as_str() {
+                        value["urls"] = serde_json::json!([url]);
+                    }
+                    serde_json::from_value(value)
+                })
                 .collect::<Result<_, _>>()
                 .map_err(|_| StoreError::Invalid("browser ICE config".into()))?,
             bringup_timeout: Duration::from_secs(15),
@@ -157,7 +162,12 @@ impl BrowserIngress {
         })
         .await
         {
-            Ok(native) => {
+            Ok(mut native) => {
+                if inputs.instance_signer().is_err() {
+                    let _ = native.shutdown().await;
+                    let _ = database.close().await;
+                    return Err(StoreError::Closed);
+                }
                 *session = Some((native, database));
                 Ok(())
             }
@@ -450,3 +460,7 @@ fn now() -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
+
+#[cfg(all(test, unix))]
+#[path = "store_browser_ingress_tests.rs"]
+mod tests;
