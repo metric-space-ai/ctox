@@ -313,6 +313,7 @@ impl RuntimeBinding {
         let feed_ingress = ingress.clone();
         let task = runtime.spawn(async move {
             let feed_health = health_send.clone();
+            eprintln!("APP_FEED_EVENT ts={} event=feed_open", now());
             let result = drive(
                 native_root,
                 database,
@@ -330,7 +331,7 @@ impl RuntimeBinding {
                 feed_health.send_replace(FeedHealth::Unavailable {
                     code: "feed_stopped",
                 });
-                eprintln!("native app runtime feed stopped; ingress is closing: {result:?}");
+                eprintln!("APP_FEED_EVENT ts={} event=feed_close reason=drive_error error={result:?} backtrace={}", now(), std::backtrace::Backtrace::force_capture());
             }
             let drained = registration.shutdown().await;
             result.and(drained)
@@ -849,15 +850,18 @@ async fn dispatch_platform(
     } else {
         None
     };
+    eprintln!("APP_FEED_EVENT ts={} event=install_start type={}", now(), command.command_type);
     let outcome = platform
         .dispatch_fenced(actor, command, now(), model_fence)
         .await;
+    eprintln!("APP_FEED_EVENT ts={} event=install_dispatch_complete status={} code={} reason={} detail={}", now(), outcome["status"], outcome["code"], outcome["reason"], outcome["detail"]);
     if let Some(pending) = pending {
         let refreshed = database
             .readers
             .read(|tx| sync_rights::read(tx))
             .await
             .map_err(|e| e.to_string());
+        eprintln!("APP_FEED_EVENT ts={} event=rights_refresh expected_ver={} committed_ver={:?}", now(), pending.expected_version(), refreshed.as_ref().map(|r|r.rights_ver));
         policy_owner
             .router
             .finish_rights_update(pending, refreshed)

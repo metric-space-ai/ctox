@@ -10,6 +10,8 @@ pub(super) use feed::check_model_fence;
 pub(crate) use origin::{enqueue_core_command, CoreCommandSource};
 #[cfg(all(test, unix, feature = "app-runtime-node"))]
 mod native_proof;
+#[cfg(all(test, unix, feature = "app-runtime-node"))]
+mod e42_proof;
 #[cfg(test)]
 mod runtime_tests;
 
@@ -381,6 +383,7 @@ pub(super) fn publish_rights(
     manifest: &Value,
 ) -> Result<(), StoreError> {
     let mut current = sync_rights::read(tx)?;
+    eprintln!("APP_FEED_EVENT ts={} event=rights_publish app={} prior_ver={}", now(), app, current.rights_ver);
     let owned = manifest["collections"]
         .as_object()
         .ok_or_else(|| invalid("invalid: manifest collections"))?

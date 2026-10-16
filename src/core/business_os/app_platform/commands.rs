@@ -1237,6 +1237,7 @@ pub(super) fn complete(
             "publication base version changed before activation",
         ));
     }
+    eprintln!("APP_FEED_EVENT ts={now} event=manifest_publish app={}", lock.app_id);
     let watermark = schema::activate_publication(tx, &lock, (now / 1000) as i64)?;
     if pending["discard_local"] == true {
         // Archive the customized version in the pointer-switch transaction,

@@ -74,7 +74,7 @@ impl Signal {
     }
 }
 
-async fn terminal(database: &Database, name: &str, id: &str) -> Result<Value> {
+pub(super) async fn terminal(database: &Database, name: &str, id: &str) -> Result<Value> {
     let mut commits = database.writer.subscribe_commits();
     let name = name.to_owned();
     let id = id.to_owned();
@@ -104,7 +104,7 @@ async fn terminal(database: &Database, name: &str, id: &str) -> Result<Value> {
     .await
     .with_context(|| format!("native daemon did not deliver {name}/{id}; elapsed_ms={} last={observed}", started.elapsed().as_millis()))?
 }
-async fn submit(
+pub(super) async fn submit(
     database: &Database,
     id: &str,
     app: &str,
@@ -164,6 +164,13 @@ fn seed(tx: &rusqlite::Transaction<'_>) -> Result<(), StoreError> {
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_daemon_hotplug_roundtrip_and_change() -> Result<()> {
+    run_native_proof(false).await
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_daemon_e42_app_handlers() -> Result<()> {
+    run_native_proof(true).await
+}
+async fn run_native_proof(e42_only: bool) -> Result<()> {
     let _scope = crate::service::store_startup::isolate_test_roots().await;
     anyhow::ensure!(
         std::env::var_os("CTOX_STATE_ROOT").is_none(),
@@ -251,17 +258,23 @@ async fn native_daemon_hotplug_roundtrip_and_change() -> Result<()> {
             files.insert(path.into(),json!(hash));
         }
         let definitions=json!({"hot_rows":{"schema":{"version":1,"type":"object","primaryKey":"id","properties":{"id":{"type":"string"},"n":{"type":"integer"}},"required":["id","n"]},"class":"full","client_limit":0,"byte_budget":1048576},"hot_events":{"schema":{"version":1,"type":"object","primaryKey":"id","properties":{"id":{"type":"string"},"n":{"type":"integer"}},"required":["id","n"]},"class":"full","client_limit":0,"byte_budget":1048576}});
-        let draft=json!({"id":"hot-draft","app_id":"hot-app","author":"owner","files":files,"collections_schema":definitions,"manifest_fields":{"title":"Native hot-plug proof","handlers":{"hot.echo":"handlers/run.js","hot.core":"handlers/run.js","hot.cross":"handlers/run.js","hot.own":"handlers/run.js","hot.forward":"handlers/forward.js","hot.completed":"handlers/callback.js","ctox.workjet.project.list":"handlers/platform-trap.js"},"commands_out":[{"app":"receiver","type":"hot.cross"},{"app":"receiver","type":"hot.denied"},{"app":"ghost","type":"hot.unknown"},{"app":"receiver","type":"hot.ambiguous"},{"app":"ghost","type":"hot.ambiguous"},{"app":"hot-app","type":"hot.own"},{"app":"receiver","type":"hot.own"},{"app":"receiver","type":"hot.wildcard"},{"app":"receiver","type":"hot.nohandler"},{"app":"receiver","type":"hot.restricted"},{"app":"receiver","type":"hot.pre.run"},{"app":"receiver","type":"hot.allow.run"},{"app":"receiver","type":"hot.fallback"}],"command_rights":{"hot.core":{"roles":[],"assigned_users":false},"ctox.workjet.project.list":{"roles":["admin"]}},"triggers":[{"handler":"handlers/change.js","on":{"collection":"hot_rows","op":"insert"}}]}});
+        let draft=json!({"id":"hot-draft","app_id":"hot-app","author":"owner","files":files,"collections_schema":definitions,"manifest_fields":{"title":"Native hot-plug proof","handlers":{"hot.echo":"handlers/run.js","hot.core":"handlers/run.js","hot.cross":"handlers/run.js","hot.own":"handlers/run.js","hot.forward":"handlers/forward.js","hot.completed":"handlers/callback.js","ctox.workjet.project.list":"handlers/platform-trap.js"},"commands_out":[{"app":"news","type":"news.issue.generate"},{"app":"matching","type":"matching.match"},{"app":"receiver","type":"hot.cross"},{"app":"receiver","type":"hot.denied"},{"app":"ghost","type":"hot.unknown"},{"app":"receiver","type":"hot.ambiguous"},{"app":"ghost","type":"hot.ambiguous"},{"app":"hot-app","type":"hot.own"},{"app":"receiver","type":"hot.own"},{"app":"receiver","type":"hot.wildcard"},{"app":"receiver","type":"hot.nohandler"},{"app":"receiver","type":"hot.restricted"},{"app":"receiver","type":"hot.pre.run"},{"app":"receiver","type":"hot.allow.run"},{"app":"receiver","type":"hot.fallback"}],"command_rights":{"hot.core":{"roles":[],"assigned_users":false},"ctox.workjet.project.list":{"roles":["admin"]}},"triggers":[{"handler":"handlers/change.js","on":{"collection":"hot_rows","op":"insert"}}]}});
         database.writer.submit(WriteJob::new(Default::default(),move |tx|super::super::commands::put(tx,"app_drafts","hot-draft",&draft)))?.await?;
         let started=Instant::now();
         let published=submit(database,"hot-publish","ctox-platform","ctox.app.publish",json!({"app_id":"hot-app","base_app_ver":null,"draft_id":"hot-draft"})).await?;
         anyhow::ensure!(published["status"]=="done","native publish failed: {published}");
         let publish_us=started.elapsed().as_micros();
+        eprintln!("APP_FEED_EVENT ts={} event=install_complete app=hot-app", now());
         anyhow::ensure!(delayed_pages.exhausted(), "native change source load was not exercised");
         let result=submit(database,"hot-write","hot-app","hot.echo",json!({"id":"one","n":7,"write":true})).await?;
         anyhow::ensure!(result["status"]=="done"&&result["result"]["n"]==7,"native handler roundtrip failed: {result}");
+        if e42_only {
+            e42_proof::prove(database, &cas).await?;
+            return Ok(json!({"e42_only":true}));
+        }
         e25_binding::assert_native_workjet_route(database).await?;
         routing_proof::prove(database, &cas).await?;
+        e42_proof::prove(database, &cas).await?;
         let changed=terminal(database,"hot_events","change").await?;
         anyhow::ensure!(changed["n"].as_u64().is_some_and(|n|n>0),"committed change did not run real trigger");
         // E23.1: forged client fields confer no native provenance, including admin.
