@@ -412,6 +412,19 @@ impl RuntimeOwnerFixture {
             "isolated Runtime fixture required"
         );
         std::fs::create_dir_all(runtime_config_path(root).parent().unwrap())?;
+        // Use the real legacy migration before the canonical writer acquires
+        // the file. Attaching an LCM handle does not initialize its schema;
+        // never open a second legacy engine after the owner is installed.
+        let core_path = crate::persistence::sqlite_path(root);
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            if let Some(parent) = core_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let schema = crate::lcm::LcmEngine::open(&core_path, crate::lcm::LcmConfig::default())?;
+            drop(schema);
+            Ok(())
+        })
+        .await??;
         let (core_writer, core_readers) =
             StoreFixture::open(DbId::new(crate::persistence::sqlite_path(root))?)
                 .await?

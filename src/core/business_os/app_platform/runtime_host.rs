@@ -4,6 +4,8 @@ mod authority;
 mod codec;
 mod feed;
 mod origin;
+#[cfg(test)]
+pub(super) use feed::check_model_fence;
 pub(crate) use origin::{enqueue_core_command, CoreCommandSource};
 #[cfg(all(test, unix, feature = "app-runtime-node"))]
 mod native_proof;

@@ -237,6 +237,7 @@ pub(super) fn may_accept_peer_write(root: &Path, token: &str, collection: &str) 
 /// these have a browser write path (unlike e.g. `desktop_files`, which the
 /// desktop apps legitimately create and therefore stays writable).
 const NATIVE_PROJECTION_COLLECTIONS: &[&str] = &[
+    "planned_steps",
     "ctox_crew_members",
     "ctox_crew_learnings",
     "ctox_harness_events",
@@ -417,6 +418,11 @@ impl ReplicationPolicyReader for RootReplicationReader<'_> {
         document: &Value,
         user: &str,
     ) -> Option<bool> {
+        if collection == "planned_steps" {
+            return Some(super::project_chats::plan_state::visible_from_root(
+                self.root, document, user,
+            ));
+        }
         if collection == super::provider_federation::REGISTRY_COLLECTION {
             let decision = (|| -> anyhow::Result<bool> {
                 let conn = Connection::open_with_flags(
@@ -467,6 +473,12 @@ impl ReplicationPolicyReader for HeldReplicationReader<'_> {
         document: &Value,
         user: &str,
     ) -> Option<bool> {
+        if collection == "planned_steps" {
+            return Some(
+                super::project_chats::plan_state::visible(self.core, self.store, document, user)
+                    .unwrap_or(false),
+            );
+        }
         if collection == super::provider_federation::REGISTRY_COLLECTION {
             return Some(
                 super::provider_federation::projection_visible(self.store, document, user)
@@ -3554,6 +3566,12 @@ fn upsert_thread(
         );
         metadata["workjet_supervisor_contract"] =
             json!(super::project_chats::supervisor_binding::CONTRACT);
+        metadata["failed_step_id"] = json!(super::project_chats::plan_state::failed(
+            root,
+            &owner,
+            &binding.project_id,
+            &binding.thread_key
+        )?);
         metadata["workjet_supervisor"] = serde_json::to_value(binding)?;
     }
     let record = json!({

@@ -207,6 +207,7 @@ fn owned_turn(
         "error_code": canonical["error_code"], "error_message": canonical["error_message"],
         "result": if result_truncated { Value::Null } else { result },
         "result_truncated": result_truncated,
+        "failed_step_id": super::plan_state::failed(root, owner, &binding.project_id, &binding.thread_key)?,
     }))
 }
 

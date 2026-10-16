@@ -3,7 +3,10 @@
 use super::*;
 const THREAD: &str = "cc6cfe73-2824-4360-9daf-3b3efb079931";
 pub(super) fn fixture(state: &str) -> anyhow::Result<TempDir> {
-    let root = super::supervisor_turns::fixture()?;
+    fixture_with_root(state, tempfile::tempdir()?)
+}
+pub(super) fn fixture_with_root(state: &str, root: TempDir) -> anyhow::Result<TempDir> {
+    let root = super::supervisor_turns::fixture_with_root("owner", root)?;
     let corpus: Value = serde_json::from_str(include_str!(
         "../../rxdb/tests/fixtures/workjet-jour-fixe-v1.json"
     ))?;
