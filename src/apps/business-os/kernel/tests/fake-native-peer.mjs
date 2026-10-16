@@ -14,9 +14,9 @@ async function gzip(bytes,decode=false){return new Uint8Array(await new Response
  * the client's framer, scheduler or ingress. Only P4's canonical hello is shared.
  */
 export class FakeNativePeer {
- constructor(channels,{instanceId='instance',head='9007199254740999',clockOffset=5000,onSubscribe,epoch='1'}={}){
+ constructor(channels,{instanceId='instance',head='9007199254740999',clockOffset=5000,onSubscribe,epoch='1',sessionState={}}={}){
   Object.assign(this,{channels,instanceId,head,clockOffset,onSubscribe,epoch});this.messages=[];this.errors=[];this.blobs=new Map();this.uploads=new Map();this.listeners=[];this.closed=false;
-  this.sent=Array(6).fill(0);this.acked=Array(6).fill(0);this.received=Array(6).fill(0);this.packet=0;this.parts=new Map();this.waiters=new Set();this.ingress=Array(6).fill(Promise.resolve());this.egress=Array(6).fill(Promise.resolve());
+  this.sessionState=sessionState;this.sent=sessionState.sent??=Array(6).fill(0);this.acked=sessionState.acked??=Array(6).fill(0);this.received=sessionState.received??=Array(6).fill(0);this.packet=0;this.framesSent=Array(6).fill(0);this.parts=new Map();this.waiters=new Set();this.ingress=Array(6).fill(Promise.resolve());this.egress=Array(6).fill(Promise.resolve());
   for(const channel of Object.values(channels)){
    channel.binaryType='arraybuffer';channel.bufferedAmountLowThreshold=16384;
    for(const [name,fn]of [['message',e=>{this.receive(e.data).catch(err=>this.errors.push(err));}],['bufferedamountlow',()=>this.wake()]]){channel.addEventListener(name,fn);this.listeners.push([channel,name,fn]);}
@@ -33,7 +33,7 @@ export class FakeNativePeer {
   if(typeof data==='string'){
    const m=JSON.parse(data);if(m.type==='ack'){const n=Number(m.upto);if(!Number.isSafeInteger(n)||n>this.sent[m.lane])throw Error('Invalid client ACK');this.acked[m.lane]=Math.max(n,this.acked[m.lane]);this.wake();return;}
    const {session_id,resume_from,...p4}=m;this.native=session_id!==undefined;
-   if(this.native){if(typeof session_id!=='string'||!Array.isArray(resume_from)||resume_from.length!==6)throw Error('Invalid E14 hello');this.sessionId=session_id;this.received=resume_from.map(Number);}
+   if(this.native){if(typeof session_id!=='string'||!Array.isArray(resume_from)||resume_from.length!==6)throw Error('Invalid E14 hello');this.sessionId=session_id;if(resume_from.some((n,l)=>!/^\d+$/.test(n)||BigInt(n)>BigInt(this.sent[l])))throw Error('Invalid E14 resume cursor');}
    const hello=decodeHelloFrame(JSON.stringify(p4));this.messages.push(m);
    const selected=negotiateHello({instance_id:this.instanceId,bootstrap_min:1,bootstrap_max:1,app_api_ver:{min:'4.0',max:'4.0'},capabilities:[],required_capabilities:[],transport:hello.transport},hello);
    this.channels[0].send(JSON.stringify({type:'hello_ok',protocol_ver:4,instance_id:this.instanceId,...selected,epoch:this.epoch,head_seq:this.head,scope_tokens:['test-scope-token'],rights_ver:'1',core_time_ms:Date.now()+this.clockOffset,...(this.native?{session_id:this.sessionId,resume_from:this.received.map(String)}:{})}));return;
@@ -92,7 +92,7 @@ export class FakeNativePeer {
    const part=raw.slice(index*step,(index+1)*step);let payload=part,codec=0;
    if(part.length>=1024){const zipped=await gzip(part);if(zipped.length<part.length){payload=zipped;codec=2;}}
    const frame=new Uint8Array(37+payload.length),d=new DataView(frame.buffer);
-   frame.set([67,84,88,52,lane,codec,id.length]);frame.set(new TextEncoder().encode(id),7);d.setUint32(27,index);d.setUint32(31,count);d.setUint16(35,part.length);frame.set(payload,37);this.channels[lane].send(frame);
+   frame.set([67,84,88,52,lane,codec,id.length]);frame.set(new TextEncoder().encode(id),7);d.setUint32(27,index);d.setUint32(31,count);d.setUint16(35,part.length);frame.set(payload,37);this.framesSent[lane]++;this.channels[lane].send(frame);
   }
  }
  async apply(m,lane){

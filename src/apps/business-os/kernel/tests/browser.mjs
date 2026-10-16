@@ -138,7 +138,7 @@ try{
    serverCheck();await serverReady;
    if(Object.keys(server).length!==6)throw Error('native channels missing');
    native=new FakeNativePeer(server,{instanceId:'rtc-browser',onSubscribe:async(sub,p)=>p.page(sub.collection,sub.collection==='notes'?[{id:'server',data:{id:'server',title:'native page'},seq:p.head,rev:'native'}]:[])});
-   let allow;const transport=new WebRTCKernelTransport({wireFormat:"k2-fixture",channels:client,peer:a,hello:()=>new Promise(r=>allow=r),resolveScope:scopeFor,verifyPackage:async p=>p.sig==='test-signature'});
+   let allow;const transport=new WebRTCKernelTransport({channels:client,peer:a,hello:()=>new Promise(r=>allow=r),resolveScope:scopeFor,verifyPackage:async p=>p.sig==='test-signature'});
    k=createKernel({instanceId:'rtc-browser',userId:'alice',transport,tabKey:'rtc-tab'});await k.ready;
    if(!allow)throw Error('hello provider not started');const localReadyBeforeHello=transport.session===undefined;
    if(!localReadyBeforeHello)throw Error('local readiness gated by hello');allow(offer('rtc-browser'));await transport.ready;

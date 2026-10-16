@@ -6,11 +6,11 @@ import {protocolChannels,FakeNativePeer,offer,scopeFor} from './fake-native-peer
 
 const tick=()=>new Promise(r=>setTimeout(r,5));
 test('real transport feeds atomic IDB-style pages with canonical per-collection scope and clock metrics',async()=>{
- let pair,peer,release,hellos=0;const addresses=[];
- const createPeer=async address=>{addresses.push(address);pair=protocolChannels();peer=new FakeNativePeer(pair.server,{onSubscribe:async(sub,p)=>p.page(sub.collection,sub.collection==='notes'?[{id:'server',data:{id:'server',title:'core'},seq:p.head,rev:'r'}]:[])});
+ let pair,peer,release,hellos=0;const addresses=[],sessionState={};
+ const createPeer=async address=>{addresses.push(address);pair=protocolChannels();peer=new FakeNativePeer(pair.server,{sessionState,onSubscribe:async(sub,p)=>p.page(sub.collection,sub.collection==='notes'?[{id:'server',data:{id:'server',title:'core'},seq:p.head,rev:'r'}]:[])});
   const native=peer;return {channels:pair.client,close:()=>native.close()};
  };
- const transport=new WebRTCKernelTransport({wireFormat:"k2-fixture",address:'native:first',createPeer,hello:()=>++hellos===1?new Promise(r=>release=r):offer('instance'),resolveScope:scopeFor,verifyPackage:async m=>m.sig==='test-signature'});
+ const transport=new WebRTCKernelTransport({address:'native:first',createPeer,hello:()=>++hellos===1?new Promise(r=>release=r):offer('instance'),resolveScope:scopeFor,verifyPackage:async m=>m.sig==='test-signature'});
  const k=createKernel({instanceId:'instance',userId:'alice',storage:'memory',multiTab:false,transport});
  try {
   await k.ready;assert.equal(transport.session,undefined);release(offer('instance'));await transport.ready;
