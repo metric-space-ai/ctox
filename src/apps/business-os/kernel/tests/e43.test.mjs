@@ -7,7 +7,7 @@ import {readFile,readdir} from 'node:fs/promises';
 import {dirname,extname,join,relative,resolve,sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createKernel,createLoader,CtoxError} from '../index.mjs';
-import {MemoryCoreTransport} from '../fake-core.mjs';
+import {MemoryCoreTransport} from '../testkit.mjs';
 import {WebRTCKernelTransport} from '../transport-webrtc.mjs';
 import {protocolChannels,FakeNativePeer,offer,scopeFor} from './fake-native-peer.mjs';
 import {sha256Hex} from '../values.mjs';

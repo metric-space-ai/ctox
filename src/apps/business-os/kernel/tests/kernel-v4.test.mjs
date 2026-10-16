@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {createKernel,createStubKernel} from '../kernel.mjs';
+import {createKernel,createStubKernel} from '../testkit.mjs';
 import {WebRTCKernelTransport} from '../transport-webrtc.mjs';
 import {protocolChannels,FakeNativePeer,offer,scopeFor} from './fake-native-peer.mjs';
 

@@ -71,6 +71,7 @@ async function runCommand(core, doc, depth, via) {
   await update(final);
 }
 export class MemoryCoreTransport extends KernelTransport {
+  get kind() { return 'memory'; }
   /** user = {id, role, permissions}: der Core kennt den Nutzer (Rechte wirken); ohne user prüft der Core keine Rechte. */
   constructor({ namespace = 'test', latencyMs = 5, user = null, everyMs, agentDelayMs, deviceLabel, codingDelayMs } = {}) {
     super(); this.namespace = namespace; this.latencyMs = latencyMs;

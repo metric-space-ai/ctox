@@ -3,9 +3,9 @@
 import { testLocks } from './web-locks.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createKernel, createStubKernel } from '../kernel.mjs';
+import { createKernel, createStubKernel } from '../testkit.mjs';
 import { KernelTransport } from '../transport.mjs';
-import { MemoryCoreTransport } from '../fake-core.mjs';
+import { MemoryCoreTransport } from '../testkit.mjs';
 
 let n = 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

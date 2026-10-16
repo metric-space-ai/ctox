@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {createStubKernel} from '../kernel.mjs';
+import {createStubKernel} from '../testkit.mjs';
 let next=0;
 const routes=k=>{for(const type of ['notes.run','other.run'])k.sim.onCommand(type,()=>({ok:true}));};
 function waitCommandDone(handle){return new Promise((resolve,reject)=>{

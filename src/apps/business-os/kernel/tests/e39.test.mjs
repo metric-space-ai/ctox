@@ -2,7 +2,7 @@ const PLATFORM_PROBES=["ctox.app_store.install", "ats.consent.check", "browser.b
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {testLocks} from './web-locks.mjs';
-import {createStubKernel} from '../kernel.mjs';
+import {createStubKernel} from '../testkit.mjs';
 let serial=0;
 async function open(t,role='admin'){const instanceId=`e39-${process.pid}-${++serial}`;const k=createStubKernel({instanceId,coreNamespace:instanceId,actor:{role,permissions:[]},userId:'alice',locks:testLocks,storage:'memory',multiTab:false,latencyMs:0});t.after(()=>k.close());await k.ready;return k;}
 const files={'index.js':'export function mount(){return {unmount(){}}}', 'handler.js':"export default async command=>({sender:command.app_id,target:'receiver'});"};
