@@ -52,6 +52,12 @@ const FRESHNESS_GRACE_MS: i64 = 6 * HOUR_MS;
 const COVERED_LOOKBACK_MS: i64 = 30 * DAY_MS;
 const MAX_COVERED_URLS: usize = 120;
 const MAX_TREND_TITLE: usize = 60;
+/// Per-run effort cap. A worker attempt is cut at 840 s; on Welsch
+/// (15.10.2026) 24 sources took ~330k input tokens per attempt and all five
+/// attempts timed out at the final check step.
+const MAX_SOURCES_PER_RUN: usize = 12;
+/// Source states that cannot deliver anything this run.
+const UNUSABLE_SOURCE_STATES: [&str; 3] = ["failed", "needs_auth", "auth_requested"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct ScheduleRoute {
@@ -413,6 +419,15 @@ pub(crate) fn emit_scheduled_issue(
     drop(conn);
 
     let session = active_domain_recovery_session(root, &route.owner_user_id)?;
+    let mut payload = generate_payload(
+        &topic,
+        &sources,
+        &issue_id,
+        &issue_date,
+        &command_id,
+        &window,
+    );
+    attach_checkpoint(&mut payload, root, &issue_id);
     let accepted = accept_rxdb_business_command_with_origin(
         root,
         json!({
@@ -423,7 +438,7 @@ pub(crate) fn emit_scheduled_issue(
             "record_id": route.topic_id,
             "inbound_channel": "business_os.news",
             "sync_collections": ["news_issues", "news_posts"],
-            "payload": generate_payload(&topic, &sources, &issue_id, &issue_date, &command_id, &window),
+            "payload": payload,
             "client_context": {
                 "actor": super::threads::actor_payload(&session),
                 "source": "native-news-schedule",
@@ -667,6 +682,8 @@ fn generate_payload(
             .to_string()
     };
     let topic_id = field("id");
+    let (usable, skipped) = select_run_sources(sources);
+    let sources = usable.as_slice();
     let source_line = sources
         .iter()
         .map(|source| {
@@ -703,7 +720,18 @@ fn generate_payload(
             window.covered_urls.len().min(MAX_COVERED_URLS)
         ),
         format!("Liefere das Ergebnis im Vertrag {NEWS_ISSUE_CONTRACT}; jeder Beitrag braucht mindestens eine Quelle mit Link."),
+        "Aufwand begrenzen: höchstens zwei Abrufe pro Quelle, keine Quelle zweimal lesen; sobald genug Beiträge belegt sind, nicht weiter suchen, sondern das Ergebnis liefern.".to_string(),
     ];
+    if !skipped.is_empty() {
+        instruction.push(format!(
+            "Diese Quellen in diesem Lauf überspringen: {}.",
+            skipped
+                .iter()
+                .map(|(label, reason)| format!("{label} ({reason})"))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+    }
     if signed_in {
         // The owner of an authenticated read is resolved from this command.
         instruction.insert(
@@ -745,6 +773,10 @@ fn generate_payload(
         "window_start": rfc3339(window.start_ms),
         "window_start_ms": window.start_ms,
         "covered_urls": window.covered_urls.iter().take(MAX_COVERED_URLS).collect::<Vec<_>>(),
+        "skipped_sources": skipped
+            .iter()
+            .map(|(label, reason)| json!({ "label": label, "reason": reason }))
+            .collect::<Vec<_>>(),
         "record_snapshot": {
             "topic": {
                 "id": topic_id,
@@ -758,6 +790,88 @@ fn generate_payload(
             "sources": snapshot_sources,
         },
     })
+}
+
+/// Sources for one run: drop ones that cannot deliver (failed, needs_auth)
+/// and cap the rest. Returns the usable sources and `(label, reason)` for the
+/// skipped ones. If nothing usable is left the run falls back to web search.
+fn select_run_sources(sources: &[Value]) -> (Vec<Value>, Vec<(String, String)>) {
+    let mut usable = Vec::new();
+    let mut skipped = Vec::new();
+    for source in sources {
+        let label = source
+            .get("label")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let status = source.get("status").and_then(Value::as_str).unwrap_or("");
+        if UNUSABLE_SOURCE_STATES.contains(&status) {
+            skipped.push((label, status.to_string()));
+        } else if usable.len() >= MAX_SOURCES_PER_RUN {
+            skipped.push((label, "limit".to_string()));
+        } else {
+            usable.push(source.clone());
+        }
+    }
+    (usable, skipped)
+}
+
+/// Gathered items survive a session timeout: the run writes them to this
+/// file after reading the sources, and every later attempt (worker retry or
+/// a Crew "Wiederholen") resumes from it instead of re-reading all sources.
+fn issue_checkpoint_path(root: &Path, issue_id: &str) -> std::path::PathBuf {
+    root.join("runtime")
+        .join("news")
+        .join("checkpoints")
+        .join(format!("{issue_id}.json"))
+}
+
+fn attach_checkpoint(payload: &mut Value, root: &Path, issue_id: &str) {
+    let path = issue_checkpoint_path(root, issue_id);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let path = path.to_string_lossy().to_string();
+    let note = format!(
+        "Zwischenstand: Prüfe zuerst {path}. Existiert die Datei, sind die Quellen schon gelesen: übernimm die Kandidaten daraus und lies nur die dort fehlenden Quellen. Sonst nach dem Lesen der Quellen sofort alle Kandidaten (Titel, Link, Datum, Quelle, Kurzinhalt) als JSON dorthin schreiben, bevor du auswählst und schreibst."
+    );
+    if let Some(object) = payload.as_object_mut() {
+        let instruction = object
+            .get("instruction")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        object.insert(
+            "instruction".into(),
+            json!(format!("{instruction}\n{note}")),
+        );
+        object.insert("checkpoint_path".into(), json!(path));
+    }
+}
+
+/// Crew "Wiederholen" on a failed issue run submits the command again; put
+/// the issue back to queued under the new command so the News app follows it.
+pub(super) fn requeue_issue_for_retry(
+    root: &Path,
+    payload: &Value,
+    command_id: &str,
+    task_id: &str,
+) -> anyhow::Result<()> {
+    let Some(issue_id) =
+        first_string_field(payload, &["issue_id"]).filter(|id| valid_record_id(id))
+    else {
+        return Ok(());
+    };
+    let conn = super::store::open_store(root)?;
+    patch_record(
+        root,
+        &conn,
+        "news_issues",
+        &issue_id,
+        now_ms() as i64,
+        json!({ "status": "queued", "error": "", "command_id": command_id, "task_id": task_id }),
+    )?;
+    Ok(())
 }
 
 // --- queue writeback ----------------------------------------------------------
@@ -1568,5 +1682,63 @@ mod tests {
             normalize_story_url("https://WWW.Cohere.com/blog/new/#x"),
             "cohere.com/blog/new"
         );
+    }
+
+    fn test_window() -> IssueWindow {
+        window_from_history(&[], &[], "daily", 0)
+    }
+
+    #[test]
+    fn run_skips_unusable_sources_and_caps_the_rest() {
+        let mut sources = vec![
+            json!({"label": "OpenAI", "kind": "lab", "status": "failed"}),
+            json!({"label": "Reddit", "kind": "reddit", "status": "needs_auth"}),
+        ];
+        for index in 0..(MAX_SOURCES_PER_RUN + 2) {
+            sources.push(json!({"label": format!("S{index}"), "kind": "lab", "status": "ok"}));
+        }
+        let (usable, skipped) = select_run_sources(&sources);
+        assert_eq!(usable.len(), MAX_SOURCES_PER_RUN);
+        assert_eq!(skipped[0], ("OpenAI".to_string(), "failed".to_string()));
+        assert_eq!(skipped[1], ("Reddit".to_string(), "needs_auth".to_string()));
+        assert_eq!(skipped.iter().filter(|(_, r)| r == "limit").count(), 2);
+        let topic = json!({"id": "topic_1", "title": "KI", "prompt": "", "max_posts": 5});
+        let payload = generate_payload(
+            &topic,
+            &sources,
+            "issue_1",
+            "2026-10-15",
+            "cmd_1",
+            &test_window(),
+        );
+        let instruction = payload["instruction"].as_str().unwrap();
+        assert!(instruction.contains("OpenAI (failed)"));
+        assert!(
+            !instruction.contains("--task-id"),
+            "skipped Reddit must not ask for a signed-in read"
+        );
+        assert_eq!(
+            payload["record_snapshot"]["sources"]
+                .as_array()
+                .unwrap()
+                .len(),
+            MAX_SOURCES_PER_RUN
+        );
+    }
+
+    #[test]
+    fn checkpoint_is_stable_per_issue() {
+        let root = std::env::temp_dir().join(format!("ctox-news-ckpt-{}", std::process::id()));
+        let mut a = json!({"instruction": "x"});
+        let mut b = json!({"instruction": "x"});
+        attach_checkpoint(&mut a, &root, "issue_1");
+        attach_checkpoint(&mut b, &root, "issue_1");
+        assert_eq!(a["checkpoint_path"], b["checkpoint_path"]);
+        assert!(a["checkpoint_path"]
+            .as_str()
+            .unwrap()
+            .ends_with("checkpoints/issue_1.json"));
+        assert!(a["instruction"].as_str().unwrap().contains("Zwischenstand"));
+        let _ = std::fs::remove_dir_all(root);
     }
 }
