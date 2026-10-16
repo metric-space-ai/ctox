@@ -1,5 +1,5 @@
 // Gemeinsamer Testaufbau für research gegen den eingefrorenen Kern-Stub (createStubKernel).
-// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/68b83a3), read-only unter /__stub/.
+// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/8265bd7), read-only unter /__stub/.
 // Playwright: PLAYWRIGHT_MODULE, sonst ~/Documents/ctox/src/apps/business-os/node_modules/playwright.
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
