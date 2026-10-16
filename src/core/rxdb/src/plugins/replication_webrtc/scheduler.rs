@@ -443,6 +443,13 @@ impl NativeSendScheduler {
             let realtime = label == REALTIME_LABEL;
             let init = RTCDataChannelInit {
                 ordered: !realtime,
+                // Carry strict lane priority into SCTP, before its TSN assignment.
+                priority: Some(match label {
+                    "ctox-v4-control" => 1024,
+                    "ctox-v4-commands" => 768,
+                    "ctox-v4-interactive" => 512,
+                    _ => 256,
+                }),
                 max_retransmits: realtime.then_some(0),
                 ..Default::default()
             };

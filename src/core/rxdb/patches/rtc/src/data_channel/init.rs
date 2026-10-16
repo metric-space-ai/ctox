@@ -23,6 +23,9 @@
 /// ```
 #[derive(Default, Clone)]
 pub struct RTCDataChannelInit {
+    /// Optional DCEP stream weight (RFC 8831 section 6.4); higher is higher priority.
+    /// None preserves upstream CHANNEL_PRIORITY_NORMAL.
+    pub priority: Option<u16>,
     /// If set to `false`, data is allowed to be delivered out of order.
     ///
     /// The default value of `true` guarantees that data will be delivered in order.

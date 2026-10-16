@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 /// configure a data channel, including reliability settings and negotiation details.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct DataChannelParameters {
+    pub(crate) priority: Option<u16>,
     /// The label that can be used to distinguish this DataChannel from others.
     pub(crate) label: String,
 

@@ -152,6 +152,17 @@ impl<'a> sansio::Protocol<TaggedRTCMessageInternal, TaggedRTCMessageInternal, RT
                                 while let Some(chunks) = stream.read_sctp()? {
                                     let n = chunks
                                         .read(&mut self.ctx.sctp_transport.internal_buffer)?;
+                                    // Apply the peer's DCEP priority to replies on this stream too.
+                                    // ref: webrtc-rs/rtc@b808b74f712ed379312a114b848ede133880d58a/rtc/src/peer_connection/handler/sctp.rs:155
+                                    if chunks.ppi == PayloadProtocolIdentifier::Dcep {
+                                        let mut payload =
+                                            &self.ctx.sctp_transport.internal_buffer[..n];
+                                        if let Message::DataChannelOpen(open) =
+                                            Message::unmarshal(&mut payload)?
+                                        {
+                                            stream.set_priority(open.priority);
+                                        }
+                                    }
                                     messages.push(SctpMessage::Inbound(DataChannelMessage {
                                         association_handle: ch.0,
                                         stream_id: id,
@@ -292,6 +303,8 @@ impl<'a> sansio::Protocol<TaggedRTCMessageInternal, TaggedRTCMessageInternal, RT
                                     data_channel_open.channel_type,
                                 );
                             let mut stream = conn.open_stream(message.stream_id, message.ppi)?;
+                            // ref: webrtc-rs/rtc@b808b74f712ed379312a114b848ede133880d58a/rtc/src/peer_connection/handler/sctp.rs:294
+                            stream.set_priority(data_channel_open.priority);
                             stream.set_reliability_params(
                                 unordered,
                                 reliability_type,

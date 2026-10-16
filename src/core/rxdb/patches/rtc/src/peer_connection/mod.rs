@@ -1793,6 +1793,7 @@ where
             // default value of true, guarantees that data will be delivered in order.
             // https://w3c.github.io/webrtc-pc/#peer-to-peer-data-api (Step #9)
             params.ordered = options.ordered;
+            params.priority = options.priority;
 
             // https://w3c.github.io/webrtc-pc/#peer-to-peer-data-api (Step #7)
             params.max_packet_life_time = options.max_packet_life_time;

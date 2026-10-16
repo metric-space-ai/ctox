@@ -207,6 +207,15 @@ impl Stream<'_> {
         }
     }
 
+    /// DCEP priority is local send scheduling metadata; higher weights win.
+    // ref: webrtc-rs/rtc@b808b74f712ed379312a114b848ede133880d58a/rtc-sctp/src/association/stream.rs:209
+    pub fn set_priority(&mut self, priority: u16) {
+        self.association
+            .pending_queue
+            .set_priority(self.stream_identifier, priority);
+        trace!(target: "ctox_sctp_timeline", "event=priority side={} sid={} weight={}", self.association.side, self.stream_identifier, priority);
+    }
+
     pub fn is_readable(&self) -> bool {
         if let Some(s) = self.association.streams.get(&self.stream_identifier) {
             s.state == RecvSendState::Readable || s.state == RecvSendState::ReadWritable
