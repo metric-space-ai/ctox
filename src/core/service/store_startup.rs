@@ -177,6 +177,10 @@ impl NativeOwners {
             .browser
             .set(super::store_browser::BrowserAdmission::new(inputs, rights)?)
             .map_err(|_| StoreError::AlreadyOwned)?;
+        inputs
+            .browser_ingress
+            .set(super::store_browser_ingress::BrowserIngress::new(inputs))
+            .map_err(|_| StoreError::AlreadyOwned)?;
         #[cfg(unix)]
         {
             native.session = super::store_native::NativeSessionOwner::start(
@@ -342,6 +346,9 @@ impl Foreground {
         while let Some(engine) = self.engines.last_mut() {
             engine.shutdown().await?;
             self.engines.pop();
+        }
+        if let Some(browser) = self.inputs.browser_ingress.get() {
+            browser.shutdown().await?;
         }
         if let Some(native) = self.native_owners.as_mut() {
             native.shutdown().await?;

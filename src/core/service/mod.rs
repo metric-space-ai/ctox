@@ -18,6 +18,7 @@ pub mod reset;
 pub mod state_invariants;
 pub mod state_write_guard;
 mod store_browser;
+mod store_browser_ingress;
 pub(crate) mod store_http;
 pub(crate) mod store_inputs;
 pub(crate) mod store_launch;

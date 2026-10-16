@@ -82,6 +82,7 @@ pub(super) fn response(
                 let context = crate::business_os::launch_context_v4::build_local(&owners)
                     .await
                     .map_err(|_| StoreError::Invalid("local launch unavailable".into()))?;
+                owners.ensure_browser_ingress().await?;
                 owners.instance_signer()?;
                 return Ok((
                     200,
@@ -115,6 +116,7 @@ pub(super) fn response(
                     b"{\"error\":\"authentication_required\"}".to_vec(),
                 ));
             }
+            owners.ensure_browser_ingress().await?;
             owners.instance_signer()?;
             let body = serde_json::to_vec(&context)
                 .map_err(|_| StoreError::Invalid("launch encoding unavailable".into()))?;
@@ -123,7 +125,7 @@ pub(super) fn response(
         .await;
         let _ = tx.send(result);
     });
-    match rx.recv_timeout(Duration::from_secs(5)) {
+    match rx.recv_timeout(Duration::from_secs(20)) {
         Ok(result) => result,
         Err(_) => {
             task.abort();
@@ -146,6 +148,10 @@ fn allows_local_admin(request: &tiny_http::Request) -> bool {
         .find(|h| h.field.equiv("Host"))
         .map(|h| h.value.as_str());
     host.is_none_or(|h| {
+        if h.contains(['@', '/', '\\', '#', '?', ',']) {
+            return false;
+        }
+
         url::Url::parse(&format!("http://{h}"))
             .ok()
             .and_then(|u| u.host_str().map(str::to_owned))

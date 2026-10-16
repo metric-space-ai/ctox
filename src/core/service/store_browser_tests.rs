@@ -15,13 +15,13 @@ async fn browser_ticket_replay_is_rejected() -> anyhow::Result<()> {
     let admission = fg.inputs.browser_admission()?;
     let peer = context.v4.signaling.peer_id.clone();
     let h = hello(&context);
-    let first = admission.admit(peer.clone(), h.clone()).await?;
+    let first = admission.admit(format!("{peer}@1"), h.clone()).await?;
     assert!(
         !first.scope_tokens.is_empty(),
         "no authorized scopes issued"
     );
     assert!(
-        admission.admit(peer, h).await.is_err(),
+        admission.admit(format!("{peer}@2"), h).await.is_err(),
         "browser ticket replay accepted"
     );
     fg.shutdown().await?;
@@ -93,6 +93,51 @@ async fn browser_ticket_checks_current_user_and_rights() -> anyhow::Result<()> {
             .is_err(),
         "disabled user admitted"
     );
+    fg.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_peer_still_requires_fresh_connection_challenge() -> anyhow::Result<()> {
+    use rxdb::plugins::replication_webrtc::index_mod::{
+        connection_lifecycle::PeerLifecycleRegistry,
+        hello::{ApiRange, Codec, HelloPolicy, TransportOffer},
+    };
+    let _scope = isolate_test_roots().await;
+    let (_root, mut fg, user) = fixture().await?;
+    let context = build(&fg.inputs, &user).await?;
+    let h = hello(&context);
+    let policy = HelloPolicy {
+        instance_id: h.instance_id.clone(),
+        bootstrap_min: 1,
+        bootstrap_max: 1,
+        app_api_ver: ApiRange {
+            min: "4.0".into(),
+            max: "4.0".into(),
+        },
+        capabilities: h.capabilities.clone(),
+        required_capabilities: vec![],
+        transport: TransportOffer {
+            codecs: vec![Codec::Gzip],
+            max_frame_bytes: 16 * 1024,
+            fragmentation: true,
+            reassembly: true,
+        },
+    };
+    let registry = PeerLifecycleRegistry::default();
+    let peer = registry.start(
+        context.v4.signaling.peer_id,
+        "A".repeat(43),
+        policy,
+        fg.inputs.browser_admission()?.authenticator(),
+        Duration::from_secs(5),
+    )?;
+    peer.transport_connected().await?;
+    assert!(
+        matches!(peer.receive_hello(h).await?, HelloFrame::HelloReject(_)),
+        "native peer without connection challenge accepted"
+    );
+    registry.drain_all().await;
     fg.shutdown().await?;
     Ok(())
 }

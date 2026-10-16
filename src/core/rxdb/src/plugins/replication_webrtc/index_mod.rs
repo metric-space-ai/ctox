@@ -6619,7 +6619,7 @@ pub mod v4_router {
             let nonce = super::fresh_device_proof_nonce();
             let lifecycle = if self.browser_tickets {
                 let authenticate = self.config.authenticate.clone();
-                let identity = peer.peer_id().to_owned();
+                let identity = peer.to_string();
                 let admission: AuthenticatePeer =
                     Arc::new(move |_, hello| authenticate(identity.clone(), hello));
                 self.registry.start_browser(

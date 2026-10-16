@@ -3809,7 +3809,7 @@ fn native_peer_retry_delay(base: Duration) -> Duration {
 type NativeSignalingUrlProvider = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
 type NativeSignalingClock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
-fn native_signaling_url_provider(
+pub(super) fn native_signaling_url_provider(
     base_urls: Vec<String>,
     sync_room: String,
     native_peer_id: String,

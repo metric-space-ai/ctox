@@ -31,6 +31,7 @@ pub(crate) struct BrowserAdmission {
     authority: Arc<sync_rights::StoreRightsAuthority>,
     key: [u8; 32],
     tickets: Mutex<HashMap<String, Ticket>>,
+    peers: Mutex<HashMap<String, Arc<BrowserPeer>>>,
 }
 impl BrowserAdmission {
     pub(super) fn new(
@@ -58,6 +59,7 @@ impl BrowserAdmission {
             authority,
             key,
             tickets: Mutex::new(HashMap::new()),
+            peers: Mutex::new(HashMap::new()),
         }))
     }
     pub(crate) async fn register(
@@ -137,12 +139,20 @@ impl BrowserAdmission {
     ) -> Result<AuthorizedSession, StoreError> {
         let inputs = self.inputs.upgrade().ok_or(StoreError::Closed)?;
         let signer = inputs.instance_signer()?;
+        let transport_peer = peer.clone();
+        let peer = peer
+            .rsplit_once('@')
+            .filter(|(_, g)| g.parse::<u64>().is_ok_and(|g| g > 0))
+            .map_or(peer.as_str(), |(id, _)| id)
+            .to_owned();
         let actor = launch_context_v4::verify_offer(&hello, &peer, &self.key)
             .map_err(|_| StoreError::Invalid("invalid launch proof".into()))?;
         let hash = digest(&hello)?;
         let owner = self.clone();
         let device = hello.device_proof.device_id.clone();
-        let authorized = self
+        let binding_actor = actor.clone();
+        let wanted = hello.scopes_wanted.clone();
+        let (authorized, local) = self
             .authority
             .writer()
             .submit(WriteJob::new(Default::default(), move |tx| {
@@ -198,19 +208,23 @@ impl BrowserAdmission {
                             token.verify(&owner.key, instance, &device, &scope, now)?;
                             tokens.push(token.to_wire()?);
                         }
+                        let local = ticket.local;
                         // Linearization: no await between current-user/rights validation,
                         // signature checks and removal. Concurrent replay cannot win twice.
                         tickets
                             .remove(&hello.device_proof.nonce)
                             .ok_or("browser ticket already consumed")?;
-                        Ok(AuthorizedSession {
-                            instance_id: instance.into(),
-                            device_id: device,
-                            epoch: head.epoch.clone(),
-                            head_seq: WireSeq(head.head_seq),
-                            scope_tokens: tokens,
-                            rights_ver: WireSeq(rights.rights_ver),
-                        })
+                        Ok((
+                            AuthorizedSession {
+                                instance_id: instance.into(),
+                                device_id: device,
+                                epoch: head.epoch.clone(),
+                                head_seq: WireSeq(head.head_seq),
+                                scope_tokens: tokens,
+                                rights_ver: WireSeq(rights.rights_ver),
+                            },
+                            local,
+                        ))
                     })
                     .map_err(StoreError::Invalid)
             }))?
@@ -220,8 +234,62 @@ impl BrowserAdmission {
             .router
             .with_snapshot(authorized.rights_ver.0, &authorized.epoch, |_, _| Ok(()))
             .map_err(StoreError::Invalid)?;
+        let scopes = wanted
+            .into_iter()
+            .zip(authorized.scope_tokens.iter())
+            .map(|(name, token)| {
+                sync_rights::scope::SignedScope::from_wire(token)
+                    .map(|t| (name, t.claims.scope_hash))
+            })
+            .collect::<Result<HashMap<_, _>, _>>()
+            .map_err(StoreError::Invalid)?;
+        let binding = Arc::new(BrowserPeer {
+            local,
+            user: binding_actor.id,
+            role: binding_actor.role,
+            device: authorized.device_id.clone(),
+            epoch: authorized.epoch.clone(),
+            rights_ver: authorized.rights_ver.0,
+            expires: Instant::now() + Duration::from_secs(300),
+            scopes,
+            results: Mutex::new(None),
+        });
+        let mut peers = self.peers.lock().map_err(|_| StoreError::Closed)?;
+        peers.retain(|_, p| p.expires > Instant::now());
+        if peers.len() >= 4096 || peers.contains_key(&transport_peer) {
+            return Err(StoreError::Busy);
+        }
+        peers.insert(transport_peer, binding);
         Ok(authorized)
     }
+    pub(super) fn peer(&self, peer: &str) -> Result<Arc<BrowserPeer>, StoreError> {
+        self.inputs
+            .upgrade()
+            .ok_or(StoreError::Closed)?
+            .instance_signer()?;
+        self.peers
+            .lock()
+            .map_err(|_| StoreError::Closed)?
+            .get(peer)
+            .filter(|p| p.expires > Instant::now())
+            .cloned()
+            .ok_or(StoreError::Closed)
+    }
+    pub(super) fn authority(&self) -> Arc<sync_rights::StoreRightsAuthority> {
+        self.authority.clone()
+    }
+}
+pub(super) struct BrowserPeer {
+    pub local: bool,
+    pub user: String,
+    pub role: String,
+    pub device: String,
+    pub epoch: String,
+    pub rights_ver: u64,
+    pub expires: Instant,
+    pub scopes: HashMap<String, String>,
+    pub results:
+        Mutex<Option<tokio::sync::mpsc::Sender<rxdb::rx_error::RxResult<serde_json::Value>>>>,
 }
 fn digest(hello: &Hello) -> Result<[u8; 32], StoreError> {
     let bytes = HelloFrame::Hello(hello.clone())
@@ -256,7 +324,7 @@ fn validate_scopes(
         })
         .collect()
 }
-fn validate_user(
+pub(super) fn validate_user(
     tx: &rusqlite::Transaction<'_>,
     user: &str,
     role: &str,

@@ -476,3 +476,40 @@ fn snapshot(
 #[cfg(all(test, unix))]
 #[path = "launch_context_v4_tests.rs"]
 pub(crate) mod tests;
+
+/// Existing role-bound native routing provider, retained in memory. The fixed
+/// protocol changes to V4; the official issuer refreshes its token window.
+pub(crate) fn native_transport(
+    root: &std::path::Path,
+) -> Result<(
+    store::BusinessOsSyncConfig,
+    Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+)> {
+    let config = store::sync_config(root)?;
+    let auth = store::signaling_auth_config(root, &config.signaling_room_password)?;
+    let urls = super::rxdb_peer::native_signaling_url_provider(
+        config.signaling_urls.clone(),
+        config.sync_room.clone(),
+        config.native_peer_id.clone(),
+        auth,
+    );
+    let provider = Arc::new(move || {
+        urls()
+            .into_iter()
+            .filter_map(|s| {
+                let mut u = url::Url::parse(&s).ok()?;
+                let pairs = u
+                    .query_pairs()
+                    .filter(|(k, _)| k != "protocol")
+                    .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                    .collect::<Vec<_>>();
+                u.set_query(None);
+                u.query_pairs_mut()
+                    .extend_pairs(pairs)
+                    .append_pair("protocol", "ctox-v4");
+                Some(u.to_string())
+            })
+            .collect()
+    });
+    Ok((config, provider))
+}

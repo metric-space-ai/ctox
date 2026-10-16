@@ -422,7 +422,17 @@ mod tests {
             assert_eq!(bootstrap["instance_public_key"], expected.1);
             assert!(bootstrap.get("session").is_none());
             assert_eq!(get("/api/business-os/records")?.status(), 404);
-            assert_eq!(get("/api/business-os/launch-context")?.status(), 401);
+            let public = client
+                .get(&format!(
+                    "http://{}/api/business-os/launch-context",
+                    listen.addr
+                ))
+                .set("Host", "public.invalid")
+                .call();
+            assert!(
+                matches!(public, Err(ureq::Error::Status(401, _))),
+                "public proxy obtained implicit loopback admin"
+            );
             assert_eq!(get("/modules/private/index.js")?.status(), 404);
             Ok(())
         })
