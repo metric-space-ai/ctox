@@ -127,7 +127,27 @@ export class WebRTCKernelTransport extends KernelTransport {
   const blob=new Blob(parts,{type:mime});if(await sha256Hex(blob)!==ref)throw new CtoxError('invalid','Transfer hash mismatch');return blob;
  }
  async artifact(hash){return (await this.download(hash,'artifact')).text();}
- async blob(ref){return this.download(ref,'blob');}
+ async blob(ref,range){
+  if(range===undefined)return this.download(ref,'blob');
+  const {start,end}=range??{};
+  if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||end<start)throw new CtoxError('invalid','Invalid byte range',{path:'range'});
+  const first=Math.floor(start/size)*size,parts=[];let total=null,mime='application/octet-stream';
+  const take=async(reply,offset)=>{
+   if(reply.ref!==ref||reply.offset!==offset||!Number.isSafeInteger(reply.total)||reply.total<offset||(total!==null&&reply.total!==total))throw new CtoxError('invalid','Invalid transfer range');
+   if(end>reply.total)throw new CtoxError('invalid','Byte range outside file',{path:'range'});
+   let part;try{part=unb64(reply.data);}catch{throw new CtoxError('invalid','Invalid transfer encoding');}
+   if(part.length!==Math.min(size,reply.total-offset))throw new CtoxError('invalid','Invalid transfer chunk length');
+   if(typeof reply.sha256!=='string'||await sha256Hex(part)!==reply.sha256)throw new CtoxError('invalid','Transfer chunk hash mismatch');
+   total=reply.total;mime=reply.mime??mime;parts.push(part);
+  };
+  // Fetch complete aligned CAS chunks; only verified bytes may be sliced.
+  await take(await this.request('transfer_get',{ref,kind:'blob',offset:first,limit:size}),first);
+  for(let offset=first+size;offset<end;){
+   const batch=[];for(let n=0;n<4&&offset<end;n++,offset+=size){const at=offset;batch.push(this.request('transfer_get',{ref,kind:'blob',offset:at,limit:size}).then(reply=>({reply,offset:at})));}
+   for(const item of await Promise.all(batch))await take(item.reply,item.offset);
+  }
+  return new Blob(parts,{type:mime}).slice(start-first,end-first,mime);
+ }
  async upload(ref,blob){
   if(await sha256Hex(blob)!==ref)throw new CtoxError('invalid','Upload hash mismatch');
   const accepted=result=>{if(result.status!=='accepted'||result.ref!==ref)throw new CtoxError('unavailable','Upload not accepted');};

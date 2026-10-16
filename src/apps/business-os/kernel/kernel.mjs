@@ -7,7 +7,7 @@ import { KernelTransport, decimalSeq, seqGreater, maxSeq, checkpointKey } from '
 import { MemoryCoreTransport } from './fake-core.mjs';
 import { assertLeader, acquireGeneration } from './leader.mjs';
 // Local App API 4.0 kernel. Derived from the reviewed executable contract; no legacy runtime imports.
-import { CtoxError, StaleLeader, cloneValue, deepFreeze, deepEqual, jsonEq, liveEqual, mergePatch, fnv1a, uuidv7, sha256Hex, hasBlob, isBlob, isPlainObject } from './values.mjs';
+import { CtoxError, StaleLeader, cloneValue, deepFreeze, deepEqual, jsonEq, liveEqual, mergePatch, fnv1a, uuidv7, sha256Js, sha256Hex, hasBlob, isBlob, isPlainObject } from './values.mjs';
 import { compileQuery, runCompiledQuery, normalizeJson, validateSchema } from './app-api.mjs';
 import { openBackend, deleteBackend } from './store-idb-v5.mjs';
 import { emptyBase, byOpId, docKey, nsName, applyOp, recompute } from './outbox.mjs';
@@ -532,7 +532,7 @@ export function createKernel(opts = {}) {
       case 'rpc': {
         if (!isLeader) break;
         try {
-          const value = msg.name==='fetchBlob' ? await fetchBlob(...msg.args) : await simImpl[msg.name](...msg.args);
+          const value = msg.name==='fetchBlob' ? await fetchBlob(...msg.args) : msg.name==='fetchRange' ? await fetchRange(...msg.args) : await simImpl[msg.name](...msg.args);
           post({ type: 'rpc_done', reqId: msg.reqId, value: value === undefined ? null : value });
         } catch (e) {
           post({ type: 'rpc_done', reqId: msg.reqId, error: { code: e?.code, message: String(e?.message ?? e) } });
@@ -562,11 +562,13 @@ export function createKernel(opts = {}) {
     local.catch(() => {});
     return { op_id, local, result, cancel: cancelFn };
   }
-  function localWrite(app, op, collection, id, body) {
+  function localWrite(app, op, collection, id, body, createOnly = false) {
     const op_id = uuidv7();
     let resolveResult;
     const result = new Promise((r) => { resolveResult = r; });
     let entry = null;
+    let reused = false;
+    let ownCommandQueued = false;
     // Synchroner Teil: prüfen und optimistisch in den Spiegel (lokal sofort sichtbar, Flag pending).
     const prepare = () => {
       guardAlive();
@@ -591,7 +593,7 @@ export function createKernel(opts = {}) {
       };
       waiters.set(op_id, resolveResult);
       const base = cur?.base ?? emptyBase();
-      mirrorPut({ collection: ns, id, data: st.data, deleted: st.deleted, rev: `op:${op_id}`, seq: base.seq, pending: true, base });
+      if (!createOnly || !visible(cur)) mirrorPut({ collection: ns, id, data: st.data, deleted: st.deleted, rev: `op:${op_id}`, seq: base.seq, pending: true, base });
     };
     const persist = async () => {
       if (skipBeforeCommit.has(op_id)) {
@@ -606,11 +608,24 @@ export function createKernel(opts = {}) {
       const rec = await db.tx(async (t) => {
         if(isLeader)await assertGen(t);
         const stored = await t.get('docs', [ns, id]);
+        // E26: the IDB transaction arbitrates concurrent tabs and reloads.
+        // Reuse the original operation/result, never enqueue another command.
+        if (createOnly && visible(stored)) {
+          reused = true;
+          waiters.delete(op_id);
+          const pending = (await t.outboxFor(ns, id)).sort(byOpId).at(-1);
+          if (pending) {
+            const previous = waiters.get(pending.op_id);
+            waiters.set(pending.op_id, (value) => { previous?.(value); resolveResult(value); });
+          } else resolveResult({ status: 'accepted', rev: stored.rev, seq: stored.seq });
+          return stored;
+        }
         await t.put('outbox', entry); // docs + outbox in EINER Transaktion
         const r = recompute(ns, id, stored?.base ?? emptyBase(), await t.outboxFor(ns, id));
         await putDoc(t, r);
         return r;
       });
+      ownCommandQueued = !reused;
       mirrorPut(rec);
       post({ type: 'docs', keys: [[ns, id]], local_seq: rec.lseq });
       post({ type: 'outbox' });
@@ -633,7 +648,7 @@ export function createKernel(opts = {}) {
       },
     );
     const localDone = committed.then(() => undefined);
-    return handleFor(op_id, localDone, result, () => cancelWrite(op_id, () => entry));
+    return handleFor(op_id, localDone, result, () => reused || (createOnly && !ownCommandQueued) ? false : cancelWrite(op_id, () => entry));
   }
   function normalizeJsonPatch(p) {
     if(!isPlainObject(p))throw new CtoxError('invalid','patch must be an object',{path:''});
@@ -1192,6 +1207,14 @@ export function createKernel(opts = {}) {
     if (broadcast) post({ type: 'upload', ref, sent, total });
   }
 
+  async function fetchRange(ref, range) {
+    guardAlive();
+    if (!isLeader || link.state !== 'online') throw new CtoxError('unavailable', 'File not cached and leader offline');
+    const bytes = new Uint8Array(await (await transport.blob(ref, range)).arrayBuffer());
+    if (bytes.length !== range.end - range.start) throw new CtoxError('invalid', 'Incomplete file range');
+    return bytes;
+  }
+
   async function fetchBlob(ref) {
     guardAlive();
     if(!isLeader || link.state!=='online')throw new CtoxError('unavailable','File not cached and leader offline');
@@ -1279,6 +1302,18 @@ export function createKernel(opts = {}) {
         guardAlive();
         const d = ownFile(sel);
         if (!d) return { found: false, ref: sel.ref ?? null, ...(sel.id ? { id: sel.id } : {}) };
+        if (sel.range !== undefined) {
+          const {start, end} = sel.range ?? {};
+          if (!isPlainObject(sel.range) || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || end > d.size) throw new CtoxError('invalid', 'Byte range outside file', {path:'range'});
+          const local = await db.get('blobs', d.ref);
+          let bytes;
+          if (local) {
+            // The immutable cached Blob was verified on full receipt/upload.
+            await db.tx(t => t.put('blobs', {...local, last_used:Date.now()}));
+            bytes = new Uint8Array(await local.blob.slice(start, end).arrayBuffer());
+          } else bytes = isLeader ? await fetchRange(d.ref, sel.range) : await callLeader('fetchRange', [d.ref, sel.range]);
+          return {found:true, ...fileInfo(d), bytes};
+        }
         const bytes = new Uint8Array(await (await getBlob(d.ref)).arrayBuffer());
         let text;
         if (bytes.byteLength <= FILE_TEXT_MAX) { try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { text = undefined; } }
@@ -1409,14 +1444,18 @@ export function createKernel(opts = {}) {
       remove(collection, id) { return localWrite(app, 'delete', collection, id, null); },
       command(type, payload = {}, commandOptions={}) {
         if (typeof type !== 'string' || !type) throw new CtoxError('invalid', 'Befehlstyp fehlt', { path: 'type' });
-        const id = uuidv7();
+        const key = commandOptions.idempotency_key;
+        if (key !== undefined && (typeof key !== 'string' || key.length > 128)) throw new CtoxError('invalid', 'idempotency_key must be a string of at most 128 characters', { path: 'idempotency_key' });
+        // UUIDv8: first 128 SHA-256 bits, RFC variant/version bits normalized.
+        const hash = key === undefined ? null : sha256Js(new TextEncoder().encode(`${appId}|${actor.id}|${key}`));
+        const id = hash === null ? uuidv7() : `${hash.slice(0,8)}-${hash.slice(8,12)}-8${hash.slice(13,16)}-${((parseInt(hash[16],16)&3)|8).toString(16)}${hash.slice(17,20)}-${hash.slice(20,32)}`;
         const write = localWrite(app, 'put', 'business_commands', id, {
           id, ...(commandOptions.record_id===undefined?{}:{record_id:commandOptions.record_id}),
           // §16.39 Nr. 3: Rückruf-Befehlstypen der auslösenden App als Felder am Befehlsdokument (Core-PR #848 liest sie dort)
           ...(typeof commandOptions.on_complete === 'string' ? { on_complete: commandOptions.on_complete } : {}),
           ...(typeof commandOptions.on_failed === 'string' ? { on_failed: commandOptions.on_failed } : {}),
           type, payload, status: 'queued', app_id: appId, actor_id: actor.id, created_at: new Date().toISOString(),
-        });
+        }, key !== undefined);
         const status = makeLive(['c:business_commands', 'commands'], () => {
           const d = visible(mirrorGet('business_commands', id));
           if (!d) {
