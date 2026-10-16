@@ -9,7 +9,7 @@ use serde_json::json;
 pub(crate) fn handles(kind: &str) -> bool {
     matches!(kind, "ctox.secret.request.list" | "ctox.secret.request.fulfill" |
         "ctox.secret.request.decline" | "ctox.workjet.remote_worker.admit" |
-        "ctox.maintenance.restart" | "instance.providers.models.check")
+        "ctox.maintenance.restart")
 }
 fn invalid() -> StoreError { StoreError::Invalid("invalid: platform request".into()) }
 fn initialize(tx: &Transaction<'_>) -> Result<(), StoreError> {
@@ -115,9 +115,6 @@ pub(super) fn execute(tx: &Transaction<'_>, actor: &BusinessOsActor,
                 json!({"restart_requested":true,"awaiting_reply":true})
             }
         }
-        // The alias is reserved to the same native models.check implementation.
-        // Train-12 has no such handler; never substitute a catalog-only read.
-        "instance.providers.models.check" => deny("unavailable","models_check_handler_missing"),
         _ => return Err(invalid()),
     }};
     commands::record(tx,actor,command,result,now)
@@ -134,7 +131,35 @@ pub(crate) fn reply_published(tx: &Transaction<'_>, command_id: &str) -> Result<
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn claim_restart(tx: &Transaction<'_>, command_id: &str) -> Result<bool, StoreError> {
     initialize(tx)?;
+    let owner: Option<String> = tx.query_row("SELECT actor_id FROM _platform_maintenance_requests WHERE command_id=?1 AND state='ready'",[command_id],|r|r.get(0)).optional()?;
+    let Some(owner)=owner else { return Ok(false) };
+    let actor=match super::runtime_host::actor(tx,&owner) { Ok(actor)=>actor,Err(_)=>return Ok(false) };
+    if !allowed(tx,&actor,"ctox.maintenance.restart") { return Ok(false) }
     Ok(tx.execute("UPDATE _platform_maintenance_requests SET state='claimed' WHERE command_id=?1 AND state='ready'",[command_id])?==1)
+}
+
+/// Native execution-point read. The tuple comes from the admitted invocation,
+/// not a deserialized grant document. Revocation, role/epoch changes, expiry and
+/// device replacement all fence a previously issued grant in this snapshot.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn worker_grant(tx: &Transaction<'_>, id: &str, actor: &BusinessOsActor,
+    app: &str, device_id: &str, now: u64) -> Result<Option<Value>, StoreError> {
+    initialize(tx)?;
+    let Some(owner_id)=actor.id.as_deref() else { return Ok(None) };
+    if !super::runtime_host::actor(tx,owner_id).is_ok_and(|current|current==*actor) { return Ok(None) }
+    if !allowed(tx,actor,"ctox.workjet.remote_worker.admit") { return Ok(None) }
+    let row:Option<(String,String,String,String,String,u64,u64,bool)>=tx.query_row(
+        "SELECT actor_id,app_id,device_id,enrollment_id,scopes,rights_ver,expires_at_ms,revoked FROM _platform_worker_grants WHERE command_id=?1",[id],
+        |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).optional()?;
+    let Some((owner,source,target,enrollment,scopes,version,expires,revoked))=row else { return Ok(None) };
+    let rights=policy::sync_rights::read(tx).map_err(|e|StoreError::Invalid(e.to_string()))?;
+    if actor.id.as_deref()!=Some(owner.as_str()) || source!=app || target!=device_id || revoked || now>=expires || version!=rights.rights_ver { return Ok(None) }
+    let device=commands::get(tx,"devices",device_id)?;
+    let machine=commands::get(tx,"machine_enrollments",&enrollment)?;
+    if !device.as_ref().is_some_and(|d|d["kind"]=="machine" && d["user_id"]==owner && d["machine_enrollment_id"]==enrollment && d["revoked"]!=true) ||
+        !machine.as_ref().is_some_and(|m|m["status"]=="green" && m["created_by"]==owner) { return Ok(None) }
+    let scopes:Value=serde_json::from_str(&scopes).map_err(|_|invalid())?;
+    Ok(Some(json!({"id":id,"actor_id":owner,"app_id":source,"device_id":target,"enrollment_id":enrollment,"scopes":scopes,"rights_ver":version.to_string(),"expires_at_ms":expires})))
 }
 
 #[cfg(test)]

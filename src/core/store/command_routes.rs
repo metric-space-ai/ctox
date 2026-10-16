@@ -52,7 +52,7 @@ pub const ROUTES: &[Route] = &[
     core_route!("ctox.secret.request.decline", "src/core/business_os/app_platform/platform_routes.rs"),
     core_route!("ctox.workjet.remote_worker.admit", "src/core/business_os/app_platform/platform_routes.rs"),
     core_route!("ctox.maintenance.restart", "src/core/business_os/app_platform/platform_routes.rs"),
-    core_route!("instance.providers.models.check", "src/core/business_os/app_platform/platform_routes.rs"),
+    core_route!("instance.providers.models.check", "src/core/business_os/app_platform/provider_model_check.rs"),
 
     route!(
         "ctox.workjet.speech.settings.v1",

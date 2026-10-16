@@ -1191,11 +1191,11 @@
     {
       "method": "instance.providers.models.check",
       "route": "instance.providers.models.check",
-      "handler": "src/core/business_os/app_platform/platform_routes.rs",
+      "handler": "src/core/business_os/app_platform/provider_model_check.rs",
       "test": "e49_platform_rights_metadata_grants_and_restart_reply_boundary",
       "verification": "build unverified",
       "productive": "not_run",
-      "gap": "models.check handler absent from train12"
+      "gap": "Native owner exists on origin/v4/harness-13 6b7d95ee5; not in train13; shadow metadata stub removed; controller composition required"
     }
   ]
 }
