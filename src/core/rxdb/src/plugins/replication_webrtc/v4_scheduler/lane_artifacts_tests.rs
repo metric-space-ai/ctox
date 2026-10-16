@@ -304,6 +304,13 @@ impl PairFixture {
         sa: Arc<ReliableSession<super::super::SessionPayload>>,
         sb: Arc<ReliableSession<super::super::SessionPayload>>,
     ) -> Self {
+        Self::connect_on(sa, sb, "127.0.0.1:0").await
+    }
+    async fn connect_on(
+        sa: Arc<ReliableSession<super::super::SessionPayload>>,
+        sb: Arc<ReliableSession<super::super::SessionPayload>>,
+        bind: &str,
+    ) -> Self {
         let (atx, mut ac) = mpsc::unbounded_channel();
         let (btx, mut bc) = mpsc::unbounded_channel();
         let (unused, _discard) = mpsc::unbounded_channel();
@@ -314,7 +321,7 @@ impl PairFixture {
                     candidates: atx,
                     channels: unused,
                 }))
-                .with_udp_addrs(vec!["127.0.0.1:0"])
+                .with_udp_addrs(vec![bind.to_owned()])
                 .build()
                 .await
                 .unwrap(),
@@ -325,7 +332,7 @@ impl PairFixture {
                     candidates: btx,
                     channels: incoming,
                 }))
-                .with_udp_addrs(vec!["127.0.0.1:0"])
+                .with_udp_addrs(vec![bind.to_owned()])
                 .build()
                 .await
                 .unwrap(),
@@ -831,4 +838,101 @@ async fn z3_p4_twenty_reconnects_preserve_every_application_delivery() {
         pair.close().await;
         eprintln!("Z3_P4_RECONNECT {}", serde_json::json!({"scenario":1,"forced_loss_reconnects":20,"additional_clean_rebinds":0,"sent":640,"explicit_send_results":explicit_results,"delivery_acknowledged":640,"replayed_after_loss":replayed,"lost":0,"duplicated":0,"transport":"native-native real WebRTC"}));
     }).await.expect("twenty reconnects must finish within fixture deadline");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires isolated unshare -Urn with Z3_OWN_NETNS=1"]
+async fn z3_p4_netns_network_change() {
+    assert_eq!(std::env::var("Z3_OWN_NETNS").as_deref(), Ok("1"));
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    tokio::time::timeout(Duration::from_secs(40), async {
+        let sa = ReliableSession::new("z3-network".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
+        let sb = ReliableSession::new("z3-network".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
+        let mut pair = PairFixture::connect_on(sa.clone(), sb.clone(), "127.0.0.2:0").await;
+        let mut received = Vec::new();
+        let mut incoming = pair.target.take_incoming(Some(Lane::Commands)).unwrap();
+        let mut held = None;
+        for id in 0..16u64 {
+            pair.source.send(Lane::Commands, WireSeq(id), &id.to_be_bytes(), Some(Arc::new(Authorized))).await.unwrap();
+            let Some(Incoming::Reliable {bytes, delivery:Some(token), ..}) = incoming.recv().await else {panic!("network prefix missing");};
+            assert_eq!(bytes, id.to_be_bytes());
+            if id == 15 {held = Some(token);} else {received.push(id); token.acknowledge().unwrap();}
+        }
+        // Flip the active interface while the final delivery is uncommitted.
+        assert!(std::process::Command::new("ip").args(["link", "set", "lo", "down"]).status().unwrap().success());
+        pair.close().await; drop(held);
+        assert!(std::process::Command::new("ip").args(["link", "set", "lo", "up"]).status().unwrap().success());
+        pair = PairFixture::connect_on(sa.clone(), sb, "127.0.0.3:0").await;
+        incoming = pair.target.take_incoming(Some(Lane::Commands)).unwrap();
+        for id in 15..32u64 {
+            if id != 15 {pair.source.send(Lane::Commands, WireSeq(id), &id.to_be_bytes(), Some(Arc::new(Authorized))).await.unwrap();}
+            let replay = tokio::time::timeout(Duration::from_secs(2), incoming.recv()).await.expect("network change must replay from prefix");
+            let Some(Incoming::Reliable {bytes, delivery:Some(token), ..}) = replay else {panic!("network suffix missing");};
+            assert_eq!(bytes, id.to_be_bytes()); received.push(id); token.acknowledge().unwrap();
+        }
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !sa.replay(pair.source.session.as_ref().unwrap().generation, Lane::Commands).unwrap().is_empty() {tokio::time::sleep(Duration::from_millis(1)).await;}
+        }).await.expect("network suffix was not acknowledged");
+        assert_eq!(received, (0..32u64).collect::<Vec<_>>()); pair.close().await;
+        eprintln!("Z3_P4_NETWORK {}", serde_json::json!({"scenario":2,"interface":"lo","interface_flips":1,"bind_before":"127.0.0.2","bind_after":"127.0.0.3","sent":32,"explicit_send_results":32,"delivery_acknowledged":32,"replayed":1,"lost":0,"duplicated":0}));
+    }).await.expect("network change fixture deadline");
+}
+
+#[test]
+#[ignore = "launches existing PairFixture in fresh native processes"]
+fn z3_p4_process_restart_from_persisted_cursor() {
+    let root = tempfile::tempdir().unwrap();
+    let data: Vec<_> = (0..CHUNK_BYTES*16).map(|i| (i%251) as u8).collect();
+    std::fs::write(root.path().join("source"), &data).unwrap();
+    let reference = format!("{:x}", Sha256::digest(&data));
+    let executable = std::env::current_exe().unwrap(); let mut pids = Vec::new();
+    for phase in ["prefix", "suffix"] {
+        let mut child = std::process::Command::new(&executable).args(["z3_p4_restart_child", "--ignored", "--nocapture", "--test-threads=1"])
+            .env("Z3_RESTART_ROOT", root.path()).env("Z3_RESTART_PHASE", phase).spawn().unwrap();
+        pids.push(child.id()); assert!(child.wait().unwrap().success(), "peer process restart must recover persisted cursor");
+    }
+    assert_ne!(pids[0], pids[1]);
+    let effects: Vec<usize> = std::fs::read_to_string(root.path().join("effects")).unwrap().lines().map(|n| n.parse().unwrap()).collect();
+    assert_eq!(effects, (0..data.len()).step_by(CHUNK_BYTES).collect::<Vec<_>>(), "persisted cursor replay lost or duplicated an application effect");
+    Cas::open(root.path().join("target")).unwrap().verified(&reference, data.len() as u64).unwrap();
+    eprintln!("Z3_P4_RESTART {}", serde_json::json!({"scenario":4,"pids":pids,"process_restarts":1,"endpoints_recreated":2,"session_reset":true,"cursor":"CAS durable byte prefix","resume_offset":data.len()/2,"bytes":data.len(),"sent":16,"explicit_send_results":16,"delivery_acknowledged":16,"lost":0,"duplicated":0,"sha256_verified":true}));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "subprocess helper for persisted cursor restart fixture"]
+async fn z3_p4_restart_child() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let root = std::path::PathBuf::from(std::env::var_os("Z3_RESTART_ROOT").expect("restart fixture root"));
+    let phase = std::env::var("Z3_RESTART_PHASE").unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let data = std::fs::read(root.join("source")).unwrap(); let reference = format!("{:x}", Sha256::digest(&data));
+        let target = Cas::open(root.join("target")).unwrap();
+        let mut sink = ArtifactReceiver::open(&target, &"f".repeat(64), &reference, data.len() as u64).unwrap();
+        let offset = sink.offset().unwrap() as usize;
+        assert_eq!(offset, if phase == "prefix" {0} else {data.len()/2}, "persisted cursor was not recovered after process restart");
+        let id = format!("restart-{phase}");
+        let sa = ReliableSession::new(id.clone(), ADMISSION[..6].try_into().unwrap()).unwrap();
+        let sb = ReliableSession::new(id, ADMISSION[..6].try_into().unwrap()).unwrap();
+        assert_eq!(sa.hello().resume_from, [WireSeq(0);6], "new process must not invent old E14 delivery state");
+        let pair = PairFixture::connect(sa.clone(), sb).await;
+        let mut cursor = pair.source.take_incoming(Some(Lane::Commands)).unwrap();
+        pair.target.send(Lane::Commands, WireSeq(0), &(offset as u64).to_be_bytes(), Some(Arc::new(Authorized))).await.unwrap();
+        let Some(Incoming::Reliable {bytes, delivery:Some(token), ..}) = cursor.recv().await else {panic!("durable cursor response missing");};
+        let resume = u64::from_be_bytes(bytes.try_into().unwrap()) as usize; token.acknowledge().unwrap();
+        let mut incoming = pair.target.take_incoming(Some(Lane::Transfer)).unwrap();
+        let end = if phase == "prefix" {data.len()/2} else {data.len()};
+        let mut effects = std::fs::OpenOptions::new().create(true).append(true).open(root.join("effects")).unwrap();
+        for next in (resume..end).step_by(CHUNK_BYTES) {
+            let payload = packet(&reference, data.len() as u64, next as u64, &data[next..next+CHUNK_BYTES]).unwrap();
+            pair.source.send(Lane::Transfer, WireSeq(next as u64), &payload, Some(Arc::new(Authorized))).await.unwrap();
+            let Some(Incoming::Reliable {bytes, delivery:Some(token), ..}) = incoming.recv().await else {panic!("restart suffix missing");};
+            let (header, _) = decode(&bytes).unwrap(); assert_eq!(header.offset, WireSeq(next as u64));
+            let (updated, _) = sink.deliver(bytes, token).await.unwrap(); sink = updated;
+            writeln!(effects, "{next}").unwrap(); effects.sync_all().unwrap();
+        }
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !sa.replay(pair.source.session.as_ref().unwrap().generation, Lane::Transfer).unwrap().is_empty() {tokio::time::sleep(Duration::from_millis(1)).await;}
+        }).await.expect("restart suffix needs cumulative delivery acknowledgement");
+        assert_eq!(sink.offset().unwrap(), end as u64); pair.close().await;
+    }).await.expect("restart child deadline");
 }
