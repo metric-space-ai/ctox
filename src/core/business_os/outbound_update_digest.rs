@@ -426,6 +426,110 @@ pub(crate) fn load_registry_runs(root: &Path) -> BTreeMap<String, RegistryRun> {
     out
 }
 
+/// Where the queue task behind a lead's open research stands. The lead's own
+/// `research_status` cannot tell: "running" is set when the research is
+/// submitted, long before one of the few queue workers takes it (16.10.2026:
+/// 245 leads "running", 8 tasks leased, ~265 pending; the update mailed
+/// "273 Blocker" for research that was merely waiting its turn).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResearchQueueState {
+    /// Submitted, not yet taken by a worker. Waiting is not a blocker.
+    Waiting,
+    /// A worker holds the task (leased, running, in rework or on hold).
+    Held,
+    /// The queue task is terminal or missing while the lead still says it is
+    /// being researched: a real inconsistency.
+    Gone,
+}
+
+/// Lead id -> queue state of its research. Leads without an entry are judged
+/// by their own record alone (unreadable core DB, no command recorded).
+pub(crate) type ResearchQueue = BTreeMap<String, ResearchQueueState>;
+
+fn is_open_research_status(status: &str) -> bool {
+    matches!(status, "running" | "queued" | "requested")
+}
+
+fn queue_state_for_route(route_status: &str) -> ResearchQueueState {
+    match route_status {
+        "pending" => ResearchQueueState::Waiting,
+        "leased" | "running" | "review_rework" | "blocked" => ResearchQueueState::Held,
+        _ => ResearchQueueState::Gone,
+    }
+}
+
+/// Native truth for every lead with an open research: lead.command_id ->
+/// business_command_task_links -> communication_routing_state, with the
+/// lead's own task_id as fallback. Read-only; an unreadable core DB yields an
+/// empty map, so the digest falls back to the lead records.
+pub(crate) fn load_research_queue(root: &Path, leads: &[Value]) -> ResearchQueue {
+    use rusqlite::OptionalExtension;
+    let mut out = ResearchQueue::new();
+    let Ok(conn) = rusqlite::Connection::open_with_flags(
+        crate::paths::core_db(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) else {
+        return out;
+    };
+    let (Ok(mut link), Ok(mut route), Ok(mut aggregate)) = (
+        conn.prepare("SELECT task_id FROM business_command_task_links WHERE command_id=?1"),
+        conn.prepare("SELECT route_status FROM communication_routing_state WHERE message_key=?1"),
+        conn.prepare("SELECT execution_phase FROM business_command_aggregates WHERE command_id=?1"),
+    ) else {
+        return out;
+    };
+    for lead in leads {
+        if !is_open_research_status(text(lead, "research_status")) {
+            continue;
+        }
+        let lead_id = text(lead, "id").trim();
+        let command_id = text(lead, "command_id").trim();
+        if lead_id.is_empty() {
+            continue;
+        }
+        let linked = if command_id.is_empty() {
+            None
+        } else {
+            match link
+                .query_row([command_id], |row| row.get::<_, String>(0))
+                .optional()
+            {
+                Ok(task) => task,
+                Err(_) => continue,
+            }
+        };
+        let task_id = linked.filter(|task| !task.trim().is_empty()).or_else(|| {
+            let own = text(lead, "task_id").trim();
+            (!own.is_empty()).then(|| own.to_string())
+        });
+        let state = if let Some(task_id) = task_id {
+            match route
+                .query_row([task_id.as_str()], |row| row.get::<_, String>(0))
+                .optional()
+            {
+                Ok(Some(status)) => queue_state_for_route(status.trim()),
+                Ok(None) => ResearchQueueState::Gone,
+                Err(_) => continue,
+            }
+        } else if !command_id.is_empty() {
+            // Accepted but not yet enqueued is waiting; a terminal or
+            // unknown command with no task left is gone.
+            match aggregate
+                .query_row([command_id], |row| row.get::<_, String>(0))
+                .optional()
+            {
+                Ok(Some(phase)) if phase.trim() != "terminal" => ResearchQueueState::Waiting,
+                Ok(_) => ResearchQueueState::Gone,
+                Err(_) => continue,
+            }
+        } else {
+            continue;
+        };
+        out.insert(lead_id.to_string(), state);
+    }
+    out
+}
+
 /// Registry target key of an Outbound source: its declared target_key, else
 /// the source id with every non-alphanumeric run turned into '-'
 /// (bundesanzeiger.de -> bundesanzeiger-de), as the app resolves it.
@@ -547,14 +651,19 @@ struct DigestData {
     total_completed: usize,
     total_new: usize,
     running: usize,
+    /// Open research whose queue task is still waiting for a worker. Not a
+    /// blocker; named once as a neutral count.
+    queued: usize,
     total_sellify: usize,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_digest(
     leads: &[Value],
     sources: &[Value],
     adapters: &[Value],
     registry: &BTreeMap<String, RegistryRun>,
+    queue: &ResearchQueue,
     since_ms: i64,
     now_ms: i64,
     tz: Tz,
@@ -640,12 +749,27 @@ fn collect_digest(
             "running" | "queued" | "requested" => {
                 data.running += 1;
                 let updated = millis(lead, "research_updated_at_ms");
-                if updated > 0 && now_ms - updated > STUCK_RESEARCH_MS {
-                    stuck.push(AttentionRow {
+                let stale = updated > 0 && now_ms - updated > STUCK_RESEARCH_MS;
+                match queue.get(text(lead, "id").trim()) {
+                    // Waiting for a free worker is not a blocker, however
+                    // long the queue is.
+                    Some(ResearchQueueState::Waiting) => data.queued += 1,
+                    Some(ResearchQueueState::Gone) if stale => stuck.push(AttentionRow {
+                        kind: "Recherche hängt",
+                        subject: lead_name(lead),
+                        detail: format!(
+                            "Auftrag nicht mehr in der Warteschlange, Lead steht seit {} auf in Arbeit",
+                            local_label(tz, updated, true)
+                        ),
+                    }),
+                    // Held by a worker, or no queue evidence: the lead's own
+                    // progress stamp decides.
+                    _ if stale => stuck.push(AttentionRow {
                         kind: "Recherche hängt",
                         subject: lead_name(lead),
                         detail: format!("kein Fortschritt seit {}", local_label(tz, updated, true)),
-                    });
+                    }),
+                    _ => {}
                 }
             }
             _ => {}
@@ -834,6 +958,29 @@ fn stale_sources_text(data: &DigestData) -> Option<String> {
     })
 }
 
+/// Research that waits for a free worker: one neutral line, never a blocker
+/// and never a row per lead.
+fn queued_text(data: &DigestData) -> Option<String> {
+    (data.queued > 0).then(|| {
+        format!(
+            "{} in der Warteschlange – {} auf einen freien Bearbeiter, kein Blocker.",
+            plural(data.queued, "Recherche", "Recherchen"),
+            if data.queued == 1 { "wartet" } else { "warten" }
+        )
+    })
+}
+
+fn running_label(data: &DigestData) -> String {
+    if data.queued > 0 {
+        format!(
+            "{} in Arbeit (davon {} in der Warteschlange)",
+            data.running, data.queued
+        )
+    } else {
+        format!("{} in Arbeit", data.running)
+    }
+}
+
 fn render_text(data: &DigestData) -> String {
     let mut out = vec![
         format!("OUTBOUND-UPDATE · {}", data.date_label),
@@ -918,6 +1065,9 @@ fn render_text(data: &DigestData) -> String {
     if leads.len() > LIST_LIMIT {
         out.push(format!("- … und {} weitere", leads.len() - LIST_LIMIT));
     }
+    if let Some(line) = queued_text(data) {
+        out.push(line);
+    }
     if data.review_leads > 0 {
         out.push(String::new());
         out.push(format!(
@@ -938,12 +1088,12 @@ fn render_text(data: &DigestData) -> String {
     out.push(String::new());
     out.push("GESAMTSTAND".to_string());
     out.push(format!(
-        "{} gesamt: {} recherchiert ({} freigegeben, {} warten auf Prüfung), {} in Arbeit, {} nicht begonnen, {} an Sellify übergeben.",
+        "{} gesamt: {} recherchiert ({} freigegeben, {} warten auf Prüfung), {}, {} nicht begonnen, {} an Sellify übergeben.",
         plural(data.total, "Lead", "Leads"),
         data.total_completed + data.review_leads,
         data.total_completed,
         data.review_leads,
-        data.running,
+        running_label(data),
         data.total_new,
         data.total_sellify
     ));
@@ -1212,6 +1362,9 @@ fn render_html(data: &DigestData) -> String {
             &table_rows,
         ));
     }
+    if let Some(line) = queued_text(data) {
+        rows.push(html_paragraph(&line, MUTED));
+    }
 
     if data.review_leads > 0 {
         rows.push(html_section_title(
@@ -1271,16 +1424,20 @@ fn render_html(data: &DigestData) -> String {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_report(
     leads: &[Value],
     sources: &[Value],
     adapters: &[Value],
     registry: &BTreeMap<String, RegistryRun>,
+    queue: &ResearchQueue,
     since_ms: i64,
     now_ms: i64,
     tz: Tz,
 ) -> DigestReport {
-    let data = collect_digest(leads, sources, adapters, registry, since_ms, now_ms, tz);
+    let data = collect_digest(
+        leads, sources, adapters, registry, queue, since_ms, now_ms, tz,
+    );
     DigestReport {
         subject: digest_subject(&data),
         body: render_text(&data),
@@ -1293,6 +1450,7 @@ pub(crate) fn build_report(
             "contacts": data.contacts,
             "sellify_handovers": data.sellify_done.len(),
             "blockers": data.attention.len(),
+            "queued_research": data.queued,
             "stale_sources": data.stale_sources.len(),
             "needs_review": data.review_leads,
             "leads_total": data.total,
@@ -1412,11 +1570,13 @@ fn build_current_report(
     let sources = store::load_rxdb_collection_records(root, SOURCE_COLLECTION)?;
     let adapters = store::load_rxdb_collection_records(root, ADAPTER_COLLECTION)?;
     let registry = load_registry_runs(root);
+    let queue = load_research_queue(root, &leads);
     Ok(build_report(
         &leads,
         &sources,
         &adapters,
         &registry,
+        &queue,
         since_ms,
         now_ms,
         config.timezone,
@@ -1767,6 +1927,7 @@ mod tests {
             &sources,
             &adapters,
             &BTreeMap::new(),
+            &ResearchQueue::new(),
             since,
             now,
             chrono_tz::Europe::Berlin,
@@ -1877,6 +2038,7 @@ mod tests {
             &sources,
             &adapters,
             &registry,
+            &ResearchQueue::new(),
             now - 24 * hour,
             now,
             chrono_tz::Europe::Berlin,
@@ -1929,6 +2091,7 @@ mod tests {
             &[],
             &[],
             &BTreeMap::new(),
+            &ResearchQueue::new(),
             now - 3_600_000,
             now,
             chrono_tz::Europe::Berlin,
@@ -1990,6 +2153,7 @@ mod tests {
             &[],
             &[],
             &BTreeMap::new(),
+            &ResearchQueue::new(),
             0,
             1_790_000_000_000,
             chrono_tz::Europe::Berlin,
@@ -2020,6 +2184,7 @@ mod tests {
             &[],
             &[],
             &BTreeMap::new(),
+            &ResearchQueue::new(),
             now - 3_600_000,
             now,
             chrono_tz::Europe::Berlin,
@@ -2070,6 +2235,146 @@ mod tests {
             .expect("general section in text");
         assert!(general < text.find("KAMPAGNEN").unwrap());
         assert!(text.find("E-Mail-Prüfung").unwrap() < text.find("KAMPAGNEN").unwrap());
+    }
+
+    // 16.10.2026: the update mailed "273 Blocker" while ~265 research tasks
+    // only waited for one of 8 queue workers. Waiting is a neutral count;
+    // a held task without progress and a vanished task stay blockers.
+    #[test]
+    fn waiting_research_is_a_neutral_queue_line_not_a_blocker() {
+        let since = utc("2026-10-15T05:00:00Z").timestamp_millis();
+        let now = utc("2026-10-16T05:00:00Z").timestamp_millis();
+        let old = now - STUCK_RESEARCH_MS - 1;
+        let lead = |id: &str, name: &str, status: &str, updated: i64| {
+            json!({"id": id, "name": name, "research_status": status,
+                   "research_updated_at_ms": updated, "command_id": format!("leadgen-lead-research-{id}")})
+        };
+        let leads = vec![
+            lead("lead_w1", "Wartet Eins GmbH", "running", old),
+            lead("lead_w2", "Wartet Zwei GmbH", "queued", old),
+            lead("lead_h", "Gehalten AG", "running", old),
+            lead("lead_g", "Verschwunden KG", "running", old),
+            lead("lead_f", "Frisch GmbH", "running", now - 60_000),
+        ];
+        let queue = ResearchQueue::from([
+            ("lead_w1".to_string(), ResearchQueueState::Waiting),
+            ("lead_w2".to_string(), ResearchQueueState::Waiting),
+            ("lead_h".to_string(), ResearchQueueState::Held),
+            ("lead_g".to_string(), ResearchQueueState::Gone),
+            ("lead_f".to_string(), ResearchQueueState::Held),
+        ]);
+        let report = build_report(
+            &leads,
+            &[],
+            &[],
+            &BTreeMap::new(),
+            &queue,
+            since,
+            now,
+            chrono_tz::Europe::Berlin,
+        );
+        assert_eq!(report.stats["blockers"], 2, "held + vanished only");
+        assert_eq!(report.stats["queued_research"], 2);
+        assert!(report
+            .body
+            .contains("- Recherche hängt: Gehalten AG – kein Fortschritt seit"));
+        assert!(report.body.contains(
+            "- Recherche hängt: Verschwunden KG – Auftrag nicht mehr in der Warteschlange"
+        ));
+        assert!(!report.body.contains("Wartet Eins GmbH"));
+        assert!(!report.body.contains("Wartet Zwei GmbH"));
+        assert!(!report.body.contains("Frisch GmbH"));
+        assert!(report.body.contains(
+            "2 Recherchen in der Warteschlange – warten auf einen freien Bearbeiter, kein Blocker."
+        ));
+        assert!(report
+            .body
+            .contains("5 Leads gesamt: 0 recherchiert (0 freigegeben, 0 warten auf Prüfung), 5 in Arbeit (davon 2 in der Warteschlange)"));
+        assert!(
+            report.subject.ends_with(", 2 Blocker"),
+            "{}",
+            report.subject
+        );
+        assert!(report.html.contains("2 Recherchen in der Warteschlange"));
+        assert!(!report.html.contains("Wartet Eins GmbH"));
+        channels::ensure_founder_outbound_body_text_clean(&report.body)
+            .expect("report body passes the outbound body gate");
+        channels::ensure_founder_outbound_body_text_clean(&report.html)
+            .expect("report html passes the outbound body gate");
+
+        // Only waiting research: no blocker in subject or KPI.
+        let waiting = &leads[..2];
+        let report = build_report(
+            waiting,
+            &[],
+            &[],
+            &BTreeMap::new(),
+            &queue,
+            since,
+            now,
+            chrono_tz::Europe::Berlin,
+        );
+        assert_eq!(report.stats["blockers"], 0);
+        assert!(!report.subject.contains("Blocker"), "{}", report.subject);
+        assert!(report.body.contains("Blocker: 0"));
+        assert!(report.html.contains("Keine Blocker."));
+    }
+
+    #[test]
+    fn research_queue_state_comes_from_the_core_queue() {
+        let root = tempfile::tempdir().expect("test root");
+        let db = crate::paths::core_db(root.path());
+        std::fs::create_dir_all(db.parent().expect("db dir")).expect("runtime dir");
+        let conn = rusqlite::Connection::open(&db).expect("core db");
+        conn.execute_batch(
+            "CREATE TABLE business_command_aggregates (command_id TEXT PRIMARY KEY, execution_phase TEXT NOT NULL);
+             CREATE TABLE business_command_task_links (command_id TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE, created_at_ms INTEGER NOT NULL);
+             CREATE TABLE communication_routing_state (message_key TEXT PRIMARY KEY, route_status TEXT NOT NULL, updated_at TEXT NOT NULL);
+             INSERT INTO business_command_task_links VALUES
+               ('leadgen-lead-research-p', 'task-p', 1),
+               ('leadgen-lead-research-l', 'task-l', 1),
+               ('leadgen-lead-research-h', 'task-h', 1),
+               ('leadgen-lead-research-x', 'task-x', 1);
+             INSERT INTO communication_routing_state VALUES
+               ('task-p', 'pending', 'now'),
+               ('task-l', 'leased', 'now'),
+               ('task-h', 'handled', 'now'),
+               ('task-own', 'pending', 'now');
+             INSERT INTO business_command_aggregates VALUES
+               ('leadgen-lead-research-a', 'accepted'),
+               ('leadgen-lead-research-t', 'terminal');",
+        )
+        .expect("schema");
+        drop(conn);
+        let lead = |id: &str, status: &str, command: &str, task: &str| json!({"id": id, "research_status": status, "command_id": command, "task_id": task});
+        let leads = vec![
+            lead("pending", "running", "leadgen-lead-research-p", ""),
+            lead("leased", "running", "leadgen-lead-research-l", ""),
+            lead("handled", "running", "leadgen-lead-research-h", ""),
+            lead("routeless", "running", "leadgen-lead-research-x", ""),
+            lead("own_task", "queued", "", "task-own"),
+            lead("accepted", "requested", "leadgen-lead-research-a", ""),
+            lead("terminal", "running", "leadgen-lead-research-t", ""),
+            lead("unknown", "running", "", ""),
+            lead("done", "completed", "leadgen-lead-research-p", ""),
+        ];
+        let queue = load_research_queue(root.path(), &leads);
+        use ResearchQueueState::*;
+        assert_eq!(
+            queue,
+            ResearchQueue::from([
+                ("pending".to_string(), Waiting),
+                ("leased".to_string(), Held),
+                ("handled".to_string(), Gone),
+                ("routeless".to_string(), Gone),
+                ("own_task".to_string(), Waiting),
+                ("accepted".to_string(), Waiting),
+                ("terminal".to_string(), Gone),
+            ])
+        );
+        // No core DB: no queue evidence, the lead records decide as before.
+        let empty = tempfile::tempdir().expect("empty root");
+        assert!(load_research_queue(empty.path(), &leads).is_empty());
     }
 
     #[test]
