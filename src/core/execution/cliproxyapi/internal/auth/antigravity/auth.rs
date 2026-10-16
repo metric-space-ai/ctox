@@ -786,6 +786,25 @@ pub trait AntigravitySecretStore: Send + Sync {
         handles: &AntigravityCredentialHandles,
         credentials: &AntigravityStoredCredentials,
     ) -> Result<(), AntigravityTokenError>;
+
+    /// Async callers lend IO to the host's actual owner executor. Portable
+    /// stores retain the blocking-pool default; native stores override it.
+    fn load_async(self: std::sync::Arc<Self>, handles: AntigravityCredentialHandles)
+        -> std::pin::Pin<Box<dyn std::future::Future<Output=Result<AntigravityStoredCredentials,AntigravityTokenError>> + Send>>
+        where Self: 'static {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || self.load_credentials(&handles)).await
+                .map_err(|_| AntigravityTokenError::Read)?
+        })
+    }
+    fn store_async(self: std::sync::Arc<Self>, handles: AntigravityCredentialHandles, credentials: AntigravityStoredCredentials)
+        -> std::pin::Pin<Box<dyn std::future::Future<Output=Result<(),AntigravityTokenError>> + Send>>
+        where Self: 'static {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || self.store_credentials(&handles,&credentials)).await
+                .map_err(|_| AntigravityTokenError::Write)?
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

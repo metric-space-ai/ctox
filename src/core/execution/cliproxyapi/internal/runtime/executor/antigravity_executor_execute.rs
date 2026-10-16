@@ -1237,9 +1237,7 @@ impl AntigravitySubscriptionAccountPool {
             retry_delay_ms,
             observed_at_ms: self.clock.now_ms(),
         };
-        tokio::task::spawn_blocking(move || conductor.record(result))
-            .await
-            .map_err(|_| AntigravityAccountPoolError::OutcomePersistence)?
+        conductor.record_async(result).await
             .map_err(|_| AntigravityAccountPoolError::OutcomePersistence)?;
         Ok(())
     }
@@ -1337,7 +1335,7 @@ impl AntigravityTrackedResponsesStream {
             retry_delay_ms: None,
             observed_at_ms: self.clock.now_ms(),
         };
-        let _ = tokio::task::spawn_blocking(move || conductor.record(result)).await;
+        let _ = conductor.record_async(result).await;
     }
 }
 

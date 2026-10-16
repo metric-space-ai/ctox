@@ -211,6 +211,25 @@ pub trait ClaudeSecretStore: Send + Sync {
         handles: &ClaudeCredentialHandles,
         credentials: &ClaudeStoredCredentials,
     ) -> Result<(), SecretStoreError>;
+
+    /// Async callers lend IO to the host's actual owner executor. Portable
+    /// stores retain the blocking-pool default; native stores override it.
+    fn load_async(self: std::sync::Arc<Self>, handles: ClaudeCredentialHandles)
+        -> std::pin::Pin<Box<dyn std::future::Future<Output=Result<ClaudeStoredCredentials,SecretStoreError>> + Send>>
+        where Self: 'static {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || self.load_credentials(&handles)).await
+                .map_err(|_| SecretStoreError::Read)?
+        })
+    }
+    fn store_async(self: std::sync::Arc<Self>, handles: ClaudeCredentialHandles, credentials: ClaudeStoredCredentials)
+        -> std::pin::Pin<Box<dyn std::future::Future<Output=Result<(),SecretStoreError>> + Send>>
+        where Self: 'static {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || self.store_credentials(&handles,&credentials)).await
+                .map_err(|_| SecretStoreError::Write)?
+        })
+    }
 }
 
 /// Anthropic token-storage aggregate adapted to CTOX's secret-store boundary.

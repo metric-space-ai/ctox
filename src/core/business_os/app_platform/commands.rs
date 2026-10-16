@@ -24,6 +24,10 @@ pub(crate) struct CommandDocument {
     pub payload: Value,
 }
 
+#[path = "provider_model_check.rs"]
+mod model_check;
+pub(super) use model_check::{finish as finish_model_check, ModelCheckRequest};
+
 pub(crate) fn handles(kind: &str) -> bool {
     matches!(
         kind,
@@ -33,6 +37,7 @@ pub(crate) fn handles(kind: &str) -> bool {
             | "ctox.app.release"
             | "ctox.app.remove"
             | "instance.providers.account.create"
+            | "instance.providers.models.check"
             | "speech.tts.key.delete"
     )
 }
@@ -337,6 +342,9 @@ fn provider_command(
             "Native provider management permission is required.",
         );
     }
+    if command.command_type == "instance.providers.models.check" {
+        return model_check::prepare(tx, actor, command, now);
+    }
     if command.command_type == "instance.providers.account.create" {
         let request: CreateAccount = match serde_json::from_value(command.payload.clone()) {
             Ok(request) => request,
@@ -637,12 +645,16 @@ fn record(
     // Valid public requests retain their exact payload for deduplication.
     let public_payload = if matches!(
         command.command_type.as_str(),
-        "instance.providers.account.create" | "speech.tts.key.delete"
+        "instance.providers.account.create"
+            | "instance.providers.models.check"
+            | "speech.tts.key.delete"
     ) {
-        let allowed: &[&str] = if command.command_type == "speech.tts.key.delete" {
-            &["provider"]
-        } else {
-            &["provider", "label", "auth_kind"]
+        let allowed: &[&str] = match command.command_type.as_str() {
+            "speech.tts.key.delete" => &["provider"],
+            "instance.providers.models.check" => {
+                &["account_id", "model_id", "expected_account_revision"]
+            }
+            _ => &["provider", "label", "auth_kind"],
         };
         Value::Object(
             command
@@ -653,7 +665,9 @@ fn record(
                         .iter()
                         .filter(|(key, value)| {
                             allowed.contains(&key.as_str())
-                                && value.as_str().is_some_and(|s| s.len() <= 512)
+                                && (value.as_str().is_some_and(|s| s.len() <= 512)
+                                    || (key.as_str() == "expected_account_revision"
+                                        && value.as_u64().is_some()))
                         })
                         .map(|(key, value)| (key.clone(), value.clone()))
                         .collect()
@@ -740,12 +754,19 @@ pub(super) fn execute(
             Some("running" | "completed" | "done" | "failed")
         ) && saved.get("result").is_some_and(|v| !v.is_null())
         {
+            if command.command_type == "instance.providers.models.check"
+                && saved["result"]["status"] == "preparing"
+            {
+                return Ok(json!({"status":"running","reason":"model_check_in_progress"}));
+            }
             return Ok(saved["result"].clone());
         }
     }
     if matches!(
         command.command_type.as_str(),
-        "instance.providers.account.create" | "speech.tts.key.delete"
+        "instance.providers.account.create"
+            | "instance.providers.models.check"
+            | "speech.tts.key.delete"
     ) {
         return provider_command(tx, actor, command, now, secret_owner_available);
     }
