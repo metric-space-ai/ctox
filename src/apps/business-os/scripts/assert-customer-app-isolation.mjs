@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR AGPL-3.0-only
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -90,7 +90,7 @@ export function assertCustomerAppIsolation(repoRoot) {
 }
 
 const isMain = process.argv[1]
-  && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url));
 if (isMain) {
   const repoRoot = resolve(process.argv[2] || '.');
   assertCustomerAppIsolation(repoRoot);
