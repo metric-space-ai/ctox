@@ -82,22 +82,6 @@ impl CapabilityRegistry {
         }
         for (capability, function, actions) in [
             (
-                "ctox.ticket",
-                "run",
-                &[
-                    "local.create",
-                    "approve",
-                    "execute",
-                    "close",
-                    "verify",
-                    "publish_clarification",
-                    "request_clarification",
-                    "resolve_clarification",
-                    "writeback_comment",
-                    "create_from_conversation",
-                ] as &'static [&'static str],
-            ),
-            (
                 "agent.queue",
                 "control",
                 &[
@@ -107,19 +91,6 @@ impl CapabilityRegistry {
                     "pause",
                     "release",
                     "retry",
-                ],
-            ),
-            (
-                "agent.task",
-                "enqueue",
-                &[
-                    "delegate",
-                    "company.research",
-                    "contact_research",
-                    "lead_qualification",
-                    "report_bug",
-                    "request",
-                    "approve",
                 ],
             ),
         ] {

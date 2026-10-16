@@ -4172,6 +4172,14 @@ fn ensure_schema_with_setup(conn: &Connection, setup: &str) -> Result<()> {
                 json_extract(intent_json,'$.payload.configuration_digest'), created_at_ms, command_id)
             WHERE command_type='outbound.research.adapters.reconcile' AND execution_phase!='terminal';
 
+        -- Durable native deletion receipts retain callback retry authority and
+        -- distinguish intentional removals from genuinely broken task links.
+        CREATE TABLE IF NOT EXISTS capability_deleted_queue_tasks (
+            task_id TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL,
+            deleted_at_ms INTEGER NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS business_command_task_links (
             command_id TEXT PRIMARY KEY,
             task_id TEXT NOT NULL UNIQUE,

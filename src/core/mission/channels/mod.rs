@@ -373,7 +373,7 @@ static QUEUE_TASK_COUNT_CACHE_MISS_COUNTS: OnceLock<
 #[cfg(test)]
 static CHANNEL_DB_OPEN_CALL_COUNTS: OnceLock<Mutex<BTreeMap<PathBuf, usize>>> = OnceLock::new();
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueTaskView {
     pub message_key: String,
     pub thread_key: String,
@@ -3697,6 +3697,107 @@ pub fn load_queue_task_last_error(root: &Path, message_key: &str) -> Result<Opti
     .optional()
     .map(|value| value.flatten())
     .map_err(anyhow::Error::from)
+}
+
+/// Remove an authorized queue row and its visible command in the same writer
+/// transaction. Retain the terminal aggregate/link as the admission receipt:
+/// replaying the old command must never recreate deleted work.
+pub(crate) fn delete_queue_task(
+    root: &Path,
+    message_key: &str,
+    expected_metadata: &serde_json::Value,
+    reason: &str,
+) -> Result<QueueTaskView> {
+    drop(crate::business_os::store::open_store(root)?);
+    let mut conn = open_channel_db(&resolve_db_path(root, None))?;
+    attach_queue_projection_store(root, &conn)?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
+    let Some(current) = load_queue_task_from_conn(&tx, message_key)? else {
+        let raw: String = tx.query_row(
+            "SELECT snapshot_json FROM capability_deleted_queue_tasks WHERE task_id=?1",
+            params![message_key],
+            |row| row.get(0),
+        )?;
+        let task: QueueTaskView = serde_json::from_str(&raw)?;
+        anyhow::ensure!(
+            &task.metadata == expected_metadata,
+            "queue task authority changed"
+        );
+        tx.commit()?;
+        return Ok(task);
+    };
+    anyhow::ensure!(
+        &current.metadata == expected_metadata,
+        "queue task authority changed"
+    );
+    let command_id: Option<String> = tx
+        .query_row(
+            "SELECT command_id FROM business_command_task_links WHERE task_id=?1",
+            params![message_key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if !canonical_queue_route_status(&current.route_status)?.is_terminal() {
+        if !transition_business_command_for_task_in_transaction(
+            &tx,
+            message_key,
+            "cancelled",
+            None,
+            None,
+            None,
+            reason,
+        )? {
+            set_routing_status(
+                &tx,
+                message_key,
+                "cancelled",
+                &now_iso_string(),
+                "capability-queue-delete",
+                reason,
+                None,
+                None,
+            )?;
+        }
+    }
+    let deleted = load_queue_task_from_conn(&tx, message_key)?.context("queue task disappeared")?;
+    tx.execute("INSERT INTO capability_deleted_queue_tasks(task_id,snapshot_json,deleted_at_ms) VALUES (?1,?2,?3)",
+        params![message_key, serde_json::to_string(&deleted)?, epoch_millis()])?;
+    crate::business_os::store::delete_attached_queue_projections(
+        &tx,
+        message_key,
+        command_id.as_deref(),
+    )?;
+    tx.execute(
+        "DELETE FROM communication_routing_state WHERE message_key=?1",
+        params![message_key],
+    )?;
+    tx.execute(
+        "DELETE FROM communication_messages WHERE message_key=?1",
+        params![message_key],
+    )?;
+    tx.commit()?;
+    crate::business_os::harness_cockpit::schedule_refresh(root);
+    Ok(deleted)
+}
+
+/// Admission receipt for retrying deletion/callback delivery after a crash.
+/// This is never part of the visible queue projection.
+pub(crate) fn load_deleted_queue_task(
+    root: &Path,
+    message_key: &str,
+) -> Result<Option<QueueTaskView>> {
+    let conn = open_channel_db(&resolve_db_path(root, None))?;
+
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT snapshot_json FROM capability_deleted_queue_tasks WHERE task_id=?1",
+            params![message_key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    raw.map(|raw| serde_json::from_str(&raw).map_err(anyhow::Error::from))
+        .transpose()
 }
 
 pub fn update_queue_task(root: &Path, request: QueueTaskUpdateRequest) -> Result<QueueTaskView> {

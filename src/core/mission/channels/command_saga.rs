@@ -2604,7 +2604,8 @@ fn business_command_core_diagnostics_uncached(root: &Path) -> Result<Value> {
     let links_without_task = conn.query_row(
         "SELECT COUNT(*) FROM business_command_task_links link
          LEFT JOIN communication_messages task ON task.message_key = link.task_id
-         WHERE task.message_key IS NULL",
+         LEFT JOIN capability_deleted_queue_tasks removed ON removed.task_id = link.task_id
+         WHERE task.message_key IS NULL AND removed.task_id IS NULL",
         [],
         |row| row.get::<_, u64>(0),
     )?;

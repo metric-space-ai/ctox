@@ -3,7 +3,7 @@ use super::*;
 
 #[test]
 fn e49_legacy_intake_cannot_invoke_native_effects_without_p9_authority() -> anyhow::Result<()> {
-    crate::business_os::mcp_channel::native_tasks::tests::with_fixture("admin", |root, session| {
+    crate::business_os::mcp_channel::native_tasks::tests::with_actor_fixture("admin", |root, session| {
         let command = BusinessCommand {
             id: Some("legacy-native-attempt".into()), module: "ctox".into(),
             command_type: "ctox.task.create".into(), record_id: None,

@@ -106,10 +106,7 @@ pub(crate) fn execute(
     text(args, "executor_id")?;
     // Existing owner/current-role check also covers listing and strict claims.
     crew_execution::authorize_owner(root, &context, &command_id)
-        .map_err(|error| {
-            #[cfg(test)] eprintln!("E49 owner authorization: {error:#}");
-            rejected("forbidden", "crew_execution_owner")
-        })?;
+        .map_err(|_| rejected("forbidden", "crew_execution_owner"))?;
     match kind {
         "ctox.crew.execution.list" => crew_execution::list(root, &context, args),
         "ctox.crew.execution.claim" => {

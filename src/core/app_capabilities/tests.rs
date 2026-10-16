@@ -129,12 +129,8 @@ impl CapabilityBackend for Backend<'_> {
         Ok(self.output.clone())
     }
 }
-fn args(name: &str) -> Value {
-    if name == "knowledge" {
-        json!({"payload":{"args":["tables"]}})
-    } else {
-        json!({"payload":{"probe":"existing-handler"},"record_id":"record"})
-    }
+fn args(_: &str) -> Value {
+    json!({"payload":{"probe":"existing-handler"},"record_id":"record"})
 }
 fn exercise(name: &str, function: &str, command_type: &str) {
     let host = Host::new();
@@ -178,56 +174,6 @@ macro_rules! route_test {
     };
 }
 route_test!(
-    ticket_local_create,
-    "ctox.ticket",
-    "local.create",
-    "ctox.ticket.local.create"
-);
-route_test!(
-    ticket_approve,
-    "ctox.ticket",
-    "approve",
-    "ctox.ticket.approve"
-);
-route_test!(
-    ticket_execute,
-    "ctox.ticket",
-    "execute",
-    "ctox.ticket.execute"
-);
-route_test!(ticket_close, "ctox.ticket", "close", "ctox.ticket.close");
-route_test!(ticket_verify, "ctox.ticket", "verify", "ctox.ticket.verify");
-route_test!(
-    ticket_publish_clarification,
-    "ctox.ticket",
-    "publish_clarification",
-    "ctox.ticket.publish_clarification"
-);
-route_test!(
-    ticket_request_clarification,
-    "ctox.ticket",
-    "request_clarification",
-    "ctox.ticket.request_clarification"
-);
-route_test!(
-    ticket_resolve_clarification,
-    "ctox.ticket",
-    "resolve_clarification",
-    "ctox.ticket.resolve_clarification"
-);
-route_test!(
-    ticket_writeback_comment,
-    "ctox.ticket",
-    "writeback_comment",
-    "ctox.ticket.writeback_comment"
-);
-route_test!(
-    ticket_create_from_conversation,
-    "ctox.ticket",
-    "create_from_conversation",
-    "support.ticket.create_from_conversation"
-);
-route_test!(
     queue_abort_turn,
     "agent.queue",
     "abort_turn",
@@ -252,87 +198,13 @@ route_test!(
     queue_task_delete,
     "agent.queue",
     "task.delete",
-    "ctox.task.delete"
+    "cap.queue.delete"
 );
 route_test!(
     queue_task_update,
     "agent.queue",
     "task.update",
-    "ctox.task.update"
-);
-route_test!(
-    task_delegate,
-    "agent.task",
-    "delegate",
-    "kundenpipeline.delegate"
-);
-route_test!(
-    task_company_research,
-    "agent.task",
-    "company.research",
-    "outbound.company.research"
-);
-route_test!(
-    task_contact_research,
-    "agent.task",
-    "contact_research",
-    "outbound.pipeline.contact_research"
-);
-route_test!(
-    task_lead_qualification,
-    "agent.task",
-    "lead_qualification",
-    "outbound.pipeline.lead_qualification"
-);
-route_test!(
-    task_report_bug,
-    "agent.task",
-    "report_bug",
-    "ctox.report.bug"
-);
-route_test!(task_request, "agent.task", "request", "threads.ai.request");
-route_test!(
-    task_approve,
-    "agent.task",
-    "approve",
-    "threads.ctox_approval.approve"
-);
-route_test!(crew_assign, "agent.crew", "assign", "ctox.crew.assign");
-route_test!(
-    crew_learning_confirm,
-    "agent.crew",
-    "learning.confirm",
-    "ctox.crew.learning.confirm"
-);
-route_test!(
-    crew_learning_delete,
-    "agent.crew",
-    "learning.delete",
-    "ctox.crew.learning.delete"
-);
-route_test!(
-    crew_learning_update,
-    "agent.crew",
-    "learning.update",
-    "ctox.crew.learning.update"
-);
-route_test!(
-    crew_member_create,
-    "agent.crew",
-    "member.create",
-    "ctox.crew.member.create"
-);
-route_test!(
-    crew_member_update,
-    "agent.crew",
-    "member.update",
-    "ctox.crew.member.update"
-);
-route_test!(
-    crew_memory_update,
-    "agent.crew",
-    "memory.update",
-    "ctox.crew.memory.update"
+    "cap.queue.update"
 );
 route_test!(
     turn_submit,
@@ -401,20 +273,22 @@ route_test!(
     "ctox.coding.models"
 );
 route_test!(coding_turn, "agent.coding", "turn", "ctox.coding.turn");
-route_test!(schedule_upsert, "schedule", "upsert", "news.topic.schedule");
-route_test!(knowledge_query, "knowledge", "query", "knowledge.command");
+route_test!(schedule_upsert, "schedule", "upsert", "cap.schedule.ensure");
 
 #[test]
 fn app_capabilities_registry_is_exact_and_duplicate_registration_preserves_original() {
     let mut registry = CapabilityRegistry::cap1();
-    assert_eq!(caps::all_routes().count(), 46);
-    assert_eq!(registry.descriptors().as_array().unwrap().len(), 49);
+    let before = registry.descriptors();
+    assert!(before.as_array().unwrap().iter().all(|d| !matches!(
+        d["name"].as_str(),
+        Some("ctox.ticket" | "agent.crew" | "knowledge")
+    )));
     let route = *caps::all_routes().next().unwrap();
     assert_eq!(
         registry.register(route).unwrap_err().code,
         ErrorCode::Conflict
     );
-    assert_eq!(registry.descriptors().as_array().unwrap().len(), 49);
+    assert_eq!(registry.descriptors(), before);
 }
 #[test]
 fn app_capabilities_manifest_and_role_denials_never_enter_effect() {
@@ -556,9 +430,9 @@ fn app_capabilities_unknown_and_malformed_requests_are_audited_without_dispatch(
             ErrorCode::Invalid,
         ),
         (
-            "knowledge",
-            "query",
-            json!({"payload":{"args":["tables",7]}}),
+            "agent.task",
+            "get",
+            json!({"payload":[]}),
             ErrorCode::Invalid,
         ),
     ] {
@@ -713,11 +587,7 @@ fn app_capabilities_handle_correlates_failure_and_success() {
 #[test]
 fn app_capabilities_action_aliases_keep_the_closed_native_routes() {
     let registry = CapabilityRegistry::cap1();
-    for (name, function) in [
-        ("ctox.ticket", "run"),
-        ("agent.queue", "control"),
-        ("agent.task", "enqueue"),
-    ] {
+    for (name, function) in [("agent.queue", "control")] {
         let descriptor = registry
             .descriptors()
             .as_array()
@@ -764,7 +634,7 @@ fn app_capabilities_action_aliases_keep_the_closed_native_routes() {
     ] {
         assert_eq!(
             registry
-                .invoke(&host, &backend, &host.ctx, "ctox.ticket", "run", input)
+                .invoke(&host, &backend, &host.ctx, "agent.queue", "control", input)
                 .unwrap_err()
                 .code,
             ErrorCode::Invalid
