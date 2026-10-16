@@ -39,7 +39,7 @@ PROOFS = [
     ("unconfined-fallback", "process.rs",
      E("let mut command = super::sandbox::command(&plan)?;"),
      "let mut command = super::sandbox::command(&plan).unwrap_or_else(|_| { let mut c = std::process::Command::new(&entry.program); c.args(&plan.args); c });",
-     "unavailable_never_unconfined_contract", "capability must reject"),
+     "unavailable_never_unconfined_contract", "unwrap_err()` on an `Ok` value"),
     ("untrusted-shell", "sandbox.rs",
      E(".is_some_and(|name| !SHELLS.contains(&name)),"), ".is_some_and(|_| true),",
      "untrusted_code_contract", "capability must reject"),
