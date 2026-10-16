@@ -8,9 +8,11 @@ use ctox_store::{
             ReadAuthority, Subscription, SubscriptionKey, WriteAuthority, WritePermission,
         },
     },
+    read_pool::ReadPool,
+    registry::Registry,
     schema::{Collection, CollectionDefinition},
-    testkit::StoreFixture,
-    DbId, JobOptions,
+    writer::{WriterHandle, WriterOptions},
+    DbId, JobOptions, WriteJob,
 };
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use rusqlite::Transaction;
@@ -139,7 +141,8 @@ pub fn request(client: usize, seq: u64) -> OrderedWrite {
     }
 }
 pub struct Driver {
-    fixture: StoreFixture,
+    writer: WriterHandle,
+    readers: ReadPool,
     ingress: OrderedWriter,
     live: Vec<Subscription>,
     signer: Signer,
@@ -150,9 +153,26 @@ pub struct Driver {
 }
 impl Driver {
     pub async fn open(path: std::path::PathBuf) -> Self {
-        let fixture = StoreFixture::open(DbId::new(path).unwrap()).await.unwrap();
-        fixture
-            .write(JobOptions::default(), |tx| {
+        // StoreFixture uses WriterOptions::default(), which deliberately has no
+        // Sync head hook. Install the real _seq hook so commits wake readers.
+        let writer = Registry
+            .open(
+                DbId::new(path).unwrap(),
+                WriterOptions {
+                    head_seq: Some(Arc::new(|connection| {
+                        Ok(connection.query_row(
+                            "SELECT v FROM _seq WHERE singleton=1",
+                            [],
+                            |row| row.get(0),
+                        )?)
+                    })),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        writer.ready().await.unwrap();
+        writer
+            .submit(WriteJob::new(JobOptions::default(), |tx| {
                 ctox_store::schema::create_collection(
                     tx,
                     &CollectionDefinition {
@@ -169,15 +189,23 @@ impl Driver {
                 )?;
                 write_contract::activate_command_projections(tx, 1)?;
                 Ok(())
-            })
+            }))
+            .unwrap()
             .await
             .unwrap();
-        let writer = fixture.writer();
+        let readers = ReadPool::for_database(
+            writer.db_id(),
+            writer.generation(),
+            Default::default(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
         let signer = Signer::new();
         let mut live = Vec::new();
         for client in 0..2 {
             let mut subscription = Subscription::new(
-                fixture.readers(),
+                readers.clone(),
                 &writer,
                 SubscriptionKey {
                     participant: format!("client-{client}"),
@@ -195,8 +223,9 @@ impl Driver {
             live.push(subscription);
         }
         Self {
-            ingress: OrderedWriter::new(writer, Arc::new(Policy)),
-            fixture,
+            ingress: OrderedWriter::new(writer.clone(), Arc::new(Policy)),
+            writer,
+            readers,
             live,
             signer,
             executor_seq: 0,
@@ -256,8 +285,7 @@ impl Driver {
         self.terminal += 1;
         let commit_ns = crate::elapsed_ns();
         let check = self
-            .fixture
-            .readers()
+            .readers
             .read(move |tx| write_contract::read_command_projection(tx, &id))
             .await
             .unwrap()
@@ -276,6 +304,8 @@ impl Driver {
         json!({"type":"component_command_result","receipt":{"results":result.results},"terminal":{"results":done.results},"deliveries":deliveries})
     }
     pub async fn shutdown(&self) {
-        self.fixture.shutdown().await.unwrap();
+        self.writer.stop_admission();
+        self.readers.shutdown().await.unwrap();
+        self.writer.shutdown().await.unwrap();
     }
 }
