@@ -15,6 +15,9 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+#[path = "cliproxyapi_xai_quota.rs"]
+pub(crate) mod quota;
+
 static AUTH_USE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const SCOPE: &str = "provider-subscriptions";
 const NAME: &str = "xai-instance-oauth";

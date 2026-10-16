@@ -31,11 +31,13 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{client_async_tls, MaybeTlsStream, WebSocketStream};
 use url::Url;
 
+use super::signaling_ice::{now_ms, SignalingIceSnapshot};
 use crate::plugins::replication_webrtc::signaling_protocol::{
     ClientToServer, PeerId, RoomId, ServerToClient,
 };
 use crate::rx_error::{new_rx_error, RxError};
 use crate::rxjs_compat::{RxBehaviorSubject, RxStream, RxSubject};
+use webrtc::peer_connection::RTCIceServer;
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -100,6 +102,7 @@ pub struct SignalingClient {
     /// bundle always initiates toward `ctox_instance`, so we must never
     /// initiate toward a `browser` peer.
     peer_roles: PlMutex<HashMap<PeerId, String>>,
+    ice_configuration: PlMutex<Option<SignalingIceSnapshot>>,
     /// Our server-issued peer id, once the `init` frame arrives.
     own_peer_id: RxBehaviorSubject<Option<PeerId>>,
     joined_room: PlMutex<Option<RoomId>>,
@@ -188,6 +191,7 @@ impl SignalingClient {
             server_messages: RxSubject::new(),
             peer_list: RxBehaviorSubject::new(Vec::new()),
             peer_roles: PlMutex::new(HashMap::new()),
+            ice_configuration: PlMutex::new(None),
             own_peer_id: RxBehaviorSubject::new(None),
             joined_room: PlMutex::new(None),
             writer: TokioMutex::new(Some(write_half)),
@@ -385,7 +389,72 @@ impl SignalingClient {
         // Keep role metadata in sync before publishing the empty peer list, just
         // as `Joined` installs roles before publishing its populated list.
         self.peer_roles.lock().clear();
+        *self.ice_configuration.lock() = None;
         self.peer_list.next(Vec::new());
+    }
+
+    /// Latest admitted ICE configuration; no unencrypted credential persistence.
+    pub fn ice_servers(&self, fallback: &[RTCIceServer]) -> Vec<RTCIceServer> {
+        self.ice_configuration
+            .lock()
+            .as_ref()
+            .map(|s| s.usable_servers(now_ms()))
+            .unwrap_or_else(|| fallback.to_vec())
+    }
+
+    pub fn ice_configuration_status(&self) -> serde_json::Value {
+        self.ice_configuration
+            .lock()
+            .as_ref()
+            .map(|s| s.status(now_ms()))
+            .unwrap_or_else(
+                || serde_json::json!({"source":"configured", "receivedAtMs":0, "revision":0}),
+            )
+    }
+
+    fn accept_ice_servers(&self, servers: Vec<RTCIceServer>) {
+        let mut snapshot = self.ice_configuration.lock();
+        let revision = snapshot
+            .as_ref()
+            .map_or(1, |s| s.revision.saturating_add(1));
+        let refresh_attempt_at_ms = snapshot.as_ref().map_or(0, |s| s.refresh_attempt_at_ms);
+        let mut fresh = SignalingIceSnapshot::new(servers, now_ms(), revision);
+        fresh.refresh_attempt_at_ms = refresh_attempt_at_ms;
+        *snapshot = Some(fresh);
+    }
+
+    /// Rejoining on the existing authenticated socket requests fresh control-plane
+    /// configuration. It does not replace the signaling identity or close peers.
+    async fn refresh_ice_if_expiring(self: &Arc<Self>) {
+        if !self.join_accepted.load(Ordering::Acquire) {
+            return;
+        }
+        let Some(room) = self.joined_room.lock().clone() else {
+            return;
+        };
+        let now = now_ms();
+        let due = {
+            let mut snapshot = self.ice_configuration.lock();
+            snapshot.as_mut().is_some_and(|s| {
+                if s.expires_at_ms == 0
+                    || now.saturating_add(300_000) < s.expires_at_ms
+                    || (s.refresh_attempt_at_ms > 0
+                        && now.saturating_sub(s.refresh_attempt_at_ms) < 60_000)
+                {
+                    return false;
+                }
+                s.refresh_attempt_at_ms = now;
+                true
+            })
+        };
+        if due
+            && self
+                .send_frame(&ClientToServer::Join { room })
+                .await
+                .is_err()
+        {
+            tracing::warn!(target: "ctox_rxdb::signaling_client", "ICE credential refresh request failed");
+        }
     }
 
     pub fn server_messages_stream(&self) -> RxStream<ServerToClient> {
@@ -618,6 +687,7 @@ async fn run_reader(client: &Arc<SignalingClient>, read_half: &mut WsRead) -> bo
                     );
                     break;
                 }
+                client.refresh_ice_if_expiring().await;
                 continue;
             }
         };
@@ -628,6 +698,9 @@ async fn run_reader(client: &Arc<SignalingClient>, read_half: &mut WsRead) -> bo
             Ok(Message::Text(text)) => match serde_json::from_str::<ServerToClient>(&text) {
                 Ok(frame) => {
                     match &frame {
+                        ServerToClient::CtoxIceServers { ice_servers } => {
+                            client.accept_ice_servers(ice_servers.0.clone());
+                        }
                         ServerToClient::Init { your_peer_id } => {
                             client.own_peer_id.next(Some(your_peer_id.clone()));
                         }
@@ -682,11 +755,9 @@ async fn run_reader(client: &Arc<SignalingClient>, read_half: &mut WsRead) -> bo
                     }
                     client.server_messages.next(frame);
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        target: "ctox_rxdb::signaling_client",
-                        "received unparseable frame: {e} ({text:?})",
-                    );
+                Err(_) => {
+                    // Malformed control-plane frames can contain TURN secrets.
+                    tracing::warn!(target: "ctox_rxdb::signaling_client", "received invalid signaling frame; contents redacted");
                 }
             },
             Ok(Message::Binary(_)) => {
@@ -773,6 +844,92 @@ mod tests {
 
     use tokio::net::TcpListener;
     use tokio_tungstenite::accept_async;
+
+    #[tokio::test]
+    async fn signaling_turn_updates_before_join_and_renews_without_reconnect() {
+        use crate::plugins::replication_webrtc::connection_handler_rs::{
+            WebRTCRsConfig, WebRTCRsConnectionHandler,
+        };
+        let listener = bind_test_signaling_listener().await;
+        let addr = listener.local_addr().unwrap();
+        let (updated, update) = tokio::sync::oneshot::channel();
+        let (done, finish) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            ws.send(Message::Text(
+                r#"{"type":"init","yourPeerId":"stable-peer"}"#.into(),
+            ))
+            .await
+            .unwrap();
+            let mut joins = 0;
+            let mut updated = Some(updated);
+            while let Some(Ok(message)) = ws.next().await {
+                if let Message::Text(text) = message {
+                    if matches!(
+                        serde_json::from_str::<ClientToServer>(&text),
+                        Ok(ClientToServer::Join { .. })
+                    ) {
+                        joins += 1;
+                        let expiry = now_ms() / 1000 + if joins == 1 { 120 } else { 3600 };
+                        let ice = serde_json::json!({"type":"ctoxIceServers","iceServers":[{"urls":["turn:localhost:3478?transport=tcp","turns:localhost:443"],"username":format!("{expiry}:fixture"),"credential":format!("fixture-secret-{joins}")}]});
+                        ws.send(Message::Text(ice.to_string().into()))
+                            .await
+                            .unwrap();
+                        ws.send(Message::Text(
+                            r#"{"type":"joined","otherPeerIds":[],"peers":[]}"#.into(),
+                        ))
+                        .await
+                        .unwrap();
+                        if joins == 2 {
+                            let _ = updated.take().unwrap().send(());
+                            break;
+                        }
+                    }
+                }
+            }
+            let _ = finish.await;
+            ws.close(None).await.ok();
+        });
+        let client = SignalingClient::connect(format!("ws://{addr}"))
+            .await
+            .unwrap();
+        client.join("turn-room".to_owned()).await.unwrap();
+        assert_eq!(client.ice_servers(&[])[0].credential, "fixture-secret-1");
+        let handler = WebRTCRsConnectionHandler::prepare_with_signaling(WebRTCRsConfig::new(
+            client.clone(),
+            "turn-room",
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            handler.frame_transport_status_json()["credentialedTurnReady"],
+            true
+        );
+        client.refresh_ice_if_expiring().await;
+        tokio::time::timeout(Duration::from_secs(2), update)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while client.ice_configuration_status()["revision"] != 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(client.ice_servers(&[])[0].credential, "fixture-secret-2");
+        assert_eq!(client.own_peer_id().as_deref(), Some("stable-peer"));
+        assert!(client.socket_connected());
+        let status = handler.frame_transport_status_json().to_string();
+        assert!(!status.contains("fixture-secret"));
+        assert!(!status.contains("localhost:443"));
+        done.send(()).unwrap();
+        use crate::plugins::replication_webrtc::webrtc_types::WebRTCConnectionHandler;
+        handler.close().await.unwrap();
+        client.close().await;
+        server.await.unwrap();
+    }
 
     /// Chaos test for the reconnect supervisor (P7 / hardening C): when the
     /// signaling socket drops mid-session, the client must reconnect AND re-join

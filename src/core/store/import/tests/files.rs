@@ -22,6 +22,7 @@ fn budget() -> Budget {
     }
 }
 #[tokio::test]
+#[ignore = "qualification: requires copied release inputs, run via scripts/sync-v4/qualify-import.sh"]
 async fn copied_profile_files_tracking_and_counting_are_complete_and_replay_is_seq_neutral(
 ) -> Result<()> {
     let input = std::env::var("IMPORT_INPUT_ROOT").unwrap();

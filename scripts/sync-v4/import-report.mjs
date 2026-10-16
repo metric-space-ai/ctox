@@ -12,7 +12,7 @@ export async function inventory(v4Root, platform) {
     files.push({path, bytes:bytes.length, sha256:createHash('sha256').update(bytes).digest('hex')});
     return JSON.parse(bytes);
   };
-  const manifests = []; const schemas = {}; const migrations = {}; const removed = []; const fieldMerge = [];
+  const manifests = []; const libs = []; const schemas = {}; const migrations = {}; const removed = []; const fieldMerge = [];
   const strip = (value,path) => {
     if (!value || typeof value !== 'object') return;
     for (const key of ['syncProfile','conflictStrategy']) if (Object.hasOwn(value,key)) {
@@ -26,6 +26,16 @@ export async function inventory(v4Root, platform) {
     const manifest = await load(join(v4Root,'manifests',name));
     if (manifest.app_id === 'ctox-platform') continue;
     const app = manifest.app_id;
+    if (manifest.kind === 'lib' || name.startsWith('lib-')) {
+      if (Object.hasOwn(manifest,'collections')) throw Error('lib_with_collections');
+      if (!/^lib:[a-z0-9-]+$/.test(app)) throw Error('lib_identity');
+      if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(manifest.version)) throw Error('lib_version');
+      const artifact_id = `${app}@${manifest.version}`;
+      if (libs.some(lib=>lib.artifact_id === artifact_id)) throw Error('duplicate_lib_artifact');
+      libs.push({artifact_id,manifest});
+      continue;
+    }
+    if (!manifest.collections || typeof manifest.collections !== 'object' || Array.isArray(manifest.collections)) throw Error('manifest_collections');
     if (!/^[a-z0-9-]+$/.test(app)) throw Error('invalid app id');
     let schema;
     try { schema = await load(join(v4Root,'schemas',`${app}.collections.schema.json`)); }
@@ -53,7 +63,7 @@ export async function inventory(v4Root, platform) {
   return {schema:'ctox.v4.import_inventory.v1',from_ver:'main@4794af03d',files,
     apps:manifests.length,collections:[...names].filter(n=>n!=='business_module_catalog').sort(),
     migrations,removed_sync_settings:[...new Set(removed)].sort(),field_merge_core_rule:[...new Set(fieldMerge)].sort(),
-    manifests,schemas};
+    manifests,schemas,libs};
 }
 
 export function accounting(report) {
@@ -71,6 +81,7 @@ async function main() {
   const result = await inventory(resolve(options['--v4-root']),resolve(options['--platform']));
   // Output is metadata only: no schema defaults, document/config bodies or rows.
   delete result.manifests; delete result.schemas;
+  result.libs = result.libs.map(({artifact_id})=>({artifact_id}));
   if (options['--counts']) {
     const counts = JSON.parse(await readFile(options['--counts'],'utf8'));
     const report = counts.report ?? counts;

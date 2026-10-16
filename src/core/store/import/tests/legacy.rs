@@ -7,6 +7,7 @@ fn conversations_take_existing_key_and_keep_deletions_and_source_cursor() -> Res
     let plan = ReleasePlan {
         version: "v4".into(),
         manifests: vec![],
+        libs: vec![],
         collections: BTreeMap::from([(
             "conversations".into(),
             vec![definition("communication_accounts", "v4")],
