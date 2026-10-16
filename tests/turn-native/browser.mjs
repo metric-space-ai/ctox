@@ -11,7 +11,10 @@ process.once('SIGTERM',()=>{void (launchPromise||Promise.resolve()).then(b=>b?.c
 const wait=async path=>{const deadline=Date.now()+30000;while(Date.now()<deadline){if(fs.existsSync(path))return JSON.parse(fs.readFileSync(path));await new Promise(r=>setTimeout(r,20));}throw Error('fixture file deadline');};
 const write=(name,data)=>{fs.writeFileSync(join(root,name+'.tmp'),JSON.stringify(data));fs.renameSync(join(root,name+'.tmp'),join(root,name));};
 try {
- launchPromise=chromium.launch({executablePath:config.chrome,headless:true,args:['--disable-gpu','--no-sandbox'],timeout:15000});
+ // This fixture's unprivileged namespace has only lo. Chromium ignores it
+ // unless explicitly admitted; this changes no SCTP extension negotiation.
+ // ref: chromium/content/public/common/content_switches.cc (kAllowLoopbackInPeerConnection)
+ launchPromise=chromium.launch({executablePath:config.chrome,headless:true,args:['--disable-gpu','--no-sandbox',...(config.fixtureLoopback?['--allow-loopback-in-peer-connection']:[])],timeout:15000});
  browser=await launchPromise;
  const page=await browser.newPage();
  if(config.m4){
@@ -71,7 +74,7 @@ try {
    const ice=await pages[0].evaluate(async()=>{
     if(!globalThis.pc)return {};
     const stats=[...(await pc.getStats()).values()].filter(s=>s.type==='local-candidate'||s.type==='candidate-pair');
-    return {gathering:pc.iceGatheringState,connection:pc.connectionState,localDescription:pc.localDescription?.sdp,stats};
+    return {gathering:pc.iceGatheringState,connection:pc.connectionState,candidateCount:(pc.localDescription?.sdp.match(/^a=candidate:/gm)||[]).length,stats};
    });
    write('browser-ice.json',ice);
   }

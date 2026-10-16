@@ -1146,7 +1146,10 @@ async fn z3_p4_turn_loss_rtt() {
         let bulk_enabled = std::env::var("Z3_TURN_BULK").as_deref() == Ok("1");
         let server: std::net::SocketAddr = std::env::var("Z3_TURN_LISTENER").unwrap().parse().unwrap();
         assert!(!rto_proof || !bulk_enabled, "RTO proof must isolate a sparse control flight");
-        let a = Z3UdpShape::start(server,rtt_ms,drop_every).await; let b = Z3UdpShape::start(server,rtt_ms,drop_every).await;
+        // A packet crosses both TURN control legs. Drop on A only so the
+        // end-to-end path sees 1%, rather than 1% independently on each leg.
+        let a = Z3UdpShape::start(server,rtt_ms,drop_every).await;
+        let b = Z3UdpShape::start(server,rtt_ms,0).await;
         let configuration = |port| RTCConfigurationBuilder::new()
             .with_ice_transport_policy(RTCIceTransportPolicy::Relay)
             .with_ice_servers(vec![RTCIceServer {urls:vec![format!("turn:127.0.0.1:{port}?transport=udp")],username:"z3-fixture".into(),credential:"z3-fixture-only".into()}]).build();
@@ -1185,14 +1188,16 @@ async fn z3_p4_turn_loss_rtt() {
             }
             count
         });
-        let mut latency = Vec::new(); let mut effects_a=Vec::new(); let mut effects_b=Vec::new();
+        let mut latency = Vec::new(); let mut command_latency = Vec::new(); let mut effects_a=Vec::new(); let mut effects_b=Vec::new();
         for id in 0..probes {
+            let command_clock = Instant::now();
             pair.source.send(Lane::Commands,WireSeq(id),&id.to_be_bytes(),Some(Arc::new(Authorized))).await.unwrap();
             pair.target.send(Lane::Commands,WireSeq(id),&id.to_be_bytes(),Some(Arc::new(Authorized))).await.unwrap();
             for (incoming,effects) in [(&mut ac,&mut effects_a),(&mut bc,&mut effects_b)] {
                 let Some(Incoming::Reliable{bytes,delivery:Some(token),..})=incoming.recv().await else {panic!("TURN application message missing");};
                 assert_eq!(bytes,id.to_be_bytes()); effects.push(id); token.acknowledge().unwrap();
             }
+            command_latency.push(command_clock.elapsed().as_secs_f64()*1000.0);
             if rto_proof {
                 tokio::time::timeout(Duration::from_secs(5),async {
                     loop {
@@ -1242,7 +1247,10 @@ async fn z3_p4_turn_loss_rtt() {
         }
         latency.sort_by(f64::total_cmp);let p95=latency[(latency.len()*95/100).min(latency.len()-1)];
         let p99=latency[(latency.len()*99/100).min(latency.len()-1)];
+        command_latency.sort_by(f64::total_cmp);
+        let command_p95=command_latency[(command_latency.len()*95/100).min(command_latency.len()-1)];
+        let command_p99=command_latency[(command_latency.len()*99/100).min(command_latency.len()-1)];
         pair.close().await;
-        eprintln!("Z3_P4_TURN {}",serde_json::json!({"scenario":3,"relay_only":true,"candidates_a":candidates_a,"candidates_b":candidates_b,"shim":"UDP at TURN control legs","nominal_rtt_ms":rtt_ms,"drop_every":drop_every,"rto_proof":rto_proof,"injected_datagrams":injected,"datagrams":packets,"dropped_datagrams":drops,"probes":probes,"full_workload":probes==64,"sent":2*probes,"explicit_send_results":2*probes,"delivery_acknowledged":2*probes,"lost":0,"duplicated":0,"control_p95_ms":p95,"control_p99_ms":p99,"control_roundtrip_ms":latency,"bulk_enabled":bulk_enabled,"bulk_bytes":bulk_sent*16_000,"bulk_seconds":bulk_seconds,"bulk_mb_s":bulk_sent as f64*16_000.0/bulk_seconds/1_000_000.0}));
+        eprintln!("Z3_P4_TURN {}",serde_json::json!({"scenario":3,"relay_only":true,"candidates_a":candidates_a,"candidates_b":candidates_b,"shim":"UDP at TURN control legs","nominal_rtt_ms":rtt_ms,"drop_every":drop_every,"loss_placement":"source TURN leg, both directions","rto_proof":rto_proof,"injected_datagrams":injected,"datagrams":packets,"dropped_datagrams":drops,"probes":probes,"full_workload":probes==64,"sent":2*probes,"explicit_send_results":2*probes,"delivery_acknowledged":2*probes,"lost":0,"duplicated":0,"control_p95_ms":p95,"control_p99_ms":p99,"command_p95_ms":command_p95,"command_p99_ms":command_p99,"command_bidirectional_delivery_ms":command_latency,"control_roundtrip_ms":latency,"bulk_enabled":bulk_enabled,"bulk_bytes":bulk_sent*16_000,"bulk_seconds":bulk_seconds,"bulk_mb_s":bulk_sent as f64*16_000.0/bulk_seconds/1_000_000.0}));
     }).await.expect("TURN loss RTT fixture deadline");
 }
