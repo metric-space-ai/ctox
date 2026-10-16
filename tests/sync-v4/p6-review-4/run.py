@@ -19,6 +19,8 @@ if USE_CURRENT_RIGHTS:
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--train', default=TRAIN, help='immutable product train revision, including any controller fix')
+parser.add_argument('--turn-bin', help='explicit existing lane coturn executable')
+parser.add_argument('--turn-lib', help='userspace coturn dependency directory')
 parser.add_argument('--only', choices=['all', 'regressions', 'r10', 'r13', 'r14', 'scenarios']
 , default='all')
 parser.add_argument('--deadline',type=float,help='absolute UTC Unix deadline; reserve time for owned-process cleanup')
@@ -131,7 +133,9 @@ if args.only in ('all','scenarios'):
         receipt.write_text(json.dumps(dict(pass_=True, **{'pass':True}, terminal=True,
             revision=TRAIN,binary=str(binary),binarySha256=digest(binary),source=str(ROOT)),indent=2))
         p=run('train-incidents',['node',ROOT/'tests/sync-v4/k13/run.mjs',
-            '--build',receipt,'--expected-revision',TRAIN],2700)
+            '--build',receipt,'--expected-revision',TRAIN]+
+            (['--turn-bin',args.turn_bin] if args.turn_bin else [])+
+            (['--turn-lib',args.turn_lib] if args.turn_lib else []),2700)
         # The default runner creates a new private artifact output; locate it
         # from the printed evidence path rather than guessing a producer pass.
         RESULTS['scenarios']=dict(exit=p.returncode,log=str(OUT/'train-incidents.log'))
