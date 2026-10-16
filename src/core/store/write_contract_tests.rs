@@ -117,6 +117,7 @@ fn put(seq: u64, n: u16, id: &str, base: Option<String>, body: Value) -> Ordered
             collection: "items".into(),
             id: id.into(),
             base_rev: base,
+            expected_revision: None,
             base_seq: None,
             gen: 1,
             schema_ver: 1,
@@ -187,6 +188,181 @@ async fn runtime() -> (tempfile::TempDir, crate::writer::WriterHandle, ReadPool)
     .unwrap();
     (dir, writer, readers)
 }
+#[tokio::test]
+async fn patch_expected_revision_is_atomic_and_optional() {
+    let (_dir, writer, readers) = runtime().await;
+    let ingress = OrderedWriter::new(writer.clone(), Arc::new(Policy));
+    let initial = ingress
+        .submit(
+            "alice".into(),
+            put(1, 1, "d", None, json!({"left":0,"right":0})),
+            NOW,
+        )
+        .await
+        .unwrap()
+        .results
+        .remove(0)
+        .result;
+
+    // The strict, flattened wire decoder must carry the explicit expectation.
+    let mut matching = put(2, 2, "d", initial.rev.clone(), json!({"left":1}));
+    matching.write.op = WriteOp::Patch;
+    matching.write.expected_revision = initial.rev.clone();
+    let wire = serde_json::to_value(ClientMessage::Write(matching.clone())).unwrap();
+    assert_eq!(wire["expected_revision"], json!(initial.rev));
+    let ClientMessage::Write(decoded) = serde_json::from_value(wire).unwrap() else {
+        panic!("expected write");
+    };
+    assert_eq!(decoded, matching);
+    let matched = ingress
+        .submit("alice".into(), decoded, NOW)
+        .await
+        .unwrap()
+        .results
+        .remove(0)
+        .result;
+    assert_eq!(matched.status, WriteStatus::Accepted);
+
+    // Buffer a CAS that matches now. A predecessor changes the live revision
+    // before drain: a preflight/admission-only check would wrongly accept it.
+    let mut guarded = put(4, 4, "d", matched.rev.clone(), json!({"right":99}));
+    guarded.write.op = WriteOp::Patch;
+    guarded.write.expected_revision = matched.rev.clone();
+    let ClientMessage::Write(guarded) =
+        serde_json::from_value(serde_json::to_value(ClientMessage::Write(guarded)).unwrap())
+            .unwrap()
+    else {
+        panic!("expected write");
+    };
+    assert!(ingress
+        .submit("alice".into(), guarded.clone(), NOW)
+        .await
+        .unwrap()
+        .results
+        .is_empty());
+    let advanced = ingress
+        .submit(
+            "alice".into(),
+            put(3, 3, "d", matched.rev.clone(), json!({"left":2,"right":0})),
+            NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(advanced.results[0].result.status, WriteStatus::Accepted);
+    let rejected = &advanced.results[1].result;
+    assert_eq!(rejected.status, WriteStatus::Rejected);
+    assert_eq!(rejected.code.as_deref(), Some("revision_conflict"));
+    assert_eq!(rejected.reason.as_deref(), Some("revision_conflict"));
+    assert_eq!(rejected.seq, None);
+    assert_eq!(rejected.rev, None);
+    assert_eq!(
+        ingress
+            .submit("alice".into(), guarded.clone(), NOW)
+            .await
+            .unwrap()
+            .results[0]
+            .result,
+        *rejected
+    );
+
+    // No CAS option: an old but reconstructible base still merges fields.
+    let mut unguarded = put(5, 5, "d", matched.rev.clone(), json!({"right":3}));
+    unguarded.write.op = WriteOp::Patch;
+    let mut legacy_wire = serde_json::to_value(ClientMessage::Write(unguarded)).unwrap();
+    assert!(legacy_wire.get("expected_revision").is_none());
+    let ClientMessage::Write(unguarded) = serde_json::from_value(legacy_wire.take()).unwrap()
+    else {
+        panic!("expected write");
+    };
+    assert_eq!(unguarded.write.expected_revision, None);
+    let merged = ingress
+        .submit("alice".into(), unguarded, NOW)
+        .await
+        .unwrap()
+        .results
+        .remove(0)
+        .result;
+    assert_eq!(merged.status, WriteStatus::Merged);
+    assert_eq!(merged.code, None);
+
+    // A different sequence/op cannot turn the retained rejected operation into
+    // an effect, and changing only its CAS changes its dedup identity.
+    let mut replay = guarded.clone();
+    replay.client_seq = Seq(6);
+    assert_eq!(
+        ingress
+            .submit("alice".into(), replay.clone(), NOW)
+            .await
+            .unwrap()
+            .results[0]
+            .result,
+        *rejected
+    );
+    replay.client_seq = Seq(7);
+    replay.write.expected_revision = merged.rev.clone();
+    let conflicting = ingress.submit("alice".into(), replay, NOW).await.unwrap();
+    assert_eq!(
+        conflicting.results[0].result.reason.as_deref(),
+        Some("op_id_conflict")
+    );
+
+    readers
+        .read(move |tx| {
+            assert_eq!(doc(tx, "d"), json!({"left":2,"right":3}));
+            let (revision_count, rejected_revisions): (u64, u64) = tx.query_row(
+                "SELECT COUNT(*),COUNT(CASE WHEN rev=?1 THEN 1 END) FROM _revs",
+                [format!("v4:{}", guarded.write.op_id)],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            assert_eq!(revision_count, 4);
+            assert_eq!(rejected_revisions, 0);
+            let page = change_log::read_page(tx, "items", 1, 0, 10)?;
+            assert_eq!(page.head_seq, 4);
+            assert_eq!(page.docs[0].rev, merged.rev.unwrap());
+            Ok(())
+        })
+        .await
+        .unwrap();
+    readers.shutdown().await.unwrap();
+    writer.shutdown().await.unwrap();
+}
+
+#[test]
+fn patch_expected_revision_rejects_missing_and_deleted_rows() {
+    let mut db = database();
+    let initial = submit(&mut db, "alice", &put(1, 1, "d", None, json!({"v":0})), NOW)
+        .results
+        .remove(0)
+        .result;
+    let mut remove = put(2, 2, "d", initial.rev, Value::Null);
+    remove.write.op = WriteOp::Delete;
+    remove.write.body = None;
+    let removed = submit(&mut db, "alice", &remove, NOW)
+        .results
+        .remove(0)
+        .result;
+    assert_eq!(removed.status, WriteStatus::Accepted);
+    for (seq, id) in [(3, "d"), (4, "missing")] {
+        let mut patch = put(seq, seq as u16, id, removed.rev.clone(), json!({"v":1}));
+        patch.write.op = WriteOp::Patch;
+        patch.write.expected_revision = removed.rev.clone();
+        let result = submit(&mut db, "alice", &patch, NOW)
+            .results
+            .remove(0)
+            .result;
+        assert_eq!(result.status, WriteStatus::Rejected);
+        assert_eq!(result.code.as_deref(), Some("revision_conflict"));
+    }
+    let (head, tombstones): (u64, u64) = db
+        .query_row(
+            "SELECT (SELECT v FROM _seq WHERE singleton=1),COUNT(*) FROM c_items WHERE deleted=1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((head, tombstones), (2, 1));
+}
+
 #[tokio::test]
 async fn participant_order_precedes_command_effect_and_duplicate_seq_is_a_receipt() {
     let (_dir, writer, readers) = runtime().await;

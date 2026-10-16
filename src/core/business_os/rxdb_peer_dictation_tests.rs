@@ -86,6 +86,7 @@ async fn fixture(mode: &'static str) -> anyhow::Result<Fixture> {
         open_command_id: Uuid::new_v4().to_string(),
         opened: Instant::now(),
         task: Mutex::new(None),
+        updates:tokio::sync::watch::channel(()).0,
     });
     let registry = Arc::new(Registry {
         sessions: Mutex::new(HashMap::new()),
@@ -101,6 +102,7 @@ async fn fixture(mode: &'static str) -> anyhow::Result<Fixture> {
         Arc::clone(&session.canceled),
         Arc::clone(&session.snapshot),
         Arc::clone(&session.final_gate),
+        session.updates.clone(),
         permit,
     )));
     registry
@@ -184,12 +186,14 @@ fn domain_counts(root: &Path) -> anyhow::Result<Vec<(String, i64)>> {
 async fn verified_final_is_correlated_draft_text_without_domain_mutations() -> anyhow::Result<()> {
     let (root, registry, s, id, server) = fixture("normal").await?;
     let before = domain_counts(root.path())?;
+    let mut notifications=s.updates.subscribe();
     write(&registry, &s, &id, 1, 0).await?;
     let r = request(&s, &id, "finish");
     let command = r.command_id.clone();
     let first = call(&registry, &s, r).await?;
     assert_eq!(first["commandId"], command);
     assert_eq!(first["streamId"], id);
+    tokio::time::timeout(Duration::from_secs(30),notifications.changed()).await??;
     let final_value = terminal(&registry, &s, &id).await?;
     assert_eq!(final_value["state"], "finished", "{final_value}");
     assert_eq!(final_value["text"], "Hallo Welt.");
@@ -340,6 +344,7 @@ fn slow_reader_receives_coalesced_full_partial_snapshot() -> anyhow::Result<()> 
         open_command_id: Uuid::new_v4().to_string(),
         opened: Instant::now(),
         task: Mutex::new(None),
+        updates:tokio::sync::watch::channel(()).0,
     };
     let id = Uuid::new_v4().to_string();
     let mut r = request(&s, &id, "read");

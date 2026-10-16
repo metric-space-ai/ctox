@@ -223,6 +223,9 @@ pub struct Write {
     pub collection: String,
     pub id: String,
     pub base_rev: Option<String>,
+    /// Optional patch CAS, checked against the live row inside the Store writer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<String>,
     pub base_seq: Option<Seq>,
     pub gen: u64,
     pub schema_ver: u32,
@@ -273,6 +276,7 @@ impl<'de> Deserialize<'de> for OrderedWrite {
             collection: String,
             id: String,
             base_rev: Option<String>,
+            expected_revision: Option<String>,
             base_seq: Option<Seq>,
             gen: u64,
             schema_ver: u32,
@@ -289,6 +293,7 @@ impl<'de> Deserialize<'de> for OrderedWrite {
                 collection: wire.collection,
                 id: wire.id,
                 base_rev: wire.base_rev,
+                expected_revision: wire.expected_revision,
                 base_seq: wire.base_seq,
                 gen: wire.gen,
                 schema_ver: wire.schema_ver,

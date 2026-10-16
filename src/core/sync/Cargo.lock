@@ -842,6 +842,7 @@ dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "ctox-store",
  "dashmap",
  "flate2",
  "futures",
@@ -866,6 +867,19 @@ dependencies = [
  "url",
  "uuid",
  "webrtc",
+ "zstd",
+]
+
+[[package]]
+name = "ctox-store"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -3397,8 +3411,6 @@ dependencies = [
 [[package]]
 name = "rtc-turn"
 version = "0.20.0-alpha.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c52c4a3b6d9fea3cb7d1365ff88ee1610ac6c57d0ee126b3b4a26b5debdda6f"
 dependencies = [
  "bytes",
  "log",
@@ -4768,7 +4780,9 @@ dependencies = [
  "futures",
  "log",
  "rtc",
+ "rustls-native-certs",
  "tokio",
+ "tokio-rustls",
 ]
 
 [[package]]
@@ -5312,6 +5326,34 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
+
+[[package]]
+name = "zstd"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
+dependencies = [
+ "zstd-safe",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "7.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64d80649ab6db9d9f6f9c80a40becd948eda4714a0a5ac8c4d157a32231c7882"
+dependencies = [
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-sys"
+version = "2.1.1+zstd.1.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aeec9eaf2dffbbd09201e23bd0ffcbaa33bb8e9266a10734fd7ed90a85eca078"
+dependencies = [
+ "cc",
+ "pkg-config",
+]
 
 [[package]]
 name = "zune-core"

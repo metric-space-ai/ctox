@@ -858,6 +858,65 @@ impl fmt::Debug for CtoxClaudeSecretStore {
 }
 
 impl ClaudeSecretStore for CtoxClaudeSecretStore {
+    fn load_credentials_async(
+        self: Arc<Self>,
+        handles: ClaudeCredentialHandles,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<ClaudeStoredCredentials, SecretStoreError>>
+                + Send,
+        >,
+    > {
+        Box::pin(async move {
+            crate::persistence::run_core_sync(move || Ok(self.load_credentials(&handles)))
+                .await
+                .map_err(|error| {
+                    // Do not include store errors or credential material in logs.
+                    eprintln!(
+                        "[credential-owner] claude load admission failed: {}",
+                        if matches!(
+                            error.downcast_ref::<ctox_store::StoreError>(),
+                            Some(ctox_store::StoreError::Busy)
+                        ) {
+                            "busy"
+                        } else {
+                            "unavailable"
+                        }
+                    );
+                    SecretStoreError::Read
+                })?
+        })
+    }
+
+    fn store_credentials_async(
+        self: Arc<Self>,
+        handles: ClaudeCredentialHandles,
+        credentials: ClaudeStoredCredentials,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), SecretStoreError>> + Send>>
+    {
+        Box::pin(async move {
+            crate::persistence::run_core_sync(move || {
+                Ok(self.store_credentials(&handles, &credentials))
+            })
+            .await
+            .map_err(|error| {
+                // Do not include store errors or credential material in logs.
+                eprintln!(
+                    "[credential-owner] claude store admission failed: {}",
+                    if matches!(
+                        error.downcast_ref::<ctox_store::StoreError>(),
+                        Some(ctox_store::StoreError::Busy)
+                    ) {
+                        "busy"
+                    } else {
+                        "unavailable"
+                    }
+                );
+                SecretStoreError::Write
+            })?
+        })
+    }
+
     fn load_credentials(
         &self,
         handles: &ClaudeCredentialHandles,
@@ -959,6 +1018,70 @@ impl fmt::Debug for CtoxCodexSecretStore {
 }
 
 impl codex_auth::CodexSecretStore for CtoxCodexSecretStore {
+    fn load_credentials_async(
+        self: Arc<Self>,
+        handles: codex_auth::CodexCredentialHandles,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        codex_auth::CodexStoredCredentials,
+                        codex_auth::SecretStoreError,
+                    >,
+                > + Send,
+        >,
+    > {
+        Box::pin(async move {
+            crate::persistence::run_core_sync(move || Ok(self.load_credentials(&handles)))
+                .await
+                .map_err(|error| {
+                    // Do not include store errors or credential material in logs.
+                    eprintln!(
+                        "[credential-owner] codex load admission failed: {}",
+                        if matches!(
+                            error.downcast_ref::<ctox_store::StoreError>(),
+                            Some(ctox_store::StoreError::Busy)
+                        ) {
+                            "busy"
+                        } else {
+                            "unavailable"
+                        }
+                    );
+                    codex_auth::SecretStoreError::Read
+                })?
+        })
+    }
+
+    fn store_credentials_async(
+        self: Arc<Self>,
+        handles: codex_auth::CodexCredentialHandles,
+        credentials: codex_auth::CodexStoredCredentials,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), codex_auth::SecretStoreError>> + Send>,
+    > {
+        Box::pin(async move {
+            crate::persistence::run_core_sync(move || {
+                Ok(self.store_credentials(&handles, &credentials))
+            })
+            .await
+            .map_err(|error| {
+                // Do not include store errors or credential material in logs.
+                eprintln!(
+                    "[credential-owner] codex store admission failed: {}",
+                    if matches!(
+                        error.downcast_ref::<ctox_store::StoreError>(),
+                        Some(ctox_store::StoreError::Busy)
+                    ) {
+                        "busy"
+                    } else {
+                        "unavailable"
+                    }
+                );
+                codex_auth::SecretStoreError::Write
+            })?
+        })
+    }
+
     fn load_credentials(
         &self,
         handles: &codex_auth::CodexCredentialHandles,
@@ -3430,6 +3553,73 @@ struct AntigravityStoredState {
 }
 
 impl antigravity_auth::AntigravitySecretStore for CtoxAntigravitySecretStore {
+    fn load_credentials_async(
+        self: Arc<Self>,
+        handles: antigravity_auth::AntigravityCredentialHandles,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        antigravity_auth::AntigravityStoredCredentials,
+                        antigravity_auth::AntigravityTokenError,
+                    >,
+                > + Send,
+        >,
+    > {
+        Box::pin(async move {
+            crate::persistence::run_core_sync(move || Ok(self.load_credentials(&handles)))
+                .await
+                .map_err(|error| {
+                    // Do not include store errors or credential material in logs.
+                    eprintln!(
+                        "[credential-owner] antigravity load admission failed: {}",
+                        if matches!(
+                            error.downcast_ref::<ctox_store::StoreError>(),
+                            Some(ctox_store::StoreError::Busy)
+                        ) {
+                            "busy"
+                        } else {
+                            "unavailable"
+                        }
+                    );
+                    antigravity_auth::AntigravityTokenError::Read
+                })?
+        })
+    }
+
+    fn store_credentials_async(
+        self: Arc<Self>,
+        handles: antigravity_auth::AntigravityCredentialHandles,
+        credentials: antigravity_auth::AntigravityStoredCredentials,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<(), antigravity_auth::AntigravityTokenError>>
+                + Send,
+        >,
+    > {
+        Box::pin(async move {
+            crate::persistence::run_core_sync(move || {
+                Ok(self.store_credentials(&handles, &credentials))
+            })
+            .await
+            .map_err(|error| {
+                // Do not include store errors or credential material in logs.
+                eprintln!(
+                    "[credential-owner] antigravity store admission failed: {}",
+                    if matches!(
+                        error.downcast_ref::<ctox_store::StoreError>(),
+                        Some(ctox_store::StoreError::Busy)
+                    ) {
+                        "busy"
+                    } else {
+                        "unavailable"
+                    }
+                );
+                antigravity_auth::AntigravityTokenError::Write
+            })?
+        })
+    }
+
     fn load_credentials(
         &self,
         handles: &antigravity_auth::AntigravityCredentialHandles,
@@ -6165,6 +6355,86 @@ mod tests {
         assert!(!serialized.contains("kimi-pi-e2e"));
         assert!(!serialized.contains("do-not-leak"));
         assert!(!serialized.contains(&proxy_addr.to_string()));
+    }
+
+    // Exercise native SDK callbacks on an async task with no inherited TLS.
+    // The real CLI fixture retains all three registered file owners until drain.
+    #[test]
+    fn vendor_credential_callbacks_use_registered_owners() {
+        use antigravity_auth::AntigravitySecretStore as _;
+        use codex_auth::CodexSecretStore as _;
+        let root = Arc::new(tempfile::tempdir().unwrap());
+        let work = Arc::clone(&root);
+        crate::persistence::run_cli_owned(root.path(), move || {
+            tokio::runtime::Handle::current()
+                .block_on(tokio::spawn(async move {
+                    let claude = Arc::new(CtoxClaudeSecretStore::new(work.path()));
+                    let codex = Arc::new(CtoxCodexSecretStore::new(work.path()));
+                    let antigravity = Arc::new(CtoxAntigravitySecretStore::new(work.path()));
+                    for revision in ["initial", "rotated"] {
+                        let c = credentials(
+                            &format!("fake-access-{revision}"),
+                            &format!("fake-refresh-{revision}"),
+                        );
+                        Arc::clone(&claude)
+                            .store_credentials_async(handles(), c.clone())
+                            .await
+                            .unwrap();
+                        assert_eq!(
+                            Arc::clone(&claude)
+                                .load_credentials_async(handles())
+                                .await
+                                .unwrap(),
+                            c
+                        );
+                        let c = codex_auth::CodexStoredCredentials::new(
+                            codex_auth::SecretString::new(format!("fake-id-{revision}")).unwrap(),
+                            codex_auth::SecretString::new(format!("fake-access-{revision}"))
+                                .unwrap(),
+                            codex_auth::SecretString::new(format!("fake-refresh-{revision}"))
+                                .unwrap(),
+                        );
+                        Arc::clone(&codex)
+                            .store_credentials_async(codex_handles(), c.clone())
+                            .await
+                            .unwrap();
+                        assert_eq!(
+                            Arc::clone(&codex)
+                                .load_credentials_async(codex_handles())
+                                .await
+                                .unwrap(),
+                            c
+                        );
+                        let c = antigravity_credentials(
+                            &format!("fake-access-{revision}"),
+                            &format!("fake-refresh-{revision}"),
+                            SystemTime::UNIX_EPOCH + Duration::from_secs(10_000),
+                            "fake-project",
+                        );
+                        Arc::clone(&antigravity)
+                            .store_credentials_async(antigravity_handles(), c.clone())
+                            .await
+                            .unwrap();
+                        assert_eq!(
+                            Arc::clone(&antigravity)
+                                .load_credentials_async(antigravity_handles())
+                                .await
+                                .unwrap(),
+                            c
+                        );
+                    }
+                    // A callback cannot substitute absence for missing ownership.
+                    let absent = work.path().join("unowned");
+                    let missing = Arc::new(CtoxClaudeSecretStore::new(absent));
+                    assert_eq!(
+                        missing.load_credentials_async(handles()).await,
+                        Err(SecretStoreError::Read)
+                    );
+                }))
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
