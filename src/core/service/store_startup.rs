@@ -80,6 +80,7 @@ pub(crate) struct Foreground {
 /// Lifetimes for the real weak-routed legacy adapters. They reuse only the
 /// registered file's writer/readers, never an additional connection or pool.
 struct NativeOwners {
+    _policy: crate::business_os::policy::PolicyAuthorityRegistration,
     _core: Arc<crate::persistence::CorePersistence>,
     _lcm: crate::lcm::owner_adapter::OwnerAdapter,
     _runtime: crate::runtime_env::RuntimeStore,
@@ -134,6 +135,17 @@ impl NativeOwners {
         .await
         .map_err(|_| StoreError::Panicked)?
         .map_err(|_| StoreError::Invalid("canonical instance ID unavailable".into()))?;
+        // Required production binding, before any engine/session admission.
+        // The same Store generation owns policy and sync publication; failure
+        // is fatal, never a silent deny-all startup or an implicit default grant.
+        let rights = crate::business_os::policy::sync_rights::StoreRightsAuthority::attach(
+            inputs.sync.writer.clone(),
+            instance_id.clone(),
+        )
+        .await
+        .map_err(|_| StoreError::Invalid("Store policy authority attachment failed".into()))?;
+        let policy = crate::business_os::policy::bind_policy_authority(rights)
+            .map_err(|_| StoreError::Invalid("Store policy authority binding failed".into()))?;
         let signer_active = Arc::new(AtomicBool::new(true));
         let signer: Arc<dyn ctox_store::change_log::subscription::protocol::InstanceSigner> =
             Arc::new(super::store_native::InstanceSigning::new(
@@ -142,6 +154,7 @@ impl NativeOwners {
                 signer_active.clone(),
             ));
         let mut native = Self {
+            _policy: policy,
             _core: core,
             _lcm: lcm,
             _runtime: runtime,

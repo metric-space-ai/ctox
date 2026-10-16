@@ -5,6 +5,76 @@ use ctox_store::{
 };
 
 struct FixtureFactory;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn foreground_binds_current_store_policy_and_retires_it() -> anyhow::Result<()> {
+    use crate::business_os::policy::{
+        self, BusinessOsActor, BusinessOsPermission, BusinessOsScope,
+    };
+    let _scope = isolate_test_roots().await;
+    anyhow::ensure!(std::env::var_os("CTOX_STATE_ROOT").is_none());
+    let root = tempfile::Builder::new().prefix("c6p-").tempdir_in("/tmp")?;
+    let mut foreground = Foreground::start(root.path().to_owned(), Handle::current()).await?;
+    let identity = foreground.inputs.instance_signer()?;
+    let rights = policy::sync_rights::StoreRightsAuthority::attach(
+        foreground.inputs.sync.writer.clone(),
+        identity.instance_id().into(),
+    )
+    .await
+    .map_err(anyhow::Error::msg)?;
+    // Import the base release through the real owner. Startup itself must not
+    // seed grants or widen an empty/custom rights table.
+    rights
+        .replace(policy::base_release_rights(&[]), vec![])
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let scope = BusinessOsScope::workspace();
+    let admin = BusinessOsActor::new(Some("admin".into()), "admin");
+    let foreign = BusinessOsActor::new(Some("foreign".into()), "user");
+    assert!(
+        policy::evaluate(&admin, BusinessOsPermission::UsersManage, &scope).allowed,
+        "foreground did not bind its Store policy authority"
+    );
+    assert!(
+        !policy::evaluate(&foreign, BusinessOsPermission::UsersManage, &scope).allowed,
+        "foreign actor inherited the administrator's grant"
+    );
+    let denied_actor = admin.clone();
+    let writer = rights.writer().clone();
+    rights
+        .replace(vec![], vec![])
+        .await
+        .map_err(anyhow::Error::msg)?;
+    assert!(
+        !policy::evaluate(&admin, BusinessOsPermission::UsersManage, &scope).allowed,
+        "foreground kept an admission-time rights snapshot"
+    );
+    rights
+        .replace(policy::base_release_rights(&[]), vec![])
+        .await
+        .map_err(anyhow::Error::msg)?;
+    assert!(
+        writer
+            .submit(WriteJob::new(Default::default(), move |tx| Ok(
+                policy::evaluate_in_store(
+                    tx,
+                    &denied_actor,
+                    BusinessOsPermission::UsersManage,
+                    &BusinessOsScope::workspace()
+                )
+                .allowed
+            )))?
+            .await?,
+        "writer callback lost its exact bound Store context"
+    );
+    foreground.shutdown().await?;
+    assert!(
+        !policy::evaluate(&admin, BusinessOsPermission::UsersManage, &scope).allowed,
+        "shutdown left policy authority usable"
+    );
+    Ok(())
+}
+
 struct FixtureEngine(ctox_store::writer::WriterHandle);
 impl EngineFactory for FixtureFactory {
     fn name(&self) -> &'static str {

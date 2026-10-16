@@ -406,7 +406,7 @@ fn may_edit_source(
     let scope = BusinessOsScope::module(app_id, assigned);
     // Preserve the live authority availability/pending-update denial as well;
     // durable rows alone must not revive an unbound or retired policy owner.
-    if !policy::evaluate(actor, BusinessOsPermission::AppsSourceEdit, &scope).allowed {
+    if !policy::evaluate_in_store(tx, actor, BusinessOsPermission::AppsSourceEdit, &scope).allowed {
         return Ok(false);
     }
     let rights = policy::sync_rights::read(tx)?;
