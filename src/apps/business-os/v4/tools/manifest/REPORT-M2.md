@@ -245,11 +245,11 @@ keine
 
 ### An den Kern gemeldet, noch keine Plattformroute (PLATFORM_ROUTES_PENDING, 13)
 
-- `browser.http_auth.respond` (E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)): browser modules/browser/index.js:627
-- `browser.observer.grant` (E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)): browser modules/browser/index.js:587
-- `browser.observer.revoke` (E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)): browser modules/browser/index.js:592
-- `browser.upload.select` (E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)): browser modules/browser/index.js:555
-- `browser.webauthn.respond` (E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)): browser modules/browser/index.js:636
+- `browser.http_auth.respond` (V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)): browser modules/browser/index.js:627
+- `browser.observer.grant` (V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)): browser modules/browser/index.js:587
+- `browser.observer.revoke` (V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)): browser modules/browser/index.js:592
+- `browser.upload.select` (V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)): browser modules/browser/index.js:555
+- `browser.webauthn.respond` (V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)): browser modules/browser/index.js:636
 - `ctox.plan.step.retry` (E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen): im UI-Scan keine Fundstelle als Befehlstyp
 - `ctox.workjet.calendar.connect.v1` (E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen): shell v4/shell/workjet/actions/calendar-connect.js:11
 - `ctox.workjet.calendar.read.v1` (E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen): shell v4/shell/workjet/actions/meeting.js:150

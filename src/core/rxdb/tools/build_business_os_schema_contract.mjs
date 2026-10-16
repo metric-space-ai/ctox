@@ -1,17 +1,33 @@
 #!/usr/bin/env node
+// Builds src/core/business_os/business_os_schema_contract.json, the native
+// peer's static RxDB schema contract, from the Business OS modules.
+//
+// Source: each module's collections.schema.json — the only schema source
+// (§16.13; schema.js was deleted by the v4 app ports, deletion plan
+// L-09/L-10). The document is read through the v4 shell manifest generator's
+// own normalizer (normalizeCollectionsSchema), so `{ schema, ... }` wrappers
+// and both migration formats are understood exactly as the shell reads them.
+//
+// Key order: collections.schema.json files are key-sorted, the committed
+// contract keeps the historical schema.js order. Object keys therefore keep
+// the order of the committed contract; keys it does not know yet follow in
+// source order. Order is not semantic (hashes use canonicalJson), this only
+// keeps the contract diff limited to real schema changes.
 import { access, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+
+import { normalizeCollectionsSchema } from '../../../apps/business-os/v4/tools/manifest/gen-manifest.mjs';
 
 const OUTPUT_PATH = new URL('../../business_os/business_os_schema_contract.json', import.meta.url);
 const MODULES_ROOT = new URL('../../../apps/business-os/modules/', import.meta.url);
+const SCHEMA_FILE = 'collections.schema.json';
 
 async function buildContract() {
   const schemas = {};
   const modules = await discoverModules();
   const manifestCollections = [];
   for (const moduleInfo of modules) {
-    const mod = await importSchemaModule(moduleInfo.schemaUrl, moduleInfo.id);
-    for (const [collection, definition] of Object.entries(mod.collections || {})) {
-      const schema = definition?.schema || definition;
+    const document = await readSchemaDocument(moduleInfo.schemaUrl, moduleInfo.id);
+    for (const [collection, schema] of Object.entries(document.collections)) {
       schemas[collection] = schemas[collection]
         ? mergeSchemaDefinitions(collection, schemas[collection], schema)
         : schema;
@@ -34,11 +50,36 @@ async function buildContract() {
     );
   }
 
+  const reference = await readCommittedContract();
   const ordered = {};
   for (const key of Object.keys(schemas).sort()) {
-    ordered[key] = schemas[key];
+    ordered[key] = orderLike(schemas[key], reference[key]);
   }
   return `${JSON.stringify(ordered, null, 2)}\n`;
+}
+
+async function readCommittedContract() {
+  try {
+    const parsed = JSON.parse(await readFile(OUTPUT_PATH, 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+// Reorders object keys like `reference` without adding, dropping or changing
+// any value: keys known to the reference first (in its order), then the rest.
+function orderLike(value, reference) {
+  if (Array.isArray(value)) {
+    return value.map((item, index) => orderLike(item, Array.isArray(reference) ? reference[index] : undefined));
+  }
+  if (!value || typeof value !== 'object') return value;
+  const ref = reference && typeof reference === 'object' && !Array.isArray(reference) ? reference : {};
+  const keys = [
+    ...Object.keys(ref).filter((key) => Object.hasOwn(value, key)),
+    ...Object.keys(value).filter((key) => !Object.hasOwn(ref, key)),
+  ];
+  return Object.fromEntries(keys.map((key) => [key, orderLike(value[key], ref[key])]));
 }
 
 function mergeSchemaDefinitions(collection, current, incoming) {
@@ -176,7 +217,7 @@ async function discoverModules() {
     const collections = Array.isArray(manifest.collections)
       ? manifest.collections.map((name) => String(name || '').trim()).filter(Boolean)
       : [];
-    const schemaUrl = new URL('schema.js', dirUrl);
+    const schemaUrl = new URL(SCHEMA_FILE, dirUrl);
     if (!(await fileExists(schemaUrl))) {
       if (collections.length && !isInstalledOnlyRuntimeSchemaPath({ manifest, dirUrl })) {
         throw new Error(`${entry}/module.json declares collections but ${schemaUrl.pathname} is missing.`);
@@ -198,22 +239,17 @@ async function discoverModules() {
   return modules;
 }
 
-async function importSchemaModule(url, moduleId) {
-  // Real ESM import instead of the old strip-exports/Function() transform:
-  // module schema files may use any import/re-export pattern (full re-exports
-  // like modules/reports, partial cross-module imports like
-  // modules/conversations pulling the outbound-owned collections). The
-  // emitted contract content is unchanged — same exported objects either way.
-  let mod;
+async function readSchemaDocument(url, moduleId) {
+  let raw;
   try {
-    mod = await import(url.href);
+    raw = JSON.parse(await readFile(url, 'utf8'));
   } catch (error) {
-    throw new Error(`Failed to import schema.js for ${moduleId}: ${error?.message || error}`);
+    throw new Error(`Failed to read ${SCHEMA_FILE} for ${moduleId}: ${error?.message || error}`);
   }
-  return {
-    collections: mod.collections || {},
-    migrationStrategies: mod.migrationStrategies || {},
-  };
+  if (!raw || typeof raw !== 'object' || !raw.collections || typeof raw.collections !== 'object' || Array.isArray(raw.collections)) {
+    throw new Error(`${moduleId}/${SCHEMA_FILE} has no collections object.`);
+  }
+  return normalizeCollectionsSchema(raw);
 }
 
 function isInstalledOnlyRuntimeSchemaPath(moduleInfo) {

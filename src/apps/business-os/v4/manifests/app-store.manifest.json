@@ -61,7 +61,7 @@
     "v4-manifest.json": "7e788f6fea787bb81cd4e9484944ae6c97b6debbe6d38924e35bcf390efed1fc",
     "vendor/store-shelf/box-art.mjs": "e3a842c0d2264aa147349429eb1d46e1be58f2405832602179fe7131f7c670ff",
     "vendor/store-shelf/provenance.json": "ad1b9705156e73e5e600fbe23d5d5437963da8c4d1ab6edc29e53459f6dbb037",
-    "vendor/store-shelf/store-shelf.mjs": "0e25512f33d54216b15390dc8828fac1e51ed6ca3c3c1778afa48ef9dc8b295b",
+    "vendor/store-shelf/store-shelf.mjs": "acaf2cfe5304bbf45abbf65349616b2bdaf5e2d5616c3fa15b07e20029702982",
     "vendor/three/RoundedBoxGeometry.js": "047158fdb27e8b64a42b03af68c69c32f667818a8f328ea2b85691e0bf974414",
     "vendor/three/provenance.json": "594225efa7691c0863248ecc7aad74b4b2ef8c001eb3957cd39297e05d918872",
     "vendor/three/three.core.min.js": "05b2609338c76cd65daf74f3ac515bc9a5045e1b3b33edc07d8c9bd55250fa90",
@@ -246,7 +246,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "0d17aaf844b2c45ed7d24229faf02cd20f663fc4d49e7ae3457ac0ede2f2ffa4",
+    "base_hash": "598307c97c5f7b5e47ceaf664ddc22264dfb4154d5151c999af80926c4fca575",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

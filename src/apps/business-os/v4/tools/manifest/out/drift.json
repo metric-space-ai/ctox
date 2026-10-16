@@ -15,7 +15,7 @@
   "commands_routes_pending": [
     {
       "app": "browser",
-      "basis": "E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)",
+      "basis": "V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)",
       "evidence": [
         "modules/browser/index.js:627"
       ],
@@ -23,7 +23,7 @@
     },
     {
       "app": "browser",
-      "basis": "E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)",
+      "basis": "V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)",
       "evidence": [
         "modules/browser/index.js:587"
       ],
@@ -31,7 +31,7 @@
     },
     {
       "app": "browser",
-      "basis": "E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)",
+      "basis": "V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)",
       "evidence": [
         "modules/browser/index.js:592"
       ],
@@ -39,7 +39,7 @@
     },
     {
       "app": "browser",
-      "basis": "E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)",
+      "basis": "V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)",
       "evidence": [
         "modules/browser/index.js:555"
       ],
@@ -47,7 +47,7 @@
     },
     {
       "app": "browser",
-      "basis": "E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)",
+      "basis": "V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)",
       "evidence": [
         "modules/browser/index.js:636"
       ],

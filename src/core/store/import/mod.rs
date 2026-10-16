@@ -2,7 +2,11 @@
 //! registered destination writer; this module never opens a database or runs DDL.
 pub mod base_release;
 pub mod core_import;
+pub mod cutover;
 pub mod file_import;
+pub mod freeze;
+pub mod jour_fixe;
+pub mod owner_alias;
 
 use crate::{
     types::{JobOptions, StoreError, WriteJob},
@@ -45,6 +49,15 @@ pub struct ImportReport {
     /// Raw source rows before chunk assembly/grouping; logical entities above.
     #[serde(default)]
     pub physical_source_rows: BTreeMap<String, usize>,
+    /// Semantic source-row hashes, compared with persisted target rows.
+    #[serde(default)]
+    pub content_hashes: BTreeMap<String, BTreeMap<String, ContentHash>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ContentHash {
+    pub source_sha256: String,
+    pub target_sha256: Option<String>,
 }
 
 impl ImportReport {
@@ -53,6 +66,18 @@ impl ImportReport {
         for (name, counts) in &self.collections {
             if counts.source_rows != counts.target_documents || counts.rejected != 0 {
                 return Err(invalid(format!("import_count_mismatch:{name}")));
+            }
+        }
+        for (name, hashes) in &self.content_hashes {
+            if self
+                .collections
+                .get(name)
+                .is_none_or(|c| c.source_rows != hashes.len())
+                || hashes
+                    .values()
+                    .any(|h| h.target_sha256.as_ref() != Some(&h.source_sha256))
+            {
+                return Err(invalid(format!("import_content_mismatch:{name}")));
             }
         }
         Ok(())
@@ -127,6 +152,14 @@ pub(crate) fn insert_document(tx: &Transaction<'_>, doc: &Document) -> Result<bo
 /// Bound one owner job to a page. Schema triggers allocate the only global seq.
 /// The report is returned only after commit; a collision rolls back the page.
 pub async fn write_page(writer: &WriterHandle, docs: Vec<Document>) -> Result<ImportReport> {
+    write_page_audited(writer, docs, BTreeMap::new()).await
+}
+
+pub(crate) async fn write_page_audited(
+    writer: &WriterHandle,
+    docs: Vec<Document>,
+    expected: BTreeMap<(String, String), String>,
+) -> Result<ImportReport> {
     if docs.len() > 128 {
         return Err(invalid("import_page_limit"));
     }
@@ -138,7 +171,34 @@ pub async fn write_page(writer: &WriterHandle, docs: Vec<Document>) -> Result<Im
         .submit(WriteJob::new(JobOptions::default(), move |tx| {
             let mut report = ImportReport::default();
             for doc in docs {
+                if doc.collection == jour_fixe::COLLECTION {
+                    jour_fixe::check_target_schema(tx, &doc)?;
+                }
                 let inserted = insert_document(tx, &doc)?;
+                if let Some(source) = expected.get(&(doc.collection.clone(), doc.id.clone())) {
+                    let target = if doc.collection == jour_fixe::COLLECTION {
+                        jour_fixe::persisted_hash(tx, &doc)?
+                    } else {
+                        cutover::persisted_hash(tx, &doc)?
+                    };
+                    if source != &target {
+                        return Err(invalid(format!(
+                            "import_content_mismatch:{}:{}",
+                            doc.collection, doc.id
+                        )));
+                    }
+                    report
+                        .content_hashes
+                        .entry(doc.collection.clone())
+                        .or_default()
+                        .insert(
+                            doc.id.clone(),
+                            ContentHash {
+                                source_sha256: source.clone(),
+                                target_sha256: Some(target),
+                            },
+                        );
+                }
                 let count = report.collections.entry(doc.collection).or_default();
                 count.source_rows += 1;
                 count.target_documents += 1;

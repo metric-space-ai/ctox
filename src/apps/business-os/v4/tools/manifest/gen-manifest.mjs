@@ -233,11 +233,11 @@ export const PLATFORM_REGISTRY_ROUTES = [
 ];
 // E40/E42: Registry-Routen, die noch nicht auf v4/integration liegen (E25 von Transfer); bis dahin nicht rot. Jeder Eintrag erscheint im Bericht; ein Typ außerhalb dieser Tabelle ohne Route bleibt rot.
 export const PLATFORM_ROUTES_PENDING = {
-  'browser.http_auth.respond': 'E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)',
-  'browser.observer.grant': 'E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)',
-  'browser.observer.revoke': 'E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)',
-  'browser.upload.select': 'E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)',
-  'browser.webauthn.respond': 'E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)',
+  'browser.http_auth.respond': 'V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)',
+  'browser.observer.grant': 'V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)',
+  'browser.observer.revoke': 'V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)',
+  'browser.upload.select': 'V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)',
+  'browser.webauthn.respond': 'V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)',
   'ctox.plan.step.retry': 'E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen',
   'ctox.workjet.calendar.connect.v1': 'E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen',
   'ctox.workjet.calendar.read.v1': 'E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen',
