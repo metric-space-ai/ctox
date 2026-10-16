@@ -1550,21 +1550,25 @@ pub fn handle_update_command(root: &Path, args: &[String]) -> Result<()> {
             let result = finish_rollback_receipt(&layout, || {
                 let result = rollback_update(root)?;
                 update_maintenance(&layout.state_root, &maintenance.lease_id, |state| {
-                state.phase = "rolled_back".to_string();
-                state.status = "rolled_back".to_string();
-                state.current_release = Some(result.current_release.clone());
-                state.previous_release = result.previous_release.clone();
-                state.service_active = true;
-                state.progress = MaintenanceProgress {
-                    percent: 100,
-                    message: "Rollback abgeschlossen".to_string(),
-                };
-                state.finished_at = Some(now_rfc3339());
+                    state.phase = "rolled_back".to_string();
+                    state.status = "rolled_back".to_string();
+                    state.current_release = Some(result.current_release.clone());
+                    state.previous_release = result.previous_release.clone();
+                    state.service_active = true;
+                    state.progress = MaintenanceProgress {
+                        percent: 100,
+                        message: "Rollback abgeschlossen".to_string(),
+                    };
+                    state.finished_at = Some(now_rfc3339());
                 })?;
                 Ok(result)
             });
             if let Err(error) = &result {
-                let _ = fail_maintenance(&layout.state_root, &maintenance.lease_id, &format!("{error:#}"));
+                let _ = fail_maintenance(
+                    &layout.state_root,
+                    &maintenance.lease_id,
+                    &format!("{error:#}"),
+                );
             }
             println!("{}", serde_json::to_string_pretty(&result?)?);
             Ok(())
@@ -2247,16 +2251,26 @@ fn apply_update(
 /// from a probe closure on the rollback thread alone does not close those FDs.
 fn rollback_probe_closed<T: Send>(probe: impl FnOnce() -> Result<T> + Send) -> Result<T> {
     std::thread::scope(|scope| {
-        scope.spawn(probe).join().map_err(|_| anyhow::anyhow!("rollback stop probe panicked"))?
+        scope
+            .spawn(probe)
+            .join()
+            .map_err(|_| anyhow::anyhow!("rollback stop probe panicked"))?
     })
 }
 
-fn finish_rollback_receipt<T>(layout: &InstallLayout, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+fn finish_rollback_receipt<T>(
+    layout: &InstallLayout,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
     persist_update_phase(&layout.update_state_path(), "rolling_back", None)?;
     let result = operation();
     match &result {
         Ok(_) => persist_update_phase(&layout.update_state_path(), "rolled_back", None)?,
-        Err(error) => persist_update_phase(&layout.update_state_path(), "failed", Some(&format!("{error:#}")))?,
+        Err(error) => persist_update_phase(
+            &layout.update_state_path(),
+            "failed",
+            Some(&format!("{error:#}")),
+        )?,
     }
     result
 }
@@ -2266,7 +2280,9 @@ fn finish_rollback_receipt<T>(layout: &InstallLayout, operation: impl FnOnce() -
 struct RestoreCustody(Vec<std::fs::File>);
 impl Drop for RestoreCustody {
     fn drop(&mut self) {
-        for file in &self.0 { let _ = file.unlock(); }
+        for file in &self.0 {
+            let _ = file.unlock();
+        }
     }
 }
 
@@ -2276,17 +2292,32 @@ fn wait_for_restore_custody(state_root: &Path, timeout: Duration) -> Result<Rest
         let attempt = (|| -> Result<RestoreCustody> {
             let mut paths = vec![state_root.join("store/store-daemon.lock")];
             for db in collect_sqlite_database_files(state_root) {
-                if db.starts_with(state_root.join("backups")) || db == state_root.join(MAINTENANCE_STORE_FILE_NAME) { continue; }
-                let mut name = db.file_name().context("database name missing")?.to_os_string();
+                if db.starts_with(state_root.join("backups"))
+                    || db == state_root.join(MAINTENANCE_STORE_FILE_NAME)
+                {
+                    continue;
+                }
+                let mut name = db
+                    .file_name()
+                    .context("database name missing")?
+                    .to_os_string();
                 name.push(".ctox-store.lock");
                 paths.push(db.with_file_name(name));
             }
-            paths.sort(); paths.dedup();
+            paths.sort();
+            paths.dedup();
             let mut custody = RestoreCustody(Vec::new());
             for path in paths {
                 ensure_dir(path.parent().context("owner lock parent missing")?)?;
-                let file = OpenOptions::new().create(true).truncate(false).read(true).write(true).open(&path)?;
-                file.try_lock().map_err(|e| anyhow::anyhow!("store owner has not drained ({}): {e}", path.display()))?;
+                let file = OpenOptions::new()
+                    .create(true)
+                    .truncate(false)
+                    .read(true)
+                    .write(true)
+                    .open(&path)?;
+                file.try_lock().map_err(|e| {
+                    anyhow::anyhow!("store owner has not drained ({}): {e}", path.display())
+                })?;
                 custody.0.push(file);
             }
             ensure_no_restore_handles(state_root)?;
@@ -2294,7 +2325,11 @@ fn wait_for_restore_custody(state_root: &Path, timeout: Duration) -> Result<Rest
         })();
         match attempt {
             Ok(custody) => return Ok(custody),
-            Err(error) if Instant::now() >= until => return Err(error.context("rollback restore refused: store/DB handles did not drain before deadline")),
+            Err(error) if Instant::now() >= until => {
+                return Err(error.context(
+                    "rollback restore refused: store/DB handles did not drain before deadline",
+                ))
+            }
             Err(_) => std::thread::sleep(Duration::from_millis(50)),
         }
     }
@@ -2307,9 +2342,15 @@ fn ensure_no_restore_handles(state_root: &Path) -> Result<()> {
     let uid = fs::metadata("/proc/self")?.uid();
     for entry in fs::read_dir("/proc")? {
         let entry = entry?;
-        if entry.file_name().to_string_lossy().parse::<u32>().is_err() { continue; }
-        let Ok(meta) = entry.metadata() else { continue; };
-        if meta.uid() != uid { continue; }
+        if entry.file_name().to_string_lossy().parse::<u32>().is_err() {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if meta.uid() != uid {
+            continue;
+        }
         let fds = match fs::read_dir(entry.path().join("fd")) {
             Ok(fds) => fds,
             Err(error) if error.kind() == ErrorKind::NotFound => continue,
@@ -2324,12 +2365,26 @@ fn ensure_no_restore_handles(state_root: &Path) -> Result<()> {
             };
             let text = target.to_string_lossy();
             let path = Path::new(text.strip_suffix(" (deleted)").unwrap_or(&text));
-            if !path.starts_with(&root) || path.starts_with(root.join("backups")) { continue; }
-            let Some(name) = path.file_name().and_then(OsStr::to_str) else { continue; };
-            if name.starts_with(MAINTENANCE_STORE_FILE_NAME) { continue; }
-            let body = SQLITE_SIDECAR_SUFFIXES.iter().find_map(|suffix| name.strip_suffix(suffix)).unwrap_or(name);
+            if !path.starts_with(&root) || path.starts_with(root.join("backups")) {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+                continue;
+            };
+            if name.starts_with(MAINTENANCE_STORE_FILE_NAME) {
+                continue;
+            }
+            let body = SQLITE_SIDECAR_SUFFIXES
+                .iter()
+                .find_map(|suffix| name.strip_suffix(suffix))
+                .unwrap_or(name);
             if is_sqlite_database_file(Path::new(body)) {
-                anyhow::bail!("database still open by pid {} fd {} ({})", entry.file_name().to_string_lossy(), fd.file_name().to_string_lossy(), path.display());
+                anyhow::bail!(
+                    "database still open by pid {} fd {} ({})",
+                    entry.file_name().to_string_lossy(),
+                    fd.file_name().to_string_lossy(),
+                    path.display()
+                );
             }
         }
     }
@@ -2338,12 +2393,25 @@ fn ensure_no_restore_handles(state_root: &Path) -> Result<()> {
 
 #[cfg(not(any(target_os = "linux", windows)))]
 fn ensure_no_restore_handles(state_root: &Path) -> Result<()> {
-    let files: Vec<_> = collect_sqlite_database_files(state_root).into_iter()
-        .filter(|p| !p.starts_with(state_root.join("backups")) && p != &state_root.join(MAINTENANCE_STORE_FILE_NAME)).collect();
-    if files.is_empty() { return Ok(()); }
-    let output = Command::new("lsof").args(["-nP", "-t", "--"]).args(&files).output()
+    let files: Vec<_> = collect_sqlite_database_files(state_root)
+        .into_iter()
+        .filter(|p| {
+            !p.starts_with(state_root.join("backups"))
+                && p != &state_root.join(MAINTENANCE_STORE_FILE_NAME)
+        })
+        .collect();
+    if files.is_empty() {
+        return Ok(());
+    }
+    let output = Command::new("lsof")
+        .args(["-nP", "-t", "--"])
+        .args(&files)
+        .output()
         .context("lsof is required to establish offline restore custody on this platform")?;
-    anyhow::ensure!(output.status.code() == Some(1) && output.stdout.is_empty() && output.stderr.is_empty(), "restore refused: DB handles remain or cannot be inspected");
+    anyhow::ensure!(
+        output.status.code() == Some(1) && output.stdout.is_empty() && output.stderr.is_empty(),
+        "restore refused: DB handles remain or cannot be inspected"
+    );
     Ok(())
 }
 
@@ -2351,10 +2419,18 @@ fn ensure_no_restore_handles(state_root: &Path) -> Result<()> {
 fn ensure_no_restore_handles(state_root: &Path) -> Result<()> {
     use std::os::windows::fs::OpenOptionsExt;
     for path in collect_sqlite_database_files(state_root) {
-        if path.starts_with(state_root.join("backups")) || path == state_root.join(MAINTENANCE_STORE_FILE_NAME) { continue; }
+        if path.starts_with(state_root.join("backups"))
+            || path == state_root.join(MAINTENANCE_STORE_FILE_NAME)
+        {
+            continue;
+        }
         // Deny all sharing while probing; Windows refuses this even for a
         // handle retained by this same process. Daemon/file leases stay held.
-        let _probe = OpenOptions::new().read(true).write(true).share_mode(0).open(path)
+        let _probe = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(0)
+            .open(path)
             .context("database handle remains open before rollback restore")?;
     }
     Ok(())
@@ -2368,17 +2444,38 @@ fn restore_rollback_state(backup_root: &Path, state_root: &Path, timeout: Durati
 
 fn verify_restored_databases(backup_root: &Path, state_root: &Path) -> Result<()> {
     for original in collect_sqlite_database_files(backup_root) {
-        if original == backup_root.join(MAINTENANCE_STORE_FILE_NAME) { continue; }
+        if original == backup_root.join(MAINTENANCE_STORE_FILE_NAME) {
+            continue;
+        }
         let restored = state_root.join(original.strip_prefix(backup_root)?);
-        let db = rusqlite::Connection::open_with_flags(&restored, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        let check: Result<String> = db.query_row("PRAGMA quick_check", [], |row| row.get(0)).map_err(Into::into);
+        let db = rusqlite::Connection::open_with_flags(
+            &restored,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        let check: Result<String> = db
+            .query_row("PRAGMA quick_check", [], |row| row.get(0))
+            .map_err(Into::into);
         match check {
-            Ok(check) => anyhow::ensure!(check == "ok", "restored database failed verification: {}", restored.display()),
+            Ok(check) => anyhow::ensure!(
+                check == "ok",
+                "restored database failed verification: {}",
+                restored.display()
+            ),
             Err(error) if sqlite_error_is_not_a_database(&error) => {
                 // Historical backups preserve non-SQLite files with a DB suffix.
-                let source = rusqlite::Connection::open_with_flags(original, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-                let source_check: Result<String> = source.query_row("PRAGMA quick_check", [], |row| row.get(0)).map_err(Into::into);
-                anyhow::ensure!(source_check.as_ref().is_err_and(sqlite_error_is_not_a_database), "restored SQLite snapshot became unreadable");
+                let source = rusqlite::Connection::open_with_flags(
+                    original,
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                )?;
+                let source_check: Result<String> = source
+                    .query_row("PRAGMA quick_check", [], |row| row.get(0))
+                    .map_err(Into::into);
+                anyhow::ensure!(
+                    source_check
+                        .as_ref()
+                        .is_err_and(sqlite_error_is_not_a_database),
+                    "restored SQLite snapshot became unreadable"
+                );
             }
             Err(error) => return Err(error).context("restored database verification failed"),
         }
