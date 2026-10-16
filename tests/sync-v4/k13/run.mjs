@@ -57,7 +57,7 @@ async function namespace(config,log) {
   let escalation;
   const seconds=JSON.parse(fs.readFileSync(config)).durationSeconds;
   const timer=setTimeout(()=>{kill('SIGTERM');escalation=setTimeout(()=>kill('SIGKILL'),7000);},(seconds+30)*1000);
-  const cancel=()=>{cancelled=true;kill('SIGTERM');};process.once('SIGTERM',cancel);
+  const cancel=()=>{cancelled=true;kill('SIGTERM');escalation=setTimeout(()=>kill('SIGKILL'),7000);};process.once('SIGTERM',cancel);
   try {
     const exit=await new Promise((resolve,reject)=>{child.once('error',reject);child.once('exit',(code,signal)=>resolve({code,signal}));});
     row.exit=exit;kill('SIGKILL');
