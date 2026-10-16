@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {generateKeyPairSync,sign,verify} from 'node:crypto';
-import {createStubKernel} from '../../../src/apps/business-os/kernel/kernel.mjs';
+import {createStubKernel} from '../../../src/apps/business-os/kernel/testkit.mjs';
 import {WebRTCKernelTransport} from '../../../src/apps/business-os/kernel/transport-webrtc.mjs';
 
 // Component proof at the actual transport -> kernel atomic-store boundary.

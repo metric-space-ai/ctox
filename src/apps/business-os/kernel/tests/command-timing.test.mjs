@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createStubKernel } from '../kernel.mjs';
+import { createStubKernel } from '../testkit.mjs';
 
 async function until(pred) {
   const deadline = Date.now() + 5000;

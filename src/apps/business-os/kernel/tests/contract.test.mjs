@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
   createStubKernel as createContractKernel, createShellKernel, compileQuery, runCompiledQuery, CtoxError, sha256Js, uuidv7,
-} from '../kernel.mjs';
+} from '../testkit.mjs';
 import { createAppHost } from '../testkit/app-host.mjs';
 const createStubKernel=options=>createContractKernel({locks:testLocks,...options});
 

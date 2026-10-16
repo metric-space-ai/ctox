@@ -2,7 +2,7 @@
 import { testLocks } from './web-locks.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createStubKernel } from '../kernel.mjs';
+import { createStubKernel } from '../testkit.mjs';
 
 let n = 0;
 async function mk(t, o = {}) {
