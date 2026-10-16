@@ -16,12 +16,6 @@ pub struct DefaultTool {
 }
 pub const DEFAULT_TOOLS: &[DefaultTool] = &[
     DefaultTool {
-        name: "appsec-app-audit-validator",
-        app_id: "appsec-pentest",
-        interpreter: "node",
-        host_script: "app-audit-scenarios.mjs",
-    },
-    DefaultTool {
         name: "olg-scrape-js",
         app_id: "outbound-lead-generation",
         interpreter: "node",
@@ -244,9 +238,5 @@ mod tests {
     #[test]
     fn app_capabilities_cap7_olg_ts_policy() {
         check_tool("olg-scrape-ts");
-    }
-    #[test]
-    fn app_capabilities_cap7_appsec_validator_policy() {
-        check_tool("appsec-app-audit-validator");
     }
 }
