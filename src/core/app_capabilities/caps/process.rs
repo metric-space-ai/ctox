@@ -127,7 +127,7 @@ pub(super) fn execute(
     args: &Value,
 ) -> Result<Value, CtoxError> {
     let request: Run = decode(args)?;
-    let programs = allowlist(root);
+    let programs = super::process_defaults::allowlist(root, ctx, &request.program)?;
     let (program, prefix_args, base_env) =
         programs
             .get(&request.program)
