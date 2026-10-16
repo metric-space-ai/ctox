@@ -304,6 +304,7 @@ async fn republish_receiver(database: &Database, id: &str, incoming: Value) -> R
             let app = document(tx, "business_apps", "receiver")?.unwrap();
             let mut draft = document(tx, "app_drafts", "receiver-draft")?.unwrap();
             draft["id"] = json!(draft_id);
+            draft["base_app_ver"] = app["active_ver"].clone();
             draft["manifest_fields"]["commands_in"] = incoming;
             super::super::super::commands::put(tx, "app_drafts", &draft_id, &draft)?;
             Ok(app["active_ver"].clone())

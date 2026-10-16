@@ -85,6 +85,8 @@ type ModelChecker = Arc<
         + Sync,
 >;
 
+pub(super) type RightsPublicationFence = Arc<dyn Fn() -> Result<(), StoreError> + Send + Sync>;
+
 #[derive(Clone)]
 pub(crate) struct Platform {
     writer: WriterHandle,
@@ -92,6 +94,7 @@ pub(crate) struct Platform {
     migrations: MigrationResolver,
     secret_writer: Option<WriterHandle>,
     model_checker: Option<ModelChecker>,
+    rights_publication: Option<RightsPublicationFence>,
 }
 
 impl Platform {
@@ -122,7 +125,13 @@ impl Platform {
             migrations: Arc::new(|_, _, _| false),
             secret_writer: None,
             model_checker: None,
+            rights_publication: None,
         }
+    }
+
+    pub(super) fn with_rights_publication(mut self, fence: RightsPublicationFence) -> Self {
+        self.rights_publication = Some(fence);
+        self
     }
 
     /// The daemon lends its own root; command JSON cannot choose it. Network
@@ -292,9 +301,10 @@ impl Platform {
         let signer = self.signer.clone();
         let migrations = self.migrations.clone();
         let secret_owner_available = self.secret_writer.is_some();
+        let publication = self.rights_publication.clone();
         self.writer
             .submit(WriteJob::new(JobOptions::default(), move |tx| {
-                commands::execute(
+                commands::execute_with_publication(
                     tx,
                     &actor,
                     &command,
@@ -302,6 +312,7 @@ impl Platform {
                     secret_owner_available,
                     signer.as_ref(),
                     migrations.as_ref(),
+                    publication.as_deref(),
                 )
             }))
     }
@@ -314,9 +325,16 @@ impl Platform {
         command_id: String,
         now_ms: u64,
     ) -> Result<ctox_store::types::JobHandle<Value>, StoreError> {
+        let publication = self.rights_publication.clone();
         self.writer
             .submit(WriteJob::new(JobOptions::default(), move |tx| {
-                commands::complete(tx, &actor, &command_id, now_ms)
+                commands::complete_with_publication(
+                    tx,
+                    &actor,
+                    &command_id,
+                    now_ms,
+                    publication.as_deref(),
+                )
             }))
     }
 }

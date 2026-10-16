@@ -802,18 +802,19 @@ async fn dispatch_platform(
             Ok((a, command))
         }))?
         .await?;
-    // Suspend publication before the schema/rights transaction. The existing P6
-    // router is the same writer/generation owner used by replication.
-    let pending = if command.command_type.starts_with("ctox.app.") {
-        Some(
-            policy_owner
-                .router
-                .begin_rights_update()
-                .map_err(|e| anyhow!(e))?,
-        )
-    } else {
-        None
-    };
+    let publication = Arc::new(std::sync::Mutex::new(None));
+    let pending = publication.clone();
+    let owner = policy_owner.clone();
+    let platform = platform.clone().with_rights_publication(Arc::new(move || {
+        let mut pending = pending
+            .lock()
+            .map_err(|_| invalid("unavailable: rights publication lock"))?;
+        if pending.is_some() {
+            return Err(invalid("conflict: duplicate rights publication"));
+        }
+        *pending = Some(owner.router.begin_rights_update().map_err(sql_error)?);
+        Ok(())
+    }));
     let model_fence = if command.command_type == "instance.providers.models.check" {
         let native = authority.clone();
         let invocation = binding.clone();
@@ -850,30 +851,60 @@ async fn dispatch_platform(
     } else {
         None
     };
-    eprintln!("APP_FEED_EVENT ts={} event=install_start type={}", now(), command.command_type);
+    eprintln!(
+        "APP_FEED_EVENT ts={} event=install_start type={}",
+        now(),
+        command.command_type
+    );
     let outcome = platform
         .dispatch_fenced(actor, command, now(), model_fence)
         .await;
     eprintln!("APP_FEED_EVENT ts={} event=install_dispatch_complete status={} code={} reason={} detail={}", now(), outcome["status"], outcome["code"], outcome["reason"], outcome["detail"]);
+    let pending = publication
+        .lock()
+        .map_err(|_| anyhow!("rights publication lock"))?
+        .take();
     if let Some(pending) = pending {
         let refreshed = database
             .readers
             .read(|tx| sync_rights::read(tx))
             .await
             .map_err(|e| e.to_string());
-        eprintln!("APP_FEED_EVENT ts={} event=rights_refresh expected_ver={} committed_ver={:?}", now(), pending.expected_version(), refreshed.as_ref().map(|r|r.rights_ver));
+        eprintln!(
+            "APP_FEED_EVENT ts={} event=rights_refresh expected_ver={} committed_ver={:?}",
+            now(),
+            pending.expected_version(),
+            refreshed.as_ref().map(|r| r.rights_ver)
+        );
         policy_owner
             .router
             .finish_rights_update(pending, refreshed)
             .map_err(|e| anyhow!(e))?;
     }
-    // Platform owns its own idempotent terminal/pending receipt; do not overwrite it.
-    authority.release(binding).await?;
+    // A rolled-back validation failure has no native terminal receipt yet.
+    // Persist the typed failure in the same command plane instead of killing
+    // the shared feed (and masking it with a rights-publication error).
     if outcome["status"] == "failed" {
-        return Err(anyhow!(
-            "unavailable: native platform effect failed; inspect typed command result"
-        ));
+        let id = text(&binding["command"], "id")?.to_owned();
+        let outcome = outcome.clone();
+        database
+            .writer
+            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+                let mut doc = document(tx, "business_commands", &id)?
+                    .ok_or_else(|| invalid("not_found: platform failure"))?;
+                if doc["status"] == "running" {
+                    let code = outcome["code"].as_str().unwrap_or("unavailable");
+                    origin::audit_rejection(tx, &doc, code)?;
+                    doc["status"] = json!("failed");
+                    doc["error"] = json!({"code":code,"reason":outcome["reason"]});
+                    doc["result"] = outcome;
+                    store_command(tx, &doc)?;
+                }
+                Ok(())
+            }))?
+            .await?;
     }
+    authority.release(binding).await?;
     Ok(())
 }
 

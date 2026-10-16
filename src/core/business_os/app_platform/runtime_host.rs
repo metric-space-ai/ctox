@@ -9,9 +9,9 @@ mod routing;
 pub(super) use feed::check_model_fence;
 pub(crate) use origin::{enqueue_core_command, CoreCommandSource};
 #[cfg(all(test, unix, feature = "app-runtime-node"))]
-mod native_proof;
-#[cfg(all(test, unix, feature = "app-runtime-node"))]
 mod e42_proof;
+#[cfg(all(test, unix, feature = "app-runtime-node"))]
+mod native_proof;
 #[cfg(test)]
 mod runtime_tests;
 
@@ -382,8 +382,23 @@ pub(super) fn publish_rights(
     version: &str,
     manifest: &Value,
 ) -> Result<(), StoreError> {
+    publish_rights_with_fence(tx, app, version, manifest, None)
+}
+
+pub(super) fn publish_rights_with_fence(
+    tx: &rusqlite::Transaction<'_>,
+    app: &str,
+    version: &str,
+    manifest: &Value,
+    publication: Option<&(dyn Fn() -> Result<(), StoreError> + Send + Sync)>,
+) -> Result<(), StoreError> {
     let mut current = sync_rights::read(tx)?;
-    eprintln!("APP_FEED_EVENT ts={} event=rights_publish app={} prior_ver={}", now(), app, current.rights_ver);
+    eprintln!(
+        "APP_FEED_EVENT ts={} event=rights_publish app={} prior_ver={}",
+        now(),
+        app,
+        current.rights_ver
+    );
     let owned = manifest["collections"]
         .as_object()
         .ok_or_else(|| invalid("invalid: manifest collections"))?
@@ -406,6 +421,11 @@ pub(super) fn publish_rights(
             .map_err(sql_error)?;
     current.manifests.retain(|m| m.app_id() != app);
     current.manifests.push(rules);
+    // Suspend the existing P6 router only for an actual rights write, after
+    // validation. An unchanged/rejected/preparing request is not a revocation.
+    if let Some(publication) = publication {
+        publication()?;
+    }
     sync_rights::replace_with_manifests(
         tx,
         current.rights_ver,

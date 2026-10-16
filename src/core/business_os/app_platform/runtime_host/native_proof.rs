@@ -242,6 +242,10 @@ async fn run_native_proof(e42_only: bool) -> Result<()> {
             tokio::time::timeout(Duration::from_secs(15),owner.inputs.native_session()?.execution_authority.worker_membership(9001)).await??;
         }
         let database=&owners[0].inputs.sync;
+        // Validation rollback publishes no rights. It must produce a typed
+        // terminal receipt and leave the shared feed available for installation.
+        let invalid=submit(database,"hot-invalid-publication","ctox-platform","ctox.app.publish",json!({"app_id":"hot-app"})).await?;
+        anyhow::ensure!(invalid["status"]=="failed"&&invalid["error"]["code"]=="invalid","invalid publication must not revoke the feed: {invalid}");
         let delayed_pages = feed::load_source::delay_pages(database.writer.db_id().path(), 3);
         let source=b"export async function handle(command,ctx){if(command.payload.write)await ctx.put('hot_rows',{id:command.payload.id,n:command.payload.n});return {n:command.payload.n,sender:command.app_id,target:'hot-app'};}";
         let platform_trap=b"export async function handle(){throw new Error('E39 platform reached app process');}";
