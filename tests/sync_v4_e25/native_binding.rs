@@ -1,6 +1,8 @@
 // Included in the existing native foreground/quorum proof; reuse its actual
 // writer, retained Raft authority, signed release and ordinary command feed.
 pub(super) async fn assert_native_workjet_route(database: &Database) -> Result<()> {
+    use sha2::Digest;
+    println!("E25_CORE_FEED_SHA256 {:x}", sha2::Sha256::digest(include_bytes!("../../src/core/business_os/app_platform/runtime_host/feed.rs")));
     let started = Instant::now();
     let result = submit(
         database,
@@ -9,7 +11,7 @@ pub(super) async fn assert_native_workjet_route(database: &Database) -> Result<(
         "ctox.workjet.project.list",
         json!({}),
     )
-    .await?;
+    .await.context("E25 real Core feed failed to complete native command")?;
     anyhow::ensure!(
         result["status"] == "done" && result["result"].is_object(),
         "E25 real Core feed failed to invoke the original native Workjet handler: {result}"
