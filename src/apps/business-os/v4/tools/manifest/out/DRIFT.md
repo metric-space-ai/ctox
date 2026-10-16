@@ -8,22 +8,22 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 |---|---|
 | apps | 42 |
 | manifests_total | 43 |
-| collections_total | 241 |
-| collections_in_contract | 237 |
+| collections_total | 242 |
+| collections_in_contract | 238 |
 | owned_by_apps | 226 |
-| owned_by_platform | 15 |
-| owner_proposals | 5 |
+| owned_by_platform | 16 |
+| owner_proposals | 6 |
 | handlers_total | 117 |
 | apps_with_handlers | 16 |
 | legacy_total | 0 |
 | capabilities_distinct | 41 |
 | triggers_total | 10 |
 | command_rights_entries | 43 |
-| foreign_declarations | 298 |
+| foreign_declarations | 299 |
 | foreign_write_declarations | 32 |
 | foreign_code_only | 94 |
 | foreign_without_export | 0 |
-| platform_clamps | 1 |
+| platform_clamps | 0 |
 | exported_collections | 85 |
 | handler_conflicts | 0 |
 | handlers_platform_type | 282 |
@@ -31,8 +31,8 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | schema_js_present | 3 |
 | schema_js_load_errors | 0 |
 | schema_from_v4_schemas | 42 |
-| no_owner_app | 5 |
-| contract_only | 11 |
+| no_owner_app | 6 |
+| contract_only | 12 |
 | multiple_owners | 0 |
 | drift_schema_js_vs_json_collections | 29 |
 | drift_migration_steps | 3 |
@@ -42,7 +42,7 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | shell_files | 126 |
 | apps_with_styles | 41 |
 | write_guards | 1 |
-| todo_total | 186 |
+| todo_total | 185 |
 | declarations | 41 |
 | commands_out_total | 20 |
 | commands_in_total | 7 |
@@ -148,12 +148,13 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | App | Fehler |
 |---|---|
 
-## 4. Nur im Schema-Vertrag, in keiner collections.schema.json (11)
+## 4. Nur im Schema-Vertrag, in keiner collections.schema.json (12)
 
 | Collection | Eigentümer |
 |---|---|
 | app_activations | ctox-platform |
 | app_drafts | ctox-platform |
+| app_user_preferences | ctox-platform |
 | business_app_versions | ctox-platform |
 | business_apps | ctox-platform |
 | business_commands | ctox-platform |
@@ -164,11 +165,12 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | mail_server_state | ctox-platform |
 | shell_preferences | ctox-platform |
 
-## 5. Ohne definierende App (5)
+## 5. Ohne definierende App (6)
 
 | Collection | Eigentümer | Grundlage |
 |---|---|---|
 | app_catalog | ctox-platform | keine App definiert die Collection; keine Präfixregel → Plattform |
+| app_user_preferences | ctox-platform | keine App definiert die Collection; keine Präfixregel → Plattform |
 | coding_turns | ctox-platform | keine App definiert die Collection; keine Präfixregel → Plattform |
 | devices | ctox-platform | keine App definiert die Collection; keine Präfixregel → Plattform |
 | machine_enrollments | ctox-platform | keine App definiert die Collection; keine Präfixregel → Plattform |
@@ -201,11 +203,10 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | Befehlstyp | Apps |
 |---|---|
 
-## 11. Plattformzugriffe auf exports beschränkt (1)
+## 11. Plattformzugriffe auf exports beschränkt (0)
 
 | App | Collection | gewünscht | gewährt | Grund |
 |---|---|---|---|---|
-| app-store | app_drafts | read | – | nicht in Plattform-exports |
 
 ## 12. foreign ohne passendes exports (0, Soll 0)
 

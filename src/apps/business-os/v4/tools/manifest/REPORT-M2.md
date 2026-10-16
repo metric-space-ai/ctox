@@ -2,7 +2,7 @@
 
 Quellen: module.json, collections.schema.json (Vorrang v4/schemas/<app_id>.collections.schema.json), handlers/*.js,
 Code (commands_out, Trigger-Exporte, net.ingest), je App v4-manifest.json (commands_in, exports, Rechte, multi_instance, Fremdzugriffs-ops, Trigger),
-ownership-baseline.json (eingefrorene Eigentümer-Zuordnung), Plattform-exports aus ~/.local/state/ctox-sync-v4/docs/v4-manifests/ctox-platform.manifest.json.
+ownership-baseline.json (eingefrorene Eigentümer-Zuordnung), Plattform-exports aus /Volumes/tmp/shell-v4-wj/src/core/business_os/v4/ctox-platform.manifest.json.
 Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.mjs`; `node src/apps/business-os/v4/tools/manifest/gen-manifest.mjs --check`.
 
 ## Zahlen
@@ -11,21 +11,21 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 |---|---|
 | Apps (modules + customer-modules) | 42 |
 | Manifeste gesamt (Apps + shell) | 43 |
-| Collections gesamt / App-eigen / ctox-platform | 241 / 226 / 15 |
+| Collections gesamt / App-eigen / ctox-platform | 242 / 226 / 16 |
 | Handler gesamt (Apps mit Handlern) | 117 (16) |
 | Legacy-Rest gesamt (ctx.cap.legacy) | 0 |
 | Capabilities gesamt (verschieden, ohne legacy) | 41 |
 | Trigger | 10 |
 | command_rights-Einträge | 43 |
-| foreign-Deklarationen (davon write / nur Code-Scan) | 298 (32 / 94) |
+| foreign-Deklarationen (davon write / nur Code-Scan) | 299 (32 / 94) |
 | **foreign ohne passendes exports (Soll 0)** | **0** |
-| Plattformzugriffe auf exports beschränkt | 1 |
+| Plattformzugriffe auf exports beschränkt | 0 |
 | Befehlstypen mit Handlern in mehreren Apps | 0 |
 | eigene Collections ohne Schema | 0 |
 | schema.js noch vorhanden / nicht ladbar | 3 / 0 |
 | Shell-Dateien | 126 |
 | Apps mit styles / write_guard-Collections | 41 / 1 |
-| offene _todo gesamt | 186 |
+| offene _todo gesamt | 185 |
 | Deklarationsdateien v4-manifest.json | 41 |
 | commands_out / commands_in | 20 / 7 |
 | **commands ohne Gegenstück (Soll 0)** | **0** |
@@ -40,7 +40,7 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 
 | App | Handler | Legacy-Rest | Capabilities | Trigger | command_rights | foreign | exports | _todo |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| app-store | 0 | 0 | 0 | 0 | 0 | 7 | 0 | 4 |
+| app-store | 0 | 0 | 0 | 0 | 0 | 8 | 0 | 3 |
 | appsec-pentest | 0 | 0 | 0 | 0 | 0 | 3 | 0 | 3 |
 | browser | 0 | 0 | 0 | 0 | 0 | 4 | 0 | 3 |
 | buchhaltung | 0 | 0 | 0 | 0 | 0 | 1 | 7 | 3 |
@@ -222,9 +222,8 @@ keine
 
 keine
 
-## Plattformzugriffe auf exports beschränkt (1)
+## Plattformzugriffe auf exports beschränkt (0)
 
-- app-store: app_drafts gewünscht read, gewährt – (nicht in Plattform-exports)
 
 ## Befehlstypen mit Handlern in mehreren Apps (0)
 
@@ -515,10 +514,6 @@ keine
 - `ctox.ticket.writeback.failed`: tickets handlers/ctox.ticket.writeback.failed.js – nicht im Manifest, der Typ geht an den Kern
 
 ## Offene _todo (app-spezifisch; die drei Standardpunkte rights/client_limit/app_ver stehen in jedem Manifest)
-
-### app-store
-
-- app_drafts: Plattform exportiert die Collection nicht – Zugriff (read) nicht deklariert.
 
 ### consent
 
