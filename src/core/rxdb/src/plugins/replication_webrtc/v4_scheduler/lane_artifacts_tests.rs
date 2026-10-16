@@ -311,12 +311,22 @@ impl PairFixture {
         sb: Arc<ReliableSession<super::super::SessionPayload>>,
         bind: &str,
     ) -> Self {
+        Self::connect_configured(sa, sb, bind, Default::default(), false).await
+    }
+    async fn connect_configured(
+        sa: Arc<ReliableSession<super::super::SessionPayload>>,
+        sb: Arc<ReliableSession<super::super::SessionPayload>>,
+        bind: &str,
+        configuration: [webrtc::peer_connection::RTCConfiguration; 2],
+        shaped: bool,
+    ) -> Self {
         let (atx, mut ac) = mpsc::unbounded_channel();
         let (btx, mut bc) = mpsc::unbounded_channel();
         let (unused, _discard) = mpsc::unbounded_channel();
         let (incoming, mut channels) = mpsc::unbounded_channel();
         let a: Arc<dyn PeerConnection> = Arc::new(
             PeerConnectionBuilder::new()
+                .with_configuration(configuration[0].clone())
                 .with_handler(Arc::new(Events {
                     candidates: atx,
                     channels: unused,
@@ -328,6 +338,7 @@ impl PairFixture {
         );
         let b: Arc<dyn PeerConnection> = Arc::new(
             PeerConnectionBuilder::new()
+                .with_configuration(configuration[1].clone())
                 .with_handler(Arc::new(Events {
                     candidates: btx,
                     channels: incoming,
@@ -422,7 +433,7 @@ impl PairFixture {
         // Surface constructor failure immediately. join! used to hide it
         // behind the unrelated accept future until the fixture watchdog fired.
         let dynamic_started = Instant::now();
-        let (source, target) = tokio::time::timeout(Duration::from_secs(1), async {
+        let (source, target) = tokio::time::timeout(Duration::from_secs(if shaped {10} else {1}), async {
             tokio::try_join!(create, async {
                 Ok::<_, crate::rx_error::RxError>(accept.await)
             })
@@ -844,11 +855,17 @@ async fn z3_p4_twenty_reconnects_preserve_every_application_delivery() {
 #[ignore = "requires isolated unshare -Urn with Z3_OWN_NETNS=1"]
 async fn z3_p4_netns_network_change() {
     assert_eq!(std::env::var("Z3_OWN_NETNS").as_deref(), Ok("1"));
+    let links = std::process::Command::new("ip").args(["-j", "link", "show"]).output().unwrap();
+    let links: Vec<serde_json::Value> = serde_json::from_slice(&links.stdout).unwrap();
+    assert_eq!(links.len(), 1, "refusing interface fault outside an isolated namespace");
+    assert_eq!(links[0]["ifname"], "lo");
     let _ = rustls::crypto::ring::default_provider().install_default();
     tokio::time::timeout(Duration::from_secs(40), async {
         let sa = ReliableSession::new("z3-network".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
         let sb = ReliableSession::new("z3-network".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
         let mut pair = PairFixture::connect_on(sa.clone(), sb.clone(), "127.0.0.2:0").await;
+        let before = z3_candidate_endpoints(&pair.a).await;
+        assert!(before.iter().all(|(address, _, _)| address == "127.0.0.2"));
         let mut received = Vec::new();
         let mut incoming = pair.target.take_incoming(Some(Lane::Commands)).unwrap();
         let mut held = None;
@@ -863,6 +880,9 @@ async fn z3_p4_netns_network_change() {
         pair.close().await; drop(held);
         assert!(std::process::Command::new("ip").args(["link", "set", "lo", "up"]).status().unwrap().success());
         pair = PairFixture::connect_on(sa.clone(), sb, "127.0.0.3:0").await;
+        let after = z3_candidate_endpoints(&pair.a).await;
+        assert!(after.iter().all(|(address, _, _)| address == "127.0.0.3"));
+        assert_ne!(before, after, "network recovery retained the original candidates");
         incoming = pair.target.take_incoming(Some(Lane::Commands)).unwrap();
         for id in 15..32u64 {
             if id != 15 {pair.source.send(Lane::Commands, WireSeq(id), &id.to_be_bytes(), Some(Arc::new(Authorized))).await.unwrap();}
@@ -874,7 +894,7 @@ async fn z3_p4_netns_network_change() {
             while !sa.replay(pair.source.session.as_ref().unwrap().generation, Lane::Commands).unwrap().is_empty() {tokio::time::sleep(Duration::from_millis(1)).await;}
         }).await.expect("network suffix was not acknowledged");
         assert_eq!(received, (0..32u64).collect::<Vec<_>>()); pair.close().await;
-        eprintln!("Z3_P4_NETWORK {}", serde_json::json!({"scenario":2,"interface":"lo","interface_flips":1,"bind_before":"127.0.0.2","bind_after":"127.0.0.3","sent":32,"explicit_send_results":32,"delivery_acknowledged":32,"replayed":1,"lost":0,"duplicated":0}));
+        eprintln!("Z3_P4_NETWORK {}", serde_json::json!({"scenario":2,"interface":"lo","interface_flips":1,"candidates_before":before,"candidates_after":after,"sent":32,"explicit_send_results":32,"delivery_acknowledged":32,"replayed":1,"lost":0,"duplicated":0}));
     }).await.expect("network change fixture deadline");
 }
 
@@ -935,4 +955,118 @@ async fn z3_p4_restart_child() {
         }).await.expect("restart suffix needs cumulative delivery acknowledgement");
         assert_eq!(sink.offset().unwrap(), end as u64); pair.close().await;
     }).await.expect("restart child deadline");
+}
+
+
+async fn z3_candidate_endpoints(pc: &Arc<dyn PeerConnection>) -> Vec<(String, u16, String)> {
+    let description = pc.local_description().await.unwrap();
+    let candidates: Vec<_> = description.sdp.lines().filter(|line| line.starts_with("a=candidate:")).map(|line| {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        (fields[4].to_owned(), fields[5].parse().unwrap(), fields[7].to_owned())
+    }).collect();
+    assert!(!candidates.is_empty(), "connected peer must publish actual candidates");
+    candidates
+}
+
+/// Network shaping sits on the TURN datagram path, not on application sends.
+/// A frame crosses two 37.5-ms shims per direction: nominal end-to-end RTT 150ms.
+struct Z3UdpShape {
+    port: u16,
+    task: tokio::task::JoinHandle<()>,
+    packets: Arc<std::sync::atomic::AtomicU64>,
+    drops: Arc<std::sync::atomic::AtomicU64>,
+}
+impl Z3UdpShape {
+    async fn start(server: std::net::SocketAddr) -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let front = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let back = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        back.connect(server).await.unwrap();
+        let port = front.local_addr().unwrap().port();
+        let packets = Arc::new(AtomicU64::new(0)); let drops = Arc::new(AtomicU64::new(0));
+        let seen = packets.clone(); let lost = drops.clone();
+        let task = tokio::spawn(async move {
+            let mut from_native = vec![0;65536]; let mut from_turn = vec![0;65536];
+            let mut native = None;
+            let mut delayed: futures::stream::FuturesUnordered<futures::future::BoxFuture<'static, (bool, Vec<u8>)>> = futures::stream::FuturesUnordered::new();
+            loop {
+                let packet = tokio::select! {
+                    received = front.recv_from(&mut from_native), if delayed.len() < 128 => {
+                        let (n, addr) = received.unwrap(); native = Some(addr);
+                        (true, from_native[..n].to_vec())
+                    }
+                    received = back.recv(&mut from_turn), if delayed.len() < 128 => {
+                        let n = received.unwrap(); (false, from_turn[..n].to_vec())
+                    }
+                    Some((outbound, bytes)) = delayed.next(), if !delayed.is_empty() => {
+                        if outbound {back.send(&bytes).await.unwrap();} else {front.send_to(&bytes, native.unwrap()).await.unwrap();}
+                        continue;
+                    }
+                };
+                let n = seen.fetch_add(1, Ordering::Relaxed)+1;
+                if n%100 == 0 {lost.fetch_add(1, Ordering::Relaxed); continue;}
+                delayed.push(Box::pin(async move {
+                    tokio::time::sleep(Duration::from_micros(37_500)).await;
+                    packet
+                }));
+            }
+        });
+        Self {port,task,packets,drops}
+    }
+}
+impl Drop for Z3UdpShape {fn drop(&mut self) {self.task.abort();}}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "isolated coturn UDP listener and unprivileged netns required"]
+async fn z3_p4_turn_loss_rtt() {
+    use webrtc::peer_connection::{RTCConfigurationBuilder,RTCIceServer,RTCIceTransportPolicy};
+    use std::sync::atomic::Ordering;
+    assert_eq!(std::env::var("Z3_OWN_NETNS").as_deref(), Ok("1"));
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    tokio::time::timeout(Duration::from_secs(90), async {
+        let server: std::net::SocketAddr = std::env::var("Z3_TURN_LISTENER").unwrap().parse().unwrap();
+        let a = Z3UdpShape::start(server).await; let b = Z3UdpShape::start(server).await;
+        let configuration = |port| RTCConfigurationBuilder::new()
+            .with_ice_transport_policy(RTCIceTransportPolicy::Relay)
+            .with_ice_servers(vec![RTCIceServer {urls:vec![format!("turn:127.0.0.1:{port}?transport=udp")],username:"z3-fixture".into(),credential:"z3-fixture-only".into()}]).build();
+        let sa = ReliableSession::new("z3-turn".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
+        let sb = ReliableSession::new("z3-turn".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
+        let pair = PairFixture::connect_configured(sa.clone(),sb.clone(),"127.0.0.1:0",[configuration(a.port),configuration(b.port)],true).await;
+        let candidates_a = z3_candidate_endpoints(&pair.a).await;
+        let candidates_b = z3_candidate_endpoints(&pair.b).await;
+        assert!(candidates_a.iter().chain(&candidates_b).all(|(_,_,kind)| kind == "relay"), "TURN-only fixture published a host/srflx candidate");
+        let mut ac = pair.source.take_incoming(Some(Lane::Commands)).unwrap();
+        let mut bc = pair.target.take_incoming(Some(Lane::Commands)).unwrap();
+        let mut control = pair.target.take_incoming(Some(Lane::Control)).unwrap();
+        let mut replies = pair.source.take_incoming(Some(Lane::Control)).unwrap();
+        let mut latency = Vec::new(); let mut effects_a=Vec::new(); let mut effects_b=Vec::new();
+        for id in 0..64u64 {
+            pair.source.send(Lane::Commands,WireSeq(id),&id.to_be_bytes(),Some(Arc::new(Authorized))).await.unwrap();
+            pair.target.send(Lane::Commands,WireSeq(id),&id.to_be_bytes(),Some(Arc::new(Authorized))).await.unwrap();
+            for (incoming,effects) in [(&mut ac,&mut effects_a),(&mut bc,&mut effects_b)] {
+                let Some(Incoming::Reliable{bytes,delivery:Some(token),..})=incoming.recv().await else {panic!("TURN application message missing");};
+                assert_eq!(bytes,id.to_be_bytes()); effects.push(id); token.acknowledge().unwrap();
+            }
+            let clock=Instant::now();
+            pair.source.send(Lane::Control,WireSeq(id),b"probe",Some(Arc::new(Authorized))).await.unwrap();
+            let Some(Incoming::Reliable{bytes,delivery:Some(token),..})=control.recv().await else {panic!("TURN control missing");};
+            assert_eq!(bytes,b"probe");token.acknowledge().unwrap();
+            pair.target.send(Lane::Control,WireSeq(id),b"reply",Some(Arc::new(Authorized))).await.unwrap();
+            let Some(Incoming::Reliable{bytes,delivery:Some(token),..})=replies.recv().await else {panic!("TURN control reply missing");};
+            assert_eq!(bytes,b"reply");token.acknowledge().unwrap();latency.push(clock.elapsed().as_secs_f64()*1000.0);
+        }
+        tokio::time::timeout(Duration::from_secs(5),async {
+            loop {
+                if [(&sa,&pair.source),(&sb,&pair.target)].iter().all(|(session,scheduler)| [Lane::Commands,Lane::Control].iter().all(|lane| session.replay(scheduler.session.as_ref().unwrap().generation,*lane).unwrap().is_empty())) {break;}
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }).await.expect("TURN application delivery acknowledgements missing");
+        assert_eq!(effects_a,(0..64u64).collect::<Vec<_>>());assert_eq!(effects_b,effects_a);
+        let packets=a.packets.load(Ordering::Relaxed)+b.packets.load(Ordering::Relaxed);
+        let drops=a.drops.load(Ordering::Relaxed)+b.drops.load(Ordering::Relaxed);
+        assert!(drops>0,"loss shaper must drop actual network datagrams");
+        latency.sort_by(f64::total_cmp);let p95=latency[(latency.len()*95/100).min(latency.len()-1)];
+        pair.close().await;
+        eprintln!("Z3_P4_TURN {}",serde_json::json!({"scenario":3,"relay_only":true,"candidates_a":candidates_a,"candidates_b":candidates_b,"shim":"UDP at TURN control legs","nominal_rtt_ms":150,"drop_every":100,"datagrams":packets,"dropped_datagrams":drops,"sent":128,"explicit_send_results":128,"delivery_acknowledged":128,"lost":0,"duplicated":0,"control_p95_ms":p95,"control_roundtrip_ms":latency}));
+    }).await.expect("TURN loss RTT fixture deadline");
 }
