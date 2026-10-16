@@ -335,10 +335,35 @@ fn resolve_business_os_installed_app_root(root: &Path) -> PathBuf {
 fn handle_request(root: &Path, app_root: &Path, request: Request) -> anyhow::Result<()> {
     let work = root.to_owned();
     let app = app_root.to_owned();
-    crate::persistence::run_core_blocking_at(root, move || {
+    // Keep custody until admission actually starts the handler. Dropping an
+    // unadmitted tiny_http request would manufacture an unexplained HTTP500.
+    let pending = Arc::new(Mutex::new(Some(request)));
+    let admitted = Arc::clone(&pending);
+    let result = crate::persistence::run_core_blocking_at(root, move || {
+        let request = admitted
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+            .context("HTTP request already consumed")?;
         handle_admitted_request(&work, &app, request)
     })
-    .context("Business OS HTTP owner admission/request failed")
+    .context("Business OS HTTP owner admission/request failed");
+    if let Err(error) = result {
+        let request = pending.lock().unwrap_or_else(|p| p.into_inner()).take();
+        if let Some(request) = request {
+            let reason = if matches!(
+                error.downcast_ref::<ctox_store::StoreError>(),
+                Some(ctox_store::StoreError::Busy)
+            ) {
+                "Core owner admission busy"
+            } else {
+                "Core owner admission unavailable"
+            };
+            respond_status(request, 503, reason).context("failed to send owner admission error")?;
+        }
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn handle_admitted_request(
@@ -4374,6 +4399,35 @@ fn mime_for(path: &PathBuf) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn guard_prod_http_missing_owner_is_visible_service_unavailable() -> anyhow::Result<()> {
+        use anyhow::Context as _;
+        use std::io::{Read as _, Write as _};
+        let root = tempfile::tempdir()?;
+        let server = tiny_http::Server::http("127.0.0.1:0")
+            .map_err(|error| anyhow::anyhow!("isolated HTTP listener: {error}"))?;
+        let address = server.server_addr().to_ip().context("loopback address")?;
+        let worker = std::thread::spawn(move || -> anyhow::Result<()> {
+            let request = server.recv()?;
+            super::handle_request(root.path(), root.path(), request)
+        });
+        let mut stream = std::net::TcpStream::connect(address)?;
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+        stream.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")?;
+        let mut response = String::new();
+        stream.read_to_string(&mut response)?;
+        let error = worker
+            .join()
+            .expect("HTTP worker joins")
+            .expect_err("missing Core owner remains an error");
+        assert!(response.starts_with("HTTP/1.1 503"), "{response}");
+        assert!(
+            response.contains("Core owner admission unavailable"),
+            "{response}"
+        );
+        assert!(error.to_string().contains("owner admission"), "{error:#}");
+        Ok(())
+    }
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn guard_prod_foreground_http_bootstrap_and_restart_identity() -> anyhow::Result<()> {
