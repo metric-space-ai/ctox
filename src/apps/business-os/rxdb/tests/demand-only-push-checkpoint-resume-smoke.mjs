@@ -42,11 +42,11 @@ function localCheckpoint() {
   };
 }
 
-function protocol(epoch, { generation = 'gen-thesen' } = {}) {
+function protocol(epoch, { generation = 'gen-field' } = {}) {
   return {
     storageGeneration: generation,
     checkpoint: { epoch, latestLwt: 1792140000000 },
-    peerSession: { sessionId: 'rxdb-rs-thesen', role: 'ctox_instance' },
+    peerSession: { sessionId: 'rxdb-rs-field', role: 'ctox_instance' },
     collection: { name: 'outbound_lead_generation_leads', schemaHash: 'hash-leads' },
     capabilities: ['ctox-checkpoint-generation-v2'],
   };
@@ -63,7 +63,7 @@ const state = await replicateWebRTC({
       bulkWrite: async () => ({}),
     },
   },
-  topic: 'room-thesen-push-resume-424242',
+  topic: 'room-field-push-resume-424242',
   connectionHandlerCreator: {
     kind: 'ctox-native-webrtc',
     signalingServerUrl: 'wss://signaling.invalid/?token=t&token_iat=1&token_exp=2',
