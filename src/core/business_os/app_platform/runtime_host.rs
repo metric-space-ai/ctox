@@ -4,6 +4,7 @@ mod authority;
 mod codec;
 mod feed;
 mod origin;
+mod routing;
 #[cfg(test)]
 pub(super) use feed::check_model_fence;
 pub(crate) use origin::{enqueue_core_command, CoreCommandSource};
@@ -347,6 +348,7 @@ impl RuntimeOwners {
 
 pub(super) fn store_command(tx: &rusqlite::Transaction<'_>, doc: &Value) -> Result<(), StoreError> {
     let id = text(doc, "id").map_err(sql_error)?;
+    if document(tx, "business_commands", id)?.is_none() { routing::known_target(tx, doc)?; }
     let provenance = origin::before_native_write(tx, doc)?;
     super::commands::put(tx, "business_commands", id, doc)?;
     origin::after_native_write(tx, doc, provenance)?;

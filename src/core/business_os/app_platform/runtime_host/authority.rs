@@ -66,22 +66,11 @@ impl RuntimeAuthority {
         lease: &write_contract::CommandLease,
     ) -> Result<Value, StoreError> {
         let a = actor(db, text(doc, "actor_id").map_err(sql_error)?)?;
-        let app = text(doc, "app_id").map_err(sql_error)?;
-        let manifest = if super::super::commands::handles(text(doc, "type").map_err(sql_error)?) {
-            json!({"app_id":app,"app_ver":"native-platform"})
-        } else if doc["runtime_completion"] == true {
-            self.codec
-                .version(db, app, text(doc, "native_version").map_err(sql_error)?)?["manifest"]
-                .clone()
-        } else {
-            self.codec.manifest(db, app)?
-        };
-        if !super::super::commands::handles(text(doc, "type").map_err(sql_error)?) {
-            origin::delivery_permit(db, doc, &a)?;
-        }
+        let manifest = self.codec.route(db, doc)?;
         let mut command = doc.clone();
         command["actor"] = actor_json(&a);
         command["app_ver"] = manifest["app_ver"].clone();
+        if manifest["app_id"] != command["app_id"] { command["target_app"] = manifest["app_id"].clone(); }
         Ok(
             json!({"command":command,"manifest":manifest,"fence":{"run_id":format!("app-runtime:{}",lease.command_id),"participant":lease.participant,"fence":lease.fence.0,"expires_at_core_ms":lease.expires_at_core,"rights_ver":rights(db)?.rights_ver}}),
         )
@@ -327,6 +316,7 @@ impl RuntimeAuthority {
             .strip_prefix("app-runtime:")
             .context("invalid: invocation run")?;
         let h = h.get(parent).context("revoked: invocation")?;
+        let scoped = h.callback.as_ref().filter(|c| c["id"] == ctx.command_id).unwrap_or(&h.command);
         anyhow::ensure!(
             h.command["id"] == ctx.command_id
                 || h.callback
@@ -335,7 +325,7 @@ impl RuntimeAuthority {
             "revoked: callback identity differs"
         );
         anyhow::ensure!(
-            h.command["app_id"] == ctx.app_id
+            ctox_app_runtime::execution_app(scoped)? == ctx.app_id
                 && h.command["app_ver"] == ctx.app_ver
                 && h.command["actor"]["id"] == ctx.actor.id
                 && h.fence["fence"] == ctx.fence.fence
@@ -347,6 +337,7 @@ impl RuntimeAuthority {
     }
 }
 impl CoreAuthority for RuntimeAuthority {
+    fn platform_command(&self, kind: &str) -> bool { routing::core_route(kind) }
     fn admit(&self, manifest: &Value, binding: &Value) -> Result<()> {
         let _held = self.live(binding)?;
         let codec = self.codec.clone();
@@ -373,7 +364,7 @@ impl CoreAuthority for RuntimeAuthority {
             if current != expected {
                 return Err(invalid("revoked: manifest changed"));
             }
-            origin::delivery_permit_with_rights(db, &b["command"], &a, &snapshot)?;
+            let _ = (a, snapshot);
             Ok(())
         })
     }
@@ -460,7 +451,7 @@ impl CoreAuthority for RuntimeAuthority {
             json!({"run_id":held.fence["run_id"],"participant":held.fence["participant"],"fence":held.fence["fence"],"expires_at_core_ms":held.fence["expires_at_core_ms"]}),
         )?;
         Ok(CapCallContext {
-            app_id: text(&held.command, "app_id")?.into(),
+            app_id: ctox_app_runtime::execution_app(&binding["command"])?.into(),
             app_ver: text(&held.command, "app_ver")?.into(),
             actor: Actor {
                 id: text(&held.command["actor"], "id")?.into(),
@@ -527,12 +518,7 @@ impl WriteAuthority for ExecutorGate {
                 participant == self.participant,
                 "forbidden: executor differs"
             );
-            let a = actor(tx, text(command, "actor_id")?)?;
-            let app = text(command, "app_id")?;
-            if !super::super::commands::handles(text(command, "type")?) {
-                self.codec.manifest(tx, app)?;
-                origin::delivery_permit(tx, command, &a)?;
-            }
+            self.codec.route(tx, command)?;
             Ok(())
         })();
         Ok(match result {

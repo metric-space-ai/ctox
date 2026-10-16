@@ -183,7 +183,7 @@ impl AppRuntimeService {
             "text":crate::artifact_text::prompt(self.host.as_ref(), &release.manifest, path)?}))
     }
     pub fn command(&self, command: Value, fence: Value) -> Result<Value> {
-        let app = crate::string(&command, "app_id")?.to_owned();
+        let app = crate::execution_app(&command)?.to_owned();
         let version = crate::string(&command, "app_ver")?.to_owned();
         self.at_version(&app, &version, || {
             ensure!(
@@ -206,7 +206,7 @@ impl AppRuntimeService {
         collection: &str,
         docs: Vec<Value>,
     ) -> Result<Value> {
-        let app = crate::string(&command, "app_id")?.to_owned();
+        let app = crate::execution_app(&command)?.to_owned();
         let version = crate::string(&command, "app_ver")?.to_owned();
         self.at_version(&app, &version, || {
             self.pool
@@ -333,7 +333,7 @@ impl AppRuntimeService {
         succeeded: bool,
         outcome: Value,
     ) -> Result<Value> {
-        let app = crate::string(&binding["command"], "app_id")?.to_owned();
+        let app = crate::execution_app(&binding["command"])?.to_owned();
         let version = crate::string(&binding["command"], "app_ver")?.to_owned();
         binding["manifest"] = self.bundle(&app, &version)?.manifest;
         self.host.authority.admit(&binding["manifest"], &binding)?;
@@ -379,7 +379,7 @@ impl AppRuntimeService {
         command_id: &str,
         outcome: Value,
     ) -> Result<Value> {
-        let app = crate::string(&binding["command"], "app_id")?.to_owned();
+        let app = crate::execution_app(&binding["command"])?.to_owned();
         let version = crate::string(&binding["command"], "app_ver")?.to_owned();
         binding["manifest"] = self.bundle(&app, &version)?.manifest;
         self.host.authority.admit(&binding["manifest"], &binding)?;

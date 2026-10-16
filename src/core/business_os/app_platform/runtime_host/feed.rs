@@ -602,8 +602,7 @@ async fn dispatch_committed(
     }
     let command = binding["command"].clone();
     let fence = binding["fence"].clone();
-    let e25_core = write_contract::routes::resolve(text(&command, "type")?)
-        .is_ok_and(write_contract::routes::is_command_bus);
+    let e25_core = routing::core_route(text(&command, "type")?);
     let native_root = native_root.to_path_buf();
     let retained = authority.clone();
     let native_binding = binding.clone();
@@ -628,6 +627,12 @@ async fn dispatch_committed(
         tokio::select! {result=&mut call=>break result,_=renew.tick()=>authority.renew(&binding).await?}
     };
     // A failed handler is a typed terminal result; an uncertain effect stays running.
+    let result = result.map_err(|error| {
+        if e25_core && error.downcast_ref::<ctox_app_runtime::HandlerError>().is_none()
+            && (error.to_string().starts_with("unknown_command:") || error.to_string().starts_with("not_found:")) {
+            ctox_app_runtime::HandlerError { uncertain:false, code:"not_found".into(), message:"unknown_command: native Core route unavailable".into(), path:None }.into()
+        } else { error }
+    });
     let outcome = match result {
         Ok(value) => json!({"status":"done","result":value}),
         Err(error) => {

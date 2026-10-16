@@ -181,7 +181,9 @@ pub(super) fn delivery_permit_with_rights(
     if a.id.as_deref() != doc["actor_id"].as_str() {
         return Err(invalid("forbidden: command actor differs"));
     }
-    let app = text(doc, "app_id").map_err(sql_error)?;
+    delivery_permit_for(db, doc, a, snapshot, text(doc, "app_id").map_err(sql_error)?)
+}
+pub(super) fn delivery_permit_for(db: &Connection, doc: &Value, a: &BusinessOsActor, snapshot: &sync_rights::RightsSnapshot, app: &str) -> Result<bool, StoreError> {
     let kind = text(doc, "type").map_err(sql_error)?;
     if core_only(snapshot, app, kind)? {
         if receipt(db, doc)?.is_none() {

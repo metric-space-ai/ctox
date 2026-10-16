@@ -31,7 +31,7 @@ fn outcome(value: &Value) -> String {
 }
 pub fn apply(tx: &Transaction<'_>, binding: &Value, method: &str, args: &Value) -> Result<Value> {
     let command = &binding["command"];
-    let app = text(command, "app_id")?;
+    let app = crate::execution_app(command).map_err(|_| invalid("invalid"))?;
     let run = text(&binding["fence"], "run_id")?;
     let fence = binding["fence"]["fence"]
         .as_i64()
