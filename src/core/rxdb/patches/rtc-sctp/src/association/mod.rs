@@ -1483,6 +1483,7 @@ impl Association {
             return Ok(vec![]);
         }
 
+        self.observe_control_sack(d);
         // Process selective ack
         let (bytes_acked_per_stream, htna) = self.process_selective_ack(d, now)?;
 
@@ -1814,7 +1815,7 @@ impl Association {
             if let Some(c) = self.inflight_queue.pop(i) {
                 trace!(target: "ctox_sctp_timeline", "event=acked side={} sid={} tsn={} ssn={} nsent={}", self.side, c.stream_identifier, c.tsn, c.stream_sequence_number, c.nsent);
                 if !c.acked {
-                    delivered.push((c.since, c.nsent));
+                    delivered.push((c.last_sent.or(c.since), c.nsent));
                     // RFC 4096 sec 6.3.2.  Retransmission Timer Rules
                     //   R3)  Whenever a SACK is received that acknowledges the DATA chunk
                     //        with the earliest outstanding TSN for that address, restart the
@@ -1892,7 +1893,7 @@ impl Association {
 
                 if let Some(c) = self.inflight_queue.get(tsn) {
                     if !is_acked {
-                        delivered.push((c.since, c.nsent));
+                        delivered.push((c.last_sent.or(c.since), c.nsent));
                         // Sum the number of bytes acknowledged per stream
                         if let Some(amount) = bytes_acked_per_stream.get_mut(&c.stream_identifier) {
                             *amount += n_bytes_acked;
@@ -2424,6 +2425,7 @@ impl Association {
                     fast_retrans_size += data_chunk_size;
                     self.stats.inc_fast_retrans();
                     c.nsent += 1;
+                    c.last_sent = Some(now);
                 } else {
                     break; // end of pending data
                 }
@@ -2622,6 +2624,7 @@ impl Association {
                 bytes_to_send += c.user_data.len();
 
                 c.nsent += 1;
+                c.last_sent = Some(now);
             } else {
                 break; // end of pending data
             }
@@ -2923,6 +2926,7 @@ impl Association {
             c.tsn = self.generate_next_tsn();
 
             c.since = Some(now); // use to calculate RTT and also for maxPacketLifeTime
+            c.last_sent = Some(now);
             c.nsent = 1; // being sent for the first time
             trace!(target: "ctox_sctp_timeline", "event=transmit side={} sid={} tsn={} ssn={} nsent=1 rto_ms={} len={} i={}", self.side, c.stream_identifier, c.tsn, c.stream_sequence_number, self.rto_mgr.get_rto(), c.user_data.len(), c.immediate_sack);
 

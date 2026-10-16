@@ -105,6 +105,9 @@ pub struct ChunkPayloadData {
 
     /// Partial-reliability parameters used only by sender
     pub(crate) since: Option<Instant>,
+    /// Last transmission for sender-only time-based loss detection. `since`
+    /// remains the first-transmission lifetime origin for partial reliability.
+    pub(crate) last_sent: Option<Instant>,
     /// number of transmission made for this chunk
     pub(crate) nsent: u32,
 
@@ -133,6 +136,7 @@ impl Default for ChunkPayloadData {
             acked: false,
             miss_indicator: 0,
             since: None,
+            last_sent: None,
             nsent: 0,
             abandoned: false,
             all_inflight: false,
@@ -215,6 +219,7 @@ impl Chunk for ChunkPayloadData {
             acked: false,
             miss_indicator: 0,
             since: None,
+            last_sent: None,
             nsent: 0,
             abandoned: false,
             all_inflight: false,
