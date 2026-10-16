@@ -11,6 +11,7 @@ let release=opt('daemon-release');const archive=opt('daemon-artifact');
 if(!old||!dest||(!release&&!archive)||(release&&archive))throw Error('Need --old-receipt --output and either --daemon-release receipt or --daemon-artifact archive');
 const out=resolve(dest),allowed=resolve(process.env.BUILD_LANE_BIN,'../artifacts');
 if(!out.startsWith(allowed+'/')||fs.existsSync(out))throw Error('New private artifact output required');
+if(Buffer.byteLength(join(out,'rehearsal/tenant-m7/runtime/store/store.sock'))>103)throw Error('Choose a shorter private output prefix for Unix store IPC');
 fs.mkdirSync(out,{mode:0o700});
 if(archive){
  const tarSha=opt('artifact-sha256'),binSha=opt('binary-sha256');
