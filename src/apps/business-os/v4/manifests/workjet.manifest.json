@@ -19,7 +19,7 @@
   "collections": {
     "workjet_luma_state": {
       "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "_schema_source": "modules/workjet/collections.schema.json",
+      "_schema_source": "v4/schemas/workjet.collections.schema.json",
       "_schema_wrapper": {
         "conflictStrategy": "field-merge"
       },
@@ -67,7 +67,7 @@
     },
     "workjet_mailbox_envelopes": {
       "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "_schema_source": "modules/workjet/collections.schema.json",
+      "_schema_source": "v4/schemas/workjet.collections.schema.json",
       "_schema_wrapper": {
         "conflictStrategy": "field-merge"
       },
@@ -155,7 +155,7 @@
     },
     "workjet_worker_dispatch_intents": {
       "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "_schema_source": "modules/workjet/collections.schema.json",
+      "_schema_source": "v4/schemas/workjet.collections.schema.json",
       "_schema_wrapper": {
         "conflictStrategy": "field-merge"
       },
@@ -330,7 +330,7 @@
     },
     "workjet_worker_dispatch_outcomes": {
       "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "_schema_source": "modules/workjet/collections.schema.json",
+      "_schema_source": "v4/schemas/workjet.collections.schema.json",
       "_schema_wrapper": {
         "conflictStrategy": "field-merge"
       },
@@ -403,7 +403,7 @@
     },
     "workjet_worker_dispatch_sources": {
       "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "_schema_source": "modules/workjet/collections.schema.json",
+      "_schema_source": "v4/schemas/workjet.collections.schema.json",
       "_schema_wrapper": {
         "conflictStrategy": "field-merge"
       },

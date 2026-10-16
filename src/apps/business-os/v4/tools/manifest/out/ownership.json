@@ -2349,7 +2349,7 @@
     },
     "workjet_luma_state": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "workjet"
       ],
@@ -2359,7 +2359,7 @@
     },
     "workjet_mailbox_envelopes": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "workjet"
       ],
@@ -2441,7 +2441,7 @@
     },
     "workjet_worker_dispatch_intents": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "workjet"
       ],
@@ -2451,7 +2451,7 @@
     },
     "workjet_worker_dispatch_outcomes": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "workjet"
       ],
@@ -2461,7 +2461,7 @@
     },
     "workjet_worker_dispatch_sources": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "workjet"
       ],

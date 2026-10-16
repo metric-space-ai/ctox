@@ -15128,6 +15128,120 @@
     "type": "object",
     "version": 1
   },
+  "workjet_luma_state": {
+    "additionalProperties": true,
+    "primaryKey": "id",
+    "properties": {
+      "configured": {
+        "type": "boolean"
+      },
+      "execution": {},
+      "id": {
+        "type": "string",
+        "maxLength": 64
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "managedSystemPrompt": {},
+      "managerThreadReference": {},
+      "revision": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "telemetry": {},
+      "updatedAtMs": {
+        "type": [
+          "number",
+          "null"
+        ]
+      },
+      "workerGraph": {}
+    },
+    "required": [
+      "id"
+    ],
+    "type": "object",
+    "version": 0
+  },
+  "workjet_mailbox_envelopes": {
+    "additionalProperties": false,
+    "primaryKey": "id",
+    "properties": {
+      "consumed_at_ms": {
+        "type": "number"
+      },
+      "consumed_by": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "envelope_json": {
+        "type": "string",
+        "maxLength": 65536
+      },
+      "expires_at_ms": {
+        "type": "number"
+      },
+      "id": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "payload_json": {
+        "type": "string",
+        "maxLength": 262144
+      },
+      "source_environment_id": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "source_workspace_id": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "consumed"
+        ]
+      },
+      "target_environment_id": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "target_workspace_id": {
+        "type": "string",
+        "maxLength": 256
+      }
+    },
+    "required": [
+      "id",
+      "target_environment_id",
+      "created_at_ms",
+      "expires_at_ms",
+      "envelope_json",
+      "payload_json",
+      "status"
+    ],
+    "type": "object",
+    "version": 0,
+    "indexes": [
+      "target_environment_id",
+      "status",
+      [
+        "target_environment_id",
+        "status",
+        "created_at_ms"
+      ]
+    ]
+  },
   "workjet_project_chats": {
     "version": 0,
     "primaryKey": "id",
@@ -16097,6 +16211,367 @@
       ]
     ],
     "additionalProperties": false
+  },
+  "workjet_worker_dispatch_intents": {
+    "additionalProperties": false,
+    "primaryKey": "id",
+    "properties": {
+      "command_id": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "dispatch_key": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "intent": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "intentId": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "registrationId": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "registrationRevision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "sourceEnvironmentId": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "sourceSupervisorThreadId": {
+            "type": "string",
+            "maxLength": 36
+          },
+          "projectId": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "task": {
+            "type": "string",
+            "maxLength": 16384
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "computerId": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "workerProfileId": {
+            "type": "string",
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "intentId",
+          "registrationId",
+          "registrationRevision",
+          "sourceEnvironmentId",
+          "sourceSupervisorThreadId",
+          "projectId",
+          "task"
+        ]
+      },
+      "intent_id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "owner_user_id": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "project_id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "registration_id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "registration_revision": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 9007199254740991
+      },
+      "request_digest": {
+        "type": "string",
+        "maxLength": 64
+      },
+      "result": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "additionalProperties": true
+      },
+      "source_environment_id": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "completed"
+        ]
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "intent_id",
+      "registration_id",
+      "registration_revision",
+      "command_id",
+      "dispatch_key",
+      "request_digest",
+      "intent",
+      "result",
+      "owner_user_id",
+      "project_id",
+      "source_environment_id",
+      "status",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "type": "object",
+    "version": 0,
+    "indexes": [
+      "registration_id",
+      [
+        "owner_user_id",
+        "status",
+        "created_at_ms"
+      ],
+      [
+        "owner_user_id",
+        "source_environment_id",
+        "status",
+        "created_at_ms"
+      ],
+      [
+        "owner_user_id",
+        "project_id",
+        "created_at_ms"
+      ]
+    ]
+  },
+  "workjet_worker_dispatch_outcomes": {
+    "additionalProperties": false,
+    "primaryKey": "id",
+    "properties": {
+      "accepted_at_ms": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "intent_id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "owner_user_id": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "project_id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "receipt": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "registration_revision": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 9007199254740991
+      },
+      "supervisor_thread_id": {
+        "type": "string",
+        "maxLength": 36
+      }
+    },
+    "required": [
+      "id",
+      "intent_id",
+      "owner_user_id",
+      "project_id",
+      "supervisor_thread_id",
+      "registration_revision",
+      "receipt",
+      "accepted_at_ms"
+    ],
+    "type": "object",
+    "version": 0,
+    "indexes": [
+      [
+        "owner_user_id",
+        "project_id",
+        "supervisor_thread_id",
+        "accepted_at_ms"
+      ]
+    ]
+  },
+  "workjet_worker_dispatch_sources": {
+    "additionalProperties": false,
+    "primaryKey": "id",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "owner_user_id": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "project_id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "record": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "contract": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "registrationId": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "sourceEnvironmentId": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "sourceSupervisorThreadId": {
+            "type": "string",
+            "maxLength": 36
+          },
+          "sourceInstanceId": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "sourceWorkspaceId": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "projectId": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "ownerUserId": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "authorityEpoch": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "revoked"
+            ]
+          }
+        },
+        "required": [
+          "contract",
+          "registrationId",
+          "revision",
+          "sourceEnvironmentId",
+          "sourceSupervisorThreadId",
+          "sourceInstanceId",
+          "sourceWorkspaceId",
+          "projectId",
+          "ownerUserId",
+          "authorityEpoch",
+          "state"
+        ]
+      },
+      "registration_id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "revision": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 9007199254740991
+      },
+      "source_environment_id": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "state": {
+        "type": "string",
+        "enum": [
+          "active",
+          "revoked"
+        ]
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "owner_user_id",
+      "project_id",
+      "registration_id",
+      "record",
+      "state",
+      "revision",
+      "source_environment_id",
+      "updated_at_ms"
+    ],
+    "type": "object",
+    "version": 0,
+    "indexes": [
+      "owner_user_id",
+      [
+        "owner_user_id",
+        "project_id"
+      ],
+      [
+        "owner_user_id",
+        "source_environment_id",
+        "state"
+      ]
+    ]
   },
   "workjet_worker_profile_bindings": {
     "version": 0,

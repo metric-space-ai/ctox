@@ -9,7 +9,7 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | apps | 42 |
 | manifests_total | 43 |
 | collections_total | 241 |
-| collections_in_contract | 232 |
+| collections_in_contract | 237 |
 | owned_by_apps | 226 |
 | owned_by_platform | 15 |
 | owner_proposals | 5 |
@@ -30,7 +30,7 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | schema_missing | 0 |
 | schema_js_present | 3 |
 | schema_js_load_errors | 0 |
-| schema_from_v4_schemas | 41 |
+| schema_from_v4_schemas | 42 |
 | no_owner_app | 5 |
 | contract_only | 11 |
 | multiple_owners | 0 |
