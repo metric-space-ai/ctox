@@ -10,6 +10,7 @@ pub(crate) mod email_account_cli;
 pub(crate) mod email_accounts;
 pub(crate) mod email_native;
 pub(crate) mod gateway;
+pub(crate) mod google_calendar;
 pub(crate) mod google_chat_native;
 pub(crate) mod jami_native;
 pub(crate) mod matrix_native;

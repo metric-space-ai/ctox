@@ -247,7 +247,7 @@ async fn native_daemon_hotplug_roundtrip_and_change() -> Result<()> {
             files.insert(path.into(),json!(hash));
         }
         let definitions=json!({"hot_rows":{"schema":{"version":1,"type":"object","primaryKey":"id","properties":{"id":{"type":"string"},"n":{"type":"integer"}},"required":["id","n"]},"class":"full","client_limit":0,"byte_budget":1048576},"hot_events":{"schema":{"version":1,"type":"object","primaryKey":"id","properties":{"id":{"type":"string"},"n":{"type":"integer"}},"required":["id","n"]},"class":"full","client_limit":0,"byte_budget":1048576}});
-        let draft=json!({"id":"hot-draft","app_id":"hot-app","author":"owner","files":files,"collections_schema":definitions,"manifest_fields":{"title":"Native hot-plug proof","handlers":{"hot.echo":"handlers/run.js","hot.core":"handlers/run.js"},"command_rights":{"hot.core":{"roles":[],"assigned_users":false}},"triggers":[{"handler":"handlers/change.js","on":{"collection":"hot_rows","op":"insert"}}]}});
+        let draft=json!({"id":"hot-draft","app_id":"hot-app","author":"owner","files":files,"collections_schema":definitions,"manifest_fields":{"title":"Native hot-plug proof","handlers":{"hot.echo":"handlers/run.js","hot.core":"handlers/run.js"},"command_rights":{"hot.core":{"roles":[],"assigned_users":false},"ctox.workjet.project.list":{"roles":["admin"]}},"triggers":[{"handler":"handlers/change.js","on":{"collection":"hot_rows","op":"insert"}}]}});
         database.writer.submit(WriteJob::new(Default::default(),move |tx|super::super::commands::put(tx,"app_drafts","hot-draft",&draft)))?.await?;
         let started=Instant::now();
         let published=submit(database,"hot-publish","ctox-platform","ctox.app.publish",json!({"app_id":"hot-app","base_app_ver":null,"draft_id":"hot-draft"})).await?;
@@ -255,6 +255,7 @@ async fn native_daemon_hotplug_roundtrip_and_change() -> Result<()> {
         let publish_us=started.elapsed().as_micros();
         let result=submit(database,"hot-write","hot-app","hot.echo",json!({"id":"one","n":7,"write":true})).await?;
         anyhow::ensure!(result["status"]=="done"&&result["result"]["n"]==7,"native handler roundtrip failed: {result}");
+        e25_binding::assert_native_workjet_route(database).await?;
         let changed=terminal(database,"hot_events","change").await?;
         anyhow::ensure!(changed["n"].as_u64().is_some_and(|n|n>0),"committed change did not run real trigger");
         // E23.1: forged client fields confer no native provenance, including admin.
@@ -304,4 +305,12 @@ async fn native_daemon_hotplug_roundtrip_and_change() -> Result<()> {
     );
     println!("APP_PLATFORM_NATIVE_PROOF {}", proof?);
     Ok(())
+}
+
+mod e25_binding {
+    use super::*;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/sync_v4_e25/native_binding.rs"
+    ));
 }

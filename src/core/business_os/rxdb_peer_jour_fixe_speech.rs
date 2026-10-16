@@ -168,6 +168,7 @@ struct Snapshot {
     event_sequence: u64,
     error: Option<&'static str>,
     committed: Option<Value>,
+    text: Option<String>,
     finished: bool,
 }
 struct Session {
@@ -180,6 +181,7 @@ struct Session {
     request_id: String,
     opened: Instant,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    updates: tokio::sync::watch::Sender<()>,
 }
 impl Drop for Session {
     fn drop(&mut self) {
@@ -212,7 +214,7 @@ impl Session {
         Ok(
             json!({"streamId":id, "state":if self.canceled.load(Ordering::SeqCst) {"canceled"} else if s.error.is_some() {"failed"} else if s.committed.is_some() {"committed"} else if s.finished {"finishing"} else {"open"},
             "events":s.events.iter().filter(|e| e["sequence"].as_u64().unwrap_or(0) > after).collect::<Vec<_>>(),
-            "receipt":s.committed, "error":s.error}),
+            "receipt":s.committed, "text":if self.canceled.load(Ordering::SeqCst) || s.error.is_some() {None} else {s.text.as_ref()}, "error":s.error}),
         )
     }
     fn cancel(&self) {
@@ -221,6 +223,7 @@ impl Session {
         let _fence = self.commit_gate.lock().unwrap_or_else(|e| e.into_inner());
         self.canceled.store(true, Ordering::SeqCst);
         self.cancel.notify_one();
+        self.updates.send_replace(());
     }
 }
 struct Registry<P> {
@@ -257,6 +260,16 @@ pub(super) fn register(
     });
     let weak_pool = Arc::downgrade(pool);
     let root = root.to_path_buf();
+    let observe=Arc::clone(&registry);
+    pool.register_native_session_observer(METHOD,Arc::new(move |peer,token,id| {
+        let entries=observe.sessions.lock().map_err(|_|"speech observer unavailable".to_string())?;
+        let (owner,session)=entries.get(&id).ok_or("SPEECH_STREAM_CLOSED")?;
+        if owner!=&peer || session.authority.token!=token || session.opened.elapsed()>=Duration::from_secs(50) {return Err("SPEECH_STREAM_CLOSED".into());}
+        let session=Arc::clone(session);let changes=session.updates.subscribe();
+        Ok(rxdb::plugins::replication_webrtc::index_mod::NativeSessionFeed::new(changes,Arc::new(move |after| {
+            session.snapshot(&id,after).map_err(|_|ctox_store::change_log::subscription::write_contract::routes::error("not_found","SPEECH_STREAM_CLOSED"))
+        })))
+    }))?;
     pool.register_guarded_auxiliary_request_handler(
         METHOD,
         Arc::new(move |peer, token, params| {
@@ -390,6 +403,7 @@ async fn handle<P: Eq + Clone>(
             request_id: r.request_id.clone().unwrap(),
             opened: Instant::now(),
             task: Mutex::new(None),
+            updates: tokio::sync::watch::channel(()).0,
         });
         let task = tokio::spawn(run(
             bound,
@@ -399,6 +413,7 @@ async fn handle<P: Eq + Clone>(
             Arc::clone(&session.canceled),
             Arc::clone(&session.snapshot),
             Arc::clone(&session.commit_gate),
+            session.updates.clone(),
             permit,
         ));
         *session.task.lock().unwrap() = Some(task);
@@ -466,6 +481,7 @@ async fn run(
     canceled: Arc<AtomicBool>,
     snapshot: Arc<Mutex<Snapshot>>,
     commit_gate: Arc<Mutex<()>>,
+    updates: tokio::sync::watch::Sender<()>,
     _permit: tokio::sync::OwnedSemaphorePermit,
 ) {
     let started = Instant::now();
@@ -499,7 +515,7 @@ async fn run(
                     Some(Command::Finish(ack)) => {
                         if !finishing {
                             if bytes == 0 || bound.stream_mut().finish_audio().is_err() { let _ = ack.send(Err("invalid_finish")); break Err("invalid_finish"); }
-                            finishing = true; finish_at = Some(Instant::now()); snapshot.lock().unwrap().finished = true;
+                            finishing = true; finish_at = Some(Instant::now()); snapshot.lock().unwrap().finished = true; updates.send_replace(());
                         }
                         let _ = ack.send(Ok(()));
                     },
@@ -512,10 +528,11 @@ async fn run(
                     let mut s = snapshot.lock().unwrap(); s.event_sequence += 1;
                     let cursor = s.event_sequence;
                     s.events.push_back(json!({"sequence":cursor, "producerSequence":producer_sequence, "text":text}));
-                    while s.events.len() > MAX_EVENTS || s.events.iter().map(|e| e["text"].as_str().map_or(0, str::len)).sum::<usize>() > 65536 { s.events.pop_front(); }
+                    while s.events.len() > MAX_EVENTS || s.events.iter().map(|e| e["text"].as_str().map_or(0, str::len)).sum::<usize>() > 65536 { s.events.pop_front(); } updates.send_replace(());
                 },
                 Some(Ok(VerifiedTranscriptEvent::Final(final_value))) => {
                     if !finishing { break Err("invalid_response"); }
+                    let final_text=final_value.text().to_owned();
                     let a = Arc::clone(&authority); let stop = Arc::clone(&canceled); let gate = Arc::clone(&commit_gate);
                     let committed = tokio::task::spawn_blocking(move || {
                         let _fence = gate.lock().map_err(|_| anyhow::anyhow!("speech commit fence unavailable"))?;
@@ -526,8 +543,8 @@ async fn run(
                         let revision = jour_fixe_speech::committed_revision(&a.root, &a.token, &a.binding, bound.stream_id())?;
                         Ok::<_, anyhow::Error>(revision)
                     }).await;
-                    match committed { Ok(Ok(revision)) => { snapshot.lock().unwrap().committed = Some(json!({"handle":Uuid::new_v4().to_string(), "meetingRevision":revision})); return; },
-                        _ => { snapshot.lock().unwrap().error = Some("commit_failed"); return; } }
+                    match committed { Ok(Ok(revision)) => { {let mut s=snapshot.lock().unwrap();s.committed=Some(json!({"handle":Uuid::new_v4().to_string(), "meetingRevision":revision}));s.text=Some(final_text);} updates.send_replace(()); return; },
+                        _ => { snapshot.lock().unwrap().error = Some("commit_failed"); updates.send_replace(()); return; } }
                 },
                 Some(Err(_)) => break Err("gateway_failed"),
                 None => break Err("missing_final"),
@@ -535,6 +552,7 @@ async fn run(
         }
     };
     snapshot.lock().unwrap().error = outcome.err();
+    updates.send_replace(());
     bound.cancel().await;
 }
 

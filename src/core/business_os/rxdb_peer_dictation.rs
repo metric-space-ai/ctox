@@ -252,6 +252,7 @@ struct Session {
     open_command_id: String,
     opened: Instant,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    updates: tokio::sync::watch::Sender<()>,
 }
 impl Drop for Session {
     fn drop(&mut self) {
@@ -309,6 +310,7 @@ impl Session {
         s.latest_event = None;
         s.text = None;
         self.cancel.notify_one();
+        self.updates.send_replace(());
     }
 }
 struct Registry<P> {
@@ -345,6 +347,17 @@ pub(super) fn register(
     });
     let weak_pool = Arc::downgrade(pool);
     let root = root.to_owned();
+    let observe=Arc::clone(&registry);
+    pool.register_native_session_observer(METHOD,Arc::new(move |peer,token,id| {
+        let entries=observe.sessions.lock().map_err(|_|"speech observer unavailable".to_string())?;
+        let (owner,session)=entries.get(&id).ok_or("SPEECH_STREAM_CLOSED")?;
+        if owner!=&peer || session.authority.token!=token || session.opened.elapsed()>=RETAIN {return Err("SPEECH_STREAM_CLOSED".into());}
+        let session=Arc::clone(session);let changes=session.updates.subscribe();
+        Ok(rxdb::plugins::replication_webrtc::index_mod::NativeSessionFeed::new(changes,Arc::new(move |after| {
+            let request=Request{op:"read".into(),command_id:session.open_command_id.clone(),scope:session.authority.scope.clone(),stream_id:Some(id.clone()),sequence:None,pcm_base64:None,after_sequence:Some(after)};
+            session.snapshot(&request,&id).map_err(|_|ctox_store::change_log::subscription::write_contract::routes::error("not_found","SPEECH_STREAM_CLOSED"))
+        })))
+    }))?;
     pool.register_guarded_auxiliary_request_handler(
         METHOD,
         Arc::new(move |peer, token, params| {
@@ -461,6 +474,7 @@ async fn handle<P: Eq + Clone>(
                 open_command_id: r.command_id.clone(),
                 opened: Instant::now(),
                 task: Mutex::new(None),
+            updates: tokio::sync::watch::channel(()).0,
             });
             if let Ok(stream) = opened {
                 *session.task.lock().unwrap() = Some(tokio::spawn(run(
@@ -471,6 +485,7 @@ async fn handle<P: Eq + Clone>(
                     Arc::clone(&session.canceled),
                     Arc::clone(&session.snapshot),
                     Arc::clone(&session.final_gate),
+                    session.updates.clone(),
                     permit,
                 )));
             }
@@ -536,6 +551,7 @@ async fn run(
     canceled: Arc<AtomicBool>,
     snapshot: Arc<Mutex<Snapshot>>,
     final_gate: Arc<Mutex<()>>,
+    updates: tokio::sync::watch::Sender<()>,
     _permit: tokio::sync::OwnedSemaphorePermit,
 ) {
     let id = stream.stream_id().to_owned();
@@ -577,7 +593,7 @@ async fn run(
                             if bytes == 0 || stream.finish_audio().is_err() {
                                 let _ = ack.send(Err("invalid_finish")); break Err("invalid_finish");
                             }
-                            finishing = true; finish_at = Some(Instant::now()); snapshot.lock().unwrap().finishing = true;
+                            finishing = true; finish_at = Some(Instant::now()); snapshot.lock().unwrap().finishing = true; updates.send_replace(());
                         }
                         let _ = ack.send(Ok(()));
                     },
@@ -591,7 +607,7 @@ async fn run(
                     let mut s = snapshot.lock().unwrap();
                     if s.partial.len() + text.len() > 8192 { break Err("invalid_response"); }
                     s.partial.push_str(&text); s.event_sequence += 1;
-                    s.latest_event = Some(json!({"sequence":s.event_sequence, "text":s.partial}));
+                    s.latest_event = Some(json!({"sequence":s.event_sequence, "text":s.partial})); updates.send_replace(());
                 },
                 Some(Ok(VerifiedTranscriptEvent::Final(value))) => {
                     if !finishing || value.stream_id() != id || value.sequence() <= producer_sequence
@@ -605,7 +621,7 @@ async fn run(
                         state.lock().map_err(|_| anyhow::anyhow!("retired"))?.text = Some(value.text().to_owned());
                         Ok::<_, anyhow::Error>(())
                     }).await;
-                    if matches!(admitted, Ok(Ok(()))) { return; }
+                    if matches!(admitted, Ok(Ok(()))) { updates.send_replace(()); return; }
                     break Err("retired");
                 },
                 Some(Err(error)) => break Err(error_class(error)),
@@ -620,6 +636,7 @@ async fn run(
         s.latest_event = None;
         s.text = None;
     }
+    updates.send_replace(());
     stream.cancel().await;
 }
 #[cfg(test)]

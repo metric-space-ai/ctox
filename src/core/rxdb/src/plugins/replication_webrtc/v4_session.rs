@@ -200,3 +200,11 @@ impl V4Session {
         Ok(Self { tasks })
     }
 }
+
+// E25 CAS adapter is independent of the P4 session owner.
+#[path = "v4_transfer.rs"]
+mod transfer;
+pub use transfer::{
+    AuthorizedTransferBlob, NativeTransferChunk, NativeTransferRouter, TransferBlobAccess,
+    TransferGet, TRANSFER_CHUNK_BYTES,
+};

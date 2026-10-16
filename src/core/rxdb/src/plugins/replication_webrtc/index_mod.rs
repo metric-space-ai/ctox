@@ -151,6 +151,13 @@ async fn finish_guarded_auxiliary_send(
     publication.after_send()
 }
 
+#[path = "v4_native_commands.rs"]
+mod v4_native_commands;
+#[path = "v4_native_sessions.rs"]
+mod v4_native_sessions;
+pub use v4_native_sessions::{NativeSessionFeed,NativeSessionStream};
+pub use v4_native_commands::{NativeCommandAuthority, NativeCommandExecutor, PendingNativeCompletion};
+
 pub struct GuardedAuxiliaryResponse {
     pub result: Value,
     pub publication: Arc<dyn super::webrtc_types::WebRTCPublicationGuard>,
@@ -408,6 +415,9 @@ pub struct RxWebRTCReplicationPool<H: WebRTCConnectionHandler> {
     /// WebRTC DataChannel without becoming RxDB documents. This is reserved for
     /// latency-sensitive ephemeral control planes such as the live Browser.
     auxiliary_request_handlers: Mutex<HashMap<String, RegisteredAuxiliaryRequest<H::Peer>>>,
+    native_command_executors: Mutex<HashMap<String,v4_native_commands::NativeCommandExecutor>>,
+    native_session_observers: Mutex<HashMap<String,v4_native_sessions::NativeSessionObserver<H::Peer>>>,
+    native_command_sessions: Mutex<HashMap<String,v4_native_sessions::NativeSessionBinding<H::Peer>>>,
     /// Room admission is also required before sending auxiliary control RPCs.
     authenticated_peers: Arc<Mutex<HashSet<H::Peer>>>,
     outbound_ready_peers: Mutex<HashSet<H::Peer>>,
@@ -515,6 +525,9 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
             file_fetch_registry: file_registry,
             rows_fetch_registry: rows_registry,
             auxiliary_request_handlers: Mutex::new(HashMap::new()),
+            native_command_executors: Mutex::new(HashMap::new()),
+            native_session_observers: Mutex::new(HashMap::new()),
+            native_command_sessions: Mutex::new(HashMap::new()),
             authenticated_peers: Arc::new(Mutex::new(HashSet::new())),
             outbound_ready_peers: Mutex::new(HashSet::new()),
             missing_collection_schemas_warning_count: std::sync::atomic::AtomicU64::new(0),
@@ -4440,6 +4453,10 @@ mod tests {
         fn connection_identity(&self, peer: &MockPeer) -> String {
             format!("{}@{}", peer.0, peer.1)
         }
+    }
+
+    mod v4_native_command_tests {
+        include!("v4_native_commands_tests.rs");
     }
 
     mod collection_authority_tests {
