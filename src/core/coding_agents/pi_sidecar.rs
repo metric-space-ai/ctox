@@ -32,7 +32,7 @@ fn with_runtime_owner<T: Send + 'static>(
 
 #[cfg(test)]
 #[path = "pi_sidecar_test_owners.rs"]
-mod test_owners;
+pub(super) mod test_owners;
 
 struct PreparedCodingTurnModel {
     model: Value,
@@ -2241,13 +2241,17 @@ mod tests {
 
     #[test]
     fn coding_model_preset_is_resolved_server_side_and_unknown_ids_fail() -> anyhow::Result<()> {
-        let temp = tempfile::tempdir()?;
-        assert_eq!(resolve_coding_model_preset(temp.path(), "ctox")?, None);
-        let error = resolve_coding_model_preset(temp.path(), "browser-forged")
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("unavailable"));
-        Ok(())
+        // Preset resolution reads through the installed Core owner (#843); a bare
+        // tempdir has none, so the isolated owner fixture supplies it.
+        crate::coding_agents::pi_sidecar::test_owners::run(move || {
+            let temp = crate::coding_agents::pi_sidecar::test_owners::root()?;
+            assert_eq!(resolve_coding_model_preset(temp.path(), "ctox")?, None);
+            let error = resolve_coding_model_preset(temp.path(), "browser-forged")
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("unavailable"));
+            Ok(())
+        })
     }
 
     #[test]
@@ -2747,26 +2751,28 @@ mod tests {
 
     #[test]
     fn gateway_model_defers_private_route_resolution_to_the_turn_owner() -> anyhow::Result<()> {
-        let temp = tempfile::tempdir()?;
-        let model = gateway_model(temp.path())?;
-        let base_url = model["baseUrl"].as_str().unwrap_or_default();
-        assert!(
-            base_url == "http://127.0.0.1:1/v1",
-            "public descriptor must not advertise the retired gateway (got {base_url})"
-        );
-        assert_eq!(model["ctoxRoute"]["kind"], "inherit_ctox");
-        assert_eq!(
-            model["api"].as_str(),
-            Some("openai-responses"),
-            "uses pi-ai's OpenAI Responses provider"
-        );
-        assert!(
-            model["id"]
-                .as_str()
-                .map(|id| !id.is_empty())
-                .unwrap_or(false),
-            "an active model id is resolved from the gateway config"
-        );
-        Ok(())
+        crate::coding_agents::pi_sidecar::test_owners::run(move || {
+            let temp = crate::coding_agents::pi_sidecar::test_owners::root()?;
+            let model = gateway_model(temp.path())?;
+            let base_url = model["baseUrl"].as_str().unwrap_or_default();
+            assert!(
+                base_url == "http://127.0.0.1:1/v1",
+                "public descriptor must not advertise the retired gateway (got {base_url})"
+            );
+            assert_eq!(model["ctoxRoute"]["kind"], "inherit_ctox");
+            assert_eq!(
+                model["api"].as_str(),
+                Some("openai-responses"),
+                "uses pi-ai's OpenAI Responses provider"
+            );
+            assert!(
+                model["id"]
+                    .as_str()
+                    .map(|id| !id.is_empty())
+                    .unwrap_or(false),
+                "an active model id is resolved from the gateway config"
+            );
+            Ok(())
+        })
     }
 }
