@@ -98,6 +98,16 @@ export const OWNER_RESOLUTIONS = {
   sellify_people: { owner: 'outbound-lead-generation', basis: '§16.21 Eigentum: OLG (Projektion der externen SQL-Quelle Sellify)' },
 };
 
+// Exakte Ausnahmen vor den Präfix-Regeln (Namensgleichheit, kein Präfix): E42.3 Nr. 2 + E54.3b Nr. 1 (16.10.2026) – das
+// Instanzmodul workjet besitzt genau diese fünf workjet_*-Collections; alle anderen workjet_* bleiben bei ctox ('workjet_').
+export const EXACT_OWNERS = {
+  workjet_luma_state: 'workjet',
+  workjet_mailbox_envelopes: 'workjet',
+  workjet_worker_dispatch_intents: 'workjet',
+  workjet_worker_dispatch_outcomes: 'workjet',
+  workjet_worker_dispatch_sources: 'workjet',
+};
+
 // Präfix-Regeln: nur für Collections, die weder entschieden noch in der Basis-Zuordnung stehen.
 export const PREFIX_OWNERS = [
   ['accounting_invoice', 'invoices'],
@@ -1583,6 +1593,8 @@ export async function generate(options = {}) {
   ]);
 
   const prefixOwner = (name, candidates = null) => {
+    const exact = Object.hasOwn(EXACT_OWNERS, name) ? EXACT_OWNERS[name] : null;
+    if (exact && (!candidates || candidates.includes(exact))) return exact;
     for (const [prefix, owner] of PREFIX_OWNERS) {
       if (!name.startsWith(prefix)) continue;
       if (candidates && !candidates.includes(owner)) continue;

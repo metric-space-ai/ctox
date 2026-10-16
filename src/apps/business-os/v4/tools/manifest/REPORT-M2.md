@@ -2,45 +2,45 @@
 
 Quellen: module.json, collections.schema.json (Vorrang v4/schemas/<app_id>.collections.schema.json), handlers/*.js,
 Code (commands_out, Trigger-Exporte, net.ingest), je App v4-manifest.json (commands_in, exports, Rechte, multi_instance, Fremdzugriffs-ops, Trigger),
-ownership-baseline.json (eingefrorene Eigentümer-Zuordnung), Plattform-exports aus /Volumes/tmp/shell-v4-pr/src/core/business_os/v4/ctox-platform.manifest.json.
+ownership-baseline.json (eingefrorene Eigentümer-Zuordnung), Plattform-exports aus ~/.local/state/ctox-sync-v4/docs/v4-manifests/ctox-platform.manifest.json.
 Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.mjs`; `node src/apps/business-os/v4/tools/manifest/gen-manifest.mjs --check`.
 
 ## Zahlen
 
 | Merkmal | Wert |
 |---|---|
-| Apps (modules + customer-modules) | 41 |
-| Manifeste gesamt (Apps + shell) | 42 |
-| Collections gesamt / App-eigen / ctox-platform | 237 / 221 / 16 |
+| Apps (modules + customer-modules) | 42 |
+| Manifeste gesamt (Apps + shell) | 43 |
+| Collections gesamt / App-eigen / ctox-platform | 241 / 226 / 15 |
 | Handler gesamt (Apps mit Handlern) | 116 (15) |
 | Legacy-Rest gesamt (ctx.cap.legacy) | 0 |
 | Capabilities gesamt (verschieden, ohne legacy) | 41 |
 | Trigger | 10 |
 | command_rights-Einträge | 42 |
-| foreign-Deklarationen (davon write / nur Code-Scan) | 295 (32 / 94) |
+| foreign-Deklarationen (davon write / nur Code-Scan) | 298 (32 / 94) |
 | **foreign ohne passendes exports (Soll 0)** | **0** |
-| Plattformzugriffe auf exports beschränkt | 0 |
+| Plattformzugriffe auf exports beschränkt | 1 |
 | Befehlstypen mit Handlern in mehreren Apps | 0 |
 | eigene Collections ohne Schema | 0 |
 | schema.js noch vorhanden / nicht ladbar | 3 / 0 |
 | Shell-Dateien | 126 |
 | Apps mit styles / write_guard-Collections | 41 / 1 |
-| offene _todo gesamt | 181 |
-| Deklarationsdateien v4-manifest.json | 40 |
+| offene _todo gesamt | 186 |
+| Deklarationsdateien v4-manifest.json | 41 |
 | commands_out / commands_in | 20 / 7 |
 | **commands ohne Gegenstück (Soll 0)** | **0** |
 | ctx.command mit nicht auflösbarem Ziel | 1 |
 | **UI-Befehle ohne Route (E40, Soll 0)** / mehrdeutig | **0** / 0 |
 | Plattformroute gemeldet (PLATFORM_ROUTES_PENDING) / commands_in aus UI abgeleitet | 13 / 1 |
 | net.ingest-Anmeldungen | 2 |
-| Apps mit multi_instance:false | 40 |
-| Icons: Rasterbild im Paket / nur SVG / generiert (MAN2) | 40 / 1 / 0 |
+| Apps mit multi_instance:false | 41 |
+| Icons: Rasterbild im Paket / nur SVG / generiert (MAN2) | 40 / 2 / 0 |
 
 ## Je App
 
 | App | Handler | Legacy-Rest | Capabilities | Trigger | command_rights | foreign | exports | _todo |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| app-store | 0 | 0 | 0 | 0 | 0 | 8 | 0 | 3 |
+| app-store | 0 | 0 | 0 | 0 | 0 | 7 | 0 | 4 |
 | appsec-pentest | 0 | 0 | 0 | 0 | 0 | 3 | 0 | 3 |
 | browser | 0 | 0 | 0 | 0 | 0 | 4 | 0 | 3 |
 | buchhaltung | 0 | 0 | 0 | 0 | 0 | 1 | 7 | 3 |
@@ -79,8 +79,9 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | spreadsheets | 5 | 0 | 4 | 0 | 0 | 6 | 3 | 3 |
 | submissions | 0 | 0 | 0 | 0 | 0 | 13 | 1 | 4 |
 | support | 4 | 0 | 2 | 2 | 37 | 11 | 3 | 37 |
-| threads | 4 | 0 | 3 | 0 | 1 | 21 | 0 | 6 |
+| threads | 4 | 0 | 3 | 0 | 1 | 21 | 1 | 6 |
 | tickets | 0 | 0 | 0 | 0 | 0 | 4 | 5 | 3 |
+| workjet | 0 | 0 | 0 | 0 | 0 | 4 | 0 | 4 |
 
 ## Legacy-Rest je App
 
@@ -221,8 +222,9 @@ keine
 
 keine
 
-## Plattformzugriffe auf exports beschränkt (0)
+## Plattformzugriffe auf exports beschränkt (1)
 
+- app-store: app_drafts gewünscht read, gewährt – (nicht in Plattform-exports)
 
 ## Befehlstypen mit Handlern in mehreren Apps (0)
 
@@ -514,6 +516,10 @@ keine
 
 ## Offene _todo (app-spezifisch; die drei Standardpunkte rights/client_limit/app_ver stehen in jedem Manifest)
 
+### app-store
+
+- app_drafts: Plattform exportiert die Collection nicht – Zugriff (read) nicht deklariert.
+
 ### consent
 
 - command_rights ats.*: kein passender Handler.
@@ -615,6 +621,10 @@ keine
 - command_rights threads.ctox_approval.approve: kein passender Handler.
 - command_rights threads.ctox_approval.reject: kein passender Handler.
 - Projektions-Auslöser (W-4) noch nicht im Vertrag: siehe _proposed_triggers.
+
+### workjet
+
+- index.js exportiert kein mount(); Einstieg klären.
 
 ## Regeln dieses Strangs
 

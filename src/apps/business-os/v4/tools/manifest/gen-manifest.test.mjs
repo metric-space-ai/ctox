@@ -13,7 +13,7 @@ import {
   DECLARATION_FILE, DECLARATION_FORMAT, validateDeclaration, triggerShapeError, collectConstants, resolveString,
   topLevelProps, scanCommandCalls, scanTriggerExports,
   scanUiCommandTypes, blankComments, SHELL_COMMANDS_OUT, PLATFORM_ROUTES_PENDING, PLATFORM_REGISTRY_ROUTES, COMMAND_INVENTORY_FILE,
-  isPlatformRoute, loadPlatformRoutes, enclosingObjectHasDispatchFalse, splitPlatformHandlers, platformHandlerViolations,
+  EXACT_OWNERS, isPlatformRoute, loadPlatformRoutes, enclosingObjectHasDispatchFalse, splitPlatformHandlers, platformHandlerViolations,
 } from './gen-manifest.mjs';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
@@ -55,7 +55,7 @@ test('ein Manifest je App unter modules/ und customer-modules/ plus shell', () =
   }).sort();
   assert.deepEqual(appManifests.map((m) => m.app_id).sort(), expected);
   assert.ok(expected.includes('outbound-lead-generation'), 'customer-modules/outbound-lead-generation erfasst');
-  assert.equal(expected.length, 41);
+  assert.equal(expected.length, 42); // + modules/workjet (E54.3b)
   assert.ok(first.manifests[SHELL_APP_ID]);
 });
 
@@ -72,6 +72,19 @@ test('jede Collection hat genau einen Eigentümer (Apps + ctox-platform)', () =>
   }
   const contract = JSON.parse(fs.readFileSync(path.join(DEFAULT_REPO, 'src/core/business_os/business_os_schema_contract.json'), 'utf8'));
   for (const name of Object.keys(contract)) assert.ok(owners[name], `Vertrags-Collection ${name} ohne Eigentümer`);
+});
+
+test('E42.3/E54.3b: genau fünf workjet_*-Collections gehören workjet, alle anderen workjet_* bleiben bei ctox', () => {
+  const five = ['workjet_luma_state', 'workjet_mailbox_envelopes', 'workjet_worker_dispatch_intents', 'workjet_worker_dispatch_outcomes', 'workjet_worker_dispatch_sources'];
+  assert.deepEqual(Object.keys(EXACT_OWNERS).sort(), five);
+  assert.ok(Object.values(EXACT_OWNERS).every((o) => o === 'workjet'));
+  for (const name of Object.keys(first.ownership).filter((n) => n.startsWith('workjet_'))) {
+    assert.equal(first.ownership[name].owner, five.includes(name) ? 'workjet' : 'ctox', name);
+  }
+  assert.deepEqual(Object.keys(first.manifests.workjet.collections).sort(), five);
+  assert.deepEqual(first.drift.prefix_mismatch.filter((d) => five.includes(d.collection)), []);
+  assert.equal(first.manifests.workjet.entry, null);
+  assert.deepEqual(first.manifests.workjet.capabilities_required, []);
 });
 
 test('Plattform- und OLG-Eigentum nach §16.17/§16.21', () => {

@@ -1,0 +1,23 @@
+{
+  "_basis": {
+    "foreign_collections": "Entscheidung E54.3b (16.10.2026): Projekt-/Supervisor-Bindung aus den ctox-eigenen workjet_projects (K-WJ-1-Export) und workjet_project_chats, Akteur-Autorität aus business_users (wie remote_worker::current_actor); ctox_task_approval_requests liest der Workjet-Client (packages/shared/src/ctoxV4AppData.ts readWorkjetDecision, E49.4).",
+    "multi_instance": "Handler-only App ohne Fenster (E42.3 Nr. 2, E54.3b Nr. 6)."
+  },
+  "_format": "ctox-shell-v4-app-declaration-1",
+  "_note": "Deklaration für gen-manifest.mjs (Strang MAN): nur Angaben, die sich nicht aus dem Code ableiten lassen. _basis = Fundstelle je Feld.",
+  "foreign_collections": {
+    "business_users": [
+      "read"
+    ],
+    "ctox_task_approval_requests": [
+      "read"
+    ],
+    "workjet_project_chats": [
+      "read"
+    ],
+    "workjet_projects": [
+      "read"
+    ]
+  },
+  "multi_instance": false
+}
