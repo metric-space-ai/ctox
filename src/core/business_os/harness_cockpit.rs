@@ -110,11 +110,23 @@ pub(super) fn control(
     let result = (|| -> Result<Value> {
         if !matches!(
             command.command_type.as_str(),
-            "ctox.queue.pause" | "ctox.queue.capacity"
+            "ctox.queue.pause" | "ctox.queue.capacity" | "ctox.plan.step.retry"
         ) {
             anyhow::ensure!(!task_id.is_empty(), "task_id is required");
         }
         Ok(match command.command_type.as_str() {
+            "ctox.plan.step.retry" => {
+                let step_id = optional_text(&command.payload, "step_id", 256)?
+                    .context("step_id is required")?;
+                let actor = session_user_id(session).context("authenticated actor is required")?;
+                let retry = crate::mission::plan::retry_failed_step(
+                    root,
+                    command.id.as_deref().context("command id is required")?,
+                    &step_id,
+                    actor,
+                )?;
+                json!({"ok": true, "status": "pending", "retry": retry})
+            }
             "ctox.queue.pause" => {
                 let paused = command
                     .payload
@@ -217,6 +229,7 @@ fn control_audit_payload(payload: &Value) -> Value {
     let mut audit = serde_json::Map::new();
     for (field, max_chars) in [
         ("task_id", 1024),
+        ("step_id", 256),
         ("priority", 16),
         ("reason", 1000),
         ("note", 1000),

@@ -12,6 +12,7 @@ const scannedRoots = [
   join(appRoot, 'desktop-apps'),
   join(appRoot, 'electron'),
   join(appRoot, 'shared'),
+  join(appRoot, 'kernel/session.mjs'),
   join(appRoot, 'modules'),
   join(appRoot, 'template-store'),
   join(repoRoot, 'src/core/business_os/server.rs'),
@@ -97,6 +98,7 @@ function assertBusinessOsStaticImportsResolve() {
   const frontendFiles = expandFiles([
     join(appRoot, 'app.js'),
     join(appRoot, 'shared'),
+    join(appRoot, 'kernel/session.mjs'),
     join(appRoot, 'modules'),
     join(appRoot, 'desktop-apps'),
   ]).filter((file) => /\.(js|mjs)$/.test(file));
@@ -262,7 +264,7 @@ function contentForForbiddenHttpScan(file, content) {
     );
   }
 
-  if (rel === 'src/apps/business-os/shared/command-bus.js') {
+  if (rel === 'src/apps/business-os/kernel/session.mjs') {
     allow(
       /['"]\/api\/business-os\/auth\/capability['"]/g,
     );
@@ -359,8 +361,8 @@ function assertBusinessOsServerHttpDataApisAreGated() {
 function assertSubscriptionAuthStartsThroughRxdbCommand() {
   const settingsPath = join(appRoot, 'shared/react-settings.js');
   const settings = readFileSync(settingsPath, 'utf8');
-  const commandBusPath = join(appRoot, 'shared/command-bus.js');
-  const commandBus = readFileSync(commandBusPath, 'utf8');
+  const sessionPath = join(appRoot, 'kernel/session.mjs');
+  const tokenSession = readFileSync(sessionPath, 'utf8');
   if (!/commandType:\s*['"]ctox\.subscription_auth\.start['"]/.test(settings)) {
     offenders.push('src/apps/business-os/shared/react-settings.js: ChatGPT subscription auth must start through business_commands');
   }
@@ -384,11 +386,11 @@ function assertSubscriptionAuthStartsThroughRxdbCommand() {
   if (/function\s+fetchBusinessOsApi/.test(settings) || /fetchBusinessOsApi\(/.test(settings)) {
     offenders.push('src/apps/business-os/shared/react-settings.js: browser must not use direct Business OS HTTP API helper');
   }
-  if (!/credentials:\s*['"]same-origin['"]/.test(commandBus)) {
-    offenders.push('src/apps/business-os/shared/command-bus.js: capability-token fetch must include same-origin credentials for managed Business OS sessions');
+  if (!/credentials:\s*['"]same-origin['"]/.test(tokenSession)) {
+    offenders.push('src/apps/business-os/kernel/session.mjs: capability-token fetch must include same-origin credentials for managed Business OS sessions');
   }
-  if (!/injectedBusinessOsCapabilityToken/.test(commandBus)) {
-    offenders.push('src/apps/business-os/shared/command-bus.js: command bus must accept a shell-injected capability token for non-HTTP data-plane launches');
+  if (!/injectedBusinessOsCapabilityToken/.test(tokenSession)) {
+    offenders.push('src/apps/business-os/kernel/session.mjs: V3 compatibility must accept a host-injected capability token for non-HTTP data-plane launches');
   }
 }
 
