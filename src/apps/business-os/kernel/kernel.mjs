@@ -1398,7 +1398,7 @@ export function createKernel(opts = {}) {
     function readableNamespace(ns) {
       const caller = readManifest(appId,app.ver);
       const c = ns.replace(/@g[1-9][0-9]*$/,'');
-      if (caller?.collections?.[c]) return ns === resolveNs(app,c);
+      if (caller?.collections?.[c] && (!SYSTEM_COLLECTIONS.has(c) || appId==='ctox-platform')) return ns === resolveNs(app,c);
       const f = caller?.foreign_collections?.[c];
       const owner = f?.owner_app ?? f?.app ?? f?.owner;
       const om = owner && currentManifest(owner);
@@ -1413,7 +1413,7 @@ export function createKernel(opts = {}) {
       const foreign = callerManifest?.foreign_collections?.[c];
       const owners = [...(mirror.get('business_app_versions')?.values() ?? [])]
         .filter(row => !row.revoked && !row.base?.deleted).map(row => row.base?.data).filter(Boolean).filter(v => v.app_id !== appId && v.manifest?.collections?.[c]);
-      if ((foreign || owners.length || (callerManifest && !callerManifest.collections?.[c])) && !readableNamespace(resolveNs(app, collection)))
+      if ((foreign || owners.length || (SYSTEM_COLLECTIONS.has(c) && appId!=='ctox-platform') || (callerManifest && !callerManifest.collections?.[c])) && !readableNamespace(resolveNs(app, collection)))
         throw new CtoxError('forbidden', 'Foreign collection requires declaration and read export', {path:'collection'});
     }
     function readableLive(collection, tags, compute, empty) {
