@@ -225,6 +225,8 @@ def main():
         result['terminal'] = True
         result['finishedAtMs'] = int(time.time()*1000)
         result['go'] = bool(result['criteria']) and all(c['status']=='pass' for c in result['criteria'])
+        result['remainingBlockers'] = [{k:c.get(k) for k in ('id','status','owner','reason')}
+                                      for c in result['criteria'] if c['status']!='pass']
         save()
     print(json.dumps({k:v for k,v in result.items() if k not in ('commands','processes')}))
     return 0 if result['go'] else 1 if result.get('error') or any(c['status']=='fail' for c in result['criteria']) else 2

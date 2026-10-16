@@ -13,7 +13,7 @@ const here=fileURLToPath(new URL('.',import.meta.url));
 if(resume&&resume!=='resume-rolled-back')throw Error('Unknown recovery mode');
 const config={owner:'01a087a0-169a',oldReceipt,newReceipt,root:resolve(root),output,roundtrip:roundtrip==='yes',resumeRolledBack:resume==='resume-rolled-back',tmpdir:process.env.TMPDIR,path:process.env.PATH,laneBin:process.env.BUILD_LANE_BIN,node:process.execPath,uid:process.getuid(),gid:process.getgid(),runner:join(here,'upgrade-runner.mjs'),host:Object.fromEntries(['net','mnt','pid','cgroup'].map(n=>[n,fs.readlinkSync('/proc/self/ns/'+n)]))};
 const file=join(output,'sandbox.json');fs.writeFileSync(file,JSON.stringify(config,null,2),{mode:0o600});
-const child=spawn('sudo',['-n','unshare','--net','--mount','--pid','--fork','--mount-proc',process.execPath,join(here,'sandbox.mjs'),file],{stdio:'inherit',detached:true});
+const child=spawn('sudo',['-n','unshare','--kill-child=SIGKILL','--net','--mount','--pid','--fork','--mount-proc',process.execPath,join(here,'sandbox.mjs'),file],{stdio:'inherit',detached:true});
 const row={owner:'01a087a0-169a',pid:child.pid,pgid:child.pid,purpose:'supported installer in private PID/mount/network namespaces',stop:'terminal or 10 min',startedAt:new Date().toISOString()};
 const save=()=>fs.writeFileSync(join(output,'controller.json'),JSON.stringify(row,null,2));save();
 const kill=s=>{try{process.kill(-child.pid,s);}catch(e){if(e.code!=='ESRCH')throw e;}};

@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import time
+from datetime import datetime
 
 assert os.environ.get('BUILD_LANE_BIN') and os.uname().sysname == 'Linux'
 base = (Path(os.environ['BUILD_LANE_BIN'])/'../artifacts').resolve()
@@ -15,19 +16,24 @@ out.mkdir(mode=0o700)
 here = Path('tests/sync-v4/k11')
 profile = base/'v4-m7-fix2-qualified-20261016T020215Z/profile'
 producer = Path(sys.argv[1]).resolve()
+deadline = datetime.fromisoformat(sys.argv[2].replace('Z','+00:00')).timestamp()
 report = dict(output=str(out),startedAtMs=int(time.time()*1000),terminal=False,
-              pass_=False,fullM7Accepted=False,steps=[])
+              deadlineUtc=sys.argv[2],pass_=False,fullM7Accepted=False,steps=[])
 def save():
     (out/'qualification.json').write_text(json.dumps(report,indent=2)+'\n')
 def interrupted(signum,_frame):
     raise RuntimeError('Owned qualification interrupted: '+str(signum))
 signal.signal(signal.SIGTERM,interrupted)
 signal.signal(signal.SIGINT,interrupted)
-def run(name,command,expected=(0,),timeout=180):
+def run(name,command,expected=(0,),timeout=180,env=None):
+    remaining = deadline-time.time()
+    if remaining < 10:
+        raise TimeoutError('Absolute qualification deadline reached before '+name)
+    timeout = min(timeout, remaining-5)
     row=dict(name=name,command=[str(x) for x in command],startedAtMs=int(time.time()*1000))
     report['steps'].append(row)
     with (out/(name+'.log')).open('w') as log:
-        child=subprocess.Popen(row['command'],stdout=log,stderr=log,start_new_session=True)
+        child=subprocess.Popen(row['command'],stdout=log,stderr=log,start_new_session=True,env=env)
         row.update(pid=child.pid,pgid=child.pid,stopAfterSeconds=timeout)
         save()
         try:
@@ -59,9 +65,15 @@ try:
     receipt=out/'release/release.json'
     release=json.loads(receipt.read_text())
     report['release']={k:release[k] for k in ('revision','runnerRevision','binary','binarySha256','package','packageSha256','sourceTree')}
+    live=out/'liveness-root'
+    (live/'home').mkdir(parents=True,mode=0o700)
+    live_env=dict(PATH=os.environ['PATH'],HOME=str(live/'home'),TMPDIR=os.environ['TMPDIR'],
+                  CTOX_ROOT=str(live),CTOX_STATE_ROOT=str(live/'runtime'),LANG='C.UTF-8',
+                  XDG_CONFIG_HOME=str(live/'home/.config'),XDG_CACHE_HOME=str(live/'home/.cache'))
+    run('release-spawn-liveness',[release['binary'],'process-mining','spawn-liveness','--root',live],timeout=180,env=live_env)
     run('custody-mutations',['python3',here/'m7-artifact-qualify.py',receipt,out/'custody',profile],timeout=600)
     run('dress',['python3',here/'m7-dress.py','--release',receipt,'--before',
-        base/'v4-e2e-old-portable-20261015/build.json','--profile',profile,'--output',out/'dress'],expected=(0,2),timeout=1000)
+        base/'v4-e2e-old-portable-20261015/build.json','--profile',profile,'--output',out/'dress'],expected=(0,1,2),timeout=1000)
     report['dress']=json.loads((out/'dress/m7-go-nogo.json').read_text())
     # Reference-slot static component only. A V3 reference slot must not make
     # installed-get-root-p99 or signed-v4-slot pass in the M7 decision matrix.
@@ -69,11 +81,11 @@ try:
         '--profile',profile,'--binary',release['binary'],'--sha256',release['binarySha256'],
         '--source',Path(release['binary']).parent.parent,
         '--slot',base/'v4-m7-fix-signed-reference-20261016/0.1.46-beta.106',
-        '--out',out/'static'],timeout=180)
+        '--out',out/'static'],expected=(0,1),timeout=180)
     static=json.loads((out/'static/result.json').read_text())
     report['referenceStatic']=dict(p99Ms=static.get('p99Ms'),rows=len(static.get('rows',[])),
         pass_=static.get('pass'),limit='Release image + V3 reference slot; not installed V4 shell/browser acceptance')
-    report['pass_']=True
+    report['pass_']=not any(c['status']=='fail' for c in report['dress']['criteria']) and static.get('pass') is True
 except Exception as error:
     report['error']=str(error)
 finally:
