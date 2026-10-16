@@ -1,7 +1,7 @@
 // Strang BUCH-3 (16.10.2026): Belegkontierung bearbeitbar, Datei über api.files, Buchen mit den eingegebenen Werten,
 // Konflikt ohne stilles Überschreiben. Echte Maus/Tastatur (page.mouse/page.keyboard) im Stub-Kern (Chromium).
 //
-// Lauf:       CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/buchhaltung/tests/belegkontierung.test.mjs
+// Lauf:       CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/8265bd7 node --test src/apps/business-os/modules/buchhaltung/tests/belegkontierung.test.mjs
 // Gegenprobe: zusätzlich BUCH_OLD_DIR=<Ordner mit altem index.js/index.html/index.css> → muss rot sein.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,9 +11,10 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const APP = 'buchhaltung';
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const OLD = process.env.BUCH_OLD_DIR || '';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
@@ -54,12 +55,17 @@ before(async () => {
   page.__errors = [];
   page.on('pageerror', (e) => page.__errors.push(e.message));
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
+  // PIN-ALL (E48): echte Routen/Rechte/Collections aus v4/manifests/buchhaltung.manifest.json; ohne aktive Version prüft der
+  // Kern weder eigene Collections noch Schemas wie in Produktion.
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes(APP));
   await page.evaluate(async (APP) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import(`/modules/${APP}/index.js`);
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false });
     await kernel.ready;
     await kernel.sim.push('business_apps', [{ id: APP, title: 'Buchhaltung' }]);
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion(APP, '1', { title: 'Buchhaltung', manifestExtra: window.__routes });
     await kernel.sim.settle();
     window.__k = kernel;
     const raw = kernel.appApi(APP, '1');
@@ -131,7 +137,8 @@ test('Upload: Datei liegt über api.files im Speicher, Referenz am Beleg, Vorsch
   assert.ok(r, 'Beleg angelegt');
   assert.match(r.file_storage_url, /^[0-9a-f]{64}$/);
   const stored = await page.evaluate(async (r) => {
-    const doc = window.__raw.query('files', {}).get().find((f) => f.id === r.file_id) || null;
+    // E48: files ist für buchhaltung nicht deklariert (App nutzt nur api.files) → Testlesen über den simulierten Core.
+    const doc = (await window.__k.sim.inspect('files', r.file_id))?.base?.data ?? null;
     const blob = await window.__raw.files.get(r.file_storage_url);
     return { doc, bytes: blob ? [...new Uint8Array(await blob.arrayBuffer())] : null };
   }, r);
@@ -264,7 +271,11 @@ test('Konflikt: Live-Änderung überschreibt die Eingabe nicht, Speichern mit ve
   await typeInto('supplier_name', 'Meine Eingabe');
   // Fremde Änderung kommt über den Core, während das Feld noch offen ist.
   const r0 = await receipt('Konflikt.pdf');
-  await page.evaluate((r) => window.__k.sim.push('accounting_receipts', { ...r, supplier_name: 'Fremd GmbH', updated_at_ms: r.updated_at_ms + 5000 }), r0);
+  // E47: gelesene Dokumente tragen _rev/_pending (reserviert) → der Core-Push trägt nur die Datenfelder.
+  await page.evaluate((r) => {
+    const data = Object.fromEntries(Object.entries(r).filter(([k]) => !k.startsWith('_')));
+    return window.__k.sim.push('accounting_receipts', { ...data, supplier_name: 'Fremd GmbH', updated_at_ms: r.updated_at_ms + 5000 });
+  }, r0);
   await settle();
   assert.equal(await field('supplier_name'), 'Meine Eingabe', 'Eingabe nicht durch Live-Daten überschrieben');
   await page.keyboard.press('Tab');
