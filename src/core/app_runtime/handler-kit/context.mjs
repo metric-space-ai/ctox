@@ -25,7 +25,11 @@ export function handlerContext(bindings, { migration = false, transaction = fals
     apply: (_, _this, args) => { effect(); return bindings.capability(name, args); },
   });
   const ctx = {
-    read(collection, query = { selector: {} }) { outside(); return bindings.read(collection, query); },
+    read(collection, query = { selector: {} }) {
+      outside();
+      if (collection === 'business_commands') error('forbidden', 'Read the owning app projection instead of command documents');
+      return bindings.read(collection, query);
+    },
     asset(path) { outside(); return bindings.asset(path); },
     async get(collection, id) {
       if (typeof id !== 'string' || !id) error('invalid', 'Document id required');
