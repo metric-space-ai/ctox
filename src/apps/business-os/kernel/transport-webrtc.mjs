@@ -127,6 +127,10 @@ export class WebRTCKernelTransport extends KernelTransport {
    const endpoint=early??(this.options.channels?{channels:this.options.channels,peer:this.options.peer}:await Promise.race([this.options.createPeer(this.options.address,identity),this.ready.then(()=>{throw new CtoxError('unavailable','Handshake ended before connection setup');})]));
    if(this.closed){endpoint.close?.();throw new CtoxError('unavailable','Transport closed');}
    this.endpoint=endpoint;this.channels=endpoint.channels;
+   if(endpoint.peer?.addEventListener){
+    const peerState=()=>{if(['disconnected','failed','closed'].includes(endpoint.peer.connectionState)||['disconnected','failed','closed'].includes(endpoint.peer.iceConnectionState))this.fail(new CtoxError('unavailable','WebRTC peer disconnected'));};
+    this.listen(endpoint.peer,'connectionstatechange',peerState);this.listen(endpoint.peer,'iceconnectionstatechange',peerState);peerState();if(this.closed)throw new CtoxError('unavailable','WebRTC peer disconnected');
+   }
    if(!this.channels?.[0])throw new CtoxError('invalid','Control data channel missing');
    if(this.options.wireFormat==='k2-fixture'){
     this.scheduler=new SendScheduler(this.channels,{codec:'gzip',adapters:this.options.codecs,onError:e=>this.fail(e)});
