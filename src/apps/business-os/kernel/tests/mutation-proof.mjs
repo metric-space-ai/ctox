@@ -17,6 +17,7 @@ const cases=[
  ['e39-right','command-routing.mjs',"!(Array.isArray(right.roles)&&right.roles.includes(user.role))",'false','e39.test.mjs','target command right'],
  ['e39-right-precedence','command-routing.mjs','b[0].length-a[0].length','a[0].length-b[0].length','e39.test.mjs','native rights precedence'],
  ['e39-app-write','command-routing.mjs',"if(cross && user && user.role!=='admin' && !right && !writable)",'if(false)','e39.test.mjs','native rights precedence'],
+ ['e39-replay','kernel.mjs','const key = commandOptions.idempotency_key;',"if(route.error)throw new CtoxError('forbidden','Target rejected before idempotent lookup');const key = commandOptions.idempotency_key;",'e39.test.mjs','authorization preserves existing idempotent'],
  ['e42-platform','command-routing.mjs','return platformTypes.has(type)','return false && platformTypes.has(type)','e39.test.mjs','every native inventory'],
  ['e44-can-navigate','kernel.mjs','if(!known)return false;','if(!known)return true;','e39.test.mjs','canNavigate'],
  ['e41-lane-name','transport-webrtc.mjs',"name==='initial'?'initial-sync':name",'name','e39-inventory.test.mjs','share the same reliable lane'],

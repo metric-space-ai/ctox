@@ -13,9 +13,9 @@ const forbidden=r=>assert.deepEqual([r.status,r.code??r.reason],['rejected','for
 test('E39 cross-app routing uses sender declarations, inbound grant, handler and target user right',async t=>{
  const k=await open(t);await receiver(k);let api=await sender(k);
  const h=api.command('ipc.run',{app_id:'attacker',target_app:'other'});assert.equal((await h.result).status,'accepted');assert.deepEqual((await end(h)).result,{sender:'sender',target:'receiver'});
- assert.throws(()=>api.command('ipc.run',{}, {target_app:'other'}),e=>e.code==='forbidden');
+ forbidden(await api.command('ipc.run',{}, {target_app:'other'}).result);
  api=await sender(k,[{app:'receiver',type:'ipc.run'},{app:'other',type:'ipc.run'}],'2');
- assert.throws(()=>api.command('ipc.run',{}),e=>e.code==='forbidden');
+ forbidden(await api.command('ipc.run',{}).result);
  assert.equal((await end(api.command('ipc.run',{}, {target_app:'receiver'}))).status,'done');
  await receiver(k,{commands_in:[]},undefined,'2');forbidden(await api.command('ipc.run',{}, {target_app:'receiver'}).result);
  await receiver(k,{commands_in:[{type:'ipc.run',from:'*'}]},undefined,'3');assert.equal((await end(api.command('ipc.run',{}, {target_app:'receiver'}))).status,'done');
@@ -65,4 +65,15 @@ test('E39 target command right is authoritative for the initiating user',async t
   await k.sim.publishAppVersion('sender','1',{files:{...files,'own.js':"export default async c=>({sender:c.app_id,target:'sender'});"},handlers:{'ipc.run':'own.js'},manifestExtra:{commands_out:[{app:'sender',type:'ipc.run'},{app:'receiver',type:'ipc.run'}]}});
   const h=k.appApi('sender','1').command('ipc.run',{}, {target_app:'sender'});
   assert.equal((await h.result).status,'accepted');assert.deepEqual((await end(h)).result,{sender:'sender',target:'sender'});
+ });
+
+ test('E39 routing authorization preserves existing idempotent commands across target/declaration changes',async t=>{
+  const k=await open(t);await receiver(k);let api=await sender(k);
+  const first=api.command('ipc.run',{}, {idempotency_key:'once'});assert.equal((await end(first)).status,'done');
+  const seq=(await k.sim.inspect('business_commands',first.id)).base.seq;
+  let replay;assert.doesNotThrow(()=>{replay=api.command('ipc.run',{}, {idempotency_key:'once',target_app:'other'});});
+  assert.equal(replay.id,first.id);assert.equal((await replay.result).status,'accepted');assert.deepEqual(replay.status.get().result,{sender:'sender',target:'receiver'});
+  api=await sender(k,[{app:'receiver',type:'ipc.run'},{app:'other',type:'ipc.run'}],'2');
+  let changed;assert.doesNotThrow(()=>{changed=api.command('ipc.run',{}, {idempotency_key:'once'});});
+  assert.equal(changed.id,first.id);assert.equal((await changed.result).status,'accepted');assert.equal((await k.sim.inspect('business_commands',first.id)).base.seq,seq);
  });

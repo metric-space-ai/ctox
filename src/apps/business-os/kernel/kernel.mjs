@@ -1632,7 +1632,6 @@ export function createKernel(opts = {}) {
       command(type, payload = {}, commandOptions={}) {
         if (typeof type !== 'string' || !type) throw new CtoxError('invalid', 'Befehlstyp fehlt', { path: 'type' });
         const route=commandTarget({type,app_id:appId,...(commandOptions.target_app===undefined?{}:{target_app:commandOptions.target_app})},readManifest(appId,app.ver));
-        if(route.error)throw new CtoxError('forbidden','Command target is not declared',{path:'target_app'});
         const key = commandOptions.idempotency_key;
         if (key !== undefined && (typeof key !== 'string' || key.length > 128)) throw new CtoxError('invalid', 'idempotency_key must be a string of at most 128 characters', { path: 'idempotency_key' });
         // UUIDv8: first 128 SHA-256 bits, RFC variant/version bits normalized.
@@ -1644,7 +1643,7 @@ export function createKernel(opts = {}) {
           ...(typeof commandOptions.on_complete === 'string' ? { on_complete: commandOptions.on_complete } : {}),
           ...(typeof commandOptions.on_failed === 'string' ? { on_failed: commandOptions.on_failed } : {}),
           type, payload, status: 'queued', app_id: appId, actor_id: actor.id, created_at: new Date().toISOString(),
-          ...(!route.platform && (route.target!==appId || commandOptions.target_app!==undefined) ? {target_app:route.target} : {}),
+          ...(commandOptions.target_app!==undefined ? {target_app:commandOptions.target_app} : !route.error && !route.platform && route.target!==appId ? {target_app:route.target} : {}),
         }, key !== undefined);
         const status = makeLive(['c:business_commands', 'commands'], () => {
           const d = visible(mirrorGet('business_commands', id));
