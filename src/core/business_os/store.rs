@@ -8666,7 +8666,7 @@ pub(super) fn queue_command_policy_target(
     )
 }
 
-fn queue_command_native_authorization(
+pub(super) fn queue_command_native_authorization(
     root: &Path,
     command: &BusinessCommand,
     authenticated_session: Option<&BusinessOsSession>,
@@ -8803,10 +8803,26 @@ pub(crate) fn revalidate_business_command_execution_authorization(
     root: &Path,
     command_id: &str,
 ) -> anyhow::Result<Value> {
-    let conn = open_store(root)?;
-    let command = load_business_command(&conn, command_id)?;
-    let canonical = channels::business_command_projection(root, command_id)?;
+    // Authorization needs the immutable native snapshot, not presentation progress.
+    let lookup_id = command_id.to_owned();
+    let canonical = crate::persistence::read_core_snapshot_blocking(root, move |core| {
+        Ok(channels::business_command_projection_from_conn(core, &lookup_id))
+    })??;
     let native_authorization = canonical.get("native_authorization");
+    let command = if native_authorization.is_some() {
+        // Native tasks have no V3 business_commands shadow row.
+        BusinessCommand {
+            id: Some(command_id.to_owned()),
+            module: canonical["module"].as_str().context("native command module missing")?.into(),
+            command_type: canonical["command_type"].as_str().context("native command type missing")?.into(),
+            record_id: canonical["record_id"].as_str().filter(|id| !id.is_empty()).map(str::to_owned),
+            payload: canonical["payload"].clone(),
+            client_context: canonical["client_context"].clone(),
+            origin: CommandOrigin::ReplicatedPeer,
+        }
+    } else {
+        load_business_command(&open_store(root)?, command_id)?
+    };
     let (session, native_policy_decision) = if let Some(authorization) = native_authorization {
         let (session, decision) =
             revalidate_queue_native_authorization(root, &command, authorization)?;
@@ -26753,6 +26769,17 @@ fn create_ctox_queue_task(
     command: &BusinessCommand,
     native_authorization: Option<&Value>,
 ) -> anyhow::Result<Option<channels::BusinessCommandQueueClaim>> {
+    create_native_target_queue_task(root, command_id, command, native_authorization, None)
+}
+
+/// The target is a server-authorized native argument, never a client_context field.
+pub(super) fn create_native_target_queue_task(
+    root: &Path,
+    command_id: &str,
+    command: &BusinessCommand,
+    native_authorization: Option<&Value>,
+    native_crew_target: Option<&str>,
+) -> anyhow::Result<Option<channels::BusinessCommandQueueClaim>> {
     if !is_cv_print_parse_command(command) {
         command_instruction(command)?;
     }
@@ -26810,6 +26837,7 @@ fn create_ctox_queue_task(
                 "business_os_command_type": command.command_type,
                 "business_os_record_id": command.record_id,
                 "business_os_attachments": attachments,
+                "native_crew_target": native_crew_target,
                 "business_os_import_source_kind": import_source,
                 "client_context": policy_audit_client_context(command)
             })),

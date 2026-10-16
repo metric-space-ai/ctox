@@ -1,5 +1,8 @@
 //! Adapt committed P9 documents to the existing native dispatcher. No V3
 //! intake, command-ledger insert, projection write or acceptance RPC is used.
+#[cfg(test)]
+#[path = "command_plane_e49_fence_tests.rs"]
+mod e49_native_fence_tests;
 use super::*;
 use ctox_store::change_log::subscription::write_contract::{
     routes::{self, NativeCommand},
@@ -90,6 +93,11 @@ fn dispatch_authorized(
         if !decision.allowed {
             return Err(routes::error("forbidden", "native_permission_denied"));
         }
+    }
+    if matches!(native.kind.as_str(), "ctox.crew.execution.list" | "ctox.crew.execution.claim" | "ctox.crew.execution.plan.update" | "ctox.crew.execution.report" | "ctox.task.create") {
+        // Both callers enter under the actual retained native authority/fence.
+        return super::super::mcp_channel::native_tasks::execute(root, &native.command_id, &native.kind, &native.payload, session)
+            .map_err(|e| routes::native_error(&e.to_string()));
     }
     let mut prepared = PreparedBusinessCommand::from_command(command)
         .map_err(|_| routes::error("invalid", "native_payload_invalid"))?;

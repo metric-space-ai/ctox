@@ -47,6 +47,26 @@ macro_rules! core_route {
 }
 /// Exact method names, not the action discriminants inside their native payloads.
 pub const ROUTES: &[Route] = &[
+    core_route!(
+        "ctox.crew.execution.list",
+        "src/core/business_os/mcp_native_tasks.rs::execute"
+    ),
+    core_route!(
+        "ctox.crew.execution.claim",
+        "src/core/business_os/mcp_native_tasks.rs::execute"
+    ),
+    core_route!(
+        "ctox.crew.execution.plan.update",
+        "src/core/business_os/mcp_native_tasks.rs::execute"
+    ),
+    core_route!(
+        "ctox.crew.execution.report",
+        "src/core/business_os/mcp_native_tasks.rs::execute"
+    ),
+    core_route!(
+        "ctox.task.create",
+        "src/core/business_os/mcp_native_tasks.rs::execute"
+    ),
     route!(
         "ctox.workjet.speech.settings.v1",
         "src/core/business_os/rxdb_peer_speech_settings.rs:372"
