@@ -44,6 +44,7 @@ impl HttpSurface {
     }
     /// Runs only on a blocking/IPC worker. Admission and thread count are bounded.
     pub fn listen(&self, addr: SocketAddr) -> Result<SocketAddr, StoreError> {
+        self.inputs.instance_signer()?;
         let mut listeners = self.listeners.lock().unwrap_or_else(|p| p.into_inner());
         if self.closing.load(Ordering::Acquire) {
             return Err(StoreError::Closed);
@@ -60,6 +61,7 @@ impl HttpSurface {
                 StoreError::Invalid("no verified Business OS bootstrap installed".into())
             })?;
         let app = std::fs::canonicalize(app)?;
+        self.inputs.instance_signer()?;
         let server = Arc::new(
             Server::http(addr)
                 .map_err(|_| StoreError::Invalid("HTTP address unavailable".into()))?,
@@ -101,6 +103,7 @@ impl HttpSurface {
                                     Header::from_bytes("X-Content-Type-Options", "nosniff")
                                         .unwrap(),
                                 );
+                                response.add_header(Header::from_bytes("Content-Security-Policy", "default-src 'self'; script-src 'self' blob:; connect-src 'self' wss:; object-src 'none'; base-uri 'none'").unwrap());
                                 let _ = request.respond(response);
                             }
                             Ok(None) => (),
@@ -146,11 +149,14 @@ impl HttpSurface {
         });
         Ok(JobHandle::from_receiver(receive))
     }
-    pub async fn shutdown(&self) -> Result<(), StoreError> {
+    pub async fn shutdown(self: &Arc<Self>) -> Result<(), StoreError> {
         self.closing.store(true, Ordering::Release);
-        let listeners =
-            std::mem::take(&mut *self.listeners.lock().unwrap_or_else(|p| p.into_inner()));
+        let surface = self.clone();
         tokio::task::spawn_blocking(move || {
+            // listen() retains this mutex while verifying a selected release.
+            // Waiting for that filesystem work must not block a Tokio worker.
+            let listeners =
+                std::mem::take(&mut *surface.listeners.lock().unwrap_or_else(|p| p.into_inner()));
             for listener in listeners {
                 for _ in &listener.workers {
                     listener.server.unblock();
@@ -195,6 +201,13 @@ fn answer(
     if path.starts_with("/api/") {
         return Ok((404, "text/plain", Vec::new()));
     }
+    // §10.1 is a bootstrap allowlist, not an unauthenticated module/record
+    // server. Active Shell/app artifacts must arrive over the V4 data stream.
+    if !matches!(path, "/" | "/index.html" | "/loader.mjs" | "/sw.js")
+        && !(path.starts_with("/kernel/") && path.ends_with(".mjs"))
+    {
+        return Ok((404, "text/plain", Vec::new()));
+    }
     let relative = path.strip_prefix('/').unwrap_or(path);
     let relative = if relative.is_empty() {
         "index.html"
@@ -222,6 +235,9 @@ fn answer(
         Some("wasm") => "application/wasm",
         _ => "application/octet-stream",
     };
+    if target.metadata()?.len() > 1024 * 1024 {
+        return Ok((413, "text/plain", Vec::new()));
+    }
     Ok((
         200,
         mime,
@@ -266,6 +282,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn foreground_http_reuses_owned_stores_and_cli_ipc() -> anyhow::Result<()> {
         let _scope = super::super::store_startup::isolate_test_roots().await;
+        anyhow::ensure!(
+            std::env::var_os("CTOX_STATE_ROOT").is_none(),
+            "configured profile forbidden in HTTP contract"
+        );
         let root = tempfile::Builder::new().prefix("c7h-").tempdir_in("/tmp")?;
         let app = root.path().join("business-os");
         std::fs::create_dir(&app)?;
@@ -349,6 +369,13 @@ mod tests {
             assert_eq!(
                 client
                     .get(format!("http://{}/api/business-os/records", listen.addr))
+                    .send()?
+                    .status(),
+                404
+            );
+            assert_eq!(
+                client
+                    .get(format!("http://{}/modules/private/index.js", listen.addr))
                     .send()?
                     .status(),
                 404
