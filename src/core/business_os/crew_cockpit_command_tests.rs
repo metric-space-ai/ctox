@@ -22,84 +22,88 @@ fn task(root: &Path) -> anyhow::Result<channels::QueueTaskView> {
 
 #[test]
 fn plan_step_retry_dispatch_denies_user_and_audits_verified_actor() -> anyhow::Result<()> {
-    let root = tempfile::tempdir()?;
-    let plan = crate::mission::plan::ingest_goal(
-        root.path(),
-        crate::mission::plan::PlanIngestRequest {
-            title: "Retry contract".into(),
-            prompt: "- retry existing step".into(),
-            thread_key: Some("retry-contract".into()),
-            skill: Some("follow-up-orchestrator".into()),
-            auto_advance: false,
-            emit_now: true,
-            wait_for: None,
-        },
-    )?;
-    let step = &plan.steps[0].step_id;
-    crate::mission::plan::handle_plan_command(
-        root.path(),
-        &[
-            "fail-step".into(),
-            "--step-id".into(),
-            step.clone(),
-            "--reason".into(),
-            "original failure".into(),
-        ],
-    )?;
-    let core = rusqlite::Connection::open(crate::paths::core_db(root.path()))?;
-    for role in ["user", "admin"] {
-        let actor = format!("retry-{role}");
-        let (token, _) = super::super::store::issue_business_os_capability_token_for_managed_user(
+    crate::business_os::project_chats::plan_state::run_contract(move || {
+        let _rights = crate::business_os::project_chats::plan_state::test_policy()?;
+        let root = tempfile::tempdir()?;
+        let plan = crate::mission::plan::ingest_goal(
             root.path(),
-            &actor,
-            &actor,
-            role,
-            now_ms() as i64,
+            crate::mission::plan::PlanIngestRequest {
+                title: "Retry contract".into(),
+                prompt: "- retry existing step".into(),
+                thread_key: Some("retry-contract".into()),
+                skill: Some("follow-up-orchestrator".into()),
+                auto_advance: false,
+                emit_now: true,
+                wait_for: None,
+            },
         )?;
-        let id = format!("retry-command-{role}");
-        let request = json!({
-            "id":id,"command_id":id,"module":"ctox","command_type":"ctox.plan.step.retry",
-            "payload":{"step_id":step,"actor":"forged-owner"},
-            "client_context":{"capability_token":token,"actor":{"id":"forged-owner","role":"admin"}}
-        });
-        let result = accept_rxdb_business_command_with_origin(
+        let step = &plan.steps[0].step_id;
+        crate::mission::plan::handle_plan_command(
             root.path(),
-            request.clone(),
-            CommandOrigin::ReplicatedPeer,
+            &[
+                "fail-step".into(),
+                "--step-id".into(),
+                step.clone(),
+                "--reason".into(),
+                "original failure".into(),
+            ],
         )?;
-        let status: String = core.query_row(
-            "SELECT status FROM planned_steps WHERE step_id=?1",
-            [step],
-            |row| row.get(0),
-        )?;
-        if role == "user" {
-            assert!(
-                result.to_string().contains("denied"),
-                "retry must require task management: {result}"
-            );
-            assert_eq!(status, "failed", "unauthorized retry mutated the plan");
-        } else {
-            assert_eq!(status, "pending", "{result}");
-            let audit: String = core.query_row(
-                "SELECT receipt_json FROM planned_step_retry_audit WHERE request_id=?1",
-                [&id],
-                |row| row.get(0),
-            )?;
-            assert_eq!(serde_json::from_str::<Value>(&audit)?["actor"], actor);
-            accept_rxdb_business_command_with_origin(
+        let core = rusqlite::Connection::open(crate::paths::core_db(root.path()))?;
+        for role in ["user", "admin"] {
+            let actor = format!("retry-{role}");
+            let (token, _) =
+                super::super::store::issue_business_os_capability_token_for_managed_user(
+                    root.path(),
+                    &actor,
+                    &actor,
+                    role,
+                    now_ms() as i64,
+                )?;
+            let id = format!("retry-command-{role}");
+            let request = json!({
+                "id":id,"command_id":id,"module":"ctox","command_type":"ctox.plan.step.retry",
+                "payload":{"step_id":step,"actor":"forged-owner"},
+                "client_context":{"capability_token":token,"actor":{"id":"forged-owner","role":"admin"}}
+            });
+            let result = accept_rxdb_business_command_with_origin(
                 root.path(),
-                request,
+                request.clone(),
                 CommandOrigin::ReplicatedPeer,
             )?;
-            let audit_after: String = core.query_row(
-                "SELECT receipt_json FROM planned_step_retry_audit WHERE request_id=?1",
-                [&id],
+            let status: String = core.query_row(
+                "SELECT status FROM planned_steps WHERE step_id=?1",
+                [step],
                 |row| row.get(0),
             )?;
-            assert_eq!(audit, audit_after);
+            if role == "user" {
+                assert!(
+                    result.to_string().contains("denied"),
+                    "retry must require task management: {result}"
+                );
+                assert_eq!(status, "failed", "unauthorized retry mutated the plan");
+            } else {
+                assert_eq!(status, "pending", "{result}");
+                let audit: String = core.query_row(
+                    "SELECT receipt_json FROM planned_step_retry_audit WHERE request_id=?1",
+                    [&id],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(serde_json::from_str::<Value>(&audit)?["actor"], actor);
+                accept_rxdb_business_command_with_origin(
+                    root.path(),
+                    request,
+                    CommandOrigin::ReplicatedPeer,
+                )?;
+                let audit_after: String = core.query_row(
+                    "SELECT receipt_json FROM planned_step_retry_audit WHERE request_id=?1",
+                    [&id],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(audit, audit_after);
+            }
         }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 #[test]

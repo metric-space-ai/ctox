@@ -18,6 +18,7 @@ use std::{io, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
 
 pub(super) const READABLE_COLLECTIONS: &[&str] = &[
+    "planned_steps",
     "business_records",
     "business_commands",
     "ctox_queue_tasks",
