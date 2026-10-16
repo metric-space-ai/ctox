@@ -219,13 +219,27 @@ impl RuntimeAuthority {
                 actor: self.execution.node_id(),
                 command: Command::CompleteEffect {
                     job_id: run.into(),
-                    ownership: held.ownership,
+                    ownership: held.ownership.clone(),
                     effect_id: held.effect,
                 },
             })
             .await?
         {
-            Receipt::Applied(_) => Ok(()),
+            Receipt::Applied(_) => match self
+                .execution
+                .submit(Request {
+                    request_id: format!("stop:{run}"),
+                    actor: self.execution.node_id(),
+                    command: Command::Stop {
+                        job_id: run.into(),
+                        ownership: held.ownership,
+                    },
+                })
+                .await?
+            {
+                Receipt::Applied(job) if job.stopped => Ok(()),
+                _ => Err(anyhow!("unavailable: stop requires reconciliation")),
+            },
             _ => Err(anyhow!("unavailable: completion requires reconciliation")),
         }
     }
@@ -282,7 +296,6 @@ impl RuntimeAuthority {
             .held
             .read()
             .map_err(|_| anyhow!("unavailable: invocation registry"))?;
-        let id = text(&binding["command"], "id")?;
         let parent = text(&binding["fence"], "run_id")?
             .strip_prefix("app-runtime:")
             .context("invalid: native run")?;
@@ -487,10 +500,10 @@ impl CoreAuthority for RuntimeAuthority {
         now()
     }
     fn log(&self, binding: &Value, args: &Value) -> Result<Value> {
-        tracing::info!(
-            app = binding["command"]["app_id"].as_str().unwrap_or(""),
-            level = args[0].as_str().unwrap_or("info"),
-            "app runtime log"
+        eprintln!(
+            "app runtime log app={} level={}",
+            binding["command"]["app_id"].as_str().unwrap_or(""),
+            args[0].as_str().unwrap_or("info")
         );
         Ok(Value::Null)
     }
@@ -703,7 +716,7 @@ impl RuntimeAuthority {
                 let mut doc = document(tx, "business_commands", &id)?
                     .ok_or_else(|| invalid("not_found: callback record"))?;
                 doc["status"] = json!(if succeeded { "done" } else { "failed" });
-                super::super::commands::put(tx, "business_commands", &id, &doc)?;
+                store_command(tx, &doc)?;
                 Ok(())
             }))?
             .await?;

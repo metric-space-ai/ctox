@@ -3,6 +3,8 @@
 mod authority;
 mod codec;
 mod feed;
+#[cfg(all(test, unix, feature = "app-runtime-node"))]
+mod native_proof;
 #[cfg(test)]
 mod runtime_tests;
 
@@ -146,8 +148,13 @@ fn rights(db: &Connection) -> Result<sync_rights::RightsSnapshot, StoreError> {
         .transpose()
         .map_err(sql_error)?
         .unwrap_or(json!({}));
-    let manifests = serde_json::from_value(metadata.get("manifests").cloned().unwrap_or(json!([])))
-        .map_err(sql_error)?;
+    let manifests: Vec<sync_rights::manifest_rules::ManifestRules> =
+        serde_json::from_value(metadata.get("manifests").cloned().unwrap_or(json!([])))
+            .map_err(sql_error)?;
+    for manifest in &manifests {
+        manifest.validate().map_err(sql_error)?;
+        manifest.validate_registry(&manifests).map_err(sql_error)?;
+    }
     Ok(sync_rights::RightsSnapshot {
         rights_ver,
         rules,
@@ -282,7 +289,7 @@ impl RuntimeOwners {
     }
 }
 
-fn store_command(tx: &rusqlite::Transaction<'_>, doc: &Value) -> Result<(), StoreError> {
+pub(super) fn store_command(tx: &rusqlite::Transaction<'_>, doc: &Value) -> Result<(), StoreError> {
     let id = text(doc, "id").map_err(sql_error)?;
     super::commands::put(tx, "business_commands", id, doc)?;
     let c = collection(tx, "business_commands")?;
@@ -334,4 +341,29 @@ pub(super) fn publish_rights(
         &current.manifests,
     )?;
     Ok(())
+}
+
+/// Called only by the native foreground root after its E22 session is retained.
+/// Unenrolled storage-only roots have no execution capability to attach.
+pub(crate) async fn attach_native(
+    inputs: Arc<crate::service::store_inputs::StoreInputs>,
+) -> Result<Option<Box<dyn crate::service::store_startup::RunningEngine>>, StoreError> {
+    let native = match inputs.native_session() {
+        Ok(native) => native,
+        Err(StoreError::Closed) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let signer = native.instance_signer.clone();
+    let execution = native.execution_authority.clone();
+    // Existing Transfer-CAS layout: workjet_transfer_workspace.rs::store.
+    // Cas is a filesystem handle, not another database or writer.
+    let transfer_root = crate::paths::runtime_dir(&inputs.root).join("transfers");
+    let cas = tokio::task::spawn_blocking(move || Cas::open(transfer_root))
+        .await
+        .map_err(|_| StoreError::Panicked)??;
+    let owners = RuntimeOwners::from_store_inputs(&inputs, signer, execution, cas)?;
+    let binding = RuntimeBinding::attach(inputs.root.clone(), owners)
+        .await
+        .map_err(sql_error)?;
+    Ok(Some(Box::new(binding)))
 }

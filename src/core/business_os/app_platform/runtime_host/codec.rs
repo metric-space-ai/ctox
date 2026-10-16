@@ -48,8 +48,10 @@ impl RuntimeCodec {
         if actor_json(&a) != command["actor"] {
             return Err(invalid("revoked: actor changed"));
         }
-        let active = self.manifest(db, text(command, "app_id").map_err(sql_error)?)?;
-        let manifest = if command["runtime_completion"] == true {
+        let native = super::super::commands::handles(text(command, "type").map_err(sql_error)?);
+        let manifest = if native {
+            json!({"app_id":command["app_id"],"app_ver":"native-platform"})
+        } else if command["runtime_completion"] == true {
             self.version(
                 db,
                 text(command, "app_id").map_err(sql_error)?,
@@ -57,7 +59,7 @@ impl RuntimeCodec {
             )?["manifest"]
                 .clone()
         } else {
-            active
+            self.manifest(db, text(command, "app_id").map_err(sql_error)?)?
         };
         if manifest["app_ver"] != command["app_ver"]
             || binding.get("manifest").is_some_and(|m| m != &manifest)

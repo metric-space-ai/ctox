@@ -682,7 +682,11 @@ fn record(
         });
         record = canonical;
     }
-    put(tx, "business_commands", &command.id, &record)?;
+    if record["type"].is_string() {
+        super::runtime_host::store_command(tx, &record)?;
+    } else {
+        put(tx, "business_commands", &command.id, &record)?;
+    }
     Ok(outcome)
 }
 
@@ -1272,6 +1276,10 @@ pub(super) fn complete(
         "completed"
     });
     command["updated_at_ms"] = json!(now);
-    put(tx, "business_commands", command_id, &command)?;
+    if command["type"].is_string() {
+        super::runtime_host::store_command(tx, &command)?;
+    } else {
+        put(tx, "business_commands", command_id, &command)?;
+    }
     Ok(outcome)
 }

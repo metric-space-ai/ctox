@@ -9,7 +9,6 @@ use tokio::{sync::watch, task::JoinHandle};
 
 pub(crate) struct RuntimeBinding {
     pub ingress: AppRuntimeIngress,
-    registration: Option<AppRuntimeRegistration>,
     stop: watch::Sender<bool>,
     task: Option<JoinHandle<Result<()>>>,
 }
@@ -30,13 +29,22 @@ impl RuntimeBinding {
         let commits = database.writer.subscribe_commits();
         let (host, authority) = tokio::task::spawn_blocking(move || super::host(&owners)).await??;
         let codec = host.codec.clone();
-        let (active,cursor)=database.readers.read_job(ReadJob::new(JobOptions::default(),move|db|{
+        let (active,initial,epoch)=database.readers.read_job(ReadJob::new(JobOptions::default(),move|db|{
             let c=collection(db,"business_apps")?;
             let rows=db.prepare(&format!("SELECT data FROM {} WHERE deleted=0 AND json_extract(data,'$.state')='active' ORDER BY id",quote(&c.table)))?.query_map([],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
             let mut active=Vec::new();for raw in rows {let app:Value=serde_json::from_str(&raw).map_err(sql_error)?;let id=text(&app,"id").map_err(sql_error)?;let m=codec.active_manifest(db,id)?;active.push((id.into(),text(&m,"app_ver").map_err(sql_error)?.into()));}
             let head=db.query_row("SELECT v FROM _seq WHERE singleton=1",[],|r|r.get::<_,u64>(0))?;
-            Ok((active,head))
+            let epoch:String=db.query_row("SELECT epoch FROM _meta WHERE singleton=1",[],|r|r.get(0))?;
+            Ok((active,head,epoch))
         })).await?;
+        let cursor=database.writer.submit(WriteJob::new(JobOptions::default(),move|tx|{
+            tx.execute_batch("CREATE TABLE IF NOT EXISTS _app_runtime_feed(singleton INTEGER PRIMARY KEY CHECK(singleton=1),epoch TEXT NOT NULL,cursor INTEGER NOT NULL)")?;
+            let saved:Option<(String,u64)>=tx.query_row("SELECT epoch,cursor FROM _app_runtime_feed WHERE singleton=1",[],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+            match saved {
+                Some((old,cursor)) if old==epoch=>Ok(cursor),
+                _=>{tx.execute("INSERT INTO _app_runtime_feed VALUES(1,?1,?2) ON CONFLICT(singleton) DO UPDATE SET epoch=excluded.epoch,cursor=excluded.cursor",params![epoch,initial])?;Ok(initial)}
+            }
+        }))?.await?;
         let inputs = AppRuntimeInputs {
             host: host.clone(),
             runtime: runtime.clone(),
@@ -47,19 +55,27 @@ impl RuntimeBinding {
                 .await??;
         let ingress = registration.ingress.clone();
         let (stop, stopping) = watch::channel(false);
-        let task = runtime.spawn(drive(
-            database,
-            authority,
-            platform,
-            policy_owner,
-            ingress.clone(),
-            commits,
-            cursor,
-            stopping,
-        ));
+        let feed_ingress = ingress.clone();
+        let task = runtime.spawn(async move {
+            let result = drive(
+                database,
+                authority,
+                platform,
+                policy_owner,
+                feed_ingress,
+                commits,
+                cursor,
+                stopping,
+            )
+            .await;
+            if result.is_err() {
+                eprintln!("native app runtime feed stopped; ingress is closing");
+            }
+            let drained = registration.shutdown().await;
+            result.and(drained)
+        });
         Ok(Self {
             ingress,
-            registration: Some(registration),
             stop,
             task: Some(task),
         })
@@ -68,9 +84,6 @@ impl RuntimeBinding {
         self.stop.send_replace(true);
         if let Some(task) = self.task.take() {
             task.await??;
-        }
-        if let Some(registration) = self.registration.take() {
-            registration.shutdown().await?;
         }
         Ok(())
     }
@@ -114,7 +127,7 @@ async fn drive(
         loop {
             let after = cursor;
             let page=database.readers.read_job(ReadJob::new(JobOptions::default(),move|db|{
-                let mut statement=db.prepare("SELECT collection,id,seq,op,gen FROM _changes WHERE seq>?1 ORDER BY seq LIMIT 256")?;
+                let mut statement=db.prepare("SELECT c.collection,c.id,c.seq,c.op,c.gen FROM _changes c JOIN _collections r ON r.name=c.collection AND r.gen=c.gen AND r.state='active' WHERE c.seq>?1 ORDER BY c.seq LIMIT 256")?;
                 let rows=statement.query_map([after],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,u64>(2)?,r.get::<_,u8>(3)?,r.get::<_,u64>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
                 rows.into_iter().map(|(collection,id,seq,op,gen)|{
                     let doc=if op==1{None}else{document(db,&collection,&id)?};
@@ -171,6 +184,16 @@ async fn drive(
                 authority.finish_events(changed.is_ok()).await?;
                 changed?;
                 cursor = seq;
+                database
+                    .writer
+                    .submit(WriteJob::new(JobOptions::default(), move |tx| {
+                        tx.execute(
+                            "UPDATE _app_runtime_feed SET cursor=MAX(cursor,?1) WHERE singleton=1",
+                            [seq],
+                        )?;
+                        Ok(())
+                    }))?
+                    .await?;
             }
         }
         tokio::select! {biased;_=stop.changed()=>break,result=commits.changed()=>{result?;}}
@@ -187,7 +210,39 @@ async fn dispatch_committed(
     doc: Value,
 ) -> Result<()> {
     let native = super::super::commands::handles(text(&doc, "type")?);
-    let binding = authority.retain(doc).await?;
+    let binding = match authority.retain(doc.clone()).await {
+        Ok(binding) => binding,
+        Err(error) => {
+            // These errors arise in the rolled-back admission transaction, before
+            // any native effect is begun. A denied command must not stop the feed.
+            let reason = match error.downcast_ref::<StoreError>() {
+                Some(StoreError::Invalid(reason))
+                    if matches!(
+                        error_code(reason),
+                        "forbidden" | "revoked" | "not_found" | "invalid"
+                    ) =>
+                {
+                    reason.clone()
+                }
+                _ => return Err(error),
+            };
+            database
+                .writer
+                .submit(WriteJob::new(JobOptions::default(), move |tx| {
+                    let id = text(&doc, "id").map_err(sql_error)?;
+                    if document(tx, "business_commands", id)?.as_ref() != Some(&doc) {
+                        return Err(invalid("conflict: command changed during rejection"));
+                    }
+                    let mut rejected = doc;
+                    rejected["status"] = json!("failed");
+                    rejected["error"] =
+                        json!({"code":error_code(&reason),"reason":"admission_denied"});
+                    store_command(tx, &rejected)
+                }))?
+                .await?;
+            return Ok(());
+        }
+    };
     if native {
         return dispatch_platform(database, authority, platform, policy_owner, &binding).await;
     }
@@ -338,4 +393,19 @@ async fn dispatch_platform(
         ));
     }
     Ok(())
+}
+
+impl crate::service::store_startup::RunningEngine for RuntimeBinding {
+    fn shutdown(&mut self) -> crate::service::store_startup::EngineFuture<()> {
+        self.stop.send_replace(true);
+        let task = self.task.take();
+        Box::pin(async move {
+            if let Some(task) = task {
+                task.await
+                    .map_err(|_| StoreError::Panicked)?
+                    .map_err(|_| invalid("unavailable: app runtime drain failed"))?;
+            }
+            Ok(())
+        })
+    }
 }
