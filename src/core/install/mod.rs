@@ -4005,6 +4005,15 @@ struct RuntimeCredentialSnapshot {
 
 impl RuntimeCredentialSnapshot {
     fn capture(root: &Path) -> Result<Self> {
+        // The installer can run with the service stopped. Own the stores only
+        // for this snapshot, releasing the daemon lease before switching or
+        // starting a release; never hold an owner across the upgrade itself.
+        let work = root.to_owned();
+        crate::persistence::run_cli_owned(root, move || Self::capture_owned(&work))
+            .context("failed to capture upgrade credentials through the store owner")
+    }
+
+    fn capture_owned(root: &Path) -> Result<Self> {
         let env_map = runtime_env::effective_operator_env_map(root)
             .with_context(|| format!("failed to read runtime env from {}", root.display()))?;
         let env_values = UPGRADE_RUNTIME_ENV_INVARIANT_KEYS
@@ -5926,6 +5935,41 @@ mod tests {
         assert_eq!(state.phase, "building");
         assert!(state.finished_at.is_none());
         assert!(state.last_error.is_none());
+    }
+
+    #[test]
+    fn installer_snapshot_owns_stopped_runtime_and_preserves_guard() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().to_owned();
+        let work = root.clone();
+        crate::persistence::run_cli_owned(&root, move || {
+            let mut env = std::collections::BTreeMap::new();
+            env.insert("CTOX_API_PROVIDER".to_owned(), "openai".to_owned());
+            runtime_env::save_runtime_env_map(&work, &env)
+        })
+        .unwrap();
+
+        // The old installer path is the mutation: the identical read without
+        // the CLI owner must still be rejected by the production guard.
+        let error = RuntimeCredentialSnapshot::capture_owned(&root).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<crate::persistence::CoreSyncError>(),
+            Some(crate::persistence::CoreSyncError::Required)
+        ));
+        let snapshot = RuntimeCredentialSnapshot::capture(&root).unwrap();
+        assert!(snapshot
+            .env_values
+            .iter()
+            .any(|(key, value)| key == "CTOX_API_PROVIDER" && value == "openai"));
+        snapshot.verify_preserved(&root).unwrap();
+
+        // Each capture released its exclusive lease; the next offline owner
+        // can attach, and callers outside it still cannot access the store.
+        let error = runtime_env::effective_operator_env_map(&root).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<crate::persistence::CoreSyncError>(),
+            Some(crate::persistence::CoreSyncError::Required)
+        ));
     }
 
     #[test]
