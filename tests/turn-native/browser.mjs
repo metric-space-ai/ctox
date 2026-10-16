@@ -64,7 +64,20 @@ try {
  write('browser-result.json',result);
  if(!result.pass)throw Error('selected relay or reliable delivery failed');
  }
-} catch(error) {write('browser-result.json',{pass:false,error:error.message});process.exitCode=1;}
+} catch(error) {
+ try {
+  const pages=browser?.contexts().flatMap(context=>context.pages())||[];
+  if(pages[0]) {
+   const ice=await pages[0].evaluate(async()=>{
+    if(!globalThis.pc)return {};
+    const stats=[...(await pc.getStats()).values()].filter(s=>s.type==='local-candidate'||s.type==='candidate-pair');
+    return {gathering:pc.iceGatheringState,connection:pc.connectionState,localDescription:pc.localDescription?.sdp,stats};
+   });
+   write('browser-ice.json',ice);
+  }
+ } catch {}
+ write('browser-result.json',{pass:false,error:error.message});process.exitCode=1;
+}
 finally {await browser?.close();if(server)await new Promise(r=>server.close(r));}
 
 async function runM4(page){
