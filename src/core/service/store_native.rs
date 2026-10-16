@@ -45,7 +45,10 @@ impl InstanceSigner for InstanceSigning {
         if !self.active.load(Ordering::Acquire) {
             return Err("instance signer is retired".into());
         }
-        Ok(self.identity.sign_canonical_bytes(canonical))
+        let encoded =
+            ctox_sync::authority::auth::CanonicalInstancePacket::from_stream_bytes(canonical)
+                .map_err(|_| "instance packet is not canonical".to_owned())?;
+        Ok(self.identity.sign_instance_packet(&encoded))
     }
 }
 
