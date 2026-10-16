@@ -89,6 +89,7 @@ struct Fixture {
 }
 fn manifests() -> Vec<ManifestRules> {
     vec![
+        ManifestRules::from_manifest("ctox-platform", "1", ["business_users".into(), "business_apps".into(), "app_user_preferences".into()].into(), &json!({})).unwrap(),
         ManifestRules::from_manifest("a", "1", ["alpha".into()].into(), &json!({})).unwrap(),
         ManifestRules::from_manifest("b", "1", ["beta".into()].into(), &json!({})).unwrap(),
         ManifestRules::from_manifest("shell", "1", ["shell_docs".into()].into(), &json!({}))
@@ -120,7 +121,7 @@ impl Fixture {
             .unwrap();
         store.writer().submit(WriteJob::new(Default::default(), |tx| {
             ctox_store::schema::initialize(tx)?;
-            for (name, app) in [("alpha", "a"), ("beta", "b"), ("shell_docs", "shell"), ("business_users", "ctox-platform"), ("business_apps", "ctox-platform")] {
+            for (name, app) in [("alpha", "a"), ("beta", "b"), ("shell_docs", "shell"), ("business_users", "ctox-platform"), ("business_apps", "ctox-platform"), ("app_user_preferences", "ctox-platform")] {
                 ctox_store::schema::create_collection(tx, &ctox_store::schema::CollectionDefinition {
                     name:name.into(), app_id:app.into(), schema_ver:1,
                     schema_json:json!({"type":"object", "properties":{"id":{"type":"string"}, "owner":{"type":"string"}, "name":{"type":"string"}}, "required":["id"]}),
@@ -368,7 +369,7 @@ async fn p6_e55_route_forbidden_duplicate_and_kernel_key_pin() {
     );
     assert_eq!(
         claims(&shell)["collections"].as_array().unwrap().len(),
-        1,
+        2,
         "hello leaked other app collections"
     );
     let denied = route
@@ -456,5 +457,43 @@ async fn p6_e55_route_forbidden_duplicate_and_kernel_key_pin() {
             .unwrap()["type"],
         "forbidden"
     );
+    f.close().await;
+}
+
+#[tokio::test]
+async fn p6_shell_boot_grant_contains_actor_bound_preferences() {
+    let f = Fixture::new().await;
+    let token = f.session.issue("shell", 1000).await.unwrap();
+    assert!(claims(&token)["collections"].as_array().unwrap().iter().any(|c| c["collection"] == "app_user_preferences"), "shell boot preferences grant missing");
+    let session=f.session.clone();
+    f.store.writer().submit(WriteJob::new(Default::default(), move |tx| {
+        let scope=session.scope_in_transaction(tx,&token,"app_user_preferences",1001).unwrap();
+        let projection=scope.projection("app_user_preferences").unwrap();
+        let filter=serde_json::to_value(&projection.row_filter).unwrap();
+        assert!(filter.to_string().contains("/user_id") && filter.to_string().contains("alice"), "shell preference filter lost actor");
+        for (user,allowed) in [("alice",true),("bob",false)] {
+            let doc=json!({"id":format!("shell/{user}/layout"),"app_id":"shell","user_id":user,"key":"layout","value":1});
+            assert_eq!(session.with_read_in_transaction(tx,&token,"app_user_preferences",1001,&doc,Ok).is_ok(),allowed,"foreign user preferences leaked");
+        }
+        Ok(())
+    })).unwrap().await.unwrap();
+    f.close().await;
+}
+
+#[tokio::test]
+async fn p6_browser_binding_uses_app_hash_and_retracts_retained_tokens() {
+    let f=Fixture::new().await;
+    let token=f.session.issue("a",1000).await.unwrap();
+    let hash=claims(&token)["scope_hash"].as_str().unwrap().to_owned();
+    assert_eq!(f.session.bound_token(Some(&hash),"alpha",1,None).unwrap(),token);
+    assert!(f.session.bound_token(Some("foreign-app-scope"),"alpha",1,None).is_err(),"foreign scope admitted");
+    assert!(f.session.bound_token(Some(&hash),"beta",1,None).is_err(),"foreign collection admitted");
+    assert!(f.session.bound_token(None,"alpha",1,Some("b")).is_err(),"foreign app write admitted");
+    assert!(f.session.bound_token(None,"alpha",2,Some("a")).is_err(),"foreign generation admitted");
+    f.session.token_current(&token,1001).unwrap();
+    f.session.revoke_app("a").unwrap().unwrap();
+    assert!(f.session.bound_token(Some(&hash),"alpha",1,None).is_err(),"revoked subscription survived");
+    assert!(f.session.token_current(&token,1001).is_err(),"queued publication survived revoke");
+    assert!(f.read(&token,"alpha",1001).await.is_err());
     f.close().await;
 }

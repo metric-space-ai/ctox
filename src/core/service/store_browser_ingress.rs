@@ -264,6 +264,7 @@ struct Source {
     admission: Arc<BrowserAdmission>,
 }
 struct Reader {
+    preferences: Option<ctox_store::preferences::Context>,
     admission: Arc<BrowserAdmission>,
     peer: Arc<BrowserPeer>,
 }
@@ -273,38 +274,23 @@ impl Reader {
         tx: &rusqlite::Transaction<'_>,
         key: &SubscriptionKey,
     ) -> rusqlite::Result<sync_rights::scope::ResolvedScope> {
-        if self.peer.expires <= Instant::now()
-            || key.participant != self.peer.user
-            || self.peer.scopes.get(&key.collection) != Some(&key.scope_hash)
-        {
+        self.admission.ensure_current().map_err(|_| sql_invalid("retired session"))?;
+        if self.peer.expires <= Instant::now() || key.participant != self.peer.user {
             return Err(sql_invalid("subscription binding"));
         }
-        validate_user(tx, &self.peer.user, &self.peer.role, self.peer.local)
-            .map_err(|_| sql_invalid("principal revoked"))?;
-        let active = ctox_store::schema::active_collection(tx, &key.collection)?
-            .ok_or_else(|| sql_invalid("collection unavailable"))?;
-        if active.gen != key.gen {
-            return Err(sql_invalid("generation changed"));
-        }
-        let rights = sync_rights::read(tx)?;
-        self.admission
-            .authority()
-            .router
-            .with_snapshot(rights.rights_ver, &self.peer.epoch, |_, _| {
-                if rights.rights_ver != self.peer.rights_ver {
-                    return Err("rights changed".into());
-                }
-                let scope =
-                    rights.resolve_collection(&self.peer.role, &self.peer.user, &key.collection)?;
-                if scope.hash()? != key.scope_hash {
-                    return Err("scope changed".into());
-                }
-                Ok(scope)
-            })
-            .map_err(sql_invalid)
+        let owner=scope_grant_route::bound_owner(&self.admission,&self.peer).map_err(|_|sql_invalid("grant owner unavailable"))?;
+        let session=owner.session();
+        let token=session.bound_token(Some(&key.scope_hash),&key.collection,key.gen,None).map_err(sql_invalid)?;
+        session.scope_in_transaction(tx,&token,&key.collection,now()/1000).map_err(sql_invalid)
     }
 }
 impl ReadAuthority for Reader {
+    fn preference_context(&self,participant:&str)->Option<ctox_store::preferences::Context> {
+        (participant==self.peer.user).then(||self.preferences.clone()).flatten()
+    }
+    fn authorize_preference_scope(&self,tx:&rusqlite::Transaction<'_>,key:&SubscriptionKey,_:&ctox_store::preferences::Context)->rusqlite::Result<()> {
+        self.scope(tx,key).map(|_|())
+    }
     fn authorize(
         &self,
         tx: &rusqlite::Transaction<'_>,
@@ -334,6 +320,8 @@ impl ReadAuthority for Reader {
     }
 }
 struct Publication {
+    grant: Option<(Arc<sync_rights::app_grant::AppGrantSession>, String)>,
+    revocation: bool,
     inputs: Weak<StoreInputs>,
     admission: Arc<BrowserAdmission>,
     peer: Arc<BrowserPeer>,
@@ -348,13 +336,15 @@ impl WebRTCPublicationGuard for Publication {
         if self.peer.expires <= Instant::now() {
             return Err(invalid());
         }
+        if self.revocation {return publish();}
         let mut result = None;
         self.admission
             .authority()
             .router
             .with_snapshot(self.peer.rights_ver, &self.peer.epoch, |_, _| {
-                result = Some(publish());
-                Ok(())
+                if let Some((session,token))=&self.grant {
+                    session.with_token_current(token,now()/1000,||{result=Some(publish());Ok(())})
+                } else { result=Some(publish());Ok(()) }
             })
             .map_err(|_| invalid())?;
         result.ok_or_else(invalid)?
@@ -362,24 +352,25 @@ impl WebRTCPublicationGuard for Publication {
 }
 #[path = "store_browser_scope_grant.rs"]
 pub(super) mod scope_grant_route;
+#[path = "store_browser_grant_stream.rs"]
+mod grant_stream;
 impl V4StreamSource for Source {
+    fn control_events(&self,peer:&str)->RxResult<BoxStream<'static,RxResult<Value>>> {grant_stream::events(self,peer)}
     fn control(&self, peer: &str, message: Value) -> BoxFuture<'static, RxResult<Option<Value>>> {
         scope_grant_route::control(self, peer, message)
     }
     fn publication(&self, peer: &str, packet: &Value) -> RxResult<Arc<dyn WebRTCPublicationGuard>> {
         let binding = self.admission.peer(peer).map_err(|_| invalid())?;
-        if matches!(packet["type"].as_str(), Some("page" | "live"))
-            && (packet["participant"] != binding.user
-                || packet["epoch"] != binding.epoch
-                || packet["collection"]
-                    .as_str()
-                    .and_then(|c| binding.scopes.get(c))
-                    .map(String::as_str)
-                    != packet["scope_hash"].as_str())
-        {
-            return Err(invalid());
-        }
+        let grant=if matches!(packet["type"].as_str(),Some("page" | "live")) {
+            if packet["participant"] != binding.user || packet["epoch"] != binding.epoch {return Err(invalid());}
+            let session=scope_grant_route::bound_owner(&self.admission,&binding)?.session();
+            let token=session.bound_token(packet["scope_hash"].as_str(),packet["collection"].as_str().ok_or_else(invalid)?,packet["gen"].as_u64().ok_or_else(invalid)?,None).map_err(|_|invalid())?;
+            session.token_current(&token,now()/1000).map_err(|_|invalid())?;
+            Some((session,token))
+        } else {None};
         Ok(Arc::new(Publication {
+            grant,
+            revocation: packet["type"] == "scope_revoke" || (packet["type"] == "write_result" && packet["status"] == "rejected" && packet["reason"] == "revoked"),
             inputs: self.inputs.clone(),
             admission: self.admission.clone(),
             peer: binding,
@@ -396,9 +387,13 @@ impl V4StreamSource for Source {
             inputs.instance_signer().map_err(|_| invalid())?;
             request.as_object_mut().ok_or_else(invalid)?.remove("type");
             let sub: Subscribe = serde_json::from_value(request).map_err(|_| invalid())?;
-            if binding.scopes.get(&sub.collection) != Some(&sub.scope_hash) {
-                return Err(invalid());
-            }
+            let grant_session=scope_grant_route::bound_owner(&self.admission,&binding)?.session();
+            grant_session.bound_token(Some(&sub.scope_hash),&sub.collection,sub.gen,None).map_err(|_|invalid())?;
+            let claims=grant_session.issued_claims().map_err(|_|invalid())?.into_iter()
+                .find(|c|c.scope_hash==sub.scope_hash).ok_or_else(invalid)?;
+            let preferences=if sub.collection==ctox_store::preferences::COLLECTION {
+                Some(ctox_store::preferences::Context::authenticated(&claims.app_id,&binding.user,claims.rights_ver.parse().map_err(|_|invalid())?).map_err(|_|invalid())?)
+            } else {None};
             let key = SubscriptionKey {
                 participant: binding.user.clone(),
                 collection: sub.collection,
@@ -413,6 +408,7 @@ impl V4StreamSource for Source {
             )
             .map_err(|_| invalid())?;
             let authority: Arc<dyn ReadAuthority> = Arc::new(Reader {
+                preferences,
                 admission: self.admission.clone(),
                 peer: binding,
             });

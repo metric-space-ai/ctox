@@ -26,6 +26,11 @@ pub trait ReadAuthority: Send + Sync {
     fn preference_context(&self, _participant: &str) -> Option<crate::preferences::Context> {
         None
     }
+    /// Default E51 callers use a single preference scope. E55 adapters override
+    /// this only after verifying their aggregate app grant in this snapshot.
+    fn authorize_preference_scope(&self, _tx: &Transaction<'_>, key: &SubscriptionKey, context: &crate::preferences::Context) -> rusqlite::Result<()> {
+        if key.scope_hash == context.scope_hash() {Ok(())} else {Err(invalid("forbidden"))}
+    }
     fn authorize(&self, tx: &Transaction<'_>, key: &SubscriptionKey) -> rusqlite::Result<()>;
     fn project(
         &self,
@@ -185,9 +190,7 @@ impl Subscription {
                     let context = authority
                         .preference_context(&key.participant)
                         .ok_or_else(|| invalid("forbidden"))?;
-                    if key.scope_hash != context.scope_hash() {
-                        return Err(invalid("forbidden"));
-                    }
+                    authority.authorize_preference_scope(tx, &key, &context)?;
                     Some(context)
                 } else {
                     None

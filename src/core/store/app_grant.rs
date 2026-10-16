@@ -57,6 +57,7 @@ pub struct ScopeRevoke {
     pub reason: &'static str,
 }
 struct Issued {
+    token: String,
     fingerprint: String,
     claims: AppGrantClaims,
 }
@@ -168,10 +169,16 @@ fn resolve(
     manifest.validate_registry(&rights.manifests)?;
     let mut collections = Vec::new();
     let mut projections = Vec::new();
-    for rule in rights
-        .rules
-        .iter()
+    // E51 is a synthesized scope, not an explicit release-rights row. Shell
+    // boot always subscribes it; resolve_app_collection binds app AND actor.
+    let preference = super::Right {
+        role: state.role.clone(), collection: ctox_store::preferences::COLLECTION.into(),
+        row_filter: scope::RowFilter::None, field_mask: scope::FieldMask::All,
+        ops: [Operation::Read, Operation::Write].into(),
+    };
+    for rule in rights.rules.iter()
         .filter(|r| r.role == state.role && r.ops.contains(&Operation::Read))
+        .chain((app == "shell" && !rights.rules.iter().any(|r| r.role == state.role && r.collection == ctox_store::preferences::COLLECTION)).then_some(&preference))
     {
         let scope =
             match rights.resolve_app_collection(app, &state.role, &state.user, &rule.collection) {
@@ -196,9 +203,9 @@ fn resolve(
         };
         let mut operations = vec!["read".to_owned()];
         if rule.ops.contains(&Operation::Write)
-            && manifest
+            && (rule.collection == ctox_store::preferences::COLLECTION || manifest
                 .authorize_collection(&rights.manifests, &rule.collection, AppOperation::Write)
-                .is_ok()
+                .is_ok())
         {
             operations.push("write".to_owned());
         }
@@ -337,12 +344,41 @@ impl AppGrantSession {
                 state.issued.insert(
                     app.into(),
                     Issued {
+                        token: token.clone(),
                         fingerprint: scope::digest(token.as_bytes()),
                         claims: grant.claims,
                     },
                 );
                 Ok(token)
             })
+    }
+    /// Lookup is not authorization: callers must use the transactional methods.
+    pub fn bound_token(&self, scope_hash: Option<&str>, collection: &str, gen: u64, app: Option<&str>) -> scope::Result<String> {
+        let state = self.state.lock().map_err(|_| "grant session unavailable")?;
+        if !state.active { return Err("revoked".into()); }
+        state.issued.values().find(|g| {
+            scope_hash.is_none_or(|h| g.claims.scope_hash == h)
+                && app.is_none_or(|a| g.claims.app_id == a)
+                && g.claims.collections.iter().any(|c| c.collection == collection && c.gen == gen)
+        }).map(|g| g.token.clone()).ok_or_else(|| "revoked".into())
+    }
+    pub fn scope_in_transaction(&self, tx: &Transaction<'_>, token: &str, collection: &str, now: u64) -> scope::Result<scope::ResolvedScope> {
+        self.with_verified_in_transaction(tx, token, now, |claims, rights, state| {
+            let base = logical_collection(claims, collection, "read")?;
+            let resolved = rights.resolve_app_collection(&claims.app_id, &state.role, &state.user, &base)?;
+            let mut projection = resolved.projection(&base).cloned().ok_or("forbidden")?;
+            projection.collection = collection.into();
+            scope::ResolvedScope::new(rights.rights_ver, vec![projection], &state.user)
+        })
+    }
+    pub fn issued_claims(&self) -> scope::Result<Vec<AppGrantClaims>> {
+        Ok(self.state.lock().map_err(|_| "grant session unavailable")?.issued.values().map(|g|g.claims.clone()).collect())
+    }
+    /// Retained-state fence at physical handoff, after transactional validation.
+    pub fn token_current(&self, token: &str, now: u64) -> scope::Result<()> { self.with_token_current(token,now,||Ok(())) }
+    pub fn with_token_current<T>(&self, token:&str, now:u64, publish:impl FnOnce()->scope::Result<T>) -> scope::Result<T> {
+        let state = self.state.lock().map_err(|_| "grant session unavailable")?;
+        if state.active && state.issued.values().any(|g| g.token == token && now < g.claims.exp) { publish() } else { Err("revoked".into()) }
     }
     /// Used by P8's native reader in its own SQLite snapshot. Authorization,
     /// reprojection and synchronous frame handoff share live policy/session

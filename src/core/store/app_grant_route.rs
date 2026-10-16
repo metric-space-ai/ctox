@@ -17,6 +17,7 @@ impl AppGrantRoute {
             answered: Default::default(),
         }
     }
+    pub fn session(&self) -> Arc<AppGrantSession> { self.session.clone() }
     pub async fn shell_token(&self, now: u64) -> Result<String, String> {
         self.handle(json!({"type":"scope.grant.request","app_id":"shell"}), now)
             .await?

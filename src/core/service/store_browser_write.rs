@@ -56,12 +56,12 @@ impl BrowserWrite {
         request: &Write,
         after: Option<&Value>,
     ) -> rusqlite::Result<WritePermission> {
-        let rights = self.current(tx, participant)?;
+        let rights = match self.current(tx, participant) { Ok(rights)=>rights,Err(_)=>return Ok(WritePermission::Reject("revoked".into())) };
         let Some(collection) = ctox_store::schema::active_collection(tx, &request.collection)?
         else {
             return Ok(WritePermission::Reject("forbidden".into()));
         };
-        if collection.gen != request.gen || !self.peer.scopes.contains_key(&request.collection) {
+        if collection.gen != request.gen {
             return Ok(WritePermission::Reject("revoked".into()));
         }
         let table = &collection.table;
@@ -83,7 +83,7 @@ impl BrowserWrite {
             .map(|v| serde_json::from_str(&v))
             .transpose()
             .map_err(|_| sql_invalid("invalid stored document"))?;
-        let app = if request.collection == "business_commands" {
+        let app = if matches!(request.collection.as_str(), "business_commands" | "app_user_preferences") {
             after.and_then(|d| d["app_id"].as_str()).unwrap_or("")
         } else {
             &collection.definition.app_id
@@ -97,32 +97,15 @@ impl BrowserWrite {
         // The existing fence is entered INSIDE P8's WriteJob, with the actual
         // before and post-merge after. Rights publications use this same writer;
         // none can commit between this validation and the document/ops commit.
-        let checked = self.admission.with_write_fence(
-            &self.peer,
-            &request.collection,
-            collection.gen,
-            &request.op_id,
-            before.as_ref(),
-            after,
-            || {
-                policy::write_sync_document(
-                    &actor,
-                    &rights,
-                    app,
-                    &request.collection,
-                    before.as_ref(),
-                    after,
-                    None,
-                )
-            },
-        );
-        match checked {
-            Ok(()) => Ok(WritePermission::Permit),
-            Err(sync_rights::OutboxError::AuthorityUnavailable) => {
-                Err(sql_invalid("current outbox authority unavailable"))
-            }
-            Err(_) => Ok(WritePermission::Reject("revoked".into())),
-        }
+        let route=scope_grant_route::bound_owner(&self.admission,&self.peer).map_err(|_|sql_invalid("grant owner unavailable"))?;
+        let session=route.session();
+        let token=match session.bound_token(None,&request.collection,request.gen,Some(app)) {
+            Ok(token)=>token,Err(_)=>return Ok(WritePermission::Reject("revoked".into()))
+        };
+        let checked=session.with_write_in_transaction(tx,&token,&request.collection,now()/1000,before.as_ref(),after,|| {
+            policy::write_sync_document(&actor,&rights,app,&request.collection,before.as_ref(),after,None)
+        });
+        Ok(if checked.is_ok() { WritePermission::Permit } else { WritePermission::Reject("revoked".into()) })
     }
 }
 impl WriteAuthority for BrowserWrite {
@@ -132,14 +115,12 @@ impl WriteAuthority for BrowserWrite {
         participant: &str,
         request: &Write,
     ) -> rusqlite::Result<WritePermission> {
-        self.current(tx, participant)?;
+        if self.current(tx, participant).is_err() { return Ok(WritePermission::Reject("revoked".into())); }
         *self
             .request
             .lock()
             .map_err(|_| sql_invalid("write context poisoned"))? = Some(request.clone());
-        if !self.peer.scopes.contains_key(&request.collection) {
-            return Ok(WritePermission::Reject("forbidden".into()));
-        }
+
         if request.op == WriteOp::Delete {
             self.admit(tx, participant, request, None)
         } else {
@@ -179,7 +160,7 @@ impl WriteAuthority for BrowserWrite {
         participant: &str,
         command: &Value,
     ) -> rusqlite::Result<WritePermission> {
-        self.current(tx, participant)?;
+        if self.current(tx, participant).is_err() { return Ok(WritePermission::Reject("revoked".into())); }
         if command["actor_id"].as_str() != Some(self.peer.user.as_str()) {
             return Ok(WritePermission::Reject("forbidden".into()));
         }

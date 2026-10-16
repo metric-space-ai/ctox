@@ -38,10 +38,10 @@ def run(name,args,cap):
  steps.append({'name':name,'exit':code,'seconds':round(time.monotonic()-start,3)});save();print('P6_K_STEP',name,code,flush=True)
  return code,(OUT/(name+'.log')).read_text()
 def summary(text):
- m=re.search(r'^K13 \| .* \| (.+)/K13/result\.json$',text,re.M)
+ m=re.search(r'^(?:M3|K13) \| .* \| (.+)/(?:M3|K13)/result\.json$',text,re.M)
  if not m:raise RuntimeError('scenario summary path absent')
  path=Path(m[1]);artifacts.append(path);return path,json.loads((path/'p6-result.json').read_text())
-def private(s):return len(s.get('scenarios',[]))==3 and all(r.get('namespaceVerified') and r.get('cleanup') for r in s['scenarios'])
+def private(s):return len(s.get('scenarios',[]))==4 and all(r.get('namespaceVerified') and r.get('cleanup') for r in s['scenarios'])
 try:
  paths=['src/core/service/store_startup.rs','src/core/service/store_native.rs','src/core/business_os/policy.rs','src/core/business_os/app_platform/runtime_host.rs']
  paths += ['src/apps/business-os/kernel/boot.mjs','src/apps/business-os/kernel/loader.mjs','src/apps/business-os/kernel/transport-webrtc.mjs','src/core/service/store_http.rs','src/core/business_os/store.rs',str(HERE.relative_to(ROOT)/'enrolled-fixture.rs')]
