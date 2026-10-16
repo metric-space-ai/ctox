@@ -58,47 +58,50 @@ const AGENT_DECISION_MAX_OPTION_DESCRIPTION_CHARS: usize = 1_000;
 /// Project new inbound e-mail messages into Decision Hub Vorgänge. Returns the
 /// number of newly created Vorgänge. Safe to call on every sync cycle.
 pub fn project_inbound_messages(root: &Path) -> anyhow::Result<usize> {
-    let channels_db = root.join("runtime/ctox.sqlite3");
+    let channels_db = crate::paths::core_db(root);
     if !channels_db.exists() {
         return Ok(0);
     }
-    let comm = Connection::open(&channels_db)
-        .with_context(|| format!("open channels db {}", channels_db.display()))?;
-    let has_table: bool = comm
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='communication_messages'",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?
-        .is_some();
-    if !has_table {
-        return Ok(0);
-    }
+    let Some(rows) = crate::lcm::with_lcm_read(&channels_db, |comm: &Connection| {
+        let has_table: bool = comm
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='communication_messages'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .is_some();
+        if !has_table {
+            return Ok(None);
+        }
 
-    let projekte = load_rxdb_collection_records(root, COL_PROJEKTE)?;
-
-    let mut stmt = comm.prepare(
-        "SELECT message_key, thread_key, sender_display, sender_address, subject, body_text,
+        let mut stmt = comm.prepare(
+            "SELECT message_key, thread_key, sender_display, sender_address, subject, body_text,
                 external_created_at
          FROM communication_messages
          WHERE direction = 'inbound' AND channel = 'email'
          ORDER BY rowid DESC LIMIT ?1",
-    )?;
-    let rows = stmt
-        .query_map(params![PROJECTION_BATCH as i64], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-            ))
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
+        )?;
+        let rows = stmt
+            .query_map(params![PROJECTION_BATCH as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
 
+        Ok(Some(rows))
+    })?
+    else {
+        return Ok(0);
+    };
+    let projekte = load_rxdb_collection_records(root, COL_PROJEKTE)?;
     // One existence check for the whole batch. Per-message `load_any_record`
     // opened the RxDB store (and the record store) 200 times on every channel
     // poll even when nothing was new — ~4 s CPU per poll on an on-prem host.

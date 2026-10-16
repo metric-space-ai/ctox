@@ -315,19 +315,52 @@ fn sync_slots() -> std::sync::Arc<tokio::sync::Semaphore> {
         .get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(4)))
         .clone()
 }
+/// Admission failures remain distinguishable from an absent configuration row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoreSyncError {
+    Required,
+    AsyncContext,
+    OwnerCallback,
+    RuntimeNotDriven,
+    WorkerClosed,
+}
+impl std::fmt::Display for CoreSyncError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Required => "synchronous Core caller must use run_core_sync or run_core_blocking",
+            Self::AsyncContext => {
+                "async Core caller must await run_core_sync or an async owner API"
+            }
+            Self::OwnerCallback => "Core owner callbacks must use their borrowed transaction",
+            Self::RuntimeNotDriven => {
+                "blocking Core entry requires an existing multi-thread runtime"
+            }
+            Self::WorkerClosed => "Core compatibility worker closed without a reply",
+        })
+    }
+}
+impl std::error::Error for CoreSyncError {}
+
 pub(crate) fn require_sync_owner_context() -> Result<()> {
-    // A private admission token is set only on the bounded compatibility
-    // executor. Owner callbacks and async workers can never wait recursively.
-    anyhow::ensure!(
-        CORE_SYNC_CONTEXT.with(std::cell::Cell::get),
-        "synchronous Core caller must use run_core_sync or an async owner API"
-    );
+    if !CORE_SYNC_CONTEXT.with(std::cell::Cell::get) {
+        return Err(CoreSyncError::Required.into());
+    }
     Ok(())
 }
 
-/// Transitional sync callers await this bounded bridge. It reuses the existing
-/// runtime, caps waiting compatibility work at four, and never executes SQLite
-/// itself. Do not call a sync facade directly from an async worker.
+fn with_core_sync_context<T>(operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            CORE_SYNC_CONTEXT.with(|value| value.set(self.0));
+        }
+    }
+    let _reset = Reset(CORE_SYNC_CONTEXT.with(|value| value.replace(true)));
+    operation()
+}
+
+/// Async entry. Admission is shared with ordinary-thread callers and remains
+/// bounded at four; SQLite is owned by the existing writer/read pool.
 pub(crate) async fn run_core_sync<T: Send + 'static>(
     operation: impl FnOnce() -> Result<T> + Send + 'static,
 ) -> Result<T> {
@@ -336,17 +369,130 @@ pub(crate) async fn run_core_sync<T: Send + 'static>(
         .map_err(|_| ctox_store::StoreError::Busy)?;
     tokio::task::spawn_blocking(move || {
         let _admission = admission;
-        struct Reset(bool);
-        impl Drop for Reset {
-            fn drop(&mut self) {
-                CORE_SYNC_CONTEXT.with(|value| value.set(self.0));
-            }
-        }
-        let _reset = Reset(CORE_SYNC_CONTEXT.with(|value| value.replace(true)));
-        operation()
+        with_core_sync_context(operation)
     })
     .await
     .context("Core compatibility worker failed")?
+}
+
+/// Ordinary OS threads borrow the daemon's runtime, never create one. This
+/// cannot be used on an async worker or from a SQLite actor callback. Already
+/// admitted compatibility phases reuse their token without a recursive wait.
+pub(crate) fn run_core_blocking<T: Send + 'static>(
+    runtime: &tokio::runtime::Handle,
+    operation: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    if CORE_SYNC_CONTEXT.with(std::cell::Cell::get) {
+        return operation();
+    }
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return Err(CoreSyncError::AsyncContext.into());
+    }
+    // The Store actor is a dedicated named OS thread (writer.rs::spawn_actor),
+    // unlike the runtime's async/read workers. It must never wait on itself.
+    if std::thread::current()
+        .name()
+        .is_some_and(|name| name.starts_with("ctox-store-"))
+    {
+        return Err(CoreSyncError::OwnerCallback.into());
+    }
+    if runtime.runtime_flavor() != tokio::runtime::RuntimeFlavor::MultiThread {
+        return Err(CoreSyncError::RuntimeNotDriven.into());
+    }
+    let admission = sync_slots()
+        .try_acquire_owned()
+        .map_err(|_| ctox_store::StoreError::Busy)?;
+    // Reuse the handed-out runtime's blocking executor. Native adapters need
+    // its reactor context even while their caller is an ordinary HTTP/CLI thread.
+    let (reply, result) = std::sync::mpsc::sync_channel(1);
+    runtime.spawn_blocking(move || {
+        let _admission = admission;
+        let value = with_core_sync_context(operation);
+        let _ = reply.send(value);
+    });
+    result.recv().map_err(|_| CoreSyncError::WorkerClosed)?
+}
+
+/// Uses only the Core handle installed for this root. Missing/retired owners
+/// are errors; there is no new runtime, pool or file opener here.
+pub(crate) fn run_core_blocking_at<T: Send + 'static>(
+    root: &Path,
+    operation: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let runtime = injected_core(root)?.runtime.clone();
+    run_core_blocking(&runtime, operation)
+}
+
+/// Offline CLI ownership uses the daemon's exclusive lease and the same file
+/// adapters. A running daemon rejects the lease before any file can be opened.
+/// The runtime is scoped to this command; owner shutdown precedes its drop.
+pub(crate) fn run_cli_owned<T: Send + 'static>(
+    root: &Path,
+    operation: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let work = root.to_owned();
+    with_cli_owners(root, move || run_core_blocking_at(&work, operation))
+}
+
+/// Lifecycle scope for foreground HTTP/MCP listeners. Listening and remote I/O
+/// consume no compatibility permit; only their individual store phases do.
+pub(crate) fn with_cli_owners<T>(root: &Path, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    if injected_core(root).is_ok() {
+        return operation();
+    }
+    anyhow::ensure!(
+        tokio::runtime::Handle::try_current().is_err(),
+        "offline CLI ownership requires an ordinary OS thread"
+    );
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(8)
+        .enable_all()
+        .build()?;
+    let handle = runtime.handle().clone();
+    let endpoint = crate::service::queue_store::endpoint(root);
+    let mut stores = crate::service::store_runtime::DaemonStores::start(endpoint, handle)?;
+    let work = root.to_owned();
+    let attached = runtime.block_on(async {
+        use ctox_store::DbId;
+        use std::sync::Arc;
+        let core = stores.register("core", DbId::new(crate::paths::core_db(&work))?, false,
+            Arc::new(|_| Ok(()))).await?;
+        let core_owner = install_core_owner(&work, core.writer.clone(), core.readers.clone()).await?;
+        let lcm = crate::lcm::attach_lcm_store(&work, core.writer, core.readers).await?;
+        let runtime_db = stores.register("runtime", DbId::new(crate::paths::runtime_config_db(&work))?, false,
+            Arc::new(|tx| {tx.execute_batch("CREATE TABLE IF NOT EXISTS runtime_env_kv(env_key TEXT PRIMARY KEY,env_value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runtime_state_store(state_id INTEGER PRIMARY KEY CHECK(state_id=1),state_json TEXT NOT NULL);")?; Ok(())})).await?;
+        let runtime_owner = crate::runtime_env::RuntimeStore::attach(&work, runtime_db.writer, runtime_db.readers).await?;
+        let secrets_db = stores.register("secrets", DbId::new(crate::paths::secrets_db(&work))?, false,
+            Arc::new(|tx| {crate::secrets::initialize_owned_secret_schema(tx).map_err(|_|ctox_store::StoreError::Invalid("secret schema initialization failed".into()))?; Ok(())})).await?;
+        let secrets_owner = crate::secrets::SecretStore::attach(&work, secrets_db.writer, secrets_db.readers).await?;
+        stores.expose_identity_root(&work);
+        Ok::<_, anyhow::Error>((core_owner, lcm, runtime_owner, secrets_owner))
+    });
+    let result = match attached {
+        Ok(retained) => {
+            let result = operation();
+            drop(retained);
+            result
+        }
+        Err(error) => Err(error),
+    };
+    let shutdown = runtime.block_on(stores.shutdown());
+    // Never replace a command failure with a fabricated absent/success value.
+    shutdown.context("offline CLI owner shutdown failed")?;
+    result
+}
+
+/// App-runtime callbacks enter through the same bounded async Core entry as
+/// other native work. Its portable crate cannot mint this owner admission.
+pub(crate) struct CoreCompatibilityExecutor;
+impl ctox_app_runtime::daemon::BlockingExecutor for CoreCompatibilityExecutor {
+    fn run(
+        &self,
+        operation: ctox_app_runtime::daemon::BlockingOperation,
+    ) -> ctox_app_runtime::daemon::BlockingFuture {
+        Box::pin(run_core_sync(operation))
+    }
 }
 
 type InstalledCoreOwners =
@@ -943,3 +1089,7 @@ mod owner_adapter_tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "persistence_blocking_tests.rs"]
+mod blocking_tests;

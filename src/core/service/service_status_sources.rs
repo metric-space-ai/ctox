@@ -133,15 +133,43 @@ fn business_os_app_recovery_queue_stamp(
     root: &Path,
     core_db_path: &Path,
 ) -> Result<BusinessOsAppRecoveryQueueStamp> {
-    let Some(conn) =
-        open_existing_sqlite_read_only(core_db_path, "Business OS app recovery stamp")?
-    else {
+    if !core_db_path.exists() {
         return Ok(empty_business_os_app_recovery_queue_stamp(
             false, false, false,
         ));
-    };
-    let messages_table_exists = sqlite_table_exists(&conn, "communication_messages")?;
-    let routing_table_exists = sqlite_table_exists(&conn, "communication_routing_state")?;
+    }
+    let (messages_table_exists, routing_table_exists, source_rows) = crate::lcm::with_lcm_read(
+        core_db_path,
+        |conn| {
+            let messages = sqlite_table_exists(conn, "communication_messages")?;
+            let routing = sqlite_table_exists(conn, "communication_routing_state")?;
+            if !messages || !routing {
+                return Ok((messages, routing, Vec::new()));
+            }
+            let mut statement=conn.prepare(r#"
+            SELECT m.message_key,m.body_text,m.metadata_json,COALESCE(r.route_status,'pending'),
+            COALESCE(r.leased_at,''),COALESCE(r.updated_at,m.observed_at),
+            COALESCE(m.external_created_at,''),COALESCE(m.observed_at,'')
+            FROM communication_messages m JOIN communication_routing_state r ON r.message_key=m.message_key
+            WHERE m.channel='queue' AND m.direction='inbound' AND lower(COALESCE(r.route_status,'pending'))='leased'
+            ORDER BY m.message_key"#)?;
+            let rows = statement
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, String>(5)?,
+                        r.get::<_, String>(6)?,
+                        r.get::<_, String>(7)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok((messages, routing, rows))
+        },
+    )?;
     if !messages_table_exists || !routing_table_exists {
         return Ok(empty_business_os_app_recovery_queue_stamp(
             true,
@@ -149,41 +177,22 @@ fn business_os_app_recovery_queue_stamp(
             routing_table_exists,
         ));
     }
-
-    let mut statement = conn.prepare(
-        r#"
-        SELECT
-            m.message_key,
-            m.body_text,
-            m.metadata_json,
-            COALESCE(r.route_status, 'pending'),
-            COALESCE(r.leased_at, ''),
-            COALESCE(r.updated_at, m.observed_at),
-            COALESCE(m.external_created_at, ''),
-            COALESCE(m.observed_at, '')
-        FROM communication_messages m
-        JOIN communication_routing_state r ON r.message_key = m.message_key
-        WHERE m.channel = 'queue'
-          AND m.direction = 'inbound'
-          AND lower(COALESCE(r.route_status, 'pending')) = 'leased'
-        ORDER BY m.message_key
-        "#,
-    )?;
-    let mut rows = statement.query([])?;
     let mut candidate_count = 0usize;
     let mut latest_route_updated_at = String::new();
     let mut next_recovery_due_epoch_secs: Option<u64> = None;
     let mut hasher = DefaultHasher::new();
 
-    while let Some(row) = rows.next()? {
-        let message_key: String = row.get(0)?;
-        let prompt: String = row.get(1)?;
-        let metadata_json: String = row.get(2)?;
-        let route_status: String = row.get(3)?;
-        let leased_at: String = row.get(4)?;
-        let route_updated_at: String = row.get(5)?;
-        let external_created_at: String = row.get(6)?;
-        let observed_at: String = row.get(7)?;
+    for (
+        message_key,
+        prompt,
+        metadata_json,
+        route_status,
+        leased_at,
+        route_updated_at,
+        external_created_at,
+        observed_at,
+    ) in source_rows
+    {
         let metadata = serde_json::from_str::<Value>(&metadata_json).unwrap_or(Value::Null);
         let Some(target) = business_os_app_module_target_from_metadata(&metadata) else {
             continue;
@@ -275,43 +284,45 @@ fn harness_audit_source_stamp(root: &Path) -> HarnessAuditSourceStamp {
 }
 
 fn harness_audit_db_stamp(core_db_path: &Path) -> Result<HarnessAuditDbStamp> {
-    let Some(conn) = open_existing_sqlite_read_only(core_db_path, "harness audit stamp")? else {
+    if !core_db_path.exists() {
         return Ok(HarnessAuditDbStamp {
             database_exists: false,
             tables: Vec::new(),
         });
-    };
-    let table_specs = [
-        ("ctox_core_transition_proofs", Some("updated_at"), None),
-        ("ctox_process_events", Some("observed_at"), None),
-        ("ctox_pm_state_violations", Some("detected_at"), None),
-        ("ctox_pm_core_transition_audit", Some("scanned_at"), None),
-        ("ctox_pm_core_transition_rules", Some("updated_at"), None),
-        (
-            "ctox_pm_event_transition_coverage",
-            Some("scanned_at"),
-            None,
-        ),
-        ("ctox_pm_unmapped_events", Some("scanned_at"), None),
-        ("ctox_core_spawn_edges", Some("updated_at"), None),
-        (
-            "ctox_hm_findings",
-            Some("last_seen_at"),
-            Some("status = 'detected'"),
-        ),
-    ];
-    let mut tables = Vec::with_capacity(table_specs.len());
-    for (table_name, timestamp_column, where_clause) in table_specs {
-        tables.push(harness_audit_table_stamp(
-            &conn,
-            table_name,
-            timestamp_column,
-            where_clause,
-        )?);
     }
-    Ok(HarnessAuditDbStamp {
-        database_exists: true,
-        tables,
+    crate::lcm::with_lcm_read(core_db_path, |conn| {
+        let table_specs = [
+            ("ctox_core_transition_proofs", Some("updated_at"), None),
+            ("ctox_process_events", Some("observed_at"), None),
+            ("ctox_pm_state_violations", Some("detected_at"), None),
+            ("ctox_pm_core_transition_audit", Some("scanned_at"), None),
+            ("ctox_pm_core_transition_rules", Some("updated_at"), None),
+            (
+                "ctox_pm_event_transition_coverage",
+                Some("scanned_at"),
+                None,
+            ),
+            ("ctox_pm_unmapped_events", Some("scanned_at"), None),
+            ("ctox_core_spawn_edges", Some("updated_at"), None),
+            (
+                "ctox_hm_findings",
+                Some("last_seen_at"),
+                Some("status = 'detected'"),
+            ),
+        ];
+        let mut tables = Vec::with_capacity(table_specs.len());
+        for (table_name, timestamp_column, where_clause) in table_specs {
+            tables.push(harness_audit_table_stamp(
+                &conn,
+                table_name,
+                timestamp_column,
+                where_clause,
+            )?);
+        }
+        Ok(HarnessAuditDbStamp {
+            database_exists: true,
+            tables,
+        })
     })
 }
 
@@ -604,61 +615,34 @@ fn durable_lcm_outcome_source_stamp(core_db_path: &Path) -> DurableLcmOutcomeSou
     }
 }
 
-fn open_existing_sqlite_read_only(path: &Path, purpose: &str) -> Result<Option<Connection>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let conn = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .with_context(|| format!("failed to open SQLite db {} for {purpose}", path.display()))?;
-    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
-        .with_context(|| format!("failed to configure SQLite busy_timeout for {purpose}"))?;
-    conn.execute_batch("PRAGMA query_only = ON;")
-        .with_context(|| format!("failed to configure read-only SQLite mode for {purpose}"))?;
-    Ok(Some(conn))
-}
-
 fn lcm_last_agent_outcome_stamp(core_db_path: &Path) -> Result<LcmLastAgentOutcomeStamp> {
     if !core_db_path.exists() {
         return Ok(empty_lcm_last_agent_outcome_stamp(false, false, false));
     }
-    let conn = Connection::open_with_flags(
-        core_db_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .with_context(|| {
-        format!(
-            "failed to open core db {} for LCM outcome stamp",
-            core_db_path.display()
-        )
-    })?;
-    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
-        .context("failed to configure SQLite busy_timeout for LCM outcome stamp")?;
-    let messages_table_exists = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'messages' LIMIT 1",
-            [],
-            |_| Ok(true),
-        )
-        .optional()?
-        .unwrap_or(false);
-    if !messages_table_exists {
-        return Ok(empty_lcm_last_agent_outcome_stamp(true, false, false));
-    }
-    let agent_outcome_column_exists = conn
-        .prepare("PRAGMA table_info(messages)")?
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<rusqlite::Result<Vec<_>>>()?
-        .iter()
-        .any(|name| name == "agent_outcome");
-    if !agent_outcome_column_exists {
-        return Ok(empty_lcm_last_agent_outcome_stamp(true, true, false));
-    }
-    let last = conn
-        .query_row(
-            r#"
+    crate::lcm::with_lcm_read(core_db_path, |conn| {
+        let messages_table_exists = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'messages' LIMIT 1",
+                [],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if !messages_table_exists {
+            return Ok(empty_lcm_last_agent_outcome_stamp(true, false, false));
+        }
+        let agent_outcome_column_exists = conn
+            .prepare("PRAGMA table_info(messages)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .iter()
+            .any(|name| name == "agent_outcome");
+        if !agent_outcome_column_exists {
+            return Ok(empty_lcm_last_agent_outcome_stamp(true, true, false));
+        }
+        let last = conn
+            .query_row(
+                r#"
             SELECT seq, COALESCE(agent_outcome, '')
             FROM messages
             WHERE conversation_id = ?1
@@ -666,17 +650,19 @@ fn lcm_last_agent_outcome_stamp(core_db_path: &Path) -> Result<LcmLastAgentOutco
             ORDER BY seq DESC
             LIMIT 1
             "#,
-            params![turn_loop::CHAT_CONVERSATION_ID],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
-        )
-        .optional()?;
-    let (last_assistant_seq, last_assistant_outcome) = last.unwrap_or_else(|| (0, String::new()));
-    Ok(LcmLastAgentOutcomeStamp {
-        database_exists: true,
-        messages_table_exists: true,
-        agent_outcome_column_exists: true,
-        last_assistant_seq,
-        last_assistant_outcome,
+                params![turn_loop::CHAT_CONVERSATION_ID],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        let (last_assistant_seq, last_assistant_outcome) =
+            last.unwrap_or_else(|| (0, String::new()));
+        Ok(LcmLastAgentOutcomeStamp {
+            database_exists: true,
+            messages_table_exists: true,
+            agent_outcome_column_exists: true,
+            last_assistant_seq,
+            last_assistant_outcome,
+        })
     })
 }
 

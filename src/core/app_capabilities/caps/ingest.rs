@@ -28,7 +28,7 @@ const PRIVATE_HEADERS: &[&str] = &["cookie", "authorization", "x-webhook-token"]
 /// submission to (app_id, type) and files publication for large bodies.
 pub trait IngestRuntime {
     /// Absolute origin of the Core HTTPS endpoint (`https://host`).
-    fn public_origin(&self) -> Option<String>;
+    fn public_origin(&self) -> Result<Option<String>, CtoxError>;
     /// Whether the app's ACTIVE manifest has a handler for this command type.
     fn has_handler(&self, app_id: &str, command_type: &str) -> Result<bool, CtoxError>;
     /// Submit the command; the receiver yields the handler result once.
@@ -145,22 +145,22 @@ fn materialize(
     runtime: &dyn IngestRuntime,
     app_id: &str,
     spec: ResponseSpec,
-) -> Option<HttpResponse> {
+) -> Result<Option<HttpResponse>, CtoxError> {
     let body = match spec.body {
         ResponseBody::Inline(bytes) => bytes,
         ResponseBody::Ref(reference) => {
-            let bytes = runtime.load_body(app_id, &reference).ok()?;
+            let bytes = runtime.load_body(app_id, &reference)?;
             if bytes.len() > MAX_BODY_BYTES || sha256_hex(&bytes) != reference {
-                return None;
+                return Ok(None);
             }
             bytes
         }
     };
-    Some(HttpResponse {
+    Ok(Some(HttpResponse {
         status: spec.status,
         headers: spec.headers,
         body,
-    })
+    }))
 }
 
 #[derive(Deserialize)]
@@ -325,9 +325,10 @@ fn register(
     }
     let default_response = match &request.default_response {
         None => HttpResponse::empty(202),
-        Some(value) => admissible_response(value)
-            .and_then(|spec| materialize(runtime, &ctx.app_id, spec))
-            .ok_or_else(|| invalid("$.default_response"))?,
+        Some(value) => {
+            let spec = admissible_response(value).ok_or_else(|| invalid("$.default_response"))?;
+            materialize(runtime, &ctx.app_id, spec)?.ok_or_else(|| invalid("$.default_response"))?
+        }
     };
     if request.pass_headers.len() > 16 {
         return Err(invalid("$.pass_headers"));
@@ -352,7 +353,7 @@ fn register(
     aliases.sort();
     aliases.dedup();
     let origin = runtime
-        .public_origin()
+        .public_origin()?
         .filter(|origin| browser::web_url(origin))
         .ok_or_else(|| {
             CtoxError::new(
@@ -489,6 +490,16 @@ fn find_route(conn: &rusqlite::Connection, request_path: &str) -> Result<Option<
     Ok(None)
 }
 
+/// A missing/foreign response file is a bad handler response. Storage and
+/// disconnected-handler failures remain service errors, never default success.
+pub fn error_status(error: &CtoxError) -> u16 {
+    if error.code == ErrorCode::NotFound {
+        502
+    } else {
+        503
+    }
+}
+
 /// The Core HTTPS ingress: request → one app command → admissible response,
 /// or the registered default after `wait` (production: RESPONSE_WAIT).
 pub fn handle_ingress(
@@ -496,12 +507,11 @@ pub fn handle_ingress(
     runtime: &dyn IngestRuntime,
     request: &IngressRequest,
     wait: Duration,
-) -> HttpResponse {
+) -> Result<HttpResponse, CtoxError> {
     let status = HttpResponse::empty;
-    let route = match open(root).and_then(|conn| find_route(&conn, &request.path)) {
-        Ok(Some(route)) => route,
-        Ok(None) => return status(404),
-        Err(_) => return status(503),
+    let route = match find_route(&open(root)?, &request.path)? {
+        Some(route) => route,
+        None => return Ok(status(404)),
     };
     let mut headers = serde_json::Map::new();
     for (name, value) in &request.headers {
@@ -533,25 +543,27 @@ pub fn handle_ingress(
                 .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
                 .map(|(_, v)| v.as_str())
                 .unwrap_or("application/octet-stream");
-            match runtime.store_body(&route.app_id, &request.body, mime) {
-                Ok(reference) => payload["body_ref"] = json!({ "ref": reference }),
-                Err(_) => return status(503),
-            }
+            let reference = runtime.store_body(&route.app_id, &request.body, mime)?;
+            payload["body_ref"] = json!({ "ref": reference });
         }
     }
-    let receiver = match runtime.dispatch(&route.app_id, &route.command_type, payload) {
-        Ok(receiver) => receiver,
-        Err(_) => return status(503),
-    };
+    let receiver = runtime.dispatch(&route.app_id, &route.command_type, payload)?;
     // The command keeps running after the deadline; only the answer is fixed.
     match receiver.recv_timeout(wait) {
-        Ok(result) => match result.get("response") {
-            Some(response) => admissible_response(response)
-                .and_then(|spec| materialize(runtime, &route.app_id, spec))
-                .unwrap_or_else(|| status(502)),
+        Ok(result) => Ok(match result.get("response") {
+            Some(response) => match admissible_response(response) {
+                Some(spec) => {
+                    materialize(runtime, &route.app_id, spec)?.unwrap_or_else(|| status(502))
+                }
+                None => status(502),
+            },
             None => route.default_response,
-        },
-        Err(_) => route.default_response,
+        }),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(route.default_response),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(CtoxError::new(
+            ErrorCode::Unavailable,
+            "ingress handler response channel closed",
+        )),
     }
 }
 
@@ -594,7 +606,7 @@ impl CoreIngestRuntime<'_> {
     }
 }
 impl IngestRuntime for CoreIngestRuntime<'_> {
-    fn public_origin(&self) -> Option<String> {
+    fn public_origin(&self) -> Result<Option<String>, CtoxError> {
         config::public_origin(self.root)
     }
     fn has_handler(&self, app_id: &str, command_type: &str) -> Result<bool, CtoxError> {
@@ -618,14 +630,23 @@ impl IngestRuntime for CoreIngestRuntime<'_> {
 /// HTTP side for business_os/server.rs: is this path served by net.ingest?
 /// `/ingest/…` always; a legacy alias only once its owner registered it, so
 /// existing native tracking keeps answering until then (no sender reconfig).
-pub fn serves(root: &Path, path: &str) -> bool {
+pub fn may_serve(path: &str) -> bool {
+    path.starts_with(ROUTE_PREFIX)
+        || LEGACY_ALIASES
+            .iter()
+            .any(|(prefix, _)| path.starts_with(prefix))
+}
+
+pub fn serves(root: &Path, path: &str) -> Result<bool, CtoxError> {
     if path.starts_with(ROUTE_PREFIX) {
-        return true;
+        return Ok(true);
     }
-    LEGACY_ALIASES
+    if !LEGACY_ALIASES
         .iter()
         .any(|(prefix, _)| path.starts_with(prefix))
-        && open(root)
-            .and_then(|conn| find_route(&conn, path))
-            .is_ok_and(|route| route.is_some())
+    {
+        return Ok(false);
+    }
+    let conn = open(root)?;
+    Ok(find_route(&conn, path)?.is_some())
 }

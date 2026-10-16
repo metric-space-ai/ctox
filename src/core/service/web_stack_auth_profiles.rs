@@ -49,6 +49,7 @@ pub(crate) fn web_stack_auth_source_defaults(
     }
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct WebStackEmailOtpRecipe {
     sender_domains: &'static [&'static str],
 }

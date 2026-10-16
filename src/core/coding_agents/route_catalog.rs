@@ -72,16 +72,10 @@ pub(super) fn account_metadata(
 ) -> anyhow::Result<Option<NativeInheritedAccountMetadata>> {
     let route = resolve_inherited_catalog_route(root)
         .map_err(|_| anyhow::anyhow!("native main account route is unavailable"))?;
-    let credential = runtime_env::load_runtime_env_map(root)
-        .map_err(|_| anyhow::anyhow!("native main credential metadata is unavailable"))?
-        .remove(route.credential_key)
-        .map(Zeroizing::new);
+    let credential = read_credential(root, &route)?;
     let current_route = resolve_inherited_catalog_route(root)
         .map_err(|_| anyhow::anyhow!("native main account route is unavailable"))?;
-    let current_credential = runtime_env::load_runtime_env_map(root)
-        .map_err(|_| anyhow::anyhow!("native main credential metadata is unavailable"))?
-        .remove(current_route.credential_key)
-        .map(Zeroizing::new);
+    let current_credential = read_credential(root, &current_route)?;
     native_metadata_from_current(
         &route,
         credential.as_ref().map(|value| value.as_str()),
@@ -263,12 +257,20 @@ fn fetch(route: &InheritedCodingRoute, credential: &str, deadline: Duration) -> 
     probe
 }
 
-fn read_credential(root: &Path, route: &InheritedCodingRoute) -> Option<Zeroizing<String>> {
-    runtime_env::load_runtime_env_map(root)
-        .ok()?
-        .remove(route.credential_key)
+fn read_credential(
+    root: &Path,
+    route: &InheritedCodingRoute,
+) -> anyhow::Result<Option<Zeroizing<String>>> {
+    let key = route.credential_key;
+    crate::coding_agents::pi_sidecar::with_runtime_owner(root, move |root| {
+        Ok(crate::secrets::read_secret_value_optional(
+            root,
+            crate::secrets::credential_scope(),
+            key,
+        )?
         .filter(|credential| !credential.trim().is_empty())
-        .map(Zeroizing::new)
+        .map(Zeroizing::new))
+    })
 }
 
 fn retain_current_result(
@@ -305,26 +307,25 @@ pub(crate) struct NativeModelCatalogObservation {
     pub inherited_selected_model: Option<String>,
 }
 
-fn probe_current(root: &Path, route: &InheritedCodingRoute) -> (Probe, Option<String>) {
-    let Some(credential) = read_credential(root, route) else {
-        return (Probe::failed(Failure::CredentialUnavailable), None);
+fn probe_current(
+    root: &Path,
+    route: &InheritedCodingRoute,
+) -> anyhow::Result<(Probe, Option<String>)> {
+    let Some(credential) = read_credential(root, route)? else {
+        return Ok((Probe::failed(Failure::CredentialUnavailable), None));
     };
     // Recheck the exact endpoint/key pair BEFORE disclosing the captured key.
     // A credential read must not combine an old endpoint with a changed route.
-    let current_route = resolve_inherited_catalog_route(root).ok();
-    let current_credential = current_route
-        .as_ref()
-        .and_then(|route| read_credential(root, route));
+    let current_route = Some(resolve_inherited_catalog_route(root)?);
+    let current_credential = read_credential(root, current_route.as_ref().unwrap())?;
     if current_route.as_ref() != Some(route)
         || current_credential.as_ref().map(|secret| secret.as_str()) != Some(credential.as_str())
     {
-        return (Probe::failed(Failure::RouteChanged), None);
+        return Ok((Probe::failed(Failure::RouteChanged), None));
     }
     let mut probe = fetch(route, &credential, DEADLINE);
-    let current_route = resolve_inherited_catalog_route(root).ok();
-    let current_credential = current_route
-        .as_ref()
-        .and_then(|route| read_credential(root, route));
+    let current_route = Some(resolve_inherited_catalog_route(root)?);
+    let current_credential = read_credential(root, current_route.as_ref().unwrap())?;
     retain_current_result(
         &mut probe,
         route,
@@ -334,7 +335,7 @@ fn probe_current(root: &Path, route: &InheritedCodingRoute) -> (Probe, Option<St
     );
     let binding =
         (probe.failure != Some(Failure::RouteChanged)).then(|| private_binding(route, &credential));
-    (probe, binding)
+    Ok((probe, binding))
 }
 
 /// Called only after native Owner/Admin command admission. The observer reads
@@ -343,7 +344,7 @@ fn probe_current(root: &Path, route: &InheritedCodingRoute) -> (Probe, Option<St
 pub(super) fn observe(root: &Path) -> anyhow::Result<NativeModelCatalogObservation> {
     let route = resolve_inherited_catalog_route(root)
         .map_err(|_| anyhow::anyhow!("native model catalog route is unavailable"))?;
-    let (probe, binding) = probe_current(root, &route);
+    let (probe, binding) = probe_current(root, &route)?;
     let failure = serde_json::to_value(probe.failure)?
         .as_str()
         .map(str::to_owned);
@@ -373,7 +374,7 @@ pub(super) fn observe(root: &Path) -> anyhow::Result<NativeModelCatalogObservati
 /// An observation never authorizes a later turn or certifies capacity.
 pub(super) fn inspect(root: &Path) -> anyhow::Result<Value> {
     let route = resolve_inherited_catalog_route(root)?;
-    let (probe, _private_binding) = probe_current(root, &route);
+    let (probe, _private_binding) = probe_current(root, &route)?;
     let selected_model_listed = probe
         .models
         .as_ref()
@@ -413,115 +414,135 @@ mod tests {
     #[test]
     fn native_catalog_observer_reads_the_stored_route_and_never_exports_private_state(
     ) -> anyhow::Result<()> {
-        use std::collections::BTreeMap;
-        let root = tempfile::tempdir()?;
-        let server = Server::http("127.0.0.1:0").unwrap();
-        let address = format!("http://{}/v1", server.server_addr());
-        // Runtime state classifies custom loopback upstreams as OpenAI.
-        // Exercise that actual persisted credential selector, not a guessed proxy key.
-        let settings = BTreeMap::from([
-            ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
-            ("CTOX_API_PROVIDER".to_owned(), "openai".to_owned()),
-            ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
-            ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
-            ("CTOX_UPSTREAM_BASE_URL".to_owned(), address.clone()),
-            (
-                "OPENAI_API_KEY".to_owned(),
-                "fixture-private-proxy".to_owned(),
-            ),
-        ]);
-        runtime_env::save_runtime_env_map(root.path(), &settings)?;
-        let before = runtime_env::load_runtime_env_map(root.path())?;
-        // Assert the selected private endpoint before any network IO. A
-        // fixture must never silently probe a live or shared gateway.
-        assert_eq!(
-            resolve_inherited_catalog_route(root.path())?.base_url,
-            address
-        );
-        let worker = std::thread::spawn(move || {
-            let request = server
-                .recv_timeout(Duration::from_secs(60))
-                .unwrap()
-                .expect("native preflight must reach the isolated upstream");
-            assert_eq!(request.url(), "/v1/models");
-            assert!(request
-                .headers()
-                .iter()
-                .any(|header| header.field.equiv("Authorization")
-                    && header.value.as_str() == "Bearer fixture-private-proxy"));
-            request
-                .respond(Response::from_string(
-                    r#"{"data":[{"id":"MiniMax-M3","private":"fixture-private-proxy"}]}"#,
-                ))
-                .unwrap();
-        });
-        let observation = observe(root.path())?;
-        worker.join().unwrap();
-        assert_eq!(observation.provider, "openai");
-        assert_eq!(
-            observation.models.as_deref(),
-            Some(&["MiniMax-M3".to_owned()][..])
-        );
-        assert_eq!(observation.http_status, Some(200));
-        assert!(observation.failure.is_none());
-        assert_eq!(
-            observation.inherited_selected_model.as_deref(),
-            Some("MiniMax-M3")
-        );
-        let public = serde_json::to_string(&observation)?;
-        assert!(!public.contains("inherited_selected_model"));
-        for private in ["fixture-private-proxy", "OPENAI_API_KEY", address.as_str()] {
-            assert!(!public.contains(private));
-        }
-        assert_eq!(runtime_env::load_runtime_env_map(root.path())?, before);
-        assert!(!root.path().join("coding-agents").exists());
-        Ok(())
+        crate::coding_agents::pi_sidecar::test_owners::run(move || {
+            use std::collections::BTreeMap;
+            let root = crate::coding_agents::pi_sidecar::test_owners::root()?;
+            let server = Server::http("127.0.0.1:0").unwrap();
+            let address = format!("http://{}/v1", server.server_addr());
+            // Runtime state classifies custom loopback upstreams as OpenAI.
+            // Exercise that actual persisted credential selector, not a guessed proxy key.
+            let settings = BTreeMap::from([
+                ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
+                ("CTOX_API_PROVIDER".to_owned(), "openai".to_owned()),
+                ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
+                ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
+                ("CTOX_UPSTREAM_BASE_URL".to_owned(), address.clone()),
+                (
+                    "OPENAI_API_KEY".to_owned(),
+                    "fixture-private-proxy".to_owned(),
+                ),
+            ]);
+            runtime_env::save_runtime_env_map(root.path(), &settings)?;
+            let before = runtime_env::load_runtime_env_map(root.path())?;
+            // Assert the selected private endpoint before any network IO. A
+            // fixture must never silently probe a live or shared gateway.
+            assert_eq!(
+                resolve_inherited_catalog_route(root.path())?.base_url,
+                address
+            );
+            let worker = std::thread::spawn(move || {
+                let request = server
+                    .recv_timeout(Duration::from_secs(60))
+                    .unwrap()
+                    .expect("native preflight must reach the isolated upstream");
+                assert_eq!(request.url(), "/v1/models");
+                assert!(request
+                    .headers()
+                    .iter()
+                    .any(|header| header.field.equiv("Authorization")
+                        && header.value.as_str() == "Bearer fixture-private-proxy"));
+                request
+                    .respond(Response::from_string(
+                        r#"{"data":[{"id":"MiniMax-M3","private":"fixture-private-proxy"}]}"#,
+                    ))
+                    .unwrap();
+            });
+            let observation = observe(root.path())?;
+            worker.join().unwrap();
+            assert_eq!(observation.provider, "openai");
+            assert_eq!(
+                observation.models.as_deref(),
+                Some(&["MiniMax-M3".to_owned()][..])
+            );
+            assert_eq!(observation.http_status, Some(200));
+            assert!(observation.failure.is_none());
+            assert_eq!(
+                observation.inherited_selected_model.as_deref(),
+                Some("MiniMax-M3")
+            );
+            let public = serde_json::to_string(&observation)?;
+            assert!(!public.contains("inherited_selected_model"));
+            for private in ["fixture-private-proxy", "OPENAI_API_KEY", address.as_str()] {
+                assert!(!public.contains(private));
+            }
+            assert_eq!(runtime_env::load_runtime_env_map(root.path())?, before);
+            assert!(!root.path().join("coding-agents").exists());
+            let secrets = crate::lcm::owner_adapter::OwnerAdapter::for_path(
+                &crate::paths::secrets_db(root.path()),
+            )?;
+            secrets.write_blocking(|tx| {
+                tx.execute_batch(
+                    "ALTER TABLE ctox_secret_records RENAME COLUMN secret_name TO broken_name;",
+                )?;
+                Ok(())
+            })?;
+            let error = observe(root.path())
+                .err()
+                .expect("failed secret storage became a missing credential observation");
+            assert!(matches!(
+                error.downcast_ref::<crate::secrets::SecretReadError>(),
+                Some(crate::secrets::SecretReadError::Unavailable)
+            ));
+            Ok(())
+        })
     }
 
     #[test]
     fn native_catalog_refuses_a_changed_private_route_before_network_io() -> anyhow::Result<()> {
-        use std::collections::BTreeMap;
-        let root = tempfile::tempdir()?;
-        let old_server = Server::http("127.0.0.1:0").unwrap();
-        let new_server = Server::http("127.0.0.1:0").unwrap();
-        let mut settings = BTreeMap::from([
-            ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
-            ("CTOX_API_PROVIDER".to_owned(), "openai".to_owned()),
-            ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
-            ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
-            (
-                "CTOX_UPSTREAM_BASE_URL".to_owned(),
-                format!("http://{}/v1", old_server.server_addr()),
-            ),
-            (
-                "OPENAI_API_KEY".to_owned(),
-                "fixture-old-private".to_owned(),
-            ),
-        ]);
-        runtime_env::save_runtime_env_map(root.path(), &settings)?;
-        // Warm the inference cache before changing the endpoint/key pair.
-        // Discovery must not combine its retired endpoint with the new key.
-        crate::execution::models::runtime_kernel::InferenceRuntimeKernel::resolve(root.path())?;
-        let captured = resolve_inherited_catalog_route(root.path())?;
-        settings.insert(
-            "CTOX_UPSTREAM_BASE_URL".into(),
-            format!("http://{}/v1", new_server.server_addr()),
-        );
-        settings.insert("OPENAI_API_KEY".into(), "fixture-new-private".into());
-        runtime_env::save_runtime_env_map(root.path(), &settings)?;
-        let before_probe = runtime_env::load_runtime_env_map(root.path())?;
-        let (probe, binding) = probe_current(root.path(), &captured);
-        assert_eq!(probe.failure, Some(Failure::RouteChanged));
-        assert!(probe.http_status.is_none());
-        assert!(probe.models.is_none());
-        assert!(binding.is_none());
-        assert!(old_server.try_recv()?.is_none());
-        assert!(new_server.try_recv()?.is_none());
-        assert_eq!(
-            runtime_env::load_runtime_env_map(root.path())?,
-            before_probe
-        );
-        Ok(())
+        crate::coding_agents::pi_sidecar::test_owners::run(move || {
+            use std::collections::BTreeMap;
+            let root = crate::coding_agents::pi_sidecar::test_owners::root()?;
+            let old_server = Server::http("127.0.0.1:0").unwrap();
+            let new_server = Server::http("127.0.0.1:0").unwrap();
+            let mut settings = BTreeMap::from([
+                ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
+                ("CTOX_API_PROVIDER".to_owned(), "openai".to_owned()),
+                ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
+                ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
+                (
+                    "CTOX_UPSTREAM_BASE_URL".to_owned(),
+                    format!("http://{}/v1", old_server.server_addr()),
+                ),
+                (
+                    "OPENAI_API_KEY".to_owned(),
+                    "fixture-old-private".to_owned(),
+                ),
+            ]);
+            runtime_env::save_runtime_env_map(root.path(), &settings)?;
+            // Warm the inference cache before changing the endpoint/key pair.
+            // Discovery must not combine its retired endpoint with the new key.
+            crate::execution::models::runtime_kernel::InferenceRuntimeKernel::resolve(root.path())?;
+            let captured = resolve_inherited_catalog_route(root.path())?;
+            settings.insert(
+                "CTOX_UPSTREAM_BASE_URL".into(),
+                format!("http://{}/v1", new_server.server_addr()),
+            );
+            settings.insert("OPENAI_API_KEY".into(), "fixture-new-private".into());
+            runtime_env::save_runtime_env_map(root.path(), &settings)?;
+            let before_probe = runtime_env::load_runtime_env_map(root.path())?;
+            let (probe, binding) = probe_current(root.path(), &captured)?;
+            assert_eq!(probe.failure, Some(Failure::RouteChanged));
+            assert!(probe.http_status.is_none());
+            assert!(probe.models.is_none());
+            assert!(binding.is_none());
+            assert!(old_server.try_recv()?.is_none());
+            assert!(new_server.try_recv()?.is_none());
+            assert_eq!(
+                runtime_env::load_runtime_env_map(root.path())?,
+                before_probe
+            );
+            Ok(())
+        })
     }
 
     /// `account_metadata` is a synchronous Core caller: it runs with the
@@ -555,7 +576,10 @@ mod tests {
                 ),
             ]);
             runtime_env::save_runtime_env_map(root, &settings)?;
-            let before = runtime_env::load_runtime_env_map(root)?;
+            let before = crate::coding_agents::pi_sidecar::with_runtime_owner(
+                root,
+                runtime_env::load_runtime_env_map,
+            )?;
             let metadata = account_metadata(root)?.unwrap();
             assert_eq!(metadata.provider, "ctox_proxy");
             let mut rotated = before.clone();
@@ -566,9 +590,21 @@ mod tests {
             runtime_env::save_runtime_env_map(root, &rotated)?;
             let changed = account_metadata(root)?.unwrap();
             assert_ne!(metadata.private_binding, changed.private_binding);
-            assert_eq!(runtime_env::load_runtime_env_map(root)?, rotated);
+            assert_eq!(
+                crate::coding_agents::pi_sidecar::with_runtime_owner(
+                    root,
+                    runtime_env::load_runtime_env_map
+                )?,
+                rotated
+            );
             runtime_env::save_runtime_env_map(root, &before)?;
-            assert_eq!(runtime_env::load_runtime_env_map(root)?, before);
+            assert_eq!(
+                crate::coding_agents::pi_sidecar::with_runtime_owner(
+                    root,
+                    runtime_env::load_runtime_env_map
+                )?,
+                before
+            );
             assert!(
                 !root.join("coding-agents").exists(),
                 "metadata must not prepare or start Pi"

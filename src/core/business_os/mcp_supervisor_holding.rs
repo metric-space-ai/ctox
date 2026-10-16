@@ -316,19 +316,12 @@ impl NativeSupervisorHoldingController {
     /// its scoped capability and the SDK producer must separately prove stop.
     pub(crate) fn cancel(&self) -> anyhow::Result<()> {
         self.retired.store(true, Ordering::Release);
-        let core = Connection::open(crate::paths::core_db(&self.lease.root))?;
-        core.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
-        core.execute(
-            "UPDATE workjet_supervisor_execution_controllers SET state='cancelled',retired_at_ms=?1
-             WHERE execution_key=?2 AND lease_hash=?3 AND controller_id=?4 AND state='active'",
-            params![
-                now_ms(),
-                self.lease.execution_key,
-                self.lease.lease_hash,
-                self.id
-            ],
-        )?;
-        Ok(())
+        cancel_controller_at_owner(
+            &self.lease.root,
+            self.lease.execution_key.clone(),
+            self.lease.lease_hash.clone(),
+            self.id.clone(),
+        )
     }
 }
 #[path = "mcp_supervisor_publication.rs"]
@@ -350,3 +343,60 @@ pub(super) fn read_owned_computation(
 #[cfg(test)]
 #[path = "mcp_supervisor_holding_tests.rs"]
 mod tests;
+
+fn cancel_controller_at_owner(
+    root: &Path,
+    execution_key: String,
+    lease_hash: String,
+    controller_id: String,
+) -> anyhow::Result<()> {
+    crate::lcm::with_lcm_write(&crate::paths::core_db(root), move |core| {
+        core.execute(
+            "UPDATE workjet_supervisor_execution_controllers SET state='cancelled',retired_at_ms=?1
+             WHERE execution_key=?2 AND lease_hash=?3 AND controller_id=?4 AND state='active'",
+            params![
+                chrono::Utc::now().timestamp_millis(),
+                execution_key,
+                lease_hash,
+                controller_id
+            ],
+        )?;
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn core_lookup_controller_cancel_keeps_exact_scope_on_existing_writer() -> anyhow::Result<()>
+{
+    let root = tempfile::tempdir()?;
+    let path = crate::paths::core_db(root.path());
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    let (writer, readers) = ctox_store::testkit::StoreFixture::open(ctox_store::DbId::new(&path)?)
+        .await?
+        .into_parts();
+    let adapter =
+        crate::lcm::owner_adapter::OwnerAdapter::attach(&path, writer.clone(), readers.clone())
+            .await?;
+    writer.submit(ctox_store::WriteJob::new(Default::default(), |tx| {
+        tx.execute_batch("CREATE TABLE workjet_supervisor_execution_controllers(execution_key TEXT,lease_hash TEXT,controller_id TEXT,state TEXT,retired_at_ms INTEGER);
+          INSERT INTO workjet_supervisor_execution_controllers VALUES('run','lease','ours','active',NULL),('run','lease','foreign','active',NULL);
+          CREATE TEMP TABLE cancel_owner_audit(n INTEGER);
+          CREATE TEMP TRIGGER audit_cancel AFTER UPDATE ON main.workjet_supervisor_execution_controllers BEGIN INSERT INTO cancel_owner_audit VALUES(1); END;")?;
+        Ok(())
+    }))?.await?;
+    let work = root.path().to_owned();
+    crate::persistence::run_core_sync(move || {
+        cancel_controller_at_owner(&work, "run".into(), "lease".into(), "ours".into())?;
+        cancel_controller_at_owner(&work, "run".into(), "lease".into(), "ours".into())?;
+        crate::lcm::with_lcm_write(&crate::paths::core_db(&work), |conn| {
+            assert_eq!(conn.query_row("SELECT COUNT(*) FROM temp.cancel_owner_audit", [], |r| r.get::<_,i64>(0))?, 1, "controller cancel opened a second writer");
+            assert_eq!(conn.query_row("SELECT state FROM workjet_supervisor_execution_controllers WHERE controller_id='foreign'", [], |r|r.get::<_,String>(0))?, "active", "controller cancellation escaped its private scope");
+            Ok(())
+        })
+    }).await?;
+    drop(adapter);
+    readers.shutdown().await?;
+    writer.shutdown().await?;
+    Ok(())
+}
