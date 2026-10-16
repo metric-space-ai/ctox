@@ -141,7 +141,6 @@ def main():
                 copy(root/path, bundle/path)
         for source, destination in [('src/skills','skills'), ('install.sh','install.sh'),
                 ('install.ps1','install.ps1'), ('LICENSE','LICENSE'), ('docs/legal/NOTICE','NOTICE'),
-                ('src/apps/business-os/rxdb','rxdb-js/app-local'),
                 ('src/core/transfers/aria2-rust/LICENSE','licenses/aria2-rust/LICENSE'),
                 ('src/core/transfers/aria2-GPL-2.0.txt','licenses/aria2-rust/COPYING'),
                 ('src/core/transfers/aria2-rust/PROVENANCE.json','licenses/aria2-rust/PROVENANCE.json'),
@@ -149,6 +148,12 @@ def main():
                 ('src/core/transfers/vendor/SMB-UPSTREAM.md','licenses/smb/UPSTREAM.md')]:
             if not (bundle/destination).exists():
                 copy(root/source, bundle/destination)
+        rxdb = root/'src/apps/business-os/rxdb'
+        for relative in ('manifest.json','README.md','dist/ctox-rxdb-js.mjs'):
+            copy(rxdb/relative, bundle/'rxdb-js/app-local'/relative)
+        for directory in ('src','tests'):
+            for path in (rxdb/directory).glob('*.mjs'):
+                copy(path, bundle/'rxdb-js/app-local'/directory/path.name)
         report['binarySha256'] = digest(bundle/'bin/ctox')
         report['binary'] = str(bundle/'bin/ctox')
         report['assets'] = {p.relative_to(bundle).as_posix(): digest(p) for p in bundle.rglob('*') if p.is_file()}

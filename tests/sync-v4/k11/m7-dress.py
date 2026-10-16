@@ -115,8 +115,10 @@ def main():
         component = out/'foreground-profile'
         component.mkdir(mode=0o700)
         (component/'.sync-v4-e2e.json').write_text(json.dumps(marker))
-        assert run('foreground-profile-restore', ['python3',HERE/'m7-backup.py','restore',
-                   '--output',snapshot,'--destination',component/'runtime'],180) == 0
+        # Fresh empty state is only a startup control. SQLite-only clones do
+        # not include the product's sealed-key/file custody and must never be
+        # presented as a valid frozen-profile restoration.
+        (component/'runtime').mkdir(mode=0o700)
         for name in ('src','contracts','Cargo.toml'):
             (component/name).symlink_to(bundle/name)
         home = component/'home'
@@ -165,7 +167,7 @@ def main():
                         process['groupAbsent'] = True
         stable = all(x['ready'] and x['exit']==0 for x in starts) and bool(starts[0]['instanceId']) and starts[0]['instanceId']==starts[1]['instanceId']
         criterion('foreground-restart-component','pass' if stable else 'fail','DevOps',
-                  measured=starts, limit='Candidate image on a fresh profile copy, not an installed upgrade or signing-key witness')
+                  measured=starts, limit='Candidate image on fresh empty state, not frozen-profile coverage, installed upgrade or signing-key witness')
         # This only probes admission capability. A failed sudo never launches
         # unshare or an installer, and no host user/system bus is contacted.
         capable = run('namespace-admission', ['sudo','-n','true'], 10) == 0
