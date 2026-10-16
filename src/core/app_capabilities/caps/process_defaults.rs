@@ -111,7 +111,7 @@ fn selected(
             let interpreter = host.interpreter.to_str().ok_or_else(unavailable)?;
             let script = host.script.to_str().ok_or_else(unavailable)?;
             json!({"interpreter":interpreter, "script":script,
-                "env":host.env,"untrusted_code":true})
+                "env":host.env,"untrusted_code":true,"net_from_call":true})
         }
     };
     if default.is_some() && !shipped_shape(&value) {
