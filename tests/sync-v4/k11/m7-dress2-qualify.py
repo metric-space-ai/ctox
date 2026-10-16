@@ -65,8 +65,14 @@ def main(a):
         for file in ('upgrade.mjs','upgrade-controller.mjs','sandbox.mjs','installer-smoke.mjs'):
             run('syntax-'+file,['node','--check',here/file],15)
         run('syntax-k24-remote',['node','--check',here.parent/'k24/remote-adapter.mjs'],15)
-        run('release',['python3',here/'m7-release.py','--output',out/'release'],4500)
-        release = out/'release/release.json'
+        if a.release:
+            release = a.release.resolve()
+            prior = json.loads(release.read_text())
+            assert prior['sourceTree'] == result['sourceTree'] and prior['terminal'] and prior['pass']
+            result['sameBinaryReused'] = True
+        else:
+            run('release',['python3',here/'m7-release.py','--output',out/'release'],4500)
+            release = out/'release/release.json'
         result['release']=json.loads(release.read_text())
         fixture = base/'v4-m7-fix2-qualified-20261016T020215Z/profile'
         before = base/'v4-e2e-old-portable-20261015/build.json'
@@ -74,10 +80,17 @@ def main(a):
                      '--profile',fixture,'--output',out/'dress'],1100,(0,1,2))
         result['matrix']=json.loads((out/'dress/m7-go-nogo.json').read_text())
         r=result['release']
-        run('static',['python3','src/core/install/static_probe.py','--mode','plain','--profile',fixture,
-            '--binary',r['binary'],'--sha256',r['binarySha256'],'--source',Path(r['binary']).parent.parent,
-            '--slot',base/'v4-m7-fix-signed-reference-20261016/0.1.46-beta.106','--out',out/'static'],180,(0,1))
-        result['static']=json.loads((out/'static/result.json').read_text())
+        if a.static_receipt:
+            static = json.loads(a.static_receipt.read_text())
+            assert static['binarySha256'] == r['binarySha256'] and static['profileSource'] == str(fixture)
+            assert static['pass'] and len(static['rows']) == 20 and all(row['status']==200 for row in static['rows'])
+            result['static']=static
+            result['staticReusedFrom']=str(a.static_receipt)
+        else:
+            run('static',['python3','src/core/install/static_probe.py','--mode','plain','--profile',fixture,
+                '--binary',r['binary'],'--sha256',r['binarySha256'],'--source',Path(r['binary']).parent.parent,
+                '--slot',base/'v4-m7-fix-signed-reference-20261016/0.1.46-beta.106','--out',out/'static'],180,(0,1))
+            result['static']=json.loads((out/'static/result.json').read_text())
         installed=out/'dress/install'
         proof=installed/'upgrade/installer.json'
         if proof.exists() and json.loads(proof.read_text()).get('roundtripExecuted'):
@@ -100,4 +113,6 @@ if __name__ == '__main__':
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--output',required=True,type=Path)
     p.add_argument('--deadline',required=True)
+    p.add_argument('--release',type=Path)
+    p.add_argument('--static-receipt',type=Path)
     raise SystemExit(main(p.parse_args()))
