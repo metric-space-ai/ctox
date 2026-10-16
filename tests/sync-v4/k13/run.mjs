@@ -7,7 +7,7 @@ import {join,resolve,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {spawn,execFileSync} from 'node:child_process';
-import {verifiedBuild,owner} from '../../sync-v4-e2e/native.mjs';
+import {verifiedBuild} from './build-receipt.mjs';
 const argv=process.argv.slice(2),flags=new Map();
 for(let i=0;i<argv.length;i+=2) {
   if(!argv[i]?.startsWith('--') || !argv[i+1])throw Error('Expected --key value');
@@ -76,7 +76,7 @@ if(build && !summary.scenarios.length) {
   for(const [id,seconds] of [['K13',180],['K21',1200],['K22',900]]) {
     if(cancelled){summary.scenarios.push({id,status:'not_run',pass:false,acceptanceComplete:false,reason:'Controller interrupted',daemonExecuted:false});save();continue;}
     const dir=join(output,id);fs.mkdirSync(dir,{mode:0o700});
-    const config={owner,...build,output:dir,profile:'small',clients:1,rttMs:20,warmRttMs:20,lossPercent:0,
+    const config={owner:summary.owner,...build,output:dir,profile:'small',clients:1,rttMs:20,warmRttMs:20,lossPercent:0,
       uid:process.getuid(),gid:process.getgid(),seedAfterStart:false,leadProfile:'eager',prime:false,
       catalog:true,scenarioRoot:resolve(here,'..'),scenario:id,osBootstrap:flags.get('--os-bootstrap')??null,
       root:join(dir,'tenant-'+expected.slice(0,12)),port:19865,signalingPort:19866,turnPort:34789,
