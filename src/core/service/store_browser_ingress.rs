@@ -41,6 +41,9 @@ use std::{
 
 pub(super) struct BrowserIngress {
     inputs: Weak<StoreInputs>,
+    state: std::sync::atomic::AtomicU8,
+    changed: tokio::sync::Notify,
+    task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     session: tokio::sync::Mutex<
         Option<(
             ctox_sync::native::NativeSyncSession,
@@ -52,10 +55,57 @@ impl BrowserIngress {
     pub fn new(inputs: &Arc<StoreInputs>) -> Arc<Self> {
         Arc::new(Self {
             inputs: Arc::downgrade(inputs),
+            state: std::sync::atomic::AtomicU8::new(0),
+            changed: tokio::sync::Notify::new(),
+            task: std::sync::Mutex::new(None),
             session: tokio::sync::Mutex::new(None),
         })
     }
-    pub async fn start(&self) -> Result<(), StoreError> {
+    /// Exactly one owner-start task. HTTP never starts or retries signaling.
+    pub fn start_owned(
+        self: &Arc<Self>,
+        runtime: &tokio::runtime::Handle,
+    ) -> Result<(), StoreError> {
+        use std::sync::atomic::Ordering;
+        self.state
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| StoreError::AlreadyOwned)?;
+        let owner = self.clone();
+        *self.task.lock().map_err(|_| StoreError::Closed)? = Some(runtime.spawn(async move {
+            let result = owner.start().await;
+            let _ = owner.state.compare_exchange(
+                1,
+                if result.is_ok() { 2 } else { 3 },
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+            owner.changed.notify_waiters();
+        }));
+        Ok(())
+    }
+    pub fn ready(&self) -> Result<(), StoreError> {
+        if self.state.load(std::sync::atomic::Ordering::Acquire) == 2 {
+            Ok(())
+        } else {
+            Err(StoreError::Busy)
+        }
+    }
+    #[cfg(test)]
+    pub(super) fn owner_started(&self) -> bool {
+        self.state.load(std::sync::atomic::Ordering::Acquire) != 0
+    }
+    pub async fn wait_failed(&self) -> std::io::Result<()> {
+        loop {
+            let changed = self.changed.notified();
+            if self.state.load(std::sync::atomic::Ordering::Acquire) == 3 {
+                return Err(std::io::Error::other(
+                    "browser V4 signaling bring-up failed",
+                ));
+            }
+            changed.await;
+        }
+    }
+    async fn start(&self) -> Result<(), StoreError> {
         let mut session = self.session.lock().await;
         let inputs = self.inputs.upgrade().ok_or(StoreError::Closed)?;
         inputs.instance_signer()?;
@@ -180,6 +230,13 @@ impl BrowserIngress {
         }
     }
     pub async fn shutdown(&self) -> Result<(), StoreError> {
+        self.state.store(4, std::sync::atomic::Ordering::Release);
+        let task = self.task.lock().map_err(|_| StoreError::Closed)?.take();
+        if let Some(task) = task {
+            // The bounded bring-up owns its database until it closes on failure.
+            // Let it observe retired inputs; cancellation must not orphan that DB.
+            let _ = task.await;
+        }
         if let Some((mut session, database)) = self.session.lock().await.take() {
             session.shutdown().await;
             database
@@ -401,25 +458,26 @@ impl V4StreamSource for Source {
                 .map_err(|_| invalid())?
                 .clone()
                 .ok_or_else(invalid)?;
-            Ok((binding, inputs, write, sender))
+            Ok((binding, inputs, write, sender, self.admission.clone()))
         })();
         Box::pin(async move {
-            let (binding, inputs, write, sender) = setup?;
-            // Mutating app/executor ingress is a separate native contract. Until
-            // bound, persist an explicit rejection through P8, never acknowledge
-            // an unvalidated document or invent an in-memory success receipt.
-            let writer = OrderedWriter::new(inputs.sync.writer.clone(), Arc::new(UnboundWrite));
+            let (binding, inputs, write, sender, self_admission) = setup?;
+            let writer = OrderedWriter::new(
+                inputs.sync.writer.clone(),
+                Arc::new(browser_write::BrowserWrite::new(
+                    self_admission,
+                    binding.clone(),
+                )),
+            );
             let batch = writer
                 .submit(binding.device.clone(), write, now())
                 .await
                 .map_err(|_| invalid())?;
-            for result in batch.results {
-                sender
-                    .send(Ok(serde_json::to_value(CoreMessage::WriteResult(result))
-                        .map_err(|_| invalid())?))
-                    .await
-                    .map_err(|_| invalid())?;
-            }
+            // E14: this point is AFTER the owning writer's commit completion.
+            // P4's reliable result lane retains delivery until its transport ACK.
+            let deadline = batch.next_deadline_ms;
+            deliver_batch(batch, &sender).await?;
+            arm_gap(&binding, writer, sender, deadline)?;
             Ok(())
         })
     }
@@ -431,25 +489,48 @@ impl V4StreamSource for Source {
         Box::pin(async move { result })
     }
 }
-struct UnboundWrite;
-impl WriteAuthority for UnboundWrite {
-    fn authorize(
-        &self,
-        _: &rusqlite::Transaction<'_>,
-        _: &str,
-        _: &Write,
-    ) -> rusqlite::Result<WritePermission> {
-        Ok(WritePermission::Reject("forbidden".into()))
+#[path = "store_browser_write.rs"]
+mod browser_write;
+#[path = "store_browser_gap.rs"]
+pub(super) mod gap;
+async fn deliver_batch(
+    batch: ctox_store::change_log::subscription::write_contract::WriteBatch,
+    sender: &tokio::sync::mpsc::Sender<RxResult<Value>>,
+) -> RxResult<()> {
+    for result in batch.results {
+        let result =
+            serde_json::to_value(CoreMessage::WriteResult(result)).map_err(|_| invalid())?;
+        tokio::time::timeout(Duration::from_secs(5), sender.send(Ok(result)))
+            .await
+            .map_err(|_| invalid())?
+            .map_err(|_| invalid())?;
     }
-    fn validate_document(
-        &self,
-        _: &rusqlite::Transaction<'_>,
-        _: &str,
-        _: &ctox_store::schema::Collection,
-        _: &Value,
-    ) -> rusqlite::Result<WritePermission> {
-        Ok(WritePermission::Reject("forbidden".into()))
-    }
+    Ok(())
+}
+/// P8 supplies a durable one-shot gap deadline, not a polling/retry loop. A
+/// peer has at most one timer; an idle connection still receives expiry results.
+fn arm_gap(
+    peer: &Arc<BrowserPeer>,
+    writer: OrderedWriter,
+    sender: tokio::sync::mpsc::Sender<RxResult<Value>>,
+    deadline: Option<u64>,
+) -> RxResult<()> {
+    let deliver: gap::Delivery = Arc::new(move |batch| {
+        let sender = sender.clone();
+        Box::pin(async move {
+            let _ = deliver_batch(batch, &sender).await;
+        })
+    });
+    peer.gap
+        .arm(
+            writer,
+            peer.device.clone(),
+            peer.expires,
+            deliver,
+            deadline,
+            now,
+        )
+        .map_err(|_| invalid())
 }
 fn now() -> u64 {
     SystemTime::now()
