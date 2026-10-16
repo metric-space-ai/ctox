@@ -1,6 +1,6 @@
 // G9 Pixelmessung mit Gegenprobe (Strang PAL, M-17).
 //
-//   CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/637caf6 node --test v4/tools/geometry/g9.test.mjs
+//   node --test v4/tools/geometry/g9.test.mjs   (Stub-Pin 8265bd7, abweichend per CTOX_APP_API_STUB)
 //
 // Rahmen-Labor (stub-lab.html, gebundene Shell), 1280×800, Fenster frei (520×360). Apps:
 //   notes          Lab-App, SVG-Icon mit runden, durchsichtigen Ecken (rx 14, einfarbig)
@@ -19,10 +19,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startServer } from '../../frame/lab/serve.mjs';
 import { g9Pixel, G9_MAX_DE } from './g9.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+// Stub-Pin 8265bd7 (abweichend per CTOX_APP_API_STUB); vor dem Laden von serve.mjs, das den Pfad beim Import liest.
+process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
+const { startServer } = await import('../../frame/lab/serve.mjs');
 const BOS = path.resolve(HERE, '../../..');
 const MOD = path.join(BOS, 'modules');
 const OUT = path.join(HERE, 'out', 'pal');
