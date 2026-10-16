@@ -305,6 +305,47 @@ mod ctox_window_ack_contract {
     use super::*;
 
     #[test]
+    fn gap_sack_samples_the_flight_once_instead_of_collapsing_rtt_variance() {
+        let now = Instant::now();
+        let mut association = Association {
+            my_next_tsn: 10,
+            min_tsn2measure_rtt: 1,
+            rto_mgr: RtoManager::new(),
+            ..Default::default()
+        };
+        for tsn in 1..10 {
+            association.inflight_queue.push_no_check(ChunkPayloadData {
+                tsn,
+                stream_identifier: 13,
+                user_data: bytes::Bytes::from(vec![23; 128]),
+                nsent: 1,
+                since: Some(now - Duration::from_millis(150)),
+                ..Default::default()
+            });
+        }
+        let sack = ChunkSelectiveAck {
+            gap_ack_blocks: vec![crate::chunk::chunk_selective_ack::GapAckBlock {
+                start: 2,
+                end: 9,
+            }],
+            ..Default::default()
+        };
+        let sack = ChunkSelectiveAck::unmarshal(&sack.marshal().unwrap()).unwrap();
+        let (acked, _) = association.process_selective_ack(&sack, now).unwrap();
+        assert_eq!(
+            acked.get(&13),
+            Some(&(8 * 128)),
+            "all gap-ACKed bytes must still retire"
+        );
+        assert_eq!(
+            association.rto_mgr.get_rto(),
+            450,
+            "one gap SACK must not masquerade as eight separate RTT observations"
+        );
+        assert_eq!(association.min_tsn2measure_rtt, 10);
+    }
+
+    #[test]
     fn send_window_requests_sack_at_credit_boundary_and_tail_only() {
         for (cwnd, expected) in [(2400, vec![false, true]), (4800, vec![false, false, true])] {
             let mut association = Association {
@@ -1730,7 +1771,9 @@ impl Association {
 
                         trace!("[{}] tsn={} has been sacked", self.side, c.tsn);
 
-                        if c.nsent == 1 {
+                        // Use the same once-per-flight Karn cursor as cumulative ACKs.
+                        // ref: webrtc-rs/rtc@b808b74f712ed379312a114b848ede133880d58a/rtc-sctp/src/association/mod.rs:1676 (compare :1618).
+                        if c.nsent == 1 && sna32gte(c.tsn, self.min_tsn2measure_rtt) {
                             self.min_tsn2measure_rtt = self.my_next_tsn;
                             if let Some(since) = &c.since {
                                 let rtt = now.duration_since(*since);

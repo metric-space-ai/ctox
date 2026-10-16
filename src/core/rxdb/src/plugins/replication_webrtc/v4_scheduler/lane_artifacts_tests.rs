@@ -1054,6 +1054,10 @@ async fn z3_p4_turn_loss_rtt() {
     // This benchmark serializes three application roundtrips per probe. A
     // 600-ms bulk path needs a longer observation window, not a runtime timeout.
     let observation_seconds = if rtt_ms == 600 { 600 } else { 180 };
+    // Full acceptance always defaults to 64. A smaller explicitly tagged sample
+    // can diagnose a high-RTT path within a bounded task; it cannot pass the gate.
+    let probes = std::env::var("Z3_PROBE_COUNT").map(|value| value.parse::<u64>().unwrap()).unwrap_or(64);
+    assert!([16,64].contains(&probes));
     tokio::time::timeout(Duration::from_secs(observation_seconds), async {
         let bulk_enabled = std::env::var("Z3_TURN_BULK").as_deref() == Ok("1");
         let server: std::net::SocketAddr = std::env::var("Z3_TURN_LISTENER").unwrap().parse().unwrap();
@@ -1097,7 +1101,7 @@ async fn z3_p4_turn_loss_rtt() {
             count
         });
         let mut latency = Vec::new(); let mut effects_a=Vec::new(); let mut effects_b=Vec::new();
-        for id in 0..64u64 {
+        for id in 0..probes {
             pair.source.send(Lane::Commands,WireSeq(id),&id.to_be_bytes(),Some(Arc::new(Authorized))).await.unwrap();
             pair.target.send(Lane::Commands,WireSeq(id),&id.to_be_bytes(),Some(Arc::new(Authorized))).await.unwrap();
             for (incoming,effects) in [(&mut ac,&mut effects_a),(&mut bc,&mut effects_b)] {
@@ -1125,13 +1129,13 @@ async fn z3_p4_turn_loss_rtt() {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         }).await.expect("TURN application delivery acknowledgements missing");
-        assert_eq!(effects_a,(0..64u64).collect::<Vec<_>>());assert_eq!(effects_b,effects_a);
+        assert_eq!(effects_a,(0..probes).collect::<Vec<_>>());assert_eq!(effects_b,effects_a);
         let packets=a.packets.load(Ordering::Relaxed)+b.packets.load(Ordering::Relaxed);
         let drops=a.drops.load(Ordering::Relaxed)+b.drops.load(Ordering::Relaxed);
         assert!(drops>0,"loss shaper must drop actual network datagrams");
         latency.sort_by(f64::total_cmp);let p95=latency[(latency.len()*95/100).min(latency.len()-1)];
         let p99=latency[(latency.len()*99/100).min(latency.len()-1)];
         pair.close().await;
-        eprintln!("Z3_P4_TURN {}",serde_json::json!({"scenario":3,"relay_only":true,"candidates_a":candidates_a,"candidates_b":candidates_b,"shim":"UDP at TURN control legs","nominal_rtt_ms":rtt_ms,"drop_every":100,"datagrams":packets,"dropped_datagrams":drops,"sent":128,"explicit_send_results":128,"delivery_acknowledged":128,"lost":0,"duplicated":0,"control_p95_ms":p95,"control_p99_ms":p99,"control_roundtrip_ms":latency,"bulk_enabled":bulk_enabled,"bulk_bytes":bulk_sent*16_000,"bulk_seconds":bulk_seconds,"bulk_mb_s":bulk_sent as f64*16_000.0/bulk_seconds/1_000_000.0}));
+        eprintln!("Z3_P4_TURN {}",serde_json::json!({"scenario":3,"relay_only":true,"candidates_a":candidates_a,"candidates_b":candidates_b,"shim":"UDP at TURN control legs","nominal_rtt_ms":rtt_ms,"drop_every":100,"datagrams":packets,"dropped_datagrams":drops,"probes":probes,"full_workload":probes==64,"sent":2*probes,"explicit_send_results":2*probes,"delivery_acknowledged":2*probes,"lost":0,"duplicated":0,"control_p95_ms":p95,"control_p99_ms":p99,"control_roundtrip_ms":latency,"bulk_enabled":bulk_enabled,"bulk_bytes":bulk_sent*16_000,"bulk_seconds":bulk_seconds,"bulk_mb_s":bulk_sent as f64*16_000.0/bulk_seconds/1_000_000.0}));
     }).await.expect("TURN loss RTT fixture deadline");
 }
