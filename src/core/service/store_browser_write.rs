@@ -28,6 +28,9 @@ impl BrowserWrite {
         tx: &rusqlite::Transaction<'_>,
         participant: &str,
     ) -> rusqlite::Result<sync_rights::RightsSnapshot> {
+        self.admission
+            .ensure_current()
+            .map_err(|_| sql_invalid("browser owner retired"))?;
         if participant != self.peer.device || self.peer.expires <= Instant::now() {
             return Err(sql_invalid("expired or foreign browser writer"));
         }

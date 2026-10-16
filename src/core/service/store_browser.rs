@@ -272,11 +272,15 @@ impl BrowserAdmission {
         peers.insert(transport_peer, binding);
         Ok(authorized)
     }
-    pub(super) fn peer(&self, peer: &str) -> Result<Arc<BrowserPeer>, StoreError> {
+    pub(super) fn ensure_current(&self) -> Result<(), StoreError> {
         self.inputs
             .upgrade()
             .ok_or(StoreError::Closed)?
             .instance_signer()?;
+        Ok(())
+    }
+    pub(super) fn peer(&self, peer: &str) -> Result<Arc<BrowserPeer>, StoreError> {
+        self.ensure_current()?;
         self.peers
             .lock()
             .map_err(|_| StoreError::Closed)?

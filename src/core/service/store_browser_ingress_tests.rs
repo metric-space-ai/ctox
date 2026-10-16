@@ -95,15 +95,35 @@ async fn write_fixture() -> anyhow::Result<(
         ["notes".to_owned()].into(),
         &serde_json::json!({
             "row_filters":{"notes":{"op":"eq","path":"/owner","value":{"kind":"actor_id"}}},
-            "write_guard":{"notes":{"command_only_fields":["locked"]}}
+            "write_guard":{"notes":{"command_only_fields":["locked"]}},
+            "foreign_collections":{"business_commands":{"owner_app":"ctox-platform","ops":["read","write"]}},
+            "command_rights":{"notes.echo":{"roles":["founder"]}}
         }),
     )
     .map_err(anyhow::Error::msg)?;
+    let platform = sync_rights::manifest_rules::ManifestRules::from_manifest(
+        "ctox-platform",
+        "1",
+        ["business_commands".to_owned()].into(),
+        &serde_json::json!({"exports":{"business_commands":["read","write"]}}),
+    )
+    .map_err(anyhow::Error::msg)?;
+    // The canonical fixture user is founder, whose imported defaults are
+    // read-only. Grant this synthetic actor's role only these test mutations
+    // through the real Store authority; never widen production defaults.
+    let mut grants = crate::business_os::policy::base_release_rights(&collections);
+    for grant in &mut grants {
+        if grant.role == "founder"
+            && matches!(grant.collection.as_str(), "notes" | "business_commands")
+        {
+            grant.ops.extend([
+                sync_rights::Operation::Write,
+                sync_rights::Operation::Delete,
+            ]);
+        }
+    }
     authority
-        .replace(
-            crate::business_os::policy::base_release_rights(&collections),
-            vec![manifest],
-        )
+        .replace(grants, vec![manifest, platform])
         .await
         .map_err(anyhow::Error::msg)?;
     let context = build(&fg.inputs, &user).await?;
@@ -142,7 +162,10 @@ async fn browser_write_receipt_requires_real_commit_and_replay_uses_same_revisio
         .await?
         .unwrap()
         .map_err(|_| anyhow::anyhow!("receipt failed"))?;
-    assert_eq!(receipt["status"], "accepted", "real browser write rejected");
+    assert_eq!(
+        receipt["status"], "accepted",
+        "real browser write rejected: {receipt}"
+    );
     let (document, ops): (String, u64) = fg
         .inputs
         .sync
@@ -179,13 +202,49 @@ async fn browser_write_receipt_requires_real_commit_and_replay_uses_same_revisio
         .unwrap()
         .map_err(|_| anyhow::anyhow!("replay receipt"))?;
     assert_eq!(replay, receipt, "replay minted another result");
+    let mut command = request(
+        2,
+        "queued-command",
+        serde_json::json!({"id":"queued-command","app_id":"notes-app","type":"notes.echo","actor_id":"alice","created_at":chrono::Utc::now().to_rfc3339(),"status":"queued","payload":{}}),
+    );
+    command["collection"] = serde_json::json!("business_commands");
+    let command_op = command["op_id"].clone();
+    source
+        .write(&peer, command)
+        .await
+        .map_err(|_| anyhow::anyhow!("command intent failed"))?;
+    let command_result = tokio::time::timeout(Duration::from_secs(2), results.next())
+        .await?
+        .unwrap()
+        .map_err(|_| anyhow::anyhow!("command receipt"))?;
+    assert_eq!(command_result["op_id"], command_op);
+    assert_eq!(
+        command_result["status"], "accepted",
+        "command did not pass current dispatch policy: {command_result}"
+    );
+    let projection: String = fg
+        .inputs
+        .sync
+        .readers
+        .read(|tx| {
+            tx.query_row(
+                "SELECT status FROM _command_projections WHERE command_id='queued-command'",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .await?;
+    assert_eq!(
+        projection, "queued",
+        "receipt preceded committed command intent"
+    );
     fg.inputs.sync.writer.submit(ctox_store::WriteJob::new(Default::default(),|tx| {
         let table:String=tx.query_row("SELECT table_name FROM _collections WHERE name='notes'",[],|r|r.get(0))?;
         // Deferred FK fails at COMMIT, after P8 has constructed its real result.
         tx.execute_batch(&format!("CREATE TABLE c_c10_parent(id INTEGER PRIMARY KEY); CREATE TABLE c_c10_child(id INTEGER REFERENCES c_c10_parent(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER c10_abort AFTER INSERT ON \"{table}\" BEGIN INSERT INTO c_c10_child VALUES(1); END"))?;Ok(())
     }))?.await?;
     let failed = request(
-        2,
+        3,
         "rolled-back",
         serde_json::json!({"id":"rolled-back","owner":"alice","title":"never committed"}),
     );
