@@ -102,7 +102,12 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
   const timer=setTimeout(()=>p.kill('SIGKILL'),180000);
   const code=await new Promise((r,j)=>{p.once('exit',r);p.once('error',j);});const exitedAtMs=Date.now();clearTimeout(timer);
   if(observer){await new Promise(r=>{if(observer.exitCode!==null)r();else observer.once('exit',r);});holderTrap('rollback-exit-'+code);}
-  calls.push({args,executable,executableSha256,startedAtMs:at,exitedAtMs,durationMs:exitedAtMs-at,code});if(code!==0&&!allowFailure)throw Error('Real installer CLI failed: '+args.join(' ')+' exit '+code);return calls.at(-1);
+  const log=join(output,'installer-'+calls.length+'.log');
+  // Persist only this fixed guard diagnosis, never arbitrary runtime/credential output.
+  const coreContextMessage='synchronous Core caller must use run_core_sync or run_core_blocking';
+  const failure=code!==0&&fs.readFileSync(log,'utf8').includes(coreContextMessage)
+   ?{guard:'Core-Kontext-Guard',code:'CoreSyncError::Required',message:coreContextMessage}:undefined;
+  calls.push({args,executable,executableSha256,startedAtMs:at,exitedAtMs,durationMs:exitedAtMs-at,code,log,failure});if(code!==0&&!allowFailure)throw Error('Real installer CLI failed: '+args.join(' ')+' exit '+code);return calls.at(-1);
  };
  const record={before:{revision:before.revision,binarySha256:before.binarySha256},after:{revision:after.revision,binarySha256:after.binarySha256},stateRoot,archive,archiveSha256,canonicalReleasePackage:!!after.package,calls,serviceCalls,requests,resumeRolledBack,installerExecuted:false,migrationExecuted:false};
  const readback=phase=>{
