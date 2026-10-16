@@ -121,6 +121,7 @@ signal.signal(signal.SIGTERM, stopped)
 signal.signal(signal.SIGINT, stopped)
 parser=argparse.ArgumentParser()
 parser.add_argument('--mutations', action='store_true')
+parser.add_argument('--skip-root', action='store_true', help='reuse root evidence and run only the process/signature checks')
 options=parser.parse_args()
 source_paths = [
     'src/core/service/store_startup.rs', 'src/core/service/store_native.rs', 'src/core/secrets.rs',
@@ -128,6 +129,7 @@ source_paths = [
     'src/core/business_os/app_platform/runtime_host/authority.rs', 'src/core/app_runtime/lib.rs',
     'src/apps/business-os/kernel/transport-webrtc.mjs', 'src/apps/business-os/kernel/kernel.mjs',
     'src/core/store/manifest_rules.rs', 'src/core/store/cas/mod.rs',
+    'src/core/app_runtime/worker.mjs',
     *[str(p.relative_to(ROOT)) for p in HERE.glob('*') if p.is_file()],
 ]
 (OUT/'source-binding.json').write_text(json.dumps({
@@ -174,39 +176,48 @@ try:
         run(test,[appbinary,test,'--nocapture','--test-threads=1'],60)
     run('p6_process_old_space_heap_limit_is_enforced',[appbinary,'p6_process_old_space_heap_limit_is_enforced','--nocapture','--test-threads=1'],60)
     cargo=['cargo','test','--locked','--jobs','2','-p','ctox','--bin','ctox','--features','app-runtime-node','--no-run','--message-format=json']
-    if run('root-build',cargo):
-        raise RuntimeError('root test build unverified')
-    binary=binary_from_log('root-build','ctox')
-    for test, expected, timeout in [
-        ('p6_identity_concurrent_creators_restart_and_corrupt_store',0,120),
-        ('p6_identity_two_process_first_start_has_one_stored_key',0,120),
-        ('p6_signing_errors_do_not_echo_input_key_material',0,30),
-        ('p6_signing_identity_cannot_implement_debug',0,30),
-        ('p6_noncanonical_input_cannot_reach_instance_signing',101,30),
-        ('p6_revocation_in_writer_transaction_prevents_effect',0,30),
-        ('p6_manifest_isolates_foreign_collection_read_and_write',0,30),
-        ('p6_invalid_release_signature_never_admits_document_effect',0,30),
-        ('p6_blob_bytes_require_digest_size_and_private_cas',0,30),
-        ('p6_core_only_handler_has_native_origin_and_rejects_ui',101,180),
-        ('foreground_retains_real_native_authority_after_sixty_seconds_idle',0,180),
-    ]:
-        run(test,[binary,test,'--nocapture','--test-threads=1'],timeout,expected)
+    if not options.skip_root:
+        if run('root-build',cargo):
+            raise RuntimeError('root test build unverified')
+        binary=binary_from_log('root-build','ctox')
+        for test, expected, timeout in [
+            ('p6_identity_concurrent_creators_restart_and_corrupt_store',0,120),
+            ('p6_identity_two_process_first_start_has_one_stored_key',0,120),
+            ('p6_signing_errors_do_not_echo_input_key_material',0,30),
+            ('p6_signing_identity_cannot_implement_debug',0,30),
+            ('p6_noncanonical_input_cannot_reach_instance_signing',101,30),
+            ('p6_revocation_in_writer_transaction_prevents_effect',0,30),
+            ('p6_manifest_isolates_foreign_collection_read_and_write',0,30),
+            ('p6_invalid_release_signature_never_admits_document_effect',0,30),
+            ('p6_blob_bytes_require_digest_size_and_private_cas',0,30),
+            ('p6_core_only_handler_has_native_origin_and_rejects_ui',101,180),
+            ('foreground_retains_real_native_authority_after_sixty_seconds_idle',0,180),
+        ]:
+            run(test,[binary,test,'--nocapture','--test-threads=1'],timeout,expected)
 
     if options.mutations:
         process=ROOT/'src/core/app_runtime/lib.rs'
         process_baseline=process.read_text()
+        worker=ROOT/'src/core/app_runtime/worker.mjs'
+        worker_baseline=worker.read_bytes()
         old='--max-old-space-size=256'
         assert process_baseline.count(old)==1
         change('src/core/app_runtime/lib.rs',old,'--max-old-space-size=512','heap-budget')
         try:
+            # The worker independently attests the exact heap flag. Raise both
+            # guards so this mutation reaches allocation, rather than failing setup.
+            change('src/core/app_runtime/worker.mjs',old,'--max-old-space-size=512','heap-attestation')
             if run('mutation-heap-build',appcargo)==0:
                 mutated=binary_from_log('mutation-heap-build','ctox_app_runtime')
                 run('mutation-heap-red',[mutated,'p6_process_old_space_heap_limit_is_enforced','--nocapture','--test-threads=1'],60,101)
         finally:
             process.write_text(process_baseline)
+            worker.write_bytes(worker_baseline)
         if run('restored-heap-build',appcargo)==0:
             restored=binary_from_log('restored-heap-build','ctox_app_runtime')
             run('restored-heap',[restored,'p6_process_old_space_heap_limit_is_enforced','--nocapture','--test-threads=1'],60)
+        if options.skip_root:
+            raise SystemExit(1 if any(r['exit']!=r['expected'] for r in RECORDS) else 0)
         codec='src/core/business_os/app_platform/runtime_host/codec.rs'
         secrets='src/core/secrets.rs'
         auth='src/core/sync/src/authority/auth.rs'
