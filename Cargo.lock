@@ -2472,6 +2472,7 @@ dependencies = [
  "ctox-sqlserver-adapter",
  "ctox-store",
  "ctox-sync",
+ "ctox-toolhub",
  "ctox-transfers",
  "ctox-utils-absolute-path",
  "ctox-voxtral-4b-tts-2603",
@@ -3454,6 +3455,20 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "url",
+]
+
+[[package]]
+name = "ctox-toolhub"
+version = "0.1.0"
+source = "git+https://github.com/metric-space-ai/ctox?rev=1b84900ce0b6a63e568d1ba3255d1ce651d343ec#1b84900ce0b6a63e568d1ba3255d1ce651d343ec"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
  "url",
 ]
 

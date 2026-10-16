@@ -14,6 +14,20 @@ use rusqlite::Transaction;
 /// app policy and actual P9 executor fence. Retain external execution authority
 /// for the entire invocation; check it again in the completion writer job.
 /// No permissive implementation or cached caller `clean` boolean is provided.
+/// Core-only typed dispatcher. It is never installed as a V3 auxiliary wire
+/// method, and receives the committed document rather than a caller envelope.
+pub type NativeCommandExecutor = Arc<
+    dyn Fn(
+            String,
+            String,
+            NativeCommand,
+            Arc<dyn NativeCommandAuthority>,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Value, CommandError>> + Send>,
+        > + Send
+        + Sync,
+>;
+
 pub trait NativeCommandAuthority: Send + Sync + 'static {
     fn with_current(
         &self,
@@ -32,6 +46,37 @@ pub trait NativeCommandAuthority: Send + Sync + 'static {
         capability: &str,
         effect: &mut dyn FnMut() -> RxResult<()>,
     ) -> RxResult<()>;
+}
+struct BoundNativeAuthority {
+    core: Arc<dyn NativeCommandAuthority>,
+    peer: Arc<dyn WebRTCPublicationGuard>,
+}
+impl NativeCommandAuthority for BoundNativeAuthority {
+    fn with_current(
+        &self,
+        command: &NativeCommand,
+        identity: &str,
+        capability: &str,
+        effect: &mut dyn FnMut() -> RxResult<()>,
+    ) -> RxResult<()> {
+        self.core
+            .with_current(command, identity, capability, &mut || {
+                self.peer.with_current(effect)
+            })
+    }
+    fn with_completion(
+        &self,
+        tx: &Transaction<'_>,
+        command: &NativeCommand,
+        identity: &str,
+        capability: &str,
+        effect: &mut dyn FnMut() -> RxResult<()>,
+    ) -> RxResult<()> {
+        self.core
+            .with_completion(tx, command, identity, capability, &mut || {
+                self.peer.with_current(effect)
+            })
+    }
 }
 impl<P> RegisteredAuxiliaryRequest<P> {
     /// E25 has a guarded command completion rather than V3's unguarded error
@@ -70,14 +115,65 @@ impl WebRTCPublicationGuard for ExistingPeerAuthority {
 /// Opaque result: the native value cannot be extracted without the retained
 /// publication + executor checks. Consume inside the ONE writer transaction.
 pub struct PendingNativeCompletion {
-    command: NativeCommand,
-    result: Result<Value, CommandError>,
-    publication: Arc<dyn WebRTCPublicationGuard>,
-    authority: Arc<dyn NativeCommandAuthority>,
-    peer_identity: String,
-    capability: String,
+    pub(super) command: NativeCommand,
+    pub(super) result: Result<Value, CommandError>,
+    pub(super) publication: Arc<dyn WebRTCPublicationGuard>,
+    pub(super) authority: Arc<dyn NativeCommandAuthority>,
+    pub(super) peer_identity: String,
+    pub(super) capability: String,
+    pub(super) linked: Option<Box<PendingNativeCompletion>>,
+    pub(super) canonical_replay: bool,
+}
+struct ResultFilesBatch(std::collections::HashMap<String, Arc<dyn ResultFiles>>);
+impl ResultFiles for ResultFilesBatch {
+    fn put_json(
+        &self,
+        tx: &Transaction<'_>,
+        command: &NativeCommand,
+        bytes: &[u8],
+    ) -> Result<routes::FileRef, CommandError> {
+        use sha2::Digest;
+        let hash = format!("{:x}", sha2::Sha256::digest(bytes));
+        self.0
+            .get(&hash)
+            .ok_or_else(|| routes::error("invalid", "files_batch_digest"))?
+            .put_json(tx, command, bytes)
+    }
 }
 impl PendingNativeCompletion {
+    /// A control result and the opening session update can have different DTO
+    /// bytes. Stage BOTH before entering the writer; each files row still shares
+    /// the completion transaction. No CAS I/O is performed by publish().
+    pub async fn stage_all_files<F, Fut>(
+        &self,
+        mut stage: F,
+    ) -> Result<Option<Arc<dyn ResultFiles>>, CommandError>
+    where
+        F: FnMut(NativeCommand, Vec<u8>) -> Fut,
+        Fut: std::future::Future<Output = Result<Arc<dyn ResultFiles>, CommandError>>,
+    {
+        use sha2::Digest;
+        let mut sinks = std::collections::HashMap::new();
+        let mut current = Some(self);
+        while let Some(pending) = current {
+            if let Ok(value) = &pending.result {
+                if let Some(bytes) = routes::result_file_bytes(&pending.command, value.clone())? {
+                    let hash = format!("{:x}", sha2::Sha256::digest(&bytes));
+                    let sink = pending
+                        .stage_files(|command, bytes| stage(command, bytes))
+                        .await?
+                        .ok_or_else(|| routes::error("invalid", "files_batch_missing"))?;
+                    sinks.insert(hash, sink);
+                }
+            }
+            current = pending.linked.as_deref();
+        }
+        if sinks.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(Arc::new(ResultFilesBatch(sinks))))
+        }
+    }
     /// Stage verified result bytes through the Core's existing Transfer-CAS
     /// service, outside the writer. The returned adapter must only attach files
     /// metadata in publish(); it must not do file/network I/O on that writer.
@@ -131,6 +227,15 @@ impl PendingNativeCompletion {
         tx.execute_batch("SAVEPOINT e25_completion")
             .map_err(|_| new_rx_error("E25_TRANSACTION", None))?;
         let attempted = (|| {
+            if self.canonical_replay {
+                if let Ok(value) = &self.result {
+                    if routes::is_canonical_completion(tx, &self.command, value.clone())
+                        .map_err(|_| new_rx_error("E25_CANONICAL_REPLAY", None))?
+                    {
+                        return Ok(());
+                    }
+                }
+            }
             let mut called = false;
             self.authority.with_completion(
                 tx,
@@ -164,6 +269,9 @@ impl PendingNativeCompletion {
             if !called {
                 return Err(new_rx_error("E25_PUBLICATION_NOT_RUN", None));
             }
+            if let Some(linked) = self.linked {
+                linked.publish(tx, files, persist)?;
+            }
             Ok(())
         })();
         let finish = if attempted.is_ok() {
@@ -177,6 +285,19 @@ impl PendingNativeCompletion {
     }
 }
 impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
+    pub fn register_native_command_executor(
+        &self,
+        method: &str,
+        executor: NativeCommandExecutor,
+    ) -> RxResult<()> {
+        if !routes::resolve(method).is_ok_and(routes::is_command_bus) {
+            return Err(new_rx_error("E25_CORE_ROUTE", None));
+        }
+        self.native_command_executors
+            .lock()
+            .insert(method.into(), executor);
+        Ok(())
+    }
     /// Internal Core executor adapter, NOT a requestNative wire endpoint.
     /// Peer and its capability come from the existing admitted connection. The
     /// authority binding must retain the original command actor/fence across await.
@@ -199,6 +320,67 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
             .filter(|s| !s.is_empty())
             .ok_or_else(|| routes::error("forbidden", "peer_not_admitted"))?;
         let peer_identity = self.connection_handler.peer_identity(&peer);
+        let call = self.session_call(&peer, &capability, &command)?;
+        let params = call.params.clone();
+        let cached = call.cached.clone();
+        let started = std::time::Instant::now();
+        let budget = std::time::Duration::from_millis(routes::timeout_ms(&command));
+        let core_executor = self
+            .native_command_executors
+            .lock()
+            .get(route.method)
+            .cloned();
+        if routes::is_command_bus(route) {
+            let executor = core_executor
+                .ok_or_else(|| routes::error("unavailable", "core_native_handler_missing"))?;
+            let peer_guard: Arc<dyn WebRTCPublicationGuard> = Arc::new(AuxiliaryPublicationGuard {
+                pool: Arc::downgrade(self),
+                peer: peer.clone(),
+                capability: Some(capability.clone()),
+                native: Arc::new(ExistingPeerAuthority),
+            });
+            let scoped: Arc<dyn NativeCommandAuthority> = Arc::new(BoundNativeAuthority {
+                core: authority.clone(),
+                peer: peer_guard.clone(),
+            });
+            let mut admitted = None;
+            authority
+                .with_current(&command, &peer_identity, &capability, &mut || {
+                    if admitted.is_some() {
+                        return Err(new_rx_error("E25_DUPLICATE_START", None));
+                    }
+                    admitted = Some(executor(
+                        peer_identity.clone(),
+                        capability.clone(),
+                        command.clone(),
+                        scoped.clone(),
+                    ));
+                    Ok(())
+                })
+                .map_err(|_| routes::error("forbidden", "command_authority_changed"))?;
+            let native = tokio::time::timeout(
+                budget,
+                admitted.ok_or_else(|| routes::error("forbidden", "command_not_admitted"))?,
+            )
+            .await
+            .map_err(|_| routes::error("expired", "native_request_timeout"))?;
+            let publication = Arc::new(AuxiliaryPublicationGuard {
+                pool: Arc::downgrade(self),
+                peer,
+                capability: Some(capability.clone()),
+                native: Arc::new(ExistingPeerAuthority),
+            });
+            return Ok(PendingNativeCompletion {
+                command,
+                result: native,
+                publication,
+                authority,
+                peer_identity,
+                capability,
+                linked: None,
+                canonical_replay: false,
+            });
+        }
         let installed = self
             .auxiliary_request_handlers
             .lock()
@@ -220,14 +402,22 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
                     peer.clone(),
                     peer_identity.clone(),
                     capability.clone(),
-                    vec![command.payload.clone()],
+                    vec![params.clone()],
                 ));
                 Ok(())
             })
             .map_err(|_| routes::error("forbidden", "command_authority_changed"))?;
-        let answer = future
-            .ok_or_else(|| routes::error("forbidden", "command_not_admitted"))?
-            .await;
+        let future = future.ok_or_else(|| routes::error("forbidden", "command_not_admitted"))?;
+        let answer = if let Some(value) = cached {
+            Ok(AuxiliaryAnswer {
+                result: value,
+                publication: None,
+            })
+        } else {
+            tokio::time::timeout(budget, future)
+                .await
+                .map_err(|_| routes::error("expired", "native_request_timeout"))?
+        };
         let (result, native) = match answer {
             Ok(answer) => (
                 Ok(answer.result),
@@ -244,17 +434,27 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         };
         let publication = Arc::new(AuxiliaryPublicationGuard {
             pool: Arc::downgrade(self),
-            peer,
+            peer: peer.clone(),
             capability: Some(capability.clone()),
             native,
         });
-        Ok(PendingNativeCompletion {
+        let mut pending = PendingNativeCompletion {
             command,
             result,
             publication,
             authority,
             peer_identity,
             capability,
-        })
+            linked: None,
+            canonical_replay: false,
+        };
+        self.attach_session_result(
+            peer,
+            call,
+            &mut pending,
+            budget.saturating_sub(started.elapsed()),
+        )
+        .await?;
+        Ok(pending)
     }
 }

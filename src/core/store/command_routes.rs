@@ -11,8 +11,14 @@ pub const CONTROL_LANE: u8 = 1;
 pub const INLINE_RESULT_LIMIT: usize = 16 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum RouteBackend {
+    Native,
+    Core,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct Route {
     pub method: &'static str,
+    pub backend: RouteBackend,
     pub handler: &'static str,
     pub streaming: bool,
     pub lane: u8,
@@ -24,9 +30,18 @@ macro_rules! route {
     ($method:literal, $handler:literal, $streaming:literal) => {
         Route {
             method: $method,
+            backend: RouteBackend::Native,
             handler: $handler,
             streaming: $streaming,
             lane: CONTROL_LANE,
+        }
+    };
+}
+macro_rules! core_route {
+    ($method:literal,$handler:literal) => {
+        Route {
+            backend: RouteBackend::Core,
+            ..route!($method, $handler)
         }
     };
 }
@@ -66,7 +81,7 @@ pub const ROUTES: &[Route] = &[
         "ctox.outbound.sellify_lookup.v1",
         "src/core/business_os/store_outbound_commands.rs:1673"
     ),
-    route!(
+    core_route!(
         "ctox.plan.step.retry",
         "src/core/business_os/command_plane.rs:1734"
     ),
@@ -74,203 +89,203 @@ pub const ROUTES: &[Route] = &[
         "ctox.workjet.calendar.connect.v1",
         "src/core/business_os/mcp_workjet_calendar_connect.rs:1"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.computer.assign",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.computer.endpoint.disable",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.computer.endpoint.upsert",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.computer.list",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.computer.ssh_key.ensure",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.computer.unassign",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.exit_model.read",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.exit_model.refresh",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.exit_model.submit",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.jour_fixe.comment.add",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.jour_fixe.meeting.end",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.jour_fixe.meeting.read",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.jour_fixe.meeting.start",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.jour_fixe.todos.confirm",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.jour_fixe.todos.revise",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.jour_fixe.transcript.append",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.presentation.canvas.save",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.presentation.read",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.project.chat.create",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.project.init",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.project.kpis.configure",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.project.kpis.read",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.project.kpis.refresh",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.project.list",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.project.supervisor.bind",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.project.supervisor.route.capabilities.v1",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.project.supervisor.route.capabilities.v2",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.project.supervisor.route.read.v1",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.project.supervisor.route.read.v2",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.project.supervisor.turn.cancel",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.project.supervisor.turn.capabilities",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.project.supervisor.turn.input",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.project.supervisor.turn.submit",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.project.supervisor.turn.watch",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.project.upsert",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.project.worker.add",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.providers.account.enable",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.providers.account.remove",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.providers.adopt_native",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.providers.list",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.providers.models.exclude",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.providers.models.select",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.providers.observe_native",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.session.create",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.session.list",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.session.transfer.abort",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.session.transfer.pause_ack",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.session.transfer.start",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.session.transfer.status",
         "src/core/business_os/command_plane.rs:1734"
     ),
-    route!(
+    core_route!(
         "ctox.workjet.working_copy.upsert",
         "src/core/business_os/command_plane.rs:1734"
     ),
@@ -300,9 +315,7 @@ pub fn timeout_ms(command: &NativeCommand) -> u64 {
     }
 }
 pub fn is_command_bus(route: Route) -> bool {
-    route
-        .handler
-        .starts_with("src/core/business_os/command_plane.rs:")
+    route.backend == RouteBackend::Core
 }
 pub fn resolve(method: &str) -> Result<Route, CommandError> {
     ROUTES
@@ -609,3 +622,50 @@ fn contains_inline_audio(v: &Value) -> bool {
 #[cfg(test)]
 #[path = "command_routes_tests.rs"]
 mod tests;
+
+/// Derive terminal replay equality from the ONE canonical writer snapshot.
+/// This does not grant a new effect or publication. A producer/finish race may
+/// observe an already committed identical opening result after its lease was
+/// retired; that existing terminal update is a no-op, not a second write.
+pub fn is_canonical_completion(
+    tx: &Transaction<'_>,
+    command: &NativeCommand,
+    native: Value,
+) -> rusqlite::Result<bool> {
+    let registered: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='_collections')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !registered {
+        return Ok(false);
+    }
+    let Some(doc) = super::command::command_document(tx, &command.command_id)? else {
+        return Ok(false);
+    };
+    let Ok(completion) = prepare_completion(command, native.clone()) else {
+        return Ok(false);
+    };
+    if !["done", "failed", "cancelled"].contains(&completion.status.as_str()) {
+        return Ok(false);
+    }
+    let mut result = completion.result;
+    if let Ok(Some(bytes)) = result_file_bytes(command, native) {
+        result = Some(json!({"ref":format!("{:x}",Sha256::digest(bytes))}));
+    }
+    Ok(doc["id"] == command.command_id
+        && doc["type"] == command.kind
+        && doc["actor_id"] == command.actor_id
+        && doc["app_id"] == command.app_id
+        && doc["payload"] == command.payload
+        && doc["status"] == completion.status
+        && doc.get("result") == result.as_ref()
+        && doc.get("error")
+            == completion
+                .error
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+                .as_ref())
+}

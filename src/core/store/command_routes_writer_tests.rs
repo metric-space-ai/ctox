@@ -133,3 +133,61 @@ async fn e25_workjet_inventory_is_registered_before_write() {
     readers.shutdown().await.unwrap();
     writer.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn e25_session_terminal_replay_is_derived_from_the_same_canonical_snapshot() {
+    let (_dir, writer, readers, ingress) = commands().await;
+    let mut queued = command(1, 61, None, "queued", None, Value::Null);
+    queued.write.body.as_mut().unwrap()["type"] = json!("ctox.workjet.grok.v1");
+    queued.write.body.as_mut().unwrap()["actor_id"] = json!("alice");
+    let original = queued.write.body.clone().unwrap();
+    let accepted = send(&ingress, "alice", queued, NOW).await;
+    assert_eq!(accepted.status, WriteStatus::Accepted);
+    let lease = ingress
+        .claim_command("executor-a".into(), "command-1".into(), None, NOW)
+        .await
+        .unwrap()
+        .unwrap();
+    let result = json!({"value":"canonical result"});
+    let mut done = command(
+        1,
+        62,
+        accepted.rev,
+        "done",
+        Some(lease.fence),
+        result.clone(),
+    );
+    done.write.body.as_mut().unwrap()["type"] = original["type"].clone();
+    done.write.body.as_mut().unwrap()["actor_id"] = json!("alice");
+    assert_eq!(
+        send(&ingress, "executor-a", done, NOW).await.status,
+        WriteStatus::Accepted
+    );
+    readers
+        .read(move |tx| {
+            let c = routes::NativeCommand {
+                command_id: "command-1".into(),
+                kind: original["type"].as_str().unwrap().into(),
+                payload: original["payload"].clone(),
+                app_id: "fixture".into(),
+                actor_id: "alice".into(),
+            };
+            assert!(routes::is_canonical_completion(tx, &c, result.clone())?);
+            let mut foreign = c.clone();
+            foreign.actor_id = "mallory".into();
+            assert!(
+                !routes::is_canonical_completion(tx, &foreign, result.clone())?,
+                "a matching result is not an actor grant"
+            );
+            assert!(!routes::is_canonical_completion(
+                tx,
+                &c,
+                json!({"value":"different"})
+            )?);
+            Ok(())
+        })
+        .await
+        .unwrap();
+    readers.shutdown().await.unwrap();
+    writer.shutdown().await.unwrap();
+}

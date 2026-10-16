@@ -407,7 +407,7 @@ pub(super) fn transition(from: &str, to: &str) -> bool {
         _ => false,
     }
 }
-fn command_document(tx: &Transaction<'_>, id: &str) -> rusqlite::Result<Option<Value>> {
+pub(super) fn command_document(tx: &Transaction<'_>, id: &str) -> rusqlite::Result<Option<Value>> {
     let Some(c) = crate::schema::active_collection(tx, "business_commands")? else {
         return Ok(None);
     };

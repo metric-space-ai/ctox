@@ -9,6 +9,35 @@ pub(crate) fn register_v4_native_command_handlers(
     root: &Path,
 ) -> rxdb::rx_error::RxResult<()> {
     let root = root.to_path_buf();
+    for route in ctox_store::change_log::subscription::write_contract::routes::ROUTES
+        .iter()
+        .copied()
+        .filter(|r| {
+            ctox_store::change_log::subscription::write_contract::routes::is_command_bus(*r)
+        })
+    {
+        let core_root = root.clone();
+        pool.register_native_command_executor(
+            route.method,
+            Arc::new(move |peer, token, command, authority| {
+                let root = core_root.clone();
+                Box::pin(async move {
+                    tokio::task::spawn_blocking(move || {
+                        crate::business_os::command_plane::execute_v4_registered_command(
+                            &root, command, &peer, &token, authority,
+                        )
+                    })
+                    .await
+                    .map_err(|_| {
+                        ctox_store::change_log::subscription::write_contract::routes::error(
+                            "unavailable",
+                            "native_executor_unavailable",
+                        )
+                    })?
+                })
+            }),
+        )?;
+    }
     let browser_live_root = root.clone();
     let browser_live_database = Arc::clone(database);
     pool.register_auxiliary_request_handler(
@@ -48,6 +77,24 @@ pub(crate) fn register_v4_native_command_handlers(
     crate::business_os::rxdb_peer_dictation::register(pool, &root)?;
     crate::business_os::rxdb_peer_grok::register(pool, &root)?;
     crate::business_os::rxdb_peer_speech_settings::register(pool, &root)?;
+    let calendar_connect_root = root.clone();
+    pool.register_auxiliary_request_handler(
+        crate::business_os::mcp_channel::WORKJET_CALENDAR_CONNECT_METHOD,
+        Arc::new(move |_peer_identity, capability_token, params| {
+            let root = calendar_connect_root.clone();
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    crate::business_os::mcp_channel::connect_workjet_calendar_webrtc(
+                        &root,
+                        &capability_token,
+                        params,
+                    )
+                })
+                .await
+                .map_err(|_| "token_exchange_failed".to_string())?
+            })
+        }),
+    )?;
     let calendar_root = root.clone();
     pool.register_auxiliary_request_handler(
         crate::business_os::mcp_channel::WORKJET_CALENDAR_READ_METHOD,
