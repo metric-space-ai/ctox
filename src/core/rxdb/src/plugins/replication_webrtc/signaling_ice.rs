@@ -57,10 +57,13 @@ fn parse_servers(value: &Value) -> Option<Vec<RTCIceServer>> {
             }
             // Match the browser's case-insensitive URI acceptance and provide
             // canonical schemes to the native gatherer.
-            let urls = urls.into_iter().map(|url| {
-                let (scheme, rest) = url.split_once(':').expect("validated ICE scheme");
-                format!("{}:{rest}", scheme.to_ascii_lowercase())
-            }).collect();
+            let urls = urls
+                .into_iter()
+                .map(|url| {
+                    let (scheme, rest) = url.split_once(':').expect("validated ICE scheme");
+                    format!("{}:{rest}", scheme.to_ascii_lowercase())
+                })
+                .collect();
             let bounded = |key, max| match entry.get(key) {
                 None => Some(String::new()),
                 Some(Value::String(value)) if value.len() <= max => Some(value.clone()),
