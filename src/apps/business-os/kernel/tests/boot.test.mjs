@@ -8,15 +8,16 @@ import {WebRTCKernelTransport} from '../transport-webrtc.mjs';
 
 const tick=()=>new Promise(r=>setTimeout(r,5));
 const COLLECTIONS=['business_apps','business_app_versions','business_commands','files','shell_preferences','app_user_preferences','app_drafts','notes'];
+const SHELL_COLLECTIONS=COLLECTIONS.filter(c=>c!=='notes');
 const b64url=bytes=>Buffer.from(bytes).toString('base64url');
 function instanceKey(){const {privateKey,publicKey}=generateKeyPairSync('ed25519');return {privateKey,publicKey:publicKey.export({format:'jwk'}).x};}
 const KEY=instanceKey(),FOREIGN=instanceKey();
-function scopeToken(collection,{key=KEY,instance='instance',device='test-device',exp=Math.floor(Date.now()/1000)+600}={}){
- const claims={instance_id:instance,scope_hash:`scope:${collection}`,rights_ver:1,device_id:device,exp};
+function scopeToken(collection,{key=KEY,instance='instance',device='test-device',exp=Math.floor(Date.now()/1000)+600,user='alice',rightsVer='1',collections=collection==='shell'?SHELL_COLLECTIONS:collection==='notes'?['notes']:[]}={}){
+ const claims={instance_id:instance,user_id:user,app_id:collection,scope_hash:`scope:${collection}`,rights_ver:rightsVer,device_id:device,exp,collections:collections.map(c=>({collection:c,gen:1,rights:['read','write'],field_mask_digest:'fixture:all'}))};
  return b64url(Buffer.from(canonicalJson({claims,signature:b64url(sign(null,Buffer.from(SCOPE_DOMAIN+canonicalJson(claims)),key.privateKey))})));
 }
 function context({instanceId='instance',userId='alice',nonce='B',capabilities=[]}={}){
- const hello=offer(instanceId);hello.capabilities=capabilities;hello.scopes_wanted=[...COLLECTIONS];hello.device_proof.nonce=nonce.repeat(43);
+ const hello=offer(instanceId);hello.capabilities=capabilities;hello.scopes_wanted=[...SHELL_COLLECTIONS];hello.device_proof.nonce=nonce.repeat(43);
  return {session:{v2:'untouched'},config:null,designTemplates:[],v4:{instanceId,userId,actor:{id:userId,role:'owner',display_name:'Alice'},
   signaling:{urls:['wss://signal.example/ws'],room:'ctox-v4:instance',peerId:'browser-1',nativePeerId:'native-1',token:'signal-token',iceServers:[{urls:'turn:turn.example:3478',username:'u',credential:'c'}]},
   hello:{offer:hello},packageKeys:[{keyId:'instance-key-1',alg:'Ed25519',publicKey:KEY.publicKey}]}};
@@ -36,12 +37,13 @@ class SignedNativePeer extends FakeNativePeer {
    const hello=decodeHelloFrame(JSON.stringify(p4));this.messages.push(m);
    if(this.reject){this.channels[0].send(JSON.stringify({type:'hello_reject',reason:'authentication_failed',required:'fresh device proof'}));return;}
    const selected=negotiateHello({instance_id:this.instanceId,bootstrap_min:1,bootstrap_max:1,app_api_ver:{min:'4.0',max:'4.0'},capabilities:this.grant,required_capabilities:[],transport:hello.transport},hello);
-   this.channels[0].send(JSON.stringify({type:'hello_ok',protocol_ver:4,instance_id:this.instanceId,...selected,epoch:this.epoch,head_seq:this.head,scope_tokens:hello.scopes_wanted.map(c=>this.tokenFor(c)),rights_ver:'1',core_time_ms:Date.now(),...(this.native?{session_id:this.sessionId,resume_from:this.received.map(String)}:{})}));return;
+   this.channels[0].send(JSON.stringify({type:'hello_ok',protocol_ver:4,instance_id:this.instanceId,...selected,epoch:this.epoch,head_seq:this.head,scope_tokens:[this.tokenFor('shell')],rights_ver:'1',core_time_ms:Date.now(),...(this.native?{session_id:this.sessionId,resume_from:this.received.map(String)}:{})}));return;
   }
   return super.receive(data);
  }
+ async apply(m,lane){if(m.type==='scope.grant.request'){this.messages.push(m);assert.equal(lane,0);return this.send('control',{type:'scope.grant',token:this.tokenFor(m.app_id)});}return super.apply(m,lane);}
  page(collection,docs=[],extra={}){
-  const m={type:'page',instance_id:this.instanceId,key_id:'instance-key-1',participant:'alice',collection,scope_hash:`scope:${collection}`,gen:1,epoch:'1',package_id:`pkg-${Math.random()}`,seq_from:'0',seq_to:this.head,cursor_to:this.head,head_seq:this.head,complete:true,backlog:0,core_sent_at_ms:Date.now(),docs,...extra};
+  const m={type:'page',instance_id:this.instanceId,key_id:'instance-key-1',participant:'alice',collection,scope_hash:`scope:${SHELL_COLLECTIONS.includes(collection)?'shell':collection}`,gen:1,epoch:'1',package_id:`pkg-${Math.random()}`,seq_from:'0',seq_to:this.head,cursor_to:this.head,head_seq:this.head,complete:true,backlog:0,core_sent_at_ms:Date.now(),docs,...extra};
   const sig=extra.sig??[...sign(null,Buffer.from(STREAM_DOMAIN+canonicalJson(m)),this.key.privateKey)];
   return this.send('initial',{...m,sig});
  }
@@ -51,7 +53,8 @@ function harness(peerOpts={}){
  const createPeer=async(address,identity)=>{peerCalls.push({address,identity});const pair=protocolChannels(),peer=new SignedNativePeer(pair.server,{...peerOpts,onSubscribe:async(sub,p)=>{p.subs=(p.subs??0)+1;if(peerOpts.pages?.[sub.collection])await p.page(sub.collection,peerOpts.pages[sub.collection].map(doc=>({id:doc.id,data:doc,seq:p.head,rev:'r'})));if(sub.collection==='notes')await p.page('notes',[{id:peerOpts.docId??'server',data:{id:peerOpts.docId??'server',title:'from core'},seq:p.head,rev:'r'}],peerOpts.pageExtra);}});peers.push(peer);return {channels:pair.client,close:()=>peer.close()};};
  return {peers,peerCalls,createPeer};
 }
-const loaderOptions={storage:'memory',multiTab:false,serviceWorker:false,latencyMs:0};
+let bootSequence=0;
+const loaderOptions={storage:'memory',multiTab:false,serviceWorker:false,latencyMs:0,get dbName(){return `boot-fixture-${process.pid}-${++bootSequence}`;}};
 const shell=()=>({startShell(){},stopShell(){}});
 
 test('launch-context shape is validated with typed reasons',async()=>{
@@ -93,8 +96,8 @@ test('bootV4 hands exactly the launch context to the transport and brings the lo
   assert.deepEqual(boot.transport.options.address,ctx.v4.signaling);assert.equal(typeof boot.transport.options.verifyPackage,'function');
   assert.equal(boot.kernel.identity.device_id,ctx.v4.hello.offer.device_proof.device_id,'device identity from the admitted bootstrap');
   assert.equal(boot.kernel.isLeader,true);assert.equal(boot.kernel.identity?.actor?.id??boot.kernel.actor?.get?.()?.id??'alice','alice');
-  assert.equal(boot.transport.session.instance_id,'instance');assert.deepEqual(boot.transport.session.scope_tokens.length,COLLECTIONS.length);
-  assert.equal((await boot.transport.scope('notes')).scope_hash,'scope:notes');
+  assert.equal(boot.transport.session.instance_id,'instance');assert.deepEqual(boot.transport.session.scope_tokens.length,1);
+  await boot.transport.grantApp('notes');assert.equal((await boot.transport.scope('notes')).scope_hash,'scope:notes');
   await assert.rejects(boot.transport.scope('not_granted'),e=>e.code==='forbidden');
   const api=boot.kernel.appApi('notes','1');
   // A local write makes `notes` a mirrored collection; the leader subscribes it over the authenticated scope.
@@ -123,7 +126,7 @@ test('typed errors: hello rejected, forged scope grant, unsigned page, missing v
  // An unsigned (fixture) or foreign-key page fails closed after hello; nothing is applied.
  for(const pageExtra of [{sig:'test-signature'},{key_id:'unknown-key'},{participant:'mallory'}]){
   const docId=`forged-${Object.keys(pageExtra)[0]}`,h=harness({pageExtra,docId});const boot=await bootV4({fetchImpl:fetchFake([context()]).impl,createPeer:h.createPeer,resolveShell:shell,loaderOptions});
-  try{void boot.kernel.appApi('notes','1').put('notes',{id:'client',title:'local'}).local;for(let n=0;n<200&&!boot.transport.closed;n++)await tick();assert.equal(boot.transport.closed,true);assert.equal(boot.kernel.appApi('notes','1').get('notes',docId).get()??null,null);assert.deepEqual(h.peers[0].errors.filter(e=>!/fixture closed/.test(e.message)),[]);}
+  try{await boot.transport.grantApp('notes');void boot.kernel.appApi('notes','1').put('notes',{id:'client',title:'local'}).local;for(let n=0;n<200&&!boot.transport.closed;n++)await tick();assert.equal(boot.transport.closed,true);assert.equal(boot.kernel.appApi('notes','1').get('notes',docId).get()??null,null);assert.deepEqual(h.peers[0].errors.filter(e=>!/fixture closed/.test(e.message)),[]);}
   finally{await boot.loader.close();for(const p of h.peers)p.close();}
  }
  const noVerifier=context();noVerifier.v4.packageKeys=[];
@@ -170,4 +173,46 @@ test('hello_ok capabilities reach the kernel through transport.capabilities (E43
    if(expected==='failed')assert.equal(state.error,'needs_update:agent.coding.cancel,agent.coding.turn');
   }finally{await boot.loader.close();for(const p of h.peers)p.close();}
  }
+});
+
+
+test('E55 41 apps and 236 collections boot with one Shell token below MAX_HELLO_BYTES; app grants use control',async()=>{
+ const rows=new Map(Array.from({length:41},(_,a)=>[`app${a}`,Array.from({length:a<31?6:5},(_,i)=>`app${a}_c${i}`)]));
+ const pages={business_apps:[...rows].map(([id])=>({id,active_ver:'1'})),business_app_versions:[...rows].map(([id,collections])=>({id:`${id}@1`,app_id:id,app_ver:'1',manifest:{entry:'index.js',files:{},collections:Object.fromEntries(collections.map(c=>[c,{schema:{type:'object',properties:{id:{type:'string'}}}}]))}}))};
+ const h=harness({pages,tokenFor:appId=>scopeToken(appId,{collections:appId==='shell'?SHELL_COLLECTIONS:rows.get(appId)??[]})});
+ const boot=await bootV4({fetchImpl:fetchFake([context()]).impl,createPeer:h.createPeer,loaderOptions:{...loaderOptions,dbName:`ctox-e55-matrix-${process.pid}`}});
+ try{
+  for(let n=0;n<500&&[...rows.keys()].some(id=>boot.kernel.activation.get(id).get()?.state!=='activated');n++)await tick();
+  for(const id of rows.keys())assert.equal(boot.kernel.activation.get(id).get()?.state,'activated',JSON.stringify(boot.kernel.activation.get(id).get()));
+  assert.equal(boot.transport.session.scope_tokens.length,1);
+  const helloBytes=Buffer.byteLength(JSON.stringify(boot.transport.session));assert.ok(helloBytes<=16384);console.log('E55_HELLO_BYTES',helloBytes);
+  assert.equal(h.peers[0].messages.filter(m=>m.type==='scope.grant.request').length,41);
+  assert.equal([...rows.values()].flat().length,236);
+  // Reintroducing all app grants in hello must fail the unchanged pre-negotiation frame limit.
+  const bulk={...boot.transport.session,scope_tokens:[...boot.transport.session.scope_tokens,...[...rows].map(([appId,collections])=>scopeToken(appId,{collections}))]};
+  assert.ok(Buffer.byteLength(JSON.stringify(bulk))>16384);assert.throws(()=>decodeHelloFrame(JSON.stringify(bulk)),/hello <= 16384 bytes/);
+ }finally{await boot.loader.close();for(const p of h.peers)p.close();}
+});
+
+
+test('E55 app grants reject wrong identity/signature and a signed app revocation removes its cached scopes',async()=>{
+ for(const bad of [{device:'other-device'},{key:FOREIGN},{exp:1},{user:'mallory'},{rightsVer:'2'}]){
+  const pages={business_apps:[{id:'notes',active_ver:'1'}],business_app_versions:[{id:'notes@1',app_id:'notes',app_ver:'1',manifest:{files:{},collections:{notes:{schema:{type:'object'}}}}}]};
+  const h=harness({pages,tokenFor:appId=>scopeToken(appId,appId==='shell'?{}:bad)}),boot=await bootV4({fetchImpl:fetchFake([context()]).impl,createPeer:h.createPeer,loaderOptions:{...loaderOptions,dbName:`e55-denied-${Object.keys(bad)[0]}-${process.pid}`}});
+  try{for(let n=0;n<300&&boot.kernel.activation.get('notes').get()?.state!=='failed';n++)await tick();assert.equal(boot.kernel.activation.get('notes').get()?.error,'Collection grant missing');assert.ok(boot.kernel.statusZone.get().some(s=>s.text==='Collection grant missing'));}
+  finally{await boot.loader.close();for(const p of h.peers)p.close();}
+ }
+ const h=harness(),boot=await bootV4({fetchImpl:fetchFake([context()]).impl,createPeer:h.createPeer,loaderOptions});
+ try{
+  const before=h.peers[0].messages.filter(m=>m.type==='scope.grant.request').length;await Promise.all([boot.transport.grantApp('notes'),boot.transport.grantApp('notes')]);assert.equal(h.peers[0].messages.filter(m=>m.type==='scope.grant.request').length,before+1);assert.equal((await boot.transport.scope('notes')).app_id,'notes');
+  // A delivered request may outlive its waiter across a reconnect. Retried signed delivery stays verifiable.
+  await boot.transport.apply({type:'scope.grant',token:scopeToken('notes')},0);
+  assert.equal((await boot.transport.scope('notes')).app_id,'notes');
+  await assert.rejects(boot.transport.apply({type:'scope_revoke',app_id:'notes',rights_ver:'1'},0),e=>e.code==='forbidden'&&e.message==='Revocation signature invalid');
+  // The normal package verifier must reject unsigned revocations.
+  assert.equal((await boot.transport.scope('notes')).app_id,'notes');
+  const revoke={type:'scope_revoke',instance_id:'instance',key_id:'instance-key-1',participant:'alice',app_id:'notes',rights_ver:'1'};
+  await boot.transport.apply({...revoke,sig:[...sign(null,Buffer.from(STREAM_DOMAIN+canonicalJson(revoke)),KEY.privateKey)]},0);
+  await assert.rejects(boot.transport.scope('notes'),e=>e.code==='forbidden'&&e.message==='Collection grant missing');
+ }finally{await boot.loader.close();for(const p of h.peers)p.close();}
 });

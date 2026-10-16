@@ -6,6 +6,7 @@ import { CtoxError } from './values.mjs';
  */
 export class KernelTransport {
   async connect(_identity, _events) {}
+  async grantApp(_appId) { throw new CtoxError('forbidden', 'Collection grant missing'); } // E55: instance-signed app token on the control lane
   async subscribe(_subscription) {} // offline: retain subscription intent without manufacturing pages
   // entry.client_seq is a positive decimal string durably reserved under
   // leader_gen; retry/reload keeps it together with op_id. E14 session IDs

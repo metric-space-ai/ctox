@@ -789,7 +789,13 @@ export function createKernel(opts = {}) {
   async function subscribeCollection(collection,priority='P2') {
     if (!isLeader || closed || !transportConnected) return;
     evicted.delete(collection);
-    const scope = transport.scope ? await transport.scope(collection) : {epoch:opts.epoch??'1',collection,scope_hash:opts.scopeHash??'local',gen:genOf(collection)};
+    let scope;
+    try {scope = transport.scope ? await transport.scope(collection) : {epoch:opts.epoch??'1',collection,scope_hash:opts.scopeHash??'local',gen:genOf(collection)};}
+    catch(error){
+      if(!transport.grantApp || error?.code!=='forbidden')throw error;
+      const base=collection.replace(/@g\d+$/,''),owner=SYSTEM_COLLECTIONS.has(base)?PLATFORM_APP_ID:[...mirror.get('business_apps')?.values()??[]].map(visible).find(d=>versionDoc(d?.id,d?.active_ver)?.manifest?.collections?.[base])?.id;
+      if(!owner)throw error;await transport.grantApp(owner);scope=await transport.scope(collection);
+    }
     expectedScopes.set(collection,scope);
     const cp = await db.get('meta', checkpointKey(scope));
     scopeCursors.set(collection,cp?.cursor_to??'0');
@@ -1123,9 +1129,9 @@ export function createKernel(opts = {}) {
 
     if (!isLeader || closed || isLib(appId)) return; // §16.37: lib:<name> nie eager, nur dateiweise bei SW-Miss
     const prev = activationChains.get(appId) ?? Promise.resolve();
-    const next = prev.then(() => runActivation(appId)).catch((err) => {
+    const next = prev.then(() => runActivation(appId)).catch(async(err) => {
       if (err instanceof StaleLeader) stepDown();
-      else if (!closed) console.error('[ctox-kernel] activation', err);
+      else if (!closed) {await setActivation(appId,{state:'failed',error:err?.message??'Collection grant missing'});zoneReport(appId,{level:'error',code:err?.code??'unavailable',text:err?.message??'Collection grant missing'},'kernel');}
     });
     activationChains.set(appId, next);
     track(next);
@@ -1144,6 +1150,7 @@ export function createKernel(opts = {}) {
     const manifest = vdoc.manifest;
     const superseded = () => visible(mirrorGet('business_apps', appId))?.active_ver !== ver;
     await setActivation(appId, { target_ver: ver, state: 'received', error: null });
+    try{if(typeof transport.grantApp!=='function')throw new CtoxError('forbidden','Collection grant missing');const grant=await transport.grantApp(appId);if(typeof grant!=='string'||!grant)throw new CtoxError('forbidden','Collection grant missing');}catch(error){await setActivation(appId,{target_ver:ver,state:'failed',error:'Collection grant missing'});zoneReport(appId,{level:'error',code:'forbidden',text:'Collection grant missing'},'kernel');return;}
     // fetched: alle Dateien per Hash geprüft (aus „Spur 4“ = transport CAS)
     for(const [path,hash]of Object.entries(manifest.files??{})){
       const cached=await db.get('artifacts',hash);
@@ -2390,6 +2397,8 @@ export function createKernel(opts = {}) {
 
   // ---- Sim-Fassade (Test-Hooks) ----
   const sim = {
+    scopeGrants:()=>cloneValue(fakeCore?.grantMessages??[]),
+    failAppGrant:appId=>fakeCore?.deniedAppGrants.add(appId),
     rejectNext: (reason = 'simulated_rejection') => forward('rejectNext')(reason),
     rejectNextUpload: (reason = {code:'forbidden',reason:'Upload denied'}) => forward('rejectNextUpload')(reason),
     migrateNext: (o = {}) => forward('migrateNext')({ dropFields: o.dropFields ?? [] }),
