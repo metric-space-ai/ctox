@@ -824,6 +824,11 @@ pub(super) fn issue_run_prompt_block(
     if command.module != NEWS_MODULE || command.command_type != NEWS_ISSUE_GENERATE {
         return Ok(None);
     }
+    // A weekly digest (#813) only condenses the week's daily posts; it reads
+    // no sources, so the source/checkpoint contract does not apply.
+    if first_string_field(&command.payload, &["mode"]).as_deref() == Some("weekly_digest") {
+        return Ok(None);
+    }
     let issue_id = first_string_field(&command.payload, &["issue_id"]).unwrap_or_default();
     ensure!(
         valid_record_id(&issue_id),
