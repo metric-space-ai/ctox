@@ -72,7 +72,7 @@ export class MemoryCoreTransport extends KernelTransport {
   /** user = {id, role, permissions}: der Core kennt den Nutzer (Rechte wirken); ohne user prüft der Core keine Rechte. */
   constructor({ namespace = 'test', latencyMs = 5, user = null, everyMs, agentDelayMs, deviceLabel, codingDelayMs } = {}) {
     super(); this.namespace = namespace; this.latencyMs = latencyMs;
-    this.core = coreFor(namespace); this.reject = []; this.migrate = []; this.handlers = new Map(); this.failures = new Map();
+    this.core = coreFor(namespace); this.reject = []; this.rejectUpload = []; this.migrate = []; this.handlers = new Map(); this.failures = new Map();
     if (everyMs !== undefined) this.core.everyMs = everyMs;
     if (agentDelayMs !== undefined) this.core.agentDelayMs = agentDelayMs;
     if (codingDelayMs !== undefined) this.core.codingDelayMs = codingDelayMs;
@@ -148,7 +148,8 @@ export class MemoryCoreTransport extends KernelTransport {
     if (!this.online || this.closed) throw new CtoxError('unavailable', 'Test core offline');
     const previous = this.core.ops.get(entry.op_id); if (previous) return cloneValue(previous);
     const old = this.core.docs.get(this.key(entry.collection,entry.id));
-    let result = this.reject.length ? { status:'rejected', reason:this.reject.shift() } : null;
+    const rejection = this.reject.shift();
+    let result = rejection === undefined ? null : {status:'rejected', ...(typeof rejection === 'object' ? rejection : {reason:rejection})};
     // K-WJ-B2 (E27.2): Befehlstyp ohne veröffentlichte Route → beim Schreiben abgelehnt, nie erst accepted und später failed
     if (!result && entry.collection === 'business_commands' && entry.op === 'put' && entry.body?.status === 'queued' && !(old?.data && !old.deleted) && !this.commandRouteKnown(entry.body)) {
       result = { status: 'rejected', code: 'unknown_command', reason: `unknown_command:${entry.body.type}` };
@@ -157,6 +158,7 @@ export class MemoryCoreTransport extends KernelTransport {
       const code = this.core.runtime.checkWrite(this.currentUser, entry, old);
       if (code) result = typeof code === 'object' ? { status: 'rejected', code: code.code, reason: code.reason } : { status: 'rejected', reason: code };
     }
+    if (!result && entry.expected_revision !== undefined && entry.expected_revision !== old?.rev) result={status:'rejected',code:'revision_conflict',reason:'Expected revision differs from current revision'};
     if (!result && entry.op === 'patch' && (!old || old.deleted)) result={status:'rejected',reason:'not_found'};
     // Doppelter Befehl (gleiche id, neue op): geänderte Absicht → idempotency_conflict; gleiche Absicht → angenommen ohne Rückschritt
     let duplicateCommand = false;
@@ -199,5 +201,5 @@ export class MemoryCoreTransport extends KernelTransport {
   async artifact(hash) { if(!this.core.artifacts.has(hash)) throw new CtoxError('not_found','Artifact missing'); return this.core.artifacts.get(hash); }
   putArtifact(hash, content) { this.core.artifacts.set(hash, content); }
   async blob(ref, range) { const blob=this.core.blobs.get(ref); if(!blob) throw new CtoxError('not_found','Blob missing'); return range === undefined ? blob : blob.slice(range.start, range.end, blob.type); }
-  async upload(ref,blob) { this.core.blobs.set(ref,blob); }
+  async upload(ref,blob) { const failure=this.rejectUpload.shift();if(failure){const e=new CtoxError(failure.code ?? 'forbidden',failure.reason ?? String(failure),{reason:failure.reason ?? String(failure)});e.core_rejection=true;throw e;}this.core.blobs.set(ref,blob); }
 }

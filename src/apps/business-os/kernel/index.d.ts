@@ -99,7 +99,7 @@ export interface CommandHandle {
   cancel(): boolean;
 }
 
-export type CtoxErrorCode = 'invalid' | 'forbidden' | 'not_found' | 'conflict' | 'revoked' | 'expired' | 'quota' | 'unavailable' | 'stale_base' | 'migration_required' | 'locally_modified' | 'token_expired' | 'token_used';
+export type CtoxErrorCode = 'revision_conflict' | 'invalid' | 'forbidden' | 'not_found' | 'conflict' | 'revoked' | 'expired' | 'quota' | 'unavailable' | 'stale_base' | 'migration_required' | 'locally_modified' | 'token_expired' | 'token_used';
 export declare class CtoxError extends Error {
   readonly name: 'CtoxError';
   readonly code: CtoxErrorCode;
@@ -177,10 +177,12 @@ export interface Actor {
   permissions: LiveDoc<string[]>;
 }
 
-export type FileMeta = { id: string; name: string; mime: string; size: number; ref: string; owner_app: string };
+export type FileMeta = { id: string; name: string; mime: string; size: number; ref: string; owner_app: string; state?: 'rejected' };
 export interface FileUploadHandle extends WriteHandle<{ ref: string }> {
   /** sha256 des Inhalts (hex). */
   ref: Promise<string>;
+  /** Resolves on Core acceptance + upload; rejects with CtoxError {code,reason}; rejected file metadata remains locally. */
+  done: Promise<WriteResult & { ref: string }>;
   upload: { progress: LiveDoc<{ sent: number; total: number }> };
 }
 /** §10.2a Nr. 4 + §16.10. Metadaten = Dokumente der Collection `files`. */
@@ -195,7 +197,7 @@ export interface FilesApi {
   /** @deprecated Altform (K-1): Blob aus dem Cache bzw. über Spur 4. */
   get(ref: string): Promise<Blob>;
   /** CAP-3b: put(bytes | {text}, {name, mime}) → {id, ref} nach lokalem Commit; Upload über Spur 4. */
-  put(content: Uint8Array | ArrayBuffer | { text: string }, meta?: { id?: string; name?: string; mime?: string }): Promise<{ id: string; ref: string }>;
+  put(content: Uint8Array | ArrayBuffer | { text: string }, meta?: { id?: string; name?: string; mime?: string }): Promise<{ id: string; ref: string; done: FileUploadHandle['done'] }>;
   /** @deprecated Altform (K-1): Blob mit Upload-Handle. */
   put(blob: Blob, meta?: { id?: string; name?: string; mime?: string }): FileUploadHandle;
   list(): Promise<{ files: FileInfo[] }>;
@@ -220,7 +222,8 @@ export interface CtoxAppApi {
   get<T = any>(collection: string, id: string): LiveDoc<T | null>;
   // Schreiben – lokal sofort, Outbox
   put<T>(collection: string, doc: T & { id: string }): WriteHandle;
-  patch(collection: string, id: string, patch: object): WriteHandle;
+  /** E35: Core writer transaction compares expected_revision; mismatch resolves result as rejected/code revision_conflict. */
+  patch(collection: string, id: string, patch: object, options?: { expected_revision?: string }): WriteHandle;
   remove(collection: string, id: string): WriteHandle;
   // Befehle – Dokument mit gepushtem Status
   /** opts.record_id (§16.19 Nr. 8): optionaler Bezug des Befehls auf einen Datensatz. */
@@ -549,7 +552,9 @@ export interface PublishOptions {
 
 export interface StubSim {
   /** Nächster bestätigter Write wird abgelehnt. */
-  rejectNext(reason?: string): Promise<void>;
+  rejectNext(reason?: string | {code: CtoxErrorCode; reason: string}): Promise<void>;
+  /** Test Core: terminal CAS rejection, independent of the metadata write receipt. */
+  rejectNextUpload(reason?: {code: CtoxErrorCode; reason: string}): Promise<void>;
   /** Nächster bestätigter Write wird `migrated`; `dropFields` wandern ins Core-Archiv. */
   migrateNext(opts?: { dropFields?: string[] }): Promise<void>;
   /** Nächster Befehl dieses Typs endet `failed`. */
