@@ -85,12 +85,13 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
   const active=execFileSync('systemctl',['--user','show','ctox.service','--property=MainPID','--value'],{env,encoding:'utf8',timeout:10000}).trim();
   if(active!=='0')throw Error('Fixture daemon is not quiescent before rollback');
  };
- const cli=async (args,{allowFailure=false}={})=>{
+ const cli=async (args,{allowFailure=false,targetUpdater=false}={})=>{
   const out=fs.openSync(join(output,'installer-'+calls.length+'.log'),'w',0o600),at=Date.now();
   // Recovery must execute the installed candidate's fixed lease code, rather
   // than continuing to invoke the historical producer after the link switch.
-  const executable=fs.realpathSync(join(installRoot,'current/bin/ctox'));
+  const executable=fs.realpathSync(targetUpdater?after.binary:join(installRoot,'current/bin/ctox'));
   const executableSha256=hash(fs.readFileSync(executable));
+  if(targetUpdater&&executableSha256!==after.binarySha256)throw Error('Target main updater image differs from verified artifact');
   const rollback=args[0]==='update'&&args[1]==='rollback';
   const trace=rollback&&traceRollback;
   const argv=[...args,'--root',env.CTOX_ROOT];
@@ -160,7 +161,7 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
    record.rollback={startedAtMs,durationMs:Date.now()-startedAtMs,currentRelease:oldCurrent,binarySha256:before.binarySha256,phase:rolled.phase,stateBackupPath:snapshot,stateRestoreSemantics:'Official update rollback restores the recorded pre-update state; not binary-only'};
    quiesce();record.rollback.dataReadback=readback('rollback');
    record.rollback.verifiedDurationMs=Date.now()-startedAtMs;
-   const forwardAt=Date.now();quiesce();await cli(['update','apply','--version',release,'--force']);
+   const forwardAt=Date.now();quiesce();await cli(['update','apply','--version',release,'--force'],{targetUpdater:!!dressSmoke});
    const finalCurrent=fs.realpathSync(join(installRoot,'current')),final=JSON.parse(fs.readFileSync(join(stateRoot,'update_state.json')));
    if(final.phase!=='completed'||finalCurrent!==join(releases,release)||hash(fs.readFileSync(join(finalCurrent,'bin/ctox')))!==after.binarySha256)throw Error('Forward re-install did not restore the verified candidate');
    record.forward={startedAtMs:forwardAt,durationMs:Date.now()-forwardAt,binarySha256:after.binarySha256,phase:final.phase};
