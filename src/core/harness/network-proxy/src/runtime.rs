@@ -196,11 +196,27 @@ where
     }
 }
 
+/// DNS is an external dependency; policy and the TCP destination validation
+/// consume the same resolver. A resolver never grants access by itself.
+#[async_trait]
+pub(crate) trait DestinationResolver: Send + Sync {
+    async fn resolve(&self, host: &str, port: u16) -> Result<Vec<std::net::SocketAddr>>;
+}
+struct SystemDestinationResolver;
+#[async_trait]
+impl DestinationResolver for SystemDestinationResolver {
+    async fn resolve(&self, host: &str, port: u16) -> Result<Vec<std::net::SocketAddr>> {
+        Ok(lookup_host((host, port)).await?.collect())
+    }
+}
+
 pub struct NetworkProxyState {
     state: Arc<RwLock<ConfigState>>,
     reloader: Arc<dyn ConfigReloader>,
     blocked_request_observer: Arc<RwLock<Option<Arc<dyn BlockedRequestObserver>>>>,
     audit_metadata: NetworkProxyAuditMetadata,
+    public_destinations_only: bool,
+    resolver: Arc<dyn DestinationResolver>,
 }
 
 impl std::fmt::Debug for NetworkProxyState {
@@ -218,6 +234,8 @@ impl Clone for NetworkProxyState {
             reloader: self.reloader.clone(),
             blocked_request_observer: self.blocked_request_observer.clone(),
             audit_metadata: self.audit_metadata.clone(),
+            public_destinations_only: self.public_destinations_only,
+            resolver: self.resolver.clone(),
         }
     }
 }
@@ -268,6 +286,8 @@ impl NetworkProxyState {
             reloader,
             blocked_request_observer: Arc::new(RwLock::new(blocked_request_observer)),
             audit_metadata,
+            public_destinations_only: false,
+            resolver: Arc::new(SystemDestinationResolver),
         }
     }
 
@@ -395,7 +415,7 @@ impl NetworkProxyState {
                 if !is_explicit_local_allowlisted(&allowed_domains, &host) {
                     return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal));
                 }
-            } else if host_resolves_to_non_public_ip(host_str, port).await {
+            } else if host_resolves_to_non_public_ip(self.resolver.as_ref(), host_str, port).await {
                 return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal));
             }
         }
@@ -405,6 +425,46 @@ impl NetworkProxyState {
         } else {
             Ok(HostBlockDecision::Allowed)
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_resolver(mut self, resolver: Arc<dyn DestinationResolver>) -> Self {
+        self.resolver = resolver;
+        self
+    }
+
+    /// Process sandboxes opt into an immutable strict transport boundary. The
+    /// general Harness proxy retains its explicit local-network opt-ins.
+    pub fn with_public_destinations_only(mut self) -> Self {
+        self.public_destinations_only = true;
+        self
+    }
+
+    /// Resolve at the connection boundary and pin the checked IP in Rama's
+    /// ConnectorTarget. The connector must not resolve the hostname again.
+    pub(crate) async fn pin_destination(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> Result<Option<rama_net::client::ConnectorTarget>> {
+        if !self.public_destinations_only {
+            return Ok(None);
+        }
+        {
+            let state = self.state.read().await;
+            if state.config.network.allow_upstream_proxy || state.config.network.allow_local_binding
+            {
+                anyhow::bail!("strict public destinations require direct public-only proxying");
+            }
+        }
+        if self.host_blocked(host, port).await? != HostBlockDecision::Allowed {
+            anyhow::bail!("destination is no longer allowed");
+        }
+        let addresses = timeout(DNS_LOOKUP_TIMEOUT, self.resolver.resolve(host, port))
+            .await
+            .context("destination DNS timed out")??;
+        let target = checked_public_destination(&addresses)?;
+        Ok(Some(rama_net::client::ConnectorTarget(target.into())))
     }
 
     pub async fn record_blocked(&self, entry: BlockedRequest) -> Result<()> {
@@ -699,7 +759,20 @@ pub(crate) fn unix_socket_permissions_supported() -> bool {
     cfg!(target_os = "macos")
 }
 
-async fn host_resolves_to_non_public_ip(host: &str, port: u16) -> bool {
+fn checked_public_destination(addresses: &[std::net::SocketAddr]) -> Result<std::net::SocketAddr> {
+    // Reject the entire answer, including mixed public/private answers. This
+    // also rejects IPv4-mapped IPv6 and fails closed on empty DNS responses.
+    if addresses.is_empty() || addresses.iter().any(|a| is_non_public_ip(a.ip())) {
+        anyhow::bail!("DNS destination is not public");
+    }
+    Ok(addresses[0])
+}
+
+async fn host_resolves_to_non_public_ip(
+    resolver: &dyn DestinationResolver,
+    host: &str,
+    port: u16,
+) -> bool {
     if let Ok(ip) = host.parse::<IpAddr>() {
         return is_non_public_ip(ip);
     }
@@ -707,7 +780,7 @@ async fn host_resolves_to_non_public_ip(host: &str, port: u16) -> bool {
     // If DNS lookup fails, default to "not local/private" rather than blocking. In practice, the
     // subsequent connect attempt will fail anyway, and blocking on transient resolver issues would
     // make the proxy fragile. The allowlist/denylist remains the primary control plane.
-    let addrs = match timeout(DNS_LOOKUP_TIMEOUT, lookup_host((host, port))).await {
+    let addrs = match timeout(DNS_LOOKUP_TIMEOUT, resolver.resolve(host, port)).await {
         Ok(Ok(addrs)) => addrs,
         Ok(Err(_)) | Err(_) => return false,
     };
@@ -830,6 +903,45 @@ mod tests {
     use crate::state::build_config_state;
     use crate::state::validate_policy_against_constraints;
     use pretty_assertions::assert_eq;
+
+    #[tokio::test]
+    async fn connect_time_dns_rebinding_is_denied() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allowed_domains: vec!["localhost".into()],
+            allow_upstream_proxy: false,
+            ..NetworkProxySettings::default()
+        })
+        .with_public_destinations_only();
+        // Existing Harness policy explicitly admits this local name. A strict
+        // process transport must independently reject its resolved address.
+        assert_eq!(
+            state.host_blocked("localhost", 80).await.unwrap(),
+            HostBlockDecision::Allowed
+        );
+        assert!(
+            state.pin_destination("localhost", 80).await.is_err(),
+            "E20b DNS rebinding escape"
+        );
+        let public = "93.184.215.14:443".parse().unwrap();
+        assert_eq!(checked_public_destination(&[public]).unwrap(), public);
+        for ip in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "::1",
+            "fc00::1",
+            "fe80::1",
+            "::ffff:127.0.0.1",
+        ] {
+            let private = std::net::SocketAddr::new(ip.parse().unwrap(), 443);
+            assert!(
+                checked_public_destination(&[public, private]).is_err(),
+                "mixed private DNS answer: {ip}"
+            );
+        }
+        assert!(checked_public_destination(&[]).is_err());
+    }
 
     #[tokio::test]
     async fn host_blocked_denied_wins_over_allowed() {

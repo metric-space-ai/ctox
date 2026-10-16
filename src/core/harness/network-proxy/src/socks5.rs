@@ -22,6 +22,7 @@ use anyhow::Result;
 use rama_core::Layer;
 use rama_core::Service;
 use rama_core::error::BoxError;
+use rama_core::extensions::ExtensionsMut;
 use rama_core::extensions::ExtensionsRef;
 use rama_core::layer::AddInputExtensionLayer;
 use rama_core::service::service_fn;
@@ -130,7 +131,7 @@ async fn run_socks5_with_listener(
 }
 
 async fn handle_socks5_tcp(
-    req: TcpRequest,
+    mut req: TcpRequest,
     tcp_connector: TcpConnector,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
 ) -> Result<EstablishedClientConnection<TcpStream, TcpRequest>, BoxError> {
@@ -290,6 +291,9 @@ async fn handle_socks5_tcp(
         }
     }
 
+    if let Some(target) = app_state.pin_destination(&host, port).await? {
+        req.extensions_mut().insert(target);
+    }
     tcp_connector.serve(req).await
 }
 
