@@ -951,7 +951,7 @@ profile ctox-e20-bwrap ATTACHMENT flags=(attach_disconnected,mediate_deleted) {
   ptrace,
   mqueue,
   dbus,
-  /** px -> &ctox-e20-payload,
+  /** px -> ctox-e20-bwrap//&ctox-e20-payload,
 }
 profile ctox-e20-payload flags=(attach_disconnected,mediate_deleted) {
   userns,
