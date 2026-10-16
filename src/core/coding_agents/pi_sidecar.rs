@@ -342,12 +342,22 @@ fn spawn_sidecar(
 }
 
 fn sidecar_command(dist: &Path, transport: &LocalTransport, faux: bool) -> anyhow::Result<Command> {
+    sidecar_command_with_node(dist, transport, faux, std::ffi::OsStr::new("node"))
+}
+
+fn sidecar_command_with_node(
+    dist: &Path,
+    transport: &LocalTransport,
+    faux: bool,
+    node: &std::ffi::OsStr,
+) -> anyhow::Result<Command> {
     anyhow::ensure!(
         dist.exists(),
         "pi-sidecar bundle is not built: {} (run `npm run build` in pi-sidecar)",
         dist.display()
     );
-    let mut command = Command::new("node");
+    ensure_sidecar_node(node)?;
+    let mut command = Command::new(node);
     command
         .arg(dist)
         .arg(transport.endpoint_string())
@@ -365,6 +375,51 @@ fn sidecar_command(dist: &Path, transport: &LocalTransport, faux: bool) -> anyho
         command.env("CTOX_PI_SIDECAR_FAUX", "1");
     }
     Ok(command)
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("pi-sidecar unavailable: {0}; requires Node >=22.19.0")]
+struct SidecarNodeUnavailable(String);
+
+fn sidecar_node_version_supported(version: &str) -> bool {
+    let parts = version.trim().strip_prefix('v').unwrap_or(version.trim())
+        .split('.').map(str::parse::<u32>).collect::<Result<Vec<_>, _>>();
+    matches!(parts, Ok(ref parts) if parts.len() == 3 && (parts[0], parts[1], parts[2]) >= (22, 19, 0))
+}
+
+// Probe before importing the bundle: undici requires worker_threads APIs that
+// Node 20 cannot load. The probe has the same empty environment and is reaped
+// on every exit path, including timeout or malformed version output.
+fn ensure_sidecar_node(node: &std::ffi::OsStr) -> anyhow::Result<()> {
+    let probe = || -> anyhow::Result<()> {
+        let child = Command::new(node).arg("--version")
+            .env_clear().env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null())
+            .spawn().context("cannot execute Node version probe")?;
+        let mut daemon = SidecarDaemon { child, unix_socket_path: None };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = daemon.child.try_wait()? { break status; }
+            anyhow::ensure!(Instant::now() < deadline, "Node version probe timed out");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        anyhow::ensure!(status.success(), "Node version probe failed");
+        let mut version = String::new();
+        daemon.child.stdout.take().context("Node version output missing")?
+            .take(64).read_to_string(&mut version)?;
+        anyhow::ensure!(sidecar_node_version_supported(&version), "unsupported Node version {}", version.trim());
+        Ok(())
+    };
+    probe().map_err(|error| SidecarNodeUnavailable(error.to_string()).into())
+}
+
+fn sidecar_transport_failure(error: anyhow::Error) -> super::draft_turn::TurnFailure {
+    let reason = if error.is::<SidecarNodeUnavailable>() {
+        "sidecar_node_unavailable"
+    } else {
+        "sidecar_transport"
+    };
+    super::draft_turn::TurnFailure::new("unavailable", reason).detail(error.to_string())
 }
 
 fn connect_with_retry(
@@ -1102,7 +1157,7 @@ impl super::draft_turn::SidecarRunner for PiSidecarRunner {
             if control.is_cancelled() {
                 TurnFailure::new("conflict", "cancelled")
             } else {
-                TurnFailure::new("unavailable", "sidecar_transport").detail(error.to_string())
+                sidecar_transport_failure(error)
             }
         })?;
         if response.get("ok").and_then(Value::as_bool) != Some(true) {
@@ -1558,6 +1613,51 @@ mod tests {
 
     fn repo_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    }
+
+    #[test]
+    fn sidecar_node_minimum_matches_bundle_dependency_contract() {
+        for version in ["v20.20.1", "v22.18.0", "v22.0.0", "v22.19", "garbage"] {
+            assert!(!sidecar_node_version_supported(version), "accepted {version}");
+        }
+        for version in ["v22.19.0", "v22.20.0", "v24.13.1\n"] {
+            assert!(sidecar_node_version_supported(version), "rejected {version}");
+        }
+        let package: Value = serde_json::from_str(include_str!("pi-sidecar/package.json")).unwrap();
+        assert!(package["scripts"]["build"].as_str().unwrap().contains("--target=node22"));
+        let lock: Value = serde_json::from_str(include_str!("pi-sidecar/package-lock.json")).unwrap();
+        assert_eq!(lock["packages"]["node_modules/undici"]["engines"]["node"], ">=22.19.0");
+    }
+
+    // Explicit lane acceptance: requires a real Node 20 executable. This is a
+    // test input only; production always uses the existing Node resolver.
+    #[test]
+    #[ignore = "set CTOX_TEST_PI_NODE20 to a real Node 20 executable"]
+    fn sidecar_node20_is_unavailable_before_bundle_load() -> anyhow::Result<()> {
+        let node = std::env::var_os("CTOX_TEST_PI_NODE20").context("real Node 20 fixture required")?;
+        let version = Command::new(&node).arg("--version").output()?;
+        anyhow::ensure!(String::from_utf8_lossy(&version.stdout).starts_with("v20."), "fixture must be Node 20");
+        let dist = sidecar_dist_path(&repo_root());
+        anyhow::ensure!(dist.exists(), "real bundled sidecar required");
+        let transport = fresh_transport();
+        // If the version guard is removed, actually load the bundle under Node
+        // 20. Its undici import fails before any IPC or provider connection.
+        let error = match sidecar_command_with_node(&dist, &transport, true, &node) {
+            Err(error) => error,
+            Ok(mut command) => {
+                let output = command.stderr(Stdio::piped()).output()?;
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                panic!("version guard bypassed; Node20 bundle exit={}: {}", output.status, stderr);
+            }
+        };
+        let failure = sidecar_transport_failure(error);
+        assert_eq!(failure.code, "unavailable");
+        assert_eq!(failure.reason, "sidecar_node_unavailable");
+        let detail = failure.detail.unwrap();
+        assert!(detail.contains("requires Node >=22.19.0"));
+        assert!(detail.contains("v20."));
+        assert!(!transport.unix_socket_path().is_some_and(Path::exists));
+        Ok(())
     }
 
     fn node_available() -> bool {
