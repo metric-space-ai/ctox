@@ -1158,6 +1158,7 @@ fn queue_supports_plan_failure(root: &Path, job: &QueuedPrompt) -> Result<bool> 
 fn accepted_queue_plan_failure(
     root: &Path,
     job: &QueuedPrompt,
+    attempt_id: &str,
     disposition: &CompletionReviewDisposition,
 ) -> Result<Option<lcm::IncompleteTaskExecutionPlan>> {
     if !matches!(
@@ -1169,14 +1170,75 @@ fn accepted_queue_plan_failure(
     {
         return Ok(None);
     }
+    let db_path = crate::paths::core_db(root);
     let work_key = worker_attempt_work_key(job);
-    Ok(
-        lcm::run_task_execution_progress(&crate::paths::core_db(root), &work_key)?
-            .as_ref()
-            .and_then(|progress| {
-                lcm::IncompleteTaskExecutionPlan::from_progress(&work_key, progress)
-            }),
-    )
+    let Some(progress) = lcm::run_task_execution_progress(&db_path, &work_key)? else {
+        return Ok(None);
+    };
+    let Some(incomplete) = lcm::IncompleteTaskExecutionPlan::from_progress(&work_key, &progress)
+    else {
+        return Ok(None);
+    };
+    if matches!(disposition, CompletionReviewDisposition::Approved { .. })
+        && review::is_lead_research_task(job.suggested_skill.as_deref(), &job.prompt)
+        && is_lead_research_rework_plan(&progress)
+    {
+        close_approved_lead_research_rework_plan(&db_path, &work_key, attempt_id, &progress)?;
+        return Ok(None);
+    }
+    Ok(Some(incomplete))
+}
+
+/// The current plan revision is the system-imposed lead-research rework plan
+/// (exactly its labels, in order), not a plan the worker authored itself.
+fn is_lead_research_rework_plan(progress: &Value) -> bool {
+    progress["steps"].as_array().is_some_and(|steps| {
+        steps
+            .iter()
+            .map(|step| step["label"].as_str())
+            .eq(LEAD_RESEARCH_REWORK_PLAN_STEPS
+                .iter()
+                .map(|label| Some(*label)))
+    })
+}
+
+/// Workers do not reliably mark the last step of the rework plan CTOX imposed
+/// on them (customer tenant, 16.10.2026: approved rework failed terminally
+/// with "plan is incomplete (2/3)"). The approving review gate already checked
+/// the stored lead against the report, so the approved attempt closes the
+/// remaining steps of that system plan. Same labels keep the same revision;
+/// it is attributed to the reviewed attempt.
+fn close_approved_lead_research_rework_plan(
+    db_path: &Path,
+    work_key: &str,
+    attempt_id: &str,
+    progress: &Value,
+) -> Result<()> {
+    let task_id = progress["task_id"]
+        .as_str()
+        .context("rework plan progress has no task_id")?;
+    let command_id = progress["command_id"]
+        .as_str()
+        .context("rework plan progress has no command_id")?;
+    let steps = LEAD_RESEARCH_REWORK_PLAN_STEPS
+        .iter()
+        .map(|label| lcm::TaskExecutionPlanStepInput {
+            label: (*label).to_string(),
+            status: "completed".to_string(),
+        })
+        .collect::<Vec<_>>();
+    lcm::run_record_task_execution_plan(
+        db_path,
+        lcm::TaskExecutionPlanUpdate {
+            work_key,
+            task_id,
+            command_id,
+            attempt_id,
+            explanation: Some("closed by approved review gate"),
+            steps: &steps,
+        },
+    )?;
+    Ok(())
 }
 
 fn apply_business_command_writebacks_for_attempt<F>(
@@ -7521,7 +7583,7 @@ fn start_prompt_worker(
                 CompletionReviewDisposition::None
             };
             let mut incomplete_plan_failure = if result.is_ok() {
-                accepted_queue_plan_failure(&root, &job, &review_disposition)?
+                accepted_queue_plan_failure(&root, &job, &attempt_id, &review_disposition)?
             } else {
                 None
             };
@@ -34336,6 +34398,7 @@ Business OS command:
         assert!(accepted_queue_plan_failure(
             &root,
             &job,
+            "attempt-reviewed",
             &CompletionReviewDisposition::ReplyValidated,
         )?
         .is_some());
@@ -37393,9 +37456,13 @@ Business OS command:
             plan.contains("Verify remaining fields=in_progress"),
             "{plan}"
         );
-        assert!(
-            accepted_queue_plan_failure(&root, &job, &CompletionReviewDisposition::None)?.is_some()
-        );
+        assert!(accepted_queue_plan_failure(
+            &root,
+            &job,
+            "attempt-reviewed",
+            &CompletionReviewDisposition::None
+        )?
+        .is_some());
         Ok(())
     }
 
@@ -37454,9 +37521,13 @@ Business OS command:
         assert!(plan.contains("Inspect the new retry=in_progress"), "{plan}");
         assert!(!plan.contains("Save research chunk=completed"), "{plan}");
         assert!(plan.contains("not an attempt-filtered query"), "{plan}");
-        assert!(
-            accepted_queue_plan_failure(&root, &job, &CompletionReviewDisposition::None)?.is_some()
-        );
+        assert!(accepted_queue_plan_failure(
+            &root,
+            &job,
+            "attempt-reviewed",
+            &CompletionReviewDisposition::None
+        )?
+        .is_some());
         let conn = rusqlite::Connection::open(&db_path)?;
         let revisions: i64 = conn.query_row(
             "SELECT COUNT(*) FROM task_execution_plan_revisions WHERE work_key=?1",
@@ -37514,10 +37585,13 @@ Business OS command:
             "{plan}"
         );
         assert!(plan.contains("Verify remaining fields=completed"), "{plan}");
-        assert!(
-            accepted_queue_plan_failure(&root, &job, &CompletionReviewDisposition::None,)?
-                .is_none()
-        );
+        assert!(accepted_queue_plan_failure(
+            &root,
+            &job,
+            "attempt-reviewed",
+            &CompletionReviewDisposition::None,
+        )?
+        .is_none());
 
         // The review verdict is an explicit fixture, not inferred from the
         // completed plan or supplied by a model. Exercise native completion.
@@ -37716,8 +37790,13 @@ Business OS command:
             "workspace-less command must be covered"
         );
         let work_key = worker_attempt_work_key(&job);
-        let incomplete =
-            accepted_queue_plan_failure(&root, &job, &CompletionReviewDisposition::None)?.unwrap();
+        let incomplete = accepted_queue_plan_failure(
+            &root,
+            &job,
+            "attempt-reviewed",
+            &CompletionReviewDisposition::None,
+        )?
+        .unwrap();
         let hold = review::HoldReason::Technical {
             policy_id: "fixture-store-recovery".into(),
         };
@@ -37855,9 +37934,13 @@ Business OS command:
         ] {
             let cancel = name == "plan-stop-cancel";
             let (root, job, attempt_id) = incomplete_plan_queue_fixture(name)?;
-            let incomplete =
-                accepted_queue_plan_failure(&root, &job, &CompletionReviewDisposition::None)?
-                    .unwrap();
+            let incomplete = accepted_queue_plan_failure(
+                &root,
+                &job,
+                "attempt-reviewed",
+                &CompletionReviewDisposition::None,
+            )?
+            .unwrap();
             if cancel {
                 channels::transition_business_command_for_task(
                     &root,
@@ -38029,7 +38112,16 @@ Business OS command:
             .map(|step| step["label"].as_str().unwrap().to_string())
             .collect::<Vec<_>>();
         assert_eq!(labels, LEAD_RESEARCH_REWORK_PLAN_STEPS);
-        let incomplete = accepted_queue_plan_failure(&root, &job, &approved)?.unwrap();
+        // An approved result now closes this system rework plan (see
+        // approved_lead_research_rework_closes_system_plan); without an
+        // approving review the open 0/3 rework plan still fails.
+        let incomplete = accepted_queue_plan_failure(
+            &root,
+            &job,
+            "attempt-reviewed",
+            &CompletionReviewDisposition::None,
+        )?
+        .unwrap();
         assert_eq!(
             (incomplete.revision, incomplete.completed, incomplete.total),
             (old_revision + 1, 0, 3)
@@ -38042,7 +38134,7 @@ Business OS command:
             *plan_revisions(&root, &job)?.last().unwrap(),
             (old_revision + 1, 3, 3)
         );
-        assert!(accepted_queue_plan_failure(&root, &job, &approved)?.is_none());
+        assert!(accepted_queue_plan_failure(&root, &job, "attempt-reviewed", &approved)?.is_none());
 
         // Not lead research: the inherited plan stays and the guard fires.
         let (root, job, attempt_id) = incomplete_plan_queue_fixture("rework-plan-generic")?;
@@ -38051,7 +38143,8 @@ Business OS command:
         let feedback = build_review_feedback_retry_prompt(&job, &failed, "Done.");
         apply_review_feedback_to_leased_queue(&root, &job, &feedback, &failed.summary)?;
         assert_eq!(plan_revisions(&root, &job)?, before);
-        let incomplete = accepted_queue_plan_failure(&root, &job, &approved)?.unwrap();
+        let incomplete =
+            accepted_queue_plan_failure(&root, &job, "attempt-reviewed", &approved)?.unwrap();
         assert_eq!((incomplete.completed, incomplete.total), (4, 6));
 
         // Missing writeback: nothing is stored yet, the research plan stays.
@@ -38065,8 +38158,88 @@ Business OS command:
         let feedback = build_review_feedback_retry_prompt(&job, &outcome, "Fertig.");
         apply_review_feedback_to_leased_queue(&root, &job, &feedback, &outcome.summary)?;
         assert_eq!(plan_revisions(&root, &job)?, before);
-        let incomplete = accepted_queue_plan_failure(&root, &job, &approved)?.unwrap();
+        let incomplete =
+            accepted_queue_plan_failure(&root, &job, "attempt-reviewed", &approved)?.unwrap();
         assert_eq!((incomplete.completed, incomplete.total), (4, 6));
+        Ok(())
+    }
+
+    #[test]
+    fn approved_lead_research_rework_closes_system_plan() -> anyhow::Result<()> {
+        let approved = CompletionReviewDisposition::Approved {
+            review_audit_key: "review-approved".into(),
+        };
+        let [read_step, correct_step, report_step] = LEAD_RESEARCH_REWORK_PLAN_STEPS;
+        let two_of_three = [
+            (read_step, "completed"),
+            (correct_step, "completed"),
+            (report_step, "in_progress"),
+        ];
+
+        // (a) Approved + system rework plan 2/3: no terminal plan failure; the
+        // remaining step is closed in the same revision by the reviewed attempt.
+        let (root, mut job, attempt_id) = incomplete_plan_queue_fixture("rework-approved-system")?;
+        job.suggested_skill = Some("outbound-lead-generation-research".into());
+        record_research_plan(&root, &job, &attempt_id, &two_of_three)?;
+        let (revision, completed, total) = *plan_revisions(&root, &job)?.last().unwrap();
+        assert_eq!((completed, total), (2, 3));
+        // Without approval the open system plan still fails.
+        let hold = accepted_queue_plan_failure(
+            &root,
+            &job,
+            "attempt-reviewed",
+            &CompletionReviewDisposition::None,
+        )?
+        .unwrap();
+        assert_eq!((hold.completed, hold.total), (2, 3));
+        assert!(accepted_queue_plan_failure(&root, &job, "attempt-reviewed", &approved)?.is_none());
+        assert_eq!(
+            *plan_revisions(&root, &job)?.last().unwrap(),
+            (revision, 3, 3)
+        );
+        let conn = rusqlite::Connection::open(crate::paths::core_db(&root))?;
+        let (closing_attempt, explanation): (String, Option<String>) = conn.query_row(
+            "SELECT attempt_id, explanation FROM task_execution_plan_revisions
+             WHERE work_key = ?1 AND revision = ?2",
+            rusqlite::params![worker_attempt_work_key(&job), revision],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(closing_attempt, "attempt-reviewed");
+        assert_eq!(
+            explanation.as_deref(),
+            Some("closed by approved review gate")
+        );
+        // The closed plan passes the terminal-success transition.
+        lcm::run_set_task_execution_review_status(
+            &crate::paths::core_db(&root),
+            &worker_attempt_work_key(&job),
+            "completed",
+        )?;
+
+        // (b) Approved + worker-authored plan 2/3 on lead research: still fails.
+        let (root, mut job, attempt_id) = incomplete_plan_queue_fixture("rework-approved-worker")?;
+        job.suggested_skill = Some("outbound-lead-generation-research".into());
+        record_research_plan(
+            &root,
+            &job,
+            &attempt_id,
+            &[
+                ("Read stored lead", "completed"),
+                ("Correct findings", "completed"),
+                ("Write report", "in_progress"),
+            ],
+        )?;
+        let incomplete =
+            accepted_queue_plan_failure(&root, &job, "attempt-reviewed", &approved)?.unwrap();
+        assert_eq!((incomplete.completed, incomplete.total), (2, 3));
+
+        // Not lead research: the same labels do not lift the guard.
+        let (root, job, attempt_id) = incomplete_plan_queue_fixture("rework-approved-generic")?;
+        record_research_plan(&root, &job, &attempt_id, &two_of_three)?;
+        let incomplete =
+            accepted_queue_plan_failure(&root, &job, "attempt-reviewed", &approved)?.unwrap();
+        assert_eq!((incomplete.completed, incomplete.total), (2, 3));
+        assert_eq!(plan_revisions(&root, &job)?.last().unwrap().1, 2);
         Ok(())
     }
 
@@ -38077,10 +38250,11 @@ Business OS command:
             reason: review::HoldReason::MissingReviewEvidence,
             summary: "review still needed".into(),
         };
-        assert!(accepted_queue_plan_failure(&root, &job, &hold)?.is_none());
+        assert!(accepted_queue_plan_failure(&root, &job, "attempt-reviewed", &hold)?.is_none());
         assert!(accepted_queue_plan_failure(
             &root,
             &job,
+            "attempt-reviewed",
             &CompletionReviewDisposition::NoSend {
                 summary: "operator no-send".into()
             }
@@ -38096,8 +38270,13 @@ Business OS command:
             "UPDATE task_execution_plan_revisions SET steps_json='{'",
             [],
         )?;
-        let error = accepted_queue_plan_failure(&root, &job, &CompletionReviewDisposition::None)
-            .unwrap_err();
+        let error = accepted_queue_plan_failure(
+            &root,
+            &job,
+            "attempt-reviewed",
+            &CompletionReviewDisposition::None,
+        )
+        .unwrap_err();
         assert!(
             error
                 .downcast_ref::<lcm::IncompleteTaskExecutionPlan>()
