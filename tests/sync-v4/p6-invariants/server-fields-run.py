@@ -2,7 +2,7 @@
 """Detached lane job: real kernel outbox -> native P8 + committed policy -> kernel journal."""
 import argparse,hashlib,json,os,shutil,signal,subprocess,time
 from pathlib import Path
-P=argparse.ArgumentParser();P.add_argument('--deadline',type=float,required=True);a=P.parse_args()
+P=argparse.ArgumentParser();P.add_argument('--deadline',type=float,required=True);P.add_argument('--reuse-native');a=P.parse_args()
 ROOT=Path(__file__).resolve().parents[3];HERE=Path(__file__).resolve().parent
 assert os.environ.get('BUILD_LANE_BIN') and os.environ.get('CARGO_TARGET_DIR'),'canonical lane required'
 OUT=Path(os.environ['CARGO_TARGET_DIR'])/('p6-fields-'+time.strftime('%Y%m%dT%H%M%SZ',time.gmtime()));OUT.mkdir()
@@ -54,7 +54,15 @@ try:
  assert run('syntax',[node,'--check',HERE/'server-fields.mjs'],30)[0]==0
  parent=ROOT/'src/core/store/rights.rs';originals[parent]=parent.read_bytes()
  parent.write_bytes(originals[parent]+('\n#[cfg(test)]\n#[path = '+json.dumps(str(HERE/'server-fields.rs'))+']\nmod p6_fields;\n').encode())
- baseline=build('baseline-build');retained=OUT/'native-baseline';shutil.copy2(baseline,retained)
+ if a.reuse_native:
+  producer=Path(a.reuse_native);previous=json.loads(producer.read_text())
+  assert previous.get('terminal') and previous.get('binary'),'nonterminal producer'
+  assert all(record['sources'].get(p)==h for p,h in previous['sources'].items() if p.endswith('.rs')),'native input changed'
+  assert subprocess.run(['git','diff','--quiet',previous['head'],record['head'],'--','*.rs','Cargo.toml','Cargo.lock'],cwd=ROOT).returncode==0,'compiled Rust graph changed'
+  baseline=Path(previous['binary']['path']);assert sha(baseline)==previous['binary']['sha256'],'producer binary changed'
+  record['native_build_reuse']={'producer':str(producer),'compiled_head':previous['head'],'runtime_head':record['head'],'binary_sha256':sha(baseline)};save()
+ else:baseline=build('baseline-build')
+ retained=OUT/'native-baseline';shutil.copy2(baseline,retained)
  record['binary']={'path':str(retained),'sha256':sha(retained)};save()
  assert case('baseline-patch','patch',retained)==0,'peer patch contract failed'
  assert case('baseline-guard','guard',retained)==0,'explicit server guard contract failed'
