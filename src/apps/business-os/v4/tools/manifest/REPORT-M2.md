@@ -12,11 +12,11 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | Apps (modules + customer-modules) | 42 |
 | Manifeste gesamt (Apps + shell) | 43 |
 | Collections gesamt / App-eigen / ctox-platform | 241 / 226 / 15 |
-| Handler gesamt (Apps mit Handlern) | 116 (15) |
+| Handler gesamt (Apps mit Handlern) | 117 (16) |
 | Legacy-Rest gesamt (ctx.cap.legacy) | 0 |
 | Capabilities gesamt (verschieden, ohne legacy) | 41 |
 | Trigger | 10 |
-| command_rights-Einträge | 42 |
+| command_rights-Einträge | 43 |
 | foreign-Deklarationen (davon write / nur Code-Scan) | 298 (32 / 94) |
 | **foreign ohne passendes exports (Soll 0)** | **0** |
 | Plattformzugriffe auf exports beschränkt | 1 |
@@ -81,7 +81,7 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | support | 4 | 0 | 2 | 2 | 37 | 11 | 3 | 37 |
 | threads | 4 | 0 | 3 | 0 | 1 | 21 | 1 | 6 |
 | tickets | 0 | 0 | 0 | 0 | 0 | 4 | 5 | 3 |
-| workjet | 0 | 0 | 0 | 0 | 0 | 4 | 0 | 4 |
+| workjet | 1 | 0 | 0 | 0 | 1 | 4 | 0 | 4 |
 
 ## Legacy-Rest je App
 

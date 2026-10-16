@@ -1,10 +1,21 @@
 {
   "_basis": {
+    "command_rights": "mcp_workjet_worker_dispatch.rs:224-245 (CtoxTaskCreate Projekt + IntegrationsManage Workspace) und mcp_remote_worker.rs:444-461 (nur aktive chef/admin); der Handler prüft zusätzlich business_users.",
     "foreign_collections": "Entscheidung E54.3b (16.10.2026): Projekt-/Supervisor-Bindung aus den ctox-eigenen workjet_projects (K-WJ-1-Export) und workjet_project_chats, Akteur-Autorität aus business_users (wie remote_worker::current_actor); ctox_task_approval_requests liest der Workjet-Client (packages/shared/src/ctoxV4AppData.ts readWorkjetDecision, E49.4).",
     "multi_instance": "Handler-only App ohne Fenster (E42.3 Nr. 2, E54.3b Nr. 6)."
   },
   "_format": "ctox-shell-v4-app-declaration-1",
   "_note": "Deklaration für gen-manifest.mjs (Strang MAN): nur Angaben, die sich nicht aus dem Code ableiten lassen. _basis = Fundstelle je Feld.",
+  "command_rights": {
+    "workjet.worker.dispatch": {
+      "roles": [
+        "admin",
+        "chef"
+      ],
+      "assigned_users": false,
+      "_permission": "CtoxTaskCreate + IntegrationsManage (native Policy), Rollen chef/admin"
+    }
+  },
   "foreign_collections": {
     "business_users": [
       "read"

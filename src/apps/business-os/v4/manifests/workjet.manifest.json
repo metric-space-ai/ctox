@@ -548,7 +548,17 @@
       }
     }
   },
-  "command_rights": {},
+  "command_rights": {
+    "workjet.worker.dispatch": {
+      "_basis": "v4-manifest.json; mcp_workjet_worker_dispatch.rs:224-245 (CtoxTaskCreate Projekt + IntegrationsManage Workspace) und mcp_remote_worker.rs:444-461 (nur aktive chef/admin); der Handler prüft zusätzlich business_users.",
+      "_permission": "CtoxTaskCreate + IntegrationsManage (native Policy), Rollen chef/admin",
+      "assigned_users": false,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    }
+  },
   "commands_in": [],
   "commands_out": [],
   "created_at": null,
@@ -556,16 +566,26 @@
   "exports": {},
   "files": {
     "collections.schema.json": "78f5ad8d2eec7924e872369d398f1639fda1a0f322f19d4dd2b38d1b523d979f",
+    "handlers/_lib/dispatch.js": "52a3778c5870e32066bf13d8176fb8065eff45897745fad5a6a5ad993c88886b",
+    "handlers/_lib/outcome-contract.js": "88089d05b3a507a7fa86af2df1413dad4cce1b4afbe4c03688c9171b01acc73f",
+    "handlers/_lib/sha256.js": "9d4ce8a6b54db463483dacb41bc782e242f7608fb2df2100b0aec5144926ba26",
+    "handlers/workjet.worker.dispatch.js": "4d9e2d41dae4482298f6c430faaa6bd5d44703a5bf67a72845d66662c26001ca",
+    "locales/de.json": "388e706fd07f371d2079d3760dcd4b8268fd8a8c7ca10d7af6be32cf5cd0152d",
+    "locales/en.json": "388e706fd07f371d2079d3760dcd4b8268fd8a8c7ca10d7af6be32cf5cd0152d",
     "module.json": "51ff8aa33170f7e20d75ffb8f637b1ac76c579673788f00d94233d3454537036",
-    "v4-manifest.json": "50c6aa9f23aa91ec47dd7cf82ae50711974d12f323585234a3af42239db24c33"
+    "v4-manifest.json": "ce9a8782401b61c5455813fd8daceeff983074d64d46875bff6b7954377d1c77"
   },
   "foreign_collections": {
     "business_users": {
       "_evidence": {
-        "code_read": [],
+        "code_read": [
+          "handlers/_lib/dispatch.js:16",
+          "handlers/_lib/dispatch.js:91"
+        ],
         "code_write": [],
         "declaration_basis": "Entscheidung E54.3b (16.10.2026): Projekt-/Supervisor-Bindung aus den ctox-eigenen workjet_projects (K-WJ-1-Export) und workjet_project_chats, Akteur-Autorität aus business_users (wie remote_worker::current_actor); ctox_task_approval_requests liest der Workjet-Client (packages/shared/src/ctoxV4AppData.ts readWorkjetDecision, E49.4).",
         "sources": [
+          "code",
           "v4-manifest.json"
         ]
       },
@@ -590,10 +610,14 @@
     },
     "workjet_project_chats": {
       "_evidence": {
-        "code_read": [],
+        "code_read": [
+          "handlers/_lib/dispatch.js:15",
+          "handlers/_lib/dispatch.js:106"
+        ],
         "code_write": [],
         "declaration_basis": "Entscheidung E54.3b (16.10.2026): Projekt-/Supervisor-Bindung aus den ctox-eigenen workjet_projects (K-WJ-1-Export) und workjet_project_chats, Akteur-Autorität aus business_users (wie remote_worker::current_actor); ctox_task_approval_requests liest der Workjet-Client (packages/shared/src/ctoxV4AppData.ts readWorkjetDecision, E49.4).",
         "sources": [
+          "code",
           "v4-manifest.json"
         ]
       },
@@ -604,10 +628,14 @@
     },
     "workjet_projects": {
       "_evidence": {
-        "code_read": [],
+        "code_read": [
+          "handlers/_lib/dispatch.js:14",
+          "handlers/_lib/dispatch.js:106"
+        ],
         "code_write": [],
         "declaration_basis": "Entscheidung E54.3b (16.10.2026): Projekt-/Supervisor-Bindung aus den ctox-eigenen workjet_projects (K-WJ-1-Export) und workjet_project_chats, Akteur-Autorität aus business_users (wie remote_worker::current_actor); ctox_task_approval_requests liest der Workjet-Client (packages/shared/src/ctoxV4AppData.ts readWorkjetDecision, E49.4).",
         "sources": [
+          "code",
           "v4-manifest.json"
         ]
       },
@@ -617,7 +645,9 @@
       "owner_app": "ctox"
     }
   },
-  "handlers": {},
+  "handlers": {
+    "workjet.worker.dispatch": "handlers/workjet.worker.dispatch.js"
+  },
   "layout": {
     "_multi_instance_basis": "v4-manifest.json; Handler-only App ohne Fenster (E42.3 Nr. 2, E54.3b Nr. 6).",
     "category": "System",
@@ -631,7 +661,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "8e2a625583d29139944d452444f4410413913e9fbc94ea402da429e9398ab2f0",
+    "base_hash": "05cf5268cb355d18be2e20effc18749f4b1ab7d8e1e78ae3030b7ae50c6f554d",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

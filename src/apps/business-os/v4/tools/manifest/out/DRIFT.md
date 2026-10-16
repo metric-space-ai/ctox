@@ -13,12 +13,12 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | owned_by_apps | 226 |
 | owned_by_platform | 15 |
 | owner_proposals | 5 |
-| handlers_total | 116 |
-| apps_with_handlers | 15 |
+| handlers_total | 117 |
+| apps_with_handlers | 16 |
 | legacy_total | 0 |
 | capabilities_distinct | 41 |
 | triggers_total | 10 |
-| command_rights_entries | 42 |
+| command_rights_entries | 43 |
 | foreign_declarations | 298 |
 | foreign_write_declarations | 32 |
 | foreign_code_only | 94 |
