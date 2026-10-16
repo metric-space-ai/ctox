@@ -518,6 +518,11 @@ mod ctox_window_ack_contract {
 }
 
 impl Association {
+    /// Read-only sender diagnostics; no congestion-window override.
+    pub fn send_window(&self) -> (usize, u64, usize, usize) {
+        (self.max_payload_size as usize, self.rto_mgr.srtt, self.cwnd as usize, self.rwnd as usize)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         server_config: Option<Arc<ServerConfig>>,
@@ -2928,7 +2933,7 @@ impl Association {
             c.since = Some(now); // use to calculate RTT and also for maxPacketLifeTime
             c.last_sent = Some(now);
             c.nsent = 1; // being sent for the first time
-            trace!(target: "ctox_sctp_timeline", "event=transmit side={} sid={} tsn={} ssn={} nsent=1 rto_ms={} len={} i={}", self.side, c.stream_identifier, c.tsn, c.stream_sequence_number, self.rto_mgr.get_rto(), c.user_data.len(), c.immediate_sack);
+            trace!(target: "ctox_sctp_timeline", "event=transmit side={} sid={} tsn={} ssn={} nsent=1 rto_ms={} len={} i={} begin={} end={} cwnd={} rwnd={}", self.side, c.stream_identifier, c.tsn, c.stream_sequence_number, self.rto_mgr.get_rto(), c.user_data.len(), c.immediate_sack, c.beginning_fragment, c.ending_fragment, self.cwnd, self.rwnd);
 
             Association::check_partial_reliability_status(
                 &mut c,

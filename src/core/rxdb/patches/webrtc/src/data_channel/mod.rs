@@ -12,6 +12,12 @@ pub use rtc::data_channel::{
     RTCDataChannelId, RTCDataChannelInit, RTCDataChannelMessage, RTCDataChannelState,
 };
 
+/// Current endpoint DATA payload limit (configured path MTU minus headers).
+// ref: webrtc-rs/rtc@b808b74f712ed379312a114b848ede133880d58a/rtc-sctp/src/config.rs:118-125.
+pub fn sctp_data_payload_limit() -> usize {
+    rtc::sctp::EndpointConfig::default().get_max_payload_size() as usize
+}
+
 /// Object-safe trait exposing all public DataChannel operations.
 ///
 /// This allows `on_data_channel` in `PeerConnectionEventHandler` to receive a
@@ -31,6 +37,9 @@ pub trait DataChannel: Send + Sync + 'static {
     /// fail closed when used by the V4 scheduler.
     async fn buffered_amount(&self) -> Result<usize> {
         Err(Error::ErrDataChannelClosed)
+    }
+    async fn sctp_send_window(&self) -> Result<Option<(usize, u64, usize, usize)>> {
+        Ok(None)
     }
     async fn buffered_amount_high_threshold(&self) -> Result<u32>;
     async fn set_buffered_amount_high_threshold(&self, threshold: u32) -> Result<()>;
@@ -150,6 +159,10 @@ where
         core.data_channel(self.id)
             .ok_or(Error::ErrDataChannelClosed)?
             .buffered_amount()
+    }
+
+    async fn sctp_send_window(&self) -> Result<Option<(usize, u64, usize, usize)>> {
+        Ok(self.inner.core.lock().await.sctp_send_window())
     }
 
     /// Ordered returns true if the DataChannel is ordered, and false if

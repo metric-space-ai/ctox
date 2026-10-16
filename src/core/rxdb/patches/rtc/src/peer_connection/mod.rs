@@ -1762,6 +1762,12 @@ where
     /// create_data_channel creates a new DataChannel object with the given label
     /// and optional DataChannelInit used to configure properties of the
     /// underlying channel such as data reliability.
+    /// Current established association's DATA limit, sampled RTT and credit.
+    pub fn sctp_send_window(&self) -> Option<(usize, u64, usize, usize)> {
+        self.pipeline_context.sctp_handler_context.sctp_transport.sctp_associations.values()
+            .find(|a| !a.is_handshaking() && !a.is_closed()).map(|a| a.send_window())
+    }
+
     pub fn create_data_channel(
         &mut self,
         label: &str,
