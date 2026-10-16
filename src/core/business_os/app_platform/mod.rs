@@ -7,6 +7,7 @@
 //! Client activation remains a separate checkpoint-gated protocol.
 
 mod commands;
+pub(crate) mod runtime_host;
 #[cfg(test)]
 mod tests;
 

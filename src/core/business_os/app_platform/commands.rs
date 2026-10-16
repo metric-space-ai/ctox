@@ -222,6 +222,29 @@ fn permission(
     .allowed
 }
 
+fn permission_in_store(
+    tx: &Transaction<'_>,
+    actor: &BusinessOsActor,
+    right: BusinessOsPermission,
+    app: Option<&Value>,
+    app_id: &str,
+) -> bool {
+    let assigned = actor.id.as_deref().is_some_and(|id| {
+        app.and_then(|a| a.pointer("/provenance/owner_id"))
+            .and_then(Value::as_str)
+            == Some(id)
+    });
+    policy::sync_rights::read(tx).is_ok_and(|rights| {
+        policy::evaluate_with_rights(
+            &rights,
+            actor,
+            right,
+            &BusinessOsScope::module(app_id, assigned),
+        )
+        .allowed
+    })
+}
+
 pub(crate) fn can_read_draft(actor: &BusinessOsActor, draft: &Value, app: Option<&Value>) -> bool {
     if actor.id.as_deref().is_none_or(str::is_empty) {
         return false;
@@ -640,17 +663,26 @@ fn record(
     } else {
         command.payload.clone()
     };
-    put(
-        tx,
-        "business_commands",
-        &command.id,
-        &json!({
-            "id":command.id,"command_id":command.id,"app_id":command.app_id,"module":command.module,"command_type":command.command_type,
-            "payload":public_payload,"client_context":{"actor":{"id":actor.id}},
-            "status":if outcome["status"] == "preparing" {"running"} else if matches!(outcome["status"].as_str(),Some("rejected"|"failed")) {"failed"} else {"completed"},
-            "result":outcome,"updated_at_ms":now
-        }),
-    )?;
+    let mut record = json!({
+        "id":command.id,"command_id":command.id,"app_id":command.app_id,"module":command.module,"command_type":command.command_type,
+        "payload":public_payload,"client_context":{"actor":{"id":actor.id}},
+        "status":if outcome["status"] == "preparing" {"running"} else if matches!(outcome["status"].as_str(),Some("rejected"|"failed")) {"failed"} else {"completed"},
+        "result":outcome,"updated_at_ms":now
+    });
+    if let Some(mut canonical) =
+        get(tx, "business_commands", &command.id)?.filter(|doc| doc["type"].is_string())
+    {
+        for key in ["result", "updated_at_ms", "payload"] {
+            canonical[key] = record[key].clone();
+        }
+        canonical["status"] = json!(if record["status"] == "completed" {
+            "done"
+        } else {
+            record["status"].as_str().unwrap()
+        });
+        record = canonical;
+    }
+    put(tx, "business_commands", &command.id, &record)?;
     Ok(outcome)
 }
 
@@ -692,11 +724,16 @@ pub(super) fn execute(
         {
             return Err(invalid("command id is bound to another request or actor"));
         }
+        if saved["type"].is_string()
+            && super::runtime_host::actor(tx, actor.id.as_deref().unwrap_or(""))? != *actor
+        {
+            return record(tx, actor, command, result("forbidden"), now);
+        }
         // Intake may already have stored the admitted command. A pending
         // document is not a completed native receipt and must still execute.
         if matches!(
             saved["status"].as_str(),
-            Some("running" | "completed" | "failed")
+            Some("running" | "completed" | "done" | "failed")
         ) && saved.get("result").is_some_and(|v| !v.is_null())
         {
             return Ok(saved["result"].clone());
@@ -732,7 +769,8 @@ pub(super) fn execute(
     };
     let reject = |code| record(tx, actor, command, result(code), now);
     if actor.id.as_deref().is_none_or(str::is_empty)
-        || !permission(
+        || !permission_in_store(
+            tx,
             actor,
             required_permission,
             current.as_ref(),
@@ -743,7 +781,8 @@ pub(super) fn execute(
         return reject("forbidden");
     }
     if request.discard_local
-        && !permission(
+        && !permission_in_store(
+            tx,
             actor,
             BusinessOsPermission::AppsModify,
             current.as_ref(),
@@ -1107,6 +1146,11 @@ pub(super) fn complete(
     let lock: PublishLock = serde_json::from_value(pending["publication"].clone())
         .map_err(|e| invalid(e.to_string()))?;
     let app = get(tx, "business_apps", &lock.app_id)?;
+    let current_actor = if command["type"].is_string() {
+        super::runtime_host::actor(tx, actor.id.as_deref().unwrap_or(""))? == *actor
+    } else {
+        true
+    };
     let right = match command["command_type"].as_str() {
         Some("ctox.app.publish") if app.is_none() => BusinessOsPermission::AppsInstall,
         Some("ctox.app.publish") => BusinessOsPermission::AppsModify,
@@ -1116,9 +1160,11 @@ pub(super) fn complete(
         _ => return Err(invalid("invalid prepared publication command")),
     };
     if actor.id.as_deref().is_none_or(str::is_empty)
-        || !permission(actor, right, app.as_ref(), &lock.app_id)
+        || !current_actor
+        || !permission_in_store(tx, actor, right, app.as_ref(), &lock.app_id)
         || (pending["discard_local"] == true
-            && !permission(
+            && !permission_in_store(
+                tx,
                 actor,
                 BusinessOsPermission::AppsModify,
                 app.as_ref(),
@@ -1180,6 +1226,14 @@ pub(super) fn complete(
     });
     version["status"] = version["state"].clone();
     version["migrated_at_seq"] = json!(watermark.to_string());
+    if command["type"].is_string() {
+        super::runtime_host::publish_rights(
+            tx,
+            &lock.app_id,
+            &lock.target_app_ver,
+            &version["manifest"],
+        )?;
+    }
     put(tx, "business_app_versions", &id, &version)?; // effect: publish/update/rollback
     let manifest = &version["manifest"];
     let mut provenance = manifest["provenance"].clone();
@@ -1212,7 +1266,11 @@ pub(super) fn complete(
         // any connected client has fetched code or reached this watermark.
     let outcome = json!({"status":"accepted","app_id":lock.app_id,"app_ver":lock.target_app_ver,"migrated_at_seq":watermark.to_string()});
     command["result"] = outcome.clone();
-    command["status"] = json!("completed");
+    command["status"] = json!(if command["type"].is_string() {
+        "done"
+    } else {
+        "completed"
+    });
     command["updated_at_ms"] = json!(now);
     put(tx, "business_commands", command_id, &command)?;
     Ok(outcome)
