@@ -137,7 +137,7 @@ command in those steps is unchanged and stays where it was.
 | `iot-soak.yml` | push `branches: [main]` → `[main, release/v2]`; paths + `assert-rxdb-only.v4.mjs` (pull_request and push) | `Run IoT module + RxDB-only contract checks` (iot + app-store tests) → `RxDB-only contract, no HTTP bridge (v4 line)`: `assert-rxdb-only.v4.mjs` | same → `… (V2 line)`: `assert-rxdb-only.mjs` |
 | `crew-ui-acceptance.yml` | none (pull_request without branch filter, workflow_dispatch) | `Module and chat behavior` (ctox test.js, tickets) → `Chat behavior (v4 line)`: same three files with `--test-skip-pattern "Web Research oeffnet den Chat"` → `Research chat handoff (v4 line)`: `node src/apps/business-os/scripts/research-chat-handoff.v4.mjs` (does not exist yet → red) … `Shell and data boundary contracts` (rest) → `RxDB-only and crew map contracts (v4 line)`: `assert-rxdb-only.v4.mjs`, `assert-ctox-crew-map.v4.mjs` | `Module and chat behavior` (rest) → `Chat behavior (V2 line)`: `node --test shared/business-chat.test.mjs shared/react-settings.test.mjs shared/shell-crew-health.test.mjs` … `Shell and data boundary contracts` (rest) → `… (V2 line)`: `assert-rxdb-only.mjs`, `assert-ctox-crew-map.mjs` |
 | `mail-ui-acceptance.yml` | none (pull_request without branch filter, workflow_dispatch) | `Mail browser behavior (v4 line)`: `mail-browser-qa.v4.mjs` with `CTOX_APP_API_STUB` = in-repo stub `modules/ctox/tests/fixtures/app-api-stub` (pin 68b83a3), evidence `mail-qa-v4/` uploaded | `Mail browser behavior`: `mail-browser-qa.mjs` (unchanged step, now `if: release/v2`) |
-| `business-os-shell-release.yml` | none | `Verify main release source`: 0.2.x must be an ancestor of `origin/main` | 0.1.x must be an ancestor of `origin/release/v2`; unknown series fails |
+| `business-os-shell-release.yml` | none | `Verify main release source`: 0.2.x must be an ancestor of `origin/main`; E37.1: a 0.2.x prerelease (`-beta.N`, `-nightly.N`) may also be an ancestor of `origin/v4/integration` (clients follow only the stable channel) | 0.1.x must be an ancestor of `origin/release/v2`; unknown series fails |
 
 Pre-existing reds, not touched (red before the port as well): `check-office-skill-gating`, `assert-ctox-data-state`,
 `assert-context-menu-lifecycle`.
@@ -149,7 +149,7 @@ Pre-existing reds, not touched (red before the port as well): `check-office-skil
 - `node /Volumes/tmp/rel-runs/wf-gates.cjs .github/workflows/business-os-shell-release.yml "$PWD" 0.2.0-beta.1
   /Volumes/tmp/rel-runs/civ4-02` → failed=0. The runner starts at `Select release gate series`, so it does not
   evaluate the ancestry check in `Verify main release source`. That check was tested separately in a temp repo:
-  0.1.x on release/v2 → 0, 0.1.x on main → 1, 0.2.x on main → 0, 0.2.x on release/v2 → 1, 0.3.0 → 1.
+  0.1.x on release/v2 → 0, 0.1.x on main → 1, 0.2.x on main → 0, 0.2.x on release/v2 → 1, 0.3.0 → 1; E37.1: 0.2.0-beta.N on v4/integration → 0, 0.2.0 on v4/integration → 1, 0.2.0-beta.N off both lines → 1, 0.1.x on v4/integration → 1.
   `release.yml` `Select CI line` was also tested: a tag on the release/v2 tip gives release/v2, a tag on the main tip
   gives main, a tag before the split gives release/v2.
 - `mail-browser-qa.v4.mjs` with the in-repo stub (`CTOX_APP_API_STUB=modules/ctox/tests/fixtures/app-api-stub`)

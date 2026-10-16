@@ -51,14 +51,22 @@ jobs:
             [[ "$source_commit" == "$INPUT_SOURCE" ]] || { echo "Checked-out source differs from requested commit" >&2; exit 1; }
           fi
           # Release line per series (E37): 0.2.x (Shell v4) is cut from main, 0.1.x (V2) only from release/v2.
+          # E37.1: a 0.2.x PRERELEASE (version with '-', channel beta/nightly) may also be cut from origin/v4/integration,
+          # so M7 dress rehearsals get a signed V4 candidate before the main merge. Stable 0.2.x stays main-only.
+          # Clients subscribe to the stable channel only (shell_update.rs CHANNEL_URL); a prerelease is staged by version.
           if [[ "$EVENT_NAME" == "push" ]]; then version="${REF_NAME#business-os-shell-v}"; else version="$INPUT_VERSION"; fi
           case "$version" in
-            0.1.*) release_line=release/v2 ;;
-            0.2.*) release_line=main ;;
-            *) echo "No release line for shell version $version (known series: 0.1.x = release/v2, 0.2.x = main)" >&2; exit 1 ;;
+            0.1.*) release_lines=(release/v2) ;;
+            0.2.*-*) release_lines=(main v4/integration) ;;
+            0.2.*) release_lines=(main) ;;
+            *) echo "No release line for shell version $version (known series: 0.1.x = release/v2, 0.2.x = main, 0.2.x-pre also v4/integration)" >&2; exit 1 ;;
           esac
-          git merge-base --is-ancestor "$source_commit" "refs/remotes/origin/$release_line" \
-            || { echo "Release source $source_commit is not on origin/$release_line (required for shell $version)" >&2; exit 1; }
+          on_line=""
+          for line in "${release_lines[@]}"; do
+            git merge-base --is-ancestor "$source_commit" "refs/remotes/origin/$line" && { on_line="$line"; break; }
+          done
+          [[ -n "$on_line" ]] \
+            || { echo "Release source $source_commit is not on origin/{${release_lines[*]}} (required for shell $version)" >&2; exit 1; }
           printf 'commit=%s\n' "$source_commit" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node.js 24
