@@ -277,6 +277,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn foreground_http_reuses_owned_stores_and_cli_ipc() -> anyhow::Result<()> {
         let _scope = super::super::store_startup::isolate_test_roots().await;
+        anyhow::ensure!(
+            std::env::var_os("CTOX_STATE_ROOT").is_none(),
+            "configured profile forbidden in HTTP contract"
+        );
         let root = tempfile::Builder::new().prefix("c7h-").tempdir_in("/tmp")?;
         let app = root.path().join("business-os");
         std::fs::create_dir(&app)?;

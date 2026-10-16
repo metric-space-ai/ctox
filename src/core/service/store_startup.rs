@@ -362,38 +362,41 @@ pub(crate) async fn run(root: PathBuf) -> anyhow::Result<()> {
     let mut owner = Foreground::start(root.clone(), Handle::current()).await?;
     // E36: the ordinary daemon owns HTTP too. Read the established typed
     // runtime-store settings through its existing reader, never a CLI opener.
-    let runtime_db = owner
-        .inputs
-        .databases
-        .get("runtime")
-        .ok_or(StoreError::Closed)?;
-    let settings = runtime_db
-        .readers
-        .read(|tx| {
-            use rusqlite::OptionalExtension;
-            let read = |key: &str| {
-                tx.query_row(
-                    "SELECT env_value FROM runtime_env_kv WHERE env_key=?1",
-                    [key],
-                    |r| r.get::<_, String>(0),
-                )
-                .optional()
-            };
-            Ok((
-                read("CTOX_BUSINESS_OS_WEB_AUTOSTART")?,
-                read("CTOX_BUSINESS_OS_WEB_ADDR")?,
-            ))
-        })
-        .await?;
-    if !matches!(settings.0.as_deref(), Some("0" | "false" | "off")) {
-        let addr = settings.1.unwrap_or_else(|| "127.0.0.1:8765".into());
-        let root = root.clone();
-        if let Err(error) =
-            tokio::task::spawn_blocking(move || super::store_http::serve(&root, &addr)).await?
-        {
-            owner.drain().await?;
-            return Err(error);
+    let http_start = async {
+        let runtime_db = owner
+            .inputs
+            .databases
+            .get("runtime")
+            .ok_or(StoreError::Closed)?;
+        let settings = runtime_db
+            .readers
+            .read(|tx| {
+                use rusqlite::OptionalExtension;
+                let read = |key: &str| {
+                    tx.query_row(
+                        "SELECT env_value FROM runtime_env_kv WHERE env_key=?1",
+                        [key],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .optional()
+                };
+                Ok((
+                    read("CTOX_BUSINESS_OS_WEB_AUTOSTART")?,
+                    read("CTOX_BUSINESS_OS_WEB_ADDR")?,
+                ))
+            })
+            .await?;
+        if !matches!(settings.0.as_deref(), Some("0" | "false" | "off")) {
+            let addr = settings.1.unwrap_or_else(|| "127.0.0.1:8765".into());
+            let root = root.clone();
+            tokio::task::spawn_blocking(move || super::store_http::serve(&root, &addr)).await??;
         }
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    if let Err(error) = http_start {
+        owner.drain().await?;
+        return Err(error);
     }
     // Publish process metadata only after acquiring the daemon/file custody.
     // A rejected second start must not overwrite the running owner's PID.
