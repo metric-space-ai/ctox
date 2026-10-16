@@ -3,8 +3,6 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { collections, migrationStrategies } from '../schema.js';
-import { collections as coreCollections } from '../../ctox/schema.js';
 import {
   __kundenpipelineTestHooks as hooks,
   decisionCommand,
@@ -31,38 +29,36 @@ test('Decision Hub raster icon hash matches checked-in provenance', async () => 
   assert.equal(createHash('sha256').update(icon).digest('hex'), derivative.sha256);
 });
 
+// v4 (App-API 4.0): Daten nur über api.query (Live-Abo), Befehle über api.command, keine Neuladeschleife.
+const { collections, migration_strategies: migrationStrategies } = JSON.parse(await readFile(new URL('../collections.schema.json', import.meta.url), 'utf8'));
+const { collections: coreCollections } = JSON.parse(await readFile(new URL('../../ctox/collections.schema.json', import.meta.url), 'utf8'));
+
 test('module context stays on the shell data and command boundaries', async () => {
   const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
-  assert.match(source, /state\.ctx\?\.db\?\.collection/);
-  assert.match(source, /state\.ctx\?\.commandBus\?\.dispatch/);
+  assert.match(source, /api\.query\(name, \{\}\)\.subscribe/);
+  assert.match(source, /api\.command\(envelope\.command_type/);
+  assert.doesNotMatch(source, /setInterval|ctx\.db|commandBus|collectionReadiness|data-refresh/);
   assert.match(source, /kundenpipeline\.decision\.resolve/);
   assert.match(source, /kundenpipeline\.decision\.answer/);
   assert.doesNotMatch(source, /\/api\/business-os/);
 });
 
 test('Decision Hub declares the native projection collections', () => {
-  assert.deepEqual(Object.keys(collections), [
-    'kundenpipeline_vorgaenge',
+  assert.deepEqual(Object.keys(collections).sort(), [
+    'business_commands',
     'kundenpipeline_entscheidungen',
     'kundenpipeline_projekte',
-    'business_commands',
+    'kundenpipeline_vorgaenge',
   ]);
   assert.equal(collections.kundenpipeline_entscheidungen.primaryKey, 'id');
   assert.ok(collections.kundenpipeline_entscheidungen.indexes.includes('status'));
   assert.ok(collections.kundenpipeline_vorgaenge.indexes.includes('kunde_id'));
   assert.deepEqual(collections.business_commands, coreCollections.business_commands);
-  const legacy = {
-    id: 'legacy-command', command_id: 'legacy-command', module: 'kundenpipeline',
-    command_type: 'kundenpipeline.decision.resolve', status: 'pending',
-    updated_at_ms: 1, payload: { decision_id: 'decision-1' },
-  };
-  let migrated = structuredClone(legacy);
-  for (let version = 1; version <= coreCollections.business_commands.version; version += 1) {
-    const migrate = migrationStrategies.business_commands[version];
-    assert.equal(typeof migrate, 'function', `missing command migration ${version}`);
-    migrated = migrate(migrated);
-  }
-  assert.deepEqual(migrated, { ...legacy, inbound_channel: 'kundenpipeline' });
+  // schema.js ist gelöscht (§16.13): die business_commands-Migration steht deklarativ in collections.schema.json.
+  assert.deepEqual(migrationStrategies.business_commands['1'].operations, [
+    { default: '', field: 'inbound_channel', op: 'set_from_first_truthy', paths: ['inbound_channel', 'module'] },
+  ]);
+  assert.deepEqual(migrationStrategies.business_commands['2'].operations, []);
 });
 
 test('decision cards filter open items and retain agent options', () => {

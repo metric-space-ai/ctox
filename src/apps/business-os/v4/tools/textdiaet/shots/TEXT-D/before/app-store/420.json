@@ -1,0 +1,111 @@
+{
+ "app": "app-store",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "App Store",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "nav:M Marketplace (0)",
+    "nav:+ Templates (1)",
+    "nav:✓ Installiert (2)",
+    "nav:* Lokale Module (0)",
+    "nav:◆ System (0)",
+    "nav:All Alles (3)",
+    "button:Zum App Creator wechseln, Rück",
+    "button:App aus einem eigenen GitHub-R",
+    "button:App aus einer hochgeladenen .z",
+    "button:Sichtbare Katalogliste exporti",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Katalog (0)",
+    "nav:Updates (0)"
+   ],
+   "shot": "app-store/420-01-open.png"
+  },
+  {
+   "step": "nav M Marketplace (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "app-store/420-02-nav_M_Marketplace_0_.png"
+  },
+  {
+   "step": "nav + Templates (1)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "app-store/420-03-nav_Templates_1_.png"
+  },
+  {
+   "step": "nav ✓ Installiert (2)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [
+    "HTTP 404 /~a/shell@lab/icon.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)"
+   ],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "app-store/420-04-nav_Installiert_2_.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 235,
+   "shot": "app-store/420-05-suche_ohne_Treffer.png",
+   "textAfter": 192
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [
+    "HTTP 404 /~a/shell@lab/icon.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)"
+   ],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "app-store/420-06-suche_geleert.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "app-store",
+  "App Store"
+ ]
+}

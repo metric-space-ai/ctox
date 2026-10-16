@@ -17,10 +17,11 @@ test('interviews: manifest is consistent and has no inline SVG', () => {
   assert.ok(!manifest.layout || !manifest.layout.icon_svg, 'no inline SVG in manifest');
 });
 
-test('interviews: schema declares its owned collection', () => {
-  const schemaSrc = read('schema.js');
-  assert.match(schemaSrc, /interview_scorecards/);
-  assert.match(schemaSrc, /export const collections/);
+test('interviews: collections.schema.json is the only schema source (schema.js removed, §16.13)', () => {
+  const schema = JSON.parse(read('collections.schema.json'));
+  assert.ok(schema.collections.interview_meetings, 'meetings declared');
+  assert.ok(schema.collections.interview_scorecards, 'scorecards declared');
+  assert.throws(() => read('schema.js'), /ENOENT/, 'schema.js is gone');
 });
 
 test('interviews: left column carries the full canonical grammar markup', () => {
@@ -30,10 +31,9 @@ test('interviews: left column carries the full canonical grammar markup', () => 
   assert.match(html, /data-pg-tray-toggle/, 'tray toggle');
   assert.match(html, /data-pg-tray\b/, 'tray');
   assert.match(html, /data-pg-reset/, 'reset');
-  assert.match(html, /data-pg-footer/, 'footer target');
+  assert.doesNotMatch(html, /data-pg-footer/, 'keine Fußzeile, die nur den Reiterzähler wiederholt (Textdiät Regel 5)');
   // Recessed well + one-line footer + view-switch band from the kit.
   assert.match(html, /ctox-well/, 'recessed well');
-  assert.match(html, /ctox-pane-footer/, 'pane footer');
 });
 
 // Operator directive 31.08.2026: the shard/list switch is ONE button that
@@ -61,7 +61,7 @@ test('interviews: the view switch is a single toggling action button', () => {
 test('interviews: card and list rows are rendered differently', () => {
   const now = 1_700_000_000_000;
   const row = {
-    id: 'imeet_1', candidate_id: 'cand-a', vacancy_id: 'vac-1', state: 'confirmed',
+    id: 'imeet_1', candidate_id: 'cand-a', candidate_name: 'Anna Adam', vacancy_id: 'vac-1', state: 'confirmed',
     parties: [{ name: 'x' }, { name: 'y' }], start: now, end: now + 3_600_000,
     location_mode: 'video', video_link: 'https://example.test/x',
   };
@@ -121,24 +121,24 @@ test('interviews: import/export handlers are wired', () => {
   // Import = read JSON from a file input and upsert via the record helper.
   assert.match(js, /\.text\(\)/, 'import reads file text');
   assert.match(js, /function normalizeImported/, 'import normalizer');
-  assert.match(js, /\.upsert\(/, 'import upserts records');
+  assert.match(js, /api\.put\(PRIMARY, rec\)/, 'import writes records through api.put');
   assert.match(js, /data-ats-import-input/, 'hidden file input');
 });
 
 test('interviews: record list renders shards from a stub doc array', () => {
   const now = 1_700_000_000_000;
   const rows = [
-    { id: 'imeet_1', candidate_id: 'cand-a', vacancy_id: 'vac-1', state: 'proposed', parties: [{ name: 'x' }], start: now + 3_600_000 },
-    { id: 'imeet_2', candidate_id: 'cand-b', state: 'completed', parties: [], attended: true, start: now - 3_600_000, end: now - 1_800_000 },
+    { id: 'imeet_1', candidate_id: 'cand-a', candidate_name: 'Anna Adam', vacancy_id: 'vac-1', state: 'proposed', parties: [{ name: 'x' }], start: now + 3_600_000 },
+    { id: 'imeet_2', candidate_id: 'cand-b', candidate_name: 'Bernd Bauer', state: 'completed', parties: [], attended: true, start: now - 3_600_000, end: now - 1_800_000 },
   ];
   const t = (k) => k;
   const html = rows.map((r) => meetingShard(r, { t, locale: 'de', nowMs: now, selectedId: 'imeet_2' })).join('');
   // Both records render with the mandatory agent-context trio.
   assert.match(html, /data-context-record-id="imeet_1"/);
   assert.match(html, /data-context-record-type="interview_meeting"/);
-  assert.match(html, /data-context-label="cand-a"/);
-  assert.match(html, /cand-a/);
-  assert.match(html, /cand-b/);
+  assert.match(html, /data-context-label="Anna Adam"/);
+  assert.match(html, /Anna Adam/);
+  assert.match(html, /Bernd Bauer/);
   // The selected record is marked; every shard is a pure selector button.
   assert.match(html, /class="ats-shard is-selected" data-ats-select="imeet_2"/);
   assert.equal((html.match(/data-ats-select=/g) || []).length, 2);
@@ -168,28 +168,14 @@ test('interviews: partitionMeetings derives band counts and honours filters', ()
   assert.equal(statusFiltered.visible[0].id, 'c');
 });
 
-test('interviews: list body gates the data-driven empty on collection readiness', () => {
+test('interviews: list body renders rows only, an empty list renders nothing (App-API 4.0)', () => {
   const t = (k) => k;
-  // Empty unfiltered source + still syncing → kit syncing shell.
-  const syncing = meetingListBody([], { sourceEmpty: true, readiness: { ready: false, state: 'catching-up' }, t });
-  assert.match(syncing, /ctox-syncing/);
-  assert.match(syncing, /syncingData/);
-  // Empty unfiltered source + live → plain empty copy.
-  const empty = meetingListBody([], { sourceEmpty: true, readiness: { ready: true, state: 'live' }, t });
-  assert.match(empty, /ctox-empty/);
-  assert.match(empty, /entriesEmpty/);
-  // No readiness API (null) → previous empty-state behaviour.
-  assert.match(meetingListBody([], { sourceEmpty: true, readiness: null, t }), /ctox-empty/);
-  // Filter empties (source holds rows) are never gated on readiness.
-  const filtered = meetingListBody([], { sourceEmpty: false, readiness: { ready: false, state: 'catching-up' }, t });
-  assert.match(filtered, /ctox-empty/);
-  // Rows always win, even while the collection is still syncing.
+  assert.equal(meetingListBody([], { t }), '', 'no syncing shell, no empty copy');
   const now = 1_700_000_000_000;
-  const rows = meetingListBody(
-    [{ id: 'imeet_1', candidate_id: 'cand-a', state: 'proposed' }],
-    { sourceEmpty: false, readiness: { ready: false }, t, nowMs: now },
-  );
+  const rows = meetingListBody([{ id: 'imeet_1', candidate_id: 'cand-a', candidate_name: 'Anna Adam', state: 'proposed' }], { t, nowMs: now });
   assert.match(rows, /data-ats-select="imeet_1"/);
+  const js = read('index.js');
+  assert.doesNotMatch(js, /ctox-syncing|renderListOrState|collectionReadiness|ctx\.db/, 'no v3 data/sync paths left');
 });
 
 test('interviews: auto-reveal follows selection / create / collapse', () => {

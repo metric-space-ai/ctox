@@ -1,3 +1,22 @@
+/* v4: Das Fenster-Containerelement der Shell (container-name business-app-window) liegt ausserhalb von root.
+   Die App benennt ihr eigenes root als Container, damit die Breiten-Haltepunkte unten (768px) im
+   Inhaltsbereich greifen, egal ob die Shell einen Vorfahren-Container stellt (V4-PORT.md OFFEN-6). */
+[data-app="browser"] {
+  container: business-app-window / inline-size;
+}
+
+/* v4: Diese Regel kam bisher aus der Shell (app.css, .shell-window[data-shell-contract="v2"] …), deren
+   Fenster-Vorfahr in v4 ausserhalb von root liegt. Ohne sie schrumpft der Spaltentitel auf einen Buchstaben. */
+/* VIS4 (G4, keine Ellipse): der Kicker bleibt ganz, der Titel bricht an Wortgrenzen um; reicht die Zeile nicht,
+   rutscht der Titel unter den Kicker (flex-wrap an .ctox-pane-titles). Der Kopf wächst mit. */
+[data-app="browser"] .browser-module .ctox-pane-titles > .ctox-pane-title {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+[data-app="browser"] .browser-module .ctox-pane-titles > .ctox-pane-kicker {
+  flex: 0 0 auto;
+}
+
 /* ============================================================================
    Browser-Modul — nur Spezialfälle.
    IA: LEFT = persistente Sitzungen (kanonische Grammatik-Spalte, SHELL-wired
@@ -17,30 +36,35 @@
 
 /* Shell V2 keeps the session pane title/filter chrome aligned with the shell
    glyph and prevents the compact toolbar from wrapping. */
-.shell-window[data-shell-contract="v2"] .browser-module { padding: 0; background: var(--shell-v2-surface, var(--bg)); }
-.shell-window[data-shell-contract="v2"] .browser-module .ctox-pane { border: 0; border-radius: 0; background: var(--shell-v2-surface, var(--surface)); box-shadow: none; }
-.shell-window[data-shell-contract="v2"] .browser-module .ctox-pane-header { box-sizing: border-box; min-height: var(--shell-v2-header-row-size, 37px); padding: 0 8px; background: var(--shell-v2-surface-alt, var(--surface-2)); border-bottom: 1px solid var(--shell-v2-line, var(--line)); display: grid; grid-template-rows: var(--shell-v2-header-row-size, 37px) auto; align-content: start; }
-.shell-window[data-shell-contract="v2"] .browser-module .ctox-pane-title-row { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); }
-.shell-window[data-shell-contract="v2"] .browser-module .ctox-pane-titles { flex-direction: row; align-items: baseline; gap: 8px; padding-top: 0; overflow: hidden; }
-.shell-window[data-shell-contract="v2"] .browser-module .ctox-pane-kicker { flex: 0 0 auto; line-height: 1; }
-.shell-window[data-shell-contract="v2"] .browser-module .ctox-pane-title { margin-top: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.1; }
-.shell-window[data-shell-contract="v2"] .browser-module .ctox-filterbar { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); box-sizing: border-box; padding: 0; flex-wrap: nowrap; overflow-x: auto; }
+/* FIX8: Flächen über Theme-Tokens statt der fest dunklen Shell-v2-Fläche (#10151c/#141b24); im hellen Theme
+   lagen Kopfzeilen sonst dunkel auf dunkel (Muster modules/knowledge, modules/esign). */
+[data-app="browser"] .browser-module { padding: 0; background: var(--bg); color: var(--text); }
+[data-app="browser"] .browser-module .ctox-pane { border: 0; border-radius: 0; background: var(--surface); color: var(--text); box-shadow: none; }
+[data-app="browser"] .browser-module .ctox-pane-header { box-sizing: border-box; min-height: var(--shell-v2-header-row-size, 37px); padding: 0 8px; background: var(--surface-2); color: var(--text); border-bottom: 1px solid var(--shell-v2-line, var(--line)); display: grid; grid-template-rows: minmax(var(--shell-v2-header-row-size, 37px), auto) auto; align-content: start; }
+[data-app="browser"] .browser-module .ctox-pane-title-row { min-height: var(--shell-v2-header-row-size, 37px); }
+[data-app="browser"] .browser-module .ctox-pane-titles { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 0 8px; padding-top: 0; }
+[data-app="browser"] .browser-module .ctox-pane-kicker { flex: 0 0 auto; line-height: 1; }
+[data-app="browser"] .browser-module .ctox-pane-title { margin-top: 0; overflow-wrap: break-word; line-height: 1.1; }
+[data-app="browser"] .browser-module .ctox-filterbar { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); box-sizing: border-box; padding: 0; flex-wrap: nowrap; overflow-x: auto; }
 
 /* custom: Spalten-Pins — LEFT (Sitzungen) = Spalte 1, Resizer = Spalte 2,
    MAIN (Canvas) = Spalte 3. Der Workspace-Grid (2-Spalten-Template) kommt aus
    .ctox-workspace--two-pane; MAIN ist die einzige flexible Spur und behält so
    den Vorrang. */
-.browser-module {
+[data-app="browser"] .browser-module {
   position: relative;
   background: var(--bg);
   color: var(--text);
 }
 
-.browser-sessions {
+[data-app="browser"] .browser-sessions {
   grid-column: 1;
   /* Explizite Shell-v2-Zeilen: Titel · Filter · optionale Filterablage ·
      gezähltes Band · Well (füllt) · Footer. */
   grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
+  /* Spalte nie breiter als die Pane: ohne explizite Spur wuchs die auto-Spur auf die Mindestbreite von Kopf/Band
+     (327 px in 320 px, rechte Kopf-Icons und „Scraping“-Reiter abgeschnitten, Rundgang RUND1 @1280). */
+  grid-template-columns: minmax(0, 1fr);
 }
 
 /* Die Filterablage ist im Ruhezustand [hidden] und damit `display: none` — sie
@@ -49,19 +73,19 @@
    1fr-Spur mit 593px, also eine leere reservierte Spur genau der Sorte, die
    Vertrag §6 beschreibt. Well und Footer stehen darum auf ihrer Spur fest;
    die Ablage klappt in Spur 3 auf, ohne etwas zu verschieben. */
-.browser-sessions > .ctox-pane-body {
+[data-app="browser"] .browser-sessions > .ctox-pane-body {
   grid-row: 5;
 }
 
-.browser-sessions > .ctox-pane-footer {
+[data-app="browser"] .browser-sessions > .ctox-pane-footer {
   grid-row: 6;
 }
 
-.browser-module > .ctox-column-resizer {
+[data-app="browser"] .browser-module > .ctox-column-resizer {
   grid-column: 2;
 }
 
-.browser-canvas {
+[data-app="browser"] .browser-canvas {
   grid-column: 3;
   /* Kanonischer Objektkopf · Ansichtsband · Browser-Chrome · Arbeitsfläche. */
   grid-template-rows: auto auto auto minmax(0, 1fr);
@@ -75,16 +99,16 @@
    Kopf hält die Icon-Spalte frei, der rechte die Fenstersteuerung. Die zweite
    Zeile liegt noch innerhalb beider Zonen (2 x 37px = 74px = 80px - 6px
    Rahmen) und wird deshalb gleich behandelt. */
-.shell-window[data-shell-contract="v2"] .browser-module .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .browser-module .ctox-filterbar,
-.shell-window[data-shell-contract="v2"] .browser-module .browser-canvas-switch {
+[data-app="browser"] .browser-module .ctox-pane-header,
+[data-app="browser"] .browser-module .ctox-filterbar,
+[data-app="browser"] .browser-module .browser-canvas-switch {
   box-sizing: border-box;
+  /* VIS4: at least one header row; a wrapped title or tab strip may grow it. */
   min-height: var(--shell-v2-header-row-size, 37px);
-  height: var(--shell-v2-header-row-size, 37px);
   padding-block: 0;
 }
 
-.shell-window[data-shell-contract="v2"] .browser-module .ctox-pane-title-row {
+[data-app="browser"] .browser-module .ctox-pane-title-row {
   height: 100%;
   min-width: 0;
 }
@@ -92,55 +116,54 @@
 /* Kicker + Titel bleiben gestapelt: 14px Kicker + 17px Titel passen in die
    37px-Zeile, und der Titel behält die volle Spaltenbreite. Eine Zeilenanordnung
    (wie im 64px-Pilot Knowledge) würde ihn hier auf ~38px zusammenquetschen. */
-.shell-window[data-shell-contract="v2"] .browser-module .ctox-pane-titles {
+[data-app="browser"] .browser-module .ctox-pane-titles {
   min-width: 0;
   padding-top: 0;
-  overflow: hidden;
 }
 
-.shell-window[data-shell-contract="v2"] .browser-module .ctox-pane-title {
+[data-app="browser"] .browser-module .ctox-pane-title {
   min-width: 0;
   margin-top: 0;
   line-height: 1.15;
 }
 
 /* Linke Spalte: Icon-Zone (80px) freihalten — Titelzeile UND Filterzeile. */
-.shell-window[data-shell-contract="v2"] .browser-module .browser-sessions > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .browser-module .browser-sessions > .ctox-filterbar {
+[data-app="browser"] .browser-module .browser-sessions > .ctox-pane-header,
+[data-app="browser"] .browser-module .browser-sessions > .ctox-filterbar {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
   padding-right: 14px;
 }
 
 /* Rechte Spalte: Fenstersteuerung (74x74) freihalten. */
-.shell-window[data-shell-contract="v2"] .browser-module .browser-canvas > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .browser-module .browser-canvas-switch {
+[data-app="browser"] .browser-module .browser-canvas > .ctox-pane-header,
+[data-app="browser"] .browser-module .browser-canvas-switch {
   padding-right: 70px;
 }
 
-.browser-canvas-head .ctox-pane-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* VIS4 (G4): the page title in the canvas head wraps instead of an ellipsis;
+   the head grows with it (heads of one window stay level, v4 frame). */
+[data-app="browser"] .browser-canvas-head .ctox-pane-title {
+  overflow-wrap: break-word;
 }
 
-.browser-canvas-head .ctox-badge {
+[data-app="browser"] .browser-canvas-head .ctox-badge {
   max-width: 150px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.browser-canvas-switch {
+[data-app="browser"] .browser-canvas-switch {
   display: flex;
   align-items: center;
   min-width: 0;
 }
 
-.browser-canvas-switch .browser-view-switch {
+[data-app="browser"] .browser-canvas-switch .browser-view-switch {
   flex: 0 0 auto;
 }
 
-.browser-canvas-switch .browser-session-list {
+[data-app="browser"] .browser-canvas-switch .browser-session-list {
   flex: 1 1 auto;
 }
 
@@ -149,12 +172,12 @@
    das Gegenstück zur aktuellen (data-pg-view). Der Knopf ist eine Aktion, kein
    Zustand — die aria-pressed-Akzentfüllung des Kits gilt hier deshalb nicht,
    auch wenn die Shell das Attribut auf [data-pg-view] stempelt. */
-.browser-view-toggle[data-pg-view="cards"] [data-view-icon="cards"],
-.browser-view-toggle[data-pg-view="list"] [data-view-icon="list"] {
+[data-app="browser"] .browser-view-toggle[data-pg-view="cards"] [data-view-icon="cards"],
+[data-app="browser"] .browser-view-toggle[data-pg-view="list"] [data-view-icon="list"] {
   display: none;
 }
 
-.ctox-view-toggle .browser-view-toggle[aria-pressed="true"] {
+[data-app="browser"] .ctox-view-toggle .browser-view-toggle[aria-pressed="true"] {
   background: none;
   color: inherit;
 }
@@ -164,14 +187,18 @@
    KARTEN  = drei Zeilen — fetter Titel, Betriebs-Meta, Detailzeile;
    LISTE   = genau eine dichte Zeile — Titel plus ein Kurz-Meta rechts.
    Auswahl = Akzent-Füllung + flacher 2px-Balken (Kit, .ctox-list-item). */
-.browser-session-rail {
+[data-app="browser"] .browser-session-rail {
   display: grid;
+  /* Eine Spalte, die nie breiter als die Schiene wird: lange Adapterzeilen (nowrap) kürzen statt die Liste seitlich
+     scrollen zu lassen (Rundgang RUND1, Band „Scraping“: 678 px Inhalt in 341 px). */
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
   gap: 6px;
   padding: 8px;
 }
 
 /* KARTEN: Zustandssymbol links über alle Zeilen, rechts Titel + Meta. */
-.browser-session {
+[data-app="browser"] .browser-session {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: start;
@@ -180,50 +207,50 @@
   cursor: pointer;
 }
 
-.browser-session > .browser-session-zustand {
+[data-app="browser"] .browser-session > .browser-session-zustand {
   grid-row: 1 / -1;
 }
 
-.browser-session-title,
-.browser-session-meta,
-.browser-session-detail,
-.browser-session-brief {
+/* VIS4 (G4): long session titles and meta lines wrap at word boundaries
+   instead of being cut with an ellipsis. */
+[data-app="browser"] .browser-session-title,
+[data-app="browser"] .browser-session-meta,
+[data-app="browser"] .browser-session-detail,
+[data-app="browser"] .browser-session-brief {
   grid-column: 2;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word;
 }
 
-.browser-session-title {
+[data-app="browser"] .browser-session-title {
   color: var(--text-strong);
   font-weight: 600;
   line-height: 1.25;
 }
 
-.browser-session-meta {
+[data-app="browser"] .browser-session-meta {
   color: var(--muted);
   font-size: 12px;
 }
 
-.browser-session-detail {
+[data-app="browser"] .browser-session-detail {
   color: var(--muted);
   font-size: 11px;
-  opacity: 0.85;
+  /* DARK: keine zusätzliche Abschwächung (opacity 0.85 ergab Kontrast 3,0). */
 }
 
-.browser-session-detail:empty {
+[data-app="browser"] .browser-session-detail:empty {
   display: none;
 }
 
 /* LISTE: genau eine Zeile je Eintrag — Titel links, ein Kurz-Meta rechts,
    enge Zeilenhöhe, keine senkrechten Lücken zwischen den Einträgen. */
-.browser-session-rail.is-list {
+[data-app="browser"] .browser-session-rail.is-list {
   gap: 0;
   padding: 0;
 }
 
-.browser-session-rail.is-list .browser-session {
+[data-app="browser"] .browser-session-rail.is-list .browser-session {
   /* Die dritte Spur ist `max-content`, nicht `auto`: die Zellen tragen
      `min-width: 0` (für die Ellipse), damit fiele eine auto-Spur neben der
      1fr-Titelspalte auf null zusammen und das Kurz-Meta bliebe als "Eingr…"
@@ -235,11 +262,11 @@
   line-height: 1.35;
 }
 
-.browser-session-rail.is-list .browser-session-title {
+[data-app="browser"] .browser-session-rail.is-list .browser-session-title {
   font-weight: 500;
 }
 
-.browser-session-brief {
+[data-app="browser"] .browser-session-brief {
   grid-column: 3;
   justify-self: end;
   max-width: 11rem;
@@ -247,13 +274,13 @@
   font-size: 11px;
 }
 
-.browser-chrome,
-.browser-workbench {
+[data-app="browser"] .browser-chrome,
+[data-app="browser"] .browser-workbench {
   min-width: 0;
   min-height: 0;
 }
 
-.browser-chrome {
+[data-app="browser"] .browser-chrome {
   display: grid;
   border-bottom: 1px solid var(--line);
   background: var(--surface);
@@ -263,18 +290,18 @@
 /* custom: Fenster-Tab-Leiste — die Kit-Tabs (.ctox-pane-tabs im
    Session-Container) sitzen in einer Chrome-ähnlichen Leiste über der
    Adresszeile; das Kit kennt keinen solchen zweizeiligen Browser-Chrome. */
-.browser-auth-row {
+[data-app="browser"] .browser-auth-row {
   display: grid;
   gap: 6px;
 }
 
-.browser-auth-row:has(> :not([hidden])) {
+[data-app="browser"] .browser-auth-row:has(> :not([hidden])) {
   padding: 8px 10px;
   border-bottom: 1px solid var(--hairline);
   background: var(--surface-2);
 }
 
-.browser-auth-row .ctox-callout:not([hidden]) {
+[data-app="browser"] .browser-auth-row .ctox-callout:not([hidden]) {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -282,7 +309,7 @@
   min-width: 0;
 }
 
-.browser-auth-row .ctox-pane-tools {
+[data-app="browser"] .browser-auth-row .ctox-pane-tools {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -292,11 +319,11 @@
 /* custom: Toggle für erweiterte Aktionen rechts in der Tab-Leiste.
    Standardzustand eingeklappt (aria-pressed="false"); sichtbare Markierung
    nur, wenn die Klappe offen ist. */
-.browser-toggle-advanced {
+[data-app="browser"] .browser-toggle-advanced {
   flex: 0 0 auto;
 }
 
-.browser-toggle-advanced[aria-pressed="true"] {
+[data-app="browser"] .browser-toggle-advanced[aria-pressed="true"] {
   color: var(--accent);
   background: var(--accent-soft);
 }
@@ -307,7 +334,7 @@
    Clipboard, Upload, Senden, Stopp) und Diagnoseflächen sitzen hier und
    werden nur bei Bedarf eingeblendet. Kein zusätzlicher Außenrahmen —
    eine feine Hairline trennt vom Hauptbereich. */
-.browser-advanced {
+[data-app="browser"] .browser-advanced {
   display: grid;
   gap: 10px;
   padding: 10px 14px;
@@ -315,41 +342,41 @@
   background: var(--surface-2);
 }
 
-.browser-advanced.is-advanced-hidden {
+[data-app="browser"] .browser-advanced.is-advanced-hidden {
   display: none;
 }
 
-.browser-advanced-actions {
+[data-app="browser"] .browser-advanced-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
 }
 
-.browser-advanced-actions .ctox-button,
-.browser-advanced-actions .ctox-choice,
-.browser-advanced-actions .ctox-compact-field {
+[data-app="browser"] .browser-advanced-actions .ctox-button,
+[data-app="browser"] .browser-advanced-actions .ctox-choice,
+[data-app="browser"] .browser-advanced-actions .ctox-compact-field {
   flex: 0 0 auto;
   margin: 0;
 }
 
-.browser-advanced-actions .ctox-compact-field {
+[data-app="browser"] .browser-advanced-actions .ctox-compact-field {
   min-width: 0;
 }
 
-.browser-advanced-actions .ctox-compact-field > .ctox-select {
+[data-app="browser"] .browser-advanced-actions .ctox-compact-field > .ctox-select {
   margin-top: 3px;
   min-height: 30px;
 }
 
-.browser-advanced-actions .ctox-choice {
+[data-app="browser"] .browser-advanced-actions .ctox-choice {
   padding: 6px 10px;
 }
 
 /* custom: Auth-Assist-Inhalt in der Kit-Callout — Titel und Hinweiszeilen
    werden gekürzt, damit lange Origins/Realms die Tab-Leiste nicht sprengen. */
-[data-browser-auth-assist] strong,
-[data-browser-auth-assist] small {
+[data-app="browser"] [data-browser-auth-assist] strong,
+[data-app="browser"] [data-browser-auth-assist] small {
   display: block;
   min-width: 0;
   overflow: hidden;
@@ -357,44 +384,51 @@
   white-space: nowrap;
 }
 
-[data-browser-auth-assist] small {
+[data-app="browser"] [data-browser-auth-assist] small {
   color: var(--muted);
   margin-top: 3px;
 }
 
-.browser-muted {
+[data-app="browser"] .browser-muted {
   color: var(--muted);
 }
 
-.browser-error {
+[data-app="browser"] .browser-error {
   color: var(--danger);
   margin-top: 8px;
   overflow-wrap: anywhere;
 }
 
-.browser-session-list {
+/* VIS4 (G1): the session tab strip wraps into a second row instead of
+   scrolling sideways when the canvas column is narrow. */
+[data-app="browser"] .browser-session-list {
   flex: 1 1 auto;
+  flex-wrap: wrap;
   min-width: 0;
-  overflow-x: auto;
+  max-width: 100%;
 }
 
 /* custom: Browser-Tabs kürzen lange Seitentitel — Kit-Tabs tragen feste,
    kurze View-Namen und haben deshalb keine Breitenbegrenzung. */
-.browser-tab {
+[data-app="browser"] .browser-tab {
   justify-content: space-between;
   gap: 4px;
   max-width: 220px;
+  /* VIS4 (G4): a long page title wraps inside the tab (kit tabs are one fixed
+     24px line with nowrap), so the tab may grow to two lines. */
+  height: auto;
+  min-height: 24px;
+  white-space: normal;
 }
 
-.browser-tab-title {
+[data-app="browser"] .browser-tab-title {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: break-word;
 }
 
 /* custom: Download-Leiste — horizontale, scrollbare Liste freizugebender
    Dateien mit Aktionen je Eintrag. */
-.browser-download-strip {
+[data-app="browser"] .browser-download-strip {
   display: flex;
   gap: 12px;
   padding: 6px 10px;
@@ -402,11 +436,11 @@
   border-top: 1px solid var(--hairline);
 }
 
-.browser-download-strip[hidden] {
+[data-app="browser"] .browser-download-strip[hidden] {
   display: none;
 }
 
-.browser-download-item {
+[data-app="browser"] .browser-download-item {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -414,7 +448,7 @@
   font-size: 12px;
 }
 
-.browser-workbench {
+[data-app="browser"] .browser-workbench {
   display: grid;
   /* Das Shell-v2-Ansichtsband sitzt oberhalb der Chrome. In der Workbench
      bleiben nur die optionale Remote-Tab-Leiste und die Bühne. */
@@ -424,13 +458,13 @@
 
 /* custom: Adresszeilen-Layout — Navigationsgruppe plus wachsende
    URL-Eingabe; die Optik der Leiste selbst kommt von .ctox-toolbar. */
-.browser-nav-actions {
+[data-app="browser"] .browser-nav-actions {
   display: flex;
   align-items: center;
   gap: 2px;
 }
 
-.browser-address-form {
+[data-app="browser"] .browser-address-form {
   display: grid;
   grid-template-columns: minmax(120px, 1fr) 30px 34px;
   gap: 4px;
@@ -440,7 +474,7 @@
 
 /* custom: Statusleiste unter der Adresszeile — Kit-Badge plus gekürzter
    Seitentitel; eine solche durchgehende Statuszeile hat das Kit nicht. */
-.browser-status-strip {
+[data-app="browser"] .browser-status-strip {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 8px;
@@ -452,7 +486,7 @@
   font-size: 12px;
 }
 
-.browser-status-strip span {
+[data-app="browser"] .browser-status-strip span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -461,7 +495,7 @@
 
 /* custom: Remote-Viewport — der Canvas zeigt den gestreamten Browser-Inhalt
    und ist die zentrale Spezialansicht dieser App. */
-.browser-frame-shell {
+[data-app="browser"] .browser-frame-shell {
   position: relative;
   min-width: 0;
   min-height: 0;
@@ -470,7 +504,7 @@
   background: var(--bg);
 }
 
-.browser-frame-shell canvas {
+[data-app="browser"] .browser-frame-shell canvas {
   width: 100%;
   height: 100%;
   aspect-ratio: 16 / 9;
@@ -479,27 +513,39 @@
   background: #fff;
 }
 
-.browser-frame-shell canvas:focus-visible {
+[data-app="browser"] .browser-frame-shell canvas:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
 
 /* custom: Der Kit-Leerzustand (.ctox-empty) liegt als nicht-interaktives
    Overlay über dem Canvas, bis der erste Frame eintrifft. */
-.browser-empty {
+[data-app="browser"] .browser-empty {
   position: absolute;
   inset: 0;
   pointer-events: none;
 }
 
-.browser-empty[hidden] {
+[data-app="browser"] .browser-empty[hidden] {
   display: none;
+}
+
+/* FIX8: ohne jede Sitzung ein Satz + Aktion (nicht doppelt in der Liste); nur der Knopf nimmt Klicks an. */
+[data-app="browser"] .browser-empty:has([data-browser-empty-start]) {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  color: var(--muted);
+}
+[data-app="browser"] .browser-empty [data-browser-empty-start] {
+  pointer-events: auto;
 }
 
 /* Live explanation for Web-Stack/Playwright work. It floats over the streamed
    page and stays compact until the user opens the actual injected capture
    code, so observability does not permanently consume browser real estate. */
-.browser-automation-overlay {
+[data-app="browser"] .browser-automation-overlay {
   position: absolute;
   z-index: 4;
   top: 10px;
@@ -516,52 +562,52 @@
   font-size: 12px;
 }
 
-.browser-automation-overlay[hidden] {
+[data-app="browser"] .browser-automation-overlay[hidden] {
   display: none;
 }
 
-.browser-automation-heading {
+[data-app="browser"] .browser-automation-heading {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 7px;
 }
 
-.browser-automation-heading strong,
-.browser-automation-overlay small {
+[data-app="browser"] .browser-automation-heading strong,
+[data-app="browser"] .browser-automation-overlay small {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.browser-automation-heading > span:last-child,
-.browser-automation-overlay small {
+[data-app="browser"] .browser-automation-heading > span:last-child,
+[data-app="browser"] .browser-automation-overlay small {
   color: var(--muted);
 }
 
-.browser-automation-dot {
+[data-app="browser"] .browser-automation-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--accent);
 }
 
-.browser-automation-overlay small {
+[data-app="browser"] .browser-automation-overlay small {
   display: block;
   margin: 3px 0 0 14px;
 }
 
-.browser-automation-overlay details {
+[data-app="browser"] .browser-automation-overlay details {
   margin-top: 6px;
 }
 
-.browser-automation-overlay summary {
+[data-app="browser"] .browser-automation-overlay summary {
   cursor: pointer;
   color: var(--text-strong);
 }
 
-.browser-automation-overlay pre {
+[data-app="browser"] .browser-automation-overlay pre {
   max-height: 220px;
   margin: 7px 0 0;
   padding: 8px;
@@ -574,7 +620,7 @@
 }
 
 @container business-app-window (max-width: 768px) {
-  .browser-automation-overlay {
+  [data-app="browser"] .browser-automation-overlay {
     top: 6px;
     right: 6px;
     width: calc(100% - 12px);
@@ -585,7 +631,7 @@
 /* custom: versteckte Diagnose-Ansicht im Erweiterungsbereich (Command-/
    Handoff-Verlauf; bleibt aria-hidden und ist UI-unsichtbar, hält aber
    die JS-Vertragsoberfläche stabil). */
-.browser-command-row {
+[data-app="browser"] .browser-command-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 4px 8px;
@@ -594,19 +640,19 @@
   font-size: 12px;
 }
 
-.browser-command-row:last-child {
+[data-app="browser"] .browser-command-row:last-child {
   border-bottom: 0;
 }
 
-.browser-command-row strong,
-.browser-command-row span {
+[data-app="browser"] .browser-command-row strong,
+[data-app="browser"] .browser-command-row span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.browser-command-row span {
+[data-app="browser"] .browser-command-row span {
   color: var(--muted);
 }
 
@@ -632,13 +678,13 @@
      ist. Mit 6px läge die Kante der ersten Spalte samt Rahmen und Fläche unter
      dem Icon (Vertrag §7, iconZone) — gemessen bei 720px als Treffer auf
      x=12. */
-  .browser-module {
+  [data-app="browser"] .browser-module {
     padding-inline: 12px;
     grid-template-rows: minmax(160px, 30%) minmax(0, 1fr);
   }
 
-  .browser-sessions,
-  .browser-canvas {
+  [data-app="browser"] .browser-sessions,
+  [data-app="browser"] .browser-canvas {
     grid-column: 1;
   }
 
@@ -647,36 +693,36 @@
      rechts. Die Steuerung ist zwei Kopfzeilen hoch, die Filterzeile liegt also
      ebenfalls darunter und braucht denselben rechten Rand; sonst laufen
      Umschalter und Filterknopf hinter den Schließen-Knopf. */
-  .shell-window[data-shell-contract="v2"] .browser-module .browser-sessions > .ctox-pane-header,
-  .shell-window[data-shell-contract="v2"] .browser-module .browser-sessions > .ctox-filterbar {
+  [data-app="browser"] .browser-module .browser-sessions > .ctox-pane-header,
+  [data-app="browser"] .browser-module .browser-sessions > .ctox-filterbar {
     padding-right: 70px;
   }
 
   /* Die Bühne steht in Zeile 2 und damit unter keiner Shell-Zone mehr. */
-  .shell-window[data-shell-contract="v2"] .browser-module .browser-canvas > .ctox-pane-header,
-  .shell-window[data-shell-contract="v2"] .browser-module .browser-canvas-switch {
+  [data-app="browser"] .browser-module .browser-canvas > .ctox-pane-header,
+  [data-app="browser"] .browser-module .browser-canvas-switch {
     padding-right: 14px;
   }
 
-  .browser-toolbar {
+  [data-app="browser"] .browser-toolbar {
     gap: 3px;
     padding-inline: 4px;
   }
 
-  .browser-status-strip {
+  [data-app="browser"] .browser-status-strip {
     display: none;
   }
 
-  .browser-address-form {
+  [data-app="browser"] .browser-address-form {
     grid-template-columns: minmax(90px, 1fr) 30px 34px;
   }
 
-  .browser-advanced-actions {
+  [data-app="browser"] .browser-advanced-actions {
     flex-wrap: wrap;
   }
 
-  .browser-advanced-actions .ctox-button,
-  .browser-advanced-actions .ctox-choice {
+  [data-app="browser"] .browser-advanced-actions .ctox-button,
+  [data-app="browser"] .browser-advanced-actions .ctox-choice {
     flex: 1 1 auto;
   }
 }
@@ -685,46 +731,46 @@
    reaches the 44px minimum; icon-only buttons in both dimensions, plus the
    custom tab-strip buttons and the on-canvas context menu. */
 @media (pointer: coarse) {
-  .browser-module button,
-  .browser-module input,
-  .browser-module select,
-  .browser-module textarea {
+  [data-app="browser"] .browser-module button,
+  [data-app="browser"] .browser-module input,
+  [data-app="browser"] .browser-module select,
+  [data-app="browser"] .browser-module textarea {
     min-height: 44px;
   }
 
-  .browser-module .ctox-pane-icon {
+  [data-app="browser"] .browser-module .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
 
-  .browser-module .ctox-icon-button {
+  [data-app="browser"] .browser-module .ctox-icon-button {
     width: 44px;
     min-width: 44px;
   }
 
-  .browser-module .ctox-pane-tab {
+  [data-app="browser"] .browser-module .ctox-pane-tab {
     min-height: 44px;
   }
 
-  .browser-module .browser-session {
+  [data-app="browser"] .browser-module .browser-session {
     min-height: 44px;
   }
 
-  .browser-module .browser-tab,
-  .browser-module .browser-tab-title,
-  .browser-module .browser-tab-close {
+  [data-app="browser"] .browser-module .browser-tab,
+  [data-app="browser"] .browser-module .browser-tab-title,
+  [data-app="browser"] .browser-module .browser-tab-close {
     min-height: 44px;
   }
 
-  .browser-module .browser-tab-close {
+  [data-app="browser"] .browser-module .browser-tab-close {
     min-width: 44px;
   }
 
-  .browser-module .browser-context-menu button {
+  [data-app="browser"] .browser-module .browser-context-menu button {
     min-height: 44px;
   }
 
-  .browser-module .browser-advanced-actions .ctox-compact-field > .ctox-select {
+  [data-app="browser"] .browser-module .browser-advanced-actions .ctox-compact-field > .ctox-select {
     min-height: 44px;
   }
 }
@@ -732,7 +778,7 @@
 /* Sitzungszustand: wer steuert, und wo jemand eingreifen muss.
    Bei 34 Sitzungen findet man "Eingriff noetig" nicht, indem man jede Zeile
    liest — deshalb traegt das Symbol die Information, nicht nur der Text. */
-.browser-session-zustand {
+[data-app="browser"] .browser-session-zustand {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -744,48 +790,49 @@
   font-size: 0.9rem;
   line-height: 1.35;
 }
-.browser-session.is-eingriff .browser-session-zustand {
-  color: var(--ctox-warn, #e0a33a);
+/* DARK: Zustandssymbole über Theme-Tokens bzw. zum Text hin gemischt; die Rückfallfarben (--ctox-warn/-accent/
+   -text-muted fehlen im v4-Rahmen) lagen im hellen Theme bei Kontrast 1,5–2,2. */
+[data-app="browser"] .browser-session.is-eingriff .browser-session-zustand {
+  color: color-mix(in srgb, #e0a33a 55%, var(--text));
 }
 /* Der einzige Zustand, der jemanden BRAUCHT — darf auffallen, aber ohne
    dicken Rand: dafuer gibt es einen Gestaltungs-Waechter, und er hat recht.
    Ein leichter Farbschleier hebt die Zeile hervor, ohne das Raster zu brechen. */
-.browser-session.is-eingriff {
+[data-app="browser"] .browser-session.is-eingriff {
   background: color-mix(in srgb, var(--ctox-warn, #e0a33a) 10%, transparent);
 }
 /* Anmeldesitzung: der einzige Ort, an dem "Erledigt - Recherche fortsetzen"
    erscheint. Sie muss in der Liste sofort auffindbar sein. */
-.browser-session.is-anmeldung .browser-session-zustand {
-  color: var(--ctox-warn, #e0a33a);
+[data-app="browser"] .browser-session.is-anmeldung .browser-session-zustand {
+  color: color-mix(in srgb, #e0a33a 55%, var(--text));
 }
-.browser-session.is-anmeldung {
+[data-app="browser"] .browser-session.is-anmeldung {
   background: color-mix(in srgb, var(--ctox-warn, #e0a33a) 14%, transparent);
 }
-.browser-session.is-nutzer .browser-session-zustand {
-  color: var(--ctox-accent, #7fd4b0);
+[data-app="browser"] .browser-session.is-nutzer .browser-session-zustand {
+  color: color-mix(in srgb, #2f9e75 50%, var(--text));
 }
-.browser-session.is-automatik .browser-session-zustand {
-  color: var(--ctox-text-muted, #8a93a0);
+[data-app="browser"] .browser-session.is-automatik .browser-session-zustand {
+  color: var(--muted);
 }
-.browser-session.is-ruhend .browser-session-zustand {
-  color: var(--ctox-text-muted, #8a93a0);
-  opacity: 0.5;
+[data-app="browser"] .browser-session.is-ruhend .browser-session-zustand {
+  color: var(--muted);
 }
 
 /* Umschalter Live-Ansicht / Automatisierungsskript */
-.browser-view-path {
+[data-app="browser"] .browser-view-path {
   flex: 0 1 30%;
   color: var(--muted);
   font-size: 11px;
   overflow-wrap: anywhere;
 }
-.browser-script-panel {
+[data-app="browser"] .browser-script-panel {
   position: absolute;
   inset: 0;
   overflow: auto;
   background: var(--surface, #0e1116);
 }
-.browser-script-code {
+[data-app="browser"] .browser-script-code {
   margin: 0;
   padding: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -799,7 +846,7 @@
 /* custom: Kontextmenue der Buehne. Absolut im .browser-frame-shell verankert
    (nicht auf Shell-Ebene), damit es mit dem Fenster wandert und beim
    Schliessen des Moduls mit verschwindet. */
-.browser-context-menu {
+[data-app="browser"] .browser-context-menu {
   position: absolute;
   z-index: 5;
   min-width: 10rem;
@@ -807,17 +854,17 @@
   display: flex;
   flex-direction: column;
   gap: 0.125rem;
-  background: var(--panel, #1b1f24);
-  border: 1px solid var(--border, #333a42);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
   border-radius: 0.5rem;
   box-shadow: var(--shadow-lg);
 }
 
-.browser-context-menu[hidden] {
+[data-app="browser"] .browser-context-menu[hidden] {
   display: none;
 }
 
-.browser-context-menu button {
+[data-app="browser"] .browser-context-menu button {
   appearance: none;
   background: none;
   border: 0;
@@ -829,39 +876,42 @@
   cursor: pointer;
 }
 
-.browser-context-menu button:hover:not(:disabled),
-.browser-context-menu button:focus-visible {
-  background: var(--hover, #262c33);
+[data-app="browser"] .browser-context-menu button:hover:not(:disabled),
+[data-app="browser"] .browser-context-menu button:focus-visible {
+  background: var(--surface-2);
 }
 
-.browser-context-menu button:disabled {
+[data-app="browser"] .browser-context-menu button:disabled {
   opacity: 0.45;
   cursor: default;
 }
 
-.browser-context-menu hr {
+[data-app="browser"] .browser-context-menu hr {
   border: 0;
-  border-top: 1px solid var(--border, #333a42);
+  border-top: 1px solid var(--line);
   margin: 0.25rem 0.1rem;
 }
 
 /* custom: Tab-Leiste der fernen Sitzung. Bleibt bei einem einzigen Tab
    verborgen (siehe renderTabstrip), damit sie keine Hoehe verschenkt. */
-.browser-tabstrip {
+[data-app="browser"] .browser-tabstrip {
   display: flex;
   gap: 0.125rem;
   align-items: stretch;
   overflow-x: auto;
   padding: 0.25rem 0.25rem 0;
-  border-bottom: 1px solid var(--border, #333a42);
+  border-bottom: 1px solid var(--line);
   scrollbar-width: thin;
 }
 
-.browser-tabstrip[hidden] {
+[data-app="browser"] .browser-tabstrip[hidden] {
   display: none;
 }
 
-.browser-tab {
+/* FIX8: Reiter, Downloads und Rahmen nutzen Theme-Tokens statt dunkler Rückfallfarben (--panel/--border/--hover
+   sind im Rahmen nicht definiert): der aktive Reiter lag im hellen Theme dunkel auf dunkel. */
+[data-app="browser"] .browser-tab {
+  color: var(--text);
   display: flex;
   align-items: center;
   gap: 0.25rem;
@@ -869,17 +919,17 @@
   max-width: 14rem;
   padding: 0.2rem 0.35rem;
   border-radius: 0.35rem 0.35rem 0 0;
-  background: var(--panel, #1b1f24);
+  background: var(--surface-2);
   border: 1px solid transparent;
   border-bottom: 0;
 }
 
-.browser-tab.is-active {
-  background: var(--bg, #12161a);
-  border-color: var(--border, #333a42);
+[data-app="browser"] .browser-tab.is-active {
+  background: var(--surface);
+  border-color: var(--line);
 }
 
-.browser-tab-title {
+[data-app="browser"] .browser-tab-title {
   appearance: none;
   background: none;
   border: 0;
@@ -888,13 +938,14 @@
   padding: 0.1rem 0.2rem;
   min-width: 0;
   max-width: 11rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* VIS4 (G4): a long page title wraps inside the tab instead of an ellipsis. */
+  overflow-wrap: break-word;
+  text-align: start;
+  line-height: 1.25;
   cursor: pointer;
 }
 
-.browser-tab-close {
+[data-app="browser"] .browser-tab-close {
   appearance: none;
   background: none;
   border: 0;
@@ -907,36 +958,37 @@
   cursor: pointer;
 }
 
-.browser-tab-close:hover,
-.browser-tab-close:focus-visible {
+[data-app="browser"] .browser-tab-close:hover,
+[data-app="browser"] .browser-tab-close:focus-visible {
   opacity: 1;
-  background: var(--hover, #262c33);
+  background: var(--surface-2);
 }
 
 /* custom: Scraping-Adapter-Schiene. Betriebszustand der Recherche-Adapter im
    Browser-Modul; verwaltet werden sie in der Outbound-App. */
-.browser-adapter-card {
+[data-app="browser"] .browser-adapter-card {
+  min-width: 0;
   padding: 0.5rem 0.6rem;
-  border-bottom: 1px solid var(--border, #333a42);
+  border-bottom: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
 }
 
-.browser-adapter-head {
+[data-app="browser"] .browser-adapter-head {
   display: flex;
   align-items: center;
   gap: 0.4rem;
   min-width: 0;
 }
 
-.browser-adapter-head strong {
+[data-app="browser"] .browser-adapter-head strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.browser-adapter-dot {
+[data-app="browser"] .browser-adapter-dot {
   width: 0.55rem;
   height: 0.55rem;
   border-radius: 50%;
@@ -944,12 +996,12 @@
   background: var(--muted, #5a646e);
 }
 
-.browser-adapter-dot.is-ok { background: var(--ok, #37b26c); }
-.browser-adapter-dot.is-warn { background: var(--warn, #d9a03f); }
-.browser-adapter-dot.is-error { background: var(--danger, #d95c4a); }
-.browser-adapter-dot.is-off { background: var(--muted, #5a646e); }
+[data-app="browser"] .browser-adapter-dot.is-ok { background: var(--ok, #37b26c); }
+[data-app="browser"] .browser-adapter-dot.is-warn { background: var(--warn, #d9a03f); }
+[data-app="browser"] .browser-adapter-dot.is-error { background: var(--danger, #d95c4a); }
+[data-app="browser"] .browser-adapter-dot.is-off { background: var(--muted, #5a646e); }
 
-.browser-adapter-meta {
+[data-app="browser"] .browser-adapter-meta {
   font-size: 0.8rem;
   opacity: 0.75;
   overflow: hidden;
@@ -957,7 +1009,7 @@
   white-space: nowrap;
 }
 
-.browser-adapter-error {
+[data-app="browser"] .browser-adapter-error {
   font-size: 0.78rem;
   color: var(--danger, #d95c4a);
   overflow: hidden;
@@ -965,7 +1017,7 @@
   white-space: nowrap;
 }
 
-.browser-adapter-hint {
+[data-app="browser"] .browser-adapter-hint {
   padding: 0.6rem;
   font-size: 0.78rem;
   opacity: 0.6;
@@ -973,22 +1025,22 @@
 
 
 /* --- Sitzungsleiste einklappbar (data-browser-rail-toggle) --- */
-.browser-module.is-rail-collapsed .browser-sessions,
-.browser-module.is-rail-collapsed [data-resizer="left"] {
+[data-app="browser"] .browser-module.is-rail-collapsed .browser-sessions,
+[data-app="browser"] .browser-module.is-rail-collapsed [data-resizer="left"] {
   display: none;
 }
 
 /* --- Praezise Eingabe --- */
-.browser-module.is-precise [data-browser-canvas] {
+[data-app="browser"] .browser-module.is-precise [data-browser-canvas] {
   cursor: crosshair;
 }
-.browser-precise-layer {
+[data-app="browser"] .browser-precise-layer {
   position: absolute;
   inset: 0;
   pointer-events: none;
   z-index: 30;
 }
-.browser-precise-mark {
+[data-app="browser"] .browser-precise-mark {
   position: absolute;
   width: 18px;
   height: 18px;
@@ -1000,15 +1052,15 @@
      Schattenflaeche. */
   outline: 2px solid rgba(0, 0, 0, 0.45);
 }
-.browser-precise-mark::before,
-.browser-precise-mark::after {
+[data-app="browser"] .browser-precise-mark::before,
+[data-app="browser"] .browser-precise-mark::after {
   content: '';
   position: absolute;
   background: var(--accent, #e8833a);
 }
-.browser-precise-mark::before { left: 50%; top: -6px; width: 2px; height: 6px; margin-left: -1px; }
-.browser-precise-mark::after { top: 50%; left: -6px; height: 2px; width: 6px; margin-top: -1px; }
-.browser-precise-panel {
+[data-app="browser"] .browser-precise-mark::before { left: 50%; top: -6px; width: 2px; height: 6px; margin-left: -1px; }
+[data-app="browser"] .browser-precise-mark::after { top: 50%; left: -6px; height: 2px; width: 6px; margin-top: -1px; }
+[data-app="browser"] .browser-precise-panel {
   position: absolute;
   width: 340px;
   max-width: calc(100% - 16px);
@@ -1021,7 +1073,7 @@
   /* Kein box-shadow (Shell-V2-Vertrag): die Abhebung traegt der Rahmen. */
   pointer-events: auto;
 }
-.browser-precise-panel textarea {
+[data-app="browser"] .browser-precise-panel textarea {
   width: 100%;
   resize: vertical;
   min-height: 40px;
@@ -1032,35 +1084,35 @@
   border-radius: 6px;
   padding: 6px 8px;
 }
-.browser-precise-actions {
+[data-app="browser"] .browser-precise-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
 }
-.browser-precise-actions .ctox-button {
+[data-app="browser"] .browser-precise-actions .ctox-button {
   font-size: 12px;
   padding: 4px 8px;
 }
-.browser-precise-hint {
+[data-app="browser"] .browser-precise-hint {
   color: var(--text-2, #9aa);
   min-height: 14px;
 }
 
 /* --- Kompakte Web-Stack-Anmeldezeile --- */
-[data-browser-auth-assist] {
+[data-app="browser"] [data-browser-auth-assist] {
   padding: 6px 10px;
 }
-[data-browser-auth-assist] .browser-auth-summary {
+[data-app="browser"] [data-browser-auth-assist] .browser-auth-summary {
   min-width: 0;
 }
-[data-browser-auth-assist] .browser-auth-instruction {
+[data-app="browser"] [data-browser-auth-assist] .browser-auth-instruction {
   display: block;
   max-width: 60ch;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-[data-browser-auth-assist] .ctox-pane-tools .ctox-button {
+[data-app="browser"] [data-browser-auth-assist] .ctox-pane-tools .ctox-button {
   font-size: 12px;
   padding: 4px 8px;
 }

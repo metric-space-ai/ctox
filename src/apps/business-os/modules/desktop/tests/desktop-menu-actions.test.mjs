@@ -1,118 +1,54 @@
+// Desktop-Menüaktionen gegen den App-API-4.0-Schreibweg (api.put/patch/remove über den Live-Stand `docs`).
 import assert from 'node:assert/strict';
 import { createCtoxLauncher } from '../ctoxLauncher.js';
-import {
-  addMissingDesktopIcons,
-  arrangeDesktopIcons,
-  desktopIconWriteAvailability,
-  dispatchDesktopChatOpen,
-  replaceDesktopIcons,
-  runDesktopActionOnce,
-} from '../desktopMenuActions.js';
+import { addMissingDesktopIcons, arrangeDesktopIcons, replaceDesktopIcons, runDesktopActionOnce } from '../desktopMenuActions.js';
 
-function makeCollection(initial = []) {
+function fakeApi(initial = []) {
   const records = new Map(initial.map((item) => [item.id, { ...item }]));
-  const wrap = (value) => ({
-    ...value,
-    incrementalPatch: async (patch) => Object.assign(value, patch),
-    remove: async () => records.delete(value.id),
-  });
+  const ops = [];
+  const handle = () => ({ local: Promise.resolve(), result: Promise.resolve({ status: 'accepted' }) });
   return {
-    records,
-    find: () => ({ exec: async () => [...records.values()].map(wrap) }),
-    insert: async (seed) => { records.set(seed.id, { ...seed }); },
+    records, ops,
+    put(collection, doc) { ops.push(['put', collection, doc.id]); records.set(doc.id, { ...doc }); return handle(); },
+    patch(collection, id, patch) { ops.push(['patch', collection, id]); Object.assign(records.get(id), patch); return handle(); },
+    remove(collection, id) { ops.push(['remove', collection, id]); records.delete(id); return handle(); },
+    docs() { return [...records.values()].map((r) => ({ ...r })); },
   };
 }
 
 const custom = { id: 'custom', target_module: 'notes', target_type: 'module', label: 'My Notes', x: 72, y: 90, sort_index: 4, hidden: false };
-const hidden = { id: 'desk_icon_explorer', target_module: 'explorer', target_type: 'app', label: 'Explorer', x: 5, y: 5, hidden: true };
-const collection = makeCollection([custom, hidden]);
-const options = {
-  collection,
-  entries: [{ id: 'explorer', kind: 'app', title: 'Explorer' }, { id: 'notes', kind: 'module', title: 'Notes' }],
-  gridPosition: (index) => ({ x: index * 20, y: 10 }),
-  glyphFor: () => '◇',
-  insertMissingSeed: (db, id, seed) => db.insert(seed),
-};
-assert.equal(await addMissingDesktopIcons(options), 1);
-assert.equal(await addMissingDesktopIcons(options), 0);
-assert.deepEqual(collection.records.get('custom'), custom);
-assert.equal(collection.records.get('desk_icon_explorer').hidden, false);
-assert.equal(collection.records.size, 2);
+const hidden = { id: 'desk_icon_explorer', target_module: 'explorer', target_type: 'module', label: 'Explorer', x: 5, y: 5, hidden: true };
+const api = fakeApi([custom, hidden]);
+const entries = [{ id: 'notes', title: 'Notes', kind: 'module' }, { id: 'explorer', title: 'Explorer', kind: 'module' }, { id: 'ctox', title: 'CTOX', kind: 'module' }];
 
-const remembered = [];
-await arrangeDesktopIcons({
-  collection,
-  knows: () => true,
-  labelFor: (doc) => doc.label,
-  gridPosition: (index) => ({ x: index * 100, y: 25 }),
-  rememberPosition: (...args) => remembered.push(args),
-  order: 'name',
-});
-assert.equal(remembered.length, 2);
-const reloaded = makeCollection([...collection.records.values()]);
-assert.deepEqual(
-  (await reloaded.find().exec()).map((doc) => ({ id: doc.id, x: doc.x, y: doc.y, sort_index: doc.sort_index }))
-    .sort((left, right) => left.sort_index - right.sort_index),
-  [
-    { id: 'desk_icon_explorer', x: 0, y: 25, sort_index: 0 },
-    { id: 'custom', x: 100, y: 25, sort_index: 1 },
-  ],
-);
+const added = addMissingDesktopIcons({ api, docs: api.docs(), entries, gridPosition: (i) => ({ x: i * 10, y: 0 }), glyphFor: () => '◻︎' });
+assert.equal(added.count, 2, 'explorer (versteckt) und ctox (fehlt)');
+assert.equal(api.records.get('desk_icon_explorer').hidden, false, 'verstecktes Icon wird sichtbar statt doppelt angelegt');
+assert.equal(api.records.get('desk_icon_ctox').target_module, 'ctox');
+assert.deepEqual(api.ops.map((o) => o[0]), ['patch', 'put']);
 
-const snapshot = [...collection.records.values()].map((doc) => ({ ...doc }));
-await replaceDesktopIcons({ collection, snapshot: [{ id: 'desk_icon_notes', target_type: 'module' }], insertMissingSeed: options.insertMissingSeed });
-assert.equal(collection.records.has('custom'), false);
-await replaceDesktopIcons({ collection, snapshot, insertMissingSeed: options.insertMissingSeed });
-assert.equal(collection.records.get('custom').label, 'My Notes');
+api.ops.length = 0;
+const arranged = arrangeDesktopIcons({ api, docs: api.docs(), knows: (id) => ['notes', 'explorer', 'ctox'].includes(id), labelFor: (d) => d.label, gridPosition: (i) => ({ x: i * 100, y: 0 }), order: 'name' });
+assert.equal(arranged.length, 3);
+assert.deepEqual(['custom', 'desk_icon_ctox', 'desk_icon_explorer'].map((id) => api.records.get(id).sort_index), [2, 0, 1], 'nach Name: CTOX, Explorer, My Notes');
 
-const apps = [{ id: 'explorer' }];
-assert.equal(await createCtoxLauncher({ modules: [], apps, currentModuleId: 'desktop' }).open('explorer'), false);
-assert.equal(await createCtoxLauncher({ modules: [], apps, currentModuleId: 'desktop', openApp: async () => null }).open('explorer'), false);
-await assert.rejects(
-  createCtoxLauncher({ modules: [], apps, currentModuleId: 'desktop', openApp: async () => { throw new Error('denied'); } }).open('explorer'),
-  /denied/,
-);
-assert.equal(await createCtoxLauncher({ modules: [], apps, currentModuleId: 'desktop', openApp: async () => 'window-1' }).open('explorer'), true);
+api.ops.length = 0;
+replaceDesktopIcons({ api, docs: api.docs(), snapshot: [{ id: 'desk_icon_ctox', target_type: 'module', target_module: 'ctox', updated_at_ms: 1 }] });
+assert.deepEqual([...api.records.keys()], ['desk_icon_ctox']);
+assert.ok(api.ops.every((o) => o[1] === 'desktop_icons'));
 
-const messages = [];
-let retries = 0;
-const availability = desktopIconWriteAvailability({
-  collection,
-  readiness: { ready: false },
-  reason: 'Sync unavailable; retry',
-  notify: (message) => messages.push(message),
-  retry: () => { retries += 1; },
-});
-assert.equal(availability.disabled, true);
-assert.equal(availability.disabledReason, 'Sync unavailable; retry');
-availability.onDisabled();
-assert.deepEqual(messages, ['Sync unavailable; retry']);
-assert.equal(retries, 1);
-assert.equal(desktopIconWriteAvailability({ collection, readiness: { ready: true } }).disabled, false);
-assert.equal(desktopIconWriteAvailability({ collection, readiness: null }).disabled, true);
-
-let resolveDispatch;
-let dispatches = 0;
 const pending = new Set();
-const firstDispatch = runDesktopActionOnce(pending, 'rename:app', () => {
-  dispatches += 1;
-  return new Promise((resolve) => { resolveDispatch = resolve; });
-});
-assert.equal(await runDesktopActionOnce(pending, 'rename:app', () => { dispatches += 1; }), undefined);
-assert.equal(dispatches, 1);
-resolveDispatch('done');
-assert.equal(await firstDispatch, 'done');
-assert.equal(pending.size, 0);
+let runs = 0;
+const first = runDesktopActionOnce(pending, 'k', async () => { runs += 1; await new Promise((r) => setTimeout(r, 5)); return 'ok'; });
+assert.equal(await runDesktopActionOnce(pending, 'k', async () => { runs += 1; }), undefined, 'gleiche Aktion läuft nicht doppelt');
+assert.equal(await first, 'ok');
+assert.equal(runs, 1);
 
-const hostError = new Error('chat host unavailable');
-await assert.rejects(
-  dispatchDesktopChatOpen({
-    detail: { module: 'desktop' },
-    openBusinessChat: async () => { throw hostError; },
-    dispatchEvent: () => assert.fail('host must be preferred'),
-    onPersistError: () => {},
-  }),
-  hostError,
-);
-
-console.log('desktop menu action behavior ok');
+const navigations = [];
+const launcher = createCtoxLauncher({ modules: [{ id: 'desktop' }, { id: 'notes', title: 'Notes' }], currentModuleId: 'desktop', navigate: (id, params) => { navigations.push([id, params]); return true; } });
+assert.equal(launcher.knows('desktop'), false, 'eigene App erscheint nicht im Launcher');
+assert.equal(launcher.open('notes', { recordId: 'n1' }), true);
+assert.deepEqual(navigations, [['notes', { record: 'n1' }]]);
+assert.equal(launcher.open('missing'), true, 'Ziel prüft die Shell (navigate meldet unbekannte Ziele selbst)');
+assert.equal(launcher.glyphFor('ctox'), '◆');
+console.log('desktop-menu-actions: ok');

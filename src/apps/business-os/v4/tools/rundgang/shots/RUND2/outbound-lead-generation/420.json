@@ -1,0 +1,739 @@
+{
+ "app": "outbound-lead-generation",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [
+    "put outbound_lead_generation_sources/handelsregister.de local=ok result=accepted {\"id\":\"handelsregister.de\",\"label\":\"Handelsregister\",\"url\":\"https://www.handelsregister.de/\",\"countries\":[\"DE\"],\"field_k",
+    "put outbound_lead_generation_sources/bundesanzeiger.de local=ok result=accepted {\"id\":\"bundesanzeiger.de\",\"label\":\"Bundesanzeiger\",\"url\":\"https://www.bundesanzeiger.de/\",\"countries\":[\"DE\"],\"field_keys",
+    "put outbound_lead_generation_sources/northdata.de local=ok result=accepted {\"id\":\"northdata.de\",\"label\":\"Northdata\",\"url\":\"https://www.northdata.de/\",\"countries\":[\"DE\",\"AT\",\"CH\"],\"field_keys\":[\"f",
+    "put outbound_lead_generation_sources/companyhouse.de local=ok result=accepted {\"id\":\"companyhouse.de\",\"label\":\"CompanyHouse\",\"url\":\"https://www.companyhouse.de/\",\"countries\":[\"DE\"],\"field_keys\":[\"fi",
+    "put outbound_lead_generation_sources/dnbhoovers.com local=ok result=accepted {\"id\":\"dnbhoovers.com\",\"label\":\"D&B Hoovers\",\"url\":\"https://app.dnbhoovers.com/\",\"countries\":[\"DE\",\"AT\",\"CH\"],\"field_key",
+    "put outbound_lead_generation_sources/leadfeeder.com local=ok result=accepted {\"id\":\"leadfeeder.com\",\"label\":\"Leadfeeder\",\"url\":\"https://app.leadfeeder.com/f/200538/dashboard?organization_id=wmNE2Md",
+    "put outbound_lead_generation_sources/linkedin.com local=ok result=accepted {\"id\":\"linkedin.com\",\"label\":\"LinkedIn (Bright Data People Scraper)\",\"url\":\"https://www.linkedin.com/\",\"countries\":[\"DE\"",
+    "put outbound_lead_generation_sources/xing.com local=ok result=accepted {\"id\":\"xing.com\",\"label\":\"XING\",\"url\":\"https://www.xing.com/\",\"countries\":[\"DE\",\"AT\",\"CH\"],\"field_keys\":[\"person_geschle",
+    "put outbound_lead_generation_sources/google.de local=ok result=accepted {\"id\":\"google.de\",\"label\":\"Google\",\"url\":\"https://www.google.de/\",\"countries\":[\"DE\",\"AT\",\"CH\"],\"field_keys\":[\"firma_name",
+    "put outbound_lead_generation_sources/maps.google.com local=ok result=accepted {\"id\":\"maps.google.com\",\"label\":\"Google Maps\",\"url\":\"https://www.google.de/maps\",\"countries\":[\"DE\",\"AT\",\"CH\"],\"field_key",
+    "put outbound_lead_generation_sources/impressum local=ok result=accepted {\"id\":\"impressum\",\"label\":\"Unternehmenswebsite / Impressum\",\"url\":\"\",\"countries\":[\"DE\",\"AT\",\"CH\"],\"field_keys\":[\"firma_a",
+    "put outbound_lead_generation_sources/rocketreach.com local=ok result=accepted {\"id\":\"rocketreach.com\",\"label\":\"RocketReach\",\"url\":\"https://rocketreach.co/\",\"countries\":[\"DE\",\"AT\",\"CH\"],\"field_keys\":",
+    "put outbound_lead_generation_sources/firmenabc.at local=ok result=accepted {\"id\":\"firmenabc.at\",\"label\":\"FirmenABC\",\"url\":\"https://www.firmenabc.at/\",\"countries\":[\"AT\"],\"field_keys\":[\"firma_name\"",
+    "put outbound_lead_generation_sources/moneyhouse.ch local=ok result=accepted {\"id\":\"moneyhouse.ch\",\"label\":\"Moneyhouse\",\"url\":\"https://www.moneyhouse.ch/\",\"countries\":[\"CH\"],\"field_keys\":[\"firma_na",
+    "put outbound_lead_generation_sources/zefix.ch local=ok result=accepted {\"id\":\"zefix.ch\",\"label\":\"Zefix\",\"url\":\"https://www.zefix.ch/\",\"countries\":[\"CH\"],\"field_keys\":[\"firma_name\",\"firma_frue",
+    "put outbound_lead_generation_sources/experte.de local=ok result=accepted {\"id\":\"experte.de\",\"label\":\"E-Mail-Prüfung\",\"url\":\"https://www.experte.de/email-pruefen\",\"countries\":[\"DE\",\"AT\",\"CH\"],\"f",
+    "put outbound_lead_generation_sources/mailtester.com local=ok result=accepted {\"id\":\"mailtester.com\",\"label\":\"MailTester\",\"url\":\"https://mailtester.com/\",\"countries\":[\"DE\",\"AT\",\"CH\"],\"field_keys\":[\"",
+    "put outbound_lead_generation_sources/evi.gv.at local=ok result=accepted {\"id\":\"evi.gv.at\",\"label\":\"EVI – Amtsblatt Österreich\",\"url\":\"https://www.evi.gv.at/\",\"countries\":[\"AT\"],\"field_keys\":[\"",
+    "put outbound_lead_generation_sources/justizonline.gv.at local=ok result=accepted {\"id\":\"justizonline.gv.at\",\"label\":\"Firmenbuch / JustizOnline\",\"url\":\"https://justizonline.gv.at/jop/web/firmenbuchabfra",
+    "put outbound_lead_generation_sources/shab.ch local=ok result=accepted {\"id\":\"shab.ch\",\"label\":\"SHAB – Schweizerisches Handelsamtsblatt\",\"url\":\"https://www.shab.ch/#!/gazette\",\"countries\":[\"C",
+    "put outbound_lead_generation_sources/sellify local=ok result=accepted {\"id\":\"sellify\",\"label\":\"Sellify (eigenes CRM)\",\"url\":\"\",\"countries\":[\"DE\",\"AT\",\"CH\"],\"field_keys\":[\"Firma\",\"Anschrift\",",
+    "put outbound_lead_generation_adapters/lead-generatio-001 local=ok result=accepted {\"id\":\"lead-generatio-001\",\"source_id\":\"lead-generatio-001\",\"status\":\"digest_config\",\"scrape_status\":\"target_available\",",
+    "put outbound_lead_generation_adapters/lead-generatio-002 local=ok result=accepted {\"id\":\"lead-generatio-002\",\"source_id\":\"lead-generatio-002\",\"status\":\"auth_requested\",\"scrape_status\":\"not_required\",\"au",
+    "put outbound_lead_generation_adapters/lead-generatio-003 local=ok result=accepted {\"id\":\"lead-generatio-003\",\"source_id\":\"lead-generatio-003\",\"status\":\"generation_queued\",\"scrape_status\":\"succeeded\",\"au",
+    "put outbound_lead_generation_adapters/lead-generatio-004 local=ok result=accepted {\"id\":\"lead-generatio-004\",\"source_id\":\"lead-generatio-004\",\"status\":\"running\",\"scrape_status\":\"generation_queued\",\"auth",
+    "put outbound_lead_generation_adapters/lead-generatio-005 local=ok result=accepted {\"id\":\"lead-generatio-005\",\"source_id\":\"lead-generatio-005\",\"status\":\"free\",\"scrape_status\":\"target_available\",\"auth_sta",
+    "put outbound_lead_generation_adapters/lead-generatio-006 local=ok result=accepted {\"id\":\"lead-generatio-006\",\"source_id\":\"lead-generatio-006\",\"status\":\"failed\",\"scrape_status\":\"not_required\",\"auth_statu",
+    "command outbound.sellify.lookup local=ok result=accepted {\"entity\":\"company\",\"selectors\":[],\"ids\":[],\"limit\":25,\"command_id\":\"cmd_leadgen_sellify_lookup_2beb1713-e4db-4424-92cd-",
+    "command outbound.sellify.lookup local=ok result=accepted {\"entity\":\"company\",\"selectors\":[],\"ids\":[],\"limit\":25,\"command_id\":\"cmd_leadgen_sellify_lookup_16cf625e-3263-4414-9e2d-",
+    "command outbound.sellify.lookup local=ok result=accepted {\"entity\":\"company\",\"selectors\":[],\"ids\":[],\"limit\":25,\"command_id\":\"cmd_leadgen_sellify_lookup_cf14b3d3-8f70-4edf-b09d-",
+    "command outbound.sellify.lookup local=ok result=accepted {\"entity\":\"company\",\"selectors\":[],\"ids\":[],\"limit\":25,\"command_id\":\"cmd_leadgen_sellify_lookup_42625fdd-20c0-4985-ad17-",
+    "command outbound.sellify.lookup local=ok result=accepted {\"entity\":\"company\",\"selectors\":[],\"ids\":[],\"limit\":25,\"command_id\":\"cmd_leadgen_sellify_lookup_6081c3e3-3545-42ba-8f92-",
+    "command outbound.sellify.lookup local=ok result=accepted {\"entity\":\"company\",\"selectors\":[],\"ids\":[],\"limit\":25,\"command_id\":\"cmd_leadgen_sellify_lookup_81a0dc7d-2197-42e2-8a13-",
+    "put outbound_lead_generation_leads/lead-generatio-001 local=ok result=accepted {\"id\":\"lead-generatio-001\",\"data\":{\"aenderungsart\":\"Neuanlage\"},\"payload\":{\"derived_field_keys\":[\"aenderungsart\"],\"selli",
+    "put outbound_lead_generation_leads/lead-generatio-002 local=ok result=accepted {\"id\":\"lead-generatio-002\",\"data\":{\"aenderungsart\":\"Neuanlage\"},\"payload\":{\"derived_field_keys\":[\"aenderungsart\"],\"selli",
+    "put outbound_lead_generation_leads/lead-generatio-003 local=ok result=accepted {\"id\":\"lead-generatio-003\",\"data\":{\"aenderungsart\":\"Neuanlage\"},\"payload\":{\"derived_field_keys\":[\"aenderungsart\"],\"selli",
+    "put outbound_lead_generation_leads/lead-generatio-004 local=ok result=accepted {\"id\":\"lead-generatio-004\",\"data\":{\"aenderungsart\":\"Neuanlage\"},\"payload\":{\"derived_field_keys\":[\"aenderungsart\"],\"selli",
+    "put outbound_lead_generation_leads/lead-generatio-005 local=ok result=accepted {\"id\":\"lead-generatio-005\",\"data\":{\"aenderungsart\":\"Neuanlage\"},\"payload\":{\"derived_field_keys\":[\"aenderungsart\"],\"selli",
+    "put outbound_lead_generation_leads/lead-generatio-006 local=ok result=accepted {\"id\":\"lead-generatio-006\",\"data\":{\"aenderungsart\":\"Neuanlage\"},\"payload\":{\"derived_field_keys\":[\"aenderungsart\"],\"selli"
+   ],
+   "title": "Outbound Lead Generation",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neue Kampagne",
+    "button:Leads aus Datei importieren (E",
+    "button:Leadliste einer Sellify-Kampag",
+    "button:Recherche-Einstellungen: Quell",
+    "button:Jahresrecherche 6",
+    "button:Jahresrecherche umbenennen",
+    "button:Jahresrecherche löschen",
+    "button:Kampagne recherchieren",
+    "button:Sellify-Freitextvermerke aller",
+    "button:Kampagne als Excel-Datei herun",
+    "nav:Kartenansicht",
+    "nav:Tabellenansicht",
+    "button:Filter und Sortierung",
+    "check:Alle sichtbaren Leads auswähle",
+    "row:— Offen neu",
+    "row:auswählen",
+    "button:bearbeiten",
+    "nav:Übersicht",
+    "nav:Unternehmen",
+    "nav:Personen",
+    "nav:Einordnung",
+    "button:Startet nur, wenn die Firma no",
+    "button:Recherche dieses Leads als Exc",
+    "button:23 offene Punkte bis zur Freig"
+   ],
+   "shot": "outbound-lead-generation/420-01-open.png"
+  },
+  {
+   "step": "nav Kartenansicht",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "outbound-lead-generation/420-02-nav_Kartenansicht.png"
+  },
+  {
+   "step": "nav Tabellenansicht",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "outbound-lead-generation/420-03-nav_Tabellenansicht.png"
+  },
+  {
+   "step": "nav Übersicht",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "outbound-lead-generation/420-04-nav_bersicht.png"
+  },
+  {
+   "step": "nav Unternehmen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "outbound-lead-generation/420-05-nav_Unternehmen.png"
+  },
+  {
+   "step": "nav Personen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "outbound-lead-generation/420-06-nav_Personen.png"
+  },
+  {
+   "step": "nav Einordnung",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "outbound-lead-generation/420-07-nav_Einordnung.png"
+  },
+  {
+   "step": "zurück zu Reiter Kartenansicht",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "outbound-lead-generation/420-08-zur_ck_zu_Reiter_Kartenansicht.png"
+  },
+  {
+   "step": "row auswählen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "outbound-lead-generation/420-09-row_ausw_hlen.png"
+  },
+  {
+   "step": "button Neue Kampagne",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [
+    "dialog: {\"kind\":\"prompt\",\"title\":\"Neue Kampagne\",\"text\":\"Name der neuen Kampagne\",\"value\":\"\",\"placeholder\":\"Kampagnenname\",\"conf"
+   ],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "outbound-lead-generation/420-10-button_Neue_Kampagne.png"
+  },
+  {
+   "step": "button Leads aus Datei importieren (Excel/CSV)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "outbound-lead-generation/420-11-button_Leads_aus_Datei_importieren_Excel.png"
+  },
+  {
+   "step": "Overlay geschlossen (Escape/Schließen) vor Leadliste einer Sellify-Kampagne importieren (Nachrecherche)"
+  },
+  {
+   "step": "button Leadliste einer Sellify-Kampagne importieren (Nachrecherche)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "outbound-lead-generation/420-12-button_Leadliste_einer_Sellify-Kampagne_.png"
+  },
+  {
+   "step": "Overlay geschlossen (Escape/Schließen) vor Recherche-Einstellungen: Quellen, Rechercheablauf, Pflichtfe"
+  },
+  {
+   "step": "button Recherche-Einstellungen: Quellen, Rechercheablauf, Pflichtfe",
+   "changed": true,
+   "ops": [
+    "command ctox.secret.list local=ok result=accepted {\"command_id\":\"cmd_outbound_secret_list_7f893114-c3ea-4b28-a415-7a7994978f77\",\"record_id\":\"credentials\",\"client_context\":{\"source\":\"outbound"
+   ],
+   "zone": [
+    "clear outbound-lead-generation.command.ctox.secret.list"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.leadgen-source-tabs 451>402"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "outbound-lead-generation/420-13-button_Recherche-Einstellungen_Quellen_R.png"
+  },
+  {
+   "step": "nav Quellen & Zugänge",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.leadgen-source-tabs 451>402"
+   ],
+   "open": true,
+   "kind": "nav",
+   "shot": "outbound-lead-generation/420-14-nav_Quellen_Zug_nge.png"
+  },
+  {
+   "step": "nav Rechercheablauf",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.leadgen-source-tabs 451>402"
+   ],
+   "open": true,
+   "kind": "nav",
+   "shot": "outbound-lead-generation/420-15-nav_Rechercheablauf.png"
+  },
+  {
+   "step": "formular 1 Felder → Speichern",
+   "changed": 2,
+   "ops": [
+    "put outbound_lead_generation_research_policies/leadgen_research_policy_v1 local=ok result=accepted {\"id\":\"leadgen_research_policy_v1\",\"title\":\"CTOX Quellenstandard\",\"version_number\":1,\"status\":\"active\",\"skill_name\":\"outbound-lead-generatio",
+    "command outbound.research_policy.publish local=ok result=accepted {\"app\":\"outbound-lead-generation\",\"skill\":\"outbound-lead-generation/research\",\"research_instructions\":\"0. Zuerst prüfen, ob Unternehmen und "
+   ],
+   "zone": [
+    "clear outbound-lead-generation.command.outbound.research_policy.publish"
+   ],
+   "dialogs": [
+    "dialog: {\"kind\":\"alert\",\"title\":\"\",\"text\":\"Rechercheablauf gespeichert. Er gilt ab dem nächsten Recherchestart.\",\"confirm_label\""
+   ],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.leadgen-source-tabs 451>402"
+   ],
+   "open": true,
+   "kind": "submit",
+   "shot": "outbound-lead-generation/420-16-formular_1_Felder_Speichern.png"
+  },
+  {
+   "step": "nav Pflichtfelder",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.leadgen-source-tabs 451>402"
+   ],
+   "open": true,
+   "kind": "nav",
+   "shot": "outbound-lead-generation/420-17-nav_Pflichtfelder.png"
+  },
+  {
+   "step": "nav Update-Verteiler",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.leadgen-source-tabs 451>402"
+   ],
+   "open": true,
+   "kind": "nav",
+   "shot": "outbound-lead-generation/420-18-nav_Update-Verteiler.png"
+  },
+  {
+   "step": "formular 2 Felder → Speichern",
+   "changed": 1,
+   "ops": [],
+   "zone": [],
+   "dialogs": [
+    "dialog: {\"kind\":\"alert\",\"title\":\"\",\"text\":\"Diese Empfänger sind keine gültigen Adressen: Rundgang, Test\",\"confirm_label\":\"OK\"}"
+   ],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.leadgen-source-tabs 451>402"
+   ],
+   "open": true,
+   "kind": "submit",
+   "shot": "outbound-lead-generation/420-19-formular_2_Felder_Speichern.png"
+  },
+  {
+   "step": "Overlay geschlossen (Escape/Schließen) vor Jahresrecherche 6"
+  },
+  {
+   "step": "button Jahresrecherche 6",
+   "changed": true,
+   "ops": [
+    "put outbound_lead_generation_leads/lead-generatio-006 local=ok result=accepted {\"id\":\"lead-generatio-006\",\"data\":{\"aenderungsart\":\"Neuanlage\"},\"payload\":{\"derived_field_keys\":[\"aenderungsart\"],\"sellify_precheck\":{\"known"
+   ],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "outbound-lead-generation/420-20-button_Jahresrecherche_6.png"
+  },
+  {
+   "step": "button Jahresrecherche umbenennen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [
+    "dialog: {\"kind\":\"prompt\",\"title\":\"Kampagne umbenennen\",\"text\":\"Neuer Name der Kampagne\",\"value\":\"Jahresrecherche\",\"placeholder\":"
+   ],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "outbound-lead-generation/420-21-button_Jahresrecherche_umbenennen.png"
+  },
+  {
+   "step": "button Kampagne recherchieren: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button Sellify-Freitextvermerke aller Leads dieser Kampagne vom CTO: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button Kampagne als Excel-Datei herunterladen",
+   "changed": 2,
+   "ops": [],
+   "zone": [
+    "{\"level\":\"info\",\"code\":\"outbound-lead-generation.hinweis\",\"text\":\"Excel mit 6 Leads wird erstellt …\"}",
+    "{\"level\":\"info\",\"code\":\"outbound-lead-generation.hinweis\",\"text\":\"Excel mit 6 Leads heruntergeladen.\"}"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "outbound-lead-generation/420-22-button_Kampagne_als_Excel-Datei_herunter.png"
+  },
+  {
+   "step": "button Filter und Sortierung",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "outbound-lead-generation/420-23-button_Filter_und_Sortierung.png"
+  },
+  {
+   "step": "button Sortierrichtung umkehren",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "outbound-lead-generation/420-24-button_Sortierrichtung_umkehren.png"
+  },
+  {
+   "step": "button Neu",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "outbound-lead-generation/420-25-button_Neu.png"
+  },
+  {
+   "step": "button Wartet",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "outbound-lead-generation/420-26-button_Wartet.png"
+  },
+  {
+   "step": "button Läuft",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "outbound-lead-generation/420-27-button_L_uft.png"
+  },
+  {
+   "step": "button Prüfung nötig",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "outbound-lead-generation/420-28-button_Pr_fung_n_tig.png"
+  },
+  {
+   "step": "button Abgeschlossen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "outbound-lead-generation/420-29-button_Abgeschlossen.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_adapters",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_adapters",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_adapters",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_adapters",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_adapters",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_adapters",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "outbound.sellify.lookup",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "outbound.sellify.lookup",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "outbound.sellify.lookup",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "outbound.sellify.lookup",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "outbound.sellify.lookup",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "outbound.sellify.lookup",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_leads",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_leads",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_leads",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_leads",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_leads",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_leads",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "ctox.secret.list",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_research_policies",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "outbound.research_policy.publish",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_leads",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "outbound-lead-generation",
+  "Outbound Lead Generation"
+ ]
+}

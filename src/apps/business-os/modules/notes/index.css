@@ -12,7 +12,7 @@
    sync status footer, and the zero-knowledge PIN/decrypt overlays.
    ========================================================================== */
 
-.notes-module {
+[data-app="notes"] .notes-module {
   /* Module aliases kept deliberately tiny; everything else uses shell tokens
      directly. Shadows stay flat per the module design contract. */
   --nn-shadow: none;
@@ -24,20 +24,20 @@
 /* Explicit column pins so the editor never slides onto the resizer track when
    the kit hides resizers on narrow windows. The editor (primary) keeps a hard
    minimum; the grammar column is the fixed side track. */
-.notes-module {
+[data-app="notes"] .notes-module {
   grid-template-columns: var(--ctox-left-width, 300px) 12px minmax(320px, 1fr);
 }
 
 /* Head, chrome rows (search + tray), counted band, list well, footer. The
    chrome rows sit outside the head so the head keeps the exact shell-v2
    header-row height; the well is the only flexible track. */
-.notes-left { grid-column: 1; grid-template-rows: auto auto auto minmax(0, 1fr) auto; }
-.notes-module > [data-resizer="left"] { grid-column: 2; }
-.notes-center { grid-column: 3; }
+[data-app="notes"] .notes-left { grid-column: 1; grid-template-rows: auto auto auto minmax(0, 1fr) auto; }
+[data-app="notes"] .notes-module > [data-resizer="left"] { grid-column: 2; }
+[data-app="notes"] .notes-center { grid-column: 3; }
 
 /* The editor pane has more than header + body, so it lays out as a flex column
    inside the kit .ctox-pane chrome. */
-.ctox-pane.notes-center {
+[data-app="notes"] .ctox-pane.notes-center {
   display: flex;
   flex-direction: column;
 }
@@ -47,22 +47,22 @@
    Ansicht (data-pg-view) blendet die passende ein. Der Knopf ist eine Aktion,
    kein Zustand — die aria-pressed-Fuellung des Kits gilt hier deshalb nicht,
    auch wenn die Shell das Attribut beim Klick stempelt. */
-.notes-view-toggle > [data-view-icon] {
+[data-app="notes"] .notes-view-toggle > [data-view-icon] {
   display: none;
 }
 
-.notes-view-toggle[data-pg-view="cards"] > [data-view-icon="list"],
-.notes-view-toggle[data-pg-view="list"] > [data-view-icon="cards"] {
+[data-app="notes"] .notes-view-toggle[data-pg-view="cards"] > [data-view-icon="list"],
+[data-app="notes"] .notes-view-toggle[data-pg-view="list"] > [data-view-icon="cards"] {
   display: block;
 }
 
-.notes-view-toggle[aria-pressed="true"] {
+[data-app="notes"] .notes-view-toggle[aria-pressed="true"] {
   background: none;
   color: inherit;
 }
 
 /* Brand logo chip next to the grammar column title. */
-.nn-logo-container {
+[data-app="notes"] .nn-logo-container {
   width: 20px;
   height: 20px;
   flex: 0 0 auto;
@@ -74,19 +74,19 @@
   justify-content: center;
 }
 
-.nn-logo-svg {
+[data-app="notes"] .nn-logo-svg {
   width: 12px;
   height: 12px;
 }
 
 /* Keep the logo + titles inline within the kit title row. */
-.notes-left .ctox-pane-title-row > .ctox-pane-titles {
+[data-app="notes"] .notes-left .ctox-pane-title-row > .ctox-pane-titles {
   flex-direction: row;
   align-items: center;
   gap: 8px;
 }
 
-.notes-left .nn-title-copy {
+[data-app="notes"] .notes-left .nn-title-copy {
   min-width: 0;
   flex: 1 1 auto;
   display: flex;
@@ -95,7 +95,7 @@
 }
 
 /* Date-bucket group labels inside the note list well. */
-.notes-group-header {
+[data-app="notes"] .notes-group-header {
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
@@ -104,11 +104,11 @@
   margin: 10px 4px 5px 4px;
 }
 
-.notes-group-header:first-child {
+[data-app="notes"] .notes-group-header:first-child {
   margin-top: 2px;
 }
 
-.nn-cards-scroll {
+[data-app="notes"] .nn-cards-scroll {
   padding: 4px;
   display: flex;
   flex-direction: column;
@@ -116,8 +116,8 @@
 }
 
 /* Focus ring for the div-based interactive note rows. */
-.notes-card:focus-visible,
-.nn-pin-pad button:focus-visible {
+[data-app="notes"] .notes-card:focus-visible,
+[data-app="notes"] .nn-pin-pad button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
@@ -131,7 +131,7 @@
      LISTE  = genau eine dichte Zeile — Titel plus ein Kurz-Meta (Datum) rechts,
               enge Zeilenhoehe, keine Luecken zwischen den Eintraegen.
    Beide Varianten stehen im Markup; die aktive Ansicht entscheidet. */
-.notes-card {
+[data-app="notes"] .notes-card {
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -140,37 +140,37 @@
 }
 
 /* Kurz-Meta gehoert allein der Liste. */
-.notes-card-listmeta {
+[data-app="notes"] .notes-card-listmeta {
   display: none;
 }
 
 /* LISTE: eine Zeile, maximale Dichte. */
-.nn-cards-scroll.is-list {
+[data-app="notes"] .nn-cards-scroll.is-list {
   gap: 0;
   padding: 0;
 }
 
-.nn-cards-scroll.is-list .notes-card {
+[data-app="notes"] .nn-cards-scroll.is-list .notes-card {
   flex-direction: row;
   align-items: center;
   gap: 8px;
   padding: 3px 12px;
 }
 
-.nn-cards-scroll.is-list .notes-card-meta,
-.nn-cards-scroll.is-list .nn-card-badges {
+[data-app="notes"] .nn-cards-scroll.is-list .notes-card-meta,
+[data-app="notes"] .nn-cards-scroll.is-list .nn-card-badges {
   display: none;
 }
 
-.nn-cards-scroll.is-list .nn-card-row {
+[data-app="notes"] .nn-cards-scroll.is-list .nn-card-row {
   flex: 1;
 }
 
-.nn-cards-scroll.is-list .notes-card-title {
+[data-app="notes"] .nn-cards-scroll.is-list .notes-card-title {
   font-weight: 500;
 }
 
-.nn-cards-scroll.is-list .notes-card-listmeta {
+[data-app="notes"] .nn-cards-scroll.is-list .notes-card-listmeta {
   display: block;
   flex: 0 0 auto;
   max-width: 7rem;
@@ -181,15 +181,15 @@
   text-overflow: ellipsis;
 }
 
-.nn-cards-scroll.is-list .notes-group-header {
+[data-app="notes"] .nn-cards-scroll.is-list .notes-group-header {
   margin: 6px 4px 2px 12px;
 }
 
-.nn-cards-scroll.is-list .notes-group-header:first-child {
+[data-app="notes"] .nn-cards-scroll.is-list .notes-group-header:first-child {
   margin-top: 4px;
 }
 
-.nn-card-row {
+[data-app="notes"] .nn-card-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -197,39 +197,38 @@
   min-width: 0;
 }
 
-.notes-card-title {
+[data-app="notes"] .notes-card-title {
   font-weight: 600;
   color: var(--text-strong, var(--text));
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* Lange Titel brechen um statt abgeschnitten zu werden (Geometrie G4). */
+  overflow-wrap: anywhere;
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
 }
 
-.notes-card-meta {
+[data-app="notes"] .notes-card-meta {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
 }
 
-.notes-card-date,
-.notes-card-snippet {
+[data-app="notes"] .notes-card-date,
+[data-app="notes"] .notes-card-snippet {
   color: var(--muted);
   font-size: 11px;
 }
 
-.notes-card-snippet {
+[data-app="notes"] .notes-card-snippet {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 /* Badges on card: the pills themselves are kit .ctox-badge. */
-.nn-card-badges {
+[data-app="notes"] .nn-card-badges {
   display: flex;
   flex-wrap: wrap;
   gap: 3px;
@@ -237,7 +236,7 @@
 }
 
 /* Card Icons */
-.nn-card-icons {
+[data-app="notes"] .nn-card-icons {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -245,25 +244,25 @@
   flex: 0 0 auto;
 }
 
-.nn-card-icon {
+[data-app="notes"] .nn-card-icon {
   width: 11px;
   height: 11px;
   flex-shrink: 0;
 }
 
-.nn-card-icon.starred {
+[data-app="notes"] .nn-card-icon.starred {
   color: var(--accent);
   fill: var(--accent);
 }
 
-.nn-card-icon.locked {
+[data-app="notes"] .nn-card-icon.locked {
   color: var(--accent);
 }
 
 /* --- Editor Header ---
    Band + icon buttons are kit; layout of meta selectors vs. actions is
    module-specific. */
-.nn-editor-head {
+[data-app="notes"] .nn-editor-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -272,69 +271,69 @@
   flex-shrink: 0;
 }
 
-.nn-note-meta-left {
+[data-app="notes"] .nn-note-meta-left {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  scrollbar-width: none;
+  /* Notizbuch/Tags/Aktionen brechen in die nächste Zeile um, statt seitlich
+     (mit versteckter Leiste) zu scrollen (Geometrie G1). */
+  flex-wrap: wrap;
   min-width: 0;
 }
 
-.nn-note-meta-left::-webkit-scrollbar {
+[data-app="notes"] .nn-note-meta-left::-webkit-scrollbar {
   display: none;
 }
 
 /* The back-to-list return path only exists in the stacked (narrow) layout. */
-.nn-back-to-list {
+[data-app="notes"] .nn-back-to-list {
   display: none;
 }
 
-.nn-meta-select-wrap {
+[data-app="notes"] .nn-meta-select-wrap {
   position: relative;
 }
 
 /* Dropdown triggers are kit .ctox-button--sm; only truncation + icon sizing
    is module-specific. */
-.nn-meta-btn {
+[data-app="notes"] .nn-meta-btn {
   max-width: 150px;
 }
 
-.nn-meta-btn span {
+[data-app="notes"] .nn-meta-btn span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.nn-meta-btn svg {
+[data-app="notes"] .nn-meta-btn svg {
   width: 12px;
   height: 12px;
   color: var(--muted);
   flex-shrink: 0;
 }
 
-.nn-caret {
+[data-app="notes"] .nn-caret {
   width: 8px !important;
   height: 8px !important;
   margin-left: 2px;
   color: var(--muted);
 }
 
-.nn-editor-controls {
+[data-app="notes"] .nn-editor-controls {
   flex-wrap: nowrap;
 }
 
 /* Favorite star keeps its warning fill on the kit is-active state. */
-.ctox-pane-icon.is-active .nn-star-icon {
+[data-app="notes"] .ctox-pane-icon.is-active .nn-star-icon {
   color: var(--warning);
   fill: var(--warning);
 }
 
 /* custom: Modul-Menüs (Notizbuch-/Tag-Zuweisung, Format-Dropdowns) — das Kit
    hat keine Popover-Menü-Komponente. */
-.nn-dropdown-menu,
-.nn-toolbar-dropdown {
+[data-app="notes"] .nn-dropdown-menu,
+[data-app="notes"] .nn-toolbar-dropdown {
   position: absolute;
   background: var(--surface);
   border: 1px solid var(--hairline, var(--line));
@@ -348,7 +347,7 @@
   animation: popIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.nn-dropdown-menu {
+[data-app="notes"] .nn-dropdown-menu {
   top: calc(100% + 4px);
   left: 0;
   min-width: 180px;
@@ -356,13 +355,13 @@
   overflow-y: auto;
 }
 
-.nn-toolbar-dropdown {
+[data-app="notes"] .nn-toolbar-dropdown {
   bottom: calc(100% + 4px);
   left: 0;
   width: 180px;
 }
 
-.nn-dropdown-item {
+[data-app="notes"] .nn-dropdown-item {
   width: 100%;
   text-align: left;
   border: 0;
@@ -380,40 +379,40 @@
   gap: 8px;
 }
 
-.nn-dropdown-item:hover {
+[data-app="notes"] .nn-dropdown-item:hover {
   background: var(--kit-hover);
   color: var(--text-strong, var(--text));
 }
 
-.nn-dropdown-item.active {
+[data-app="notes"] .nn-dropdown-item.active {
   background: var(--accent-soft);
   color: color-mix(in srgb, var(--accent) 78%, var(--text));
   font-weight: 600;
 }
 
-.nn-dropdown-item.is-danger {
+[data-app="notes"] .nn-dropdown-item.is-danger {
   color: var(--danger);
 }
-.nn-dropdown-item.is-danger svg {
+[data-app="notes"] .nn-dropdown-item.is-danger svg {
   color: var(--danger);
 }
-.nn-dropdown-item.is-danger:hover {
+[data-app="notes"] .nn-dropdown-item.is-danger:hover {
   background: var(--danger-soft);
 }
 
-.nn-popover-divider {
+[data-app="notes"] .nn-popover-divider {
   height: 1px;
   background: var(--hairline, var(--line));
   margin: 2px 0;
 }
 
 /* Tags management dropdown */
-.nn-tags-dropdown {
+[data-app="notes"] .nn-tags-dropdown {
   padding: 8px;
   gap: 5px;
 }
 
-.nn-tag-select-item {
+[data-app="notes"] .nn-tag-select-item {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -424,24 +423,24 @@
   border-radius: var(--control-radius);
 }
 
-.nn-tag-select-item:hover {
+[data-app="notes"] .nn-tag-select-item:hover {
   background: var(--kit-hover);
 }
 
-.nn-tag-select-item input {
+[data-app="notes"] .nn-tag-select-item input {
   accent-color: var(--accent);
   cursor: pointer;
   margin: 0;
 }
 
-.nn-dropdown-empty {
+[data-app="notes"] .nn-dropdown-empty {
   padding: 10px 14px;
   font-size: 11.5px;
   color: var(--muted);
 }
 
 /* Toolbar group separators. */
-.toolbar-separator {
+[data-app="notes"] .toolbar-separator {
   width: 1px;
   height: 18px;
   background: var(--hairline, var(--line));
@@ -453,7 +452,7 @@
 /* --- Centered Paper Sheet & Desk ---
    custom: das Notesnook-Schreibblatt (zentrierte Papierfläche mit eigener
    Inhalts-Typografie) — bewusst keine Kit-Pane-Fläche. */
-.nn-editor-workspace {
+[data-app="notes"] .nn-editor-workspace {
   flex: 1;
   min-height: 0;
   display: flex;
@@ -464,7 +463,7 @@
   padding: 12px 10px;
 }
 
-.nn-paper-sheet {
+[data-app="notes"] .nn-paper-sheet {
   max-width: 820px;
   width: 100%;
   margin: 0 auto;
@@ -479,34 +478,34 @@
   box-sizing: border-box;
 }
 
-.nn-note-badges {
+[data-app="notes"] .nn-note-badges {
   padding: 14px 24px 0 24px;
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
 }
 
-.notes-note-date {
+[data-app="notes"] .notes-note-date {
   padding: 8px 24px 0 24px;
   color: var(--muted);
   font-size: 11px;
 }
 
-.notes-tab-panel {
+[data-app="notes"] .notes-tab-panel {
   display: flex;
   flex: 1;
   min-height: 550px;
 }
 
 /* WYSIWYG Editor Textarea */
-.nn-wysiwyg-editor-host {
+[data-app="notes"] .nn-wysiwyg-editor-host {
   flex: 1;
   min-width: 0;
   min-height: 550px;
   display: block;
 }
 
-.nn-wysiwyg-editor {
+[data-app="notes"] .nn-wysiwyg-editor {
   flex: 1;
   width: 100%;
   height: 100%;
@@ -524,19 +523,19 @@
   box-sizing: border-box;
 }
 
-.nn-wysiwyg-editor::selection {
+[data-app="notes"] .nn-wysiwyg-editor::selection {
   background: var(--accent-soft);
 }
 
-.nn-wysiwyg-editor::placeholder {
+[data-app="notes"] .nn-wysiwyg-editor::placeholder {
   color: var(--muted);
   opacity: 0.5;
 }
 
 /* custom: Inhalts-Typografie des Editors (vom Nutzer erzeugte Inhalte). */
-.nn-wysiwyg-editor h1,
-.nn-wysiwyg-editor h2,
-.nn-wysiwyg-editor h3 {
+[data-app="notes"] .nn-wysiwyg-editor h1,
+[data-app="notes"] .nn-wysiwyg-editor h2,
+[data-app="notes"] .nn-wysiwyg-editor h3 {
   color: var(--text-strong, var(--text));
   margin-top: 18px;
   margin-bottom: 8px;
@@ -544,27 +543,27 @@
   line-height: 1.35;
 }
 
-.nn-wysiwyg-editor h1 {
+[data-app="notes"] .nn-wysiwyg-editor h1 {
   font-size: 22px;
   border-bottom: 1px solid var(--hairline, var(--line));
   padding-bottom: 6px;
   margin-top: 0;
 }
 
-.nn-wysiwyg-editor h2 {
+[data-app="notes"] .nn-wysiwyg-editor h2 {
   font-size: 16.5px;
 }
 
-.nn-wysiwyg-editor h3 {
+[data-app="notes"] .nn-wysiwyg-editor h3 {
   font-size: 14.5px;
 }
 
-.nn-wysiwyg-editor p {
+[data-app="notes"] .nn-wysiwyg-editor p {
   margin-bottom: 10px;
 }
 
 /* Custom Inline Code */
-.nn-inline-code {
+[data-app="notes"] .nn-inline-code {
   font-family: var(--font-mono);
   font-size: 12.5px;
   background: var(--surface-2);
@@ -575,7 +574,7 @@
 }
 
 /* Custom pre / Code Block */
-.nn-code-block {
+[data-app="notes"] .nn-code-block {
   font-family: var(--font-mono);
   font-size: 12.5px;
   background: var(--surface-2);
@@ -588,7 +587,7 @@
   line-height: 1.5;
 }
 
-.nn-code-block code {
+[data-app="notes"] .nn-code-block code {
   font-family: inherit;
   background: transparent;
   padding: 0;
@@ -598,7 +597,7 @@
 
 /* custom: Callout-Blöcke im Editor — semantische Kit-Farben statt
    hartkodierter rgba-Palette, damit beide Themes funktionieren. */
-.callout {
+[data-app="notes"] .callout {
   display: flex;
   gap: 12px;
   padding: 12px 16px;
@@ -610,62 +609,62 @@
   border: 1px solid var(--hairline, var(--line));
 }
 
-.callout-icon {
+[data-app="notes"] .callout-icon {
   font-size: 18px;
   user-select: none;
   flex-shrink: 0;
 }
 
-.callout-content {
+[data-app="notes"] .callout-content {
   flex: 1;
   outline: 0;
 }
 
-.callout-content strong {
+[data-app="notes"] .callout-content strong {
   font-weight: 700;
   font-size: 12px;
   letter-spacing: 0.05em;
 }
 
 /* Callout variants */
-.callout-info {
+[data-app="notes"] .callout-info {
   background: var(--accent-soft);
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
   color: var(--text);
 }
-.callout-info .callout-content strong {
+[data-app="notes"] .callout-info .callout-content strong {
   color: color-mix(in srgb, var(--accent) 80%, var(--text));
 }
 
-.callout-warning {
+[data-app="notes"] .callout-warning {
   background: var(--warning-soft);
   border-color: color-mix(in srgb, var(--warning) 30%, transparent);
   color: var(--text);
 }
-.callout-warning .callout-content strong {
+[data-app="notes"] .callout-warning .callout-content strong {
   color: var(--warning);
 }
 
-.callout-tip {
+[data-app="notes"] .callout-tip {
   background: var(--success-soft);
   border-color: color-mix(in srgb, var(--success) 30%, transparent);
   color: var(--text);
 }
-.callout-tip .callout-content strong {
+[data-app="notes"] .callout-tip .callout-content strong {
   color: var(--success);
 }
 
-.callout-danger {
+[data-app="notes"] .callout-danger {
   background: var(--danger-soft);
   border-color: color-mix(in srgb, var(--danger) 30%, transparent);
   color: var(--text);
 }
-.callout-danger .callout-content strong {
+[data-app="notes"] .callout-danger .callout-content strong {
   color: var(--danger);
 }
 
 /* custom: Checklisten im Editor (interaktive Todo-Zeilen). */
-.notes-todo-row {
+[data-app="notes"] .notes-todo-row {
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -673,19 +672,19 @@
   transition: padding-left 0.15s ease;
 }
 
-.notes-todo-row.indent-1 {
+[data-app="notes"] .notes-todo-row.indent-1 {
   padding-left: 24px;
 }
 
-.notes-todo-row.indent-2 {
+[data-app="notes"] .notes-todo-row.indent-2 {
   padding-left: 48px;
 }
 
-.notes-todo-row.indent-3 {
+[data-app="notes"] .notes-todo-row.indent-3 {
   padding-left: 72px;
 }
 
-.notes-todo-checkbox {
+[data-app="notes"] .notes-todo-checkbox {
   appearance: none;
   -webkit-appearance: none;
   width: 18px;
@@ -703,12 +702,12 @@
   justify-content: center;
 }
 
-.notes-todo-checkbox:checked {
+[data-app="notes"] .notes-todo-checkbox:checked {
   background-color: var(--accent);
   border-color: var(--accent);
 }
 
-.notes-todo-checkbox:checked::after {
+[data-app="notes"] .notes-todo-checkbox:checked::after {
   content: "";
   width: 4px;
   height: 8px;
@@ -720,38 +719,38 @@
   left: 5px;
 }
 
-.notes-todo-text {
+[data-app="notes"] .notes-todo-text {
   flex: 1;
   outline: 0;
 }
 
-.notes-todo-checkbox:checked + .notes-todo-text {
+[data-app="notes"] .notes-todo-checkbox:checked + .notes-todo-text {
   text-decoration: line-through;
   opacity: 0.65;
   color: var(--muted);
 }
 
 /* custom: Editierbare Tabelle im Editor (Inhalt, keine Datentabelle). */
-.notes-table {
+[data-app="notes"] .notes-table {
   width: 100%;
   border-collapse: collapse;
   margin: 12px 0;
 }
 
-.notes-table td {
+[data-app="notes"] .notes-table td {
   border: 1px solid var(--hairline, var(--line));
   padding: 6px 10px;
   font-size: 13px;
   outline: none;
 }
 
-.notes-table td:focus {
+[data-app="notes"] .notes-table td:focus {
   background: var(--accent-soft);
   border-color: var(--accent);
 }
 
 /* Horizontal line */
-.nn-wysiwyg-editor hr {
+[data-app="notes"] .nn-wysiwyg-editor hr {
   border: 0;
   height: 1px;
   background: var(--hairline, var(--line));
@@ -761,7 +760,7 @@
 /* --- Floating Editor Format Toolbar ---
    custom: Formatier-Leiste des Editors (Buttons selbst sind kit
    .ctox-pane-icon). */
-.nn-floating-toolbar-wrapper {
+[data-app="notes"] .nn-floating-toolbar-wrapper {
   padding: 10px 16px;
   border-top: 1px solid var(--hairline, var(--line));
   display: flex;
@@ -769,7 +768,7 @@
   flex-shrink: 0;
 }
 
-.nn-editor-toolbar {
+[data-app="notes"] .nn-editor-toolbar {
   display: flex;
   align-items: center;
   gap: 2px;
@@ -778,39 +777,32 @@
   border-radius: var(--kit-radius);
   border: 1px solid var(--hairline, var(--line));
   max-width: 100%;
-  overflow-x: auto;
-  overflow-y: visible;
-  flex-wrap: nowrap;
-  scrollbar-width: none;
+  /* Formatknöpfe brechen um, statt unsichtbar seitlich zu scrollen (Geometrie G1). */
+  flex-wrap: wrap;
+  justify-content: center;
 }
 
-.nn-editor-toolbar::-webkit-scrollbar {
+[data-app="notes"] .nn-editor-toolbar::-webkit-scrollbar {
   display: none;
 }
 
-.nn-format-wrapper {
+[data-app="notes"] .nn-format-wrapper {
   position: relative;
 }
 
-/* Draft/restore banners: kit .ctox-callout + module row layout. */
-.nn-draft-banner,
-.nn-restore-banner {
+/* Entwurf/Papierkorb: nur die Aktionen, rechtsbündig über dem Blatt (keine Hinweisbox). */
+[data-app="notes"] .nn-draft-actions,
+[data-app="notes"] .nn-restore-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-
-.nn-banner-actions {
-  display: flex;
-  align-items: center;
+  justify-content: flex-end;
   gap: 8px;
+  margin-bottom: 10px;
 }
 
 /* custom: Modul-Toast mit Undo-Aktionsbutton (die Shell-Notifications haben
    keinen Aktionsbutton). */
-.nn-action-toast {
+[data-app="notes"] .nn-action-toast {
   position: absolute;
   right: 18px;
   bottom: 46px;
@@ -830,19 +822,19 @@
 }
 
 @container business-app-window (max-width: 1024px) {
-  .nn-editor-head {
+  [data-app="notes"] .nn-editor-head {
     align-items: flex-start;
   }
 
-  .nn-note-meta-left,
-  .nn-editor-controls {
+  [data-app="notes"] .nn-note-meta-left,
+  [data-app="notes"] .nn-editor-controls {
     max-width: 100%;
   }
 }
 
 /* --- Editor Status Footer ---
    custom: kompakte Statusleiste (Sync-Puls, Lesezeit, Zähler). */
-.nn-editor-footer {
+[data-app="notes"] .nn-editor-footer {
   min-height: 30px;
   border-top: 1px solid var(--hairline, var(--line));
   display: flex;
@@ -855,31 +847,31 @@
   flex-shrink: 0;
 }
 
-.nn-editor-footer > div {
+[data-app="notes"] .nn-editor-footer > div {
   display: flex;
   align-items: center;
   min-width: 0;
 }
 
-.nn-sync-indicator {
+[data-app="notes"] .nn-sync-indicator {
   display: flex;
   align-items: center;
   gap: 5px;
   font-weight: 500;
 }
 
-.nn-sync-icon {
+[data-app="notes"] .nn-sync-icon {
   width: 12px;
   height: 12px;
   color: var(--accent);
 }
 
 /* Pulse Animation for Syncing status */
-.nn-sync-indicator.syncing {
+[data-app="notes"] .nn-sync-indicator.syncing {
   color: var(--text);
 }
 
-.nn-sync-indicator.syncing .nn-sync-icon {
+[data-app="notes"] .nn-sync-indicator.syncing .nn-sync-icon {
   animation: pulseGreen 1s infinite alternate;
 }
 
@@ -888,14 +880,14 @@
   to { opacity: 1; transform: scale(1.05); }
 }
 
-.nn-stats {
+[data-app="notes"] .nn-stats {
   margin-left: 10px;
   font-weight: 500;
 }
 
 /* --- Client App PIN Pad Lock Screen ---
    custom: Zero-Knowledge-PIN-Overlay (Spezialansicht, kein Kit-Pendant). */
-.nn-pin-overlay {
+[data-app="notes"] .nn-pin-overlay {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
   background: color-mix(in srgb, var(--bg) 88%, rgba(0, 0, 0, 0.72));
@@ -908,7 +900,7 @@
   color: var(--text);
 }
 
-.nn-pin-container {
+[data-app="notes"] .nn-pin-container {
   background: var(--surface);
   border: 1px solid var(--hairline, var(--line));
   border-radius: var(--control-radius);
@@ -919,7 +911,7 @@
   animation: scaleIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.nn-shield-logo {
+[data-app="notes"] .nn-shield-logo {
   width: 44px;
   height: 44px;
   border-radius: var(--control-radius);
@@ -932,32 +924,32 @@
   box-shadow: none;
 }
 
-.nn-shield-logo svg {
+[data-app="notes"] .nn-shield-logo svg {
   width: 28px;
   height: 28px;
 }
 
-.nn-pin-container h2 {
+[data-app="notes"] .nn-pin-container h2 {
   font-size: 16px;
   font-weight: 700;
   margin: 0 0 4px 0;
 }
 
-.nn-pin-container p {
+[data-app="notes"] .nn-pin-container p {
   font-size: 12px;
   color: var(--muted);
   margin: 0 0 16px 0;
 }
 
 /* PIN Dots Display */
-.nn-pin-display {
+[data-app="notes"] .nn-pin-display {
   display: flex;
   justify-content: center;
   gap: 10px;
   margin-bottom: 18px;
 }
 
-.nn-pin-dot {
+[data-app="notes"] .nn-pin-dot {
   width: 10px;
   height: 10px;
   border-radius: var(--control-radius);
@@ -966,13 +958,13 @@
   transition: all 0.15s;
 }
 
-.nn-pin-dot.filled {
+[data-app="notes"] .nn-pin-dot.filled {
   background: var(--accent);
   border-color: var(--accent);
   box-shadow: none;
 }
 
-.nn-pin-dot.error {
+[data-app="notes"] .nn-pin-dot.error {
   background: var(--danger);
   border-color: var(--danger);
   box-shadow: none;
@@ -980,13 +972,13 @@
 }
 
 /* Keypad Grid */
-.nn-pin-pad {
+[data-app="notes"] .nn-pin-pad {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
 }
 
-.nn-pin-pad button {
+[data-app="notes"] .nn-pin-pad button {
   height: 40px;
   border-radius: var(--control-radius);
   border: 1px solid var(--hairline, var(--line));
@@ -1002,39 +994,39 @@
   transition: background 0.15s, transform 0.1s;
 }
 
-.nn-pin-pad button:hover {
+[data-app="notes"] .nn-pin-pad button:hover {
   background: var(--kit-hover);
 }
 
-.nn-pin-pad button:active {
+[data-app="notes"] .nn-pin-pad button:active {
   transform: translateY(1px);
   background: var(--accent);
 }
 
-.nn-pin-pad button[data-action] {
+[data-app="notes"] .nn-pin-pad button[data-action] {
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
 }
 
-.nn-pin-pad button[data-action="pin-clear"] {
+[data-app="notes"] .nn-pin-pad button[data-action="pin-clear"] {
   color: var(--muted);
   border: 0;
   background: transparent;
 }
 
-.nn-pin-pad button[data-action="pin-ok"] {
+[data-app="notes"] .nn-pin-pad button[data-action="pin-ok"] {
   background: var(--accent-soft);
   color: color-mix(in srgb, var(--accent) 80%, var(--text));
   border-color: var(--accent);
 }
 
-.nn-pin-pad button[data-action="pin-ok"]:hover {
+[data-app="notes"] .nn-pin-pad button[data-action="pin-ok"]:hover {
   background: var(--accent);
   color: var(--accent-foreground, var(--surface));
 }
 
-.nn-pin-hint {
+[data-app="notes"] .nn-pin-hint {
   margin-top: 14px;
   font-size: 10px;
   color: var(--muted);
@@ -1043,7 +1035,7 @@
 /* --- Note Decryption Locked Pad Overlay ---
    custom: Zero-Knowledge-Entsperr-Pad (Input/Button sind kit .ctox-input /
    .ctox-button). */
-.nn-note-lock-overlay {
+[data-app="notes"] .nn-note-lock-overlay {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
   background: var(--surface);
@@ -1053,7 +1045,7 @@
   justify-content: center;
 }
 
-.nn-note-lock-pad {
+[data-app="notes"] .nn-note-lock-pad {
   max-width: 420px;
   width: 90%;
   padding: 22px;
@@ -1065,24 +1057,24 @@
   box-sizing: border-box;
 }
 
-.nn-lock-icon-huge {
+[data-app="notes"] .nn-lock-icon-huge {
   margin-bottom: 16px;
   color: var(--accent);
 }
 
-.nn-lock-icon-huge svg {
+[data-app="notes"] .nn-lock-icon-huge svg {
   width: 48px;
   height: 48px;
 }
 
-.nn-note-lock-pad h3 {
+[data-app="notes"] .nn-note-lock-pad h3 {
   font-size: 15px;
   font-weight: 700;
   margin: 0 0 6px 0;
   color: var(--text-strong, var(--text));
 }
 
-.nn-note-lock-pad p {
+[data-app="notes"] .nn-note-lock-pad p {
   font-size: 12px;
   color: var(--muted);
   margin: 0 0 20px 0;
@@ -1090,20 +1082,20 @@
 
 /* Input and button styling come from the kit (.ctox-input, .ctox-button
    .is-primary); only the row layout is module-specific. */
-.nn-decrypt-row {
+[data-app="notes"] .nn-decrypt-row {
   display: flex;
   gap: 8px;
   justify-content: center;
   margin-bottom: 16px;
 }
 
-.nn-decrypt-row .nn-decrypt-input {
+[data-app="notes"] .nn-decrypt-row .nn-decrypt-input {
   flex: 1 1 auto;
   width: auto;
   max-width: 220px;
 }
 
-.nn-lock-hint {
+[data-app="notes"] .nn-lock-hint {
   font-size: 10px;
   color: var(--muted);
 }
@@ -1131,95 +1123,88 @@
    stack until a note is selected (auto-reveal); then the editor owns it and the
    back button returns to the list. */
 @container business-app-window (max-width: 768px) {
-  .notes-module {
+  [data-app="notes"] .notes-module {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
   }
 
-  .notes-module > [data-resizer] {
+  [data-app="notes"] .notes-module > [data-resizer] {
     display: none;
   }
 
-  .notes-left,
-  .notes-center {
+  [data-app="notes"] .notes-left,
+  [data-app="notes"] .notes-center {
     grid-column: 1;
     grid-row: 1;
   }
 
   /* Auto-reveal: editor visible only with a selection (root drops
      .is-editor-hidden); otherwise the list owns the stack. */
-  .notes-module:not(.is-editor-hidden) .notes-left {
+  [data-app="notes"] .notes-module:not(.is-editor-hidden) .notes-left {
     display: none;
   }
 
-  .notes-module.is-editor-hidden .notes-center {
+  [data-app="notes"] .notes-module.is-editor-hidden .notes-center {
     display: none;
   }
 
-  .nn-back-to-list {
+  [data-app="notes"] .nn-back-to-list {
     display: inline-flex;
   }
 
-  .nn-editor-head {
+  [data-app="notes"] .nn-editor-head {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .nn-note-meta-left,
-  .nn-editor-controls {
+  [data-app="notes"] .nn-note-meta-left,
+  [data-app="notes"] .nn-editor-controls {
     width: 100%;
     justify-content: flex-start;
   }
 
-  .nn-meta-select-wrap,
-  .nn-meta-btn {
+  [data-app="notes"] .nn-meta-select-wrap,
+  [data-app="notes"] .nn-meta-btn {
     max-width: none;
   }
 
-  .nn-meta-btn {
+  [data-app="notes"] .nn-meta-btn {
     min-width: 0;
   }
 
-  .nn-editor-workspace {
+  [data-app="notes"] .nn-editor-workspace {
     padding: 12px;
   }
 
-  .nn-paper-sheet {
+  [data-app="notes"] .nn-paper-sheet {
     min-height: 420px;
   }
 
-  .nn-note-badges,
-  .nn-wysiwyg-editor {
+  [data-app="notes"] .nn-note-badges,
+  [data-app="notes"] .nn-wysiwyg-editor {
     padding-left: 18px;
     padding-right: 18px;
   }
 
-  .notes-tab-panel {
+  [data-app="notes"] .notes-tab-panel {
     min-height: 360px;
   }
 
-  .nn-floating-toolbar-wrapper {
-    justify-content: flex-start;
-    overflow-x: auto;
+  [data-app="notes"] .nn-floating-toolbar-wrapper {
     padding: 8px 12px;
   }
 
-  .nn-editor-toolbar {
-    flex-wrap: nowrap;
-    min-width: max-content;
-  }
-
-  .nn-editor-footer {
+  [data-app="notes"] .nn-editor-footer {
     min-height: 34px;
     flex-wrap: wrap;
     padding: 6px 12px;
   }
 
-  .nn-decrypt-row {
+  [data-app="notes"] .nn-decrypt-row {
     flex-direction: column;
   }
 
-  .nn-decrypt-row .nn-decrypt-input {
+  [data-app="notes"] .nn-decrypt-row .nn-decrypt-input {
     max-width: none;
   }
 }
@@ -1229,8 +1214,8 @@
    positioned popover menus inside the narrow sheet (they anchor to their
    trigger and could otherwise bleed past the right edge). */
 @container business-app-window (max-width: 768px) {
-  .nn-dropdown-menu,
-  .nn-toolbar-dropdown {
+  [data-app="notes"] .nn-dropdown-menu,
+  [data-app="notes"] .nn-toolbar-dropdown {
     max-width: calc(100cqw - 24px);
     right: 0;
     left: auto;
@@ -1241,41 +1226,41 @@
    reaches the 44px minimum, icon-only pane buttons in both dimensions, and
    the PIN pad keys grow to a full finger height. */
 @media (pointer: coarse) {
-  .notes-module button,
-  .notes-module input,
-  .notes-module select,
-  .notes-module textarea {
+  [data-app="notes"] .notes-module button,
+  [data-app="notes"] .notes-module input,
+  [data-app="notes"] .notes-module select,
+  [data-app="notes"] .notes-module textarea {
     min-height: 44px;
   }
 
-  .notes-module .ctox-pane-icon {
+  [data-app="notes"] .notes-module .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
 
-  .notes-module .ctox-pane-tab {
+  [data-app="notes"] .notes-module .ctox-pane-tab {
     min-height: 44px;
   }
 
   /* Note rows and dropdown entries get a full finger-height hit area. */
-  .notes-module .notes-card,
-  .notes-module .nn-dropdown-item,
-  .notes-module .nn-tag-select-item {
+  [data-app="notes"] .notes-module .notes-card,
+  [data-app="notes"] .notes-module .nn-dropdown-item,
+  [data-app="notes"] .notes-module .nn-tag-select-item {
     min-height: 44px;
   }
 
-  .notes-module .nn-pin-pad button {
+  [data-app="notes"] .notes-module .nn-pin-pad button {
     height: 48px;
   }
 
   /* Editor toolbar buttons stay compact visually but keep a 44px tap area. */
-  .notes-module .nn-editor-toolbar .ctox-pane-icon {
+  [data-app="notes"] .notes-module .nn-editor-toolbar .ctox-pane-icon {
     width: 44px;
     height: 44px;
   }
 
   /* Interactive todo checkboxes inside note content. */
-  .notes-module .notes-todo-checkbox {
+  [data-app="notes"] .notes-module .notes-todo-checkbox {
     width: 22px;
     height: 22px;
   }
@@ -1284,6 +1269,8 @@
 /* ============================================================================
    Shell V2 — pane head geometry.
 
+   v4 (Entwurf §6): das Fenster-Chrome liegt AUSSERHALB von root; die Freihaltungen für Icon-Zone (80px) und
+   Fenstersteuerung (78px) entfallen deshalb (V4-PORT.md). Historisch:
    The v2 shell paints three zones over an app whose `.shell-window-content` is
    NOT indented, so the module has to keep them free itself:
      - the app icon, 80px (`--shell-v2-icon-size`), covering the first 74px of
@@ -1299,13 +1286,13 @@
    head actions (210px). At the 300px default the title is squeezed to zero;
    420px is the column's own resizer maximum and leaves kicker and title
    untruncated. The shell resizer still persists the user's own width. */
-.shell-window[data-shell-contract="v2"] .notes-module {
+[data-app="notes"] .notes-module {
   --ctox-left-width: 420px;
 }
 
 /* Both heads of the top pane row are exactly one shell header row high. */
-.shell-window[data-shell-contract="v2"] .notes-module .notes-left > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .notes-module .notes-center > .ctox-pane-header {
+[data-app="notes"] .notes-module .notes-left > .ctox-pane-header,
+[data-app="notes"] .notes-module .notes-center > .ctox-pane-header {
   box-sizing: border-box;
   height: var(--shell-v2-header-row-size, 37px);
   min-height: var(--shell-v2-header-row-size, 37px);
@@ -1313,10 +1300,6 @@
   padding-bottom: 0;
 }
 
-/* First head: clear the app icon. */
-.shell-window[data-shell-contract="v2"] .notes-module .notes-left > .ctox-pane-header {
-  padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
-}
 
 /* The chrome rows are the second half of the icon zone and keep the same
    clearance. The clearance sits on the kit rows themselves (replacing their
@@ -1325,43 +1308,36 @@
    icon zone, while the bare rows hold only inputs and icon buttons. The kit
    rows stay unnamed (guard: no chrome selectors in module CSS); the search
    box still lines up with the title. */
-.shell-window[data-shell-contract="v2"] .notes-module .notes-head-rows > div {
-  padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
-}
 
-/* Last head: clear the 74px window control. */
-.shell-window[data-shell-contract="v2"] .notes-module .notes-center > .ctox-pane-header {
-  padding-right: 78px;
-}
 
 /* The head row fills its 37px track; the title keeps its own room and the
    standing actions never claim the row. */
-.shell-window[data-shell-contract="v2"] .notes-module .ctox-pane-title-row {
+[data-app="notes"] .notes-module .ctox-pane-title-row {
   height: 100%;
   min-width: 0;
 }
 
-.shell-window[data-shell-contract="v2"] .notes-module .ctox-pane-titles {
+[data-app="notes"] .notes-module .ctox-pane-titles {
   min-width: 0;
   padding-top: 0;
 }
 
-.shell-window[data-shell-contract="v2"] .notes-module .ctox-pane-title,
-.shell-window[data-shell-contract="v2"] .notes-module .ctox-pane-kicker {
+[data-app="notes"] .notes-module .ctox-pane-title,
+[data-app="notes"] .notes-module .ctox-pane-kicker {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.shell-window[data-shell-contract="v2"] .notes-module .ctox-pane-actions {
+[data-app="notes"] .notes-module .ctox-pane-actions {
   flex: 0 0 auto;
 }
 
 /* The shell already paints the app icon 14px to the left of this row, so the
    module's own shield chip would only repeat it — and it costs the title the
    28px it needs to stay readable. */
-.shell-window[data-shell-contract="v2"] .notes-module .nn-logo-container {
+[data-app="notes"] .notes-module .nn-logo-container {
   display: none;
 }
 
@@ -1373,15 +1349,10 @@
      icon zone, where nothing but the shell's icon may paint. The module keeps
      its wide-layout 12px frame instead, so the icon clearance is identical at
      every window width. */
-  .shell-window[data-shell-contract="v2"] .notes-module {
+  [data-app="notes"] .notes-module {
     padding: 12px;
   }
 
-  .shell-window[data-shell-contract="v2"] .notes-module .notes-left > .ctox-pane-header,
-  .shell-window[data-shell-contract="v2"] .notes-module .notes-center > .ctox-pane-header {
-    padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
-    padding-right: 78px;
-  }
 
   /* Reserved zone 3 (contract §3): the 74x74 window control is two header rows
      TALL, so in the stacked layout — where the grammar column itself reaches the
@@ -1390,21 +1361,53 @@
      wide layout needs no such rule: there the editor, not the grammar column,
      owns the right edge. Selector stays structural (first head row), so the
      module still names no kit chrome class. */
-  .shell-window[data-shell-contract="v2"] .notes-module .notes-head-rows > div:first-child {
-    padding-right: calc(var(--shell-v2-header-row-size, 37px) * 2);
-  }
 
   /* The head of whichever pane owns the stack stays exactly one shell header
      row: the editor's meta controls keep their single row inside the icon and
      window-control clearance instead of stacking into a second band. */
-  .shell-window[data-shell-contract="v2"] .notes-module .nn-editor-head {
+  [data-app="notes"] .notes-module .nn-editor-head {
     flex-direction: row;
     align-items: center;
   }
 
-  .shell-window[data-shell-contract="v2"] .notes-module .nn-note-meta-left,
-  .shell-window[data-shell-contract="v2"] .notes-module .nn-editor-controls {
+  [data-app="notes"] .notes-module .nn-note-meta-left,
+  [data-app="notes"] .notes-module .nn-editor-controls {
     width: auto;
     flex-wrap: nowrap;
+  }
+}
+
+/* Textdiät Regel 8: Kopfzeilen halten die Ecken für App-Icon (links) und Fensterknöpfe (rechts) frei. */
+[data-app="notes"] .notes-module .notes-left > .ctox-pane-header {
+  padding-left: var(--shell-icon-inset, calc(var(--shell-v2-icon-size, 80px) + 14px));
+}
+[data-app="notes"] .notes-module .notes-center > .ctox-pane-header {
+  padding-right: var(--shell-controls-inset, var(--shell-v2-control-inset, calc(var(--shell-v2-header-row-size, 37px) * 2)));
+}
+
+/* „…“-Menü im Listenkopf: rechtsbündig am Auslöser, damit es in der Spalte bleibt. */
+[data-app="notes"] .nn-list-more .nn-list-more-menu {
+  left: auto;
+  right: 0;
+}
+
+/* Textdiät Regel 8 (schmal): neben App-Icon und Knopf-Zone reicht der Editorkopf nicht für zwei beschriftete
+   Auswahlknöpfe. Notizbuch und Tags zeigen dann nur ihr Symbol (Name bleibt für Screenreader und als Tooltip),
+   sodass nichts unter den Knopf-Cluster rutscht und Stern/„…“ nicht über die Auswahl laufen. */
+@container business-app-window (max-width: 768px) {
+  [data-app="notes"] .notes-module .nn-note-meta-left {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+  [data-app="notes"] .notes-module .nn-editor-head .nn-meta-btn > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  [data-app="notes"] .notes-module .nn-editor-head .nn-meta-btn > .nn-caret {
+    display: none;
   }
 }

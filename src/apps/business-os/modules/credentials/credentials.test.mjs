@@ -4,7 +4,18 @@ import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-import { build } from 'esbuild';
+import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
+import { join as joinPath } from 'node:path';
+// Lader (OLDTEST): esbuild aus dem Klon, sonst ESBUILD_MODULE, sonst aus dem Haupt-Checkout
+// ~/Documents/ctox/src/apps/business-os/node_modules (wie PLAYWRIGHT_MODULE in den v4-api-Tests). Nicht installieren.
+const requireDev = createRequire(import.meta.url);
+function loadDev(name, envVar) {
+  try { return requireDev(name); } catch {
+    return requireDev(process.env[envVar] || joinPath(homedir(), 'Documents/ctox/src/apps/business-os/node_modules', name));
+  }
+}
+const { build } = loadDev('esbuild', 'ESBUILD_MODULE');
 
 // Bundle the browser module exactly as the shell would load it, then import
 // the pure test hooks. This proves the module's logic evaluates without error
@@ -16,6 +27,13 @@ const bundled = await build({
   format: 'esm',
   platform: 'browser',
   write: false,
+  // App-API 4.0: ctox:shared/x.js löst der Service Worker auf (§16.15); hier wie im SW auf den Shell-Pfad.
+  plugins: [{
+    name: 'ctox-shared',
+    setup(b) {
+      b.onResolve({ filter: /^ctox:shared\// }, (args) => ({ path: fileURLToPath(new URL(`../../shared/${args.path.slice('ctox:shared/'.length)}`, import.meta.url)) }));
+    },
+  }],
 });
 const [{ text: bundledSource }] = bundled.outputFiles;
 const mod = await import(
@@ -69,12 +87,12 @@ test('recordDetailHtml shows metadata only and never a secret value', () => {
 });
 
 test('dispatched command targets the credentials module and a secret command type', () => {
-  const doc = hooks.buildCommandDoc('ctox.secret.put', { name: 'OPENAI_API_KEY', value: 'x' }, 'cmd_test');
-  assert.equal(doc.id, 'cmd_test');
-  assert.equal(doc.module, 'credentials');
-  assert.equal(doc.command_type, 'ctox.secret.put');
-  assert.equal(doc.record_id, 'OPENAI_API_KEY');
-  assert.equal(doc.inbound_channel, 'business_os.credentials');
+  // v4: api.command(type, payload) – Routing-Felder reisen im Payload, das Dokument legt die API an.
+  const doc = hooks.buildCommandDoc('ctox.secret.put', { name: 'OPENAI_API_KEY', value: 'x' });
+  assert.equal(doc.type, 'ctox.secret.put');
+  assert.equal(doc.payload.record_id, 'OPENAI_API_KEY');
+  assert.equal(doc.payload.inbound_channel, 'business_os.credentials');
+  assert.equal(doc.payload.client_context.source_module, 'credentials');
 });
 
 test('mergeEntries tags catalog and extra and drops nameless rows', () => {
@@ -143,40 +161,12 @@ test('auto-reveal follows hasSelection && !userCollapsed', () => {
   assert.equal(mod.shouldRevealRecord(true, true), false, 'user collapsed → hidden');
 });
 
-test('data-driven empty is gated on collection readiness (syncing shell vs empty)', () => {
-  // Empty + not ready (never-synced / catching-up / offline-pending) → syncing shell.
-  for (const state of ['never-synced', 'catching-up', 'offline-pending']) {
-    const html = mod.renderRecordList([], {
-      emptyText: 'No credentials configured.',
-      readiness: { collection: 'business_commands', state, ready: false, syncing: true, updatedAt: null },
-      syncingText: 'Syncing data.',
-    });
-    assert.match(html, /ctox-syncing/, `${state} renders the syncing shell`);
-    assert.match(html, /role="status"/, 'syncing shell is a polite status region');
-    assert.match(html, /aria-live="polite"/);
-    assert.match(html, /Syncing data\./, 'syncing text is rendered');
-    assert.doesNotMatch(html, /ctox-empty/, 'no premature "no data" claim while unready');
-  }
-  // Empty + live → the real empty state.
-  const readyHtml = mod.renderRecordList([], {
-    emptyText: 'No credentials configured.',
-    readiness: { collection: 'business_commands', state: 'live', ready: true, syncing: false, updatedAt: 1 },
-    syncingText: 'Syncing data.',
-  });
-  assert.match(readyHtml, /ctox-empty/, 'ready + empty renders the empty state');
-  assert.match(readyHtml, /No credentials configured\./);
-  assert.doesNotMatch(readyHtml, /ctox-syncing/);
-  // No readiness snapshot (older shell) → legacy empty, never a sync spinner.
-  const legacyHtml = mod.renderRecordList([], { emptyText: 'No credentials configured.' });
-  assert.match(legacyHtml, /ctox-empty/);
-  assert.doesNotMatch(legacyHtml, /ctox-syncing/);
-  // Rows always win over any readiness state.
-  const rowsHtml = mod.renderRecordList(
-    [{ name: 'OPENAI_API_KEY', description: '', is_set: true, updated_at: null, source: 'catalog' }],
-    { readiness: { ready: false }, syncingText: 'Syncing data.' },
-  );
-  assert.match(rowsHtml, /OPENAI_API_KEY/, 'rows render regardless of readiness');
-  assert.doesNotMatch(rowsHtml, /ctox-syncing/);
+test('v4: empty list renders nothing – no syncing shell, no readiness (App-API 4.0)', async () => {
+  assert.equal(mod.renderRecordList([], { view: 'cards', readiness: { ready: false } }), '');
+  const rowsHtml = mod.renderRecordList([{ name: 'OPENAI_API_KEY', is_set: true, source: 'catalog' }], { view: 'cards' });
+  assert.match(rowsHtml, /OPENAI_API_KEY/);
+  const indexJs = await readSource('./index.js');
+  assert.doesNotMatch(indexJs, /ctox-syncing|collectionReadiness|subscribeCollectionReadiness|commandBus/);
 });
 
 test('left column carries the canonical grammar markup pins', async () => {
@@ -215,8 +205,8 @@ test('the manual refresh button is gone; the list is reactive via a subscription
   assert.doesNotMatch(html, /data-action="refresh"/, 'no refresh button in the markup');
   assert.doesNotMatch(indexJs, /=== 'refresh'/, 'no refresh action handler');
   // Reactive: subscribe to business_commands for secret put/delete landings.
-  assert.match(indexJs, /command_type:\s*\{\s*\$in:\s*\[PUT_COMMAND,\s*DELETE_COMMAND\]/, 'subscription scoped to put/delete');
-  assert.match(indexJs, /\.\$\?\.subscribe/, 'subscribes to the collection query');
+  assert.match(indexJs, /type: \{ \$in: \[PUT_COMMAND, DELETE_COMMAND\] \}/, 'subscription scoped to put/delete');
+  assert.match(indexJs, /api\.query\('business_commands', \{/, 'subscribes to the live query (App-API 4.0)');
 });
 
 test('import/export/new/delete/collapse handlers are wired in index.js', async () => {
@@ -264,5 +254,6 @@ test('mount renders before the command-bus list round-trip completes', async () 
     source.indexOf('function formatUpdated'),
   );
   // Non-blocking bootstrap: synchronous render, then a fire-and-forget refresh.
-  assert.match(mountSource, /render\(\);[\s\S]{0,120}void refresh\(\);/, 'render precedes a non-blocking refresh');
+  assert.match(mountSource, /render\(\);[\s\S]{0,120}refresh\(\);/, 'render precedes a non-blocking refresh');
+  assert.doesNotMatch(mountSource, /await sendCommand|await refresh/, 'commands are never awaited (App-API 4.0)');
 });

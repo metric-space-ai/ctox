@@ -1,32 +1,22 @@
-import {
-  readStoredFileFromDemandChunks,
-} from '../../shared/file-integrity.js?v=20260816-browser-sync-guards-v141';
+// CV Print Builder – App-API 4.0 (Shell v4). Daten live über api.query/get, Schreiben über api.put/patch,
+// Parsing als Befehl `ctox.cv_print.apply_parse` (Handler fertig, nie warten), PDF-Quellen über api.files.
+// Sync-Kopplung, Readiness-Warten, Chunk-Schreiben nach desktop_files/desktop_file_chunks und der
+// business_os.chat.task-Weg entfallen (V4-PORT.md).
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
+import { readStoredFileFromChunks } from 'ctox:shared/file-integrity.js';
 
-const BUILD = '20260721-ia-grammar-v30';
 const MODULE_ID = 'cv-print-builder';
+const PARSE_COMMAND = 'ctox.cv_print.apply_parse';
 const PROFILE_MIME = 'application/vnd.ctox.cv-print-profile+json';
-const CHUNK_SIZE = 16 * 1024;
+// Nur noch zum Lesen älterer Profile, deren PDF als desktop_files/desktop_file_chunks gespeichert ist.
 const CONTENT_HASH_SCHEME = 'sha256-bytes-v1';
-const CHUNK_HASH_SCHEME = 'sha256-base64-chunk-v1';
-const DEMAND_ONLY_SYNC_COLLECTIONS = new Set([
-  'desktop_file_chunks',
-  'document_blob_chunks',
-  'spreadsheet_blob_chunks',
-]);
-const REQUIRED_COLLECTIONS = [
+// Live-Abos: jede Änderung zeichnet neu (entprellt 80 ms).
+const LIVE_COLLECTIONS = [
   'documents',
   'document_versions',
-  'desktop_files',
-  'business_chats',
   'business_commands',
   'ctox_queue_tasks',
 ];
-const LIVE_COLLECTIONS = [
-  ...REQUIRED_COLLECTIONS,
-];
-// Backing collection of the candidate selector list (documents filtered to
-// document_type === 'cv_print_profile'); its readiness gates the data empty.
-const LIST_READINESS_COLLECTION = 'documents';
 let ACTIVE_LOCALE = 'de';
 
 function tr(de, en) {
@@ -42,7 +32,7 @@ const TEMPLATES = [
 const VIEW_LABELS = {
   original: 'Original',
   split: 'Beide',
-  print: 'Print',
+  print: 'Druckansicht',
 };
 
 const COMMON_FIRST_NAMES = new Set([
@@ -86,82 +76,165 @@ const COMMON_FIRST_NAMES = new Set([
   'maria',
 ]);
 
-export async function mount(ctx) {
-  ACTIVE_LOCALE = String(ctx.locale || document.documentElement.lang || 'de').toLowerCase().startsWith('en') ? 'en' : 'de';
-  await ensureStyles();
-  const markupVersion = String(import.meta.url).split('?v=')[1] || BUILD;
-  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
-  const html = await fetch(markupHref).then((res) => res.text());
-  ctx.host.innerHTML = html;
-  applyStaticLocale(ctx.host);
-  ctx.host.dataset.cvPrintBuilder = 'native';
-  ctx.left?.replaceChildren?.();
-  ctx.right?.replaceChildren?.();
+export async function mount(root, api, { restored } = {}) {
+  ACTIVE_LOCALE = localeOf(api.shell.locale.get());
+  if (!root.dataset.app) root.dataset.app = MODULE_ID;
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  root.innerHTML = html;
+  applyStaticLocale(root);
+  api.shell.setTitle('CV Print Builder');
+  autoWirePaneGrammar(root);
 
+  const snap = restored && typeof restored === 'object' ? restored : {};
   const state = {
-    ctx,
-    host: ctx.host.querySelector('[data-cv-print-builder]'),
+    api,
+    root,
+    host: root.querySelector('[data-cv-print-builder]'),
     items: [],
-    selectedId: '',
+    selectedId: typeof snap.selectedId === 'string' ? snap.selectedId : '',
     lastSelectedId: '',
     lastSelectedPhase: '',
-    viewMode: 'original',
-    userCollapsed: false,
+    viewMode: ['original', 'split', 'print'].includes(snap.viewMode) ? snap.viewMode : 'original',
+    userCollapsed: snap.userCollapsed === true,
     originalUrls: new Map(),
     disposers: [],
     refreshTimer: null,
     renderSerial: 0,
-    ready: false,
-    listReadiness: null,
     importing: false,
     bulkParsing: false,
     originalErrors: new Map(),
+    statusCodes: new Set(),
+    mounted: true,
+    // Offene (noch nicht per blur gespeicherte) Eingaben im Korrektur-Editor: überleben Live-Neuzeichnen und
+    // Remount (snapshot/restored) und werden zurückgespielt, sobald das Profil gezeichnet ist.
+    editorDraft: normalizeEditorDraft(snap.editorDraft),
   };
+  // Restored view: lastSelected* so setzen, dass refresh die wiederhergestellte Ansicht nicht überschreibt.
+  if (state.selectedId && typeof snap.selectedPhase === 'string') {
+    state.lastSelectedId = state.selectedId;
+    state.lastSelectedPhase = snap.selectedPhase;
+  }
+  restoreGrammar(state, snap.grammar);
 
   bindStaticEvents(state);
   subscribeToCollections(state);
-  state.listReadiness = readListReadiness(state);
-  subscribeToReadiness(state);
-  setModuleBusy(state, true);
-  render(state);
-  let disposed = false;
-  Promise.resolve()
-    .then(async () => {
-      state.ready = await waitForRequiredCollectionsReady(state.ctx, REQUIRED_COLLECTIONS, 120000);
-      if (disposed) return;
-      setModuleBusy(state, !state.ready);
-      await refresh(state);
-      if (disposed) return;
-      if (!state.ready) {
-        notify(state, 'error', tr('CV-Daten noch nicht synchronisiert', 'CV data is not synchronized yet'), tr('Import und Parsing bleiben gesperrt, bis die Business-OS Collections bereit sind.', 'Import and parsing remain locked until the Business OS collections are ready.'));
-        scheduleReadinessRetry(state);
-      }
-    })
-    .catch((error) => {
-      if (disposed) return;
-      console.warn('[cv-print-builder] background initialization failed', error);
-      setModuleBusy(state, true);
-      render(state);
-    });
+  state.disposers.push(api.shell.locale.subscribe((value) => {
+    const next = localeOf(value);
+    if (next === ACTIVE_LOCALE) return;
+    ACTIVE_LOCALE = next;
+    applyStaticLocale(root);
+    setViewToggle(state, readGrammar(state).view);
+    render(state);
+  }));
+  refresh(state);
 
-  return () => {
-    disposed = true;
-    state.disposers.forEach((dispose) => dispose?.());
-    state.originalUrls.forEach((url) => URL.revokeObjectURL(url));
-    state.originalUrls.clear();
-    clearTimeout(state.refreshTimer);
-    ctx.host.replaceChildren();
-    delete ctx.host.dataset.cvPrintBuilder;
+  return {
+    unmount() {
+      state.mounted = false;
+      state.disposers.forEach((dispose) => { try { dispose?.(); } catch {} });
+      state.disposers.length = 0;
+      state.originalUrls.forEach((url) => URL.revokeObjectURL(url));
+      state.originalUrls.clear();
+      clearTimeout(state.refreshTimer);
+      root.replaceChildren();
+    },
+    snapshot() {
+      const selected = getSelectedItem(state);
+      const snapOut = {
+        v: 1,
+        selectedId: state.selectedId,
+        selectedPhase: selected ? workflowPhase(selected.model) : '',
+        viewMode: state.viewMode,
+        userCollapsed: state.userCollapsed,
+        grammar: readGrammarSnapshot(state),
+      };
+      if (state.editorDraft.documentId && Object.keys(state.editorDraft.fields).length) {
+        snapOut.editorDraft = structuredClone(state.editorDraft);
+      }
+      return snapOut;
+    },
   };
 }
 
+function localeOf(value) {
+  return String(value || 'de').toLowerCase().startsWith('en') ? 'en' : 'de';
+}
+
+// Listenzustand (Suche, Band, Filter, Kachel/Liste) für snapshot/restored.
+function readGrammarSnapshot(state) {
+  const rail = state.host?.querySelector('[data-cv-rail]');
+  return {
+    search: rail?.querySelector('[data-pg-search]')?.value || '',
+    band: rail?.querySelector('[data-pg-band][aria-selected="true"]')?.dataset.pgBand || 'all',
+    sort: rail?.querySelector('[data-pg-filter][data-pg-name="sort"]')?.value || 'updated_desc',
+    template: rail?.querySelector('[data-pg-filter][data-pg-name="template"]')?.value || 'all',
+    view: rail?.querySelector('[data-cv-view-toggle]')?.dataset.cvListView === 'list' ? 'list' : 'cards',
+  };
+}
+
+function restoreGrammar(state, grammar) {
+  if (!grammar || typeof grammar !== 'object') return;
+  const rail = state.host?.querySelector('[data-cv-rail]');
+  if (!rail) return;
+  const search = rail.querySelector('[data-pg-search]');
+  if (search && typeof grammar.search === 'string') search.value = grammar.search;
+  for (const name of ['sort', 'template']) {
+    const select = rail.querySelector(`[data-pg-filter][data-pg-name="${name}"]`);
+    if (select && typeof grammar[name] === 'string' && [...select.options].some((o) => o.value === grammar[name])) select.value = grammar[name];
+  }
+  if (typeof grammar.band === 'string') {
+    const tabs = [...rail.querySelectorAll('[data-pg-band]')];
+    if (tabs.some((tab) => tab.dataset.pgBand === grammar.band)) {
+      tabs.forEach((tab) => {
+        const on = tab.dataset.pgBand === grammar.band;
+        tab.setAttribute('aria-selected', String(on));
+        tab.classList.toggle('is-active', on);
+      });
+    }
+  }
+  const toggle = rail.querySelector('[data-cv-view-toggle]');
+  if (toggle && (grammar.view === 'list' || grammar.view === 'cards')) toggle.dataset.cvListView = grammar.view;
+  rail.__ctoxPaneGrammar?.refreshDot?.();
+}
+
+// Offene Editor-Eingaben je Feld (Schlüssel = Feldpfad / Eintrag / Skill-Gruppe).
+function normalizeEditorDraft(value) {
+  const draft = { documentId: '', fields: {} };
+  if (!value || typeof value !== 'object' || typeof value.documentId !== 'string') return draft;
+  draft.documentId = value.documentId;
+  for (const [key, text] of Object.entries(value.fields || {})) {
+    if (typeof text === 'string') draft.fields[key] = text;
+  }
+  return draft;
+}
+
+// Schlüssel eines Editorfelds: Feldpfad, Eintrag (Art:Index:Feld) oder Skill-Gruppe.
+function editorKey(el) {
+  if (el?.dataset?.cvFieldPath) return `f:${el.dataset.cvFieldPath}`;
+  if (el?.dataset?.cvSkillGroup) return `s:${el.dataset.cvSkillGroup}`;
+  const row = el?.closest?.('[data-cv-entry-kind]');
+  if (row && el.dataset.cvEntryField) return `e:${row.dataset.cvEntryKind}:${row.dataset.cvIndex}:${el.dataset.cvEntryField}`;
+  return '';
+}
+
+function applyEditorDraft(state) {
+  const draft = state.editorDraft;
+  const editor = state.host?.querySelector('[data-cv-field-editor]');
+  if (!editor || !draft.documentId || draft.documentId !== state.selectedId) return;
+  editor.querySelectorAll('[data-cv-field-path], [data-cv-entry-field], [data-cv-skill-group]').forEach((input) => {
+    const key = editorKey(input);
+    if (key && typeof draft.fields[key] === 'string') input.value = draft.fields[key];
+  });
+}
+
+// Statisches Markup übersetzen; beidseitig, weil die Sprache live wechseln kann (api.shell.locale).
 function applyStaticLocale(host) {
   const root = host.querySelector('[data-cv-print-builder]');
   if (!root) return;
   root.setAttribute('lang', ACTIVE_LOCALE);
-  if (ACTIVE_LOCALE !== 'en') return;
   const text = new Map([
     ['Kandidaten', 'Candidates'], ['Neueste', 'Newest'], ['Name', 'Name'], ['Status', 'Status'], ['Template', 'Template'],
+    // v4-allow: label (Band „In Arbeit“ = Werkstatt-Phase, kein App-Zustand)
     ['Alle', 'All'], ['In Arbeit', 'In progress'], ['Korrektur', 'Review'], ['Freigegeben', 'Approved'],
     ['Alle Templates', 'All templates'], ['Minimal', 'Minimal'], ['Klassisch', 'Classic'], ['Modern', 'Modern'],
     ['CV Stage', 'CV Stage'],
@@ -176,32 +249,22 @@ function applyStaticLocale(host) {
     ['Filter zurücksetzen', 'Reset filters'], ['Sortieren', 'Sort'], ['Template filtern', 'Filter by template'],
     ['Status-Ansichten', 'Status views'],
   ]);
+  const invert = (map) => new Map([...map].map(([de, en]) => [en, de]));
+  const textMap = ACTIVE_LOCALE === 'en' ? text : invert(text);
+  const attrMap = ACTIVE_LOCALE === 'en' ? attrs : invert(attrs);
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let node;
   while ((node = walker.nextNode())) {
     const raw = node.nodeValue || '';
     const value = raw.trim();
-    if (text.has(value)) node.nodeValue = raw.replace(value, text.get(value));
+    if (textMap.has(value)) node.nodeValue = raw.replace(value, textMap.get(value));
   }
   root.querySelectorAll('[aria-label],[placeholder],[title]').forEach((element) => {
     for (const attr of ['aria-label', 'placeholder', 'title']) {
       const value = element.getAttribute(attr);
-      if (attrs.has(value)) element.setAttribute(attr, attrs.get(value));
+      if (attrMap.has(value)) element.setAttribute(attr, attrMap.get(value));
     }
   });
-}
-
-async function ensureStyles() {
-  const cssVersion = String(import.meta.url).split('?v=')[1] || BUILD;
-  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
-  let link = document.querySelector('link[data-cv-print-builder-style]');
-  if (!link) {
-    link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.dataset.cvPrintBuilderStyle = 'true';
-    document.head.append(link);
-  }
-  if (link.getAttribute('href') !== cssHref) link.href = cssHref;
 }
 
 function bindStaticEvents(state) {
@@ -209,15 +272,23 @@ function bindStaticEvents(state) {
   // The left column's chrome (search / view-toggle / tray / reset / active-dot
   // / band) is SHELL-wired from the data-pg-* markup; the module only listens
   // for the bubbling change event and re-renders the list from data.
-  rail?.addEventListener('ctox-pane-grammar-change', () => render(state));
+  const onGrammar = () => render(state);
+  rail?.addEventListener('ctox-pane-grammar-change', onGrammar);
   // The single view toggle is module-owned (the shell grammar only wires
   // two-button [data-pg-view] groups); sync its icon/labels to the locale.
   setViewToggle(state, readGrammar(state).view);
   // One delegated click handler for header actions, the selector list, and the
   // stage controls. Selecting a candidate is an in-place class flip, never a
   // list rebuild, so the operator's scroll offset is preserved.
-  state.host.addEventListener('click', (event) => onHostClick(state, event));
-  state.host.addEventListener('change', (event) => onHostChange(state, event));
+  const onClick = (event) => onHostClick(state, event);
+  const onChange = (event) => onHostChange(state, event);
+  state.host.addEventListener('click', onClick);
+  state.host.addEventListener('change', onChange);
+  state.disposers.push(() => {
+    rail?.removeEventListener('ctox-pane-grammar-change', onGrammar);
+    state.host.removeEventListener('click', onClick);
+    state.host.removeEventListener('change', onChange);
+  });
 }
 
 function onHostClick(state, event) {
@@ -234,7 +305,7 @@ function onHostClick(state, event) {
   if (taskLink) {
     event.preventDefault();
     event.stopPropagation();
-    return openCtoxTask(taskLink.dataset.cvTaskId || '', taskLink.dataset.cvCommandId || '');
+    return openCtoxTask(state, taskLink.dataset.cvTaskId || '', taskLink.dataset.cvCommandId || '');
   }
   if (target.closest?.('[data-toggle-stage]')) return toggleStage(state);
   // Must precede the stage-view tabs: the list toggle is a sibling control in
@@ -260,36 +331,32 @@ function onHostChange(state, event) {
 }
 
 function triggerNewCandidate(state) {
-  if (!state.ready) {
-    notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('CVs können importiert werden, sobald die Arbeitsdaten geladen sind.', 'CVs can be imported once the workspace data is loaded.'));
-    return;
-  }
   state.host.querySelector('[data-cv-upload]')?.click();
 }
 
 function triggerImportCandidates(state) {
-  if (!state.ready) {
-    notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('Profile können importiert werden, sobald die Arbeitsdaten geladen sind.', 'Profiles can be imported once the workspace data is loaded.'));
-    return;
-  }
   state.host.querySelector('[data-cv-import]')?.click();
 }
 
 async function triggerReparseAll(state) {
   const candidates = reparseCandidates(state);
-  if (!state.ready && !candidates.length) {
-    notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('Parsing kann starten, sobald die Arbeitsdaten geladen sind.', 'Parsing can start once the workspace data is loaded.'));
-    return;
-  }
   if (!candidates.length) {
-    notify(state, 'info', tr('Keine PDFs zum Parsen', 'No PDFs to parse'), tr('Es wurden keine CVs mit lokaler PDF-Quelle gefunden.', 'No CVs with a local PDF source were found.'));
+    notify(state, 'info', 'reparse', tr('Keine PDFs zum Parsen', 'No PDFs to parse'), tr('Es wurden keine CVs mit lokaler PDF-Quelle gefunden.', 'No CVs with a local PDF source were found.'));
     return;
   }
-  const confirmed = window.confirm(tr(
-    `${candidates.length} CV-PDF${candidates.length === 1 ? '' : 's'} erneut parsen? Bestehende Parser-Tasks werden nicht gelöscht, die CVs erhalten neue Parser-Aufträge.`,
-    `Reparse ${candidates.length} CV PDF${candidates.length === 1 ? '' : 's'}? Existing parser tasks remain and each CV receives a new parser task.`,
-  ));
-  if (!confirmed) return;
+  clearNotice(state, 'reparse');
+  // Bestätigung im App-Fenster (api.shell.dialog) statt window.confirm; ohne Antwort passiert nichts.
+  const confirmed = await state.api.shell.dialog({
+    kind: 'confirm',
+    title: tr('Alle reparsen', 'Reparse all'),
+    text: tr(
+      `${candidates.length} CV-PDF${candidates.length === 1 ? '' : 's'} erneut parsen? Jeder CV erhält einen neuen Parser-Auftrag, alte bleiben.`,
+      `Reparse ${candidates.length} CV PDF${candidates.length === 1 ? '' : 's'}? Each CV gets a new task, old ones remain.`,
+    ),
+    confirm_label: tr('Reparsen', 'Reparse'),
+    default: false,
+  });
+  if (confirmed !== true) return;
   await reparseAllPdfs(state, candidates);
 }
 
@@ -297,14 +364,11 @@ async function handleUploadChange(state, input) {
   const files = Array.from(input.files || []);
   input.value = '';
   if (!files.length) return;
-  if (!state.ready) {
-    notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('Bitte kurz warten, bis die CV-Liste geladen ist.', 'Please wait until the CV list is loaded.'));
-    return;
-  }
   try {
     await importPdfs(state, files);
+    clearNotice(state, 'import.pdf');
   } catch (error) {
-    notify(state, 'error', tr('PDF konnte nicht importiert werden', 'PDF could not be imported'), String(error?.message || error));
+    notify(state, 'error', 'import.pdf', tr('PDF konnte nicht importiert werden', 'PDF could not be imported'), String(error?.message || error));
   }
 }
 
@@ -312,14 +376,11 @@ async function handleImportChange(state, input) {
   const file = input.files?.[0];
   input.value = '';
   if (!file) return;
-  if (!state.ready) {
-    notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('Bitte kurz warten, bis die CV-Liste geladen ist.', 'Please wait until the CV list is loaded.'));
-    return;
-  }
   try {
     await importCandidates(state, file);
+    clearNotice(state, 'import.profiles');
   } catch (error) {
-    notify(state, 'error', tr('Import fehlgeschlagen', 'Import failed'), String(error?.message || error));
+    notify(state, 'error', 'import.profiles', tr('Import fehlgeschlagen', 'Import failed'), String(error?.message || error));
   }
 }
 
@@ -355,9 +416,10 @@ async function runWorkflowAction(state) {
   try {
     if (phase === 'uploaded' || phase === 'error') await startParsing(state, item);
     else if (phase === 'review') await approvePrint(state, item);
-    else if (phase === 'approved') window.print();
+    else if (phase === 'approved') printApprovedSheet(state, item);
+    clearNotice(state, 'action');
   } catch (error) {
-    notify(state, 'error', tr('Aktion fehlgeschlagen', 'Action failed'), String(error?.message || error));
+    notify(state, 'error', 'action', tr('Aktion fehlgeschlagen', 'Action failed'), String(error?.message || error));
   }
 }
 
@@ -406,34 +468,14 @@ function toggleStage(state) {
 
 function subscribeToCollections(state) {
   const schedule = () => {
+    if (!state.mounted) return;
     clearTimeout(state.refreshTimer);
     state.refreshTimer = setTimeout(() => refresh(state), 80);
   };
+  // Live-Abos je Montage (PORTING §4 Falle 1); subscribe ruft sofort mit dem aktuellen Stand.
   LIVE_COLLECTIONS.forEach((name) => {
-    const col = getCollection(state.ctx, name);
-    const sub = col?.$?.subscribe?.(schedule);
-    if (sub?.unsubscribe) state.disposers.push(() => sub.unsubscribe());
+    state.disposers.push(state.api.query(name, {}).subscribe(schedule));
   });
-}
-
-// Readiness of the candidate list's backing collection (`documents`). While it
-// has not completed its initial replication, an empty list must render the
-// sync state instead of "no data" (render hint only — never a mount blocker).
-function readListReadiness(state) {
-  const read = state.ctx?.sync?.collectionReadiness;
-  return typeof read === 'function'
-    ? read.call(state.ctx.sync, LIST_READINESS_COLLECTION)
-    : null;
-}
-
-function subscribeToReadiness(state) {
-  const subscribe = state.ctx?.sync?.subscribeCollectionReadiness;
-  if (typeof subscribe !== 'function') return;
-  const unsubscribe = subscribe.call(state.ctx.sync, LIST_READINESS_COLLECTION, (snapshot) => {
-    state.listReadiness = snapshot;
-    renderList(state);
-  });
-  if (typeof unsubscribe === 'function') state.disposers.push(unsubscribe);
 }
 
 function setModuleBusy(state, busy) {
@@ -456,105 +498,13 @@ function setModuleBusy(state, busy) {
   }
 }
 
-async function waitForRequiredCollectionsReady(ctx, collections, timeoutMs) {
-  const localReady = await waitForLocalCollections(ctx, collections, Math.min(timeoutMs, 10000));
-  if (!localReady) return false;
-  warmRequiredCollectionSync(ctx, collections, timeoutMs);
-  return true;
-}
-
-async function waitForLocalCollections(ctx, collections, timeoutMs) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      requireCollections(ctx, collections);
-      return true;
-    } catch {
-      await delay(250);
-    }
-  }
-  return false;
-}
-
-function warmRequiredCollectionSync(ctx, collections, timeoutMs) {
-  if (!ctx.sync?.startCollection && !ctx.sync?.leaseCollection) return;
-  (async () => {
-    const syncHandles = await startScopedSyncCollections(ctx, collections, 'cv-print-builder-warm', { optional: true });
-    try {
-      await Promise.race([
-        Promise.all(syncHandles.handles.map((bridge) => waitForSyncBridgeReady(bridge, Math.min(timeoutMs, 30000)))).catch(() => {}),
-        delay(Math.min(timeoutMs, 30000)),
-      ]);
-    } finally {
-      await releaseSyncLeases(syncHandles.leases);
-    }
-  })().catch(() => {});
-}
-
-async function waitForBusinessOsCollectionsReady(collections, timeoutMs) {
-  const statusApi = globalThis.CTOX_BUSINESS_OS_STATUS;
-  if (!statusApi?.snapshot) return true;
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const status = await statusApi.snapshot({
-      includeCounts: false,
-      requiredCollections: collections,
-      allowRestart: true,
-    }).catch(() => null);
-    if (isBusinessOsCollectionsReady(status, collections)) return true;
-    await delay(750);
-  }
-  return false;
-}
-
-function isBusinessOsCollectionsReady(status, collections = []) {
-  const checks = status?.checks || {};
-  const entries = status?.sync?.initialSync?.entries || [];
-  const entryByCollection = new Map(entries.map((entry) => [entry.collection, entry]));
-  const strictCollections = collections.filter((collection) => collection !== 'desktop_file_chunks');
-  const initialReplicationComplete = strictCollections.every((collection) => {
-    const entry = entryByCollection.get(collection);
-    return entry?.state === 'complete' || Boolean(entry?.initialReplicationAt);
-  });
-  const chunksReady = collections.includes('desktop_file_chunks')
-    ? Boolean(entryByCollection.get('desktop_file_chunks')?.streamingReady)
-    : true;
-  return Boolean(
-    checks.requiredCollectionsConnected
-      && initialReplicationComplete
-      && chunksReady
-      && checks.requiredCollectionsCheckpointEpochAdvertised
-      && checks.frameTransportRealtimeHealthy
-      && checks.noCheckpointProtocolErrors
-      && checks.noSchemaProtocolErrors
-      && checks.noReplicationIoErrors
-      && checks.noFailedCollections
-      && checks.noStalledReconnect
-  );
-}
-
-function scheduleReadinessRetry(state) {
-  window.setTimeout(async () => {
-    if (!state.host?.isConnected || state.ready) return;
-    const ready = await waitForRequiredCollectionsReady(state.ctx, REQUIRED_COLLECTIONS, 30000);
-    if (!ready) {
-      scheduleReadinessRetry(state);
-      return;
-    }
-    state.ready = true;
-    setModuleBusy(state, false);
-    await refresh(state);
-    notify(state, 'success', tr('CV-Daten synchronisiert', 'CV data synchronized'), tr('Import und Parsing sind bereit.', 'Import and parsing are ready.'));
-  }, 3000);
-}
-
-async function refresh(state) {
-  const [documents, versions, commands, queueTasks] = await Promise.all([
-    findAll(state.ctx, 'documents'),
-    findAll(state.ctx, 'document_versions'),
-    findAll(state.ctx, 'business_commands'),
-    findAll(state.ctx, 'ctox_queue_tasks'),
-  ]);
+function refresh(state) {
+  if (!state.mounted) return;
+  // Alle Lesezugriffe sind lokale Live-Abfragen (kein Netz, kein Warten, keine Readiness).
+  const documents = readAll(state, 'documents');
+  const versions = readAll(state, 'document_versions');
+  const commands = readAll(state, 'business_commands');
+  const queueTasks = readAll(state, 'ctox_queue_tasks');
   const versionById = new Map(versions.map((item) => [item.id, item]));
   const liveStatus = buildLiveStatusIndex(commands, queueTasks);
   state.items = documents
@@ -599,7 +549,7 @@ async function refresh(state) {
 function render(state) {
   renderList(state);
   renderStage(state);
-  setModuleBusy(state, !state.ready || state.importing || state.bulkParsing);
+  setModuleBusy(state, state.importing || state.bulkParsing);
 }
 
 // Shell-wired grammar state, read straight from the pane DOM (the handle may
@@ -653,7 +603,7 @@ function bandCounts(state) {
 function bandLabel(band) {
   return ({
     all: tr('Alle', 'All'),
-    progress: tr('In Arbeit', 'In progress'),
+    progress: tr('In Arbeit', 'In progress'), // v4-allow: label (Band = Werkstatt-Phase)
     review: tr('Korrektur', 'Review'),
     approved: tr('Freigegeben', 'Approved'),
   })[band] || tr('Alle', 'All');
@@ -670,7 +620,7 @@ function renderList(state) {
   list.classList.toggle('is-compact', grammar.view === 'list');
   list.innerHTML = visible.length
     ? visible.map((item) => renderCandidateCard(state, item, grammar.view)).join('')
-    : renderListEmptyState(state);
+    : renderListEmptyState();
   applyListSelection(state);
   writeCounts(state, bandCounts(state));
   writeFooter(state, `${visible.length} ${visible.length === 1 ? tr('Eintrag', 'entry') : tr('Einträge', 'entries')} · ${bandLabel(grammar.band)}`);
@@ -709,18 +659,9 @@ function toggleListView(state, button) {
   renderList(state);
 }
 
-// Empty branches of the candidate list: a FILTER empty (source has rows) always
-// wins; a DATA empty shows the sync shell while `documents` is not initially
-// replicated (ready === false, incl. offline-pending) and the honest empty
-// state only once the collection is live.
-function renderListEmptyState(state) {
-  if (state.items.length) {
-    return '<div class="ctox-empty">' + escapeHtml(tr('Keine Kandidaten für diesen Filter.', 'No candidates for this filter.')) + '</div>';
-  }
-  if (state.listReadiness?.ready === false) {
-    return '<div class="ctox-syncing" role="status" aria-live="polite">' + escapeHtml(tr('Daten werden synchronisiert.', 'Syncing data.')) + '</div>';
-  }
-  return '<div class="ctox-empty">' + escapeHtml(tr('Noch keine CVs. Über „Neu" ein PDF anlegen.', 'No CVs yet. Add a PDF via "New".')) + '</div>';
+// Leere Liste rendert nichts (R11): weder Filter- noch Datenleere ist ein Zustandstext.
+function renderListEmptyState() {
+  return '';
 }
 
 // In-place selection flip — never a rebuild, so the operator's scroll offset in
@@ -782,7 +723,7 @@ function buildLiveStatusIndex(commands, queueTasks) {
     .forEach((command) => {
       const commandId = command.command_id || command.id;
       if (commandId && !byCommandId.has(commandId)) byCommandId.set(commandId, command);
-      const recordId = command.record_id || command.payload?.document_id || command.client_context?.document_id;
+      const recordId = command.record_id || command.payload?.record_id || command.payload?.document_id || command.client_context?.document_id;
       if (recordId && !byRecordId.has(recordId)) byRecordId.set(recordId, command);
     });
   queueTasks.forEach((task) => {
@@ -794,7 +735,10 @@ function buildLiveStatusIndex(commands, queueTasks) {
 }
 
 function isCvPrintParseCommandProjection(command) {
-  return command?.module === MODULE_ID
+  // v4: Befehlsdokument {id, type, payload, status, app_id, result?, error?}; v3-Projektionen bleiben lesbar.
+  return command?.app_id === MODULE_ID
+    || command?.type === PARSE_COMMAND
+    || command?.module === MODULE_ID
     || command?.client_context?.module === MODULE_ID
     || command?.client_context?.source_module === MODULE_ID
     || command?.payload?.source_module === MODULE_ID
@@ -810,14 +754,17 @@ function applyLiveWorkflowState(model, record, liveStatus) {
   const command = (commandId && liveStatus.byCommandId.get(commandId))
     || liveStatus.byRecordId.get(record.id)
     || null;
+  // v4: der Handler liefert {task_id} als Befehlsergebnis.
+  const commandTaskId = command?.task_id || command?.result?.task_id || '';
+  const commandKey = command?.command_id || command?.id || '';
   const task = (taskId && liveStatus.tasksById.get(taskId))
-    || (command?.task_id && liveStatus.tasksById.get(command.task_id))
-    || (command?.command_id && liveStatus.tasksByCommandId.get(command.command_id))
+    || (commandTaskId && liveStatus.tasksById.get(commandTaskId))
+    || (commandKey && liveStatus.tasksByCommandId.get(commandKey))
     || null;
   const live = liveWorkflowStatus(command, task);
-  if (command?.command_id && !next.workflow.command_id) next.workflow.command_id = command.command_id;
+  if (commandKey && !next.workflow.command_id) next.workflow.command_id = commandKey;
   if (task?.id && !next.workflow.task_id) next.workflow.task_id = task.id;
-  if (command?.task_id && !next.workflow.task_id) next.workflow.task_id = command.task_id;
+  if (commandTaskId && !next.workflow.task_id) next.workflow.task_id = commandTaskId;
   if (live.status) next.workflow.task_status = live.status;
   if (live.error) next.workflow.error = live.error;
 
@@ -916,11 +863,8 @@ function stageVisible(state) {
   return Boolean(getSelectedItem(state)) && !state.userCollapsed;
 }
 
-function emptyStageHtml(title, sub, showToggle = false) {
-  const toggle = showToggle
-    ? `<button type="button" class="ctox-button cv-stage-show" data-toggle-stage>${escapeHtml(tr('Anzeigen', 'Show'))}</button>`
-    : '';
-  return `<div class="ctox-empty"><div><strong>${escapeHtml(title)}</strong><div>${escapeHtml(sub)}</div>${toggle}</div></div>`;
+function collapsedStageHtml(title) {
+  return `<div class="ctox-empty"><div><strong>${escapeHtml(title)}</strong><div><button type="button" class="ctox-button cv-stage-show" data-toggle-stage>${escapeHtml(tr('Anzeigen', 'Show'))}</button></div></div></div>`;
 }
 
 function renderStage(state) {
@@ -944,12 +888,13 @@ function renderStage(state) {
     }
   }
 
+  // Ohne Auswahl bleibt die Bühne leer (R11). Ausgeblendet: Name + Knopf zum Wiedereinblenden.
   if (!item) {
-    stage.innerHTML = emptyStageHtml(tr('Kein CV ausgewählt', 'No CV selected'), tr('Links einen Kandidaten wählen oder über „Neu" ein PDF anlegen.', 'Pick a candidate on the left or add a PDF via "New".'));
+    stage.innerHTML = '';
     return;
   }
   if (!visible) {
-    stage.innerHTML = emptyStageHtml(displayCandidateName(item.model), tr('CV-Bühne ausgeblendet.', 'CV stage hidden.'), true);
+    stage.innerHTML = collapsedStageHtml(displayCandidateName(item.model));
     return;
   }
 
@@ -966,13 +911,18 @@ function renderStage(state) {
   stage.innerHTML = `<div class="cv-view-grid${mode === 'split' ? ' is-split' : ''}">${views.join('')}</div>`;
   bindEditablePrintFields(state);
   bindFieldEditor(state);
+  applyEditorDraft(state);
   ensureOriginalUrl(state, item)
     .then(() => {
+      clearNotice(state, 'original');
       if (serial === state.renderSerial) renderOriginalFrame(state, item);
     })
     .catch((error) => {
-      const fileId = item.model.source?.desktop_file_id || '';
-      if (fileId) state.originalErrors.set(fileId, error?.message || String(error || tr('Original-PDF konnte nicht geladen werden.', 'Original PDF could not be loaded.')));
+      const key = sourceKey(item.model);
+      const message = error?.message || String(error || '');
+      if (key) state.originalErrors.set(key, message);
+      // Fehler in die Zustandszone statt Fehlerkasten im Inhalt (R11).
+      notify(state, 'error', 'original', tr('Original-PDF konnte nicht geöffnet werden', 'Original PDF could not be opened'), message);
       if (serial === state.renderSerial) renderOriginalFrame(state, item);
     });
 }
@@ -984,7 +934,7 @@ function renderStageHead(state, item) {
   const model = item.model;
   const phase = workflowPhase(model);
   const approved = phase === 'approved';
-  const controlsDisabled = !state.ready || phase === 'uploaded' || phase === 'parsing';
+  const controlsDisabled = phase === 'uploaded' || phase === 'parsing';
   const action = actionForPhase(phase);
   const kicker = state.host.querySelector('[data-cv-stage-kicker]');
   const title = state.host.querySelector('[data-cv-stage-title]');
@@ -1019,9 +969,7 @@ function renderOriginalPane(state, item) {
       <header class="ctox-pane-header cv-pane-head">
         <h3 class="ctox-pane-title">${escapeHtml(tr('Original PDF', 'Original PDF'))}</h3>
       </header>
-      <div class="cv-pane-body" data-cv-original-body>
-        <div class="ctox-empty">${escapeHtml(tr('PDF wird geladen.', 'Loading PDF.'))}</div>
-      </div>
+      <div class="cv-pane-body" data-cv-original-body></div>
     </section>
   `;
 }
@@ -1029,25 +977,11 @@ function renderOriginalPane(state, item) {
 function renderOriginalFrame(state, item) {
   const body = state.host.querySelector('[data-cv-original-body]');
   if (!body) return;
-  const fileId = item.model.source?.desktop_file_id || '';
-  const error = state.originalErrors.get(fileId);
-  if (error) {
-    body.innerHTML = `
-      <div class="ctox-empty">
-        <div>
-          <strong>${escapeHtml(tr('Original-PDF konnte nicht geladen werden.', 'Original PDF could not be loaded.'))}</strong>
-          <div>${escapeHtml(error)}</div>
-        </div>
-      </div>
-    `;
-    return;
-  }
-  const url = state.originalUrls.get(fileId);
-  if (!url) {
-    body.innerHTML = '<div class="ctox-empty">' + escapeHtml(tr('Original-PDF ist noch nicht lokal materialisiert.', 'Original PDF has not been materialized locally yet.')) + '</div>';
-    return;
-  }
-  body.innerHTML = `<iframe class="cv-original-frame" title="Original PDF" src="${escapeAttr(`${url}#toolbar=0&navpanes=0&view=FitH`)}"></iframe>`;
+  const url = state.originalUrls.get(sourceKey(item.model));
+  // Ohne Blob (noch nicht lokal oder Fehler → Zone) bleibt die Fläche leer.
+  body.innerHTML = url
+    ? `<iframe class="cv-original-frame" title="Original PDF" src="${escapeAttr(`${url}#toolbar=0&navpanes=0&view=FitH`)}"></iframe>`
+    : '';
 }
 
 function renderPrintPane(item) {
@@ -1412,6 +1346,18 @@ function renderSkillEditor(label, value) {
 function bindFieldEditor(state) {
   const editor = state.host.querySelector('[data-cv-field-editor]');
   if (!editor) return;
+  // Offene Eingabe merken (Entwurf je Profil); ein gespeichertes Feld (blur) verlässt den Entwurf.
+  const documentId = state.selectedId;
+  editor.addEventListener('input', (event) => {
+    const key = editorKey(event.target);
+    if (!key) return;
+    if (state.editorDraft.documentId !== documentId) state.editorDraft = { documentId, fields: {} };
+    state.editorDraft.fields[key] = event.target.value;
+  });
+  editor.addEventListener('focusout', (event) => {
+    const key = editorKey(event.target);
+    if (key && state.editorDraft.documentId === documentId) delete state.editorDraft.fields[key];
+  });
   editor.querySelectorAll('[data-cv-field-path]').forEach((input) => {
     input.addEventListener('blur', async () => {
       const path = input.dataset.cvFieldPath;
@@ -1597,44 +1543,53 @@ async function importPdfs(state, files) {
       state.lastSelectedId = '';
       state.lastSelectedPhase = '';
       state.viewMode = 'original';
-      await refresh(state);
+      refresh(state);
       if (state.selectedId !== selectedId) {
         state.selectedId = selectedId;
         state.lastSelectedId = '';
         state.lastSelectedPhase = '';
-        await refresh(state);
+        refresh(state);
       }
     }
   } finally {
     state.importing = false;
-    setModuleBusy(state, !state.ready);
+    setModuleBusy(state, false);
   }
   if (failures.length) {
     throw new Error(failures.join('\n'));
   }
-  notify(state, 'success', pdfs.length === 1 ? 'PDF importiert' : `${pdfs.length} PDFs importiert`, 'Originalansicht ist bereit. Parsing kann pro Kandidat gestartet werden.');
 }
 
+// Das Original-PDF geht als Datei über api.files (Metadaten in `files`, Inhalt per sha256-Ref), nicht mehr als
+// desktop_files/desktop_file_chunks-Dokumente einer fremden App. Profil und Version bleiben in documents/
+// document_versions.
 async function importPdf(state, file, options = {}) {
   if (!/^application\/pdf$/i.test(file.type) && !/\.pdf$/i.test(file.name)) {
     throw new Error('Bitte eine PDF-Datei auswählen.');
   }
-  requireCollections(state.ctx, ['documents', 'document_versions', 'desktop_files', 'desktop_file_chunks']);
   const bytes = new Uint8Array(await file.arrayBuffer());
   const sha = await sha256Hex(bytes);
   const now = Date.now();
   const documentId = `cv_${crypto.randomUUID()}`;
   const versionId = `${documentId}_v1`;
-  const fileId = `desktop_file_${documentId}`;
-  const generationId = `${fileId}_g1`;
-  const base64 = uint8ToBase64(bytes);
+  const fileId = `cv_file_${documentId}`;
+  const mimeType = file.type || 'application/pdf';
+  const upload = state.api.files.put(file, { id: fileId, name: file.name, mime: mimeType });
+  await upload.local;
+  const fileRef = await upload.ref;
+  // Upload-Ergebnis des Core: Ablehnung in die Zustandszone, nie warten.
+  upload.result.then((result) => {
+    if (result?.status === 'rejected') {
+      notify(state, 'error', 'file.upload', tr('PDF-Upload abgelehnt', 'PDF upload rejected'), `${file.name}: ${result.reason || result.status}`);
+    }
+  }, () => {});
   const identity = candidateIdentityFromFilename(file.name);
   const title = identity.name;
   const model = createInitialModel({
     documentId,
     versionId,
     fileId,
-    generationId,
+    fileRef,
     filename: file.name,
     title,
     identity,
@@ -1643,31 +1598,19 @@ async function importPdf(state, file, options = {}) {
     now,
   });
 
-  await saveDesktopFile(state.ctx, {
-    fileId,
-    generationId,
-    documentId,
-    filename: file.name,
-    mimeType: file.type || 'application/pdf',
-    size: file.size,
-    sha,
-    base64,
-    now,
-  });
-
-  await getCollection(state.ctx, 'document_versions').insert({
+  await writeLocal(state.api.put('document_versions', {
     id: versionId,
     document_id: documentId,
     version: 1,
     source_kind: 'cv_pdf_upload',
-    blob_id: fileId,
+    blob_id: fileRef,
     model_json: model,
     diagnostics: [],
     created_at_ms: now,
     updated_at_ms: now,
-  });
+  }));
 
-  await getCollection(state.ctx, 'documents').insert({
+  await writeLocal(state.api.put('documents', {
     id: documentId,
     title,
     filename: file.name,
@@ -1680,7 +1623,7 @@ async function importPdf(state, file, options = {}) {
     page_count: 0,
     diagnostics_count: 0,
     linked_records: [
-      { collection: 'desktop_files', id: fileId, role: 'source_pdf' },
+      { collection: 'files', id: fileId, ref: fileRef, role: 'source_pdf' },
     ],
     display_cache: {
       candidate_name: title,
@@ -1691,66 +1634,15 @@ async function importPdf(state, file, options = {}) {
     is_deleted: false,
     created_at_ms: now,
     updated_at_ms: now,
-  });
+  }));
 
-  state.originalUrls.set(fileId, URL.createObjectURL(file));
+  state.originalUrls.set(fileRef, URL.createObjectURL(file));
   if (options.select !== false) {
     state.selectedId = documentId;
     state.viewMode = 'original';
   }
-  if (options.refresh !== false) await refresh(state);
+  if (options.refresh !== false) refresh(state);
   return { documentId, fileId };
-}
-
-async function saveDesktopFile(ctx, input) {
-  await getCollection(ctx, 'desktop_files').insert({
-    id: input.fileId,
-    parent_id: '',
-    path: '',
-    local_path: '',
-    virtual_path: `/cv-print-builder/${input.filename}`,
-    name: input.filename,
-    kind: 'file',
-    mime_type: input.mimeType,
-    extension: 'pdf',
-    size_bytes: input.size,
-    owner_id: '',
-    source: MODULE_ID,
-    linked_collection: 'documents',
-    linked_record_id: input.documentId,
-    content_ref: '',
-    content_state: 'available',
-    content_hash: input.sha,
-    content_hash_scheme: CONTENT_HASH_SCHEME,
-    content_generation_id: input.generationId,
-    mtime_ms: input.now,
-    content_synced_at_ms: input.now,
-    sort_index: input.now,
-    is_deleted: false,
-    created_at_ms: input.now,
-    updated_at_ms: input.now,
-  });
-  const total = Math.ceil(input.base64.length / CHUNK_SIZE) || 1;
-  const chunkRows = await Promise.all(Array.from({ length: total }, async (_, idx) => {
-    const data = input.base64.slice(idx * CHUNK_SIZE, (idx + 1) * CHUNK_SIZE);
-    const chunkHash = await sha256Hex(new TextEncoder().encode(data));
-    return {
-      id: canonicalDesktopFileChunkId(input.fileId, input.generationId, idx),
-      file_id: input.fileId,
-      generation_id: input.generationId,
-      content_hash: input.sha,
-      content_hash_scheme: CONTENT_HASH_SCHEME,
-      idx,
-      total,
-      encoding: 'base64',
-      data,
-      chunk_hash: chunkHash,
-      chunk_hash_scheme: CHUNK_HASH_SCHEME,
-      size_bytes: data.length,
-      created_at_ms: Date.now(),
-    };
-  }));
-  await writeChunkDocuments(getCollection(ctx, 'desktop_file_chunks'), chunkRows);
 }
 
 // Export/import the structured candidate PROFILES as JSON (honest and small):
@@ -1781,16 +1673,15 @@ function exportCandidates(state) {
     state.host.appendChild(anchor);
     anchor.click();
     anchor.remove();
-    notify(state, 'success', tr('Profile exportiert', 'Profiles exported'), tr(`${source.length} CV-Profil(e) als JSON geladen.`, `${source.length} CV profile(s) downloaded as JSON.`));
+    clearNotice(state, 'export');
   } catch (error) {
-    notify(state, 'error', tr('Export fehlgeschlagen', 'Export failed'), String(error?.message || error));
+    notify(state, 'error', 'export', tr('Export fehlgeschlagen', 'Export failed'), String(error?.message || error));
   } finally {
     if (url) setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 4000);
   }
 }
 
 async function importCandidates(state, file) {
-  requireCollections(state.ctx, ['documents', 'document_versions']);
   let parsed;
   try {
     parsed = JSON.parse(await file.text());
@@ -1814,8 +1705,7 @@ async function importCandidates(state, file) {
     state.lastSelectedId = '';
     state.lastSelectedPhase = '';
   }
-  await refresh(state);
-  notify(state, 'success', tr('Profile importiert', 'Profiles imported'), tr(`${count} CV-Profil(e) angelegt.`, `${count} CV profile(s) created.`));
+  refresh(state);
 }
 
 async function persistImportedProfile(state, entry) {
@@ -1834,9 +1724,11 @@ async function persistImportedProfile(state, entry) {
   model.source = { ...(model.source || {}) };
   delete model.source.desktop_file_id;
   delete model.source.generation_id;
+  delete model.source.file_id;
+  delete model.source.file_ref;
   const title = displayCandidateName(model) || tr('Importierter CV', 'Imported CV');
   const phase = workflowPhase(model);
-  await getCollection(state.ctx, 'document_versions').insert({
+  await writeLocal(state.api.put('document_versions', {
     id: versionId,
     document_id: documentId,
     version: 1,
@@ -1846,8 +1738,8 @@ async function persistImportedProfile(state, entry) {
     diagnostics: [],
     created_at_ms: now,
     updated_at_ms: now,
-  });
-  await getCollection(state.ctx, 'documents').insert({
+  }));
+  await writeLocal(state.api.put('documents', {
     id: documentId,
     title,
     filename: String(model.source?.filename || ''),
@@ -1869,19 +1761,65 @@ async function persistImportedProfile(state, entry) {
     is_deleted: false,
     created_at_ms: now,
     updated_at_ms: now,
-  });
+  }));
   return documentId;
 }
 
+// Parsing als eigener Befehl `ctox.cv_print.apply_parse` (Handler: PDF-Text über cap.doc.extract, Agenten-Task
+// mit App-Skill cv-print-builder/parser – der Handler wählt ihn, nicht die UI –, Rückschreiben der neuen Version
+// über den Rückruf ctox.cv_print.apply_parse.done, Fehlschlag/Abbruch über .failed). Nie warten (R5): der Status kommt
+// gepusht; failed → Zustandszone, die Phase „Fehler“ ergibt sich aus der Live-Projektion des Befehls.
 async function startParsing(state, item) {
-  if (!state.ctx.commandBus?.dispatch) {
-    throw new Error('CTOX commandBus ist nicht verfügbar. CV Parsing muss als Business-OS Chat-Task gestartet werden.');
+  const source = item.model?.source || {};
+  if (!source.file_ref && !source.desktop_file_id) {
+    throw new Error('CV-Quelle ist unvollständig: PDF-Datei fehlt.');
   }
-  requireCollections(state.ctx, ['business_chats', 'documents', 'document_versions', 'desktop_files', 'desktop_file_chunks']);
   const now = Date.now();
   const chatId = `chat_cv_${item.record.id}`;
-  const commandId = `cmd_${crypto.randomUUID()}`;
   const taskInstruction = buildParserTaskInstruction(item);
+  const handle = submitCommand(state, PARSE_COMMAND, {
+    title: `CV strukturieren: ${source.filename || item.record.filename}`,
+    instruction: taskInstruction,
+    chat_id: chatId,
+    source_module: MODULE_ID,
+    // Neue Profile: Datei-Ref aus api.files. Ältere Profile: desktop_files-ID + Generation (Handler liest sie).
+    ...(source.desktop_file_id ? { source_file_id: source.desktop_file_id, generation_id: source.generation_id } : {}),
+    ...(source.file_ref ? {
+      source_file_ref: source.file_ref,
+      source_file: { kind: 'file', ref: source.file_ref, file_id: source.file_id || '', name: source.filename || '', mime_type: 'application/pdf' },
+    } : {}),
+    filename: source.filename || item.record.filename,
+    mime_type: 'application/pdf',
+    size_bytes: source.size_bytes || 0,
+    sha256: source.sha256 || '',
+    document_id: item.record.id,
+    version_id: item.version.id,
+    record_snapshot: parserRecordSnapshot(item),
+    expected_model_schema: 'ctox.cv_print_profile.v1',
+    record_id: item.record.id,
+    client_context: {
+      surface: 'business-os-cv-print-builder',
+      action: 'parse_cv_pdf',
+      module: MODULE_ID,
+      document_id: item.record.id,
+      version_id: item.version.id,
+      chat_id: chatId,
+    },
+  }, {
+    // Lokal abgelehnter Befehl (h.local) = Versand gescheitert: wie v3 „dispatch_failed“ am Profil festhalten.
+    onRejected: (error) => patchItemModel(state, item, (model) => ({
+      ...model,
+      workflow: {
+        ...model.workflow,
+        phase: 'error',
+        chat_id: chatId,
+        task_status: 'dispatch_failed',
+        error: error?.message || String(error),
+        updated_at_ms: Date.now(),
+      },
+    }), { documentStatus: 'error', displayPhase: 'error' }).catch(() => {}),
+  });
+  const commandId = handle.id;
   const markParsing = (model) => ({
     ...model,
     workflow: {
@@ -1901,141 +1839,40 @@ async function startParsing(state, item) {
   state.lastSelectedId = item.record.id;
   state.lastSelectedPhase = 'parsing';
   render(state);
-  let parsingPatchApplied = false;
-  try {
-    await patchItemModel(state, item, markParsing, {
-      documentStatus: 'parsing',
-      displayPhase: 'parsing',
-    });
-    parsingPatchApplied = true;
-  } catch (error) {
-    console.warn('[cv-print-builder] optimistic parsing status patch failed; dispatching task anyway', error);
-  }
-  if (parsingPatchApplied) await refresh(state);
+  await patchItemModel(state, item, markParsing, {
+    documentStatus: 'parsing',
+    displayPhase: 'parsing',
+  });
+  state.viewMode = 'original';
+  refresh(state);
+  return handle;
+}
 
-  try {
-    const sourcePrepare = await ensureParseSourceReady(state, item);
-    if (!sourcePrepare.generation_id) {
-      throw new Error(sourcePrepare.warning || 'PDF-Daten konnten nicht lokal vorbereitet werden.');
+function submitCommand(state, type, payload, { onRejected } = {}) {
+  const code = `${MODULE_ID}.command.${type}`;
+  // record_id zusätzlich als Befehls-Option (§16.19 Nr. 8): der Handler liest command.record_id.
+  const handle = state.api.command(type, payload, payload?.record_id ? { record_id: payload.record_id } : undefined);
+  const off = handle.status.subscribe((status) => {
+    if (status?.status === 'failed') {
+      state.api.status.report({ level: 'error', code, text: `${tr('CV-Parsing fehlgeschlagen', 'CV parsing failed')}: ${status.error || '-'}`, ref: handle.id });
+      state.statusCodes.add(code);
+    } else if (status?.status === 'done') {
+      state.api.status.clear(code);
     }
-    if (!sourcePrepare.ready) {
-      console.warn('[cv-print-builder] dispatching parser task with native source fallback', {
-        fileId: sourcePrepare.file_id,
-        generationId: sourcePrepare.generation_id,
-        warning: sourcePrepare.warning || '',
-      });
-    }
-    await upsertBusinessChat(state.ctx, {
-      id: chatId,
-      title: `CV Parsing · ${displayCandidateName(item.model)}`,
-      message: taskInstruction,
-      now,
-    });
-    const dispatchResult = await dispatchCvParserCommand(state, {
-      id: commandId,
-      module: MODULE_ID,
-      command_type: 'business_os.chat.task',
-      record_id: item.record.id,
-      inbound_channel: MODULE_ID,
-      sync_collections: [
-        'desktop_file_chunks',
-        'desktop_files',
-        'documents',
-        'document_versions',
-        'business_chats',
-        'business_commands',
-        'ctox_queue_tasks',
-      ],
-      payload: {
-        title: `CV strukturieren: ${item.model.source?.filename || item.record.filename}`,
-        instruction: taskInstruction,
-        chat_id: chatId,
-        message_id: `msg_${crypto.randomUUID()}`,
-        conversation: [],
-        inbound_channel: MODULE_ID,
-        source_module: MODULE_ID,
-        skill: 'ctox-cv-print-parser',
-        skill_id: 'ctox-cv-print-parser',
-        source_file_id: item.model.source?.desktop_file_id,
-        generation_id: item.model.source?.generation_id,
-        filename: item.model.source?.filename || item.record.filename,
-        mime_type: 'application/pdf',
-        size_bytes: item.model.source?.size_bytes || 0,
-        sha256: item.model.source?.sha256 || '',
-        document_id: item.record.id,
-        version_id: item.version.id,
-        source_prepare: sourcePrepare,
-        record_snapshot: parserRecordSnapshot(item),
-        writeback_contract: {
-          command_type: 'ctox.cv_print.apply_parse',
-          target_collection: 'document_versions',
-          document_id: item.record.id,
-          expected_model_schema: 'ctox.cv_print_profile.v1',
-        },
-      },
-      client_context: {
-        surface: 'business-os-cv-print-builder',
-        action: 'parse_cv_pdf',
-        module: MODULE_ID,
-        document_id: item.record.id,
-        version_id: item.version.id,
-        desktop_file_id: item.model.source?.desktop_file_id,
-        chat_id: chatId,
-        source_prepare_ready: sourcePrepare.ready,
-        source_prepare_warning: sourcePrepare.warning || '',
-      },
-    });
-    const taskId = String(dispatchResult?.task_id || dispatchResult?.taskId || '').trim();
-    const taskStatus = String(dispatchResult?.task_status || dispatchResult?.status || 'queued').trim();
-    warmRequiredCollectionSync(state.ctx, [
-      'desktop_file_chunks',
-      'desktop_files',
-      'business_chats',
-      'business_commands',
-      'ctox_queue_tasks',
-    ], 30000);
-    await patchItemModel(state, item, (model) => ({
-      ...model,
-      workflow: {
-        ...model.workflow,
-        phase: 'parsing',
-        chat_id: chatId,
-        command_id: commandId,
-        task_id: taskId || model.workflow?.task_id || '',
-        task_status: taskStatus || model.workflow?.task_status || 'queued',
-        updated_at_ms: Date.now(),
-      },
-    }), {
-      documentStatus: 'parsing',
-      displayPhase: 'parsing',
-    });
-  } catch (error) {
-    await patchItemModel(state, item, (model) => ({
-      ...model,
-      workflow: {
-        ...model.workflow,
-        phase: 'error',
-        chat_id: chatId,
-        command_id: model.workflow?.command_id || commandId,
-        task_status: 'dispatch_failed',
-        error: error?.message || String(error),
-        updated_at_ms: Date.now(),
-      },
-    }), {
-      documentStatus: 'error',
-      displayPhase: 'error',
-    });
-    throw error;
-  } finally {
-    state.viewMode = 'original';
-    await refresh(state);
-  }
+  });
+  state.disposers.push(off);
+  handle.local.catch((error) => {
+    state.api.status.report({ level: 'error', code, text: `${tr('CV-Parsing abgelehnt', 'CV parsing rejected')}: ${String(error?.message || error?.code || error)}`, ref: handle.id });
+    state.statusCodes.add(code);
+    onRejected?.(error);
+  });
+  return handle;
 }
 
 function reparseCandidates(state) {
   return state.items.filter((item) => {
     const source = item.model?.source || {};
-    return Boolean(item.record?.id && item.version?.id && source.desktop_file_id);
+    return Boolean(item.record?.id && item.version?.id && (source.file_ref || source.desktop_file_id));
   });
 }
 
@@ -2063,80 +1900,14 @@ async function reparseAllPdfs(state, candidates = reparseCandidates(state)) {
       ? originalSelection
       : state.items[0]?.record.id || '';
     state.viewMode = originalViewMode || 'original';
-    await refresh(state);
-    setModuleBusy(state, !state.ready);
+    refresh(state);
+    setModuleBusy(state, false);
   }
   if (failures.length) {
-    notify(state, 'error', `${started}/${candidates.length} Parser-Tasks gestartet`, failures.slice(0, 3).join('\n'));
+    notify(state, 'error', 'reparse', `${started}/${candidates.length} ${tr('Parser-Aufträge gesendet', 'parser commands sent')}`, failures.slice(0, 3).join('\n'));
     return;
   }
-  notify(state, 'success', `${started} Parser-Tasks gestartet`, 'Alle CV-PDFs wurden erneut an CTOX uebergeben.');
-}
-
-async function dispatchCvParserCommand(state, command) {
-  try {
-    return await state.ctx.commandBus.dispatch({
-      ...command,
-      wait_timeout_ms: 90000,
-    });
-  } catch (error) {
-    const message = String(error?.message || error || '');
-    const commandId = error?.command_id || command.id || command.command_id || '';
-    if (commandId && /wartet noch auf die Rueckmeldung/i.test(message)) {
-      return {
-        ok: true,
-        command_id: commandId,
-        status: 'pending_sync',
-        task_id: '',
-        task_status: 'syncing',
-        transport: 'rxdb-command-bus-timeout',
-      };
-    }
-    throw error;
-  }
-}
-
-async function ensureParseSourceReady(state, item) {
-  const source = item.model?.source || {};
-  const fileId = source.desktop_file_id || '';
-  const generationId = source.generation_id || '';
-  if (!fileId) {
-    throw new Error('CV-Quelle ist unvollständig: PDF-Datei fehlt.');
-  }
-  if (!generationId) {
-    return {
-      ready: false,
-      file_id: fileId,
-      generation_id: '',
-      warning: 'CV-Quelle hat keine Generation-ID.',
-    };
-  }
-  try {
-    await Promise.race([
-      Promise.resolve()
-        .then(() => verifyDesktopFileSourceAvailable(state.ctx, {
-          fileId,
-          generationId,
-          contentHash: source.sha256 || '',
-        }))
-        .then(() => flushFileCollectionsForDispatch(state.ctx, 60000)),
-      timeoutAfter(60000, 'PDF-Sync-Vorbereitung konnte nicht innerhalb von 60s abgeschlossen werden.'),
-    ]);
-    return { ready: true, file_id: fileId, generation_id: generationId };
-  } catch (error) {
-    const warning = `PDF-Daten konnten nicht lokal vorbereitet werden: ${String(error?.message || error || 'PDF-Sync-Vorbereitung ist fehlgeschlagen.')}`;
-    console.warn('[cv-print-builder] parse source preparation did not complete before dispatch', {
-      fileId,
-      generationId,
-      warning,
-    });
-    return {
-      ready: false,
-      file_id: fileId,
-      generation_id: generationId,
-      warning,
-    };
-  }
+  clearNotice(state, 'reparse');
 }
 
 function parserRecordSnapshot(item) {
@@ -2148,6 +1919,7 @@ function parserRecordSnapshot(item) {
     source: {
       desktop_file_id: model.source?.desktop_file_id || '',
       generation_id: model.source?.generation_id || '',
+      file_ref: model.source?.file_ref || '',
       filename: model.source?.filename || item.record?.filename || '',
       mime_type: model.source?.mime_type || 'application/pdf',
       size_bytes: model.source?.size_bytes || 0,
@@ -2175,132 +1947,6 @@ function parserRecordSnapshot(item) {
   };
 }
 
-async function syncFileCollections(ctx) {
-  if (!ctx.sync?.startCollection && !ctx.sync?.leaseCollection) return;
-  const syncHandles = await startScopedSyncCollections(
-    ctx,
-    ['desktop_files', 'desktop_file_chunks'],
-    'cv-print-builder-file-sync',
-  );
-  try {
-    await Promise.all(syncHandles.handles.map((bridge) => waitForSyncBridgeReady(bridge, 15000, { allowPush: true })));
-  } finally {
-    await releaseSyncLeases(syncHandles.leases);
-  }
-}
-
-async function flushFileCollectionsForDispatch(ctx, timeoutMs = 30000) {
-  if (!ctx.sync?.startCollection && !ctx.sync?.leaseCollection) return;
-  const syncHandles = await startScopedSyncCollections(
-    ctx,
-    ['desktop_files', 'desktop_file_chunks'],
-    'cv-print-builder-dispatch-flush',
-  );
-  try {
-    await Promise.all(syncHandles.handles.map((bridge) => waitForSyncBridgeReady(bridge, timeoutMs, { allowPush: true })));
-  } finally {
-    await releaseSyncLeases(syncHandles.leases);
-  }
-}
-
-async function waitForSyncBridgeReady(bridge, timeoutMs = 10000, options = {}) {
-  const bridgeState = syncBridgeFromHandle(bridge)?.state;
-  if (!bridgeState) return;
-  const runWithTimeout = (promise) => Promise.race([
-    Promise.resolve(promise).catch(() => {}),
-    delay(timeoutMs),
-  ]);
-  await Promise.race([
-    Promise.resolve()
-      .then(() => bridgeState.awaitInSync?.() || bridgeState.awaitInitialReplication?.())
-      .catch(() => {}),
-    delay(timeoutMs),
-  ]);
-  if (options.allowPush && typeof bridgeState.pushToRemotePeers === 'function') {
-    await runWithTimeout(bridgeState.pushToRemotePeers());
-  } else if (options.allowPush && typeof bridgeState.awaitInSync === 'function') {
-    await runWithTimeout(bridgeState.awaitInSync());
-  }
-}
-
-async function startScopedSyncCollections(ctx, collections, reason, options = {}) {
-  const leases = [];
-  const handles = [];
-  for (const collection of collections || []) {
-    try {
-      const handle = await startScopedSyncCollection(ctx.sync, collection, reason, leases);
-      if (handle) handles.push(handle);
-    } catch (error) {
-      if (!options.optional) throw error;
-    }
-  }
-  return {
-    handles,
-    leases,
-  };
-}
-
-async function startScopedSyncCollection(sync, collection, reason, leases) {
-  if (DEMAND_ONLY_SYNC_COLLECTIONS.has(collection)) {
-    if (typeof sync?.leaseCollection === 'function') {
-      const lease = await sync.leaseCollection(collection, reason);
-      leases.push(lease);
-      return lease;
-    }
-    throw new Error(`${collection} requires sync.leaseCollection().`);
-  }
-  return sync?.startCollection?.(collection);
-}
-
-async function releaseSyncLeases(leases) {
-  await Promise.all((leases || []).map((lease) => lease?.release?.().catch(() => null)));
-}
-
-function syncBridgeFromHandle(handle) {
-  return handle?.bridge || handle;
-}
-
-async function verifyDesktopFileSourceAvailable(ctx, { fileId, generationId, contentHash = '' }) {
-  await readDesktopFileFromDemand(ctx, fileId, 'application/pdf', {
-    contentGenerationId: generationId,
-    contentHash,
-    contentHashScheme: contentHash ? CONTENT_HASH_SCHEME : '',
-  });
-}
-
-async function writeChunkDocuments(collection, rows) {
-  const docs = Array.isArray(rows) ? rows.filter(Boolean) : [];
-  if (!docs.length) return;
-  if (typeof collection.bulkUpsert === 'function') {
-    await collection.bulkUpsert(docs);
-    return;
-  }
-  for (const doc of docs) {
-    if (typeof collection.upsert === 'function') {
-      await collection.upsert(doc);
-      continue;
-    }
-    const existing = await collection.findOne(doc.id).exec().catch(() => null);
-    if (existing?.incrementalPatch) {
-      await existing.incrementalPatch(doc);
-    } else {
-      await collection.insert(doc);
-    }
-  }
-}
-
-function canonicalDesktopFileChunkId(fileId, generationId, idx) {
-  return `${fileId}_${generationId}_${idx}`;
-}
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function timeoutAfter(ms, message) {
-  return new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms));
-}
-
 function buildParserPrompt(item) {
   return buildParserTaskInstruction(item);
 }
@@ -2308,25 +1954,26 @@ function buildParserPrompt(item) {
 function buildParserTaskInstruction(item) {
   const source = item.model.source || {};
   return [
-    'Skill: `ctox-cv-print-parser`.',
-    'Strukturiere den CTOX-vorextrahierten Abschnitt "CV PDF extracted text" als Ninja-kompatibles Qualifikationsprofil.',
-    'Ausfuehrung nur ueber CTOX desktop_files/desktop_file_chunks, RxDB/WebRTC und CTOX PDF-Stack.',
-    'Keine Tools, keine Shell, kein PDF erneut oeffnen, keine HTTP- oder Ninja-Services.',
+    'Skill: `cv-print-builder/parser`.',
+    'Strukturiere den CTOX-vorextrahierten Abschnitt "CV PDF extracted text" als Ninja-kompatibles Qualifikationsprofil.', // v4-allow: text (Parser-Auftrag)
+    'Ausfuehrung nur ueber CTOX desktop_files/desktop_file_chunks, RxDB/WebRTC und CTOX PDF-Stack.', // v4-allow: text (Parser-Auftrag)
+    'Keine Tools, keine Shell, kein PDF erneut oeffnen, keine HTTP- oder Ninja-Services.', // v4-allow: text (Parser-Auftrag)
     'Antwort exakt als ein minifiziertes JSON-Objekt, kein Markdown, keine Analyse.',
     'Schema: {"schema":"ctox.cv_print_profile.v1","workflow":{"phase":"review","diagnostics":[]},',
     '"candidate":{name,firstName,lastName,currentRole,location,availability,email,phone,birthDate,nationality,highestDegree,degree,languages[],skills[],additional[]}}.',
     'candidate.additional muss exakt diese CV-Keys enthalten:',
     '- cv.experience: Array mit {job_title,employer,location,start_date,end_date,job_description[]}.',
     '- cv.education: Array mit {degree,institution,major,specialization,location,start_date,end_date,details[]}.',
-    '- cv.skills: Objekt mit Gruppen, mindestens Fachkenntnisse[], Sprachkenntnisse[], Weitere Fähigkeiten[].',
+    '- cv.skills: Objekt mit Gruppen, mindestens Fachkenntnisse[], Sprachkenntnisse[], Weitere Fähigkeiten[].', // v4-allow: text (Parser-Auftrag)
     '- cv.meta: Objekt mit birthDate,nationality,highestDegree,degree,availabilityFrom,languages[],source_filename.',
     'Alle erkennbaren Stationen behalten; nicht künstlich auf wenige Einträge kürzen.',
     'Fehlende Werte leer lassen, nichts erfinden.',
     `- document_id: ${item.record.id}`,
     `- version_id: ${item.version.id}`,
     `- desktop_file_id: ${source.desktop_file_id || ''}`,
+    `- source_file_ref: ${source.file_ref || ''}`,
     `- filename: ${source.filename || item.record.filename || ''}`,
-    'Der CTOX Writeback `ctox.cv_print.apply_parse` persistiert das JSON als neue document_versions-Version.',
+    'Der CTOX Writeback `ctox.cv_print.apply_parse` persistiert das JSON als neue document_versions-Version.', // v4-allow: text (Parser-Auftrag)
   ].join('\n');
 }
 
@@ -2366,114 +2013,92 @@ async function approvePrint(state, item) {
   render(state);
 }
 
-async function upsertBusinessChat(ctx, input) {
-  const col = getCollection(ctx, 'business_chats');
-  const existing = await col.findOne(input.id).exec();
-  const message = {
-    id: `msg_${crypto.randomUUID()}`,
-    role: 'user',
-    content: input.message,
-    createdAt: input.now,
-    source_module: MODULE_ID,
-  };
-  if (existing?.incrementalPatch) {
-    const json = existing.toJSON();
-    await existing.incrementalPatch({
-      title: input.title,
-      open: true,
-      minimized: false,
-      messages: [...(json.messages || []), message],
-      draft: '',
-      updated_at_ms: input.now,
-    });
-    return;
-  }
-  await col.insert({
-    id: input.id,
-    title: input.title,
-    open: true,
-    minimized: false,
-    owner_user_id: '',
-    lastTrackingId: '',
-    messages: [message],
-    draft: '',
-    createdAt: input.now,
-    updated_at_ms: input.now,
-  });
-}
-
-async function readDesktopFileFromDemand(ctx, fileId, mimeType = 'application/octet-stream', options = {}) {
-  const chunks = await fetchDesktopFileDemandChunks(ctx, fileId);
-  return readStoredFileFromDemandChunks(chunks, mimeType, options);
-}
-
-async function fetchDesktopFileDemandChunks(ctx, fileId) {
-  const loader = await fileDemandLoaderFor(ctx).catch(() => null);
-  if (!loader?.fetchFile) {
-    throw new Error('PDF-Daten sind noch nicht über den Sync-Demand-Pfad verfügbar.');
-  }
-  return loader.fetchFile(fileId);
-}
-
-async function fileDemandLoaderFor(ctx) {
-  if (!ctx?.sync?.startCollection) return null;
-  const bridge = await ctx.sync.startCollection('desktop_files');
-  await waitForSyncBridgeReady(bridge, 15000);
-  return bridge?.state?.demandFileLoader || null;
-}
-
+// Original-PDF lokal als Blob: neue Profile über api.files.get(ref), ältere Profile aus den lokal vorhandenen
+// desktop_file_chunks (gewöhnliche Live-Abfrage statt Sync-Demand-Loader, R4).
 async function ensureOriginalUrl(state, item) {
-  const fileId = item.model.source?.desktop_file_id;
-  const generationId = item.model.source?.generation_id || '';
-  if (!fileId || state.originalUrls.has(fileId)) return;
   const source = item.model.source || {};
-  const blob = await readDesktopFileFromDemand(state.ctx, fileId, 'application/pdf', {
-    contentGenerationId: generationId,
-    contentHash: source.sha256 || '',
-    contentHashScheme: source.sha256 ? CONTENT_HASH_SCHEME : '',
-  });
-  state.originalErrors.delete(fileId);
-  state.originalUrls.set(fileId, URL.createObjectURL(blob));
+  const key = sourceKey(item.model);
+  if (!key || state.originalUrls.has(key)) return;
+  let blob;
+  if (source.file_ref) {
+    blob = await state.api.files.get(source.file_ref);
+  } else {
+    const chunks = state.api.query('desktop_file_chunks', { selector: { file_id: source.desktop_file_id } }).get();
+    blob = await readStoredFileFromChunks(chunks, source.desktop_file_id, 'application/pdf', {
+      contentGenerationId: source.generation_id || '',
+      contentHash: source.sha256 || '',
+      contentHashScheme: source.sha256 ? CONTENT_HASH_SCHEME : '',
+    });
+  }
+  if (!state.mounted) return;
+  state.originalErrors.delete(key);
+  state.originalUrls.set(key, URL.createObjectURL(blob));
+}
+
+function sourceKey(model) {
+  const source = model?.source || {};
+  return String(source.file_ref || source.desktop_file_id || '');
 }
 
 async function patchSelectedModel(state, updater, options = {}) {
   const item = getSelectedItem(state);
   if (!item) return;
-  await patchItemModel(state, item, updater, options);
-  if (!options.quiet) await refresh(state);
+  try {
+    await patchItemModel(state, item, updater, options);
+    clearNotice(state, 'write');
+  } catch (error) {
+    notify(state, 'error', 'write', tr('Änderung nicht gespeichert', 'Change not saved'), String(error?.message || error));
+    return;
+  }
+  if (!options.quiet) refresh(state);
 }
 
 async function patchItemModel(state, item, updater, options = {}) {
   const now = Date.now();
-  const versionDoc = await getCollection(state.ctx, 'document_versions').findOne(item.version.id).exec();
-  if (!versionDoc?.incrementalPatch) throw new Error('CV Version konnte nicht aktualisiert werden.');
-  const versionJson = versionDoc.toJSON ? versionDoc.toJSON() : {};
+  const versionJson = state.api.get('document_versions', item.version.id).get();
+  if (!versionJson) throw new Error('CV Version konnte nicht aktualisiert werden.');
   const current = structuredClone(versionJson.model_json || item.model);
   const next = updater(current);
   next.workflow = {
     ...next.workflow,
     updated_at_ms: now,
   };
-  await versionDoc.incrementalPatch({
+  await writeLocal(state.api.patch('document_versions', item.version.id, {
     model_json: next,
     diagnostics: next.workflow?.diagnostics || versionJson.diagnostics || item.version.diagnostics || [],
     updated_at_ms: now,
-  });
-  const documentDoc = await getCollection(state.ctx, 'documents').findOne(item.record.id).exec();
-  if (documentDoc?.incrementalPatch) {
-    await documentDoc.incrementalPatch({
+  }));
+  const documentJson = state.api.get('documents', item.record.id).get();
+  if (documentJson) {
+    await writeLocal(state.api.patch('documents', item.record.id, {
       title: displayCandidateName(next),
-      status: options.documentStatus || documentDoc.toJSON().status || workflowPhase(next),
+      status: options.documentStatus || documentJson.status || workflowPhase(next),
       diagnostics_count: (next.workflow?.diagnostics || []).length,
       display_cache: {
-        ...(documentDoc.toJSON().display_cache || {}),
+        ...(documentJson.display_cache || {}),
         candidate_name: displayCandidateName(next),
         phase: options.displayPhase || workflowPhase(next),
         template: normalizeTemplateId(next.print?.template || 'minimal'),
       },
       index_text: buildIndexText(next),
       updated_at_ms: now,
-    });
+    }));
+  }
+}
+
+// Lokaler Commit eines Schreibvorgangs (WriteHandle.local). Das Core-Ergebnis wird nicht abgewartet; eine
+// Ablehnung durch den Core erscheint als Zoneneintrag.
+async function writeLocal(handle) {
+  await handle.local;
+  return handle;
+}
+
+function readAll(state, name) {
+  try {
+    return state.api.query(name, {}).get();
+  } catch (error) {
+    console.warn(`[${MODULE_ID}] ${name} query failed`, error);
+    return [];
   }
 }
 
@@ -2481,8 +2106,8 @@ function createInitialModel(input) {
   return {
     schema: 'ctox.cv_print_profile.v1',
     source: {
-      desktop_file_id: input.fileId,
-      generation_id: input.generationId,
+      file_id: input.fileId,
+      file_ref: input.fileRef,
       filename: input.filename,
       mime_type: 'application/pdf',
       size_bytes: input.size,
@@ -2537,23 +2162,6 @@ function createInitialModel(input) {
   };
 }
 
-function getCollection(ctx, name) {
-  const collection = ctx?.db?.collection?.(name);
-  if (!collection) throw new Error(`Business-OS Collection fehlt: ${name}`);
-  return collection;
-}
-
-async function findAll(ctx, name) {
-  const collection = ctx?.db?.collection?.(name);
-  if (!collection?.find) return [];
-  const docs = await collection.find().exec();
-  return docs.map((doc) => doc?.toJSON ? doc.toJSON() : doc);
-}
-
-function requireCollections(ctx, names) {
-  names.forEach((name) => getCollection(ctx, name));
-}
-
 function getSelectedItem(state) {
   return state.items.find((item) => item.record.id === state.selectedId) || null;
 }
@@ -2577,15 +2185,15 @@ function viewAllowed(model, view) {
 }
 
 function actionForPhase(phase) {
-  if (phase === 'review') return { title: tr('Print freigeben', 'Approve print'), icon: iconCheck() };
+  if (phase === 'review') return { title: tr('Freigeben', 'Approve'), icon: iconCheck() };
   if (phase === 'approved') return { title: tr('Drucken', 'Print'), icon: iconPrinter() };
-  return { title: tr('Parsing starten', 'Start parsing'), icon: iconPlay() };
+  return { title: tr('Analysieren', 'Analyze'), icon: iconPlay() };
 }
 
 function phaseLabel(phase) {
   return ({
     uploaded: tr('PDF geladen', 'PDF uploaded'),
-    parsing: tr('Parsing läuft', 'Parsing'),
+    parsing: tr('Parsing läuft', 'Parsing'), // v4-allow: label (Phase des CV-Datensatzes, fachlich)
     review: tr('Korrektur', 'Review'),
     approved: tr('Freigegeben', 'Approved'),
     error: tr('Fehler', 'Error'),
@@ -2594,16 +2202,18 @@ function phaseLabel(phase) {
 
 function phaseFootnoteHtml(model) {
   const phase = workflowPhase(model);
-  if (phase === 'uploaded') return tr('PDF geladen. Als Nächstes Parsing starten.', 'PDF uploaded. Start parsing next.');
+  // Textdiät: keine Hinweis-/Anleitungssätze im Kopf; Phase steht im Kicker, Hauptaktion ist beschriftet.
+  if (phase === 'uploaded') return '';
   if (phase === 'parsing') {
-    if (model.workflow?.task_status === 'syncing') return tr('PDF wird an CTOX synchronisiert. Flow wird angelegt.', 'PDF is synchronizing with CTOX. The flow is being created.');
+    // v4: 'syncing' (v3-Transport-Zeitüberschreitung) und „Flow wird angelegt“ entfallen – der Befehl hat ab dem
+    // Absenden eine ID; ohne ID gibt es nichts anzuzeigen.
     const tracking = taskTracking(model);
-    if (!tracking.taskId && !tracking.commandId) return tr('Task läuft. Flow wird angelegt.', 'Task is running. The flow is being created.');
+    if (!tracking.taskId && !tracking.commandId) return '';
     const label = tracking.taskId ? shortTaskId(tracking.taskId) : shortTaskId(tracking.commandId);
+    // v4-allow: label (Status des Parser-Tasks am Datensatz + Link in die CTOX-App, fachlich)
     return `${escapeHtml(tr('Task läuft', 'Task running'))} · <button class="cv-task-link" type="button" data-cv-open-task data-cv-task-id="${escapeAttr(tracking.taskId)}" data-cv-command-id="${escapeAttr(tracking.commandId)}" title="${escapeAttr([tracking.taskId, tracking.commandId].filter(Boolean).join(' · '))}">${escapeHtml(tr('Flow öffnen', 'Open flow'))} <span>${escapeHtml(label)}</span></button>`;
   }
-  if (phase === 'review') return `${escapeHtml(templateLabel(model.print?.template))} · ${escapeHtml(tr('Korrektur und Template prüfen.', 'Review corrections and template.'))}`;
-  if (phase === 'approved') return `${escapeHtml(templateLabel(model.print?.template))} · ${escapeHtml(tr('Druckansicht freigegeben.', 'Print view approved.'))}`;
+  if (phase === 'review' || phase === 'approved') return escapeHtml(templateLabel(model.print?.template));
   if (phase === 'error') {
     const tracking = taskTracking(model);
     const error = clipText(model.workflow?.error || tr('Parser-Task fehlgeschlagen.', 'Parser task failed.'), 74);
@@ -2612,7 +2222,7 @@ function phaseFootnoteHtml(model) {
       : '';
     return `${escapeHtml(tr('Parsing fehlgeschlagen', 'Parsing failed'))}: ${escapeHtml(error)}${link}`;
   }
-  return tr('Status prüfen.', 'Check status.');
+  return '';
 }
 
 function taskTracking(model) {
@@ -2634,30 +2244,15 @@ function clipText(value, max) {
   return text.length > max ? text.slice(0, Math.max(0, max - 1)) + '…' : text;
 }
 
-function openCtoxTask(taskId, commandId) {
+// Flow öffnen: Sprung in die CTOX-App per api.shell.navigate (ctox liest task_id/command_id aus der Route),
+// statt sessionStorage-Übergabe und Hash-Navigation des Elternfensters (R13).
+function openCtoxTask(state, taskId, commandId) {
   if (!taskId && !commandId) return;
-  const focus = {
-    taskId,
-    commandId,
-    sourceModule: MODULE_ID,
-    openedAt: Date.now(),
-  };
-  const params = new URLSearchParams();
-  if (taskId) params.set('task_id', taskId);
-  if (commandId) params.set('command_id', commandId);
-  const hash = params.toString() ? `ctox?${params.toString()}` : 'ctox';
-  try {
-    parent.sessionStorage.setItem('ctox.businessOs.focusTask', JSON.stringify(focus));
-    parent.dispatchEvent(new CustomEvent('ctox-business-os-focus-task', { detail: focus }));
-    parent.location.hash = hash;
-  } catch {
-    // Cross-origin parent: fall back to the local session handoff + hash
-    // navigation, which the shell observes via hashchange.
-    try {
-      sessionStorage.setItem('ctox.businessOs.focusTask', JSON.stringify(focus));
-    } catch {}
-    location.hash = hash;
-  }
+  state.api.shell.navigate('ctox', {
+    ...(taskId ? { task_id: taskId } : {}),
+    ...(commandId ? { command_id: commandId } : {}),
+    source_module: MODULE_ID,
+  });
 }
 
 function templateLabel(id) {
@@ -2877,14 +2472,6 @@ async function sha256Hex(bytes) {
   return Array.from(new Uint8Array(hash)).map((value) => value.toString(16).padStart(2, '0')).join('');
 }
 
-function uint8ToBase64(bytes) {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  }
-  return btoa(binary);
-}
-
 
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -2895,9 +2482,46 @@ function fileToDataUrl(file) {
   });
 }
 
-function notify(state, type, title, message) {
-  state.ctx.notifications?.show?.({ type, title, message, time: 8000 });
-  if (!state.ctx.notifications?.show) console[type === 'error' ? 'error' : 'log'](`[${MODULE_ID}] ${title}: ${message}`);
+// Meldungen gehen in die Zustandszone der Shell (R11), mit stabilem Code je Bereich, damit clear greift.
+function notify(state, type, area, title, message) {
+  const code = `${MODULE_ID}.${area}`;
+  const level = type === 'error' ? 'error' : type === 'warn' ? 'warn' : 'info';
+  state.api.status.report({ level, code, text: message ? `${title}: ${message}` : title });
+  state.statusCodes.add(code);
+}
+
+function clearNotice(state, area) {
+  const code = `${MODULE_ID}.${area}`;
+  if (!state.statusCodes.has(code)) return;
+  state.statusCodes.delete(code);
+  state.api.status.clear(code);
+}
+
+// Druck der freigegebenen Druckansicht im App-Fenster: verstecktes iframe in root mit den Stilen des Dokuments
+// und nur dem Druckbogen (statt window.print() über die ganze Shell).
+function printApprovedSheet(state, item) {
+  const sheet = state.host.querySelector('.cv-print-sheet');
+  const html = sheet ? sheet.outerHTML : renderPrintSheet(item.model);
+  const frame = document.createElement('iframe');
+  frame.setAttribute('aria-hidden', 'true');
+  frame.tabIndex = -1;
+  frame.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden';
+  state.root.appendChild(frame);
+  const doc = frame.contentDocument;
+  if (!doc) {
+    frame.remove();
+    return;
+  }
+  const styles = [...document.querySelectorAll('link[rel="stylesheet"], style')]
+    .map((node) => (node.tagName === 'LINK' ? `<link rel="stylesheet" href="${escapeAttr(node.href)}">` : node.outerHTML))
+    .join('');
+  doc.open();
+  doc.write(`<!doctype html><html lang="${ACTIVE_LOCALE}"><head><meta charset="utf-8"><title>${escapeHtml(displayCandidateName(item.model))}</title>${styles}<style>@page{size:A4;margin:0}html,body{margin:0;background:#fff}</style></head><body><div data-app="${MODULE_ID}"><div class="cv-print-frame">${html}</div></div></body></html>`);
+  doc.close();
+  setTimeout(() => {
+    try { frame.contentWindow?.print(); } catch { /* ignore */ }
+    setTimeout(() => frame.remove(), 1000);
+  }, 250);
 }
 
 function escapeHtml(value) {

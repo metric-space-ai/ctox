@@ -7,20 +7,24 @@
    card grid, the card internals, the install-progress button, the lifecycle
    status dot, the retail-box shelf, and the sync/loading indicator. */
 
+/* v4: Das App-root ist selbst der Container für die Breitenregeln (@container business-app-window);
+   in v3 setzte ihn das Shell-Fenster außerhalb der App. */
+[data-app="app-store"] { container-type: inline-size; container-name: business-app-window; }
+
 /* Shell V2 keeps module title/filter chrome inside the two compact header rows. */
-.shell-window[data-shell-contract="v2"] .app-store-module { position: relative; padding: 0; overflow: hidden; background: var(--shell-v2-surface, var(--bg)); }
-.shell-window[data-shell-contract="v2"] .app-store-module .ctox-pane { border: 0; border-radius: 0; background: var(--shell-v2-surface, var(--surface)); box-shadow: none; }
-.shell-window[data-shell-contract="v2"] .app-store-module > .ctox-modal { position: absolute; inset: 0; z-index: 240; box-sizing: border-box; }
-.shell-window[data-shell-contract="v2"] .app-store-module > .ctox-context-menu { max-width: calc(100% - 16px); }
-.shell-window[data-shell-contract="v2"] .app-store-module .ctox-pane-header { box-sizing: border-box; min-height: var(--shell-v2-header-row-size, 37px); padding: 0 8px; background: var(--shell-v2-surface-alt, var(--surface-2)); border-bottom: 1px solid var(--shell-v2-line, var(--line)); display: grid; grid-template-rows: var(--shell-v2-header-row-size, 37px) auto; align-content: start; }
-.shell-window[data-shell-contract="v2"] .app-store-module .ctox-pane-title-row { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); }
-.shell-window[data-shell-contract="v2"] .app-store-module .ctox-pane-titles { flex-direction: row; align-items: baseline; gap: 8px; padding-top: 0; overflow: hidden; }
-.shell-window[data-shell-contract="v2"] .app-store-module .ctox-pane-kicker { flex: 0 0 auto; line-height: 1; }
-.shell-window[data-shell-contract="v2"] .app-store-module .ctox-pane-title { margin-top: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.1; }
-.shell-window[data-shell-contract="v2"] .app-store-module .store-filterbar { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); box-sizing: border-box; padding: 0; flex-wrap: nowrap; overflow-x: auto; }
+[data-app="app-store"] .app-store-module { position: relative; padding: 0; overflow: hidden; background: var(--bg); }
+[data-app="app-store"] .app-store-module .ctox-pane { border: 0; border-radius: 0; background: var(--surface); box-shadow: none; }
+[data-app="app-store"] .app-store-module > .ctox-modal { position: absolute; inset: 0; z-index: 240; box-sizing: border-box; }
+[data-app="app-store"] .app-store-module > .ctox-context-menu { max-width: calc(100% - 16px); }
+[data-app="app-store"] .app-store-module .ctox-pane-header { box-sizing: border-box; min-height: var(--shell-v2-header-row-size, 37px); padding: 0 8px; background: var(--surface-2); border-bottom: 1px solid var(--shell-v2-line, var(--line)); display: grid; grid-template-rows: var(--shell-v2-header-row-size, 37px) auto; align-content: start; }
+[data-app="app-store"] .app-store-module .ctox-pane-title-row { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); }
+[data-app="app-store"] .app-store-module .ctox-pane-titles { flex-direction: row; align-items: baseline; gap: 8px; padding-top: 0; overflow: hidden; }
+[data-app="app-store"] .app-store-module .ctox-pane-kicker { flex: 0 0 auto; line-height: 1; }
+[data-app="app-store"] .app-store-module .ctox-pane-title { margin-top: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.1; }
+[data-app="app-store"] .app-store-module .store-filterbar { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); box-sizing: border-box; padding: 0; flex-wrap: nowrap; overflow-x: auto; }
 
 /* Local-app state stays on the module's Development category accent. */
-.app-store-module[data-app-store-root] {
+[data-app="app-store"] .app-store-module[data-app-store-root] {
   --app-store-local-accent: var(--app-accent);
   --app-store-local-ink: var(--app-accent-foreground);
   /* Bezugsrahmen fuer das Kontextmenue: es haengt jetzt im Modul-Root statt
@@ -29,29 +33,14 @@
 }
 
 /* --- Sidebar layout glue (kit .ctox-pane-body > flex column) --- */
-.store-sidebar {
+[data-app="app-store"] .store-sidebar {
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
 
-/* Collapsible sidebar extras (source info): hidden by default per the M3
-   reduction — common view is browse/search. A "…" icon button in the pane
-   header toggles [hidden] on this section. The install/create/refresh
-   ACTIONS are header icons in the catalog pane, not text buttons here. */
-.store-sidebar-extras {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 10px;
-}
-
-.store-sidebar-extras[hidden] {
-  display: none;
-}
-
 /* Kit .ctox-list filling the remaining sidebar height. */
-.store-category-list {
+[data-app="app-store"] .store-category-list {
   flex: 1 1 auto;
 }
 
@@ -59,13 +48,13 @@
    count, zeros included) inside the kit .ctox-list-item — pure selectors, no
    badge pills. Selection state comes from .ctox-list-item.is-selected (JS
    toggles it next to the legacy .active hook). */
-.category-btn {
+[data-app="app-store"] .category-btn {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.category-btn .cat-icon {
+[data-app="app-store"] .category-btn .cat-icon {
   width: 22px;
   height: 22px;
   flex: 0 0 auto;
@@ -78,7 +67,7 @@
   font-weight: 800;
 }
 
-.category-btn .cat-main {
+[data-app="app-store"] .category-btn .cat-main {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -86,63 +75,43 @@
   gap: 1px;
 }
 
-.category-btn .cat-label {
+[data-app="app-store"] .category-btn .cat-label {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.category-btn .cat-meta {
+[data-app="app-store"] .category-btn .cat-meta {
   color: var(--muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
-/* Sidebar discovery info panel: kit .ctox-callout, module owns the spacing. */
-
-.store-info-box h4 {
-  margin: 0 0 6px;
-  color: var(--text);
-}
-
-.store-info-box p {
-  margin: 0;
-}
-
-.store-info-box code {
-  color: var(--accent);
-}
-
 /* Center pane body: status callout above the scrollable catalog. The message
    itself is the kit .ctox-callout (is-success/is-danger toggled in JS). */
-.store-center-body {
+[data-app="app-store"] .store-center-body {
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
 }
 
-.store-message {
-  flex: 0 0 auto;
-  margin: 8px 10px 0;
-}
-
 /* ONE view control (Betreiber-Direktive 31.08.2026): a single kit
    .ctox-pane-icon whose glyph names the view the click switches TO. Only the
    glyph for that target is rendered; the other stays [hidden]. */
-.store-view-toggle {
+[data-app="app-store"] .store-view-toggle {
   flex: 0 0 auto;
 }
 
-.store-view-glyph {
+[data-app="app-store"] .store-view-glyph {
   display: inline-flex;
 }
 
-.store-view-glyph[hidden] {
+[data-app="app-store"] .store-view-glyph[hidden] {
   display: none !important;
 }
 
-.store-grid-workspace {
+[data-app="app-store"] .store-grid-workspace {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -150,56 +119,12 @@
   position: relative;
 }
 
-/* custom: sticky sync indicator that floats at the bottom of the catalog
-   scroll area while GitHub Discovery runs (pulse dot + warning tint). */
-.store-loading-overlay {
-  position: sticky;
-  bottom: 12px;
-  z-index: 6;
-  width: fit-content;
-  max-width: min(420px, 100%);
-  margin: 16px auto 0;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 9px 12px;
-  border: 1px solid color-mix(in srgb, var(--warning) 26%, transparent);
-  border-radius: var(--panel-radius);
-  background: color-mix(in srgb, var(--warning) 6%, var(--surface));
-  color: var(--warning);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.store-loading-overlay[hidden] {
-  display: none;
-}
-
-.store-loading-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--warning);
-  animation: app-store-sync-pulse 1200ms ease-in-out infinite;
-}
-
 /* custom: the catalog card grid is the signature view of the App Store —
    a grid (or list) of rich app cards, not a plain record table/list. */
-.store-card-grid {
+[data-app="app-store"] .store-card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   gap: 8px;
-}
-
-/* Kit .ctox-empty inside the card grid: span all columns; rely on the
-   kit's muted centered text — no extra card around the empty state. */
-.store-empty-state {
-  grid-column: 1 / -1;
-  min-height: 190px;
-}
-
-.store-empty-state span {
-  max-width: 420px;
 }
 
 /* custom: app catalog card (signature view). Selection via .active (JS hook)
@@ -207,7 +132,7 @@
    Two shapes share this base (Betreiber-Direktive 31.08.2026):
      .app-card--shard  bold title + two meta lines + actions, roomy padding
      .app-card--row    exactly one dense line: title + one short meta right */
-.app-card {
+[data-app="app-store"] .app-card {
   background: var(--surface);
   border: 1px solid var(--hairline, var(--line));
   border-radius: var(--panel-radius);
@@ -221,32 +146,32 @@
 }
 
 /* SHARD: the roomy shape. Padding is deliberately larger than the row's. */
-.app-card--shard {
+[data-app="app-store"] .app-card--shard {
   padding: 14px;
   gap: 8px;
 }
 
-.app-card:hover {
+[data-app="app-store"] .app-card:hover {
   background: var(--kit-hover);
   border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
 }
 
-.app-card.active {
+[data-app="app-store"] .app-card.active {
   background: var(--accent-soft);
   border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
 }
 
-.app-card.is-operating {
+[data-app="app-store"] .app-card.is-operating {
   border-color: color-mix(in srgb, var(--warning) 42%, var(--line));
 }
 
-.app-card-head {
+[data-app="app-store"] .app-card-head {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.app-card-icon {
+[data-app="app-store"] .app-card-icon {
   font-size: 20px;
   background: var(--kit-fill);
   width: 34px;
@@ -259,23 +184,23 @@
   position: relative;
 }
 
-.app-card-icon svg,
-.app-logo-large svg {
+[data-app="app-store"] .app-card-icon svg,
+[data-app="app-store"] .app-logo-large svg {
   width: 20px;
   height: 20px;
   display: block;
 }
 
-.app-card-icon-glyph {
+[data-app="app-store"] .app-card-icon-glyph {
   line-height: 1;
 }
 
-.app-card-meta {
+[data-app="app-store"] .app-card-meta {
   flex: 1;
   overflow: hidden;
 }
 
-.app-card-title {
+[data-app="app-store"] .app-card-title {
   font-size: 13px;
   font-weight: 700;
   color: var(--text);
@@ -287,7 +212,7 @@
 }
 
 /* Shard meta line 1: category · the live version, on ONE line. */
-.app-card-metaline {
+[data-app="app-store"] .app-card-metaline {
   display: block;
   margin-top: 2px;
   font-size: 11px;
@@ -300,7 +225,7 @@
 
 /* Shard meta line 2: the state badges (modification, release, lifecycle,
    unverified external source) as ONE line — it never wraps into a pile. */
-.app-card-version-row {
+[data-app="app-store"] .app-card-version-row {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
@@ -310,7 +235,7 @@
   overflow: hidden;
 }
 
-.app-card-version-row > .ctox-badge {
+[data-app="app-store"] .app-card-version-row > .ctox-badge {
   flex: 0 1 auto;
   min-width: 0;
   white-space: nowrap;
@@ -319,7 +244,7 @@
 }
 
 /* custom: lifecycle status dot pinned to the card icon corner. */
-.app-lifecycle-dot {
+[data-app="app-store"] .app-lifecycle-dot {
   position: absolute;
   right: -3px;
   bottom: -3px;
@@ -330,24 +255,24 @@
   background: var(--muted);
 }
 
-.app-lifecycle-dot[data-state="private"] {
+[data-app="app-store"] .app-lifecycle-dot[data-state="private"] {
   background: color-mix(in srgb, var(--warning) 86%, var(--text));
 }
 
-.app-lifecycle-dot[data-state="preview"] {
+[data-app="app-store"] .app-lifecycle-dot[data-state="preview"] {
   background: var(--accent);
 }
 
-.app-lifecycle-dot[data-state="team"] {
+[data-app="app-store"] .app-lifecycle-dot[data-state="team"] {
   background: var(--success);
 }
 
-.app-lifecycle-dot[data-state="restricted"] {
+[data-app="app-store"] .app-lifecycle-dot[data-state="restricted"] {
   background: var(--danger);
 }
 
 /* Card action row: kit .ctox-button--sm buttons. */
-.app-card-actions {
+[data-app="app-store"] .app-card-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -357,7 +282,7 @@
 
 /* custom: permission-denied actions stay visible but locked — the warning
    tint distinguishes "locked by role" from a plain disabled button. */
-.ctox-button.denied:disabled {
+[data-app="app-store"] .ctox-button.denied:disabled {
   opacity: 1;
   border-color: color-mix(in srgb, var(--warning) 38%, var(--line));
   background: color-mix(in srgb, var(--warning-soft) 58%, var(--surface));
@@ -366,7 +291,7 @@
 
 /* custom: install/update progress button — the label sits above an animated
    progress track inside the (disabled) kit primary button. */
-.ctox-button.is-progress {
+[data-app="app-store"] .ctox-button.is-progress {
   position: relative;
   display: inline-grid;
   align-content: center;
@@ -375,14 +300,14 @@
   overflow: hidden;
 }
 
-.card-btn-progress-label {
+[data-app="app-store"] .card-btn-progress-label {
   position: relative;
   z-index: 1;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.card-btn-progress-track {
+[data-app="app-store"] .card-btn-progress-track {
   position: relative;
   z-index: 1;
   display: block;
@@ -393,7 +318,7 @@
   background: color-mix(in srgb, var(--surface) 32%, transparent);
 }
 
-.card-btn-progress-track span {
+[data-app="app-store"] .card-btn-progress-track span {
   position: absolute;
   inset: 0 auto 0 0;
   width: 42%;
@@ -403,7 +328,7 @@
 }
 
 /* Per-card operation status line (kind colors via data-kind). */
-.app-card-operation {
+[data-app="app-store"] .app-card-operation {
   min-height: 18px;
   margin: 0;
   color: var(--muted);
@@ -412,22 +337,22 @@
   line-height: 1.35;
 }
 
-.app-card-operation[data-kind="running"] {
+[data-app="app-store"] .app-card-operation[data-kind="running"] {
   color: var(--warning);
 }
 
-.app-card-operation[data-kind="success"] {
+[data-app="app-store"] .app-card-operation[data-kind="success"] {
   color: var(--success);
 }
 
-.app-card-operation[data-kind="error"] {
+[data-app="app-store"] .app-card-operation[data-kind="error"] {
   color: var(--danger);
 }
 
 /* LIST: maximum density — one row per app, no card chrome, hairline between
    rows instead of eight separate bordered boxes. Actions and every remaining
    field live in the detail panel, which a row click opens. */
-.store-card-grid.is-list-view {
+[data-app="app-store"] .store-card-grid.is-list-view {
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -436,7 +361,7 @@
   overflow: hidden;
 }
 
-.app-card--row {
+[data-app="app-store"] .app-card--row {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) auto;
   align-items: center;
@@ -448,17 +373,17 @@
   background: transparent;
 }
 
-.app-card--row + .app-card--row {
+[data-app="app-store"] .app-card--row + .app-card--row {
   border-top: 1px solid var(--hairline, var(--line));
 }
 
-.app-card--row .app-card-title {
+[data-app="app-store"] .app-card--row .app-card-title {
   font-size: 12px;
   font-weight: 650;
   line-height: 28px;
 }
 
-.app-card-icon--row {
+[data-app="app-store"] .app-card-icon--row {
   width: 18px;
   height: 18px;
   flex: 0 0 18px;
@@ -472,14 +397,14 @@
   overflow: hidden;
 }
 
-.app-card-icon--row svg {
+[data-app="app-store"] .app-card-icon--row svg {
   width: 12px;
   height: 12px;
   display: block;
 }
 
 /* The ONE short meta on the right of a row. */
-.app-card-rowmeta {
+[data-app="app-store"] .app-card-rowmeta {
   justify-self: end;
   color: var(--muted);
   font-size: 11px;
@@ -487,13 +412,8 @@
   white-space: nowrap;
 }
 
-/* The list empty state is the only full-height block inside the dense list. */
-.store-card-grid.is-list-view .store-empty-state {
-  border: 0;
-}
-
 /* Detail drawer header/content glue (drawer shell = .ctox-bottom-drawer). */
-.store-detail-title-row {
+[data-app="app-store"] .store-detail-title-row {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -501,7 +421,7 @@
   min-width: 0;
 }
 
-.app-logo-large {
+[data-app="app-store"] .app-logo-large {
   flex: 0 0 auto;
   width: 34px;
   height: 34px;
@@ -512,11 +432,11 @@
   font-size: 18px;
 }
 
-.store-detail-heading {
+[data-app="app-store"] .store-detail-heading {
   min-width: 0;
 }
 
-.store-detail-badges {
+[data-app="app-store"] .store-detail-badges {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -524,11 +444,11 @@
   margin-top: 4px;
 }
 
-.store-detail-fields {
+[data-app="app-store"] .store-detail-fields {
   margin-bottom: 10px;
 }
 
-.store-readme-section h4 {
+[data-app="app-store"] .store-readme-section h4 {
   margin: 0 0 10px;
   color: var(--text);
   font-size: 11px;
@@ -536,20 +456,20 @@
   text-transform: uppercase;
 }
 
-.store-readme-section [data-readme-content] {
+[data-app="app-store"] .store-readme-section [data-readme-content] {
   color: var(--text);
   font-size: 12px;
   line-height: 1.5;
 }
 
-.store-detail-empty {
+[data-app="app-store"] .store-detail-empty {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
 }
 
 /* Module-specific badge state on top of the kit .ctox-badge: "local app". */
-.ctox-badge.app-badge-local {
+[data-app="app-store"] .ctox-badge.app-badge-local {
   background: color-mix(in srgb, var(--app-store-local-accent) 14%, transparent);
   border-color: color-mix(in srgb, var(--app-store-local-accent) 40%, var(--line));
   color: var(--app-store-local-ink);
@@ -557,8 +477,8 @@
 
 /* Keyboard focus for the two custom interactive surfaces (category list
    items and cards); kit controls bring their own focus ring. */
-.store-category-list .ctox-list-item:focus-visible,
-.app-card:focus-visible {
+[data-app="app-store"] .store-category-list .ctox-list-item:focus-visible,
+[data-app="app-store"] .app-card:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
   outline-offset: 2px;
 }
@@ -573,87 +493,78 @@
       row is content-sized, the catalog row takes the rest. Without the
       explicit rows both panes claimed 100% and the catalog was clipped. */
 @container business-app-window (max-width: 768px) {
-  .app-store-module[data-app-store-root] {
+  [data-app="app-store"] .app-store-module[data-app-store-root] {
     padding: 0;
     row-gap: 6px;
     grid-template-rows: auto minmax(200px, 1fr);
   }
 
-  .app-store-module .store-left {
+  [data-app="app-store"] .app-store-module .store-left {
     grid-row: 1;
   }
 
-  .app-store-module .store-center {
+  [data-app="app-store"] .app-store-module .store-center {
     grid-row: 2;
     min-height: 0;
   }
 
   /* Stacked, the scope list is a horizontal strip of shards, not a clipped
      column: a 150px-tall vertical list showed 2.5 of 6 scopes and cut the
-     third in half. One row, scrolled sideways inside its own box, keeps every
-     scope reachable and gives the catalog the height back. */
-  .store-sidebar,
-  .ctox-pane.store-left > .ctox-pane-body {
+     third in half. VIS4: the strip wraps into as many rows as it needs instead
+     of scrolling sideways (880 > 420 px at window 420), so every scope stays
+     visible without a horizontal scroller. */
+  [data-app="app-store"] .store-sidebar,
+  [data-app="app-store"] .ctox-pane.store-left > .ctox-pane-body {
     min-width: 0;
     overflow: hidden;
   }
 
-  .store-category-list {
+  [data-app="app-store"] .store-category-list {
     flex: 0 0 auto;
     flex-direction: row;
+    flex-wrap: wrap;
     gap: 6px;
     min-width: 0;
-    overflow-x: auto;
-    overflow-y: hidden;
+    overflow: visible;
     padding: 6px 12px;
-    scrollbar-width: thin;
   }
 
-  .store-category-list .ctox-list-item {
+  [data-app="app-store"] .store-category-list .ctox-list-item {
     flex: 0 0 auto;
     width: auto;
   }
 
-  .category-btn .cat-main {
+  [data-app="app-store"] .category-btn .cat-main {
     flex-direction: row;
     align-items: baseline;
     gap: 5px;
   }
 
-  .category-btn .cat-label {
+  [data-app="app-store"] .category-btn .cat-label {
     white-space: nowrap;
   }
 
   /* The action icons stay a shrink-wrapped block. `width: 100%` made them
      claim the whole title row, which squeezed the pane title down to a few
      pixels in the stacked layout. */
-  .store-pane-actions {
+  [data-app="app-store"] .store-pane-actions {
     width: auto;
     justify-content: flex-end;
   }
 
   /* 170px was tuned for the old description card; the shard's title + meta
      line need ~200px before they start ellipsing after three characters. */
-  .store-card-grid {
+  [data-app="app-store"] .store-card-grid {
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   }
 
-  .store-detail-title-row {
+  [data-app="app-store"] .store-detail-title-row {
     align-items: flex-start;
   }
 
-  .app-card-actions .ctox-button {
+  [data-app="app-store"] .app-card-actions .ctox-button {
     flex: 0 1 auto;
     min-width: 0;
-  }
-}
-
-@keyframes app-store-sync-pulse {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.55;
   }
 }
 
@@ -671,13 +582,13 @@
 
 /* Version timeline / rollback dialog — kit .ctox-modal/.ctox-modal-card,
    module only styles the version rows. */
-.app-version-list {
+[data-app="app-store"] .app-version-list {
   list-style: none;
   margin: 0;
   padding: 0;
 }
 
-.app-version-row {
+[data-app="app-store"] .app-version-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -686,65 +597,65 @@
   border-radius: var(--panel-radius);
 }
 
-.app-version-row + .app-version-row {
+[data-app="app-store"] .app-version-row + .app-version-row {
   border-top: 1px solid var(--hairline, var(--line));
 }
 
-.app-version-meta {
+[data-app="app-store"] .app-version-meta {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
 }
 
-.app-version-meta span {
+[data-app="app-store"] .app-version-meta span {
   font-size: 12px;
   color: var(--muted);
 }
 
 /* Release wizard dialog: two-column form + data-access review rows on top of
    the kit modal and .ctox-field-label/.ctox-input controls. */
-.app-release-dialog {
+[data-app="app-store"] .app-release-dialog {
   width: min(680px, 100%);
 }
 
-.app-release-form {
+[data-app="app-store"] .app-release-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
 
-.app-release-form label,
-.app-release-data-review {
+[data-app="app-store"] .app-release-form label,
+[data-app="app-store"] .app-release-data-review {
   display: flex;
   flex-direction: column;
   gap: 6px;
   min-width: 0;
 }
 
-.app-release-form .ctox-field-label {
+[data-app="app-store"] .app-release-form .ctox-field-label {
   margin-bottom: 0;
 }
 
-.app-release-data-review p,
-.app-release-data-row span,
-.app-release-data-row label {
+[data-app="app-store"] .app-release-data-review p,
+[data-app="app-store"] .app-release-data-row span,
+[data-app="app-store"] .app-release-data-row label {
   font-size: 12px;
   color: var(--muted);
 }
 
-.app-release-data-review {
+[data-app="app-store"] .app-release-data-review {
   grid-column: 1 / -1;
   border-top: 1px solid var(--hairline, var(--line));
   padding-top: 14px;
 }
 
-.app-release-data-review h4,
-.app-release-data-review p {
+[data-app="app-store"] .app-release-data-review h4,
+[data-app="app-store"] .app-release-data-review p {
   margin: 0;
 }
 
-.app-release-data-review ul {
+[data-app="app-store"] .app-release-data-review ul {
   list-style: none;
   margin: 8px 0 0;
   padding: 0;
@@ -752,7 +663,7 @@
   gap: 8px;
 }
 
-.app-release-data-row {
+[data-app="app-store"] .app-release-data-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 10px;
@@ -762,28 +673,28 @@
   border-radius: var(--panel-radius);
 }
 
-.app-release-data-row label {
+[data-app="app-store"] .app-release-data-row label {
   flex-direction: row;
   align-items: center;
   white-space: nowrap;
 }
 
-.app-release-data-row input {
+[data-app="app-store"] .app-release-data-row input {
   width: auto;
 }
 
-.app-release-data-row.is-empty {
+[data-app="app-store"] .app-release-data-row.is-empty {
   display: block;
   color: var(--muted);
 }
 
 @container business-app-window (max-width: 768px) {
-  .app-release-form,
-  .app-release-data-row {
+  [data-app="app-store"] .app-release-form,
+  [data-app="app-store"] .app-release-data-row {
     grid-template-columns: 1fr;
   }
 
-  .app-release-data-row label {
+  [data-app="app-store"] .app-release-data-row label {
     white-space: normal;
   }
 }
@@ -794,15 +705,15 @@
    the compact counterpart. Canvas artwork draws its own colors; everything in
    DOM/CSS stays on shell tokens.
    ========================================================================== */
-.store-filterbar {
+[data-app="app-store"] .store-filterbar {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 0 12px 8px;
 }
-.store-filterbar .ctox-pane-search { flex: 1 1 auto; min-width: 0; }
-.store-filter-toggle { position: relative; flex: 0 0 auto; }
-.store-filter-toggle.has-active-filters::after {
+[data-app="app-store"] .store-filterbar .ctox-pane-search { flex: 1 1 auto; min-width: 0; }
+[data-app="app-store"] .store-filter-toggle { position: relative; flex: 0 0 auto; }
+[data-app="app-store"] .store-filter-toggle.has-active-filters::after {
   content: '';
   position: absolute;
   top: 3px;
@@ -812,11 +723,11 @@
   border-radius: 50%;
   background: var(--accent);
 }
-.store-filter-advanced { padding: 0 12px 8px; }
-.store-filter-advanced[hidden] { display: none !important; }
-.store-filter-row { display: flex; align-items: center; gap: 6px; }
-.store-select { flex: 1 1 auto; min-width: 0; height: 28px; font-size: 12px; }
-.store-sort-dir {
+[data-app="app-store"] .store-filter-advanced { padding: 0 12px 8px; }
+[data-app="app-store"] .store-filter-advanced[hidden] { display: none !important; }
+[data-app="app-store"] .store-filter-row { display: flex; align-items: center; gap: 6px; }
+[data-app="app-store"] .store-select { flex: 1 1 auto; min-width: 0; height: 28px; font-size: 12px; }
+[data-app="app-store"] .store-sort-dir {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -830,11 +741,11 @@
   color: var(--muted);
   cursor: pointer;
 }
-.store-sort-dir:hover { color: var(--text); background: var(--surface-2); }
-.store-sort-dir svg { width: 14px; height: 14px; }
-.store-view-switch { padding: 0 12px 8px; border-bottom: 1px solid var(--line); }
-.store-view-switch .view-count { color: var(--muted); font-weight: 500; }
-.store-footer {
+[data-app="app-store"] .store-sort-dir:hover { color: var(--text); background: var(--surface-2); }
+[data-app="app-store"] .store-sort-dir svg { width: 14px; height: 14px; }
+[data-app="app-store"] .store-view-switch { padding: 0 12px 8px; border-bottom: 1px solid var(--line); }
+[data-app="app-store"] .store-view-switch .view-count { color: var(--muted); font-weight: 500; }
+[data-app="app-store"] .store-footer {
   padding: 6px 12px;
   border-top: 1px solid var(--line);
   color: var(--muted);
@@ -842,52 +753,38 @@
 }
 
 /* Recessed element well hosting shelf, list, and the detail panel. */
-.store-well {
+[data-app="app-store"] .store-well {
   position: relative;
   display: flex;
   flex-direction: column;
   min-height: 0;
   background: color-mix(in srgb, var(--text) 6%, var(--surface));
 }
-.store-shelf-stage {
+[data-app="app-store"] .store-shelf-stage {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
 }
-.store-shelf-stage[hidden] { display: none !important; }
-.store-shelf-canvas {
+[data-app="app-store"] .store-shelf-stage[hidden] { display: none !important; }
+[data-app="app-store"] .store-shelf-canvas {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   display: block;
 }
-.store-shelf-scroll {
+[data-app="app-store"] .store-shelf-scroll {
   position: absolute;
   inset: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
 }
-.store-shelf-track { width: 1px; }
-.store-shelf-hint {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 8px;
-  margin: 0;
-  text-align: center;
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  pointer-events: none;
-}
-.store-card-grid[hidden] { display: none !important; }
+[data-app="app-store"] .store-shelf-track { width: 1px; }
+[data-app="app-store"] .store-card-grid[hidden] { display: none !important; }
 
 /* Detail panel: right half over the well (the selected box poses on the left). */
-.store-detail {
+[data-app="app-store"] .store-detail {
   position: absolute;
   top: 0;
   right: 0;
@@ -899,8 +796,8 @@
   background: var(--surface);
   z-index: 8;
 }
-.store-detail[hidden] { display: none !important; }
-.store-detail-header {
+[data-app="app-store"] .store-detail[hidden] { display: none !important; }
+[data-app="app-store"] .store-detail-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -908,21 +805,21 @@
   padding: 12px;
   border-bottom: 1px solid var(--line);
 }
-.store-detail-title { margin: 0; font-size: 15px; }
-.store-detail-body {
+[data-app="app-store"] .store-detail-title { margin: 0; font-size: 15px; }
+[data-app="app-store"] .store-detail-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   padding: 12px;
 }
-.store-detail-capture { margin: 0 0 12px; }
-.store-detail-capture img {
+[data-app="app-store"] .store-detail-capture { margin: 0 0 12px; }
+[data-app="app-store"] .store-detail-capture img {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: var(--control-radius);
   display: block;
 }
-.store-detail-capture figcaption {
+[data-app="app-store"] .store-detail-capture figcaption {
   margin-top: 4px;
   color: var(--muted);
   font-family: var(--font-mono);
@@ -930,20 +827,20 @@
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
-.store-detail-actions {
+[data-app="app-store"] .store-detail-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin: 0 0 12px;
 }
 @container business-app-window (max-width: 1024px) {
-  .store-detail { width: 100%; }
+  [data-app="app-store"] .store-detail { width: 100%; }
 }
 
 /* Explicit pane rows — header, view band, well (1fr), footer. Without these
    the kit default rows collapse the well and the shelf canvas ends up 1px. */
-.store-center { grid-template-rows: auto auto minmax(0, 1fr) auto; }
-.store-left { grid-template-rows: auto minmax(0, 1fr) auto; }
+[data-app="app-store"] .store-center { grid-template-rows: auto auto minmax(0, 1fr) auto; }
+[data-app="app-store"] .store-left { grid-template-rows: auto minmax(0, 1fr) auto; }
 
 /* Touch targets on coarse pointers (phone/tablet): every interactive control
    reaches the 44px minimum, icon-only pane buttons in both dimensions, and
@@ -952,19 +849,19 @@
    two shell-owned breakpoints and nothing else: 1024px (three columns to two)
    and 768px (two columns to one). */
 @media (pointer: coarse) {
-  .app-store-module button,
-  .app-store-module input,
-  .app-store-module select,
-  .app-store-module textarea {
+  [data-app="app-store"] .app-store-module button,
+  [data-app="app-store"] .app-store-module input,
+  [data-app="app-store"] .app-store-module select,
+  [data-app="app-store"] .app-store-module textarea {
     min-height: 44px;
   }
 
-  .app-store-module .ctox-pane-icon {
+  [data-app="app-store"] .app-store-module .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
 
-  .app-store-module .store-category-list .ctox-list-item {
+  [data-app="app-store"] .app-store-module .store-category-list .ctox-list-item {
     min-height: 44px;
   }
 }
@@ -981,17 +878,17 @@
    head clears the window control on the right. The collapsible filter tray
    drops out of the head as an overlay so the head height stays fixed.
    ========================================================================== */
-.shell-window[data-shell-contract="v2"] .app-store-module .ctox-pane-header {
+[data-app="app-store"] .app-store-module .ctox-pane-header {
   box-sizing: border-box;
 }
 
-.shell-window[data-shell-contract="v2"] .app-store-module .store-left > .ctox-pane-header {
+[data-app="app-store"] .app-store-module .store-left > .ctox-pane-header {
   min-height: calc(var(--shell-v2-header-row-size, 37px) * 2);
   height: calc(var(--shell-v2-header-row-size, 37px) * 2);
   padding: 0 12px 0 calc(var(--shell-v2-icon-size, 80px) + 14px);
 }
 
-.shell-window[data-shell-contract="v2"] .app-store-module .store-center > .ctox-pane-header {
+[data-app="app-store"] .app-store-module .store-center > .ctox-pane-header {
   position: relative;
   min-height: calc(var(--shell-v2-header-row-size, 37px) * 2);
   height: calc(var(--shell-v2-header-row-size, 37px) * 2);
@@ -1001,7 +898,7 @@
 }
 
 /* Row 2 of the center head: the filter strip fills the second header row. */
-.shell-window[data-shell-contract="v2"] .app-store-module .store-center > .ctox-pane-header > .store-filterbar {
+[data-app="app-store"] .app-store-module .store-center > .ctox-pane-header > .store-filterbar {
   box-sizing: border-box;
   min-height: var(--shell-v2-header-row-size, 37px);
   height: var(--shell-v2-header-row-size, 37px);
@@ -1010,7 +907,7 @@
 }
 
 /* The collapsed tray opens as an overlay below the fixed-height head. */
-.shell-window[data-shell-contract="v2"] .app-store-module .store-center > .ctox-pane-header > .store-filter-advanced {
+[data-app="app-store"] .app-store-module .store-center > .ctox-pane-header > .store-filter-advanced {
   position: absolute;
   top: 100%;
   left: 0;
@@ -1021,15 +918,15 @@
   padding: 8px 12px;
 }
 
-.shell-window[data-shell-contract="v2"] .app-store-module .store-left > .ctox-pane-header > .ctox-pane-title-row,
-.shell-window[data-shell-contract="v2"] .app-store-module .store-center > .ctox-pane-header > .ctox-pane-title-row {
+[data-app="app-store"] .app-store-module .store-left > .ctox-pane-header > .ctox-pane-title-row,
+[data-app="app-store"] .app-store-module .store-center > .ctox-pane-header > .ctox-pane-title-row {
   min-height: var(--shell-v2-header-row-size, 37px);
   height: var(--shell-v2-header-row-size, 37px);
 }
 
 /* Kicker and title share the single header row; the title truncates instead of
    collapsing, and the action block never takes space from it. */
-.shell-window[data-shell-contract="v2"] .app-store-module .ctox-pane-title-row > .ctox-pane-titles {
+[data-app="app-store"] .app-store-module .ctox-pane-title-row > .ctox-pane-titles {
   flex: 1 1 auto;
   min-width: 0;
   flex-direction: row;
@@ -1039,7 +936,7 @@
   overflow: hidden;
 }
 
-.shell-window[data-shell-contract="v2"] .app-store-module .ctox-pane-titles > .ctox-pane-title {
+[data-app="app-store"] .app-store-module .ctox-pane-titles > .ctox-pane-title {
   min-width: 0;
   margin-top: 0;
   line-height: 1.1;
@@ -1048,7 +945,7 @@
   white-space: nowrap;
 }
 
-.shell-window[data-shell-contract="v2"] .app-store-module .ctox-pane-title-row > .ctox-pane-actions {
+[data-app="app-store"] .app-store-module .ctox-pane-title-row > .ctox-pane-actions {
   flex: 0 0 auto;
 }
 
@@ -1057,11 +954,11 @@
    74x74 window control on the right. The catalog head, now the second row of
    the stack, gives its reserved control space back. */
 @container business-app-window (max-width: 768px) {
-  .shell-window[data-shell-contract="v2"] .app-store-module .store-left > .ctox-pane-header {
+  [data-app="app-store"] .app-store-module .store-left > .ctox-pane-header {
     padding-right: calc(var(--shell-v2-header-row-size, 37px) * 2);
   }
 
-  .shell-window[data-shell-contract="v2"] .app-store-module .store-center > .ctox-pane-header {
+  [data-app="app-store"] .app-store-module .store-center > .ctox-pane-header {
     padding-right: 12px;
   }
 }

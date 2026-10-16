@@ -10,6 +10,8 @@ const source = readFileSync(modulePath, 'utf8');
 // the renderer are still part of what this guard protects.
 const crewRendererSource = readFileSync(resolve(scriptDir, '../shared/crew-renderer.js'), 'utf8');
 const crewMotionSource = readFileSync(resolve(scriptDir, '../shared/crew-motion.js'), 'utf8');
+// Crew presence helpers (crewCreatureHtml, getTaskState, …) live in crew-presence.js since Shell v4 R4.
+const crewPresenceSource = readFileSync(resolve(scriptDir, '../shared/crew-presence.js'), 'utf8');
 const chatSurfaceSource = `${source}\n${crewRendererSource}`;
 const failures = [];
 
@@ -150,7 +152,7 @@ expectIncludes(
   '.ctox-chat-window:not(.is-active) {\n      opacity: 0.6;\n      visibility: visible;\n      pointer-events: auto;',
   'Inactive desktop windows must remain visible and focusable as a 3D gallery'
 );
-expectIncludes(source, 'function crewCreatureHtml(chat, taskState = getTaskState(chat), placement = \'dock\')', 'Crew members need deterministic SVG identities');
+expectIncludes(crewPresenceSource, 'function crewCreatureHtml(chat, taskState = getTaskState(chat), placement = \'dock\')', 'Crew members need deterministic SVG identities');
 // Working crew is animated procedurally by the page-wide engine (base pose per
 // state), no longer by a CSS keyframe loop.
 expectIncludes(crewMotionSource, "if (mode === 'working') {", 'Crew status must have a working animation');

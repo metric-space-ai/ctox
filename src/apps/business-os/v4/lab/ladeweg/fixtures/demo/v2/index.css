@@ -1,0 +1,2 @@
+[data-app="demo"] .demo-box { border: 3px solid rgb(0, 0, 200); padding: 4px; }
+[data-app="demo"] .demo-badge { display: inline-block; width: 16px; height: 16px; background-image: url(./icon.svg); }

@@ -1,7 +1,6 @@
 <!-- This file is a SHELL FRAGMENT: styles and mount(ctx) come from the
      Business OS shell. Opened directly (file://) it renders unstyled — that is
      by design, not a defect. Run it at http://localhost:8765/business-os/ -->
-<p class="ctox-standalone-note">Dieses Modul-Fragment läuft nur innerhalb der Workjet Business OS. Öffne die App unter <strong>http://localhost:8765/business-os/#threads</strong>.</p>
 <main class="ctox-workspace threads-module is-actions-hidden" data-threads-root data-resize-frame>
   <aside class="ctox-pane threads-left" aria-label="Threads Navigation">
     <header class="ctox-pane-header ctox-pane-band">
@@ -12,8 +11,8 @@
         </div>
         <!-- Standing actions: new note (opens the action workbench, focuses
              the note form) + JSON export of the filtered thread list. No
-             manual refresh: the module keeps itself current (bounded poll +
-             command receipts). Reactive data needs no reload button. -->
+             manual refresh: the module renders live queries (App-API 4.0).
+             Reactive data needs no reload button. -->
         <div class="ctox-pane-actions">
           <button type="button" class="ctox-pane-icon" data-action="create-note" aria-label="Neue Notiz anlegen" title="Neue Notiz anlegen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
           <button type="button" class="ctox-pane-icon" data-action="export-threads" aria-label="Gefilterte Threads als JSON exportieren" title="Gefilterte Threads als JSON exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7"/></svg></button>
@@ -21,7 +20,8 @@
       </div>
       <!-- Row 2: filter section — search + view toggle + filter tray toggle.
            Canonical data-pg-* grammar: the SHELL wires search / view / tray /
-           reset / band / counts / footer (autoWirePaneGrammar); the module
+           reset / band / counts (autoWirePaneGrammar; no footer — no
+           count/state line in the app, owner rule); the module
            only renders lists and listens to ctox-pane-grammar-change. The old
            permanent 12-chip wall lived here; secondary filters now sit in the
            collapsed tray, primary views in the switcher band below. -->
@@ -41,6 +41,7 @@
                band below; the neutral value means "band governs". -->
           <select class="ctox-select threads-select" data-pg-filter data-pg-name="view" data-pg-default="" aria-label="Sekundäre Ansicht">
             <option value="">Sekundäransicht aus</option>
+            <!-- v4-allow: label -->
             <option value="delegated">Wartet auf andere</option>
             <option value="snoozed">Später</option>
             <option value="team">Team Queue</option>
@@ -59,15 +60,15 @@
     <nav class="threads-view-switch" aria-label="Thread Ansichten">
       <div class="ctox-pane-tabs">
         <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="inbox" aria-selected="true">Handeln<span class="view-count" data-pg-count="inbox"></span></button>
+        <!-- v4-allow: label -->
         <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="waiting" aria-selected="false">Wartet<span class="view-count" data-pg-count="waiting"></span></button>
-        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="running" aria-selected="false">AI<span class="view-count" data-pg-count="running"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="running" aria-selected="false" title="Von der KI bearbeitet">KI<span class="view-count" data-pg-count="running"></span></button>
         <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="archived" aria-selected="false">Erledigt<span class="view-count" data-pg-count="archived"></span></button>
       </div>
     </nav>
     <div class="ctox-pane-body threads-well">
       <div class="ctox-list threads-list" data-thread-list tabindex="-1"></div>
     </div>
-    <footer class="threads-footer"><span data-pg-footer></span><span class="threads-sync-state" data-sync-state role="status" aria-live="polite">Daten werden geprüft</span></footer>
   </aside>
 
   <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="240" data-resizer-max="480" aria-label="Linke Spaltenbreite anpassen"></button>
@@ -79,9 +80,8 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
         </button>
         <div class="ctox-pane-titles">
-          <button type="button" class="ctox-pane-kicker threads-source-link" data-thread-source aria-label="Verknüpften Datensatz öffnen">Kontext</button>
-          <h2 class="ctox-pane-title" data-thread-title>Kein Thread ausgewählt</h2>
-          <span class="threads-status" data-thread-status role="status" aria-live="polite"></span>
+          <button type="button" class="ctox-pane-kicker threads-source-link" data-thread-source aria-label="Verknüpften Datensatz öffnen"></button>
+          <h2 class="ctox-pane-title" data-thread-title></h2>
         </div>
         <div class="ctox-pane-actions">
           <button type="button" class="ctox-pane-icon" data-thread-claim title="Abstimmung übernehmen" aria-label="Abstimmung übernehmen">
@@ -106,12 +106,13 @@
           </button>
         </div>
       </div>
+      <!-- workjet#594: Status ausgeschrieben in der zweiten Bandzeile, Umbruch statt Ellipse. -->
+      <div class="threads-status" data-thread-status></div>
     </header>
-    <div class="threads-command-receipt" data-thread-command-receipt role="status" aria-live="polite" hidden></div>
     <div class="threads-timeline" data-thread-timeline></div>
     <form class="threads-composer" data-message-form>
       <div class="threads-mention-popup" data-mention-popup hidden></div>
-      <textarea class="ctox-textarea" data-message-body rows="3" placeholder="Antwort oder Notiz in diesen Thread schreiben"></textarea>
+      <textarea class="ctox-textarea" data-message-body rows="3" placeholder="Antwort oder Notiz…"></textarea>
       <button type="submit" class="ctox-button is-primary">Senden</button>
     </form>
     <nav class="threads-mobile-actions" aria-label="Thread Aktionen">

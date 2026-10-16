@@ -1,0 +1,368 @@
+{
+ "app": "submissions",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Vorstellungen",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 748
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neu",
+    "button:Importieren",
+    "button:Exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Alle (6)",
+    "nav:Offen (4)",
+    "nav:Erledigt (2)",
+    "button:zurückgezogen candidate-001 cl",
+    "button:string candidate-002 client-ac",
+    "button:done candidate-003 client-acco",
+    "button:all candidate-001 client-accou",
+    "button:eingestellt candidate-002 clie",
+    "button:gesendet candidate-003 client-",
+    "button:Spaltenbreite anpassen",
+    "button:Vorstellen",
+    "button:Weitere Angaben"
+   ],
+   "shot": "submissions/1280-01-open.png"
+  },
+  {
+   "step": "nav Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "submissions/1280-02-nav_Alle_6_.png"
+  },
+  {
+   "step": "nav Offen (4)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "submissions/1280-03-nav_Offen_4_.png"
+  },
+  {
+   "step": "nav Erledigt (2)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "submissions/1280-04-nav_Erledigt_2_.png"
+  },
+  {
+   "step": "zurück zu Reiter Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "submissions/1280-05-zur_ck_zu_Reiter_Alle_6_.png"
+  },
+  {
+   "step": "button Neu",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Importieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Exportieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Als Liste anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "submissions/1280-06-button_Als_Liste_anzeigen.png"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "submissions/1280-07-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "submissions/1280-08-button_Filter.png"
+  },
+  {
+   "step": "button zurückgezogen candidate-001 client-account-001 · Vakanz: vac",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "submissions/1280-09-button_zur_ckgezogen_candidate-001_clien.png"
+  },
+  {
+   "step": "button string candidate-002 client-account-002 · Vakanz: vacancy-00",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "submissions/1280-10-button_string_candidate-002_client-accou.png"
+  },
+  {
+   "step": "button done candidate-003 client-account-003 · Vakanz: vacancy-003 ",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "submissions/1280-11-button_done_candidate-003_client-account.png"
+  },
+  {
+   "step": "button all candidate-001 client-account-001 · Vakanz: vacancy-001 G",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "submissions/1280-12-button_all_candidate-001_client-account-.png"
+  },
+  {
+   "step": "button eingestellt candidate-002 client-account-002 · Vakanz: vacan",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "submissions/1280-13-button_eingestellt_candidate-002_client-.png"
+  },
+  {
+   "step": "button gesendet candidate-003 client-account-003 · Vakanz: vacancy-",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "submissions/1280-14-button_gesendet_candidate-003_client-acc.png"
+  },
+  {
+   "step": "button Spaltenbreite anpassen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Detail einklappen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "submissions/1280-15-button_Detail_einklappen.png"
+  },
+  {
+   "step": "button Vorstellen",
+   "changed": true,
+   "ops": [
+    "command ats.submission.present local=ok result=accepted {\"candidate_id\":\"candidate-003\",\"client_account_id\":\"client-account-003\",\"vacancy_id\":\"vacancy-003\",\"client_contact_id\":\"client-contact-003\""
+   ],
+   "zone": [
+    "clear submissions.form.ids_required",
+    "clear submissions.command.ats.submission.present",
+    "clear submissions.present.blocked"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "submissions/1280-16-button_Vorstellen.png"
+  },
+  {
+   "step": "button Weitere Angaben",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "submissions/1280-17-button_Weitere_Angaben.png"
+  },
+  {
+   "step": "formular 4 Felder → Vorstellen",
+   "changed": 1,
+   "ops": [
+    "command ats.submission.present local=ok result=accepted {\"candidate_id\":\"Rundgang Test\",\"client_account_id\":\"Rundgang Test\",\"vacancy_id\":\"Rundgang Test\",\"client_contact_id\":\"Rundgang Test\"}"
+   ],
+   "zone": [
+    "clear submissions.form.ids_required",
+    "clear submissions.command.ats.submission.present",
+    "clear submissions.present.blocked"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "submissions/1280-18-formular_4_Felder_Vorstellen.png"
+  },
+  {
+   "step": "auswahl Status filtern → sent",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "submissions/1280-19-auswahl_Status_filtern_sent.png"
+  },
+  {
+   "step": "button Filter zurücksetzen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "submissions/1280-20-button_Filter_zur_cksetzen.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 957,
+   "shot": "submissions/1280-21-suche_ohne_Treffer.png",
+   "textAfter": 294
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "submissions/1280-22-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "command",
+   "coll": "ats.submission.present",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "ats.submission.present",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "submissions",
+  "Vorstellungen"
+ ]
+}

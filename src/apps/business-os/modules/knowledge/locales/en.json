@@ -2,13 +2,6 @@
   "sources": "Sources",
   "runbooks": "Runbooks",
   "selected": "Selected",
-  "loading": "Loading knowledge",
-  "noItems": "No knowledge entries found.",
-  "syncingData": "Syncing data.",
-  "noRunbooks": "No runbooks available.",
-  "tableUnavailable": "This item has no table.",
-  "queued": "Command queued",
-  "queueFailed": "Could not queue command",
   "edit": "Edit",
   "closeEditor": "Close editor",
   "showAsList": "Show as list",
@@ -16,5 +9,5 @@
   "scopeUser": "User",
   "scopeSystem": "System",
   "scopeMixed": "User + System",
-  "neverEdited": "Never edited"
+  "dismiss": "Dismiss"
 }

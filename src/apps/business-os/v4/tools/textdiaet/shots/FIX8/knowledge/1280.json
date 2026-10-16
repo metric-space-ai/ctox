@@ -1,0 +1,478 @@
+{
+ "app": "knowledge",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Knowledge",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 744
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Knowledge Book erstellen",
+    "button:Knowledge Book importieren",
+    "button:Knowledge Books exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "button:DataFrames · Skillbooks (0) · ",
+    "button:Rahmenvertrag über Wartung und",
+    "button:Budgetplanung Vertrieb Süd · S",
+    "button:Messeplanung Hannover 2027 · S",
+    "button:Spaltenbreite anpassen",
+    "nav:Skill (1)",
+    "nav:Runbooks (0)",
+    "nav:Quellen (1)",
+    "nav:Tabellen (0)",
+    "button:Bearbeiten",
+    "button:Löschen"
+   ],
+   "shot": "knowledge/1280-01-open.png"
+  },
+  {
+   "step": "nav Skill (1)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "knowledge/1280-02-nav_Skill_1_.png"
+  },
+  {
+   "step": "nav Runbooks (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "knowledge/1280-03-nav_Runbooks_0_.png"
+  },
+  {
+   "step": "nav Quellen (1)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "knowledge/1280-04-nav_Quellen_1_.png"
+  },
+  {
+   "step": "nav Tabellen (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "knowledge/1280-05-nav_Tabellen_0_.png"
+  },
+  {
+   "step": "zurück zu Reiter Skill (1)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "knowledge/1280-06-zur_ck_zu_Reiter_Skill_1_.png"
+  },
+  {
+   "step": "button Knowledge Book erstellen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/1280-07-button_Knowledge_Book_erstellen.png"
+  },
+  {
+   "step": "formular 4 Felder → Erstellen lassen",
+   "changed": true,
+   "ops": [
+    "command ctox.knowledge.book.create local=ok result=accepted {\"title\":\"Knowledge Book erstellen · Rundgang Test\",\"knowledge_book\":{\"title\":\"Rundgang Test\",\"domain\":\"Rundgang Test\",\"status\":\"draft\",\"sum"
+   ],
+   "zone": [
+    "clear knowledge.command.ctox.knowledge.book.create"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "knowledge/1280-08-formular_4_Felder_Erstellen_lassen.png"
+  },
+  {
+   "step": "button Knowledge Book importieren",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/1280-09-button_Knowledge_Book_importieren.png"
+  },
+  {
+   "step": "formular 3 Felder → Import starten",
+   "changed": true,
+   "ops": [
+    "command ctox.knowledge.book.import local=ok result=accepted {\"title\":\"Knowledge Book importieren · Rundgang Test\",\"import_request\":{\"source_type\":\"path\",\"source\":\"Rundgang Test\",\"domain\":\"Rundgang Tes"
+   ],
+   "zone": [
+    "clear knowledge.command.ctox.knowledge.book.import"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "knowledge/1280-10-formular_3_Felder_Import_starten.png"
+  },
+  {
+   "step": "button Knowledge Books exportieren",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/1280-11-button_Knowledge_Books_exportieren.png"
+  },
+  {
+   "step": "formular 2 Felder → Export starten",
+   "changed": true,
+   "ops": [
+    "command ctox.knowledge.book.export local=ok result=accepted {\"title\":\"Knowledge Books exportieren · selected\",\"export_request\":{\"scope\":\"selected\",\"format\":\"markdown_bundle\",\"destination\":\"Rundgang Te"
+   ],
+   "zone": [
+    "clear knowledge.command.ctox.knowledge.book.export"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "knowledge/1280-12-formular_2_Felder_Export_starten.png"
+  },
+  {
+   "step": "button Als Liste anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/1280-13-button_Als_Liste_anzeigen.png"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/1280-14-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/1280-15-button_Filter.png"
+  },
+  {
+   "step": "button Sortierrichtung umkehren",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/1280-16-button_Sortierrichtung_umkehren.png"
+  },
+  {
+   "step": "button Skillbooks",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/1280-17-button_Skillbooks.png"
+  },
+  {
+   "step": "button Runbooks",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/1280-18-button_Runbooks.png"
+  },
+  {
+   "step": "button Tabellen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/1280-19-button_Tabellen.png"
+  },
+  {
+   "step": "button Rahmenvertrag über Wartung und Instandhaltung der Produktion",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/1280-20-button_Rahmenvertrag_ber_Wartung_und_Ins.png"
+  },
+  {
+   "step": "nav Quellen (7)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "knowledge/1280-21-nav_Quellen_7_.png"
+  },
+  {
+   "step": "nav Tabellen (3)",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear knowledge.table.incomplete"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "knowledge/1280-22-nav_Tabellen_3_.png"
+  },
+  {
+   "step": "button Spaltenbreite anpassen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Lieferantenbewertung 2026",
+   "changed": 1,
+   "ops": [],
+   "zone": [
+    "clear knowledge.table.incomplete"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/1280-23-button_Lieferantenbewertung_2026.png"
+  },
+  {
+   "step": "button Onboarding neue Mitarbeitende",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear knowledge.table.incomplete"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/1280-24-button_Onboarding_neue_Mitarbeitende.png"
+  },
+  {
+   "step": "button Als CSV exportieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "auswahl Bereich → user",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "knowledge/1280-25-auswahl_Bereich_user.png"
+  },
+  {
+   "step": "auswahl Sortieren nach → created",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "knowledge/1280-26-auswahl_Sortieren_nach_created.png"
+  },
+  {
+   "step": "button Filter zurücksetzen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/1280-27-button_Filter_zur_cksetzen.png"
+  },
+  {
+   "step": "button DataFrames · Skillbooks (0) · Runbooks (0) · Tabellen (3)",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear knowledge.table.incomplete"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/1280-28-button_DataFrames_Skillbooks_0_Runbooks_.png"
+  },
+  {
+   "step": "nav Quellen (3)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "knowledge/1280-29-nav_Quellen_3_.png"
+  },
+  {
+   "step": "button Budgetplanung Vertrieb Süd · Skillbooks (0) · Runbooks (0) ·",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/1280-30-button_Budgetplanung_Vertrieb_S_d_Skillb.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 593,
+   "shot": "knowledge/1280-31-suche_ohne_Treffer.png",
+   "textAfter": 295
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "knowledge/1280-32-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "command",
+   "coll": "ctox.knowledge.book.create",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "ctox.knowledge.book.import",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "ctox.knowledge.book.export",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "knowledge",
+  "Knowledge"
+ ]
+}

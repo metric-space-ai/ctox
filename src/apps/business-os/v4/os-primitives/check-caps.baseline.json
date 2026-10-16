@@ -1,0 +1,9 @@
+{
+  "_comment": "Ratchet: tolerated non-OS capabilities pending app-port. Target Z9 = []",
+  "tolerated": [
+    "agent.flow.record",
+    "command.get",
+    "pentest.app_audit",
+    "pentest.run"
+  ]
+}

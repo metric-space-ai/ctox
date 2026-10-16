@@ -1,0 +1,263 @@
+{
+  "_app_id": "documents",
+  "_format": "ctox-v4-collections-a9",
+  "_base_release": "main@4794af03d",
+  "_generator": "src/apps/business-os/v4/schemas/build-schemas.mjs",
+  "_sources": {
+    "document_blob_chunks": {
+      "source": "modules/documents/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "document_runbooks": {
+      "source": "modules/documents/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "document_versions": {
+      "source": "modules/documents/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "documents": {
+      "source": "modules/documents/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    }
+  },
+  "_foreign_copies_not_taken": [
+    {
+      "name": "knowledge_items",
+      "owner": "knowledge"
+    },
+    {
+      "name": "knowledge_runbooks",
+      "owner": "knowledge"
+    },
+    {
+      "name": "knowledge_tables",
+      "owner": "knowledge"
+    }
+  ],
+  "collections": {
+    "document_blob_chunks": {
+      "additionalProperties": false,
+      "primaryKey": "id",
+      "properties": {
+        "blob_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "data": {
+          "type": "string"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "encoding": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "idx": {
+          "type": "number"
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "total": {
+          "type": "number"
+        },
+        "version_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "blob_id",
+        "document_id",
+        "version_id",
+        "idx",
+        "total",
+        "mime_type",
+        "encoding",
+        "data",
+        "created_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "document_runbooks": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "command_type": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "description": {
+          "type": "string"
+        },
+        "document_type": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "prompt_template": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "document_type",
+        "title",
+        "command_type",
+        "prompt_template",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "document_versions": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "blob_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "diagnostics": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "model_json": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "source_kind": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "version": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "document_id",
+        "version",
+        "source_kind",
+        "blob_id",
+        "model_json",
+        "diagnostics",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "documents": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "created_at_ms": {
+          "type": "number"
+        },
+        "current_version_id": {
+          "type": "string"
+        },
+        "diagnostics_count": {
+          "type": "number"
+        },
+        "display_cache": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "document_type": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "index_text": {
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "linked_records": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "owner_id": {
+          "type": "string"
+        },
+        "page_count": {
+          "type": "number"
+        },
+        "source_sha256": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "filename",
+        "mime_type",
+        "status",
+        "current_version_id",
+        "index_text",
+        "is_deleted",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    }
+  },
+  "migrations": {}
+}

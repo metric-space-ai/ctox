@@ -3,7 +3,6 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">Matching</span>
           <h2 class="ctox-pane-title column-title">Anforderungen</h2>
         </div>
         <div class="ctox-pane-actions">
@@ -44,17 +43,16 @@
     <div class="ctox-pane-body ctox-well">
       <div class="ctox-list source-grid" id="sourceGrid" role="listbox" aria-label="Anforderungen"></div>
     </div>
-    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
     <input type="file" id="requirementImportInput" accept="application/json,.json" hidden>
   </aside>
 
   <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="240" data-resizer-max="480" aria-label="Spaltenbreite links anpassen"></button>
 
-  <section class="ctox-pane matching-main" id="center" data-pg-default-view="cards" aria-label="Match Workbench">
+  <section class="ctox-pane matching-main" id="center" data-pg-default-view="cards" aria-label="Treffer">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" id="sourceName">Match Workbench</span>
+          <span class="ctox-pane-kicker" id="sourceName"></span>
           <h2 class="ctox-pane-title column-title" id="workbenchTitle">Anforderung auswählen</h2>
         </div>
         <div class="ctox-pane-actions">
@@ -94,7 +92,7 @@
       <div class="ctox-list requirement-list" id="requirementList" role="listbox" aria-label="Gerankte Kandidaten"></div>
       <div class="map-wrap" id="mapWrap" hidden><div class="map" id="map"></div></div>
     </div>
-    <footer class="ctox-pane-footer"><span id="matchFooter">Anforderung auswählen</span></footer>
+    <footer class="ctox-pane-footer"><span id="matchFooter"></span></footer>
   </section>
 
   <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="260" data-resizer-max="480" aria-label="Spaltenbreite rechts anpassen"></button>
@@ -103,7 +101,7 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">Objekt-Nachweise</span>
+          <span class="ctox-pane-kicker">Nachweise</span>
           <h2 class="ctox-pane-title column-title" id="objectEvidenceTitle">Kein Match ausgewählt</h2>
         </div>
         <div class="ctox-pane-actions">
@@ -115,7 +113,7 @@
     </header>
     <input type="file" id="objectImportPdfInput" accept="application/pdf,.pdf,image/*,.png,.jpg,.jpeg,.webp,.gif,.bmp,.avif,application/json,.json" multiple hidden>
     <div class="ctox-pane-body ctox-pane-scroll" id="objectList"></div>
-    <footer class="ctox-pane-footer"><span id="objectFooter">Match auswählen · Pane ist standardmäßig verborgen</span></footer>
+    <footer class="ctox-pane-footer"><span id="objectFooter"></span></footer>
   </aside>
 </main>
 
@@ -154,7 +152,6 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">Matching</span>
           <h2 class="ctox-pane-title column-title" id="objectTitle">Objekt</h2>
         </div>
         <div class="ctox-pane-actions">
@@ -171,7 +168,6 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">Matching</span>
           <h2 class="ctox-pane-title column-title" id="jpTitle">Anforderung</h2>
         </div>
         <div class="ctox-pane-actions">
@@ -199,10 +195,6 @@
 
         <!-- NEU: großer Portrait-Platzhalter -->
         <div id="relPhoto" class="rel-photo"></div>
-
-        <p class="muted" style="font-size:12px;margin:0 0 8px">
-          Hier kannst du markieren, ob bereits ein persönlicher Kontakt besteht.
-        </p>
         <div class="ctox-choice-group" id="relOptions" role="radiogroup" aria-label="Kontaktstatus">
           <label class="ctox-choice">
             <input type="radio" name="relState" value="1" />

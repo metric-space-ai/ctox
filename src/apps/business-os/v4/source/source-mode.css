@@ -1,0 +1,236 @@
+/* Shell v4 – Quelltext-Modus (Entwurf §8). Dicht und ruhig; nur Shell-Tokens aus window-chrome.css.
+   Liegt immer IM App-Fenster (zwischen Inhalt und Zustandszone), nie im Dokument darüber. */
+.v4-window__source {
+  border: 0; background: none; cursor: pointer; color: var(--v4-muted, #5b6474);
+  font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 4px 6px; border-radius: 4px;
+}
+.v4-window__source[hidden] { display: none; }
+.v4-window__source:hover { background: rgba(0, 0, 0, .06); color: var(--v4-text, #1d2330); }
+.v4-window__source[aria-pressed="true"] { background: rgba(47, 111, 222, .12); color: var(--v4-info, #2f6fde); }
+
+.v4-src-host { flex: 1 1 auto; min-height: 0; position: relative; display: flex; }
+.v4-src {
+  --src-line: #e3e6eb; --src-soft: #f3f4f6; --src-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column;
+  background: var(--v4-win-bg, #fff); color: var(--v4-text, #1d2330); font-size: 12px; container-type: inline-size;
+}
+/* ZONE2: Zonen-Garantie der Code-Ansicht (createZoneGuard in source-mode.js). Nur wenn der Wirt keinen Zonen-Abstand
+   hält und ein Bedienelement eine reservierte Zone schneidet; der Rahmen-Wirt (.v4-src-host) hält ihn → kein Attribut. */
+.v4-src[data-v4-zone-guard~="top"] { padding-top: var(--shell-zone-height, 74px); }
+.v4-src[data-v4-zone-guard~="right"] { padding-right: var(--shell-controls-inset, 96px); }
+.v4-src__bar {
+  flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 32px; padding: 4px 8px;
+  box-sizing: border-box; border-bottom: 1px solid var(--src-line);
+}
+.v4-src__spacer { flex: 1 1 auto; }
+.v4-src__select { display: none; min-width: 0; flex: 1 1 auto; font: inherit; padding: 2px 4px; }
+.v4-src__btn {
+  flex: 0 0 auto; font: inherit; padding: 3px 9px; border: 1px solid var(--v4-win-border, #c9ced6); border-radius: 5px;
+  background: var(--v4-win-bg, #fff); color: inherit; cursor: pointer; white-space: nowrap;
+}
+.v4-src__btn[hidden] { display: none; }
+.v4-src__btn:hover:not(:disabled) { background: var(--src-soft); }
+.v4-src__btn:disabled { opacity: .45; cursor: default; }
+.v4-src__btn--primary { background: var(--v4-info, #2f6fde); border-color: var(--v4-info, #2f6fde); color: #fff; }
+.v4-src__btn--primary:hover:not(:disabled) { background: #275fc2; }
+.v4-src__btn--small { padding: 1px 7px; font-size: 11px; }
+.v4-src__input { font: inherit; padding: 3px 6px; border: 1px solid var(--v4-win-border, #c9ced6); border-radius: 5px; min-width: 0; width: 160px; }
+.v4-src__input[hidden] { display: none; }
+
+.v4-src__main { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(150px, 210px) minmax(0, 1fr); }
+.v4-src__tree { overflow: auto; border-right: 1px solid var(--src-line); padding: 4px 0; background: var(--src-soft); }
+.v4-src__group + .v4-src__group { margin-top: 6px; }
+.v4-src__group-title { padding: 2px 10px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--v4-muted, #5b6474); }
+.v4-src__item {
+  display: block; width: 100%; text-align: left; border: 0; background: none; font: inherit; font-family: var(--src-mono);
+  font-size: 11.5px; padding: 3px 10px 3px 14px; cursor: pointer; color: inherit; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; position: relative;
+}
+.v4-src__item:hover { background: rgba(0, 0, 0, .05); }
+.v4-src__item.is-current { background: rgba(47, 111, 222, .12); color: var(--v4-info, #2f6fde); }
+/* Zeile = Eintrag + Datei-Aktionen (umbenennen, löschen); Aktionen nur bei Zeiger/aktuellem Eintrag sichtbar. */
+.v4-src__row { display: flex; align-items: center; min-width: 0; }
+.v4-src__row > .v4-src__item { flex: 1 1 auto; min-width: 0; width: auto; }
+.v4-src__row.is-current { background: rgba(47, 111, 222, .12); }
+.v4-src__row.is-current > .v4-src__item { background: none; }
+.v4-src__acts { flex: 0 0 auto; display: flex; gap: 1px; padding-right: 4px; opacity: 0; }
+.v4-src__row:hover .v4-src__acts, .v4-src__row.is-current .v4-src__acts, .v4-src__acts:focus-within { opacity: 1; }
+.v4-src__act {
+  border: 0; background: none; padding: 0 4px; height: 18px; font: inherit; font-size: 12px; line-height: 18px; border-radius: 3px;
+  color: var(--v4-muted, #5b6474); cursor: pointer;
+}
+.v4-src__act:hover { background: rgba(0, 0, 0, .08); color: var(--v4-text, #1d2330); }
+.v4-src__rename { flex: 1 1 auto; width: auto; margin: 1px 4px 1px 10px; padding: 1px 4px; font-family: var(--src-mono); font-size: 11.5px; }
+.v4-src__acts--narrow { display: none; opacity: 1; padding: 0; }
+.v4-src__bar > .v4-src__rename { flex: 1 1 0; margin: 0; }
+.v4-src__break { display: none; }
+/* geändert im Entwurf: Punkt (Inhalt, kein Zähler) */
+.v4-src__item.is-changed::before { content: ''; position: absolute; left: 5px; top: 50%; width: 5px; height: 5px; margin-top: -2.5px; border-radius: 50%; background: var(--v4-warn, #b7791f); }
+
+.v4-src__pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.v4-src__editor { flex: 1 1 auto; min-height: 0; display: flex; position: relative; }
+.v4-src-ed { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; font: 12px/18px var(--src-mono, monospace); }
+.v4-src-ed--monaco { display: block; }
+.v4-src-ed__gutter {
+  flex: 0 0 auto; margin: 0; padding: 6px 8px 6px 6px; min-width: 2.5em; text-align: right; color: var(--v4-muted, #5b6474);
+  background: var(--src-soft); border-right: 1px solid var(--src-line); overflow: hidden; user-select: none; font: inherit;
+}
+.v4-src-ed__text {
+  flex: 1 1 auto; min-width: 0; margin: 0; padding: 6px 8px; border: 0; outline: 0; resize: none; font: inherit;
+  background: transparent; color: inherit; white-space: pre; overflow: auto; tab-size: 2;
+}
+
+.v4-src__diff { flex: 0 0 auto; max-height: 45%; overflow: auto; border-top: 1px solid var(--src-line); }
+.v4-src__diff:empty { display: none; }
+.v4-src__coll { padding: 6px 10px; border-bottom: 1px solid var(--src-line); }
+.v4-src__coll-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.v4-src__coll-name { font-family: var(--src-mono); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.v4-src__badge { flex: 0 0 auto; font-size: 10.5px; padding: 0 6px; border-radius: 3px; line-height: 16px; background: var(--src-soft); color: var(--v4-muted, #5b6474); }
+.v4-src__coll[data-kind="compatible"] .v4-src__badge, .v4-src__coll[data-kind="new"] .v4-src__badge { background: #e3f4e8; color: #23733f; }
+.v4-src__coll[data-kind="generation"] .v4-src__badge { background: #fdf0d9; color: #8a5a10; }
+.v4-src__coll[data-kind="removed"] .v4-src__badge { background: #fde4e4; color: #9b2c2c; }
+.v4-src__coll-reasons { margin-top: 2px; color: var(--v4-muted, #5b6474); overflow-wrap: anywhere; }
+.v4-src__coll-mig { margin-top: 4px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.v4-src__coll-mig[data-missing] > span { color: #8a5a10; }
+.v4-src__link { border: 0; background: none; padding: 0; font: inherit; font-family: var(--src-mono); color: var(--v4-info, #2f6fde); cursor: pointer; text-decoration: underline; overflow-wrap: anywhere; text-align: left; }
+
+.v4-src__form { padding: 10px 12px; display: grid; gap: 8px; overflow: auto; max-width: 640px; }
+.v4-src__field { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; align-items: start; }
+.v4-src__field-label { color: var(--v4-muted, #5b6474); padding-top: 4px; }
+.v4-src__field input, .v4-src__field textarea {
+  font: inherit; font-family: var(--src-mono); padding: 3px 6px; border: 1px solid var(--v4-win-border, #c9ced6); border-radius: 5px;
+  min-width: 0; background: var(--v4-win-bg, #fff); color: inherit; resize: vertical;
+}
+.v4-src.is-readonly .v4-src__field input, .v4-src.is-readonly .v4-src__field textarea { background: var(--src-soft); }
+
+.v4-src-upload__files { margin: 0; padding: 4px 0; list-style: none; overflow: auto; flex: 1 1 auto; font-family: var(--src-mono); font-size: 11.5px; }
+.v4-src-upload__files li { padding: 2px 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Editor-Kopf (Bedienkonzept §3): Diff als Umschalter, Weiteres im „…“-Menü. */
+.v4-src__toggle[aria-pressed="true"] { background: rgba(47, 111, 222, .12); border-color: rgba(47, 111, 222, .45); color: var(--v4-info, #2f6fde); }
+.v4-src__more { position: relative; flex: 0 0 auto; display: inline-flex; }
+.v4-src__more-btn { padding: 3px 8px; letter-spacing: .05em; }
+.v4-src__menu {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 5; min-width: 210px; padding: 4px; display: grid;
+  background: var(--v4-win-bg, #fff); border: 1px solid var(--v4-win-border, #c9ced6); border-radius: 7px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .16);
+}
+.v4-src__menu[hidden] { display: none; }
+.v4-src__menu-item { border: 0; background: none; font: inherit; color: inherit; text-align: left; padding: 5px 9px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+.v4-src__menu-item[hidden] { display: none; }
+.v4-src__menu-item:hover, .v4-src__menu-item:focus-visible { background: rgba(47, 111, 222, .1); outline: 0; }
+
+/* Nur lesender Zeilen-Diff (Basis ↔ Entwurf). */
+.v4-src__diffhost { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.v4-src-diff { font: 12px/18px var(--src-mono, monospace); padding: 4px 0; min-width: max-content; }
+.v4-src-diff__line { display: grid; grid-template-columns: 3.2em 3.2em minmax(0, 1fr); white-space: pre; }
+.v4-src-diff__no { color: var(--v4-muted, #5b6474); text-align: right; padding-right: 8px; user-select: none; opacity: .75; }
+.v4-src-diff__text { padding: 0 10px 0 4px; }
+.v4-src-diff__line.is-add { background: #e6f6ea; }
+.v4-src-diff__line.is-add .v4-src-diff__text { color: #1f6b36; }
+.v4-src-diff__line.is-del { background: #fdecec; }
+.v4-src-diff__line.is-del .v4-src-diff__text { color: #9b2c2c; }
+.v4-src-diff__skip { padding: 2px 12px; color: var(--v4-muted, #5b6474); background: var(--src-soft); font-family: system-ui, sans-serif; font-size: 11px; }
+
+/* Coding Agent rechts (wie die sekundäre Seitenleiste in VS Code); eingeklappt nur eine Lasche. */
+.v4-src.has-agent-panel .v4-src__main { grid-template-columns: minmax(150px, 210px) minmax(0, 1fr) auto; }
+.v4-agent {
+  width: clamp(240px, 30cqi, 340px); min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--src-line);
+  background: var(--src-soft);
+}
+.v4-agent[hidden] { display: none; }
+.v4-agent__head { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--src-line); }
+.v4-agent__title { flex: 1 1 auto; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--v4-muted, #5b6474); }
+.v4-agent__icon { border: 0; background: none; width: 24px; height: 24px; border-radius: 4px; cursor: pointer; color: var(--v4-muted, #5b6474); font-size: 16px; line-height: 1; }
+.v4-agent__icon:hover { background: rgba(0, 0, 0, .07); color: var(--v4-text, #1d2330); }
+.v4-agent__turns { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px; display: flex; flex-direction: column; gap: 10px; }
+.v4-agent__empty { margin: 4px 4px 0; color: var(--v4-muted, #5b6474); line-height: 1.45; }
+.v4-agent__turn { display: grid; gap: 6px; }
+.v4-agent__turn[data-state="cancelled"] { opacity: .55; }
+.v4-agent__prompt {
+  justify-self: end; max-width: 92%; padding: 6px 9px; border-radius: 9px 9px 2px 9px; background: rgba(47, 111, 222, .12);
+  white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4;
+}
+.v4-agent__reply { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; padding: 0 2px; }
+.v4-agent__files { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
+.v4-agent__file {
+  display: block; width: 100%; border: 0; background: var(--v4-win-bg, #fff); text-align: left; font: 11.5px/1.5 var(--src-mono, monospace);
+  padding: 2px 8px; border-radius: 4px; color: var(--v4-info, #2f6fde); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.v4-agent__file:disabled { color: inherit; cursor: default; }
+.v4-agent__file:hover:not(:disabled) { text-decoration: underline; }
+.v4-agent__apply { justify-self: start; }
+.v4-agent__dots { display: inline-flex; gap: 4px; padding: 4px 2px; }
+.v4-agent__dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--v4-muted, #5b6474); opacity: .35; animation: v4-agent-dot 1.2s infinite ease-in-out; }
+.v4-agent__dots i:nth-child(2) { animation-delay: .15s; }
+.v4-agent__dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes v4-agent-dot { 0%, 80%, 100% { opacity: .25; } 40% { opacity: .9; } }
+@media (prefers-reduced-motion: reduce) { .v4-agent__dots i { animation: none; opacity: .6; } }
+.v4-agent__form { flex: 0 0 auto; padding: 8px; border-top: 1px solid var(--src-line); display: grid; gap: 6px; }
+.v4-agent__input {
+  font: inherit; font-size: 12.5px; line-height: 1.4; padding: 6px 8px; border: 1px solid var(--v4-win-border, #c9ced6); border-radius: 7px;
+  resize: none; min-width: 0; background: var(--v4-win-bg, #fff); color: inherit; max-height: 160px;
+}
+.v4-agent__input:focus { outline: 2px solid rgba(47, 111, 222, .35); outline-offset: 0; border-color: var(--v4-info, #2f6fde); }
+.v4-agent__acts { display: flex; align-items: center; gap: 6px; }
+.v4-agent-tab {
+  width: 22px; border: 0; border-left: 1px solid var(--src-line); background: var(--src-soft); color: var(--v4-muted, #5b6474); cursor: pointer;
+  writing-mode: vertical-rl; font: 600 10.5px/1 system-ui, sans-serif; letter-spacing: .06em; text-transform: uppercase; padding: 10px 0;
+}
+.v4-agent-tab:hover { color: var(--v4-info, #2f6fde); background: rgba(47, 111, 222, .08); }
+.v4-agent-tab[hidden] { display: none; }
+
+/* Schmal (Fensterbreite, nicht Viewport): Baum weicht einer Dateiauswahl in der Leiste. */
+@container (max-width: 560px) {
+  .v4-src__main { grid-template-columns: minmax(0, 1fr); }
+  .v4-src__tree { display: none; }
+  .v4-src__select { display: block; flex: 1 1 0; }
+  .v4-src__select[hidden] { display: none; }
+  .v4-src__acts--narrow { display: flex; }
+  .v4-src__acts--narrow:empty { display: none; }
+  .v4-src__break { display: block; flex: 0 0 100%; height: 0; }
+  .v4-src__spacer { display: none; }
+  .v4-src__btn { padding: 3px 7px; }
+  .v4-src__btn--primary { margin-left: auto; }
+  .v4-src__field { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  /* Schmal: Agent unter dem Editor statt daneben. */
+  .v4-src.has-agent-panel .v4-src__main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  .v4-agent { width: auto; max-height: 46%; border-left: 0; border-top: 1px solid var(--src-line); }
+  .v4-agent-tab { writing-mode: horizontal-tb; width: auto; border-left: 0; border-top: 1px solid var(--src-line); padding: 6px 10px; text-align: left; }
+}
+
+@media (prefers-color-scheme: dark) {
+  .v4-src { --src-line: #343a45; --src-soft: #232831; }
+  .v4-src__coll[data-kind="compatible"] .v4-src__badge, .v4-src__coll[data-kind="new"] .v4-src__badge { background: #1d3b28; color: #8fd6a6; }
+  .v4-src__coll[data-kind="generation"] .v4-src__badge { background: #3e3016; color: #f0c674; }
+  .v4-src__coll[data-kind="removed"] .v4-src__badge { background: #452020; color: #f5a3a3; }
+  .v4-src-diff__line.is-add { background: #17331f; } .v4-src-diff__line.is-add .v4-src-diff__text { color: #9be0b0; }
+  .v4-src-diff__line.is-del { background: #3a1b1b; } .v4-src-diff__line.is-del .v4-src-diff__text { color: #f5a3a3; }
+}
+
+/* Meldeschleife (Strang LOOP): Reiter „Dateien | Meldungen“ oben im Baum, Liste der offenen Meldungen der App. */
+.v4-src__tabs { display: flex; gap: 2px; padding: 0 6px 4px; margin-bottom: 4px; border-bottom: 1px solid var(--src-line); }
+.v4-src__tabs[hidden] { display: none; }
+.v4-src__tab {
+  flex: 1 1 0; min-width: 0; border: 0; background: none; padding: 4px 6px; border-radius: 4px; cursor: pointer;
+  font: 600 11px/1.2 system-ui, sans-serif; color: var(--v4-muted, #5b6474); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.v4-src__tab:hover { background: rgba(0, 0, 0, .05); }
+.v4-src__tab.is-on { background: rgba(47, 111, 222, .12); color: var(--v4-info, #2f6fde); }
+.v4-src__tab-count { font-weight: 500; }
+.v4-src__files[hidden], .v4-src__reports[hidden] { display: none; }
+.v4-src__reports { display: grid; gap: 1px; }
+.v4-src__reports-empty { margin: 4px 10px; color: var(--v4-muted, #5b6474); font-size: 11.5px; line-height: 1.4; }
+.v4-src__report { display: grid; gap: 3px; padding: 6px 10px; border-bottom: 1px solid var(--src-line); }
+/* Markierte Meldung (api.shell.openSource(appId, {reportId}), Strang LOOP Runde 2) – wie die aktuelle Datei im Baum. */
+.v4-src__report.is-marked { background: rgba(47, 111, 222, .12); box-shadow: inset 3px 0 0 var(--v4-info, #2f6fde); }
+.v4-src__report-head { display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+.v4-src__report-no { flex: 0 0 auto; font-family: var(--src-mono); font-size: 11px; color: var(--v4-muted, #5b6474); }
+.v4-src__report-title { min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+.v4-src__report-meta { display: flex; flex-wrap: wrap; gap: 2px 8px; font-size: 11px; color: var(--v4-muted, #5b6474); }
+.v4-src__report-kind.is-bug { color: #9b2c2c; }
+.v4-src__report-kind.is-feature { color: #6b46c1; }
+.v4-src__report-status.is-running { color: var(--v4-info, #2f6fde); font-weight: 600; }
+.v4-src__report-acts { display: flex; gap: 6px; }
+.v4-src__report-acts .v4-src__link { font-family: inherit; font-size: 11px; }
+.v4-agent__turn.is-focused { outline: 2px solid var(--v4-info, #2f6fde); outline-offset: 2px; border-radius: 4px; }

@@ -26,9 +26,9 @@ import {
   trendsForIssue,
   validateTopic,
 } from '../core/news-model.mjs';
-import { collections } from '../schema.js';
-
 const moduleDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+// v4 (§16.13): einzige Schemaquelle ist collections.schema.json; schema.js ist gelöscht.
+const { collections } = JSON.parse(await readFile(resolve(moduleDir, 'collections.schema.json'), 'utf8'));
 
 test('cadence maps to a five-field cron expression', () => {
   assert.equal(cronForTopic({ cadence: 'daily', run_time: '07:05' }), '5 7 * * *');
@@ -64,12 +64,9 @@ test('topic records satisfy the declared schema shape', () => {
   for (const key of collections.news_sources.required) assert.ok(key in source, `source misses required ${key}`);
 });
 
-test('collections.schema.json and schema.js agree', async () => {
-  const json = JSON.parse(await readFile(resolve(moduleDir, 'collections.schema.json'), 'utf8'));
-  assert.deepEqual(Object.keys(json.collections).sort(), Object.keys(collections).sort());
-  for (const [name, schema] of Object.entries(collections)) {
-    assert.deepEqual(json.collections[name], JSON.parse(JSON.stringify(schema)), `${name} drifted`);
-  }
+test('collections.schema.json is the single schema source (schema.js removed)', async () => {
+  await assert.rejects(readFile(resolve(moduleDir, 'schema.js'), 'utf8'));
+  assert.deepEqual(Object.keys(collections).sort(), ['news_issues', 'news_posts', 'news_sources', 'news_topics']);
 });
 
 test('sources: presets skip known urls and account sources merge selectors', () => {
@@ -141,11 +138,12 @@ test('commands carry canonical type, record id, skill and record snapshot', () =
   assert.equal(generate.record_id, 'topic_1');
   assert.equal(generate.command_id, generate.id);
   assert.equal('type' in generate, false);
-  assert.deepEqual(generate.payload.required_skills, ['news-aggregation']);
+  assert.equal(generate.payload.required_skills, undefined, 'skill is chosen by the handler (news/news-aggregation)');
   assert.equal(generate.payload.issue_id, 'issue_1');
   assert.equal(generate.payload.thread_key, 'business-os/news/topic_1');
   assert.equal(generate.payload.record_snapshot.sources.length, 1, 'only enabled sources of this topic');
-  assert.match(generate.payload.instruction, /Lab-Releases/);
+  assert.equal(generate.payload.instruction, undefined, 'prompt lives in prompts/issue.md');
+  assert.equal(generate.payload.record_snapshot.topic.prompt, topic.prompt);
 
   const schedule = buildScheduleCommand(topic);
   assert.equal(schedule.command_type, NEWS_TOPIC_SCHEDULE);
@@ -156,7 +154,7 @@ test('commands carry canonical type, record id, skill and record snapshot', () =
   assert.equal(removed.payload.cron_expr, '');
 
   const adapter = buildAdapterCommand(topic, sources[0]);
-  assert.deepEqual(adapter.payload.required_skills, ['universal-scraping']);
+  assert.equal(adapter.payload.instruction, undefined, 'prompt lives in prompts/source-adapter.md');
   assert.ok(adapter.payload.record_snapshot.source);
   const auth = buildAuthCommand(topic, newSource('topic_1', 'x', '', 'Home'));
   assert.equal(auth.payload.target_url, 'https://x.com/home');
@@ -179,18 +177,14 @@ test('reddit and x read through a CTOX account, never an API', async () => {
   const connect = model.buildAdapterCommand({ id: 'topic_a' }, reddit);
   assert.equal(connect.command_type, model.NEWS_SOURCE_ADAPTER);
   assert.equal(connect.payload.auth_source, 'reddit.com');
-  assert.deepEqual(connect.payload.required_skills, [model.NEWS_SKILL]);
-  assert.ok(connect.payload.instruction.includes(`--task-id ${connect.command_id}`));
-  assert.ok(connect.payload.instruction.includes('--generate-credential'));
+  assert.equal(connect.payload.instruction, undefined, 'prompt lives in prompts/source-connect.md');
+  assert.equal(connect.payload.output_contract, model.SOURCE_REPLY_CONTRACT);
   assert.equal(model.buildAuthCommand({ id: 'topic_a' }, reddit).payload.target_url, 'https://www.reddit.com/');
 
   const topic = model.normalizeTopic({ id: 'topic_a', title: 'KI' });
   const generate = model.buildGenerateCommand(topic, [reddit], { id: 'issue_a', issue_date: '2026-10-14' }, null);
-  assert.ok(generate.payload.instruction.includes(`--task-id ${generate.command_id}`));
+  // --task-id line: handler test news.issue.generate.test.mjs (prompts/issue.md, uses the kernel command id)
   assert.equal(generate.payload.record_snapshot.sources[0].auth_source, 'reddit.com');
-  const lab = model.newSource('topic_a', 'lab', 'OpenAI', 'https://openai.com/news/');
-  const plain = model.buildGenerateCommand(topic, [lab], { id: 'issue_b', issue_date: '2026-10-14' }, null);
-  assert.ok(!plain.payload.instruction.includes('--task-id'));
 });
 
 test('a failed run replaced on the same day leaves the issue list; same-day runs show their time', async () => {

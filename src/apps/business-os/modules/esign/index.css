@@ -1,3 +1,6 @@
+/* v4: das App-root ist der Größencontainer (früher das Shell-Fenster außerhalb von root). */
+[data-app="esign"] { container: business-app-window / inline-size; }
+
 /* esign/index.css — module-specific layer on top of shared/base.css.
    The two-pane frame, pane headers, canonical column grammar (filterbar, tray,
    counted band, well, footer), list items, compact form, inputs, selects,
@@ -9,7 +12,7 @@
 /* ---- Explicit workspace pins (design-guide: pin panes to grid tracks so a
    hidden resizer never lets the main view slide onto an empty track). Pane
    rows: header / band / well / footer (left) and header / body / footer. ---- */
-.esign-module {
+[data-app="esign"] .esign-module {
   --ctox-left-width: 320px;
 }
 
@@ -18,23 +21,23 @@
    zugewiesen, weil die Filterablage [hidden] (display:none) ist und die
    automatische Platzierung sonst alle nachfolgenden Kinder eine Spur nach
    oben zoege. */
-.esign-left {
+[data-app="esign"] .esign-left {
   grid-column: 1;
   grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
 }
 
-.esign-left > .ctox-pane-header { grid-row: 1; }
-.esign-left > .ctox-filterbar { grid-row: 2; }
-.esign-left > .ctox-filter-tray { grid-row: 3; }
-.esign-left > .ctox-view-switch { grid-row: 4; }
-.esign-left > .ctox-pane-body { grid-row: 5; }
-.esign-left > .ctox-pane-footer { grid-row: 6; }
+[data-app="esign"] .esign-left > .ctox-pane-header { grid-row: 1; }
+[data-app="esign"] .esign-left > .ctox-filterbar { grid-row: 2; }
+[data-app="esign"] .esign-left > .ctox-filter-tray { grid-row: 3; }
+[data-app="esign"] .esign-left > .ctox-view-switch { grid-row: 4; }
+[data-app="esign"] .esign-left > .ctox-pane-body { grid-row: 5; }
+[data-app="esign"] .esign-left > .ctox-pane-footer { grid-row: 6; }
 
-.esign-module > [data-resizer="left"] {
+[data-app="esign"] .esign-module > [data-resizer="left"] {
   grid-column: 2;
 }
 
-.esign-center {
+[data-app="esign"] .esign-center {
   grid-column: 3;
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
@@ -47,15 +50,15 @@
    Icon-Spalte frei, der rechte die Fenstersteuerung. Die zweite Zeile liegt
    noch in der Icon-Zone (2 x 37px = 74px = 80px - 6px Rahmen) und wird deshalb
    gleich eingerueckt. ---- */
-.shell-window[data-shell-contract="v2"] .esign-module .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .esign-module .ctox-filterbar {
+[data-app="esign"] .esign-module .ctox-pane-header,
+[data-app="esign"] .esign-module .ctox-filterbar {
   box-sizing: border-box;
   min-height: var(--shell-v2-header-row-size, 37px);
   height: var(--shell-v2-header-row-size, 37px);
   padding-block: 0;
 }
 
-.shell-window[data-shell-contract="v2"] .esign-module .ctox-pane-title-row {
+[data-app="esign"] .esign-module .ctox-pane-title-row {
   height: 100%;
   min-width: 0;
 }
@@ -63,7 +66,7 @@
 /* In 37px passt kein gestapelter Kicker + Titel: beide teilen sich eine
    Grundlinie (identisch zur Knowledge-Referenz). Der Titel traegt das
    Versionsmenue der Shell und darf deshalb nicht zerquetscht werden. */
-.shell-window[data-shell-contract="v2"] .esign-module .ctox-pane-titles {
+[data-app="esign"] .esign-module .ctox-pane-titles {
   flex-direction: row;
   align-items: baseline;
   gap: 8px;
@@ -75,7 +78,7 @@
 /* Der Titel traegt das Versionsmenue (Vertrag §4): er darf NICHT als erster
    weichen. Der Kicker schrumpft und verschwindet zuerst, der Titel behaelt eine
    Trefferflaeche von mindestens 44px Breite. */
-.shell-window[data-shell-contract="v2"] .esign-module .ctox-pane-kicker {
+[data-app="esign"] .esign-module .ctox-pane-kicker {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -83,7 +86,7 @@
   white-space: nowrap;
 }
 
-.shell-window[data-shell-contract="v2"] .esign-module .ctox-pane-title {
+[data-app="esign"] .esign-module .ctox-pane-title {
   flex: 1 1 auto;
   min-width: 44px;
   margin-top: 0;
@@ -94,18 +97,18 @@
 }
 
 /* Linke Spalte: Icon-Zone (80px) freihalten — Titelzeile UND Filterleiste. */
-.shell-window[data-shell-contract="v2"] .esign-module .esign-left > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .esign-module .esign-left > .ctox-filterbar {
+[data-app="esign"] .esign-module .esign-left > .ctox-pane-header,
+[data-app="esign"] .esign-module .esign-left > .ctox-filterbar {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
   padding-right: 14px;
 }
 
 /* Rechte Spalte: Fenstersteuerung (74x74) freihalten. */
-.shell-window[data-shell-contract="v2"] .esign-module .esign-center > .ctox-pane-header {
-  padding-right: 70px;
+[data-app="esign"] .esign-module .esign-center > .ctox-pane-header {
+  padding-right: var(--shell-v2-control-inset, 70px);
 }
 
-.esign-workbench-scroll {
+[data-app="esign"] .esign-workbench-scroll {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -115,12 +118,12 @@
 /* ---- Ein-Knopf-Ansichtsumschalter: der Knopf traegt beide Icons, sichtbar ist
    immer das der ZIEL-Ansicht. Gesteuert allein ueber `data-pg-view` (die
    aktuelle Ansicht), damit JS nur ein Attribut umlegt. ---- */
-.esign-view-toggle .esign-view-icon {
+[data-app="esign"] .esign-view-toggle .esign-view-icon {
   display: none;
 }
 
-.esign-view-toggle[data-pg-view="cards"] [data-esign-view-icon="list"],
-.esign-view-toggle[data-pg-view="list"] [data-esign-view-icon="cards"] {
+[data-app="esign"] .esign-view-toggle[data-pg-view="cards"] [data-esign-view-icon="list"],
+[data-app="esign"] .esign-view-toggle[data-pg-view="list"] [data-esign-view-icon="cards"] {
   display: block;
 }
 
@@ -128,17 +131,17 @@
    (Betreiber-Direktive 31.08.): KARTE = 2-3 Zeilen mit fettem Titel und
    Metazeilen, grosszuegiges Padding. LISTE = genau eine dichte Zeile.
    Auswahl-Styling kommt weiterhin von .ctox-list-item. ---- */
-.esign-row--card {
+[data-app="esign"] .esign-row--card {
   padding: 10px 14px;
 }
 
-.esign-shard {
+[data-app="esign"] .esign-shard {
   display: grid;
   gap: 3px;
   min-width: 0;
 }
 
-.esign-shard-title {
+[data-app="esign"] .esign-shard-title {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -146,41 +149,41 @@
   min-width: 0;
 }
 
-.esign-shard-title strong {
+/* FIX11 (G4): Kartentitel brechen an Wortgrenzen um statt mit Ellipse zu kuerzen (wie notes); die Karte zeigt den
+   vollen Dokumenttitel, die dichte Listenansicht bleibt einzeilig. */
+[data-app="esign"] .esign-shard-title strong {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: normal;
+  white-space: normal;
   font-size: var(--fs-base);
   font-weight: 660;
 }
 
-.esign-shard-title .ctox-badge {
+[data-app="esign"] .esign-shard-title .ctox-badge {
   flex: 0 0 auto;
 }
 
-.esign-shard-meta {
+[data-app="esign"] .esign-shard-meta {
   display: block;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Umbruch statt Ellipse: lange Titel bleiben vollständig lesbar (Geometrie G4). */
+  overflow-wrap: anywhere;
   color: var(--muted);
   font-size: var(--fs-sm);
   line-height: 1.35;
 }
 
-.esign-shard-meta--secondary {
-  color: color-mix(in srgb, var(--muted) 82%, transparent);
+[data-app="esign"] .esign-shard-meta--secondary {
+  color: var(--muted); /* FIX8: 82 % Deckkraft unterschritt auf der gewählten Zeile Kontrast 3 */
   font-size: var(--fs-meta, 11px);
 }
 
 /* Dichte Listenzeile: eine Zeile, enge Zeilenhoehe, kein zweites Meta. */
-.esign-row--list {
+[data-app="esign"] .esign-row--list {
   padding: 3px 14px;
 }
 
-.esign-row-compact {
+[data-app="esign"] .esign-row-compact {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -190,7 +193,7 @@
   line-height: 1.25;
 }
 
-.esign-compact-title {
+[data-app="esign"] .esign-compact-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -199,26 +202,26 @@
   font-weight: 560;
 }
 
-.esign-row--list .ctox-badge {
+[data-app="esign"] .esign-row--list .ctox-badge {
   flex: 0 0 auto;
 }
 
 /* ---- Workbench detail (auto-revealed on selection) + signer flow. ---- */
-.esign-detail:empty {
+[data-app="esign"] .esign-detail:empty {
   display: none;
 }
 
-.esign-detail-card {
+[data-app="esign"] .esign-detail-card {
   display: grid;
   gap: 10px;
 }
 
-.esign-signers-head {
+[data-app="esign"] .esign-signers-head {
   color: var(--muted);
   font-size: 12px;
 }
 
-.esign-signers {
+[data-app="esign"] .esign-signers {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -226,7 +229,7 @@
   gap: 6px;
 }
 
-.esign-signer {
+[data-app="esign"] .esign-signer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 8px;
@@ -237,36 +240,36 @@
   background: var(--surface);
 }
 
-.esign-signer-id {
+[data-app="esign"] .esign-signer-id {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.esign-signer-state {
+[data-app="esign"] .esign-signer-state {
   color: var(--muted);
   font-size: 12px;
 }
 
 /* ---- Gate callout: collapse when empty (the kit callout has no :empty rule),
    plus the secondary detail lines and blocker list rendered inside it. ---- */
-.esign-module [data-esign-gate]:empty {
+[data-app="esign"] .esign-module [data-esign-gate]:empty {
   display: none;
 }
 
-.esign-module .ats-result-row {
+[data-app="esign"] .esign-module .ats-result-row {
   margin-top: 4px;
   color: var(--muted);
 }
 
-.esign-module .ats-blockers {
+[data-app="esign"] .esign-module .ats-blockers {
   margin: 6px 0 0;
   padding-left: 18px;
   color: var(--muted);
 }
 
-.esign-module .ats-blockers li {
+[data-app="esign"] .esign-module .ats-blockers li {
   margin: 2px 0;
 }
 
@@ -286,7 +289,7 @@
    74px-Icon-/Steuerungszeile liegt) die rechte Freihaltung. Das Raster ist
    explizit zugewiesen, damit keine leere Spur entsteht. ---- */
 @container business-app-window (max-width: 768px) {
-  .esign-module {
+  [data-app="esign"] .esign-module {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(240px, 42vh) minmax(320px, 1fr);
     height: auto;
@@ -299,25 +302,25 @@
     gap: 8px;
   }
 
-  .esign-module > [data-resizer="left"] {
+  [data-app="esign"] .esign-module > [data-resizer="left"] {
     display: none !important;
   }
 
-  .esign-left {
+  [data-app="esign"] .esign-left {
     grid-column: 1;
     grid-row: 1;
   }
 
-  .esign-center {
+  [data-app="esign"] .esign-center {
     grid-column: 1;
     grid-row: 2;
   }
 
   /* Einspaltig ist der linke Kopf zugleich der letzte Kopf der obersten Zeile:
      er traegt jetzt beide Freihaltungen. */
-  .shell-window[data-shell-contract="v2"] .esign-module .esign-left > .ctox-pane-header,
-  .shell-window[data-shell-contract="v2"] .esign-module .esign-left > .ctox-filterbar {
-    padding-right: 70px;
+  [data-app="esign"] .esign-module .esign-left > .ctox-pane-header,
+  [data-app="esign"] .esign-module .esign-left > .ctox-filterbar {
+    padding-right: var(--shell-v2-control-inset, 70px);
   }
 }
 
@@ -327,62 +330,68 @@
    Tap-Flaechen. Das Spalten-Stacking steuert die @container-Regel oben
    (768px). ---- */
 @media (pointer: coarse) {
-  .esign-module button,
-  .esign-module input,
-  .esign-module select,
-  .esign-module textarea {
+  [data-app="esign"] .esign-module button,
+  [data-app="esign"] .esign-module input,
+  [data-app="esign"] .esign-module select,
+  [data-app="esign"] .esign-module textarea {
     min-height: 44px;
   }
 
-  .esign-module .ctox-pane-icon {
+  [data-app="esign"] .esign-module .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
 
-  .esign-module .ctox-pane-tab,
-  .esign-module .ctox-sort-dir {
+  [data-app="esign"] .esign-module .ctox-pane-tab,
+  [data-app="esign"] .esign-module .ctox-sort-dir {
     min-height: 44px;
   }
 
-  .esign-module .ctox-sort-dir {
+  [data-app="esign"] .esign-module .ctox-sort-dir {
     width: 44px;
     min-width: 44px;
   }
 
-  .esign-module .ctox-list-item,
-  .esign-module .esign-shard,
-  .esign-module .esign-row-compact,
-  .esign-module .esign-signer {
+  [data-app="esign"] .esign-module .ctox-list-item,
+  [data-app="esign"] .esign-module .esign-shard,
+  [data-app="esign"] .esign-module .esign-row-compact,
+  [data-app="esign"] .esign-module .esign-signer {
     min-height: 44px;
   }
 }
 
 /* Shell-v2 keeps one shared app frame. The pane title remains semantic, while
    the module kicker is suppressed where it only repeats the shell title. */
-.shell-window[data-shell-contract="v2"] .esign-module {
+/* FIX8: keine fest dunkle Shell-v2-Fläche (#10151c/#141b24) mehr. Sie galt auch im hellen Theme, während Text
+   und Felder die hellen Theme-Tokens nutzen: Kopfzeilen und Detailbereich lagen dunkel auf dunkel. Flächen folgen
+   jetzt den Theme-Tokens (Muster modules/knowledge). */
+[data-app="esign"] .esign-module {
   padding: 0;
-  background: var(--shell-v2-surface, var(--bg));
+  background: var(--bg);
+  color: var(--text);
 }
-.shell-window[data-shell-contract="v2"] .esign-module .ctox-pane {
+[data-app="esign"] .esign-module .ctox-pane {
   border: 0;
   border-radius: 0;
-  background: var(--shell-v2-surface-alt, var(--surface));
+  background: var(--surface);
+  color: var(--text);
   box-shadow: none;
 }
-.shell-window[data-shell-contract="v2"] .esign-left > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .esign-center > .ctox-pane-header {
+[data-app="esign"] .esign-left > .ctox-pane-header,
+[data-app="esign"] .esign-center > .ctox-pane-header {
   padding: 0;
-  background: var(--shell-v2-surface-alt, var(--surface));
+  background: var(--surface);
+  color: var(--text);
 }
-.shell-window[data-shell-contract="v2"] .esign-left > .ctox-pane-header > [data-shell-v2-header-row="1"] {
+[data-app="esign"] .esign-left > .ctox-pane-header > [data-shell-v2-header-row="1"] {
   height: var(--shell-v2-header-row-size, 37px);
   padding: 0 8px 0 calc(var(--shell-v2-icon-size, 80px) + 8px);
 }
-.shell-window[data-shell-contract="v2"] .esign-center > .ctox-pane-header > [data-shell-v2-header-row="1"] {
+[data-app="esign"] .esign-center > .ctox-pane-header > [data-shell-v2-header-row="1"] {
   height: var(--shell-v2-header-row-size, 37px);
   padding: 0 62px 0 8px;
 }
-.shell-window[data-shell-contract="v2"] .esign-module [data-shell-v2-header-row="2"] {
+[data-app="esign"] .esign-module [data-shell-v2-header-row="2"] {
   box-sizing: border-box;
   min-height: var(--shell-v2-header-row-size, 37px);
   height: var(--shell-v2-header-row-size, 37px);
@@ -391,10 +400,35 @@
   overflow-y: hidden;
   white-space: nowrap;
 }
-.shell-window[data-shell-contract="v2"] .esign-left .ctox-pane-kicker { display: none; }
-.shell-window[data-shell-contract="v2"] .esign-module .ctox-pane-title-row { height: 100%; }
-.shell-window[data-shell-contract="v2"] .esign-module .ctox-pane-title { margin-top: 0; line-height: 1.1; }
-.shell-window[data-shell-contract="v2"] .esign-module .ctox-pane-icon {
+[data-app="esign"] .esign-left .ctox-pane-kicker { display: none; }
+[data-app="esign"] .esign-module .ctox-pane-title-row { height: 100%; }
+[data-app="esign"] .esign-module .ctox-pane-title { margin-top: 0; line-height: 1.1; }
+[data-app="esign"] .esign-module .ctox-pane-icon {
   width: min(26px, var(--shell-v2-header-row-size, 37px));
   height: min(26px, var(--shell-v2-header-row-size, 37px));
+}
+
+/* FIX7: Dokument- und Personenauswahl (DocuSign/Adobe-Sign-Muster) */
+[data-app="esign"] .esign-picker { position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+[data-app="esign"] .esign-picker--wide { grid-column: 1 / -1; }
+[data-app="esign"] .esign-picked { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 32px; padding: 4px 4px 4px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+[data-app="esign"] .esign-picked[hidden] { display: none; }
+[data-app="esign"] .esign-picked-title { font-size: inherit; text-transform: none; letter-spacing: normal; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+[data-app="esign"] .esign-picked small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-app="esign"] .esign-options { display: flex; flex-direction: column; max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+[data-app="esign"] .esign-options[hidden] { display: none; }
+[data-app="esign"] .esign-option { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; padding: 6px 10px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+[data-app="esign"] .esign-option:hover, [data-app="esign"] .esign-option:focus-visible { background: var(--surface-2); }
+[data-app="esign"] .esign-option strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-app="esign"] .esign-option small { flex: 0 1 auto; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-app="esign"] .esign-recipients { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+[data-app="esign"] .esign-recipients:empty { display: none; }
+[data-app="esign"] .esign-recipient { display: grid; grid-template-columns: 20px minmax(0, 1.2fr) minmax(0, 1.4fr) minmax(0, 1fr) auto; align-items: center; gap: 6px; min-width: 0; }
+[data-app="esign"] .esign-recipient-order { font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; text-align: center; }
+[data-app="esign"] .esign-recipient-actions { display: flex; gap: 2px; }
+/* Empfängerzeile stapelt auf der einspaltigen Stufe (Shell-Haltepunkt 768px, Vertrag §6). */
+@container business-app-window (max-width: 768px) {
+  [data-app="esign"] .esign-recipient { grid-template-columns: 20px minmax(0, 1fr) auto; }
+  [data-app="esign"] .esign-recipient > input[type="email"], [data-app="esign"] .esign-recipient > select { grid-column: 2 / -1; }
+  [data-app="esign"] .esign-recipient > .esign-recipient-actions { grid-column: 3; grid-row: 1; }
 }

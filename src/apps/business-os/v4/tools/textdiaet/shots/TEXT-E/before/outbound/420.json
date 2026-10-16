@@ -1,0 +1,135 @@
+{
+ "app": "outbound",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [
+    "put outbound_campaigns/outbound_default_campaign local=ok result=accepted {\"id\":\"outbound_default_campaign\",\"name\":\"Outbound Firmenqualifizierung\",\"objective\":\"Unternehmen importieren, qualifizi",
+    "command knowledge.command local=ok result=rejected:unknown_command:knowledge.command {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archived\"],\"client_context\":{\"source"
+   ],
+   "title": "Outbound",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 812
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "2 unknown_command:knowledge.command",
+   "cands": [
+    "button:Neue Kampagne",
+    "button:Kampagnen importieren",
+    "button:Kampagnen exportieren",
+    "button:Kachelansicht",
+    "button:Listenansicht",
+    "button:Filter",
+    "nav:Alle (7)",
+    "nav:Aktiv (6)",
+    "nav:Planung (1)",
+    "nav:Beendet (0)",
+    "row:Outbound Firmenqualifizierung ",
+    "button:Outbound Firmenqualifizierung ",
+    "button:Importjob anlegen",
+    "button:Kampagnen-Runbook öffnen",
+    "button:Kampagne bearbeiten",
+    "button:Kampagne löschen",
+    "row:Angebot Wartungsvertrag Halle ",
+    "button:Angebot Wartungsvertrag Halle ",
+    "row:Projektplan Relaunch Kundenpor",
+    "button:Projektplan Relaunch Kundenpor",
+    "row:Lieferantenbewertung 2026 Antw",
+    "button:Lieferantenbewertung 2026 Antw",
+    "row:Onboarding neue Mitarbeitende ",
+    "button:Onboarding neue Mitarbeitende ",
+    "row:Rahmenvertrag über Wartung und",
+    "button:Rahmenvertrag über Wartung und",
+    "row:Kundentermin Vorbereitung Quar",
+    "button:Kundentermin Vorbereitung Quar"
+   ],
+   "shot": "outbound/420-01-open.png"
+  },
+  {
+   "step": "nav Alle (7)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "outbound/420-02-nav_Alle_7_.png"
+  },
+  {
+   "step": "nav Aktiv (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "outbound/420-03-nav_Aktiv_6_.png"
+  },
+  {
+   "step": "nav Planung (1)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "outbound/420-04-nav_Planung_1_.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 125,
+   "shot": "outbound/420-05-suche_ohne_Treffer.png",
+   "textAfter": 853
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "outbound/420-06-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "outbound_campaigns",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "knowledge.command",
+   "local": "ok",
+   "result": "rejected:unknown_command:knowledge.command"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "outbound",
+  "Outbound"
+ ]
+}

@@ -4,14 +4,35 @@ import { Buffer } from 'node:buffer';
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-import { build } from 'esbuild';
+import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
+import { join as joinPath } from 'node:path';
+// Lader (OLDTEST): esbuild aus dem Klon, sonst ESBUILD_MODULE, sonst aus dem Haupt-Checkout
+// ~/Documents/ctox/src/apps/business-os/node_modules (wie die v4-api-Tests mit PLAYWRIGHT_MODULE). Nicht installieren.
+const requireDev = createRequire(import.meta.url);
+function loadDev(name, envVar) {
+  try { return requireDev(name); } catch {
+    return requireDev(process.env[envVar] || joinPath(homedir(), 'Documents/ctox/src/apps/business-os/node_modules', name));
+  }
+}
+const { build } = loadDev('esbuild', 'ESBUILD_MODULE');
 
+// Lader (OLDTEST): wie der Service Worker – ctox:shared/x → shared/x (§16.15); ctox:lib/<name>@<major>/ ist eine
+// Shell-Standardbibliothek, die erst zur Laufzeit gebunden wird (dynamischer Import) – im Bündel extern lassen.
+const CTOX_SPECIFIERS = {
+  name: 'ctox-specifiers',
+  setup(b) {
+    b.onResolve({ filter: /^ctox:shared\// }, (args) => ({ path: fileURLToPath(new URL(`../../shared/${args.path.slice('ctox:shared/'.length)}`, import.meta.url)) }));
+    b.onResolve({ filter: /^ctox:lib\// }, (args) => ({ path: args.path, external: true }));
+  },
+};
 const bundledModule = await build({
   entryPoints: [fileURLToPath(new URL('./index.js', import.meta.url))],
   bundle: true,
   format: 'esm',
   platform: 'browser',
   write: false,
+  plugins: [CTOX_SPECIFIERS],
 });
 
 const [{ text: bundledSource }] = bundledModule.outputFiles;
@@ -41,258 +62,101 @@ for (const format of ['csv', 'unsupported']) {
       if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument);
       else delete globalThis.document;
     });
+    const reports = [];
     const state = {
       disposed: false, selectedId: 'sheet', selectedVersion: { id: 'version' },
       versionLoad: { selection: 'sheet', versionId: 'version', status: 'ready' },
       spreadsheets: [{ id: 'sheet', title: 'Test', filename: `test.${format}`, current_version_id: 'version' }],
       officeEngine: 'unavailable-test-engine', t: (_key, fallback) => fallback,
-      ctx: { host: { isConnected: true, querySelector(selector) {
+      // App-API 4.0: Fenster-Root aus mount(root, api) statt ctx.host; Meldungen über api.status.
+      root: { isConnected: true, querySelector(selector) {
         if (selector === '[data-spreadsheets-editor]') return shell;
         if (selector === 'template[data-spreadsheets-head="editor"]') {
           return { content: { cloneNode: () => head } };
         }
         return null;
-      } } },
+      } },
+      api: { status: { report: (entry) => reports.push(entry), clear() {} }, metrics: { get: () => ({ backlog: 0 }) } },
     };
     const pending = hooks.renderCenter(state);
     assert.equal(badge.hidden, true, 'status stays hidden while opening');
     await pending;
-    assert.match(canvas.innerHTML, /spreadsheets-error/);
+    // v4 (R11): der Fehler geht in die Zustandszone, nie als Kasten in den Inhalt.
+    assert.deepEqual(reports.map((entry) => entry.code), [format === 'csv' ? 'spreadsheets.editor' : 'spreadsheets.format.unsupported']);
+    assert.equal(canvas?.innerHTML, undefined);
     assert.equal(badge.hidden, true, 'failure cannot show the saved badge');
     assert.equal(state.editorHandle, null);
   });
 }
 
-test('spreadsheet chunk refresh does not re-query the file library or runbooks', async () => {
-  const queried = [];
-  const state = { spreadsheets: [], selectedId: '', ctx: {
-    host: { querySelector: () => null },
-    db: { collection(name) { queried.push(name); return { find: () => ({ exec: async () => [] }) }; } },
-  } };
-  await hooks.refreshSpreadsheetsFromLocal(state, new Set(['spreadsheet_blob_chunks']));
-  assert.deepEqual(queried, []);
-  await hooks.refreshSpreadsheetsFromLocal(state, new Set(['spreadsheets']));
-  assert.deepEqual(queried, ['spreadsheets']);
+test('spreadsheet refresh for unrelated changes reads no collection and no version', async () => {
+  // App-API 4.0: Bibliothek und Runbooks kommen über Abos (api.query(...).subscribe); ein Refresh liest nur die
+  // Version des ausgewählten Blatts, und nur, wenn sich spreadsheets/spreadsheet_versions geändert haben.
+  const reads = [];
+  const api = {
+    get: (collection, id) => { reads.push(`get:${collection}`); return { get: () => (id === 'v2' ? { id: 'v2', spreadsheet_id: 'sheet' } : null) }; },
+    query: (collection) => ({ get: () => { reads.push(`query:${collection}`); return []; }, subscribe: () => () => {} }),
+  };
+  const state = { api, root: { isConnected: true, querySelector: () => null },
+    spreadsheets: [{ id: 'sheet', current_version_id: 'v2' }], selectedId: 'sheet', selectedVersion: { id: 'v1' } };
+  await hooks.refreshSpreadsheetsFromLocal(state, new Set(['files']));
+  assert.deepEqual(reads, []);
+  await hooks.refreshSpreadsheetsFromLocal(state, new Set(['spreadsheet_versions']));
+  assert.deepEqual(reads, ['get:spreadsheet_versions']);
+  assert.equal(state.selectedVersion.id, 'v2');
 });
 
 test('spreadsheet background refresh does not render after disposal during a read', async () => {
   let active = true;
-  let release;
-  const held = new Promise(resolve => { release = resolve; });
-  const state = { spreadsheets: [], selectedId: '', ctx: {
-    host: { querySelector: () => assert.fail('disposed app must not render') },
-    db: { collection() { return { find: () => ({ exec: () => held }) }; } },
-  } };
-  const pending = hooks.refreshSpreadsheetsFromLocal(state, new Set(['spreadsheets']), () => active);
-  active = false;
-  release([]);
-  await pending;
-});
-
-test('spreadsheet version reads return locally without starting replication', async () => {
-  const version = { id: 'local' };
-  assert.equal(await hooks.resolveSpreadsheetVersionLocalFirst(async timeoutMs => {
-    assert.equal(timeoutMs, 4500);
-    return version;
-  }, () => assert.fail('must not wait for sync')), version);
-});
-
-test('spreadsheet metadata deadline recovers once with a bounded network read', async () => {
-  const budgets = [];
-  let recoveries = 0;
-  const version = { id: 'reconnected' };
-  assert.equal(await hooks.resolveSpreadsheetVersionLocalFirst(async timeoutMs => {
-    budgets.push(timeoutMs);
-    if (budgets.length === 1) {
-      return hooks.withSpreadsheetVersionTimeout(new Promise(() => {}), 1, 'deadline');
-    }
-    return version;
-  }, async () => { recoveries += 1; }), version);
-  assert.deepEqual(budgets, [4500, 60000]);
-  assert.equal(recoveries, 1);
-});
-
-test('spreadsheet metadata recovery does not relabel integrity or permission failures', async () => {
-  for (const code of ['permission_denied', 'blob_sha256_mismatch']) {
-    const error = Object.assign(new Error(code), { code });
-    assert.equal(hooks.isTransientSpreadsheetVersionReadError(error), false);
-    await assert.rejects(hooks.resolveSpreadsheetVersionLocalFirst(
-      () => hooks.withSpreadsheetVersionTimeout(Promise.reject(error), 100, 'deadline'),
-      () => assert.fail('must not recover non-transient failure'),
-    ), actual => actual === error);
-  }
-});
-
-for (const failures of [1, 2, 3]) {
-  test(`spreadsheet peer-reopen failure is bounded after ${failures} reads`, async () => {
-    const error = new Error('Timed out waiting for WebRTC peer reopen for spreadsheet_versions');
-    const version = { id: 'reopened' };
-    const budgets = [];
-    let recoveries = 0;
-    const pending = hooks.resolveSpreadsheetVersionLocalFirst(async budget => {
-      budgets.push(budget);
-      if (budgets.length <= failures) throw error;
-      return version;
-    }, async () => { recoveries += 1; });
-    if (failures === 3) await assert.rejects(pending, actual => actual === error);
-    else assert.equal(await pending, version);
-    assert.deepEqual(budgets, failures === 1 ? [4500, 60000] : [4500, 60000, 60000]);
-    assert.equal(recoveries, Math.min(failures, 2));
-  });
-}
-
-test('spreadsheet metadata absence remains absence after successful recovery', async () => {
-  let reads = 0;
-  let recoveries = 0;
-  assert.equal(await hooks.resolveSpreadsheetVersionLocalFirst(async () => {
-    reads += 1;
-    return null;
-  }, async () => { recoveries += 1; }), null);
-  assert.equal(reads, 2);
-  assert.equal(recoveries, 1);
-});
-
-test('spreadsheet terminal codes override a misleading transport error message', async () => {
-  for (const code of ['permission_denied', 'schema_validation_failed', 'blob_sha256_mismatch']) {
-    const error = Object.assign(new Error('Timed out waiting for WebRTC peer reopen for spreadsheet_versions'), { code });
-    assert.equal(hooks.isTransientSpreadsheetVersionReadError(error), false);
-    await assert.rejects(hooks.resolveSpreadsheetVersionLocalFirst(async () => { throw error; },
-      () => assert.fail('terminal error must not reconnect')), actual => actual === error);
-  }
-});
-
-for (const boundary of ['before-read', 'read-result', 'read-error', 'recovery-result', 'recovery-error']) {
-  test(`spreadsheet supersession at ${boundary} cancels without applying or retrying`, async () => {
-    let current = boundary !== 'before-read';
-    let reads = 0;
-    let recoveries = 0;
-    const result = await hooks.resolveSpreadsheetVersionLocalFirst(async () => {
-      reads += 1;
-      if (boundary === 'read-result') { current = false; return { id: 'stale' }; }
-      if (boundary === 'read-error') current = false;
-      if (reads === 1) throw new Error('query_cancelled');
-      return { id: 'stale' };
-    }, async () => {
-      recoveries += 1;
-      current = false;
-      if (boundary === 'recovery-error') throw new Error('query_cancelled');
-    }, { isCurrent: () => current });
-    assert.equal(result, null);
-    assert.equal(reads, boundary === 'before-read' ? 0 : 1);
-    assert.equal(recoveries, boundary.startsWith('recovery') ? 1 : 0);
-  });
-}
-
-test('spreadsheet recovery resolves a pending direct bridge and waits only for its peer', async () => {
-  const events = [];
-  await hooks.awaitSpreadsheetVersionReplication({ sync: {
-    async startCollection(name, options) {
-      assert.equal(name, 'spreadsheet_versions');
-      assert.deepEqual(options, { forceDirect: true });
-      events.push('direct');
-      return { ready: Promise.resolve({ state: {
-        async waitForOpenPeerId(timeoutMs) {
-          assert.equal(timeoutMs, 60000);
-          events.push('native-peer');
-          return 'native';
-        },
-        async awaitInitialReplication() { assert.fail('no full collection download'); },
-        async awaitInSync() { assert.fail('no full collection synchronization'); },
-      } }) };
-    },
-  } });
-  assert.deepEqual(events, ['direct', 'native-peer']);
-});
-
-test('spreadsheet recovery propagates a refused direct channel without another read', async () => {
-  let reads = 0;
-  let starts = 0;
-  const refused = new Error('forbidden');
-  await assert.rejects(hooks.resolveSpreadsheetVersionLocalFirst(async () => { reads += 1; return null; },
-    () => hooks.awaitSpreadsheetVersionReplication({ sync: {
-      async startCollection() { starts += 1; throw refused; },
-    } })), actual => actual === refused);
-  assert.equal(reads, 1);
-  assert.equal(starts, 1);
-});
-
-test('spreadsheet failed reconnect attempts consume the bounded recovery budget', async () => {
-  let recoveries = 0;
-  let reads = 0;
-  const error = new Error('Timed out waiting for WebRTC peer reopen for spreadsheet_versions');
-  await assert.rejects(hooks.resolveSpreadsheetVersionLocalFirst(async () => {
-    reads += 1;
-    return null;
-  }, async () => { recoveries += 1; throw error; }), actual => actual === error);
-  assert.equal(reads, 1);
-  assert.equal(recoveries, 2);
-});
-
-test('spreadsheet cancelled direct bridge never continues to readiness or peer wait', async () => {
-  for (const boundary of ['start', 'ready']) {
-    let current = true;
-    await hooks.awaitSpreadsheetVersionReplication({ sync: {
-      async startCollection() {
-        if (boundary === 'start') current = false;
-        return { ready() {
-          assert.equal(boundary, 'ready');
-          current = false;
-          return Promise.resolve({ state: {
-            waitForOpenPeerId() { assert.fail('cancelled readiness must not wait for peer'); },
-          } });
-        } };
-      },
-    } }, () => current);
-  }
+  const api = {
+    // Die Fensterschließung fällt mitten in das Lesen der Version.
+    get: () => { active = false; return { get: () => ({ id: 'v2', spreadsheet_id: 'sheet' }) }; },
+    query: () => ({ get: () => [], subscribe: () => () => {} }),
+  };
+  const state = { api, spreadsheets: [{ id: 'sheet', current_version_id: 'v2' }], selectedId: 'sheet', selectedVersion: null,
+    root: { isConnected: true, querySelector: () => assert.fail('disposed app must not render') } };
+  await hooks.refreshSpreadsheetsFromLocal(state, new Set(['spreadsheets']), () => active);
+  assert.equal(active, false);
 });
 
 function versionState(read) {
+  // App-API 4.0: Versionen liegen lokal vollständig vor (api.get/api.query synchron); kein Transportfehler, kein Retry.
   return {
     selectedId: 'sheet', selectedVersion: null, editorHandle: null,
     spreadsheets: [{ id: 'sheet', current_version_id: 'version' }],
     dirty: false, saving: false,
-    ctx: { db: { collection() { return {
-      findOne: () => ({ exec: read }),
-      find: () => ({ exec: async () => [] }),
-    }; } }, sync: { startCollection: async () => ({}) } },
+    api: {
+      get: () => ({ get: read }),
+      query: () => ({ get: () => [], subscribe: () => () => {} }),
+    },
   };
 }
 
-test('spreadsheet loader distinguishes failed transport, missing metadata, and ready version', async t => {
-  t.mock.method(console, 'warn', () => {});
-  const error = new Error('Timed out waiting for WebRTC peer reopen for spreadsheet_versions');
-  const state = versionState(async () => { throw error; });
-  await hooks.loadSelectedVersion(state);
-  assert.equal(hooks.currentSpreadsheetVersionLoad(state).status, 'error');
-  assert.equal(state.versionLoad.error, error);
-  assert.equal(state.selectedVersion, null);
-  const absent = versionState(async () => null);
+test('spreadsheet loader distinguishes missing metadata and a ready version', async () => {
+  const absent = versionState(() => null);
   await hooks.loadSelectedVersion(absent);
   assert.equal(hooks.currentSpreadsheetVersionLoad(absent).status, 'missing');
-  const version = { id: 'version' };
-  const ready = versionState(async () => ({ toJSON: () => version }));
+  assert.equal(absent.selectedVersion, null);
+  const version = { id: 'version', data: { cells: [1] } };
+  const ready = versionState(() => version);
   await hooks.loadSelectedVersion(ready);
   assert.equal(hooks.currentSpreadsheetVersionLoad(ready).status, 'ready');
-  assert.equal(ready.selectedVersion, version);
+  assert.deepEqual(ready.selectedVersion, version);
+  assert.notEqual(ready.selectedVersion, version, 'the editor works on its own copy of the frozen live row');
 });
 
-for (const change of ['selection', 'dispose', 'draft']) {
-  test(`spreadsheet loader cannot commit or retry after concurrent ${change}`, async () => {
-    let release;
+for (const change of ['dispose', 'draft']) {
+  test(`spreadsheet loader cannot commit after ${change}`, async () => {
     let reads = 0;
-    const held = new Promise(resolve => { release = resolve; });
-    const state = versionState(async () => { reads += 1; return held; });
-    const pending = hooks.loadSelectedVersion(state);
-    if (change === 'selection') state.selectedId = 'other';
+    const state = versionState(() => { reads += 1; return { id: 'stale' }; });
     if (change === 'dispose') state.disposed = true;
     if (change === 'draft') {
       state.dirty = true;
       state.editorHandle = { kind: 'ctox-spreadsheets', recordId: 'sheet', activity: 1 };
     }
-    release({ toJSON: () => ({ id: 'stale' }) });
-    assert.equal(await pending, null);
+    assert.equal(await hooks.loadSelectedVersion(state), null);
     assert.equal(state.selectedVersion, null);
-    assert.equal(reads, 1);
+    assert.equal(reads, 0);
     assert.equal(state.dirty, change === 'draft');
     assert.equal(hooks.currentSpreadsheetVersionLoad(state), null);
   });
@@ -306,25 +170,12 @@ test('spreadsheet chrome is a two-pane file manager without a right runbook colu
   ]);
   assert.match(source, /data-spreadsheets-new[^\n]+[\s\S]{0,140}requestBlankSpreadsheet/);
   assert.match(source, /const BLANK_GRID_DATA/);
-  assert.match(source, /state\.rightPaneEl\.hidden = true/);
+  // v4: es gibt keine rechte Spalte mehr (renderRight ist leer), statt sie zur Laufzeit zu verstecken.
+  assert.match(source, /function renderRight\(\) \{\}/);
+  assert.doesNotMatch(source, /rightPaneEl/);
   assert.doesNotMatch(html, /data-spreadsheets-head="runbooks"/);
   assert.doesNotMatch(html, /data-spreadsheets-toggle-actions/);
   assert.equal(manifest.layout.right, undefined);
-});
-
-test('spreadsheet runtime waits for initial replication before reading collections', async () => {
-  const events = [];
-  const ready = await hooks.ensureSpreadsheetRuntimeReady({
-    actions: {
-      async ensureRuntimeReady() {
-        events.push('ready');
-      },
-    },
-  });
-
-  assert.equal(ready, true);
-  assert.deepEqual(events, ['ready']);
-  assert.equal(await hooks.ensureSpreadsheetRuntimeReady({}), false);
 });
 
 test('spreadsheet records without is_deleted remain visible', () => {
@@ -511,72 +362,71 @@ async function snapshotReportInput(overrides = {}) {
   };
 }
 
-// Exercise openFile through the real persistence bridge. No editor/native
-// conversion is simulated here; installed SaveACK/reopen remains acceptance.
+// Exercise openFile through the real persistence path of App-API 4.0: bytes via api.files.put (one blob, the
+// reference is usable after `local`), records via api.put. The live subscription is simulated: a put on
+// `spreadsheets` appears in state.spreadsheets like the pushed query result. No editor/native conversion here.
 function snapshotReportState(initialRecords = []) {
   const rows = new Map([
     ['spreadsheets', initialRecords.map((row) => ({ ...row }))],
     ['spreadsheet_versions', []],
-    ['spreadsheet_blob_chunks', []],
-    ['desktop_files', []],
+    ['files', []],
   ]);
   const writes = [];
   const acknowledged = [];
   const events = [];
-  const collections = new Map(Array.from(rows, ([name, records]) => [name, {
-    find: () => ({ exec: async () => records.map((row) => ({ toJSON: () => ({ ...row }) })) }),
-    findOne: (query) => ({ exec: async () => {
-      const id = typeof query === 'string' ? query : query.selector.id;
-      const row = records.find((candidate) => candidate.id === id);
-      return row ? { toJSON: () => ({ ...row }) } : null;
-    } }),
-    async insert(row) {
-      events.push(`insert:${name}`);
+  const blobs = new Map();
+  let state;
+  const api = {
+    get: (name, id) => ({ get: () => (rows.get(name) || []).find((row) => row.id === id) || null }),
+    query: (name) => ({ get: () => [...(rows.get(name) || [])], subscribe: () => () => {} }),
+    put(name, row) {
+      events.push(`put:${name}`);
       writes.push({ name, row });
-      records.push({ ...row });
-      return { toJSON: () => ({ ...row }) };
+      rows.get(name).push({ ...row });
+      if (name === 'spreadsheets') {
+        state.rawSpreadsheets.push({ ...row });
+        state.spreadsheets.push(hooks.normalizeSpreadsheetRecord({ ...row }));
+      }
+      return { local: Promise.resolve() };
     },
-    async bulkUpsert(documents) {
-      writes.push({ name, documents });
-      records.push(...documents);
-      return documents.map((row) => ({ toJSON: () => ({ ...row, _meta: { lwt: Date.now() } }) }));
+    files: {
+      put(blob, meta) {
+        events.push('file-put');
+        writes.push({ name: 'files', meta });
+        blobs.set(meta.id, blob);
+        rows.get('files').push({ id: meta.id, ref: `ref:${meta.id}` });
+        return {
+          local: Promise.resolve().then(() => { events.push('source-ack'); acknowledged.push(meta.id); }),
+          ref: Promise.resolve(`ref:${meta.id}`),
+        };
+      },
+      async get(ref) { return blobs.get(String(ref).replace(/^ref:/, '')) || null; },
     },
-  }]));
-  const state = {
-    spreadsheets: initialRecords.map((row) => ({ ...row })),
+    command() { throw new Error('opening a snapshot must not dispatch research'); },
+    status: { report() {}, clear() {} },
+    metrics: { get: () => ({ backlog: 0 }) },
+  };
+  state = {
+    rawSpreadsheets: initialRecords.map((row) => ({ ...row })),
+    spreadsheets: initialRecords.map((row) => hooks.normalizeSpreadsheetRecord({ ...row })),
     selectedId: initialRecords[0]?.id || '',
     selectedVersion: null,
-    active: false,
-    disposed: true,
+    disposed: false,
     t: (_key, fallback) => fallback,
-    ctx: {
-      host: { isConnected: false, querySelector: () => null },
-      db: { collection: (name) => collections.get(name) },
-      commandBus: { dispatch: async () => { throw new Error('opening a snapshot must not dispatch research'); } },
-      sync: { async leaseCollection() { return {
-        bridge: { state: {
-          async waitForOpenPeerId() { return 'native'; },
-          async pushDocumentsToPeer(_peer, documents) {
-            events.push('source-ack');
-            acknowledged.push(...documents);
-            return true;
-          },
-        } },
-        async release() {},
-      }; } },
-    },
+    api,
+    root: { isConnected: false, querySelector: () => null },
   };
   return {
-    state, rows, writes, acknowledged, events,
+    state, rows, writes, acknowledged, events, blobs,
     remount() {
       return {
         ...state,
-        spreadsheets: structuredClone(rows.get('spreadsheets')),
+        rawSpreadsheets: rows.get('spreadsheets').map((row) => ({ ...row })),
+        spreadsheets: rows.get('spreadsheets').map((row) => hooks.normalizeSpreadsheetRecord({ ...row })),
         selectedVersion: null,
         editorHandle: null,
         dirty: false,
         saving: false,
-        ctx: { ...state.ctx },
       };
     },
   };
@@ -598,16 +448,13 @@ test('explicit saved-state XLSX report persists its exact bytes and non-evidence
   }
   assert.equal(opened.source_sha256, input.report_snapshot.file_sha256);
   const version = fixture.rows.get('spreadsheet_versions')[0];
-  const sourceChunks = fixture.rows.get('spreadsheet_blob_chunks')
-    .filter((chunk) => chunk.blob_id === version.blob_id)
-    .sort((a, b) => a.idx - b.idx);
-  const persistedBytes = Buffer.concat(sourceChunks.map((chunk) => Buffer.from(chunk.data, 'base64')));
-  assert.deepEqual(persistedBytes, Buffer.from(await input.file.arrayBuffer()));
-  assert.deepEqual(fixture.acknowledged.map((chunk) => chunk.id), sourceChunks.map((chunk) => chunk.id));
+  const persisted = fixture.blobs.get(version.blob_id);
+  assert.deepEqual(Buffer.from(await persisted.arrayBuffer()), Buffer.from(await input.file.arrayBuffer()));
+  assert.deepEqual(fixture.acknowledged, [version.blob_id]);
   const ackIndex = fixture.events.indexOf('source-ack');
   assert.ok(ackIndex >= 0);
   for (const name of ['spreadsheet_versions', 'spreadsheets']) {
-    assert.ok(fixture.events.indexOf(`insert:${name}`) > ackIndex,
+    assert.ok(fixture.events.indexOf(`put:${name}`) > ackIndex,
       `${name} must not publish a source reference before acknowledgement`);
   }
   const reopened = await hooks.openSpreadsheetFile(fixture.remount(), input);
@@ -669,6 +516,24 @@ test('snapshot digest is checked before reusing a matching saved report', async 
   }), (error) => error.code === 'SPREADSHEET_LINEAGE_REQUIRED');
   assert.deepEqual(fixture.writes, []);
   assert.deepEqual(fixture.acknowledged, []);
+});
+
+// FIX5: Die Digest-Prüfung steht genau einmal (openSpreadsheetFile, vor Wiederverwendung und Import). Ein
+// gespeicherter Bericht mit derselben (falschen) Beschreibung würde ohne sie wiederverwendet, ein neuer ohne sie
+// angelegt – beide Wege müssen ablehnen.
+test('snapshot digest guards reuse of a saved report with the same stale descriptor', async () => {
+  const input = await snapshotReportInput();
+  const stale = { ...input.report_snapshot, file_sha256: '0'.repeat(64) };
+  const fixture = snapshotReportState([{
+    id: 'stale-report', source_sha256: input.report_snapshot.file_sha256,
+    source_kind: 'research_generated', ingestion_kind: 'research_generated',
+    knowledge_lineage: { open_purpose: 'snapshot_report', evidence_eligible: false, report_snapshot: stale },
+  }]);
+  fixture.state.selectedId = '';
+  await assert.rejects(hooks.openSpreadsheetFile(fixture.state, { ...input, report_snapshot: stale }),
+    (error) => error.code === 'SPREADSHEET_LINEAGE_REQUIRED');
+  assert.equal(fixture.state.selectedId, '', 'the stale saved report is not opened');
+  assert.deepEqual(fixture.writes, []);
 });
 
 test('snapshot purpose cannot turn an unresolved source file into an import', async () => {
@@ -733,71 +598,37 @@ test('CSV serialization quotes only when required, preserving numeric round-trip
   );
 });
 
-test('spreadsheet blob chunks are persisted with one bulk write', async () => {
-  const bulkWrites = [];
-  let acknowledged = false;
-  const blobChunks = {
-    bulkUpsert: async (docs) => {
-      bulkWrites.push(docs);
-      return docs.map(row => ({ toJSON: () => ({ ...row, _meta: { lwt: Date.now() } }) }));
-    },
-    insert: async () => { throw new Error('spreadsheet_blob_chunks insert must not run per chunk'); },
-  };
-  const ctx = {
-    sync: { async leaseCollection() { return { bridge: { state: {
-      async waitForOpenPeerId() { return 'native'; },
-      async pushDocumentsToPeer(_peer, rows) { assert.equal(rows.length, bulkWrites[0].length); acknowledged = true; },
-    } }, async release() {} }; } },
-    db: {
-      collection(name) {
-        if (name === 'spreadsheet_blob_chunks') return blobChunks;
-        return {};
-      },
-    },
-  };
-
+test('spreadsheet bytes are persisted as one file through api.files', async () => {
+  // App-API 4.0: keine spreadsheet_blob_chunks mehr; die Bytes gehen als EIN Blob über api.files.put, die Referenz
+  // wird erst nach der lokalen Annahme (handle.local) zurückgegeben.
+  const puts = [];
+  let accepted = false;
+  const api = { files: { put(blob, meta) {
+    puts.push({ blob, meta });
+    // Lokale Annahme kommt später als die Referenz: wer nicht auf `local` wartet, gibt die Referenz zu früh heraus.
+    return { local: new Promise((resolve) => setTimeout(() => { accepted = true; resolve(); }, 5)), ref: Promise.resolve('sha-ref') };
+  } } };
   const bytes = new Uint8Array(260 * 1024);
   bytes.fill(67);
-  await hooks.saveBlobChunks(ctx, {
+  const out = await hooks.saveBlobChunks({ api }, {
     blobId: 'sheet_blob_bulk',
     spreadsheetId: 'sheet_bulk',
     versionId: 'sheet_version_bulk',
     mimeType: 'application/octet-stream',
     bytes,
+    name: 'bulk.xlsx',
   });
-
-  assert.equal(bulkWrites.length, 1, 'blob chunks are written through one bulkUpsert call');
-  assert.ok(bulkWrites[0].length > 1, 'test payload spans multiple chunk documents');
-  assert.equal(acknowledged, true, 'source bytes are acknowledged before exposing references');
-});
-
-test('empty spreadsheet explorer shows syncing only while the collection is unready', () => {
-  const unready = { collection: 'spreadsheets', state: 'catching-up', ready: false, syncing: true, updatedAt: 0 };
-  const offlinePending = { collection: 'spreadsheets', state: 'offline-pending', ready: false, syncing: false, updatedAt: 0 };
-  const live = { collection: 'spreadsheets', state: 'live', ready: true, syncing: false, updatedAt: 1 };
-
-  // Empty + unready ⇒ syncing shell (render hint, includes offline-pending).
-  assert.equal(hooks.shouldRenderSpreadsheetsSyncing({ spreadsheets: [], spreadsheetsReadiness: unready }), true);
-  assert.equal(hooks.shouldRenderSpreadsheetsSyncing({ spreadsheets: [], spreadsheetsReadiness: offlinePending }), true);
-  // Empty + ready ⇒ regular ctox-empty.
-  assert.equal(hooks.shouldRenderSpreadsheetsSyncing({ spreadsheets: [], spreadsheetsReadiness: live }), false);
-  // Rows always win, regardless of readiness.
-  assert.equal(hooks.shouldRenderSpreadsheetsSyncing({ spreadsheets: [{ id: 'sheet_1' }], spreadsheetsReadiness: unready }), false);
-  // No readiness signal (older shells/tests) keeps the previous empty behaviour.
-  assert.equal(hooks.shouldRenderSpreadsheetsSyncing({ spreadsheets: [] }), false);
-  // Fallback reads the canonical shell API when no snapshot is cached.
-  assert.equal(
-    hooks.shouldRenderSpreadsheetsSyncing({
-      spreadsheets: [],
-      ctx: { sync: { collectionReadiness: (name) => (name === 'spreadsheets' ? unready : null) } },
-    }),
-    true,
-  );
+  assert.equal(puts.length, 1, 'bytes are written through one api.files.put call');
+  assert.equal(puts[0].blob.size, bytes.byteLength);
+  assert.equal(puts[0].meta.id, 'sheet_blob_bulk');
+  assert.equal(accepted, true, 'the reference is exposed only after the local acceptance');
+  assert.deepEqual(out, { blob_id: 'sheet_blob_bulk', ref: 'sha-ref' });
 });
 
 test('spreadsheets context menu remains scoped to the mounted module host', async () => {
   const source = await fs.readFile(new URL('./index.js', import.meta.url), 'utf8');
-  assert.match(source, /const moduleHost = state\.ctx\?\.host/);
+  // v4: Kontextmenü hängt am Fenster-Root aus mount(root, api).
+  assert.match(source, /const moduleHost = state\.root;/);
   assert.match(source, /moduleHost\.append\(menu\)/);
   assert.doesNotMatch(source, /document\.body\.append\(menu\)/);
 });

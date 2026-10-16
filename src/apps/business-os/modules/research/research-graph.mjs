@@ -12,7 +12,7 @@ import {
   SpriteMaterial,
   SpriteText,
   Vector3,
-} from '../../vendor/research-graph.mjs';
+} from './vendor/research-graph.mjs';
 
 const BACKGROUND = '#0c0e0f';
 const MUTED = '#66717a';
@@ -510,7 +510,7 @@ function assertWebGlSupport() {
     || canvas.getContext('webgl2')
     || canvas.getContext('webgl', { failIfMajorPerformanceCaveat: true })
     || canvas.getContext('webgl');
-  if (!context) throw new Error('WebGL ist auf diesem Gerät nicht verfügbar.');
+  if (!context) throw new Error('WebGL fehlt auf diesem Gerät.');
   context.getExtension?.('WEBGL_lose_context')?.loseContext?.();
   canvas.width = 0;
   canvas.height = 0;

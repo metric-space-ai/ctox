@@ -3,7 +3,18 @@ import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-import { build } from 'esbuild';
+import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
+import { join as joinPath } from 'node:path';
+// Lader (OLDTEST): esbuild aus dem Klon, sonst ESBUILD_MODULE, sonst aus dem Haupt-Checkout
+// ~/Documents/ctox/src/apps/business-os/node_modules (wie die v4-api-Tests mit PLAYWRIGHT_MODULE). Nicht installieren.
+const requireDev = createRequire(import.meta.url);
+function loadDev(name, envVar) {
+  try { return requireDev(name); } catch {
+    return requireDev(process.env[envVar] || joinPath(homedir(), 'Documents/ctox/src/apps/business-os/node_modules', name));
+  }
+}
+const { build } = loadDev('esbuild', 'ESBUILD_MODULE');
 
 async function importBrowserBundle(relativePath) {
   const bundledModule = await build({
@@ -12,6 +23,13 @@ async function importBrowserBundle(relativePath) {
     format: 'esm',
     platform: 'browser',
     write: false,
+    // Wie der Service Worker (§16.15): ctox:shared/x.js → Shell-Pfad.
+    plugins: [{
+      name: 'ctox-shared',
+      setup(b) {
+        b.onResolve({ filter: /^ctox:shared\// }, (args) => ({ path: fileURLToPath(new URL(`../../shared/${args.path.slice('ctox:shared/'.length)}`, import.meta.url)) }));
+      },
+    }],
   });
 
   const [{ text: bundledSource }] = bundledModule.outputFiles;
@@ -19,11 +37,11 @@ async function importBrowserBundle(relativePath) {
 }
 
 const {
+  codeViewTargetFor,
   filterReportItems,
+  isCodingRunning,
   normalizeReportItems,
   resolveReportsContextRecord,
-  resolveReportsDataState,
-  showReportNotification,
 } = await importBrowserBundle('./index.js');
 
 const t = (_key, fallback) => fallback;
@@ -134,36 +152,16 @@ test('reads JSON encoded payload and client context fields', () => {
   assert.equal(items[0].attachment.capture_mode, 'viewport');
 });
 
-test('gates data empties on canonical readiness: unready renders syncing, ready renders empty', () => {
-  // Rows always win — even while a collection is still catching up.
-  assert.equal(resolveReportsDataState({ sourceCount: 2, readiness: { ready: false, syncing: true } }), 'content');
-  // Empty source + not ready (never-synced / catching-up / offline-pending) => syncing shell.
-  assert.equal(resolveReportsDataState({ sourceCount: 0, readiness: { ready: false, syncing: true } }), 'syncing');
-  assert.equal(resolveReportsDataState({ sourceCount: 0, readiness: { ready: false, syncing: false } }), 'syncing');
-  // Empty source + live => real empty state.
-  assert.equal(resolveReportsDataState({ sourceCount: 0, readiness: { ready: true, syncing: false } }), 'empty');
-  // No readiness facade (legacy ctx) => previous behaviour: plain empty.
-  assert.equal(resolveReportsDataState({ sourceCount: 0, readiness: null }), 'empty');
-});
-
-test('delegation feedback uses the shell notification contract', () => {
-  const shown = [];
-  showReportNotification({
-    show(options) {
-      shown.push(options);
-      return 'toast-1';
-    },
-  }, {
-    type: 'error',
-    title: 'Delegation fehlgeschlagen',
-    message: 'Native write rejected.',
-  });
-
-  assert.deepEqual(shown, [{
-    type: 'error',
-    title: 'Delegation fehlgeschlagen',
-    message: 'Native write rejected.',
-  }]);
+test('v4: empty data renders no state text; feedback goes to the status zone only', async () => {
+  const js = await readFile(new URL('./index.js', import.meta.url), 'utf8');
+  // Leere Liste rendert nichts, kein Syncing-/Leer-Kasten (PORTING.md R11).
+  assert.doesNotMatch(js, /ctox-syncing|ctox-empty|role="status"/);
+  assert.doesNotMatch(js, /collectionReadiness|subscribeCollectionReadiness|startCollection|restartCollections/);
+  assert.match(js, /list\.replaceChildren\(\)/);
+  // Rückmeldungen nur über api.status.report / clear, nie über ctx.notifications.
+  assert.doesNotMatch(js, /notifications/);
+  assert.match(js, /status\.report\(\{ level: 'error', code, text: failText/);
+  assert.match(js, /api\.status\.clear\(code\)/);
 });
 
 test('right-click context resolves the clicked report before selected fallback', () => {
@@ -187,23 +185,33 @@ test('right-click context resolves the clicked report before selected fallback',
   }).id, 'selected-report');
 });
 
-test('module wires canonical collection readiness for the data-driven empty states', async () => {
+test('v4: data only through api.query, commands through api.command without waiting', async () => {
   const js = await readFile(new URL('./index.js', import.meta.url), 'utf8');
+  assert.match(js, /export async function mount\(root, api, \{ restored \} = \{\}\)/);
+  assert.match(js, /api\.query\(name, \{\}\)\.subscribe/);
+  assert.match(js, /api\.command\(commandType,/);
+  assert.doesNotMatch(js, /commandBus|until: 'accepted'|\.find\(\)\.exec\(\)|state\.ctx/);
+  // LOOP Runde 2: Übergabe an den Coding Agent nur über die Code-Ansicht der Ziel-App, keine threads-Freigabe mehr.
+  assert.match(js, /state\.api\?\.shell\.openSource\(appId, options\)/);
+  assert.doesNotMatch(js, /threads\.ctox_approval\.request|target_command_type|ctox_task_approval_requests/);
+});
 
-  // Canonical shell API: snapshot + subscription on the two data collections
-  // that merge into the report list.
-  assert.match(js, /sync\?\.collectionReadiness/);
-  assert.match(js, /sync\?\.subscribeCollectionReadiness/);
-  assert.match(js, /REPORT_DATA_COLLECTIONS\.map\(\(name\) => subscribe\.call/);
-  // Syncing shell is the kit class with status semantics; filter/selection
-  // empties keep ctox-empty.
-  assert.match(js, /class="ctox-syncing" role="status" aria-live="polite"/);
-  assert.match(js, /resolveReportsDataState\(\{ sourceCount: allItems\.length, readiness: reportsDataReadiness\(\) \}\)/);
-  assert.match(js, /state\.ctx\.session\?\.user\?\.id/);
+test('LOOP Runde 2: Übergabe öffnet die Code-Ansicht der Ziel-App auf der Meldung; „In Arbeit“ aus coding_turn_id', () => {
+  const [item] = normalizeReportItems({ reports: [{ id: 'rep-7', report_id: 'rep-7', module_id: 'notes', kind: 'bug', title: 'x', status: 'open', coding_turn_id: 'turn-9' }] });
+  assert.equal(item.status, 'running');
+  assert.equal(item.codingTurnId, 'turn-9');
+  assert.equal(isCodingRunning(item), true);
+  assert.deepEqual(codeViewTargetFor(item), { appId: 'notes', options: { tab: 'reports', reportId: 'rep-7' } });
+  const [plain] = normalizeReportItems({ reports: [{ id: 'rep-8', module_id: 'notes', status: 'open' }] });
+  assert.equal(plain.status, 'open');
+  assert.equal(isCodingRunning(plain), false);
+  const [done] = normalizeReportItems({ reports: [{ id: 'rep-9', module_id: 'notes', status: 'completed', coding_turn_id: 'turn-1' }] });
+  assert.equal(done.status, 'completed');
+  assert.equal(isCodingRunning(done), false);
 });
 
 test('presentation layer stays compact and shell-native', async () => {
-  const css = await readFile(new URL('./index.css', import.meta.url), 'utf8');
+  const css = (await readFile(new URL('./index.css', import.meta.url), 'utf8')).replaceAll('[data-app="reports"] ', ''); // v4-Scope (scope-css.mjs --check prüft ihn)
   const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
   const source = `${css}\n${html}`;
   const forbiddenSurfacePattern = new RegExp(['ctox-pane--gla' + 'ss', 'Prem' + 'ium', 'gla' + 'ss'].join('|'), 'i');
@@ -241,7 +249,8 @@ test('presentation layer stays compact and shell-native', async () => {
   assert.match(at768, /\[data-resizer\][\s\S]*display: none !important/);
   // Stacked, the rail header is the ONLY head of the top row: it has to keep
   // the icon zone (80px, left) and the window controls (74x74, right) free.
-  assert.match(at768, /\.reports-rail > \.ctox-pane-header,[\s\S]{0,120}?\.reports-rail > \.ctox-filterbar \{\s*padding-right: 70px/);
+  // v4: der Abstand kommt aus der Shell-Variable mit 70px-Rückfall (Shell-v2-Kopfzone, DEBT D-004).
+  assert.match(at768, /\.reports-rail > \.ctox-pane-header,[\s\S]{0,120}?\.reports-rail > \.ctox-filterbar \{\s*padding-right: (?:70px|var\(--shell-v2-control-inset, 70px\));/);
   // Decorative helpers from the previous layout are gone — the icon button's
   // aria-label/title is the single source of the accessible name.
   assert.doesNotMatch(css, /\.reports-sr-only/);
@@ -249,7 +258,7 @@ test('presentation layer stays compact and shell-native', async () => {
 });
 
 test('rail chrome is shell grammar: search, view toggle, tray, counted band, footer', async () => {
-  const css = await readFile(new URL('./index.css', import.meta.url), 'utf8');
+  const css = (await readFile(new URL('./index.css', import.meta.url), 'utf8')).replaceAll('[data-app="reports"] ', ''); // v4-Scope (scope-css.mjs --check prüft ihn)
   const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
   const js = await readFile(new URL('./index.js', import.meta.url), 'utf8');
   const manifest = JSON.parse(await readFile(new URL('./module.json', import.meta.url), 'utf8'));
@@ -345,10 +354,10 @@ test('rail chrome is shell grammar: search, view toggle, tray, counted band, foo
   assert.match(js, /aria-selected/);
   assert.match(js, /renderList\(\{ resetScroll = false \} = \{\}\)/);
 
-  // Cache-buster contract: markup + stylesheet inherit the JS ?v= buster.
+  // v4 (§16.15): markup relativ ohne Cache-Buster; das Stylesheet lädt die Shell aus dem Manifest.
   assert.match(js, /async function loadModuleMarkup\(\)/);
-  assert.match(js, /\?v=\$\{version\}/);
-  assert.match(js, /link\.dataset\.reportsStyle = 'true'/);
+  assert.match(js, /fetch\(new URL\('\.\/index\.html', import\.meta\.url\)\)/);
+  assert.doesNotMatch(js, /\?v=|ensureStyles|data-reports-style/);
 
   // Manifest: semantic version + documented third pane.
   assert.match(manifest.layout.third_pane_justification, /Aktion/);
@@ -357,10 +366,10 @@ test('rail chrome is shell grammar: search, view toggle, tray, counted band, foo
   // No web-storage state — filters live in module state, data in RxDB.
   assert.doesNotMatch(js, /localStorage|sessionStorage/);
 
-  // Context actions stay inside this mounted module instance.
-  assert.match(js, /const moduleHost = state\.ctx\?\.host/);
-  assert.match(js, /moduleHost\.append\(menu\)/);
-  assert.doesNotMatch(js, /document\.body\.append\(menu\)/);
+  // Nichts außerhalb des App-Fensters: kein eigener Dialog mehr (Übergabe = Code-Ansicht der Ziel-App, LOOP Runde 2),
+  // keine Fenster-/Dokument-Ereignisse.
+  assert.doesNotMatch(js, /data-delegate-modal|ctox-modal/);
+  assert.doesNotMatch(js, /document\.body\.append|window\.addEventListener|window\.dispatchEvent|location\.hash/);
 });
 
 let passed = 0;

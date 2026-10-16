@@ -1,0 +1,648 @@
+[
+ {
+  "id": "app-store",
+  "theme": "light",
+  "ok": true,
+  "checked": 30,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "app-store",
+  "theme": "dark",
+  "ok": true,
+  "checked": 30,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "appsec-pentest",
+  "theme": "light",
+  "ok": true,
+  "checked": 120,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "appsec-pentest",
+  "theme": "dark",
+  "ok": true,
+  "checked": 120,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "browser",
+  "theme": "light",
+  "ok": true,
+  "checked": 100,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "browser",
+  "theme": "dark",
+  "ok": true,
+  "checked": 100,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "buchhaltung",
+  "theme": "light",
+  "ok": true,
+  "checked": 125,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "buchhaltung",
+  "theme": "dark",
+  "ok": true,
+  "checked": 125,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "calendar",
+  "theme": "light",
+  "ok": true,
+  "checked": 54,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "calendar",
+  "theme": "dark",
+  "ok": true,
+  "checked": 54,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "coding-agents",
+  "theme": "light",
+  "ok": true,
+  "checked": 2,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "coding-agents",
+  "theme": "dark",
+  "ok": true,
+  "checked": 2,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "consent",
+  "theme": "light",
+  "ok": true,
+  "checked": 66,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "consent",
+  "theme": "dark",
+  "ok": true,
+  "checked": 66,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "conversations",
+  "theme": "light",
+  "ok": true,
+  "checked": 112,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "conversations",
+  "theme": "dark",
+  "ok": true,
+  "checked": 112,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "creator",
+  "theme": "light",
+  "ok": true,
+  "checked": 31,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "creator",
+  "theme": "dark",
+  "ok": true,
+  "checked": 31,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "credentials",
+  "theme": "light",
+  "ok": true,
+  "checked": 16,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "credentials",
+  "theme": "dark",
+  "ok": true,
+  "checked": 16,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "ctox",
+  "theme": "light",
+  "ok": true,
+  "checked": 116,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "ctox",
+  "theme": "dark",
+  "ok": true,
+  "checked": 116,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "customers",
+  "theme": "light",
+  "ok": true,
+  "checked": 110,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "customers",
+  "theme": "dark",
+  "ok": true,
+  "checked": 110,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "cv-print-builder",
+  "theme": "light",
+  "ok": true,
+  "checked": 78,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "cv-print-builder",
+  "theme": "dark",
+  "ok": true,
+  "checked": 78,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "desktop",
+  "theme": "light",
+  "ok": true,
+  "checked": 32,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "desktop",
+  "theme": "dark",
+  "ok": true,
+  "checked": 32,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "documents",
+  "theme": "light",
+  "ok": true,
+  "checked": 5,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "documents",
+  "theme": "dark",
+  "ok": true,
+  "checked": 5,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "esign",
+  "theme": "light",
+  "ok": true,
+  "checked": 62,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "esign",
+  "theme": "dark",
+  "ok": true,
+  "checked": 62,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "explorer",
+  "theme": "light",
+  "ok": true,
+  "checked": 112,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "explorer",
+  "theme": "dark",
+  "ok": true,
+  "checked": 112,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "file-viewer",
+  "theme": "light",
+  "ok": true,
+  "checked": 3,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "file-viewer",
+  "theme": "dark",
+  "ok": true,
+  "checked": 3,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "importer",
+  "theme": "light",
+  "ok": true,
+  "checked": 13,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "importer",
+  "theme": "dark",
+  "ok": true,
+  "checked": 13,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "intake",
+  "theme": "light",
+  "ok": true,
+  "checked": 58,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "intake",
+  "theme": "dark",
+  "ok": true,
+  "checked": 58,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "interviews",
+  "theme": "light",
+  "ok": true,
+  "checked": 58,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "interviews",
+  "theme": "dark",
+  "ok": true,
+  "checked": 58,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "invoices",
+  "theme": "light",
+  "ok": true,
+  "checked": 112,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "invoices",
+  "theme": "dark",
+  "ok": true,
+  "checked": 112,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "iot",
+  "theme": "light",
+  "ok": true,
+  "checked": 15,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "iot",
+  "theme": "dark",
+  "ok": true,
+  "checked": 15,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "knowledge",
+  "theme": "light",
+  "ok": true,
+  "checked": 80,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "knowledge",
+  "theme": "dark",
+  "ok": true,
+  "checked": 80,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "kundenpipeline",
+  "theme": "light",
+  "ok": true,
+  "checked": 25,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "kundenpipeline",
+  "theme": "dark",
+  "ok": true,
+  "checked": 25,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "mail",
+  "theme": "light",
+  "ok": true,
+  "checked": 17,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "mail",
+  "theme": "dark",
+  "ok": true,
+  "checked": 17,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "matching",
+  "theme": "light",
+  "ok": true,
+  "checked": 19,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "matching",
+  "theme": "dark",
+  "ok": true,
+  "checked": 19,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "nachweise",
+  "theme": "light",
+  "ok": true,
+  "checked": 69,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "nachweise",
+  "theme": "dark",
+  "ok": true,
+  "checked": 69,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "news",
+  "theme": "light",
+  "ok": true,
+  "checked": 56,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "news",
+  "theme": "dark",
+  "ok": true,
+  "checked": 56,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "notes",
+  "theme": "light",
+  "ok": true,
+  "checked": 26,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "notes",
+  "theme": "dark",
+  "ok": true,
+  "checked": 26,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "outbound-lead-generation",
+  "ok": false,
+  "skipped": true,
+  "error": "keine Laborkonfiguration: ENOENT: no such file or directory, scandir '/Users/michaelwelsch/Documents/ctox-shell-v4/src/apps/business-os/modules/ou"
+ },
+ {
+  "id": "outbound",
+  "theme": "light",
+  "ok": true,
+  "checked": 152,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "outbound",
+  "theme": "dark",
+  "ok": true,
+  "checked": 152,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "placements",
+  "theme": "light",
+  "ok": true,
+  "checked": 57,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "placements",
+  "theme": "dark",
+  "ok": true,
+  "checked": 57,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "reports",
+  "theme": "light",
+  "ok": true,
+  "checked": 118,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "reports",
+  "theme": "dark",
+  "ok": true,
+  "checked": 118,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "research",
+  "theme": "light",
+  "ok": true,
+  "checked": 16,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "research",
+  "theme": "dark",
+  "ok": true,
+  "checked": 16,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "shiftflow",
+  "theme": "light",
+  "ok": true,
+  "checked": 84,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "shiftflow",
+  "theme": "dark",
+  "ok": true,
+  "checked": 84,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "spreadsheets",
+  "theme": "light",
+  "ok": true,
+  "checked": 2,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "spreadsheets",
+  "theme": "dark",
+  "ok": true,
+  "checked": 2,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "submissions",
+  "theme": "light",
+  "ok": true,
+  "checked": 59,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "submissions",
+  "theme": "dark",
+  "ok": true,
+  "checked": 59,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "support",
+  "theme": "light",
+  "ok": true,
+  "checked": 57,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "support",
+  "theme": "dark",
+  "ok": true,
+  "checked": 57,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "threads",
+  "theme": "light",
+  "ok": true,
+  "checked": 16,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "threads",
+  "theme": "dark",
+  "ok": true,
+  "checked": 16,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "tickets",
+  "theme": "light",
+  "ok": true,
+  "checked": 142,
+  "low": [],
+  "token": []
+ },
+ {
+  "id": "tickets",
+  "theme": "dark",
+  "ok": true,
+  "checked": 142,
+  "low": [],
+  "token": []
+ }
+]

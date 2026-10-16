@@ -85,6 +85,10 @@ test('every exclusion is explicit and diagnostic exceptions stay path-scoped', (
   assert.match(exclusionReason('src/apps/business-os/rxdb/src/index.mjs'), /data-plane/i);
   assert.match(exclusionReason('src/apps/business-os/installed-modules/customer/index.js'), /customer/i);
   assert.equal(exclusionReason('src/apps/business-os/modules/notes/index.js'), null);
+  assert.match(exclusionReason('src/apps/business-os/modules/mail/vendor/easy-email-editor/bundle/assets/frame.js'), /third-party/i);
+  assert.match(exclusionReason('src/apps/business-os/customer-modules/outbound-lead-generation/vendor/jszip/jszip.mjs'), /third-party/i);
+  assert.equal(exclusionReason('src/apps/business-os/modules/notes/ui/vendor/own.js'), null);
+  assert.equal(exclusionReason('src/apps/business-os/modules/vendor.js'), null);
   for (const exception of [...TECHNICAL_DIAGNOSTIC_CONTEXTS, ...INTERNAL_COPY_CONTEXTS]) {
     assert.ok(exception.path);
     assert.ok(exception.context instanceof RegExp);

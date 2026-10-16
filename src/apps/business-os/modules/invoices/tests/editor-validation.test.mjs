@@ -5,120 +5,13 @@
 //   - the published computeValidationIssues helper gates the post button
 //   - createDraft refuses to dispatch when no customer is available
 //
-// We reuse the same esbuild + fake-DOM scaffolding as mount-unmount.test.mjs.
+// We reuse the same fake-DOM + App-API 4.0 scaffolding as mount-unmount.test.mjs (_v4-node.mjs).
 // Driving the full DOM-click flow in the shim is brittle, so we focus on
 // the validation contract that ties the UI gate to the native gate.
 
 import { strict as assert } from 'node:assert';
 import test from 'node:test';
-import { build } from 'esbuild';
-import { Buffer } from 'node:buffer';
-
-const SOURCE = new URL('../index.js', import.meta.url);
-
-function makeSubject() {
-  const subscribers = new Set();
-  return {
-    subscribe(fn) {
-      subscribers.add(fn);
-      return { unsubscribe() { subscribers.delete(fn); } };
-    },
-    emit(payload) { for (const fn of subscribers) fn(payload); },
-  };
-}
-
-function makeCollection(initialDocs = []) {
-  const subject = makeSubject();
-  let docs = initialDocs.map((d) => ({ ...d }));
-  return {
-    $: subject,
-    find() {
-      return {
-        async exec() {
-          return docs
-            .filter((d) => d && d._deleted !== true && d.is_deleted !== true)
-            .map((d) => ({ toJSON: () => d }));
-        },
-      };
-    },
-  };
-}
-
-function makeFakeDocument() {
-  const elements = new Map();
-  return {
-    createElement(tag) {
-      const dataset = {};
-      const attrs = {};
-      const node = {
-        tagName: tag.toUpperCase(),
-        className: '',
-        innerHTML: '',
-        textContent: '',
-        children: [],
-        style: {},
-        dataset,
-        classList: {
-          _set: new Set(),
-          add(c) { this._set.add(c); },
-          remove(c) { this._set.delete(c); },
-          contains(c) { return this._set.has(c); },
-        },
-        appendChild(c) { this.children.push(c); return c; },
-        replaceChildren() { this.children = []; },
-        addEventListener() {},
-        setAttribute(k, v) { attrs[k] = v; },
-      };
-      Object.defineProperty(node, 'disabled', {
-        get() { return !!attrs.disabled; },
-        set(v) { attrs.disabled = v; },
-      });
-      return node;
-    },
-    getElementById(id) {
-      if (!elements.has(id)) {
-        const el = this.createElement('div');
-        el.id = id;
-        elements.set(id, el);
-      }
-      return elements.get(id);
-    },
-    head: { append() {} },
-    body: { innerHTML: '' },
-  };
-}
-
-function makeFakeWindow() {
-  return {
-    setTimeout(fn, ms) {
-      const id = { cleared: false };
-      const handle = setTimeout(() => {
-        if (!id.cleared) fn();
-      }, ms || 0);
-      id.handle = handle;
-      return id;
-    },
-    clearTimeout(id) {
-      if (id && id.handle) clearTimeout(id.handle);
-      if (id) id.cleared = true;
-    },
-  };
-}
-
-async function buildInvoicesModule() {
-  const result = await build({
-    entryPoints: [SOURCE.pathname],
-    bundle: true,
-    format: 'esm',
-    platform: 'browser',
-    target: 'es2020',
-    write: false,
-    external: ['node:*'],
-    logLevel: 'silent',
-  });
-  const code = result.outputFiles[0].text;
-  return await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
-}
+import { loadInvoicesModule, makeApi, withFakeDom } from './_v4-node.mjs';
 
 test('computeValidationIssues flags empty party_id and missing lines', async () => {
   const issues = (await import('../core/invoice-validate.js')).validateInvoice;
@@ -194,92 +87,30 @@ test('computeValidationIssues mirrors the native gate for reverse_charge and sko
 });
 
 test('mount publishes a debug handle so the shell can drive tests / inspect state', async () => {
-  const fakeDoc = makeFakeDocument();
-  const fakeWin = makeFakeWindow();
-  const originalWindow = globalThis.window;
-  const originalDocument = globalThis.document;
-  globalThis.window = fakeWin;
-  globalThis.document = fakeDoc;
-  const watched = {
-    accounting_invoices: makeCollection([]),
-    accounting_invoice_lines: makeCollection(),
-    accounting_payments: makeCollection(),
-    accounting_payment_allocations: makeCollection(),
-    accounting_dunning_runs: makeCollection(),
-    accounting_dunning_letters: makeCollection(),
-    accounting_journal_entries: makeCollection(),
-    accounting_journal_entry_lines: makeCollection(),
-    customer_accounts: makeCollection([]),
-  };
-  try {
-    const mod = await buildInvoicesModule();
-    const ctx = {
-      db: { collection: (name) => watched[name] || null },
-      commandBus: { dispatch: async () => ({ status: 'completed' }) },
-      eventBus: { on: () => () => {} },
-      modules: [
-        { id: 'buchhaltung', installed: true },
-        { id: 'customers', installed: true },
-      ],
-      host: fakeDoc.createElement('div'),
-      left: fakeDoc.createElement('aside'),
-      right: fakeDoc.createElement('aside'),
-    };
-    const unmount = await mod.mount(ctx);
+  await withFakeDom(async (fakeDoc) => {
+    const mod = await loadInvoicesModule();
+    const t = await makeApi({});
+    const handle = await mod.mount(fakeDoc.createElement('div'), t.api, {});
     assert.ok(globalThis.window.__ctoxInvoicesModule, 'module must publish __ctoxInvoicesModule');
     assert.equal(typeof globalThis.window.__ctoxInvoicesModule.mount, 'function');
     assert.equal(typeof globalThis.window.__ctoxInvoicesModule.inspect, 'function');
     const snapshot = globalThis.window.__ctoxInvoicesModule.inspect();
     assert.equal(snapshot.mounted, true);
-    assert.equal(snapshot.last_error, '');
-    unmount();
-  } finally {
-    if (originalWindow === undefined) delete globalThis.window; else globalThis.window = originalWindow;
-    if (originalDocument === undefined) delete globalThis.document; else globalThis.document = originalDocument;
-  }
+    // v4: no error strip in the content — problems go to the status zone only.
+    assert.equal(Object.hasOwn(snapshot, 'last_error'), false);
+    assert.equal(t.zone.size, 0);
+    handle.unmount();
+  });
 });
 
 test('mount does not dispatch any command when no parties are available', async () => {
-  const fakeDoc = makeFakeDocument();
-  const fakeWin = makeFakeWindow();
-  const originalWindow = globalThis.window;
-  const originalDocument = globalThis.document;
-  globalThis.window = fakeWin;
-  globalThis.document = fakeDoc;
-  const watched = {
-    accounting_invoices: makeCollection([]),
-    accounting_invoice_lines: makeCollection(),
-    accounting_payments: makeCollection(),
-    accounting_payment_allocations: makeCollection(),
-    accounting_dunning_runs: makeCollection(),
-    accounting_dunning_letters: makeCollection(),
-    accounting_journal_entries: makeCollection(),
-    accounting_journal_entry_lines: makeCollection(),
-    customer_accounts: makeCollection([]), // empty CRM
-  };
-  let dispatched = 0;
-  try {
-    const mod = await buildInvoicesModule();
-    const ctx = {
-      db: { collection: (name) => watched[name] || null },
-      commandBus: { dispatch: async () => { dispatched += 1; return { status: 'completed' }; } },
-      eventBus: { on: () => () => {} },
-      modules: [
-        { id: 'buchhaltung', installed: true },
-        { id: 'customers', installed: true },
-      ],
-      host: fakeDoc.createElement('div'),
-      left: fakeDoc.createElement('aside'),
-      right: fakeDoc.createElement('aside'),
-    };
-    const unmount = await mod.mount(ctx);
+  await withFakeDom(async (fakeDoc) => {
+    const mod = await loadInvoicesModule();
+    const t = await makeApi({}); // empty CRM
+    const handle = await mod.mount(fakeDoc.createElement('div'), t.api, {});
     // Mount does not dispatch any command on its own (the createDraft click
     // handler is the one that would, and we cannot fire it from the shim).
-    // The contract we assert is: the commandBus has not been called.
-    assert.equal(dispatched, 0, 'mount itself must not dispatch any business command');
-    unmount();
-  } finally {
-    if (originalWindow === undefined) delete globalThis.window; else globalThis.window = originalWindow;
-    if (originalDocument === undefined) delete globalThis.document; else globalThis.document = originalDocument;
-  }
+    assert.equal(t.commands.length, 0, 'mount itself must not dispatch any business command');
+    handle.unmount();
+  });
 });

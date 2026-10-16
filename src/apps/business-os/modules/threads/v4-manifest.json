@@ -1,0 +1,58 @@
+{
+  "_basis": {
+    "command_rights": "modules/threads/V4-HANDLERS.md „Zulassung vor dem Handler“ (command_plane.rs:1428-1546, :1224)",
+    "commands_out": "aus dem Code abgeleitet (handlers/_approval_targets.js APPROVAL_CALLBACKS, Strang THR2, §16.40; Ziel ctox.coding.turn entfernt in LOOP Runde 2, §16.44; Rückruf an reports entfernt in FIX10, Liste leer) – keine Deklaration",
+    "foreign_collections": "modules/threads/V4-PORT.md OFFEN 2",
+    "multi_instance": "modules/threads/V4-PORT.md OFFEN 7; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)"
+  },
+  "_format": "ctox-shell-v4-app-declaration-1",
+  "_note": "Deklaration für gen-manifest.mjs (Strang MAN): nur Angaben, die sich nicht aus dem Code ableiten lassen. _basis = Fundstelle je Feld.",
+  "_proposed_triggers": {
+    "basis": "modules/threads/V4-HANDLERS.md §4 W-4 (Projektions-Handler, Vorschlag; Vertrag kennt nur triggers §16.20)",
+    "proposals": [
+      {
+        "handler": "handlers/_projection.ctox_relevance.js",
+        "sources": [
+          "business_commands",
+          "ctox_queue_tasks"
+        ]
+      },
+      {
+        "handler": "handlers/_projection.app_relevance.js",
+        "sources": "14 App-Collections (kundenpipeline, tickets ×4, support ×3, outbound ×2, research ×2, documents, notes)"
+      }
+    ]
+  },
+  "command_rights": {
+    "threads.*": {
+      "_note": "nur authentifizierte Sitzung (alle Rollen aus policy.rs parse_role)",
+      "assigned_users": false,
+      "roles": [
+        "admin",
+        "chef",
+        "founder",
+        "user"
+      ]
+    },
+    "threads.ctox_approval.approve": {
+      "_note": "assigned_to_actor = (reviewer == Akteur)",
+      "_permission": "external.approve",
+      "_scope": "approval:<id>",
+      "assigned_users": true,
+      "roles": []
+    },
+    "threads.ctox_approval.reject": {
+      "_note": "assigned_to_actor = (reviewer == Akteur)",
+      "_permission": "external.approve",
+      "_scope": "approval:<id>",
+      "assigned_users": true,
+      "roles": []
+    }
+  },
+  "foreign_collections": {
+    "workjet_projects": [
+      "read"
+    ]
+  },
+  "multi_instance": false
+}

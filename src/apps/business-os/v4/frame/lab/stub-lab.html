@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shell v4 Rahmen gegen Kern-Stub</title>
+<style>html,body{margin:0;height:100%}</style>
+</head>
+<body>
+<div id="ctox-shell"></div>
+<script type="module">
+// Kern-Stub 67229d2 (§16.19): der Kernel mountet nichts (kein kernel.shell.mount, keine In-Memory-Module bei
+// publishAppVersion). Die Apps montiert die Shell selbst (../../shell/app-host.js), Code kommt über /~a/.
+// URL-Parameter: storage=indexeddb|memory (Standard memory), inst=<instanzname>, multi=1 (Mehr-Tab über Web Locks).
+// shell=bound: der Rahmen lädt wie im echten Ladeweg von der Instanz-URL der Shell, die der Kern baut
+// (kernel.artifacts.bind('shell', 'lab') → /~a/shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/v4/frame/index.js); der
+// Labor-Server liefert sie mit der Umschreibung des SW (v4/lab/sw-lab.mjs), damit ctox:lib/monaco@0/ in editor.js
+// auflöst (Code-Ansicht mit Monaco, v4/source/MONACO.md). Ohne den Parameter: Rohpfad ../index.js (Monaco fällt dann
+// auf die textarea zurück), weil viele Fälle Module per import('/v4/…') als dieselbe Instanz wie den Rahmen ansprechen.
+import { createStubKernel } from '/~stub/ctox-app-api-stub.mjs';
+
+const q = new URLSearchParams(location.search);
+const BOUND = q.get('shell') === 'bound';
+const LAB_LIBS = { 'ctox-office': '1.0', monaco: '0.0' };
+let frameBase = null;
+const storage = q.get('storage') === 'indexeddb' ? 'indexeddb' : 'memory';
+// kernelOpts bleibt als Referenz erreichbar: der Stub liest einzelne Optionen live (z. B. codingDelayMs ab Pin 51b1e33).
+const kernelOpts = { instanceId: q.get('inst') || 'framelab', userId: 'owner', storage, latencyMs: 5, multiTab: q.get('multi') === '1' };
+const kernel = createStubKernel(kernelOpts);
+await kernel.ready;
+// Die integrierte Shell selbst ist das Shell-Modul für den Loader (sim.startShell/swapShell).
+const shellModule = { startShell: (k, o = {}) => frameBase.startShell(k, o), stopShell: () => frameBase.stopShell() };
+// §16.19 Nr. 6: layout + styles im Manifest; der Launcher zeigt Icons und Kategorien daraus.
+const LAYOUT = {
+  notes: { icon_asset: 'icon.svg', category: 'Arbeit' },
+  tasks: { icon_asset: 'icon.svg', category: 'Arbeit', default_width: 700, default_height: 480, min_width: 360, min_height: 260 },
+  ledger: { icon_asset: 'icon.svg', category: 'Finanzen', frame_palette: 'green' },
+  crm: { icon_svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#7b5cc4"/><text x="32" y="42" font-family="system-ui,sans-serif" font-size="28" font-weight="600" fill="#fff" text-anchor="middle">K</text></svg>', category: 'Vertrieb' },
+};
+const publish = (id, ver, title) => kernel.sim.publishAppVersion(id, ver, { title, layout: LAYOUT[id], styles: [] });
+// Zweiter Tab derselben Instanz: Apps sind schon veröffentlicht.
+const known = new Set(kernel.apps.get().map((a) => a.id));
+// K-1d: artifacts.url/bind nehmen die aktive Shell des Kernels; ohne veröffentlichte Shell gibt es keine Instanz-URL.
+// Die Shell-Zeile filtert der Rahmen aus dem Launcher.
+if (BOUND) {
+  // §16.37/§16.39: Bibliotheken als eigene Artefakte lib:<name>@<M.m>, die Shell bindet ihre Majors (manifest.libs).
+  for (const [name, ver] of Object.entries(LAB_LIBS)) {
+    if (!known.has(`lib:${name}`)) await kernel.sim.publishAppVersion(`lib:${name}`, ver, { title: `lib:${name}`, styles: [] });
+  }
+  if (!known.has('shell')) await kernel.sim.publishAppVersion('shell', 'lab', { title: 'Shell', styles: [], manifestExtra: { libs: Object.fromEntries(Object.entries(LAB_LIBS).map(([n, v]) => [n, v.split('.')[0]])) } });
+  frameBase = await import((kernel.artifacts ?? kernel.shell.artifacts).bind('shell', 'lab').url('v4/frame/index.js'));
+} else {
+  if (!known.has('shell')) await kernel.sim.publishAppVersion('shell', 'lab', { title: 'Shell', styles: [] });
+  frameBase = await import('../index.js');
+}
+for (const [id, title] of [['notes', 'Notizen'], ['tasks', 'Aufgaben'], ['ledger', 'Buchhaltung']]) {
+  if (!known.has(id)) await publish(id, '1.0.0', title);
+}
+await kernel.sim.startShell(shellModule);
+window.__lab = {
+  kernel,
+  kernelOpts,
+  frame: frameBase,
+  shellRoot: BOUND ? (kernel.artifacts ?? kernel.shell.artifacts).bind('shell', 'lab').root : null,
+  publish,
+  activeShell: () => kernel.apps.get().find((a) => a.id === 'shell')?.active_ver ?? null,
+  async swapShell() {
+    const t0 = performance.now();
+    const r = await kernel.sim.swapShell(shellModule);
+    return { snap: r.restored, swapped: r.swapped, error: r.error, ms: performance.now() - t0 };
+  },
+  remove: (id) => kernel.sim.push('business_apps', [{ id, _deleted: true }]),
+};
+window.__labReady = true;
+</script>
+</body>
+</html>

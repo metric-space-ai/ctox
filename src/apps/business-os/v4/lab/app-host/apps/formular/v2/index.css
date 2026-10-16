@@ -1,0 +1,6 @@
+[data-app="formular"] .f2 { display: grid; grid-template-columns: 40% 60%; height: 100%; }
+[data-app="formular"] .f2__liste { overflow: auto; margin: 0; padding: 6px 10px; list-style: none; border-right: 1px solid #ddd; background: #fafbfc; }
+[data-app="formular"] .f2__liste li { padding: 3px 0; font-size: 12px; }
+[data-app="formular"] .f2__form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 10px; align-content: start; overflow: auto; }
+[data-app="formular"] .f2__form label { display: grid; gap: 2px; }
+[data-app="formular"] .f2__wide { grid-column: 1 / -1; }

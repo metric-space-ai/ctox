@@ -5,6 +5,5 @@
   "bookingStatusPosted": "Posted",
   "bookingImport": "Import bookings",
   "bookingExport": "Export bookings",
-  "evidenceTitle": "OCR evidence",
-  "syncingData": "Syncing data."
+  "evidenceTitle": "Evidence"
 }

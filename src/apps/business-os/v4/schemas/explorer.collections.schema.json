@@ -1,0 +1,39 @@
+{
+  "_app_id": "explorer",
+  "_format": "ctox-v4-collections-a9",
+  "_base_release": "main@4794af03d",
+  "_generator": "src/apps/business-os/v4/schemas/build-schemas.mjs",
+  "_sources": {},
+  "_foreign_copies_not_taken": [
+    {
+      "name": "desktop_file_chunks",
+      "owner": "desktop"
+    },
+    {
+      "name": "desktop_files",
+      "owner": "desktop"
+    },
+    {
+      "name": "documents",
+      "owner": "documents"
+    },
+    {
+      "name": "knowledge_items",
+      "owner": "knowledge"
+    },
+    {
+      "name": "matching_objects",
+      "owner": "matching"
+    },
+    {
+      "name": "outbound_companies",
+      "owner": "outbound"
+    },
+    {
+      "name": "spreadsheets",
+      "owner": "spreadsheets"
+    }
+  ],
+  "collections": {},
+  "migrations": {}
+}

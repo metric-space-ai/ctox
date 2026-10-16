@@ -3,12 +3,22 @@ import { readFile } from 'node:fs/promises';
 import { Buffer } from 'node:buffer';
 import { fileURLToPath } from 'node:url';
 
-import { build } from 'esbuild';
+import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
+import { join as joinPath } from 'node:path';
+// Lader (OLDTEST): esbuild aus dem Klon, sonst ESBUILD_MODULE, sonst aus dem Haupt-Checkout
+// ~/Documents/ctox/src/apps/business-os/node_modules (wie PLAYWRIGHT_MODULE in den v4-api-Tests). Nicht installieren.
+const requireDev = createRequire(import.meta.url);
+function loadDev(name, envVar) {
+  try { return requireDev(name); } catch {
+    return requireDev(process.env[envVar] || joinPath(homedir(), 'Documents/ctox/src/apps/business-os/node_modules', name));
+  }
+}
+const { build } = loadDev('esbuild', 'ESBUILD_MODULE');
 
-const schemaUrl = new URL('./schema.js', import.meta.url);
-const schemaSource = await readFile(schemaUrl, 'utf8');
-const schemaModule = await import(`data:text/javascript;base64,${Buffer.from(schemaSource).toString('base64')}`);
-const { collections, migrationStrategies } = schemaModule;
+// v4 (R17): schema.js ist gelöscht, einzige Schemaquelle ist collections.schema.json.
+const schemaJson = JSON.parse(await readFile(new URL('./collections.schema.json', import.meta.url), 'utf8'));
+const { collections, migration_strategies: migrationStrategies } = schemaJson;
 
 // Collection entries may be either a bare schema or a `{ schema,
 // conflictStrategy }` wrapper — the shell, hash generator, and native peer
@@ -62,17 +72,17 @@ assert.ok(schemaOf(collections.customer_dedupe_candidates).indexes.some((index) 
 assert.deepEqual(migrationStrategies, {});
 
 const moduleJson = JSON.parse(await readFile(new URL('./module.json', import.meta.url), 'utf8'));
-const registryJson = JSON.parse(await readFile(new URL('../registry.json', import.meta.url), 'utf8'));
-const registryEntry = registryJson.modules.find((mod) => mod.id === 'customers');
+// v4: Katalog kommt aus dem generierten Manifest (v4/manifests), nicht mehr aus der Legacy-Registry.
+const v4Manifest = JSON.parse(await readFile(new URL('../../v4/manifests/customers.manifest.json', import.meta.url), 'utf8'));
 
 assert.equal(moduleJson.id, 'customers');
 assert.equal(moduleJson.entry, 'modules/customers/index.html');
 assert.equal(moduleJson.layout.shell, 'windowed');
 assert.ok(moduleJson.layout.icon_svg.includes('svg-customers'));
-assert.ok(registryEntry, 'customers registry entry exists');
-assert.deepEqual(registryEntry.collections, moduleJson.collections);
-assert.equal(registryEntry.entry, moduleJson.entry);
-assert.equal(registryEntry.category, 'Sales');
+assert.equal(v4Manifest.app_id, 'customers');
+assert.equal(v4Manifest.entry, 'index.js');
+assert.equal(v4Manifest.min_app_api, '4.0');
+assert.deepEqual(Object.keys(v4Manifest.collections).sort(), [...expectedCollections].sort());
 
 const bundledModule = await build({
   entryPoints: [fileURLToPath(new URL('./index.js', import.meta.url))],
@@ -80,6 +90,13 @@ const bundledModule = await build({
   format: 'esm',
   platform: 'browser',
   write: false,
+  // v4: ctox:shared/x.js wie der Service Worker (§16.15) auf shared/ abbilden.
+  plugins: [{
+    name: 'ctox-shared',
+    setup(b) {
+      b.onResolve({ filter: /^ctox:shared\// }, (args) => ({ path: fileURLToPath(new URL(`../../shared/${args.path.slice('ctox:shared/'.length)}`, import.meta.url)) }));
+    },
+  }],
 });
 const [{ text: bundledSource }] = bundledModule.outputFiles;
 const { __customersTestHooks: hooks } = await import(
@@ -243,9 +260,11 @@ assert.deepEqual(hooks.filterRelatedNotes(opportunityContext, customerFixtures).
 assert.deepEqual(hooks.filterRelatedTasks(contactContext, customerFixtures).map((item) => item.id), ['task-b']);
 assert.deepEqual(hooks.filterRelatedFiles(accountContext, customerFixtures).map((item) => item.id), ['file-a']);
 assert.deepEqual(hooks.buildTimelineRows(opportunityContext, customerFixtures).map((item) => item.id), ['note-b', 'task-c', 'act-b']);
-assert.equal(hooks.canMutateCustomersContext({ session: { user: { role: 'business_os_readonly' } } }), false);
-assert.equal(hooks.canMutateCustomersContext({ canModifyModule: () => false, session: { user: { role: 'admin' } } }), true);
-assert.equal(hooks.canMutateCustomersContext({ session: { user: { role: 'sales_admin' } } }), true);
+// v4: Spiegel aus api.actor (role) und api.actor.permissions (R9).
+assert.equal(hooks.canMutateCustomersContext({ role: 'business_os_readonly', permissions: [] }), false);
+assert.equal(hooks.canMutateCustomersContext({ role: 'viewer', permissions: ['apps.source.edit'] }), true);
+assert.equal(hooks.canMutateCustomersContext({ role: 'admin', permissions: [] }), true);
+assert.equal(hooks.canMutateCustomersContext({ role: 'sales_admin' }), true);
 assert.equal(hooks.commandStatusTone('pending_sync'), 'pending');
 assert.equal(hooks.commandStatusTone('completed'), 'completed');
 assert.equal(hooks.commandStatusTone('failed'), 'failed');
@@ -276,6 +295,8 @@ assert.deepEqual(hooks.buildImportFromOutboundCommand(hooks.buildOutboundHandoff
   outbound_company_id: 'co-ready',
   pipeline_id: 'pipe-ready',
   source: 'business-os-customers-ui',
+  account_id: 'co-ready',
+  import_batch_id: 'co-ready',
 });
 assert.deepEqual(hooks.buildDedupeResolveCommand('dedupe-a', 'keep_existing').payload, {
   candidate_id: 'dedupe-a',
@@ -528,20 +549,15 @@ const sigA = hooks.accountListSignature(customerFixtures.customer_accounts, 'car
 assert.equal(sigA, hooks.accountListSignature(customerFixtures.customer_accounts, 'cards'));
 assert.notEqual(sigA, hooks.accountListSignature(customerFixtures.customer_accounts, 'list'));
 
-// Sync readiness gate: the syncing shell replaces data-driven empties only
-// when the unfiltered source is empty AND the collection reports
-// ready === false. Rows and ready collections keep the existing empty copy.
-assert.equal(hooks.dataEmptyShowsSyncing(true, { ready: false }), true);
-assert.equal(hooks.dataEmptyShowsSyncing(true, { ready: true }), false);
-assert.equal(hooks.dataEmptyShowsSyncing(false, { ready: false }), false);
-assert.equal(hooks.dataEmptyShowsSyncing(true, undefined), false);
-assert.match(indexSource, /subscribeCollectionReadiness/);
-assert.match(indexSource, /class="ctox-syncing" role="status" aria-live="polite"/);
-assert.match(html, /data-customers-account-syncing/);
+// v4 (R4/R11): keine Readiness, kein Sync-Platzhalter; leere Listen rendern nichts,
+// Zustand nur über api.status.report.
+assert.doesNotMatch(indexSource, /subscribeCollectionReadiness|collectionReadiness|ctox-syncing/);
+assert.doesNotMatch(html, /data-customers-account-syncing|data-customers-account-empty/);
+assert.match(indexSource, /api\.status\.report\(/);
 
 // V2 keeps the customer pane title/filter chrome compact and provides a
 // visible action glyph even while shell icon assets are recovering.
-assert.match(css, /\.shell-window\[data-shell-contract="v2"\] \.customers-module \{ padding: 0;/);
+assert.match(css, /\[data-app="customers"\] \.customers-module \{ padding: 0;/);
 assert.match(css, /\.customers-module \.ctox-pane-header \{ box-sizing: border-box;[\s\S]*grid-template-rows:/);
 assert.match(indexSource, /function actionIcon\(name\) \{[\s\S]*const paths = \{/);
 assert.doesNotMatch(indexSource, /return state\.ctx\?\.getActionIcon\?\.\(name\) \|\| ''/);

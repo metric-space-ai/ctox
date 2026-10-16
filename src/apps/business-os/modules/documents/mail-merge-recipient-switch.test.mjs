@@ -6,7 +6,10 @@ import { __documentsTestHooks as hooks } from './index.js';
 
 function switchState() {
   return {
-    ctx: { host: { querySelector: () => null } },
+    // App-API 4.0: das Fenster-Root kommt aus mount(root, api), nicht aus ctx.host.
+    root: { querySelector: () => null },
+    // App-API 4.0: Zustandsmeldungen gehen in die Shell-Zone (api.status), nicht in die App.
+    api: { status: { report() {}, clear() {} } },
     t: (_key, fallback) => fallback,
     documents: [
       { id: 'merge_1', current_version_id: 'merge_1_recipient_1' },
@@ -112,36 +115,29 @@ test('switching to another document still destroys the active editor', async () 
   assert.equal(state.selectedId, 'document_2');
 });
 
-test('loading the same blob twice performs one chunk query', async () => {
-  let chunkQueries = 0;
-  const chunks = [{
-    toJSON: () => ({ data: Buffer.from('recipient bytes').toString('base64') }),
-  }];
-  const ctx = {
-    db: {
-      collection(name) {
-        if (name === 'document_blob_chunks') {
-          return {
-            find: () => ({
-              exec: async () => {
-                chunkQueries += 1;
-                return chunks;
-              },
-            }),
-          };
-        }
-        return {};
+test('loading the same blob twice performs one file read', async () => {
+  // App-API 4.0: Blob-Bytes kommen über das files-Dokument (ref) und api.files.get statt über document_blob_chunks.
+  let fileReads = 0;
+  const api = {
+    get: (collection, id) => ({ get: () => (collection === 'files' && id === 'blob_1' ? { id: 'blob_1', ref: 'ref_blob_1' } : null) }),
+    files: {
+      async get(ref) {
+        assert.equal(ref, 'ref_blob_1');
+        fileReads += 1;
+        return new Blob([Buffer.from('recipient bytes')]);
       },
     },
   };
   const cache = hooks.createDocumentBlobByteCache();
 
-  const first = await hooks.loadBlobBytes(ctx, 'blob_1', cache);
-  const second = await hooks.loadBlobBytes(ctx, 'blob_1', cache);
+  const first = await hooks.loadBlobBytes({ api }, 'blob_1', cache);
+  const second = await hooks.loadBlobBytes({ api }, 'blob_1', cache);
 
-  assert.equal(chunkQueries, 1);
+  assert.equal(fileReads, 1);
   assert.equal(Buffer.from(first).toString(), 'recipient bytes');
   assert.equal(second, first);
+  assert.equal(await hooks.loadBlobBytes({ api }, 'blob_missing', cache), null, 'unknown blob yields null, not a read');
+  assert.equal(fileReads, 1);
 });
 
 test('openVersion resolves without producing content, so the recipient switch rebuilds the editor', async () => {

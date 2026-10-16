@@ -5,18 +5,32 @@ import {
   normalizeCompanyRow,
   openUniversalImporter,
   parseDelimitedText,
-} from '../../shared/universal-importer.js';
-import { showBusinessAlert, showBusinessConfirm, showBusinessPrompt } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
-import { loadModuleMessages } from '../../shared/i18n.js';
+} from 'ctox:shared/universal-importer.js';
 import {
   configureActiveOutreach,
   loadActiveOutreachData,
   renderActiveOutreachShell,
   handleActiveOutreachAction,
   handleActiveOutreachInput,
-} from './active-outreach.js?v=20260816-browser-sync-guards-v141';
+  ACTIVE_OUTREACH_COLLECTIONS,
+} from './active-outreach.js';
+import {
+  bindApi,
+  readAll,
+  readOne,
+  liveCollection,
+  putDoc,
+  patchDocById,
+  upsertDocById,
+  removeDocById,
+  sendCommand,
+  reportStatus,
+  clearStatus,
+  confirmDialog,
+  promptDialog,
+  disposeCommandSubscriptions,
+} from './v4-bridge.js';
 
-const BUILD = '20260721-outbound-ia-karte';
 let loadedOutboundLang = '';
 let t = (key, fallback, ...args) => {
   let val = fallback ?? key;
@@ -55,7 +69,8 @@ function getContactFieldDesc(id, fallback) {
 }
 const DEFAULT_CAMPAIGN_ID = 'outbound_default_campaign';
 const DEFAULT_CAMPAIGN_NAME = 'Outbound Firmenqualifizierung';
-const OUTBOUND_CAMPAIGN_SETUP_SKILL = 'business-os-outbound-campaign-setup';
+// Strang SKL-O: App-Skill im Paket (skills/campaign-setup); Auftrag stellt der Handler outbound.campaign.setup.request.
+const OUTBOUND_CAMPAIGN_SETUP_SKILL = 'outbound/campaign-setup';
 const OUTBOUND_CENTER_SPLIT_KEY = 'outbound.centerSplit';
 const OUTBOUND_HIDDEN_COMPANIES_KEY_PREFIX = 'outbound.hiddenCompanies.';
 const OUTBOUND_CENTER_MIN = Object.freeze({ left: 360, right: 360 });
@@ -223,194 +238,194 @@ const CAMPAIGN_IDEA_TEMPLATES = Object.freeze({
     {
       id: 'de-mail-handwerk-nord',
       title: 'Handwerk in Norddeutschland per E-Mail',
-      text: 'Ich möchte 100 Handwerksbetriebe in Norddeutschland per E-Mail anschreiben und unsere Software für digitale Auftragsplanung, Terminabstimmung und Kundenkommunikation verkaufen. Bitte priorisiere Betriebe mit mehreren Teams, sichtbarer Projekt- oder Wartungsarbeit und einer Website, auf der noch viel manuell oder telefonisch organisiert wirkt.',
+      text: 'Ich möchte 100 Handwerksbetriebe in Norddeutschland per E-Mail anschreiben und unsere Software für digitale Auftragsplanung, Terminabstimmung und Kundenkommunikation verkaufen. Bitte priorisiere Betriebe mit mehreren Teams, sichtbarer Projekt- oder Wartungsarbeit und einer Website, auf der noch viel manuell oder telefonisch organisiert wirkt.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'de-letter-hr-webinar',
       title: 'HR-Agenturen per Brief zum Webinar',
-      text: 'Ich möchte alle Inhaber von HR-Agenturen in Deutschland mit einem physischen Brief zu einem Webinar einladen. Das Webinar erklärt, wie Agenturen mit KI mehr passende Kandidaten identifizieren, Kunden schneller qualifizieren und ihre Vermittlungsprozesse dokumentieren können. Bitte bereite Briefvorlagen als PDF vor und plane nach Versand einen manuellen Nachfass-Schritt.',
+      text: 'Ich möchte alle Inhaber von HR-Agenturen in Deutschland mit einem physischen Brief zu einem Webinar einladen. Das Webinar erklärt, wie Agenturen mit KI mehr passende Kandidaten identifizieren, Kunden schneller qualifizieren und ihre Vermittlungsprozesse dokumentieren können. Bitte bereite Briefvorlagen als PDF vor und plane nach Versand einen manuellen Nachfass-Schritt.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'de-mail-saas-finance',
       title: 'SaaS-CFOs zu Kostenkontrolle',
-      text: 'Ich möchte CFOs und Gründer von B2B-SaaS-Unternehmen in der DACH-Region per E-Mail ansprechen. Ziel ist ein Beratungsgespräch zu besseren Margen, transparenteren Betriebskosten und planbarerem Cashflow. Bitte finde Unternehmen mit 20 bis 300 Mitarbeitenden, aktivem Wachstum und Hinweisen auf komplexe Tool- oder Infrastrukturkosten.',
+      text: 'Ich möchte CFOs und Gründer von B2B-SaaS-Unternehmen in der DACH-Region per E-Mail ansprechen. Ziel ist ein Beratungsgespräch zu besseren Margen, transparenteren Betriebskosten und planbarerem Cashflow. Bitte finde Unternehmen mit 20 bis 300 Mitarbeitenden, aktivem Wachstum und Hinweisen auf komplexe Tool- oder Infrastrukturkosten.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'de-mail-pflegedienste',
       title: 'Pflegedienste für Tourenplanung',
-      text: 'Ich möchte ambulante Pflegedienste in Nordrhein-Westfalen per E-Mail kontaktieren und eine Lösung für Tourenplanung, Schichtkoordination und automatische Dokumentation verkaufen. Bitte adressiere Geschäftsführung oder Pflegedienstleitung und achte auf Betriebe mit mehreren Standorten oder sichtbarem Personalbedarf.',
+      text: 'Ich möchte ambulante Pflegedienste in Nordrhein-Westfalen per E-Mail kontaktieren und eine Lösung für Tourenplanung, Schichtkoordination und automatische Dokumentation verkaufen. Bitte adressiere Geschäftsführung oder Pflegedienstleitung und achte auf Betriebe mit mehreren Standorten oder sichtbarem Personalbedarf.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'de-letter-architekten',
       title: 'Architekturbüros per Brief',
-      text: 'Ich möchte mittelgroße Architekturbüros mit einem hochwertigen Brief anschreiben und ihnen eine Projektcontrolling-Lösung vorstellen. Der Brief soll persönlich wirken, auf laufende Bauprojekte eingehen und einen Termin für eine kurze Demo anbieten. Nach dem markierten Versand sollen Erinnerungen für telefonisches Nachfassen entstehen.',
+      text: 'Ich möchte mittelgroße Architekturbüros mit einem hochwertigen Brief anschreiben und ihnen eine Projektcontrolling-Lösung vorstellen. Der Brief soll persönlich wirken, auf laufende Bauprojekte eingehen und einen Termin für eine kurze Demo anbieten. Nach dem markierten Versand sollen Erinnerungen für telefonisches Nachfassen entstehen.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'de-mail-it-systemhaeuser',
       title: 'IT-Systemhäuser für Managed Service',
-      text: 'Ich möchte IT-Systemhäuser im deutschsprachigen Raum per E-Mail ansprechen, die Managed Services anbieten und ihren Support stärker automatisieren wollen. Ziel ist ein Erstgespräch über KI-gestützte Ticket-Triage, Wissensdatenbank und SLA-Reporting. Bitte suche Ansprechpartner in Geschäftsführung, Serviceleitung oder Operations.',
+      text: 'Ich möchte IT-Systemhäuser im deutschsprachigen Raum per E-Mail ansprechen, die Managed Services anbieten und ihren Support stärker automatisieren wollen. Ziel ist ein Erstgespräch über KI-gestützte Ticket-Triage, Wissensdatenbank und SLA-Reporting. Bitte suche Ansprechpartner in Geschäftsführung, Serviceleitung oder Operations.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'de-mail-immobilienverwalter',
       title: 'Immobilienverwalter für Eigentümerportal',
-      text: 'Ich möchte Immobilienverwaltungen mit 500 bis 5.000 Einheiten in Deutschland per E-Mail anschreiben und ein Eigentümer- und Mieterportal verkaufen. Bitte fokussiere auf Verwaltungen mit vielen Serviceanfragen, Dokumentenprozessen oder sichtbaren Modernisierungsinitiativen.',
+      text: 'Ich möchte Immobilienverwaltungen mit 500 bis 5.000 Einheiten in Deutschland per E-Mail anschreiben und ein Eigentümer- und Mieterportal verkaufen. Bitte fokussiere auf Verwaltungen mit vielen Serviceanfragen, Dokumentenprozessen oder sichtbaren Modernisierungsinitiativen.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'de-mail-produktion-qm',
       title: 'Produktion für QM-Automation',
-      text: 'Ich möchte Produktionsunternehmen in Süddeutschland per E-Mail kontaktieren, die komplexe Qualitätsprozesse haben. Verkauft werden soll eine Lösung für digitale Prüfprotokolle, Reklamationsmanagement und Audit-Vorbereitung. Bitte priorisiere Unternehmen mit ISO-Zertifizierungen, Zuliefererrollen und mehreren Standorten.',
+      text: 'Ich möchte Produktionsunternehmen in Süddeutschland per E-Mail kontaktieren, die komplexe Qualitätsprozesse haben. Verkauft werden soll eine Lösung für digitale Prüfprotokolle, Reklamationsmanagement und Audit-Vorbereitung. Bitte priorisiere Unternehmen mit ISO-Zertifizierungen, Zuliefererrollen und mehreren Standorten.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'de-mail-kanzleien',
       title: 'Kanzleien für Mandantenportal',
-      text: 'Ich möchte Steuerkanzleien mit 10 bis 80 Mitarbeitenden per E-Mail anschreiben und ein Mandantenportal inklusive Dokumentenanforderung, Fristenübersicht und KI-Zusammenfassungen vorstellen. Bitte finde Kanzleien, die digital wirken, aber noch viele manuelle Kontaktpunkte zeigen.',
+      text: 'Ich möchte Steuerkanzleien mit 10 bis 80 Mitarbeitenden per E-Mail anschreiben und ein Mandantenportal inklusive Dokumentenanforderung, Fristenübersicht und KI-Zusammenfassungen vorstellen. Bitte finde Kanzleien, die digital wirken, aber noch viele manuelle Kontaktpunkte zeigen.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'de-mail-webinar-maschinenbau',
       title: 'Maschinenbau-Webinar',
-      text: 'Ich möchte Entscheider im Maschinenbau zu einem Webinar über Service-Umsatz, Ersatzteilgeschäft und Predictive Maintenance einladen. Die Ansprache soll per E-Mail laufen, mit zwei Follow-ups und einem klaren Link zur Landingpage mit automatischer Anmeldung.',
+      text: 'Ich möchte Entscheider im Maschinenbau zu einem Webinar über Service-Umsatz, Ersatzteilgeschäft und Predictive Maintenance einladen. Die Ansprache soll per E-Mail laufen, mit zwei Follow-ups und einem klaren Link zur Landingpage mit automatischer Anmeldung.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'de-letter-aerzte',
       title: 'Ärztezentren per Brief',
-      text: 'Ich möchte größere Ärztezentren und MVZ per Brief kontaktieren und eine Lösung für Patientenkommunikation und Terminmanagement anbieten. Bitte formuliere die Briefe seriös, ohne aggressive Verkaufssprache, und ermögliche den PDF-Download für den postalischen Versand.',
+      text: 'Ich möchte größere Ärztezentren und MVZ per Brief kontaktieren und eine Lösung für Patientenkommunikation und Terminmanagement anbieten. Bitte formuliere die Briefe seriös, ohne aggressive Verkaufssprache, und ermögliche den PDF-Download für den postalischen Versand.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'de-mail-agenturen',
       title: 'Marketing-Agenturen für Reporting',
-      text: 'Ich möchte Marketing-Agenturen per E-Mail anschreiben, die mehrere B2B-Kunden betreuen, und ihnen automatisiertes Reporting mit KI-Kommentaren verkaufen. Bitte suche Agenturen mit Performance-Marketing, SEO oder Paid-Ads-Angeboten und Ansprechpartner in Geschäftsführung oder Client Services.',
+      text: 'Ich möchte Marketing-Agenturen per E-Mail anschreiben, die mehrere B2B-Kunden betreuen, und ihnen automatisiertes Reporting mit KI-Kommentaren verkaufen. Bitte suche Agenturen mit Performance-Marketing, SEO oder Paid-Ads-Angeboten und Ansprechpartner in Geschäftsführung oder Client Services.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'de-mail-logistik',
       title: 'Logistik für Disposition',
-      text: 'Ich möchte Logistikunternehmen in Nord- und Ostdeutschland per E-Mail kontaktieren und eine Dispositions- und Kundenstatuslösung verkaufen. Bitte priorisiere Unternehmen mit Fuhrpark, Stückgut, Lager oder Fulfillment und sichtbaren operativen Engpässen.',
+      text: 'Ich möchte Logistikunternehmen in Nord- und Ostdeutschland per E-Mail kontaktieren und eine Dispositions- und Kundenstatuslösung verkaufen. Bitte priorisiere Unternehmen mit Fuhrpark, Stückgut, Lager oder Fulfillment und sichtbaren operativen Engpässen.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'de-mail-bauzulieferer',
       title: 'Bauzulieferer für Angebotsprozess',
-      text: 'Ich möchte Bauzulieferer und Baustoffhändler per E-Mail anschreiben, um eine Lösung für schnellere Angebotskalkulation und CRM-Nachverfolgung zu verkaufen. Bitte finde Firmen, bei denen individuelle Angebote, Außendienst oder Projektgeschäft erkennbar sind.',
+      text: 'Ich möchte Bauzulieferer und Baustoffhändler per E-Mail anschreiben, um eine Lösung für schnellere Angebotskalkulation und CRM-Nachverfolgung zu verkaufen. Bitte finde Firmen, bei denen individuelle Angebote, Außendienst oder Projektgeschäft erkennbar sind.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'de-letter-vereine-sponsoring',
       title: 'Vereine per Brief für Sponsoring',
-      text: 'Ich möchte Sportvereine und regionale Kulturvereine per Brief kontaktieren und ein Sponsoring-Angebot vorstellen. Der Brief soll lokal, wertschätzend und konkret sein, mit einem QR-Code zu einer Landingpage und einem manuellen Versandstatus in der App.',
+      text: 'Ich möchte Sportvereine und regionale Kulturvereine per Brief kontaktieren und ein Sponsoring-Angebot vorstellen. Der Brief soll lokal, wertschätzend und konkret sein, mit einem QR-Code zu einer Landingpage und einem manuellen Versandstatus in der App.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'de-mail-ecommerce',
       title: 'E-Commerce für Retourenreduktion',
-      text: 'Ich möchte E-Commerce-Händler mit eigenem Shop per E-Mail anschreiben und eine Lösung zur Reduktion von Retouren und Supporttickets verkaufen. Bitte priorisiere Händler mit erklärungsbedürftigen Produkten, Größen-/Variantenlogik oder hohem Beratungsbedarf.',
+      text: 'Ich möchte E-Commerce-Händler mit eigenem Shop per E-Mail anschreiben und eine Lösung zur Reduktion von Retouren und Supporttickets verkaufen. Bitte priorisiere Händler mit erklärungsbedürftigen Produkten, Größen-/Variantenlogik oder hohem Beratungsbedarf.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'de-mail-energieberater',
       title: 'Energieberater für Lead Management',
-      text: 'Ich möchte Energieberater und Sanierungsberater in Deutschland per E-Mail ansprechen und ein Lead-Management-System verkaufen. Bitte suche Unternehmen mit Fördermittelberatung, Wärmepumpen-, PV- oder Sanierungsangeboten und sichtbarer Termin- oder Anfragegenerierung.',
+      text: 'Ich möchte Energieberater und Sanierungsberater in Deutschland per E-Mail ansprechen und ein Lead-Management-System verkaufen. Bitte suche Unternehmen mit Fördermittelberatung, Wärmepumpen-, PV- oder Sanierungsangeboten und sichtbarer Termin- oder Anfragegenerierung.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'de-mail-recruiting-event',
       title: 'Recruiting-Event für Mittelstand',
-      text: 'Ich möchte mittelständische Arbeitgeber in Niedersachsen zu einem Recruiting-Event einladen. Die Kampagne soll per E-Mail starten, bei Interesse zur Landingpage führen und automatisch Anmeldungen für HR-Leitung oder Geschäftsführung erfassen.',
+      text: 'Ich möchte mittelständische Arbeitgeber in Niedersachsen zu einem Recruiting-Event einladen. Die Kampagne soll per E-Mail starten, bei Interesse zur Landingpage führen und automatisch Anmeldungen für HR-Leitung oder Geschäftsführung erfassen.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'de-letter-hotellerie',
       title: 'Hotels per Brief',
-      text: 'Ich möchte inhabergeführte Hotels per Brief anschreiben und eine Lösung für Gästekommunikation, Upselling und Bewertungsmanagement vorstellen. Bitte bereite druckbare Briefe vor und markiere danach manuell, welche Hotels tatsächlich angeschrieben wurden.',
+      text: 'Ich möchte inhabergeführte Hotels per Brief anschreiben und eine Lösung für Gästekommunikation, Upselling und Bewertungsmanagement vorstellen. Bitte bereite druckbare Briefe vor und markiere danach manuell, welche Hotels tatsächlich angeschrieben wurden.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'de-mail-consulting-partner',
       title: 'Beratungen für Partnerprogramm',
-      text: 'Ich möchte Unternehmensberatungen per E-Mail für ein Partnerprogramm gewinnen. Zielgruppe sind Beratungen mit Digitalisierung, Prozessoptimierung oder CRM-Projekten. Die Ansprache soll auf gemeinsame Kundenprojekte und wiederkehrende Provisionen ausgerichtet sein.',
+      text: 'Ich möchte Unternehmensberatungen per E-Mail für ein Partnerprogramm gewinnen. Zielgruppe sind Beratungen mit Digitalisierung, Prozessoptimierung oder CRM-Projekten. Die Ansprache soll auf gemeinsame Kundenprojekte und wiederkehrende Provisionen ausgerichtet sein.', // v4-allow: text (Briefing-Vorlage)
     },
   ]),
   en: Object.freeze([
     {
       id: 'en-mail-trades-north',
       title: 'Trades in Northern Germany by email',
-      text: 'I want to email 100 trade businesses in Northern Germany and sell our software for digital job planning, appointment coordination, and customer communication. Please prioritize companies with multiple field teams, visible project or maintenance work, and websites that still look heavily phone- or spreadsheet-driven.',
+      text: 'I want to email 100 trade businesses in Northern Germany and sell our software for digital job planning, appointment coordination, and customer communication. Please prioritize companies with multiple field teams, visible project or maintenance work, and websites that still look heavily phone- or spreadsheet-driven.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'en-letter-hr-webinar',
       title: 'HR agencies by letter for webinar',
-      text: 'I want to send physical letters to owners of HR agencies in Germany inviting them to a webinar. The webinar explains how agencies can use AI to identify better candidates, qualify clients faster, and document placement workflows. Please prepare PDF letter templates and schedule a manual follow-up step after mailing.',
+      text: 'I want to send physical letters to owners of HR agencies in Germany inviting them to a webinar. The webinar explains how agencies can use AI to identify better candidates, qualify clients faster, and document placement workflows. Please prepare PDF letter templates and schedule a manual follow-up step after mailing.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'en-mail-saas-finance',
       title: 'SaaS CFOs for cost control',
-      text: 'I want to email CFOs and founders of B2B SaaS companies in the DACH region. The goal is a consulting call about stronger margins, transparent operating costs, and more predictable cash flow. Please find companies with 20 to 300 employees, visible growth, and signs of complex tooling or infrastructure costs.',
+      text: 'I want to email CFOs and founders of B2B SaaS companies in the DACH region. The goal is a consulting call about stronger margins, transparent operating costs, and more predictable cash flow. Please find companies with 20 to 300 employees, visible growth, and signs of complex tooling or infrastructure costs.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'en-mail-care-services',
       title: 'Care providers for route planning',
-      text: 'I want to contact outpatient care providers in North Rhine-Westphalia by email and sell a solution for route planning, shift coordination, and automated documentation. Please address management or care service leadership and look for providers with multiple locations or visible hiring pressure.',
+      text: 'I want to contact outpatient care providers in North Rhine-Westphalia by email and sell a solution for route planning, shift coordination, and automated documentation. Please address management or care service leadership and look for providers with multiple locations or visible hiring pressure.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'en-letter-architects',
       title: 'Architecture firms by letter',
-      text: 'I want to send high-quality physical letters to mid-sized architecture firms and introduce a project controlling solution. The letter should feel personal, refer to active construction projects where possible, and offer a short demo appointment. After the mailing is marked as sent, create reminders for phone follow-up.',
+      text: 'I want to send high-quality physical letters to mid-sized architecture firms and introduce a project controlling solution. The letter should feel personal, refer to active construction projects where possible, and offer a short demo appointment. After the mailing is marked as sent, create reminders for phone follow-up.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'en-mail-it-msps',
       title: 'IT service providers for managed service',
-      text: 'I want to email German-speaking IT service providers that offer managed services and want to automate support operations. The goal is an intro call about AI-powered ticket triage, knowledge base workflows, and SLA reporting. Please look for contacts in management, service leadership, or operations.',
+      text: 'I want to email German-speaking IT service providers that offer managed services and want to automate support operations. The goal is an intro call about AI-powered ticket triage, knowledge base workflows, and SLA reporting. Please look for contacts in management, service leadership, or operations.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'en-mail-property-management',
       title: 'Property managers for owner portal',
-      text: 'I want to email property management companies with 500 to 5,000 units in Germany and sell an owner and resident portal. Please focus on firms with many service requests, document workflows, or visible modernization initiatives.',
+      text: 'I want to email property management companies with 500 to 5,000 units in Germany and sell an owner and resident portal. Please focus on firms with many service requests, document workflows, or visible modernization initiatives.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'en-mail-manufacturing-qm',
       title: 'Manufacturing for quality automation',
-      text: 'I want to contact manufacturing companies in Southern Germany by email if they have complex quality processes. The offer is a solution for digital inspection reports, complaint management, and audit preparation. Please prioritize companies with ISO certifications, supplier roles, and multiple locations.',
+      text: 'I want to contact manufacturing companies in Southern Germany by email if they have complex quality processes. The offer is a solution for digital inspection reports, complaint management, and audit preparation. Please prioritize companies with ISO certifications, supplier roles, and multiple locations.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'en-mail-accounting-firms',
       title: 'Accounting firms for client portal',
-      text: 'I want to email tax and accounting firms with 10 to 80 employees and present a client portal with document requests, deadline overview, and AI summaries. Please find firms that appear digitally mature but still show many manual client touchpoints.',
+      text: 'I want to email tax and accounting firms with 10 to 80 employees and present a client portal with document requests, deadline overview, and AI summaries. Please find firms that appear digitally mature but still show many manual client touchpoints.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'en-mail-webinar-machinery',
       title: 'Machinery webinar',
-      text: 'I want to invite decision-makers in mechanical engineering to a webinar about service revenue, spare parts business, and predictive maintenance. The outreach should run by email, include two follow-ups, and point clearly to a landing page with automatic registration.',
+      text: 'I want to invite decision-makers in mechanical engineering to a webinar about service revenue, spare parts business, and predictive maintenance. The outreach should run by email, include two follow-ups, and point clearly to a landing page with automatic registration.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'en-letter-medical-centers',
       title: 'Medical centers by letter',
-      text: 'I want to contact larger medical centers and outpatient clinics by physical letter and offer a solution for patient communication and appointment management. Please write the letters in a serious tone without aggressive sales language and enable PDF download for postal sending.',
+      text: 'I want to contact larger medical centers and outpatient clinics by physical letter and offer a solution for patient communication and appointment management. Please write the letters in a serious tone without aggressive sales language and enable PDF download for postal sending.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'en-mail-agencies-reporting',
       title: 'Marketing agencies for reporting',
-      text: 'I want to contact marketing agencies by email if they serve multiple B2B clients and sell automated reporting with AI commentary. Please find agencies offering performance marketing, SEO, or paid ads and identify contacts in management or client services.',
+      text: 'I want to contact marketing agencies by email if they serve multiple B2B clients and sell automated reporting with AI commentary. Please find agencies offering performance marketing, SEO, or paid ads and identify contacts in management or client services.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'en-mail-logistics',
       title: 'Logistics for dispatching',
-      text: 'I want to email logistics companies in Northern and Eastern Germany and sell a dispatching and customer status solution. Please prioritize companies with fleets, groupage, warehousing, or fulfillment and visible operational complexity.',
+      text: 'I want to email logistics companies in Northern and Eastern Germany and sell a dispatching and customer status solution. Please prioritize companies with fleets, groupage, warehousing, or fulfillment and visible operational complexity.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'en-mail-construction-suppliers',
       title: 'Construction suppliers for quoting',
-      text: 'I want to contact construction suppliers and building materials dealers by email to sell a solution for faster quote calculation and CRM follow-up. Please find companies where custom quotes, field sales, or project business are visible.',
+      text: 'I want to contact construction suppliers and building materials dealers by email to sell a solution for faster quote calculation and CRM follow-up. Please find companies where custom quotes, field sales, or project business are visible.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'en-letter-clubs-sponsoring',
       title: 'Clubs by letter for sponsorship',
-      text: 'I want to send physical letters to sports clubs and regional cultural associations to present a sponsorship offer. The letter should be local, respectful, and concrete, with a QR code to a landing page and a manual sent status in the app.',
+      text: 'I want to send physical letters to sports clubs and regional cultural associations to present a sponsorship offer. The letter should be local, respectful, and concrete, with a QR code to a landing page and a manual sent status in the app.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'en-mail-ecommerce',
       title: 'E-commerce for returns reduction',
-      text: 'I want to email e-commerce merchants with their own shops and sell a solution for reducing returns and support tickets. Please prioritize merchants with complex products, size or variant logic, or high advisory needs.',
+      text: 'I want to email e-commerce merchants with their own shops and sell a solution for reducing returns and support tickets. Please prioritize merchants with complex products, size or variant logic, or high advisory needs.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'en-mail-energy-consultants',
       title: 'Energy consultants for lead management',
-      text: 'I want to email energy and renovation consultants in Germany and sell a lead management system. Please find companies offering subsidies, heat pumps, solar, or renovation consulting with visible appointment or inquiry generation.',
+      text: 'I want to email energy and renovation consultants in Germany and sell a lead management system. Please find companies offering subsidies, heat pumps, solar, or renovation consulting with visible appointment or inquiry generation.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'en-mail-recruiting-event',
       title: 'Recruiting event for SMEs',
-      text: 'I want to invite mid-sized employers in Lower Saxony to a recruiting event. The campaign should start by email, lead interested contacts to a landing page, and automatically capture registrations for HR leaders or management.',
+      text: 'I want to invite mid-sized employers in Lower Saxony to a recruiting event. The campaign should start by email, lead interested contacts to a landing page, and automatically capture registrations for HR leaders or management.', // v4-allow: text (Briefing-Vorlage)
     },
     {
       id: 'en-letter-hotels',
@@ -420,14 +435,15 @@ const CAMPAIGN_IDEA_TEMPLATES = Object.freeze({
     {
       id: 'en-mail-consulting-partners',
       title: 'Consultancies for partner program',
-      text: 'I want to email consultancies and recruit them for a partner program. The target group is consultancies working on digitalization, process optimization, or CRM projects. The outreach should focus on joint customer projects and recurring commission.',
+      text: 'I want to email consultancies and recruit them for a partner program. The target group is consultancies working on digitalization, process optimization, or CRM projects. The outreach should focus on joint customer projects and recurring commission.', // v4-allow: text (Briefing-Vorlage)
     },
   ]),
 });
 
 
-const DEFAULT_ICP_CORE =`Wholix ist ein anpassbares CRM + Light-ERP für Solo-Unternehmer bis KMU. Es bündelt Vertrieb, Projekte und Service in einem System und erlaubt eine flexible Datenstruktur (eigene Objekte wie Immobilien/Objekte, Aufträge, Verträge, Tickets), Relationen, Felder und Ansichten. Teams oder einzelne Nutzer erhalten rollenbasierte Menüs/Workspaces. Pipelines (Board/Liste/Kalender) für Sales, Service und Projekte sowie Kollaboration (Kommentare, Aufgaben, Erwähnungen) sind integriert. Automationen und KI-Assistenz unterstützen beim Zusammenfassen, Priorisieren und bei Vorschlägen für nächste Schritte. Reporting über gespeicherte, filterbare Ansichten. Einführung in Tagen statt Monaten ohne Großprojekt. Kommerziell: nutzungsbasierte, paketierte Preise (keine Abrechnung pro User) zur Konsolidierung mehrerer Tools und zur besseren Kostenkontrolle.`;
+const DEFAULT_ICP_CORE =`Wholix ist ein anpassbares CRM + Light-ERP für Solo-Unternehmer bis KMU. Es bündelt Vertrieb, Projekte und Service in einem System und erlaubt eine flexible Datenstruktur (eigene Objekte wie Immobilien/Objekte, Aufträge, Verträge, Tickets), Relationen, Felder und Ansichten. Teams oder einzelne Nutzer erhalten rollenbasierte Menüs/Workspaces. Pipelines (Board/Liste/Kalender) für Sales, Service und Projekte sowie Kollaboration (Kommentare, Aufgaben, Erwähnungen) sind integriert. Automationen und KI-Assistenz unterstützen beim Zusammenfassen, Priorisieren und bei Vorschlägen für nächste Schritte. Reporting über gespeicherte, filterbare Ansichten. Einführung in Tagen statt Monaten ohne Großprojekt. Kommerziell: nutzungsbasierte, paketierte Preise (keine Abrechnung pro User) zur Konsolidierung mehrerer Tools und zur besseren Kostenkontrolle.`; // v4-allow: text (Standard-ICP, Inhalt)
 
+// v4-allow: text (Agenten-Prompt bzw. Standardinhalt, kein Oberflächentext)
 const DEFAULT_CHECKLIST = `B2B-Ansprache klar erkennbar (Leistungs-/Branchen-/Lösungsseiten).
 Objekt-/Auftragslogik sichtbar (z. B. Immobilien/Exposés, Aufträge, Tickets, Wartung, Projekte).
 Navigation/Content zu Vertrieb (Pipeline/Leads/Anfragen), Projekten/Leistungen und Service/Support.
@@ -439,11 +455,12 @@ Referenzen im KMU-Umfeld (DACH), mehrsprachige Site optional.
 Preis-/Kostenargumente gegen Seat-Modelle (viele Nutzerrollen, interne/externe Mitnutzer).
 Bei Maklern: Hinweise auf Objektaufnahme, Exposé-/Terminkoordination, Nachbetreuung/Service.`;
 
-const DEFAULT_CTA = 'Soll ich Ihnen 12 potenzielle Kunden inklusive der fertigen Anschreiben zusenden?';
+const DEFAULT_CTA = 'Soll ich Ihnen 12 potenzielle Kunden inklusive der fertigen Anschreiben zusenden?'; // v4-allow: text (Standard-CTA, Inhalt)
 
 const DEFAULT_SIGNATURE = `Beste Grüße
 Max Mustermann`;
 
+// v4-allow: text (Agenten-Prompt bzw. Standardinhalt, kein Oberflächentext)
 const ICP_PROMPT_TEMPLATE = `Du bist ein Sales Specialist und berätst Unternehmen, ideale Kundenprofile zu definieren, Ich gebe dir hierfür mehre <Muster ICPs> Beschreibungen, an den du dich orientieren kannst, sowie eine <Taxonomie> als Hilfe. Deine Aufgabe ist, es aus der <Homepage des Kunden> einen ICP für den Kunden zu entwickeln. Folge dazu der <Instruktion> Schritt für Schritt. Du gibst ein JSON Objekt zurück, ohne weitere Kommentare
 
 <Instruktion>:
@@ -579,6 +596,7 @@ Formuliere eine Produkt und Dienstleistungsberschreibung. Hol dir dazu Inspirati
 <Homepage des Kunden>:
 \${homepage}`;
 
+// v4-allow: text (Agenten-Prompt bzw. Standardinhalt, kein Oberflächentext)
 const MESSAGE_PROMPT_TEMPLATE = `Du bist ein Sales Specialist und berätst Unternehmen, bessere Kaltakquise-E-Mails zu formulieren.
 Ich gebe dir hierfür mehrere <Muster E-Mails Positiv> und <Muster E-Mails Negativ> als Referenz sowie eine <Negativ-Checkliste> als Hilfe.
 Deine Aufgabe ist es, aus der <Produkt und Dienstleistungsbeschreibung>, und falls vorhanden auch <zusätzliche Anweisung>: enthalten kann, z.B. für CTA und Absender, der <Checkliste für Infos von Kunden>, <Infos zum Kontakt> und der <Infos von Hompage des Kunden> ein relevantes Anschreiben zu entwickeln.
@@ -722,7 +740,8 @@ EINGABE (Rohtext der Message_Prompt-Antwort):
 END_MESSAGE_PROMPT_OUTPUT>>>`;
 
 const state = {
-  ctx: null,
+  api: null,
+  root: null,
   campaigns: [],
   sources: [],
   companies: [],
@@ -779,51 +798,134 @@ const state = {
   detailPaneUserHidden: false,
 };
 
-export async function mount(ctx) {
-  state.ctx = ctx;
-  state.requestedRecordId = String(ctx.args?.record || ctx.args?.record_id || '').trim();
-  state.returnThreadId = String(ctx.args?.return_thread_id || '').trim();
-  state.unavailableFocusReportedId = '';
-  state.focusedRunId = '';
-  await applyOutboundLanguage(ctx.locale || 'de', { render: false });
-  if (!state.activeMsgByContact) state.activeMsgByContact = new Map();
-  if (!state.activeNoteByContact) state.activeNoteByContact = new Map();
-  if (!state.viewMode) state.viewMode = 'compact';
-  state.statusFilter = '';
-  state.tagFilter = '';
-  state.lastTbodyHtml = '';
-  if (!state.viewMode) state.viewMode = 'compact';
+// Live-Collections dieses Moduls. Jede Änderung im lokalen Spiegel landet ohne Nachladen in `state`.
+const OUTBOUND_LIVE_COLLECTIONS = Object.freeze([
+  'outbound_campaigns',
+  'outbound_sources',
+  'outbound_companies',
+  'outbound_pipeline_items',
+  'outbound_research_runs',
+  'outbound_research_adapters',
+  'business_commands',
+  'ctox_queue_tasks',
+  ...ACTIVE_OUTREACH_COLLECTIONS,
+]);
 
-  state.isScrolling = false;
-  state.scrollTimeout = null;
-  state.pendingRenderAfterScroll = false;
+// Ansichtszustand, den snapshot() über einen Live-Remount trägt (nur structured-clone-fähige Werte).
+const SNAPSHOT_VIEW_KEYS = Object.freeze([
+  'selectedCampaignId', 'selectedCompanyId', 'selectedPipelineId', 'activeView', 'filter', 'search',
+  'statusFilter', 'tagFilter', 'outreachView', 'campaignSearch', 'campaignViewMode', 'campaignBand',
+  'campaignStatusFilter', 'campaignSort', 'editingCampaignId', 'researchSettingsActiveTab', 'detailPaneUserHidden',
+  'viewMode',
+]);
 
-  await ensureStyles();
-  ctx.host.innerHTML = await loadModuleMarkup();
-  ctx.left?.replaceChildren?.();
-  ctx.right?.replaceChildren?.();
+function resetMountState() {
+  Object.assign(state, {
+    campaigns: [], sources: [], companies: [], pipeline: [], runs: [], researchAdapters: [], commands: [], queueTasks: [],
+    selectedCampaignId: '', selectedCompanyId: '', selectedPipelineId: '', focusedRunId: '', requestedRecordId: '',
+    returnThreadId: '', activeView: 'companies', filter: 'all', search: '', tableFilters: {}, tableSort: null,
+    editingCampaignId: '', centerRenderTimer: null, importRecoveryPending: false, cleanup: [], centerResizeCleanup: null,
+    researchSettingsActiveTab: 'columns', tempResearchSettings: null, generatingOutreach: new Map(), isScrolling: false,
+    scrollTimeout: null, pendingRenderAfterScroll: false, statusFilter: '', tagFilter: '', lastTbodyHtml: '',
+    lastActiveColsKey: '', outreachView: false, campaignEditDrafts: new Map(), campaignCreateDraft: null,
+    campaignSearch: '', campaignViewMode: 'cards', campaignBand: 'all', campaignStatusFilter: 'all',
+    campaignSort: 'updated-desc', campaignChromeLang: '', detailPaneUserHidden: false, viewMode: 'compact',
+    activeMsgByContact: new Map(), activeNoteByContact: new Map(), mailserver: null, liveTimer: null,
+    defaultCampaignChecked: false, hiddenCompaniesByCampaign: {}, centerSplitRatio: null,
+  });
+  state.activeOutreach = null;
+}
+
+function applyRestoredSnapshot(restored) {
+  if (!restored || typeof restored !== 'object') return null;
+  for (const key of SNAPSHOT_VIEW_KEYS) {
+    if (key in restored && typeof restored[key] === typeof state[key]) state[key] = restored[key];
+  }
+  if (restored.tableFilters && typeof restored.tableFilters === 'object') state.tableFilters = { ...restored.tableFilters };
+  if (restored.tableSort && typeof restored.tableSort === 'object') state.tableSort = { ...restored.tableSort };
+  if (restored.hiddenCompaniesByCampaign && typeof restored.hiddenCompaniesByCampaign === 'object') {
+    state.hiddenCompaniesByCampaign = { ...restored.hiddenCompaniesByCampaign };
+  }
+  if (Number.isFinite(restored.centerSplitRatio)) state.centerSplitRatio = restored.centerSplitRatio;
+  if (Array.isArray(restored.campaignEditDrafts)) state.campaignEditDrafts = new Map(restored.campaignEditDrafts);
+  if (restored.campaignCreateDraft && typeof restored.campaignCreateDraft === 'object') state.campaignCreateDraft = restored.campaignCreateDraft;
+  if (restored.activeOutreach && typeof restored.activeOutreach === 'object') {
+    const ao = restored.activeOutreach;
+    if (typeof ao.view === 'string') state.activeOutreach.view = ao.view;
+    if (typeof ao.selectedEngagementId === 'string') state.activeOutreach.selectedEngagementId = ao.selectedEngagementId;
+    if (typeof ao.selectedMessageId === 'string') state.activeOutreach.selectedMessageId = ao.selectedMessageId;
+    if (Array.isArray(ao.messageEdits)) state.activeOutreach.messageEdits = new Map(ao.messageEdits);
+  }
+  return Array.isArray(restored.fields) ? restored.fields : null;
+}
+
+// Offene Eingaben (Kampagnen-Editor, Nachrichtenentwürfe, Notizen …) über data-Attribute bzw. name/id erfassen.
+function captureOpenFields(root) {
+  const fields = [];
+  root.querySelectorAll('input, textarea, select').forEach((el, index) => {
+    if (el.type === 'file' || el.type === 'password') return;
+    const key = fieldKey(el, index);
+    if (!key) return;
+    const value = el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.value;
+    fields.push([key, value]);
+  });
+  return fields;
+}
+
+function fieldKey(el, index) {
+  const attrs = [...el.attributes].filter((a) => a.name.startsWith('data-') && a.name !== 'data-pg-wired').map((a) => `${a.name}=${a.value}`);
+  const base = [el.tagName, el.name || '', el.id || '', ...attrs].join('|');
+  return base.replace(/\|+$/, '') ? `${base}` : `${el.tagName}#${index}`;
+}
+
+function restoreOpenFields(root, fields) {
+  if (!fields?.length) return;
+  const byKey = new Map(fields);
+  root.querySelectorAll('input, textarea, select').forEach((el, index) => {
+    const key = fieldKey(el, index);
+    if (!byKey.has(key)) return;
+    const value = byKey.get(key);
+    if (el.type === 'checkbox' || el.type === 'radio') el.checked = Boolean(value);
+    else if (el.value !== value) {
+      el.value = value;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  });
+}
+
+export async function mount(root, api, { restored } = {}) {
+  resetMountState();
+  bindApi(api);
+  state.api = api;
+  state.root = root;
+  if (!root.dataset.app) root.dataset.app = 'outbound';
+  const mountToken = {};
+  state.mountToken = mountToken;
+  const listeners = new AbortController();
+  state.mountSignal = listeners.signal;
+  const subs = [];
   configureActiveOutreach({ state, t, escapeHtml, rerender: () => render() });
-  wireEvents(ctx.host);
-  const onAppLaunch = (event) => {
-    const args = event?.detail?.args || {};
+  const restoredFields = applyRestoredSnapshot(restored);
+
+  api.shell.setTitle('Outbound');
+  root.innerHTML = await loadModuleMarkup();
+  wireEvents(root);
+  subs.push(api.shell.locale.subscribe((lang) => {
+    applyOutboundLanguage(lang || 'de').catch((error) => console.warn('[outbound] language update failed', error));
+  }));
+  subs.push(api.shell.onRoute((event) => {
+    const args = event?.params || {};
     const recordId = String(args.record || args.record_id || '').trim();
     if (!recordId) return;
     state.requestedRecordId = recordId;
     state.returnThreadId = String(args.return_thread_id || '').trim();
-    state.unavailableFocusReportedId = '';
     focusRequestedOutboundRecord();
     render();
     scrollFocusedOutboundRun();
-    if (state.requestedRecordId) scheduleDataRefresh(0);
-  };
-  ctx.host.addEventListener('ctox-business-os-app-launch', onAppLaunch);
-  state.cleanup.push(() => ctx.host.removeEventListener('ctox-business-os-app-launch', onAppLaunch));
-  wireRealtime();
-  wireCollectionReadiness();
-  let disposed = false;
+  }));
 
   const scrollListener = (event) => {
-    const scrollContainer = event.target.closest('.outbound-table-scroll-unified, .ctox-well, .outbound-outreach');
+    const scrollContainer = event.target.closest?.('.outbound-table-scroll-unified, .ctox-well, .outbound-outreach');
     if (scrollContainer) {
       state.isScrolling = true;
       if (state.scrollTimeout) window.clearTimeout(state.scrollTimeout);
@@ -837,76 +939,91 @@ export async function mount(ctx) {
       }, 500);
     }
   };
-  ctx.host.addEventListener('scroll', scrollListener, { capture: true, passive: true });
-  state.cleanup.push(() => {
-    ctx.host.removeEventListener('scroll', scrollListener, true);
-    if (state.scrollTimeout) window.clearTimeout(state.scrollTimeout);
-  });
+  root.addEventListener('scroll', scrollListener, { capture: true, passive: true, signal: listeners.signal });
 
-  const preferencesHandler = (event) => {
-    const lang = event?.detail?.language || event?.detail?.lang || '';
-    if (lang) {
-      applyOutboundLanguage(lang).catch((error) => console.warn('[outbound] language update failed', error));
-    }
-  };
-  const languageMessageHandler = (event) => {
-    if (event?.data?.type !== 'ctox-business-os-language' && event?.data?.type !== 'ctox-business-os-preferences') return;
-    const lang = event.data.lang || event.data.language || '';
-    if (lang) {
-      applyOutboundLanguage(lang).catch((error) => console.warn('[outbound] language message failed', error));
-    }
-  };
-  window.addEventListener('ctox-business-os-preferences', preferencesHandler);
-  window.addEventListener('message', languageMessageHandler);
-  state.cleanup.push(() => {
-    window.removeEventListener('ctox-business-os-preferences', preferencesHandler);
-    window.removeEventListener('message', languageMessageHandler);
-  });
+  // Live-Abos je Montage (PORTING §4 Falle 1). Erste Emission kommt sofort mit dem lokalen Stand.
+  let primed = false;
+  for (const name of OUTBOUND_LIVE_COLLECTIONS) {
+    subs.push(liveCollection(name, () => { if (primed) scheduleLiveRender(); }));
+  }
+  primed = true;
+  api.setVisible?.(OUTBOUND_LIVE_COLLECTIONS.slice());
+  deriveState();
+  ensureDefaultCampaign();
+  focusRequestedOutboundRecord();
+  render(true);
+  restoreOpenFields(root, restoredFields);
+  scrollFocusedOutboundRun();
 
-  render();
-  Promise.resolve()
-    .then(async () => {
-      await ensureDefaultCampaign();
-      if (disposed || state.ctx !== ctx) return;
-      await loadAll({ hydrateKnowledge: false });
-      if (disposed || state.ctx !== ctx) return;
-      const activeLoaded = await loadActiveOutreachData().then(() => true).catch((error) => {
-        console.warn('[outbound] active outreach load failed', error);
-        return false;
-      });
-      if (disposed || state.ctx !== ctx) return;
-      focusRequestedOutboundRecord();
-      render();
-      scrollFocusedOutboundRun();
-      if (activeLoaded) reportUnavailableOutboundFocus();
-      scheduleCampaignKnowledgeSetup(selectedCampaign());
-    })
-    .catch((error) => {
-      if (disposed || state.ctx !== ctx) return;
-      console.warn('[outbound] background initialization failed', error);
-      render();
-    });
-  return () => {
-    disposed = true;
-    state.centerResizeCleanup?.();
-    state.centerResizeCleanup = null;
-    if (state.centerRenderTimer) window.clearTimeout(state.centerRenderTimer);
-    state.centerRenderTimer = null;
-    closeHiddenCompaniesPanel();
-    state.cleanup.forEach((fn) => fn?.());
-    state.cleanup = [];
-    ctx.host.replaceChildren();
+  return {
+    unmount() {
+      if (state.mountToken === mountToken) state.mountToken = null;
+      listeners.abort();
+      subs.forEach((off) => { try { off?.(); } catch (_error) { /* Abo schon beendet */ } });
+      subs.length = 0;
+      disposeCommandSubscriptions();
+      root.removeEventListener('scroll', scrollListener, true);
+      if (state.scrollTimeout) window.clearTimeout(state.scrollTimeout);
+      if (state.liveTimer) window.clearTimeout(state.liveTimer);
+      state.liveTimer = null;
+      state.centerResizeCleanup?.();
+      state.centerResizeCleanup = null;
+      if (state.centerRenderTimer) window.clearTimeout(state.centerRenderTimer);
+      state.centerRenderTimer = null;
+      closeHiddenCompaniesPanel();
+      state.cleanup.forEach((fn) => fn?.());
+      state.cleanup = [];
+      root.replaceChildren();
+    },
+    snapshot() {
+      const snap = { v: 1 };
+      for (const key of SNAPSHOT_VIEW_KEYS) snap[key] = state[key];
+      snap.tableFilters = { ...(state.tableFilters || {}) };
+      snap.tableSort = state.tableSort ? { ...state.tableSort } : null;
+      snap.hiddenCompaniesByCampaign = JSON.parse(JSON.stringify(state.hiddenCompaniesByCampaign || {}));
+      snap.centerSplitRatio = Number.isFinite(state.centerSplitRatio) ? state.centerSplitRatio : null;
+      const editor = root.querySelector('.outbound-campaign-edit');
+      if (editor) syncCampaignEditDraftFromEditor(editor);
+      snap.campaignEditDrafts = JSON.parse(JSON.stringify([...(state.campaignEditDrafts || new Map())]));
+      snap.campaignCreateDraft = state.campaignCreateDraft ? JSON.parse(JSON.stringify(state.campaignCreateDraft)) : null;
+      const ao = state.activeOutreach || {};
+      snap.activeOutreach = {
+        view: ao.view || 'lead_queue',
+        selectedEngagementId: ao.selectedEngagementId || '',
+        selectedMessageId: ao.selectedMessageId || '',
+        messageEdits: JSON.parse(JSON.stringify([...(ao.messageEdits || new Map())])),
+      };
+      snap.fields = captureOpenFields(root);
+      return snap;
+    },
   };
+}
+
+// Bündelt Live-Emissionen (mehrere Collections je Mikrotask) zu einer Ableitung + Darstellung.
+function scheduleLiveRender() {
+  if (state.liveTimer) return;
+  state.liveTimer = window.setTimeout(() => {
+    state.liveTimer = null;
+    if (!state.mountToken) return;
+    deriveState();
+    ensureDefaultCampaign();
+    render();
+  }, 60);
 }
 
 async function applyOutboundLanguage(lang, options = {}) {
   const nextLang = lang === 'en' ? 'en' : 'de';
   if (loadedOutboundLang === nextLang && state.lang === nextLang) return;
   state.lang = nextLang;
-  const messages = await loadModuleMessages(import.meta.url, nextLang, {});
+  // Eingebettete Texte bleiben Rückfall; Locale-Datei relativ (SW liefert versioniert), api.shell.t übersteuert.
+  const messages = await fetch(new URL(`./locales/${nextLang}.json`, import.meta.url))
+    .then((res) => (res.ok ? res.json() : {}))
+    .catch(() => ({}));
+  const shellT = state.api?.shell?.t;
   loadedOutboundLang = nextLang;
   t = (key, fallback, ...args) => {
-    let val = messages[key] ?? fallback ?? key;
+    const fromShell = typeof shellT === 'function' ? shellT(`outbound.${key}`) : null;
+    let val = (fromShell && fromShell !== `outbound.${key}`) ? fromShell : (messages[key] ?? fallback ?? key);
     if (args.length) {
       args.forEach((arg, i) => {
         val = val.replace(`{${i}}`, arg);
@@ -915,31 +1032,18 @@ async function applyOutboundLanguage(lang, options = {}) {
     return val;
   };
   configureActiveOutreach({ state, t, escapeHtml, rerender: () => render() });
-  if (options.render !== false && state.ctx?.host?.isConnected) {
-    const editor = state.ctx.host.querySelector('.outbound-campaign-edit');
+  if (options.render !== false && state.root?.isConnected) {
+    const editor = state.root.querySelector('.outbound-campaign-edit');
     if (editor) syncCampaignEditDraftFromEditor(editor);
     render(true);
   }
 }
 
-async function ensureStyles() {
-  const cssVersion = String(import.meta.url).split('?v=')[1] || BUILD;
-  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
-  let link = document.querySelector('link[data-outbound-style]');
-  if (!link) {
-    link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.dataset.outboundStyle = 'true';
-    document.head.append(link);
-  }
-  if (link.getAttribute('href') !== cssHref) link.href = cssHref;
-}
-
 async function loadModuleMarkup() {
-  const markupVersion = String(import.meta.url).split('?v=')[1] || BUILD;
-  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
-  const html = await fetch(markupHref).then((res) => res.text());
+  // index.html bleibt Markup-Quelle; der Service Worker liefert sie versioniert, deshalb kein Cache-Buster.
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
   return doc.body.innerHTML;
 }
 
@@ -997,27 +1101,13 @@ function slugId(value) {
   return normalized || `campaign_${Date.now()}`;
 }
 
-async function knowledgeCommand(args) {
-  if (!state.ctx?.commandBus?.dispatch) {
-    throw new Error('The local command service is not available.');
-  }
-  const commandId = `cmd_knowledge_${crypto.randomUUID()}`;
-  const dispatched = await state.ctx.commandBus.dispatch({
-    id: commandId,
-    module: 'knowledge',
-    command_type: 'knowledge.command',
-    record_id: commandId,
-    inbound_channel: 'business_os.outbound',
-    payload: {
-      title: 'Knowledge command',
-      args,
-    },
-    client_context: {
-      source_module: 'outbound',
-      command_path: 'knowledge',
-    },
-  });
-  return normalizeKnowledgeCommandResult(dispatched, commandId);
+// Knowledge-DataFrames laufen über den Plattformbefehl `knowledge.command` (cap.knowledge). Nie warten: das
+// Promise erfüllt sich im Hintergrund mit dem gepushten Ergebnis (`done`), die UI arbeitet weiter.
+function knowledgeCommand(args) {
+  return sendCommand('knowledge.command', { title: 'Knowledge command', args }, {
+    code: 'outbound.command.knowledge.command',
+    client_context: { command_path: 'knowledge' },
+  }).settled.then((commandState) => normalizeKnowledgeCommandResult(commandState?.result, ''));
 }
 
 function normalizeKnowledgeCommandResult(value, commandId) {
@@ -1025,7 +1115,7 @@ function normalizeKnowledgeCommandResult(value, commandId) {
   if (result?.ok === false) {
     throw new Error(result.error || `Knowledge command ${commandId} failed`);
   }
-  return result || value;
+  return result || value || {};
 }
 
 async function ensureKnowledgeDataTable(refs, key, title, description) {
@@ -1053,7 +1143,7 @@ async function ensureKnowledgeDataTable(refs, key, title, description) {
 }
 
 async function ensureCampaignKnowledge(campaign) {
-  if (!campaign?.id || !nativeRxdbSyncReady()) return null;
+  if (!campaign?.id) return null;
   const refs = campaignKnowledgeRefs(campaign);
   await ensureKnowledgeDataTable(refs, refs.companiesKey, `${campaign.name} · Unternehmen`, 'Outbound Campaign Firmen, Importjobs, Qualifikation und Unternehmens-Research.');
   await ensureKnowledgeDataTable(refs, refs.contactsKey, `${campaign.name} · Ansprechpartner`, 'Outbound Campaign Ansprechpartner- und Lead-Qualifikation.');
@@ -1063,8 +1153,8 @@ async function ensureCampaignKnowledge(campaign) {
     '--id', refs.skillbookId,
     '--title', 'Business OS Outbound Campaigns',
     '--version', 'v1',
-    '--mission', 'Outbound Campaigns führen Firmenquellen über Unternehmensqualifikation, Ansprechpartner-Recherche und Lead-Qualifikation.',
-    '--runtime-policy', 'Nutze Knowledge DataFrames als einzige record-shaped Wissensquelle. Outbound speichert nur Workflow-State und Referenzen.',
+    '--mission', 'Outbound Campaigns führen Firmenquellen über Unternehmensqualifikation, Ansprechpartner-Recherche und Lead-Qualifikation.', // v4-allow: text (Skillbook)
+    '--runtime-policy', 'Nutze Knowledge DataFrames als einzige record-shaped Wissensquelle. Outbound speichert nur Workflow-State und Referenzen.', // v4-allow: text (Skillbook)
     '--workflow-backbone', 'source-import,company-research,pipeline-contact-research,lead-qualification',
     '--linked-runbooks', refs.runbookId,
   ]);
@@ -1121,17 +1211,17 @@ function campaignRunbookChunk(campaign, refs) {
     `- Research Runs DataFrame: ctox knowledge data describe --domain ${refs.domain} --key ${refs.runsKey}`,
     '',
     'Funnel:',
-    '1. Importjobs anlegen, daraus Unternehmen extrahieren und nur Unternehmen in den Companies DataFrame schreiben.',
+    '1. Importjobs anlegen, daraus Unternehmen extrahieren und nur Unternehmen in den Companies DataFrame schreiben.', // v4-allow: text (Runbook)
     '2. Unternehmensdaten recherchieren, belegen und Firmen qualifizieren.',
-    '3. Erst nach Unternehmensqualifikation Ansprechpartner im Contacts DataFrame recherchieren.',
-    '4. Ansprechpartner gegen Scope/ICP qualifizieren und erst dann als Lead markieren.',
+    '3. Erst nach Unternehmensqualifikation Ansprechpartner im Contacts DataFrame recherchieren.', // v4-allow: text (Runbook)
+    '4. Ansprechpartner gegen Scope/ICP qualifizieren und erst dann als Lead markieren.', // v4-allow: text (Runbook)
     '',
-    'Grenze: Vor Pipeline-Stufe keine Personen recherchieren und keine Outreach-Nachrichten erzeugen.',
+    'Grenze: Vor Pipeline-Stufe keine Personen recherchieren und keine Outreach-Nachrichten erzeugen.', // v4-allow: text (Runbook)
   ].join('\n');
 }
 
 async function appendKnowledgeRows(campaign, tableKey, rows) {
-  if (!rows.length || !nativeRxdbSyncReady()) return null;
+  if (!rows.length) return null;
   const refs = await ensureCampaignKnowledge(campaign);
   if (!refs) return null;
   for (let index = 0; index < rows.length; index += OUTBOUND_KNOWLEDGE_APPEND_CHUNK) {
@@ -1147,7 +1237,7 @@ async function appendKnowledgeRows(campaign, tableKey, rows) {
 }
 
 async function readKnowledgeRows(refs, tableKey, limit = 5000) {
-  if (state.knowledgeProjectionDisabled || !nativeRxdbSyncReady()) return [];
+  if (state.knowledgeProjectionDisabled) return [];
   try {
     const result = await knowledgeCommand([
       'data', 'select',
@@ -1157,107 +1247,41 @@ async function readKnowledgeRows(refs, tableKey, limit = 5000) {
     ]);
     return Array.isArray(result.rows) ? result.rows : [];
   } catch (error) {
-    const message = String(error?.message || error);
-    if (message.includes('405') || message.includes('404') || message.includes('Failed to fetch')) {
-      state.knowledgeProjectionDisabled = true;
-    }
     console.warn('[outbound] knowledge projection unavailable; using local projections', error);
     return [];
   }
 }
 
-function nativeRxdbSyncReady() {
-  return state.ctx?.sync?.mode === 'webrtc'
-    || state.ctx?.sync?.config?.native_rxdb_peer_available === true;
-}
-
-function businessCommandsSyncReady() {
-  if (!outboundCollection('business_commands') || !nativeRxdbSyncReady()) return false;
-  const status = state.ctx?.sync?.diagnostics?.collections?.business_commands || null;
-  if (!status) return false;
-  const value = String(status.connectionStatus || status.status || '').trim();
-  return ['connected', 'running', 'reused'].includes(value);
-}
-
-function scheduleCampaignKnowledgeSetup(campaign, options = {}) {
+// Einmalige Einrichtung im Hintergrund (früher: Retry-Kette bis Sync bereit; die Outbox braucht das nicht).
+function scheduleCampaignKnowledgeSetup(campaign) {
   if (!campaign?.id) return;
-  const delayMs = Number(options.delayMs || 2500);
-  const maxAttempts = Number(options.maxAttempts || 8);
-  let attempts = 0;
-  const run = async () => {
-    attempts += 1;
-    if (!businessCommandsSyncReady()) {
-      if (attempts < maxAttempts) window.setTimeout(run, delayMs);
-      return;
-    }
-    try {
-      await ensureCampaignKnowledge(campaign);
-      await loadAll({ hydrateKnowledge: false });
-      render();
-    } catch (error) {
-      if (attempts < maxAttempts) {
-        window.setTimeout(run, delayMs);
-        return;
-      }
-      console.warn('[outbound] campaign knowledge setup deferred; using local campaign projections', error);
-    }
-  };
-  window.setTimeout(run, delayMs);
-}
-
-async function waitForCampaignProjection(campaignId, minUpdatedAtMs, timeoutMs = 15000) {
-  const collection = outboundCollection('outbound_campaigns');
-  if (!collection) return null;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const doc = await collection.findOne(campaignId).exec();
-      const campaign = typeof doc?.toJSON === 'function' ? doc.toJSON() : doc;
-      if (campaign && Number(campaign.updated_at_ms || 0) >= Number(minUpdatedAtMs || 0)) {
-        return campaign;
-      }
-    } catch (_) {
-      // Native RxDB projection can arrive just after command completion.
-    }
-    await new Promise((resolve) => window.setTimeout(resolve, 400));
-  }
-  return null;
-}
-
-async function enqueueBusinessCommandForProjection(command) {
-  const commandId = command.id || command.command_id || `cmd_${crypto.randomUUID()}`;
-  if (!state.ctx?.commandBus?.dispatch) {
-    throw new Error('CTOX command bus is required for outbound command enqueue');
-  }
-  return state.ctx.commandBus.dispatch({ ...command, id: commandId });
+  ensureCampaignKnowledge(campaign).catch((error) => {
+    console.warn('[outbound] campaign knowledge setup deferred; using local campaign projections', error);
+  });
 }
 
 function openCampaignRunbook(campaignId) {
   const campaign = state.campaigns.find((item) => item.id === campaignId) || selectedCampaign();
   const runbookId = campaignKnowledgeRefs(campaign).runbookId;
   if (!runbookId) return;
-  state.ctx?.storageScope?.set?.('ctox.businessOs.knowledge.openId', `runbook:${runbookId}`);
-  location.hash = 'knowledge';
+  state.api?.shell.navigate('knowledge', { id: `runbook:${runbookId}` });
 }
 
-async function ensureDefaultCampaign() {
-  const collection = outboundCollection('outbound_campaigns');
-  if (!collection) return;
-  const existing = await collection.find().exec();
+function ensureDefaultCampaign() {
+  if (state.defaultCampaignChecked) return;
+  state.defaultCampaignChecked = true;
+  const existing = readAll('outbound_campaigns');
   if (existing.some((doc) => doc.id === DEFAULT_CAMPAIGN_ID)) return;
-  const defaults = existing
-    .map((doc) => doc.toJSON ? doc.toJSON() : doc)
-    .filter((doc) => doc.name === DEFAULT_CAMPAIGN_NAME);
+  const defaults = existing.filter((doc) => doc.name === DEFAULT_CAMPAIGN_NAME);
   if (defaults.length) return;
-  if (!canWriteCollection('outbound_campaigns')) return;
   const now = Date.now();
   const campaign = {
     id: DEFAULT_CAMPAIGN_ID,
     name: DEFAULT_CAMPAIGN_NAME,
-    objective: 'Unternehmen importieren, qualifizieren und erst danach in die Ansprechpartner-Pipeline übergeben.',
+    objective: 'Unternehmen importieren, qualifizieren und erst danach in die Ansprechpartner-Pipeline übergeben.', // v4-allow: text (Kampagnendaten)
     market: 'DACH',
     status: 'active',
-    owner_id: state.ctx?.session?.user?.id || '',
+    owner_id: state.api?.actor?.id || '',
     source_count: 0,
     company_count: 0,
     qualified_count: 0,
@@ -1271,38 +1295,31 @@ async function ensureDefaultCampaign() {
     created_at_ms: now,
     updated_at_ms: now,
   };
-  await collection.insert(campaign);
-  scheduleCampaignKnowledgeSetup(campaign, { delayMs: 5000 });
+  putDoc('outbound_campaigns', campaign);
+  deriveState();
+  scheduleCampaignKnowledgeSetup(campaign);
 }
 
-async function loadAll(options = {}) {
-  const [campaigns, sources, companies, pipeline, runs, researchAdapters] = await Promise.all([
-    findAll(outboundCollection('outbound_campaigns')),
-    findAll(outboundCollection('outbound_sources')),
-    findAll(outboundCollection('outbound_companies')),
-    findAll(outboundCollection('outbound_pipeline_items')),
-    findAll(outboundCollection('outbound_research_runs')),
-    findAll(optionalReadableCollection('outbound_research_adapters')),
-  ]);
-  state.campaigns = campaigns;
-  state.sources = sources;
-  state.companies = companies;
-  state.pipeline = dedupePipelineItems(pipeline);
-  state.runs = runs;
-  state.researchAdapters = researchAdapters;
-  refreshOperationalStateInBackground();
+// Leitet den Modulzustand aus dem lokalen Spiegel ab (synchron, ohne Netz). Ersetzt loadAll()+Reload-Schleifen.
+function deriveState(options = {}) {
+  state.campaigns = readAll('outbound_campaigns');
+  state.sources = readAll('outbound_sources');
+  state.companies = readAll('outbound_companies');
+  state.pipeline = dedupePipelineItems(readAll('outbound_pipeline_items'));
+  state.runs = readAll('outbound_research_runs');
+  state.researchAdapters = readAll('outbound_research_adapters');
+  state.commands = readAll('business_commands');
+  state.queueTasks = readAll('ctox_queue_tasks');
+  loadActiveOutreachData();
   selectBestCampaignAfterLoad();
   const visible = visibleCampaigns();
   if (visible.length && !visible.some((campaign) => campaign.id === state.selectedCampaignId)) {
     state.selectedCampaignId = preferredCampaign(visible)?.id || visible[0].id;
   }
-  if (options.hydrateKnowledge === true) await hydrateSelectedCampaignFromKnowledge();
-  if (options.skipImportRecovery !== true) {
-    const repaired = await repairDanglingImportedSources();
-    if (repaired) {
-      await loadAll({ ...options, skipImportRecovery: true });
-      return;
-    }
+  if (options.skipImportRecovery !== true && !state.importRecoveryPending) {
+    repairDanglingImportedSources().then((repaired) => {
+      if (repaired && state.mountToken) scheduleLiveRender();
+    }).catch((error) => console.warn('[outbound] imported source recovery failed', error));
   }
   if (state.selectedCompanyId && !currentCompanies().some((item) => item.id === state.selectedCompanyId || item.duplicate_company_ids?.includes(state.selectedCompanyId))) {
     state.selectedCompanyId = '';
@@ -1313,15 +1330,19 @@ async function loadAll(options = {}) {
   focusRequestedOutboundRecord();
 }
 
+// Frühere Aufrufer von loadAll(): der Stand ist schon lokal, nur neu ableiten.
+function loadAll(options = {}) {
+  deriveState({ ...options, skipImportRecovery: true });
+  return Promise.resolve();
+}
+
 function focusRequestedOutboundRecord() {
   const recordId = state.requestedRecordId;
   if (!recordId) return;
-  const status = state.ctx?.host?.querySelector('[data-outbound-record-status]');
+  // v4: Rückmeldungen zum Deep-Link nur in der Zustandszone (Fehlerfälle); Erfolg räumt den Eintrag.
   const showStatus = (message, isError = false) => {
-    if (!status) return;
-    status.hidden = false;
-    status.textContent = message;
-    status.dataset.state = isError ? 'error' : 'info';
+    if (isError) reportStatus('warn', 'outbound.route.record', message, recordId);
+    else clearStatus('outbound.route.record');
   };
   const campaign = state.campaigns.find((item) => item.id === recordId);
   const company = state.companies.find((item) => item.id === recordId || item.duplicate_company_ids?.includes(recordId));
@@ -1374,15 +1395,19 @@ function focusRequestedOutboundRecord() {
     }
     showStatus('Verknüpfter Recherchelauf geöffnet.');
   } else {
-    showStatus(`Verknüpfter Outbound-Datensatz ${recordId} ist hier nicht verfügbar.`, true);
+    showStatus(`Verknüpfter Outbound-Datensatz ${recordId} ist hier nicht vorhanden.`, true);
+    if (state.unavailableFocusReportedId !== recordId) {
+      state.unavailableFocusReportedId = recordId;
+      reportOutboundFocus('unavailable', recordId);
+    }
     return;
   }
-  const mountCtx = state.ctx;
+  const mountToken = state.mountToken;
   const focusedId = company?.id || recordId;
   queueMicrotask(() => {
-    if (state.ctx !== mountCtx || state.requestedRecordId !== recordId) return;
-    const center = mountCtx?.host?.querySelector('.outbound-center');
-    const target = campaign ? center : [...(mountCtx?.host?.querySelectorAll('[data-context-record-id]') || [])]
+    if (state.mountToken !== mountToken || state.requestedRecordId !== recordId) return;
+    const center = state.root?.querySelector('.outbound-center');
+    const target = campaign ? center : [...(state.root?.querySelectorAll('[data-context-record-id]') || [])]
       .find((element) => element.dataset.contextRecordId === focusedId && element.getClientRects().length);
     if (!center || center.dataset.renderedCampaignId !== state.selectedCampaignId
       || !target || !target.getClientRects().length) {
@@ -1395,30 +1420,20 @@ function focusRequestedOutboundRecord() {
   });
 }
 
+// Rückmeldung an den aufrufenden CTOX-Thread: Ereignis am App-root (bleibt im Fenster; V4-PORT.md OFFEN-5).
 function reportOutboundFocus(status, recordId) {
-  if (!state.returnThreadId) return;
-  state.ctx.host.dispatchEvent(new CustomEvent('ctox-business-os-record-focus', {
+  if (!state.returnThreadId || !state.root) return;
+  state.root.dispatchEvent(new CustomEvent('ctox-business-os-record-focus', {
     bubbles: true,
     detail: { module: 'outbound', status, recordId, returnThreadId: state.returnThreadId },
   }));
-}
-
-function reportUnavailableOutboundFocus() {
-  const recordId = state.requestedRecordId;
-  if (!recordId || !state.returnThreadId || state.unavailableFocusReportedId === recordId) return;
-  const ready = ['outbound_campaigns', 'outbound_companies', 'outbound_pipeline_items',
-    'outbound_research_runs', 'outbound_engagements']
-    .every((name) => outboundCollectionReadiness(name)?.ready === true);
-  if (!ready) return;
-  state.unavailableFocusReportedId = recordId;
-  reportOutboundFocus('unavailable', recordId);
 }
 
 function scrollFocusedOutboundRun() {
   if (!state.focusedRunId) return;
   const runId = state.focusedRunId;
   requestAnimationFrame(() => {
-    const row = [...state.ctx.host.querySelectorAll('[data-context-record-type="outbound_research_run"]')]
+    const row = [...(state.root?.querySelectorAll('[data-context-record-type="outbound_research_run"]') || [])]
       .find((item) => item.dataset.contextRecordId === runId);
     row?.scrollIntoView?.({ block: 'nearest' });
   });
@@ -1478,79 +1493,18 @@ async function repairDanglingImportedSources() {
   return repaired;
 }
 
-function refreshOperationalStateInBackground() {
-  const commandCollection = optionalReadableCollection('business_commands');
-  const queueTaskCollection = optionalReadableCollection('ctox_queue_tasks');
-  if (!commandCollection || !queueTaskCollection) return;
-  const now = Date.now();
-  if (state.operationalRefreshPending || now - state.lastOperationalRefreshMs < 10000) return;
-  state.operationalRefreshPending = true;
-  state.lastOperationalRefreshMs = now;
-  withTimeout(Promise.all([
-    findAll(commandCollection),
-    findAll(queueTaskCollection),
-  ]), 2500, null)
-    .then((result) => {
-      if (!result) return;
-      const [commands, queueTasks] = result;
-      state.commands = commands;
-      state.queueTasks = queueTasks;
-      render();
-    })
-    .catch((error) => console.warn('[outbound] CTOX activity refresh skipped', error))
-    .finally(() => {
-      state.operationalRefreshPending = false;
-    });
-}
-
+// v4: Collections werden über den Namen angesprochen; Lesen/Schreiben läuft über v4-bridge.js (api.*).
 function optionalReadableCollection(name) {
-  if (!name || !state.ctx?.db) return null;
-  if (state.ctx?.permissions?.canReadCollection
-    && !state.ctx.permissions.canReadCollection(name)) {
-    return null;
-  }
-  return outboundCollection(name);
+  return name || null;
 }
 
 function outboundCollection(name) {
-  const facade = state.ctx?.db;
-  if (!facade || !name) return null;
-  return facade.collection?.(name) || null;
+  return name || null;
 }
 
-function canWriteCollection(name) {
-  return !state.ctx?.permissions?.canWriteCollection
-    || state.ctx.permissions.canWriteCollection(name) === true;
-}
-
-function withTimeout(promise, timeoutMs, fallback) {
-  return Promise.race([
-    promise,
-    new Promise((resolve) => window.setTimeout(() => resolve(fallback), timeoutMs)),
-  ]);
-}
-
-async function hydrateSelectedCampaignFromKnowledge() {
-  const campaign = selectedCampaign();
-  if (!campaign || state.knowledgeProjectionDisabled || !campaign.payload?.knowledge) return;
-  const refs = campaignKnowledgeRefs(campaign);
-  const [companyRows, contactRows, runRows] = await Promise.all([
-    readKnowledgeRows(refs, refs.companiesKey),
-    readKnowledgeRows(refs, refs.contactsKey),
-    readKnowledgeRows(refs, refs.runsKey, 1000),
-  ]);
-  if (companyRows.length) {
-    const projectedCompanies = projectCompaniesFromKnowledgeRows(campaign, companyRows);
-    state.companies = mergeProjectionById(state.companies, projectedCompanies);
-  }
-  if (contactRows.length) {
-    const projectedPipeline = projectPipelineFromKnowledgeRows(campaign, contactRows);
-    state.pipeline = dedupePipelineItems(mergeProjectionById(state.pipeline, projectedPipeline));
-  }
-  if (runRows.length) {
-    const projectedRuns = projectRunsFromKnowledgeRows(campaign, runRows);
-    state.runs = mergeProjectionById(state.runs, projectedRuns);
-  }
+// Nur Spiegel: ob geschrieben werden darf, entscheidet der Core (Ablehnung → Zustandszone).
+function canWriteCollection(_name) {
+  return true;
 }
 
 function projectCompaniesFromKnowledgeRows(campaign, rows) {
@@ -1910,178 +1864,12 @@ function stringValue(value) {
   return String(value).trim();
 }
 
-function wireRealtime() {
-  state.refreshEnabled = true;
-  // business_commands / ctox_queue_tasks are not read by loadAll(); every
-  // knowledge command the module dispatches writes one, so routing them into a
-  // full reload turned the 2.5 s knowledge watch into a reload loop.
-  for (const collection of [
-    outboundCollection('business_commands'),
-    optionalReadableCollection('ctox_queue_tasks'),
-  ].filter(Boolean)) {
-    const subscription = collection.$?.subscribe?.(() => scheduleOperationalRefresh());
-    if (subscription?.unsubscribe) state.cleanup.push(() => subscription.unsubscribe());
-  }
-  state.cleanup.push(() => {
-    state.refreshEnabled = false;
-    state.refreshQueued = false;
-    if (state.operationalRefreshTimer) window.clearTimeout(state.operationalRefreshTimer);
-    state.operationalRefreshTimer = null;
-  });
-  const collections = [
-    outboundCollection('outbound_campaigns'),
-    outboundCollection('outbound_sources'),
-    outboundCollection('outbound_companies'),
-    outboundCollection('outbound_pipeline_items'),
-    outboundCollection('outbound_research_runs'),
-    outboundCollection('outbound_engagements'),
-    outboundCollection('outbound_messages'),
-    outboundCollection('outbound_approvals'),
-    outboundCollection('outbound_sequences'),
-    outboundCollection('outbound_sender_assignments'),
-    outboundCollection('outbound_meeting_requests'),
-    outboundCollection('outbound_suppression_entries'),
-    outboundCollection('outbound_account_limits'),
-    outboundCollection('outbound_skillbooks'),
-    outboundCollection('outbound_letter_templates'),
-  ].filter(Boolean);
-  for (const collection of collections) {
-    const subscription = collection.$?.subscribe?.(() => scheduleDataRefresh(150));
-    if (subscription?.unsubscribe) state.cleanup.push(() => subscription.unsubscribe());
-  }
-  startKnowledgeProjectionWatch();
-}
-
-function outboundCollectionReadiness(name) {
-  const read = state.ctx?.sync?.collectionReadiness;
-  return typeof read === 'function' ? read.call(state.ctx.sync, name) : null;
-}
-
-function wireCollectionReadiness() {
-  const subscribe = state.ctx?.sync?.subscribeCollectionReadiness;
-  if (typeof subscribe !== 'function') return;
-  for (const name of ['outbound_campaigns', 'outbound_companies']) {
-    const unsubscribe = subscribe.call(state.ctx.sync, name, () => render());
-    if (typeof unsubscribe === 'function') state.cleanup.push(() => unsubscribe());
-  }
-}
-
-function syncingStateHint() {
-  return `<div class="ctox-syncing" role="status" aria-live="polite">${escapeHtml(t('syncingData', 'Daten werden synchronisiert.'))}</div>`;
-}
-
-function scheduleDataRefresh(delay = 80) {
-  if (!state.refreshEnabled) return;
-  if (state.refreshInFlight) {
-    state.refreshQueued = true;
-    return;
-  }
-  // Coalesce bursts without pushing the first deadline back indefinitely.
-  if (state.refreshTimer) return;
-  state.refreshTimer = window.setTimeout(runDataRefresh, delay);
-}
-
-async function runDataRefresh() {
-  state.refreshTimer = null;
-  if (!state.refreshEnabled) return;
-  // Never overlap full reloads; replication bursts collapse into one trailing run.
-  if (state.refreshInFlight) {
-    state.refreshQueued = true;
-    return;
-  }
-  state.refreshInFlight = true;
-  try {
-    await loadAll({ hydrateKnowledge: false });
-    if (!state.refreshEnabled) return;
-    const activeLoaded = await loadActiveOutreachData().then(() => true).catch((error) => {
-      console.warn('[outbound] active outreach refresh failed', error);
-      return false;
-    });
-    if (!state.refreshEnabled) return;
-    render();
-    if (activeLoaded) reportUnavailableOutboundFocus();
-  } catch (error) {
-    console.warn('[outbound] data refresh failed', error);
-  } finally {
-    state.refreshInFlight = false;
-    if (state.refreshEnabled && state.refreshQueued) {
-      state.refreshQueued = false;
-      scheduleDataRefresh(150);
-    }
-  }
-}
-
-function scheduleOperationalRefresh() {
-  if (!state.refreshEnabled) return;
-  if (state.operationalRefreshTimer) return;
-  const wait = Math.max(250, 10000 - (Date.now() - Number(state.lastOperationalRefreshMs || 0)));
-  state.operationalRefreshTimer = window.setTimeout(() => {
-    state.operationalRefreshTimer = null;
-    refreshOperationalStateInBackground();
-  }, wait);
-}
-
-function startKnowledgeProjectionWatch() {
-  if (state.knowledgeWatchTimer) window.clearInterval(state.knowledgeWatchTimer);
-  const tick = async () => {
-    if (state.knowledgeWatchBusy) return;
-    state.knowledgeWatchBusy = true;
-    try {
-      const changed = await refreshKnowledgeProjectionIfChanged();
-      if (changed) render();
-    } finally {
-      state.knowledgeWatchBusy = false;
-    }
-  };
-  state.knowledgeWatchTimer = window.setInterval(tick, 2500);
-  state.cleanup.push(() => {
-    if (state.knowledgeWatchTimer) window.clearInterval(state.knowledgeWatchTimer);
-    state.knowledgeWatchTimer = null;
-    if (state.refreshTimer) window.clearTimeout(state.refreshTimer);
-    state.refreshTimer = null;
-  });
-}
-
-async function refreshKnowledgeProjectionIfChanged() {
-  const campaign = selectedCampaign();
-  if (!campaign || state.knowledgeProjectionDisabled || !campaign.payload?.knowledge) return false;
-  const refs = campaignKnowledgeRefs(campaign);
-  try {
-    const [companyRows, contactRows, runRows] = await Promise.all([
-      readKnowledgeRows(refs, refs.companiesKey),
-      readKnowledgeRows(refs, refs.contactsKey),
-      readKnowledgeRows(refs, refs.runsKey, 1000),
-    ]);
-    const signature = knowledgeRowsSignature(campaign.id, companyRows, contactRows, runRows);
-    if (signature === state.knowledgeProjectionSignature) return false;
-    state.knowledgeProjectionSignature = signature;
-    if (companyRows.length) state.companies = mergeProjectionById(state.companies, projectCompaniesFromKnowledgeRows(campaign, companyRows));
-    if (contactRows.length) state.pipeline = dedupePipelineItems(mergeProjectionById(state.pipeline, projectPipelineFromKnowledgeRows(campaign, contactRows)));
-    if (runRows.length) state.runs = mergeProjectionById(state.runs, projectRunsFromKnowledgeRows(campaign, runRows));
-    return true;
-  } catch (error) {
-    console.warn('[outbound] knowledge projection watch failed', error);
-    return false;
-  }
-}
-
-function knowledgeRowsSignature(campaignId, companyRows, contactRows, runRows) {
-  const compact = (rows, idFn) => rows.map((row) => [
-    idFn(row),
-    row.updated_at_ms || row.researched_at_ms || row.imported_at_ms || row.created_at_ms || '',
-    row.company_name || row.name || row.contact_name || row.run_type || '',
-    row.research_status || row.qualification_status || row.contact_research_status || row.lead_status || row.status || '',
-  ].join(':')).sort().join('|');
-  return [
-    campaignId,
-    compact(companyRows, (row) => row.company_id || companyIdFromKnowledgeRow({ id: campaignId }, row)),
-    compact(contactRows, (row) => row.pipeline_id || row.contact_id || row.company_id || ''),
-    compact(runRows, (row) => row.run_id || row.command_id || row.company_id || ''),
-  ].join('::');
-}
-
 function wireEvents(root) {
-  root.addEventListener('ctox-pane-grammar-change', (event) => {
+  // Listener je Montage: das App-root bleibt über Remounts dasselbe Element; mit dem Signal der Montage
+  // meldet unmount alle Listener ab (sonst feuern Klicks nach dem Remount mehrfach).
+  const signal = state.mountSignal;
+  const on = (type, fn) => root.addEventListener(type, fn, signal ? { signal } : undefined);
+  on('ctox-pane-grammar-change', (event) => {
     const pane = event.target?.closest?.('.outbound-left');
     if (!pane || !event.detail) return;
     state.campaignSearch = event.detail.search || '';
@@ -2092,7 +1880,7 @@ function wireEvents(root) {
     renderCampaignList(pane);
   });
 
-  root.addEventListener('click', async (event) => {
+  on('click', async (event) => {
     const action = event.target.closest('[data-action]')?.dataset.action;
     const view = event.target.closest('[data-view]')?.dataset.view;
     const filter = event.target.closest('[data-filter]')?.dataset.filter;
@@ -2197,7 +1985,7 @@ function wireEvents(root) {
       const itemId = tr.dataset.id;
       const contactIndex = Number(tr.dataset.contactIndex);
       const noteKey = event.target.dataset.noteKey;
-      if (confirm('Diesen Notiz-Typ löschen?')) {
+      if (await confirmDialog('Diesen Notiz-Typ löschen?', { danger: true })) {
         await updateContactInPipelineItem(itemId, contactIndex, (c) => {
           if (c.notes) delete c.notes[noteKey];
         });
@@ -2213,7 +2001,7 @@ function wireEvents(root) {
       if (!tr) return;
       const itemId = tr.dataset.id;
       const contactIndex = Number(tr.dataset.contactIndex);
-      const raw = prompt('Neuen Notiz-Typ anlegen (Name):', '');
+      const raw = await promptDialog('Neuen Notiz-Typ anlegen (Name):', '');
       if (!raw) return;
       const safeKey = 'note_' + raw.trim().toLowerCase().replace(/\s+/g, '_');
       await updateContactInPipelineItem(itemId, contactIndex, (c) => {
@@ -2296,11 +2084,15 @@ function wireEvents(root) {
       exportCampaignRecords();
       return;
     }
-    if (action === 'import-source') {
-      if (id) state.selectedCampaignId = id;
-      await openCompanyImporter();
+    if (action === 'import-source' || action === 'open-campaign-runbook') await runCampaignAction(action, id);
+    if (action === 'campaign-more') {
+      event.preventDefault();
+      const campaign = state.campaigns.find((item) => item.id === id);
+      if (!campaign) return;
+      const choice = await openActionMenu(event.target.closest('[data-action="campaign-more"]'), campaignMenuItems(campaign), t('campaignActions', 'Kampagnen-Aktionen'));
+      if (choice) await runCampaignAction(choice, id);
+      return;
     }
-    if (action === 'open-campaign-runbook') openCampaignRunbook(id || state.selectedCampaignId);
     if (action === 'edit-campaign') {
       state.editingCampaignId = id || state.selectedCampaignId;
       renderCampaignEditorModal({ force: true });
@@ -2315,7 +2107,7 @@ function wireEvents(root) {
       updateCampaignSelectionInPlace();
     }
     if (action === 'save-campaign-edit') await saveCampaignInlineEdit(id || state.selectedCampaignId);
-    if (action === 'delete-campaign') await deleteCampaign(id || state.selectedCampaignId);
+    if (action === 'delete-campaign') await runCampaignAction(action, id);
     if (action === 'select-company-row') {
       const companyId = event.target.closest('[data-company-id]')?.dataset.companyId || id;
       if (companyId) {
@@ -2333,12 +2125,18 @@ function wireEvents(root) {
       updateDetailPaneVisibility();
       return;
     }
-    if (action === 'research-company') await queueCompanyResearch(id || state.selectedCompanyId);
-    if (action === 'validate-company-research') await validateCompanyResearch(id || state.selectedCompanyId);
-    if (action === 'download-company-research-log') downloadCompanyResearchLog(id || state.selectedCompanyId);
-    if (action === 'qualify-company') await setCompanyQualification(id || state.selectedCompanyId, 'qualified');
-    if (action === 'reject-company') await setCompanyQualification(id || state.selectedCompanyId, 'rejected');
-    if (action === 'send-pipeline') await sendCompanyToPipeline(id || state.selectedCompanyId);
+    if (['research-company', 'validate-company-research', 'download-company-research-log', 'qualify-company', 'reject-company', 'send-pipeline'].includes(action)) {
+      await runCompanyAction(action, id || state.selectedCompanyId);
+    }
+    if (action === 'company-more') {
+      event.preventDefault();
+      event.stopPropagation();
+      const company = state.companies.find((item) => item.id === id);
+      if (!company) return;
+      const choice = await openActionMenu(event.target.closest('[data-action="company-more"]'), companyMenuItems(company), t('companyActions', 'Firmen-Aktionen'));
+      if (choice) await runCompanyAction(choice, id);
+      return;
+    }
     if (action === 'select-company-contact') {
       event.preventDefault();
       event.stopPropagation();
@@ -2358,7 +2156,7 @@ function wireEvents(root) {
       const btn = event.target.closest('[data-action="delete-company-contact"]');
       const itemId = btn.dataset.itemId;
       const index = Number(btn.dataset.index);
-      if (itemId && confirm('Diesen Ansprechpartner wirklich löschen?')) {
+      if (itemId && await confirmDialog('Diesen Ansprechpartner wirklich löschen?', { danger: true })) {
         await deleteContactFromPipelineItem(itemId, index);
       }
       return;
@@ -2424,38 +2222,15 @@ function wireEvents(root) {
       const drawer = root.querySelector('.outbound-research-panel') || root.querySelector('.outbound-research-drawer');
       const domainName = (drawer?.querySelector('#mailserver-new-domain-input')?.value || '').trim();
       if (!domainName) {
-        showBusinessAlert(t('pleaseEnterDomain', 'Bitte gib einen Domain-Namen ein.'));
+        reportStatus('warn', 'outbound.mailserver.input', t('pleaseEnterDomain', 'Bitte gib einen Domain-Namen ein.'));
         return;
       }
-      state.mailserver = state.mailserver || { domains: [], users: [], loading: false, error: null };
-      state.mailserver.loading = true;
-      const rPanel = root.querySelector('.outbound-research-drawer');
-      if (rPanel) {
-        rPanel.innerHTML = renderResearchSettingsDrawer(selectedCampaign());
-      }
-      try {
-        const commandId = `cmd_mailserver_save_domain_${crypto.randomUUID()}`;
-        const result = await state.ctx.commandBus.dispatch({
-          id: commandId,
-          module: 'ctox',
-          command_type: 'ctox.mailserver.save_domain',
-          record_id: commandId,
-          inbound_channel: 'business_os.outbound',
-          payload: {
-            domain_name: domainName,
-            dkim_selector: 'default',
-            dkim_private_key: '',
-          },
-          client_context: { source_module: 'outbound' }
-        });
-        if (!result || (result.status !== 'completed' && !result.result)) {
-          throw new Error('Fehler beim Speichern der Domain.');
-        }
-      } catch (err) {
-        showBusinessAlert(err.message || String(err));
-      } finally {
-        await loadMailserverConfig();
-      }
+      clearStatus('outbound.mailserver.input');
+      mailserverCommand('ctox.mailserver.save_domain', {
+        domain_name: domainName,
+        dkim_selector: 'default',
+        // kein dkim_private_key: den Schlüssel erzeugt der Kern (CAP-3 #831)
+      });
       return;
     }
 
@@ -2465,36 +2240,12 @@ function wireEvents(root) {
       const btn = event.target.closest('[data-action="mailserver-delete-domain"]');
       const domainName = btn?.dataset.domain;
       if (!domainName) return;
-      const confirmed = await showBusinessConfirm(
+      const confirmed = await confirmDialog(
         t('deleteDomainConfirm', 'Möchtest du die Domain "{0}" wirklich löschen? Alle E-Mail-Konten dieser Domain könnten beeinträchtigt werden.', domainName),
         { danger: true }
       );
       if (!confirmed) return;
-      state.mailserver = state.mailserver || { domains: [], users: [], loading: false, error: null };
-      state.mailserver.loading = true;
-      const rPanel = root.querySelector('.outbound-research-drawer');
-      if (rPanel) {
-        rPanel.innerHTML = renderResearchSettingsDrawer(selectedCampaign());
-      }
-      try {
-        const commandId = `cmd_mailserver_delete_domain_${crypto.randomUUID()}`;
-        const result = await state.ctx.commandBus.dispatch({
-          id: commandId,
-          module: 'ctox',
-          command_type: 'ctox.mailserver.delete_domain',
-          record_id: commandId,
-          inbound_channel: 'business_os.outbound',
-          payload: { domain_name: domainName },
-          client_context: { source_module: 'outbound' }
-        });
-        if (!result || (result.status !== 'completed' && !result.result)) {
-          throw new Error('Fehler beim Löschen der Domain.');
-        }
-      } catch (err) {
-        showBusinessAlert(err.message || String(err));
-      } finally {
-        await loadMailserverConfig();
-      }
+      mailserverCommand('ctox.mailserver.delete_domain', { domain_name: domainName });
       return;
     }
 
@@ -2505,34 +2256,11 @@ function wireEvents(root) {
       const username = (drawer?.querySelector('#mailserver-new-username-input')?.value || '').trim();
       const password = (drawer?.querySelector('#mailserver-new-password-input')?.value || '').trim();
       if (!username || !password) {
-        showBusinessAlert(t('pleaseEnterUserPass', 'Bitte gib eine E-Mail-Adresse und ein Passwort ein.'));
+        reportStatus('warn', 'outbound.mailserver.input', t('pleaseEnterUserPass', 'Bitte gib eine E-Mail-Adresse und ein Passwort ein.'));
         return;
       }
-      state.mailserver = state.mailserver || { domains: [], users: [], loading: false, error: null };
-      state.mailserver.loading = true;
-      const rPanel = root.querySelector('.outbound-research-drawer');
-      if (rPanel) {
-        rPanel.innerHTML = renderResearchSettingsDrawer(selectedCampaign());
-      }
-      try {
-        const commandId = `cmd_mailserver_save_user_${crypto.randomUUID()}`;
-        const result = await state.ctx.commandBus.dispatch({
-          id: commandId,
-          module: 'ctox',
-          command_type: 'ctox.mailserver.save_user',
-          record_id: commandId,
-          inbound_channel: 'business_os.outbound',
-          payload: { username, password },
-          client_context: { source_module: 'outbound' }
-        });
-        if (!result || (result.status !== 'completed' && !result.result)) {
-          throw new Error('Fehler beim Erstellen des E-Mail-Kontos.');
-        }
-      } catch (err) {
-        showBusinessAlert(err.message || String(err));
-      } finally {
-        await loadMailserverConfig();
-      }
+      clearStatus('outbound.mailserver.input');
+      mailserverCommand('ctox.mailserver.save_user', { username, password });
       return;
     }
 
@@ -2542,44 +2270,19 @@ function wireEvents(root) {
       const btn = event.target.closest('[data-action="mailserver-delete-user"]');
       const username = btn?.dataset.username;
       if (!username) return;
-      const confirmed = await showBusinessConfirm(
+      const confirmed = await confirmDialog(
         t('deleteUserConfirm', 'Möchtest du das E-Mail-Konto "{0}" wirklich löschen? Alle in diesem Postfach gespeicherten E-Mails gehen unwiderruflich verloren.', username),
         { danger: true }
       );
       if (!confirmed) return;
-      state.mailserver = state.mailserver || { domains: [], users: [], loading: false, error: null };
-      state.mailserver.loading = true;
-      const rPanel = root.querySelector('.outbound-research-drawer');
-      if (rPanel) {
-        rPanel.innerHTML = renderResearchSettingsDrawer(selectedCampaign());
-      }
-      try {
-        const commandId = `cmd_mailserver_delete_user_${crypto.randomUUID()}`;
-        const result = await state.ctx.commandBus.dispatch({
-          id: commandId,
-          module: 'ctox',
-          command_type: 'ctox.mailserver.delete_user',
-          record_id: commandId,
-          inbound_channel: 'business_os.outbound',
-          payload: { username },
-          client_context: { source_module: 'outbound' }
-        });
-        if (!result || (result.status !== 'completed' && !result.result)) {
-          throw new Error('Fehler beim Löschen des E-Mail-Kontos.');
-        }
-      } catch (err) {
-        showBusinessAlert(err.message || String(err));
-      } finally {
-        await loadMailserverConfig();
-      }
+      mailserverCommand('ctox.mailserver.delete_user', { username });
       return;
     }
 
     if (action === 'hide-company') {
       event.preventDefault();
       event.stopPropagation();
-      hideCompany(id);
-      render(true);
+      await runCompanyAction(action, id);
       return;
     }
     if (action === 'toggle-hidden-companies' || event.target.closest('#toggle-hidden-companies')) {
@@ -2606,7 +2309,7 @@ function wireEvents(root) {
   });
 
   // Double-click delegated inline editors
-  root.addEventListener('dblclick', async (event) => {
+  on('dblclick', async (event) => {
     const tr = event.target.closest('tr');
     if (!tr || tr.dataset.contactIndex == null) return;
 
@@ -2730,7 +2433,7 @@ function wireEvents(root) {
   });
 
   // Hover-peeking mouseover/mouseout listeners
-  root.addEventListener('mouseover', (event) => {
+  on('mouseover', (event) => {
     const tab = event.target.closest('.msg-tab');
     if (tab) {
       const tr = tab.closest('tr');
@@ -2776,7 +2479,7 @@ function wireEvents(root) {
     }
   });
 
-  root.addEventListener('mouseout', (event) => {
+  on('mouseout', (event) => {
     const tab = event.target.closest('.msg-tab');
     if (tab) {
       const tr = tab.closest('tr');
@@ -2824,7 +2527,7 @@ function wireEvents(root) {
     }
   });
 
-  root.addEventListener('input', (event) => {
+  on('input', (event) => {
     if (event.target.matches('[data-campaign-edit-field]')) {
       const editor = event.target.closest('.outbound-campaign-edit');
       syncCampaignEditDraftFromEditor(editor);
@@ -2849,10 +2552,10 @@ function wireEvents(root) {
     }
   });
 
-  root.addEventListener('change', (event) => {
+  on('change', (event) => {
     if (event.target.matches('[data-campaign-record-import]')) {
       const input = event.target;
-      importCampaignRecords(input.files?.[0]).catch((error) => showBusinessAlert(error?.message || String(error)));
+      importCampaignRecords(input.files?.[0]).catch((error) => reportStatus('error', 'outbound.campaign.import', error?.message || String(error)));
       input.value = '';
       return;
     }
@@ -2875,9 +2578,9 @@ function wireEvents(root) {
     }
   });
 
-  root.addEventListener('keydown', (event) => {
+  on('keydown', (event) => {
     if (event.key !== 'Escape') return;
-    if (state.ctx?.host?.querySelector('.outbound-research-drawer')) {
+    if (state.root?.querySelector('.outbound-research-drawer')) {
       event.preventDefault();
       closeResearchSettingsDrawer();
       return;
@@ -2909,7 +2612,7 @@ function applyCampaignIdeaTemplate(select) {
 
 function render(force = false) {
   if (!force) {
-    const hasInlineEditor = !!state.ctx?.host?.querySelector('.inline-editor');
+    const hasInlineEditor = !!state.root?.querySelector('.inline-editor');
     if (state.isScrolling || hasInlineEditor || activeOverlay) {
       state.pendingRenderAfterScroll = true;
       return;
@@ -2917,6 +2620,23 @@ function render(force = false) {
   }
   renderLeft();
   renderCenter(force);
+  reportAgentTaskState();
+}
+
+// Strang SKL-O: Ausgang der Agentenaufträge (Campaign-Setup, Anschreiben) nur über die Zustandszone.
+function reportAgentTaskState() {
+  const campaign = selectedCampaign();
+  const setup = campaign?.payload?.campaign_setup_task;
+  if (setup && setup.status === 'failed') {
+    reportStatus('error', 'outbound.campaign.setup', `${t('campaignSetupTaskTitle', 'Outbound Campaign einrichten')}: ${setup.error || setup.status}`, setup.task_id);
+  } else clearStatus('outbound.campaign.setup');
+  const failed = (state.pipeline || [])
+    .filter((item) => !campaign || item.campaign_id === campaign.id)
+    .flatMap((item) => (Array.isArray(item.contacts) ? item.contacts : []))
+    .find((contact) => contact?.outreach_status === 'draft_failed' && contact.outreach_error);
+  if (failed) {
+    reportStatus('error', 'outbound.outreach.draft', `${t('outreachDraftFailed', 'Anschreiben generieren')}: ${failed.outreach_error}`, failed.outreach_task_id);
+  } else clearStatus('outbound.outreach.draft');
 }
 
 function cardsViewIcon() {
@@ -2955,6 +2675,17 @@ function campaignBandCounts(campaigns = visibleCampaigns()) {
   const counts = { all: campaigns.length, active: 0, planning: 0, done: 0 };
   campaigns.forEach((campaign) => { counts[campaignStatusBand(campaign)] += 1; });
   return counts;
+}
+
+// Textdiät Regel 4 (15.10.): Kampagnenstatus in Nutzerbegriffen; unbekannte Rohwerte („string“, „lead_qualified“
+// ohne Eintrag) erscheinen nicht in der Listenzeile, im Filter fällt das Label auf den Wert zurück.
+const CAMPAIGN_STATUS_LABELS = Object.freeze({
+  de: { active: 'Aktiv', paused: 'Pausiert', draft: 'Entwurf', planning: 'Planung', planned: 'Planung', running: 'Läuft', completed: 'Beendet', done: 'Beendet', ended: 'Beendet', finished: 'Beendet', archived: 'Archiviert', qualified: 'Qualifiziert', lead_qualified: 'Lead qualifiziert', reply_received: 'Antwort erhalten', contacted: 'Kontaktiert', rejected: 'Abgelehnt' }, // v4-allow: label (Kampagnenstatus, Fachbegriff)
+  en: { active: 'Active', paused: 'Paused', draft: 'Draft', planning: 'Planning', planned: 'Planning', running: 'Running', completed: 'Ended', done: 'Ended', ended: 'Ended', finished: 'Ended', archived: 'Archived', qualified: 'Qualified', lead_qualified: 'Lead qualified', reply_received: 'Reply received', contacted: 'Contacted', rejected: 'Rejected' }, // v4-allow: en
+});
+function campaignStatusLabel(status) {
+  const key = String(status || 'active').trim().toLowerCase();
+  return (CAMPAIGN_STATUS_LABELS[state.lang] || CAMPAIGN_STATUS_LABELS.de)[key] || '';
 }
 
 function campaignStatusOptions(campaigns = visibleCampaigns()) {
@@ -3001,20 +2732,19 @@ function campaignColumnMarkup() {
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">${escapeHtml(t('outbound', 'Outbound'))}</span>
-          <h2 class="ctox-pane-title">${escapeHtml(t('campaignsAndSequences', 'Campaigns & Sequenzen'))}</h2>
+          <h2 class="ctox-pane-title">${escapeHtml(t('campaignsAndSequences', 'Kampagnen'))}</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button class="ctox-pane-icon" type="button" data-action="new-campaign" title="${escapeHtml(t('newCampaign', 'Neue Campaign'))}" aria-label="${escapeHtml(t('newCampaign', 'Neue Campaign'))}">${actionIcon('add')}</button>
-          <button class="ctox-pane-icon" type="button" data-action="import-campaign-records" title="${escapeHtml(t('importCampaigns', 'Campaigns importieren'))}" aria-label="${escapeHtml(t('importCampaigns', 'Campaigns importieren'))}">${actionIcon('download')}</button>
-          <button class="ctox-pane-icon" type="button" data-action="export-campaign-records" title="${escapeHtml(t('exportCampaigns', 'Campaigns exportieren'))}" aria-label="${escapeHtml(t('exportCampaigns', 'Campaigns exportieren'))}">${actionIcon('export')}</button>
+          <button class="ctox-pane-icon" type="button" data-action="new-campaign" title="${escapeHtml(t('newCampaign', 'Neue Kampagne'))}" aria-label="${escapeHtml(t('newCampaign', 'Neue Kampagne'))}">${actionIcon('add')}</button>
+          <button class="ctox-pane-icon" type="button" data-action="import-campaign-records" title="${escapeHtml(t('importCampaigns', 'Kampagnen importieren'))}" aria-label="${escapeHtml(t('importCampaigns', 'Kampagnen importieren'))}">${actionIcon('download')}</button>
+          <button class="ctox-pane-icon" type="button" data-action="export-campaign-records" title="${escapeHtml(t('exportCampaigns', 'Kampagnen exportieren'))}" aria-label="${escapeHtml(t('exportCampaigns', 'Kampagnen exportieren'))}">${actionIcon('export')}</button>
           <input type="file" accept="application/json,.json" data-campaign-record-import hidden />
         </div>
       </div>
     </header>
     <div class="outbound-pane-toolbelt">
       <div class="ctox-filterbar">
-        <input class="ctox-pane-search" type="search" data-pg-search value="${escapeHtml(state.campaignSearch)}" placeholder="${escapeHtml(t('campaignSearch', 'Campaign oder Sequenz suchen'))}" aria-label="${escapeHtml(t('campaignSearch', 'Campaign oder Sequenz suchen'))}">
+        <input class="ctox-pane-search" type="search" data-pg-search value="${escapeHtml(state.campaignSearch)}" placeholder="${escapeHtml(t('campaignSearch', 'Kampagne oder Sequenz suchen'))}" aria-label="${escapeHtml(t('campaignSearch', 'Kampagne oder Sequenz suchen'))}">
         <div class="ctox-view-toggle" role="group" aria-label="${escapeHtml(t('view', 'Darstellung'))}">
           <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="${cards}" aria-label="${escapeHtml(t('cardsView', 'Kachelansicht'))}" title="${escapeHtml(t('cardsView', 'Kachelansicht'))}">${cardsViewIcon()}</button>
           <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="${!cards}" aria-label="${escapeHtml(t('listView', 'Listenansicht'))}" title="${escapeHtml(t('listView', 'Listenansicht'))}">${listViewIcon()}</button>
@@ -3025,7 +2755,7 @@ function campaignColumnMarkup() {
         <div class="ctox-filter-row">
           <select class="ctox-select" data-pg-filter data-pg-name="status" data-pg-default="all" aria-label="${escapeHtml(t('status', 'Status'))}">
             <option value="all">${escapeHtml(t('allStatus', 'Alle Status'))}</option>
-            ${campaignStatusOptions().map((status) => `<option value="${escapeHtml(status)}"${state.campaignStatusFilter === status ? ' selected' : ''}>${escapeHtml(status)}</option>`).join('')}
+            ${campaignStatusOptions().map((status) => `<option value="${escapeHtml(status)}"${state.campaignStatusFilter === status ? ' selected' : ''}>${escapeHtml(campaignStatusLabel(status) || status)}</option>`).join('')}
           </select>
           <select class="ctox-select" data-pg-filter data-pg-name="sort" data-pg-default="updated-desc" aria-label="${escapeHtml(t('sort', 'Sortieren'))}">
             <option value="updated-desc">${escapeHtml(t('sortUpdatedDesc', 'Aktualisiert ↓'))}</option>
@@ -3040,9 +2770,9 @@ function campaignColumnMarkup() {
           <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="${escapeHtml(t('resetFilters', 'Filter zurücksetzen'))}" title="${escapeHtml(t('resetFilters', 'Filter zurücksetzen'))}">${resetIcon()}</button>
         </div>
       </div>
-      <nav class="ctox-view-switch" aria-label="${escapeHtml(t('campaignStatusViews', 'Campaign-Status'))}">
+      <nav class="ctox-view-switch" aria-label="${escapeHtml(t('campaignStatusViews', 'Kampagnen-Status'))}">
         <div class="ctox-pane-tabs" role="tablist">
-          ${['all', 'active', 'planning', 'done'].map((key) => `<button type="button" class="ctox-pane-tab${state.campaignBand === key ? ' is-active' : ''}" role="tab" data-pg-band="${key}" aria-selected="${state.campaignBand === key}">${escapeHtml(campaignBandLabel(key))}<span class="view-count" data-pg-count="${key}"> (${counts[key]})</span></button>`).join('')}
+          ${['all', 'active', 'planning', 'done'].map((key) => `<button type="button" class="ctox-pane-tab${state.campaignBand === key ? ' is-active' : ''}" role="tab" data-pg-band="${key}" aria-selected="${state.campaignBand === key}">${escapeHtml(campaignBandLabel(key))}</button>`).join('')}
         </div>
       </nav>
     </div>
@@ -3054,7 +2784,7 @@ function campaignColumnMarkup() {
 }
 
 function renderLeft() {
-  const root = state.ctx.host.querySelector('.outbound-left');
+  const root = state.root.querySelector('.outbound-left');
   if (!root) return;
   const needsChrome = !root.querySelector('[data-campaign-list]') || state.campaignChromeLang !== state.lang;
   if (needsChrome) {
@@ -3079,12 +2809,12 @@ function updateCampaignStatusOptions(root) {
   select.dataset.optionsSignature = signature;
   const selected = options.includes(state.campaignStatusFilter) ? state.campaignStatusFilter : 'all';
   state.campaignStatusFilter = selected;
-  select.innerHTML = `<option value="all">${escapeHtml(t('allStatus', 'Alle Status'))}</option>${options.map((status) => `<option value="${escapeHtml(status)}">${escapeHtml(status)}</option>`).join('')}`;
+  select.innerHTML = `<option value="all">${escapeHtml(t('allStatus', 'Alle Status'))}</option>${options.map((status) => `<option value="${escapeHtml(status)}">${escapeHtml(campaignStatusLabel(status) || status)}</option>`).join('')}`;
   select.value = selected;
   root.__ctoxPaneGrammar?.refreshDot?.();
 }
 
-function renderCampaignList(root = state.ctx?.host?.querySelector?.('.outbound-left')) {
+function renderCampaignList(root = state.root?.querySelector?.('.outbound-left')) {
   if (!root) return;
   const list = root.querySelector('[data-campaign-list]');
   const well = root.querySelector('.ctox-well');
@@ -3094,15 +2824,7 @@ function renderCampaignList(root = state.ctx?.host?.querySelector?.('.outbound-l
   list.classList.toggle('is-cards', state.campaignViewMode !== 'list');
   list.classList.toggle('is-list', state.campaignViewMode === 'list');
   let listHtml = campaigns.map(renderCampaignItem).join('');
-  if (!listHtml) {
-    const unfiltered = (state.campaignBand || 'all') === 'all'
-      && (state.campaignStatusFilter || 'all') === 'all'
-      && !state.campaignSearch.trim();
-    const readiness = unfiltered ? outboundCollectionReadiness('outbound_campaigns') : null;
-    listHtml = readiness?.ready === false
-      ? syncingStateHint()
-      : `<div class="ctox-empty">${escapeHtml(t('noCampaignsForView', 'Keine Campaigns für diese Ansicht.'))}</div>`;
-  }
+  // v4: leere Liste rendert nichts (kein Sync-/Leertext).
   list.innerHTML = listHtml;
   if (well && previousScrollTop) well.scrollTop = previousScrollTop;
   renderCampaignCountsAndFooter(root, campaigns.length);
@@ -3110,9 +2832,8 @@ function renderCampaignList(root = state.ctx?.host?.querySelector?.('.outbound-l
 
 function renderCampaignCountsAndFooter(root, visibleCount) {
   const counts = campaignBandCounts();
-  const bandLabel = campaignBandLabel(state.campaignBand);
-  const statusLabel = state.campaignStatusFilter === 'all' ? t('allStatus', 'Alle Status') : state.campaignStatusFilter;
-  const footer = `${visibleCount} ${t('entries', 'Einträge')} · ${bandLabel} · ${statusLabel}`;
+  // Textdiät R2: der Fuß wiederholte nur Reiterzähler und Filter („7 Einträge · Alle · Alle Status“).
+  const footer = '';
   const pg = root.__ctoxPaneGrammar;
   if (pg?.setCounts) pg.setCounts(counts);
   else for (const [key, value] of Object.entries(counts)) {
@@ -3127,7 +2848,7 @@ function renderCampaignCountsAndFooter(root, visibleCount) {
 }
 
 function updateCampaignSelectionInPlace() {
-  const list = state.ctx?.host?.querySelector?.('[data-campaign-list]');
+  const list = state.root?.querySelector?.('[data-campaign-list]');
   list?.querySelectorAll?.('[data-campaign-id]').forEach((row) => {
     const selected = row.dataset.campaignId === state.selectedCampaignId;
     row.classList.toggle('is-selected', selected);
@@ -3138,20 +2859,20 @@ function updateCampaignSelectionInPlace() {
 function renderCampaignItem(campaign) {
   const metrics = campaignFunnelMetrics(campaign.id);
   const selected = campaign.id === state.selectedCampaignId;
-  const knowledge = campaignKnowledgeRefs(campaign);
   const status = String(campaign.status || 'active');
-  const meta = `${status} · ${campaignSequenceSummary(campaign)} · ${formatCount(metrics.leadQualified)} ${t('leadsShort', 'Leads')}`;
+  // Textdiät E: keine Nullzähler („0 Leads“) und kein „Keine Sequenz“ in der Liste.
+  const sequenceSummary = campaignSequences(campaign.id).length ? campaignSequenceSummary(campaign) : '';
+  const leadCount = Number(metrics.leadQualified) || 0;
+  const meta = [campaignStatusLabel(status), sequenceSummary, leadCount ? `${formatCount(leadCount)} ${leadCount === 1 ? t('leadShortOne', 'Lead') : t('leadsShort', 'Leads')}` : ''].filter(Boolean).join(' · ');
   return `
     <article class="ctox-list-item outbound-campaign-item${selected ? ' is-selected' : ''}" role="option" aria-selected="${selected}" data-campaign-id="${escapeHtml(campaign.id)}" data-context-record-id="${escapeHtml(campaign.id)}" data-context-record-type="outbound_campaign" data-context-label="${escapeHtml(campaign.name)}">
       <button class="outbound-campaign-select" type="button" data-action="select-campaign" data-id="${escapeHtml(campaign.id)}">
         <strong>${escapeHtml(campaign.name)}</strong>
         <span>${escapeHtml(meta)}</span>
       </button>
-      <div class="outbound-campaign-actions" aria-label="${escapeHtml(t('campaignActions', 'Campaign-Aktionen'))}">
-        <button class="ctox-pane-icon" type="button" data-action="import-source" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('importJob', 'Importjob anlegen'))}" aria-label="${escapeHtml(t('importJob', 'Importjob anlegen'))}">${actionIcon('download')}</button>
-        <button class="ctox-pane-icon" type="button" data-action="open-campaign-runbook" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('openRunbook', 'Campaign Runbook öffnen'))}" aria-label="${escapeHtml(t('openRunbook', 'Campaign Runbook öffnen'))}" ${knowledge.runbookId ? '' : 'disabled'}>${actionIcon('book')}</button>
-        <button class="ctox-pane-icon" type="button" data-action="edit-campaign" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('editCampaign', 'Campaign bearbeiten'))}" aria-label="${escapeHtml(t('editCampaign', 'Campaign bearbeiten'))}">${actionIcon('edit')}</button>
-        <button class="ctox-pane-icon" type="button" data-action="delete-campaign" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('deleteCampaign', 'Campaign löschen'))}" aria-label="${escapeHtml(t('deleteCampaign', 'Campaign löschen'))}">${actionIcon('trash')}</button>
+      <div class="outbound-campaign-actions" aria-label="${escapeHtml(t('campaignActions', 'Kampagnen-Aktionen'))}">
+        <button class="ctox-pane-icon" type="button" data-action="edit-campaign" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('editCampaign', 'Kampagne bearbeiten'))}" aria-label="${escapeHtml(t('editCampaign', 'Kampagne bearbeiten'))}">${actionIcon('edit')}</button>
+        ${renderMoreButton('campaign-more', campaign.id, t('moreActions', 'Weitere Aktionen'))}
       </div>
     </article>
   `;
@@ -3204,26 +2925,23 @@ async function importCampaignRecords(file) {
   const campaigns = (Array.isArray(parsed) ? parsed : parsed?.campaigns || []).filter(validCampaignImportRecord);
   const sequences = (Array.isArray(parsed?.sequences) ? parsed.sequences : []).filter(validSequenceImportRecord);
   if (!campaigns.length && !sequences.length) {
-    throw new Error(t('campaignImportEmpty', 'Die JSON-Datei enthält keine gültigen Campaign- oder Sequenz-Datensätze.'));
+    throw new Error(t('campaignImportEmpty', 'Die JSON-Datei enthält keine gültigen Kampagnen- oder Sequenz-Datensätze.'));
   }
   const campaignCollection = outboundCollection('outbound_campaigns');
   const sequenceCollection = outboundCollection('outbound_sequences');
   if (campaigns.length && (!campaignCollection || !canWriteCollection('outbound_campaigns'))) {
-    throw new Error(t('campaignImportDenied', 'Campaigns können mit den aktuellen Rechten nicht importiert werden.'));
+    throw new Error(t('campaignImportDenied', 'Kampagnen können mit den aktuellen Rechten nicht importiert werden.'));
   }
   if (sequences.length && (!sequenceCollection || !canWriteCollection('outbound_sequences'))) {
     throw new Error(t('sequenceImportDenied', 'Sequenzen können mit den aktuellen Rechten nicht importiert werden.'));
   }
   for (const campaign of campaigns) await upsertDoc(campaignCollection, campaign.id, campaign);
   for (const sequence of sequences) await upsertDoc(sequenceCollection, sequence.id, sequence);
-  await loadAll({ hydrateKnowledge: false });
-  await loadActiveOutreachData();
+  deriveState({ skipImportRecovery: true });
   selectBestCampaignAfterLoad();
   render();
-  const message = t('campaignImportDone', '{0} Campaigns und {1} Sequenzen importiert.', campaigns.length, sequences.length);
-  if (state.ctx?.notifications?.show) {
-    state.ctx.notifications.show({ type: 'success', title: t('outbound', 'Outbound'), message });
-  } else showBusinessAlert(message);
+  const message = t('campaignImportDone', '{0} Kampagnen und {1} Sequenzen importiert.', campaigns.length, sequences.length);
+  reportStatus('info', 'outbound.campaign.import', message);
 }
 
 function renderCampaignEditItem(campaign) {
@@ -3280,8 +2998,7 @@ function renderCampaignEditItem(campaign) {
         </label>
         <label class="ctox-compact-field outbound-campaign-briefing">
           <span>${escapeHtml(t('campaignBriefing', 'Briefing'))}</span>
-          <textarea class="ctox-textarea" data-campaign-edit-field="briefing" rows="7" placeholder="${escapeHtml(t('campaignBriefingPlaceholder', 'Beschreibe in natürlicher Sprache, wen die Campaign erreichen soll, über welchen Kanal, welches Angebot verkauft wird und welche Folgeaktionen geplant sind.'))}">${escapeHtml(briefing)}</textarea>
-          <small>${escapeHtml(t('campaignBriefingHelp', 'Dieser Text ist die zentrale Arbeitsanweisung der Campaign und bleibt später jederzeit editierbar.'))}</small>
+          <textarea class="ctox-textarea" data-campaign-edit-field="briefing" rows="7" placeholder="${escapeHtml(t('campaignBriefingPlaceholder', 'Zielgruppe, Kanal, Angebot, Folgeaktionen'))}">${escapeHtml(briefing)}</textarea>
         </label>
       </div>
       <div class="outbound-campaign-edit-actions">
@@ -3293,7 +3010,7 @@ function renderCampaignEditItem(campaign) {
 }
 
 function renderCampaignEditorModal(options = {}) {
-  const modal = state.ctx?.host?.querySelector?.('[data-campaign-editor-modal]');
+  const modal = state.root?.querySelector?.('[data-campaign-editor-modal]');
   if (!modal) return;
   const campaign = state.campaigns.find((item) => item.id === state.editingCampaignId)
     || (state.campaignCreateDraft?.id === state.editingCampaignId ? state.campaignCreateDraft : null);
@@ -3310,7 +3027,7 @@ function renderCampaignEditorModal(options = {}) {
   modal.innerHTML = `
     <section class="ctox-modal-card ctox-modal-card--wide" role="dialog" aria-modal="true" aria-labelledby="outbound-campaign-editor-title">
       <header class="ctox-modal-header">
-        <h2 class="ctox-modal-title" id="outbound-campaign-editor-title">${escapeHtml(campaign.payload?.create_draft ? t('createCampaignTitle', 'Campaign anlegen') : t('editCampaign', 'Campaign bearbeiten'))}</h2>
+        <h2 class="ctox-modal-title" id="outbound-campaign-editor-title">${escapeHtml(campaign.payload?.create_draft ? t('createCampaignTitle', 'Kampagne anlegen') : t('editCampaign', 'Kampagne bearbeiten'))}</h2>
         <button class="ctox-pane-icon" type="button" data-action="cancel-campaign-edit" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('close', 'Schließen'))}" aria-label="${escapeHtml(t('close', 'Schließen'))}">${actionIcon('close')}</button>
       </header>
       <div class="ctox-modal-body">${renderCampaignEditItem(campaign)}</div>
@@ -3370,7 +3087,7 @@ function formatCount(value) {
 function renderWorkbenchModeSwitch() {
   return `
     <div class="ctox-pane-tabs outbound-workbench-mode-switch" role="tablist" aria-label="${escapeHtml(t('workbenchMode', 'Workbench-Modus'))}">
-      <button type="button" class="ctox-pane-tab${state.outreachView ? '' : ' is-active'}" role="tab" data-action="set-workbench-mode" data-workbench-mode="campaign" aria-selected="${!state.outreachView}">${escapeHtml(t('campaignWorkbench', 'Campaign'))}</button>
+      <button type="button" class="ctox-pane-tab${state.outreachView ? '' : ' is-active'}" role="tab" data-action="set-workbench-mode" data-workbench-mode="campaign" aria-selected="${!state.outreachView}">${escapeHtml(t('campaignWorkbench', 'Kampagne'))}</button>
       <button type="button" class="ctox-pane-tab${state.outreachView ? ' is-active' : ''}" role="tab" data-action="set-workbench-mode" data-workbench-mode="outreach" aria-selected="${state.outreachView}">${escapeHtml(t('sequenceAndSending', 'Sequenz & Versand'))}</button>
     </div>
   `;
@@ -3401,24 +3118,18 @@ function renderOutreachCenterShell(campaign) {
 
 function renderQualificationCenterContent(campaign) {
   return `
-    <div class="outbound-research-activity-container">
-      ${renderResearchActivityPanel(campaign)}
-    </div>
     ${renderQualificationSplit(campaign)}
   `;
 }
 
 function renderCenter(force = false) {
-  const root = state.ctx.host.querySelector('.outbound-center');
+  const root = state.root.querySelector('.outbound-center');
   if (!root) return;
   state.centerResizeCleanup?.();
   state.centerResizeCleanup = null;
   const campaign = selectedCampaign();
   if (!campaign) {
-    const readiness = outboundCollectionReadiness('outbound_campaigns');
-    root.innerHTML = readiness?.ready === false
-      ? syncingStateHint()
-      : `<div class="ctox-empty">${escapeHtml(t('noCampaignSelected', 'Keine Campaign ausgewählt.'))}</div>`;
+    root.innerHTML = '';
     return;
   }
   if (state.outreachView) {
@@ -3487,7 +3198,7 @@ function renderCenter(force = false) {
 
     const hiddenCountBadge = root.querySelector('#toggle-hidden-companies span:last-child');
     if (hiddenCountBadge) {
-      hiddenCountBadge.textContent = hiddenCount;
+      hiddenCountBadge.textContent = hiddenCount || '';
     }
 
     // 4. Update tbody with table rows
@@ -3582,7 +3293,7 @@ function renderCenter(force = false) {
       <div class="outbound-pane-toolbelt">
       ${renderWorkbenchModeSwitch()}
       <div class="ctox-pane-tools outbound-center-tools">
-        <div class="ctox-pane-tabs outbound-funnel-tabs" role="tablist" aria-label="${escapeHtml(t('campaignFunnel', 'Campaign-Funnel'))}">
+        <div class="ctox-pane-tabs outbound-funnel-tabs" role="tablist" aria-label="${escapeHtml(t('campaignFunnel', 'Kampagnen-Funnel'))}">
           ${[
             ['all', t('filter_all', 'Input')],
             ['research', t('filter_research', 'Research')],
@@ -3614,7 +3325,7 @@ function renderCenter(force = false) {
 
         <button type="button" id="toggle-hidden-companies" class="ctox-button outbound-hidden-toggle" data-action="toggle-hidden-companies">
           <span>${escapeHtml(t('hiddenCompanies', 'Versteckte Firmen'))}</span>
-          <span>${hiddenCount}</span>
+          <span>${hiddenCount || ''}</span>
         </button>
       </div>
       </div>
@@ -3912,28 +3623,8 @@ function renderCRMCompanyRows(row) {
               <a href="${escapeHtml(row.company.website || '#')}" target="_blank" rel="noopener" class="company-name-title">${escapeHtml(row.company.name)}</a>
               ${row.company.domain ? `<a href="https://${escapeHtml(row.company.domain)}" target="_blank" rel="noopener" class="company-domain-link">${escapeHtml(row.company.domain)}</a>` : ''}
               ${row.company.qualification_status === 'rejected' ? '<span class="company-exclude-badge">Ausgeschlossen</span>' : ''}
-              <div class="outbound-cell-meta">
-                <span>Recht: ${escapeHtml(row.company.company_data?.legal_form || '—')}</span>
-                <span>Mitarbeiter: ${escapeHtml(row.company.company_data?.employee_count || '—')}</span>
-                <span>Umsatz: ${escapeHtml(row.company.company_data?.revenue_eur ? row.company.company_data.revenue_eur.toLocaleString('de-DE') + ' €' : '—')}</span>
-              </div>
-              <div class="outbound-cell-actions">
-                ${row.company.qualification_status === 'pending' ? `
-                  <button class="ctox-button ctox-button--sm" type="button" data-action="qualify-company" data-id="${escapeHtml(row.company.id)}">Qualifizieren</button>
-                  <button class="ctox-button ctox-button--sm is-danger" type="button" data-action="reject-company" data-id="${escapeHtml(row.company.id)}">Ausschließen</button>
-                ` : `
-                  <span class="ctox-badge ${row.company.qualification_status === 'qualified' ? 'is-success' : 'is-danger'}">
-                    ${row.company.qualification_status === 'qualified' ? 'Qualifiziert' : 'Ausgeschlossen'}
-                  </span>
-                  ${row.company.qualification_status === 'qualified' && row.company.pipeline_status !== 'pipeline' ? `
-                    <button class="ctox-button ctox-button--sm" type="button" data-action="send-pipeline" data-id="${escapeHtml(row.company.id)}">In Pipeline</button>
-                  ` : ''}
-                `}
-                <button class="ctox-button ctox-button--sm" type="button" data-action="hide-company" data-id="${escapeHtml(row.company.id)}">Ausblenden</button>
-                <button class="ctox-button ctox-button--sm" type="button" data-action="research-company" data-id="${escapeHtml(row.company.id)}" title="Unternehmensdaten nachrecherchieren">Nachrecherche</button>
-                <button class="ctox-button ctox-button--sm" type="button" data-action="validate-company-research" data-id="${escapeHtml(row.company.id)}" title="Recherche nach menschlicher Kontrolle markieren">Validiert</button>
-                <button class="ctox-button ctox-button--sm" type="button" data-action="download-company-research-log" data-id="${escapeHtml(row.company.id)}" title="Agent-Run-Log herunterladen">Log</button>
-              </div>
+              ${renderCompanyFacts(row.company)}
+              ${renderCompanyRowActions(row.company)}
             </div>
           </td>
         `;
@@ -3990,28 +3681,8 @@ function renderCRMCompanyRows(row) {
               <a href="${escapeHtml(row.company.website || '#')}" target="_blank" rel="noopener" class="company-name-title">${escapeHtml(row.company.name)}</a>
               ${row.company.domain ? `<a href="https://${escapeHtml(row.company.domain)}" target="_blank" rel="noopener" class="company-domain-link">${escapeHtml(row.company.domain)}</a>` : ''}
               ${row.company.qualification_status === 'rejected' ? '<span class="company-exclude-badge">Ausgeschlossen</span>' : ''}
-              <div class="outbound-cell-meta">
-                <span>Recht: ${escapeHtml(row.company.company_data?.legal_form || '—')}</span>
-                <span>Mitarbeiter: ${escapeHtml(row.company.company_data?.employee_count || '—')}</span>
-                <span>Umsatz: ${escapeHtml(row.company.company_data?.revenue_eur ? row.company.company_data.revenue_eur.toLocaleString('de-DE') + ' €' : '—')}</span>
-              </div>
-              <div class="outbound-cell-actions">
-                ${row.company.qualification_status === 'pending' ? `
-                  <button class="ctox-button ctox-button--sm" type="button" data-action="qualify-company" data-id="${escapeHtml(row.company.id)}">Qualifizieren</button>
-                  <button class="ctox-button ctox-button--sm is-danger" type="button" data-action="reject-company" data-id="${escapeHtml(row.company.id)}">Ausschließen</button>
-                ` : `
-                  <span class="ctox-badge ${row.company.qualification_status === 'qualified' ? 'is-success' : 'is-danger'}">
-                    ${row.company.qualification_status === 'qualified' ? 'Qualifiziert' : 'Ausgeschlossen'}
-                  </span>
-                  ${row.company.qualification_status === 'qualified' && row.company.pipeline_status !== 'pipeline' ? `
-                    <button class="ctox-button ctox-button--sm" type="button" data-action="send-pipeline" data-id="${escapeHtml(row.company.id)}">In Pipeline</button>
-                  ` : ''}
-                `}
-                <button class="ctox-button ctox-button--sm" type="button" data-action="hide-company" data-id="${escapeHtml(row.company.id)}">Ausblenden</button>
-                <button class="ctox-button ctox-button--sm" type="button" data-action="research-company" data-id="${escapeHtml(row.company.id)}" title="Unternehmensdaten nachrecherchieren">Nachrecherche</button>
-                <button class="ctox-button ctox-button--sm" type="button" data-action="validate-company-research" data-id="${escapeHtml(row.company.id)}" title="Recherche nach menschlicher Kontrolle markieren">Validiert</button>
-                <button class="ctox-button ctox-button--sm" type="button" data-action="download-company-research-log" data-id="${escapeHtml(row.company.id)}" title="Agent-Run-Log herunterladen">Log</button>
-              </div>
+              ${renderCompanyFacts(row.company)}
+              ${renderCompanyRowActions(row.company)}
             </div>
           </td>
         `;
@@ -4076,14 +3747,8 @@ function renderCRMCompanyRows(row) {
         html += `
           <td class="col-message">
             ${(state.generatingOutreach.has(contactKey) || contact.outreach_generating) ? `
-              <div class="outbound-message-loading">
-                <span class="outbound-spinner"></span>
-                <div>
-                  <strong>${escapeHtml(t('generatingOutreachEllipsis', 'Anschreiben wird generiert...'))}</strong>
-                  <div class="outbound-muted outbound-loading-hint">
-                    ${escapeHtml(state.generatingOutreach.get(contactKey)?.statusText || t('outreachInProgress', 'CTOX erstellt das Anschreiben...'))}
-                  </div>
-                </div>
+              <div class="msg-content" data-active-key="${escapeHtml(activeMsgKey)}" aria-busy="true">
+                <pre class="msg-text">—</pre>
               </div>
             ` : `
               <div class="msg-content" data-active-key="${escapeHtml(activeMsgKey)}">
@@ -4129,7 +3794,7 @@ function renderCRMCompanyRows(row) {
 }
 
 function updateQualificationSelectionInPlace() {
-  const root = state.ctx?.host?.querySelector?.('.outbound-center');
+  const root = state.root?.querySelector?.('.outbound-center');
   root?.querySelectorAll?.('.crm-table tbody tr[data-company-id]').forEach((row) => {
     const selected = row.dataset.companyId === state.selectedCompanyId;
     row.classList.toggle('is-selected', selected);
@@ -4138,7 +3803,7 @@ function updateQualificationSelectionInPlace() {
 }
 
 function updateDetailPaneVisibility(options = {}) {
-  const root = state.ctx?.host?.querySelector?.('.outbound-center');
+  const root = state.root?.querySelector?.('.outbound-center');
   const split = root?.querySelector?.('[data-outbound-center-split]');
   if (!root || !split) return;
   const hasSelection = state.activeView === 'pipeline'
@@ -4182,7 +3847,7 @@ function renderQualificationSplit(campaign) {
   const rows = filteredQualificationRows();
   const visibleRows = rows.slice(0, OUTBOUND_TABLE_RENDER_LIMIT);
   const emptyCompanyMessage = state.filter === 'all'
-    ? t('noCompaniesCampaign', 'Noch keine Unternehmen in dieser Campaign.')
+    ? t('noCompaniesCampaign', 'Noch keine Unternehmen in dieser Kampagne.')
     : t('noCompaniesFilter', 'Keine Unternehmen für Filter: {0}.', currentFilterLabel());
 
   const settings = getCampaignResearchSettings(campaign);
@@ -4215,7 +3880,7 @@ function renderQualificationSplit(campaign) {
   return `
     <div class="outbound-split-workbench${showDetail ? '' : ' is-detail-hidden'}" data-outbound-center-split>
       <div class="outbound-unified-workbench" data-view="${state.viewMode}">
-        <div class="outbound-table-scroll-unified">
+        <div class="outbound-table-scroll-unified" data-scroll-x>
           <table class="crm-table">
             <thead>
               <tr>
@@ -4254,6 +3919,108 @@ function syncTableEmptyOverlay(scrollContainer, shouldShow, message) {
   scrollContainer.insertAdjacentHTML('beforeend', html);
 }
 
+// Textdiät E: Firmendaten ohne Feld-Captions („Recht: — Mitarbeiter: — Umsatz: —“); nur vorhandene Werte,
+// die Bedeutung steht im Tooltip. Ohne Werte entfällt die Zeile.
+// OUTRES (TEXT-E Frage 2): je Firmenzeile höchstens eine Hauptaktion sichtbar – die zum Stand passende –, alle
+// übrigen Aktionen im „…“-Menü (Rahmen-Standard api.shell.menu). Menü-ids = bisherige data-action-Werte.
+const MORE_ICON = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>';
+
+// Offen = weder qualifiziert noch ausgeschlossen (wie labelQualification: „neu“) – Import setzt 'input', die
+// Normalisierung 'new', ältere Daten 'pending'. Vorher galt nur 'pending' als offen; 'input'/'new' zeigten fälschlich
+// „Ausgeschlossen“ ohne Qualifizieren/Ausschließen.
+function isCompanyOpen(company) {
+  return !['qualified', 'rejected'].includes(String(company?.qualification_status || '').toLowerCase());
+}
+
+function companyPrimaryAction(company) {
+  const status = company?.qualification_status;
+  if (isCompanyOpen(company)) return { action: 'qualify-company', label: t('qualifyCompany', 'Qualifizieren') };
+  if (status === 'qualified' && company.pipeline_status !== 'pipeline') return { action: 'send-pipeline', label: t('toPipeline', 'In Pipeline') };
+  return null;
+}
+
+function companyMenuItems(company) {
+  const items = [
+    { id: 'research-company', label: t('researchCompanyAgain', 'Nachrecherchieren') },
+    { id: 'validate-company-research', label: t('markResearchValidated', 'Als validiert markieren') },
+    { id: 'download-company-research-log', label: t('downloadRunLog', 'Run-Log herunterladen') },
+    { id: 'hide-company', label: t('hideCompany', 'Ausblenden') },
+  ];
+  if (isCompanyOpen(company)) items.push({ type: 'separator' }, { id: 'reject-company', label: t('rejectCompany', 'Ausschließen'), danger: true });
+  return items;
+}
+
+function renderMoreButton(action, id, label) {
+  return `<button class="ctox-pane-icon outbound-more-button" type="button" data-action="${action}" data-id="${escapeHtml(id)}" aria-haspopup="menu" aria-expanded="false" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${MORE_ICON}</button>`;
+}
+
+function renderCompanyRowActions(company) {
+  const primary = companyPrimaryAction(company);
+  const status = company.qualification_status;
+  const badge = isCompanyOpen(company) ? '' : `
+    <span class="ctox-badge ${status === 'qualified' ? 'is-success' : 'is-danger'}">${status === 'qualified' ? 'Qualifiziert' : 'Ausgeschlossen'}</span>`;
+  return `
+    <div class="outbound-cell-actions">
+      ${badge}
+      ${primary ? `<button class="ctox-button ctox-button--sm" type="button" data-action="${primary.action}" data-id="${escapeHtml(company.id)}">${escapeHtml(primary.label)}</button>` : ''}
+      ${renderMoreButton('company-more', company.id, t('moreActions', 'Weitere Aktionen'))}
+    </div>`;
+}
+
+function campaignMenuItems(campaign) {
+  const knowledge = campaignKnowledgeRefs(campaign);
+  return [
+    { id: 'import-source', label: t('importJob', 'Importjob anlegen') },
+    { id: 'open-campaign-runbook', label: t('openRunbook', 'Kampagnen-Runbook öffnen'), disabled: !knowledge.runbookId },
+    { type: 'separator' },
+    { id: 'delete-campaign', label: t('deleteCampaign', 'Kampagne löschen'), danger: true },
+  ];
+}
+
+// „…“ öffnet das Rahmen-Menü unter dem Knopf (window-sheet.js: Enter/Space am Knopf öffnet, Pfeiltasten/Pos1/Ende,
+// Enter wählt, Esc schließt und gibt den Fokus an den Knopf zurück). Antwort: id des Eintrags oder ''.
+async function openActionMenu(button, items, label) {
+  const shell = state.api?.shell;
+  if (!button || typeof shell?.menu !== 'function') return '';
+  const r = button.getBoundingClientRect();
+  button.setAttribute('aria-expanded', 'true');
+  try {
+    const choice = await shell.menu({ items, at: { x: Math.round(r.left), y: Math.round(r.bottom) }, label });
+    return typeof choice === 'string' ? choice : (choice?.id || '');
+  } finally {
+    button.setAttribute('aria-expanded', 'false');
+  }
+}
+
+async function runCompanyAction(action, companyId) {
+  if (action === 'research-company') await queueCompanyResearch(companyId);
+  else if (action === 'validate-company-research') await validateCompanyResearch(companyId);
+  else if (action === 'download-company-research-log') downloadCompanyResearchLog(companyId);
+  else if (action === 'qualify-company') await setCompanyQualification(companyId, 'qualified');
+  else if (action === 'reject-company') await setCompanyQualification(companyId, 'rejected');
+  else if (action === 'send-pipeline') await sendCompanyToPipeline(companyId);
+  else if (action === 'hide-company') { hideCompany(companyId); render(true); }
+}
+
+async function runCampaignAction(action, campaignId) {
+  if (action === 'import-source') {
+    if (campaignId) state.selectedCampaignId = campaignId;
+    await openCompanyImporter();
+  } else if (action === 'open-campaign-runbook') openCampaignRunbook(campaignId || state.selectedCampaignId);
+  else if (action === 'delete-campaign') await deleteCampaign(campaignId || state.selectedCampaignId);
+}
+
+function renderCompanyFacts(company) {
+  const data = company?.company_data || {};
+  const facts = [
+    [t('legalForm', 'Rechtsform'), data.legal_form],
+    [t('employees', 'Mitarbeiter'), data.employee_count ? `${data.employee_count} MA` : ''],
+    [t('revenue', 'Umsatz'), data.revenue_eur ? `${Number(data.revenue_eur).toLocaleString('de-DE')} €` : ''],
+  ].filter(([, value]) => value);
+  if (!facts.length) return '';
+  return `<div class="outbound-cell-meta">${facts.map(([label, value]) => `<span title="${escapeHtml(label)}">${escapeHtml(value)}</span>`).join('')}</div>`;
+}
+
 function renderActiveResearchSummary(campaign) {
   const counts = researchActivityCounts(campaign.id);
   const active = [
@@ -4265,11 +4032,21 @@ function renderActiveResearchSummary(campaign) {
   if (!active.length) return '';
   const tone = counts.failed || counts.cancelled ? 'warn' : counts.running ? 'running' : 'waiting';
   return `
-    <div class="outbound-active-research ${tone}" title="CTOX Research Status">
+    <div class="outbound-active-research ${tone}" title="${escapeHtml(researchActivityTooltip(campaign))}" data-v4-allow-label>
       <span></span>
       <b>${active.map(([label, count]) => `${formatCount(count)} ${label}`).join(' · ')}</b>
     </div>
   `;
+}
+
+// Textdiät (15.10.): die Recherche-Box unter dem Kopf („CTOX Research – CTOX arbeitet gerade nicht: 2 wartet“) ist
+// entfallen; die Pille in der Werkzeugleiste trägt den Stand, ihre Einträge stehen im Tooltip.
+function researchActivityTooltip(campaign) {
+  const items = researchActivityRows(campaign.id)
+    .filter((item) => item.kind !== 'done' && item.kind !== 'idle')
+    .slice(0, 5)
+    .map((item) => [item.label, item.statusLabel].filter(Boolean).join(' – '));
+  return items.join('\n');
 }
 
 function renderResearchActivityPanel(campaign) {
@@ -4278,12 +4055,12 @@ function renderResearchActivityPanel(campaign) {
   if (!counts.total) return '';
   const isProblem = counts.failed || counts.cancelled;
   const title = counts.running
-    ? t('automationActiveResearch', 'CTOX arbeitet: {0} läuft{1}{2}',
+    ? t('automationActiveResearch', 'CTOX arbeitet: {0} läuft{1}{2}', // v4-allow: label
         formatCount(counts.running),
-        counts.waiting ? t('automationActiveResearchWaiting', ' · {0} wartet', formatCount(counts.waiting)) : '',
+        counts.waiting ? t('automationActiveResearchWaiting', ' · {0} wartet', formatCount(counts.waiting)) : '', // v4-allow: label
         isProblem ? t('automationActiveResearchFailed', ' · {0} Fehler', formatCount(counts.failed + counts.cancelled)) : ''
       )
-    : t('automationIdleResearch', 'CTOX arbeitet gerade nicht: {0} wartet{1}',
+    : t('automationIdleResearch', 'CTOX arbeitet gerade nicht: {0} wartet{1}', // v4-allow: label
         formatCount(counts.waiting),
         isProblem ? t('automationActiveResearchFailed', ' · {0} Fehler', formatCount(counts.failed + counts.cancelled)) : ''
       );
@@ -4291,7 +4068,7 @@ function renderResearchActivityPanel(campaign) {
     .filter((item) => item.kind !== 'done' && item.kind !== 'idle')
     .slice(0, 5);
   return `
-    <details class="outbound-research-activity ${isProblem ? 'warn' : counts.running ? 'running' : 'waiting'}">
+    <details class="outbound-research-activity ${isProblem ? 'warn' : counts.running ? 'running' : 'waiting'}" data-v4-allow-label>
       <summary>
         <div class="outbound-research-activity-head">
           <span>CTOX Research</span>
@@ -4319,6 +4096,8 @@ function renderResearchActivityPanel(campaign) {
 }
 
 function renderActivityCount(label, count, tone = '') {
+  // Null-Zähler („0 läuft“, „0 Fehler“) tragen keine Information und entfallen.
+  if (!count) return '';
   return `<span class="${escapeHtml(tone)}"><b>${formatCount(count)}</b> ${escapeHtml(label)}</span>`;
 }
 
@@ -4366,31 +4145,13 @@ function renderTableLimitRow(total, columnCount) {
   `;
 }
 
-function renderTableEmptyState(message) {
-  if (state.filter === 'all' && !state.search.trim()) {
-    const readiness = outboundCollectionReadiness('outbound_companies');
-    if (readiness?.ready === false) {
-      return `
-    <div class="outbound-table-empty-overlay">
-        <div class="ctox-syncing" role="status" aria-live="polite">
-          <span>${escapeHtml(t('syncingData', 'Daten werden synchronisiert.'))}</span>
-        </div>
-    </div>
-  `;
-    }
-  }
-  const hasSources = currentSources().length > 0;
-  const title = hasSources
-    ? t('emptyAfterImportTitle', 'Keine Firmen sichtbar')
-    : t('emptyBeforeImportTitle', 'Noch keine Firmen importiert');
-  const detail = hasSources
-    ? message
-    : t('emptyBeforeImportDetail', 'Lege einen Import aus Excel, PDF, URL oder Freitext an. Danach erscheinen die Firmen hier als prüfbare Arbeitsliste.');
+// v4: leere Tabelle ohne Zustands-/Leertext; nur die Handlung „Importjob anlegen“ bleibt, solange es noch
+// keine Quelle gibt.
+function renderTableEmptyState(_message) {
+  if (currentSources().length > 0) return '';
   return `
     <div class="outbound-table-empty-overlay">
         <div class="ctox-empty">
-          <strong>${escapeHtml(title)}</strong>
-          <span>${escapeHtml(detail)}</span>
           <button class="ctox-button is-primary" type="button" data-action="import-source">${escapeHtml(t('importJob', 'Importjob anlegen'))}</button>
         </div>
     </div>
@@ -4595,7 +4356,7 @@ function automationOpenRecords(campaignId, stage) {
 function openAutomationDrawer(stage, campaignId) {
   const campaign = state.campaigns.find((item) => item.id === campaignId) || selectedCampaign();
   const definition = getAutomationStageDefinition(stage);
-  const root = state.ctx.host.querySelector('[data-outbound-root]');
+  const root = state.root.querySelector('[data-outbound-root]');
   if (!campaign || !definition || !root) return;
   state.selectedCampaignId = campaign.id;
   closeAutomationDrawer();
@@ -4610,7 +4371,7 @@ function openAutomationDrawer(stage, campaignId) {
 }
 
 function closeAutomationDrawer() {
-  state.ctx?.host?.querySelector('.outbound-automation-drawer')?.remove();
+  state.root?.querySelector('.outbound-automation-drawer')?.remove();
 }
 
 function renderAutomationDrawer(campaign, stage, openCount, batchSize) {
@@ -4633,7 +4394,7 @@ function renderAutomationDrawer(campaign, stage, openCount, batchSize) {
       </header>
       <div class="outbound-automation-body">
         <dl>
-          <div><dt>${escapeHtml(t('campaign', 'Campaign'))}</dt><dd>${escapeHtml(campaign.name)}</dd></div>
+          <div><dt>${escapeHtml(t('campaign', 'Kampagne'))}</dt><dd>${escapeHtml(campaign.name)}</dd></div>
           <div><dt>${escapeHtml(t('open', 'Offen'))}</dt><dd>${formatCount(openCount)}</dd></div>
           <div><dt>${escapeHtml(t('automationNextRun', 'Nächster Run'))}</dt><dd>${escapeHtml(t('automationBatchSize', '{0} Datensätze', formatCount(nextCount)))}</dd></div>
           <div><dt>${escapeHtml(t('automationSafety', 'Sicherheit'))}</dt><dd>${escapeHtml(t('automationSafetyDesc', '{0} pro Run', OUTBOUND_BATCH_LIMIT))}</dd></div>
@@ -4655,7 +4416,7 @@ function renderAutomationDrawer(campaign, stage, openCount, batchSize) {
 }
 
 async function startAutomationBatch() {
-  const drawer = state.ctx?.host?.querySelector('.outbound-automation-panel');
+  const drawer = state.root?.querySelector('.outbound-automation-panel');
   if (!drawer) return;
   const stage = drawer.dataset.stage;
   const campaignId = drawer.dataset.campaignId;
@@ -4670,7 +4431,6 @@ async function startAutomationBatch() {
   const button = drawer.querySelector('[data-action="start-automation"]');
   if (button) {
     button.setAttribute('disabled', 'disabled');
-    button.textContent = 'Run wird gestartet...';
   }
   state.selectedCampaignId = campaign.id;
   closeAutomationDrawer();
@@ -4803,7 +4563,7 @@ function exportQualificationTable() {
   anchor.href = url;
   anchor.download = `${slugifyFileName(campaign.name || 'outbound')}-tabelle.xls`;
   anchor.style.display = 'none';
-  (state.ctx?.host || document.documentElement).append(anchor);
+  (state.root || document.documentElement).append(anchor);
   anchor.click();
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 500);
@@ -4863,7 +4623,7 @@ function pipelineItemForCompany(companyOrId) {
 
 function openResearchSettingsDrawer() {
   const campaign = selectedCampaign();
-  const root = state.ctx.host.querySelector('[data-outbound-root]');
+  const root = state.root.querySelector('[data-outbound-root]');
   if (!campaign || !root) return;
   closeResearchSettingsDrawer();
 
@@ -4885,7 +4645,7 @@ function openResearchSettingsDrawer() {
 function closeResearchSettingsDrawer() {
   state.tempResearchSettings = null;
   state.researchSettingsActiveTab = 'columns';
-  state.ctx?.host?.querySelector('.outbound-research-drawer')?.remove();
+  state.root?.querySelector('.outbound-research-drawer')?.remove();
 }
 
 function renderResearchSettingsDrawer(campaign) {
@@ -4904,7 +4664,7 @@ function renderResearchSettingsDrawer(campaign) {
       </div>
       <label class="ctox-compact-field outbound-research-notes">
         <span>${escapeHtml(t('additionalHints', 'Zusätzliche Hinweise'))}</span>
-        <textarea class="ctox-textarea" data-research-setting-custom rows="3" placeholder="${escapeHtml(t('additionalHintsPlaceholder', 'z.B. Belege immer mit URL ausgeben, nur öffentlich belegbare Unternehmensdaten, keine Personen recherchieren'))}">${escapeHtml(settings.customInstruction)}</textarea>
+        <textarea class="ctox-textarea" data-research-setting-custom rows="3" placeholder="${escapeHtml(t('additionalHintsPlaceholder', 'z. B. Belege mit URL, keine Personen recherchieren'))}">${escapeHtml(settings.customInstruction)}</textarea>
       </label>
     `;
   } else if (state.researchSettingsActiveTab === 'prompts') {
@@ -4957,29 +4717,15 @@ function renderResearchSettingsDrawer(campaign) {
   } else if (state.researchSettingsActiveTab === 'sources') {
     tabBodyHtml = renderResearchSourcesSettings(settings);
   } else if (state.researchSettingsActiveTab === 'mailserver') {
-    const ms = state.mailserver || { domains: [], users: [], loading: false, error: null };
+    const ms = state.mailserver || { domains: [], users: [] };
     
     let msContent = '';
-    if (ms.loading) {
-      msContent = `
-        <div class="outbound-mailserver-loading">
-          <div class="outbound-spinner outbound-spinner--lg"></div>
-          <p class="outbound-muted">${escapeHtml(t('loadingMailserverConfig', 'Mailserver-Konfiguration wird geladen...'))}</p>
-        </div>
-      `;
-    } else {
-      if (ms.error) {
-        msContent += `
-          <div class="ctox-callout is-danger outbound-mailserver-error">
-            <strong>${escapeHtml(t('errorLabel', 'Fehler'))}:</strong> ${escapeHtml(ms.error)}
-          </div>
-        `;
-      }
+    {
       
       // Sektion 1: Custom Domains
       let domainsListHtml = '';
       if (!ms.domains || ms.domains.length === 0) {
-        domainsListHtml = `<p class="outbound-muted outbound-muted-placeholder">${escapeHtml(t('noDomainsConfigured', 'Keine Domains konfiguriert.'))}</p>`;
+        domainsListHtml = '';
       } else {
         domainsListHtml = ms.domains.map(dom => {
           const publicDkimClean = (dom.dkim_public_key || '')
@@ -5046,7 +4792,7 @@ function renderResearchSettingsDrawer(campaign) {
       // Sektion 2: E-Mail-Konten
       let usersListHtml = '';
       if (!ms.users || ms.users.length === 0) {
-        usersListHtml = `<p class="outbound-muted outbound-muted-placeholder">${escapeHtml(t('noUsersConfigured', 'Keine E-Mail-Konten konfiguriert.'))}</p>`;
+        usersListHtml = '';
       } else {
         usersListHtml = `
           <div class="ctox-table-wrap outbound-mailserver-users-wrap">
@@ -5077,10 +4823,7 @@ function renderResearchSettingsDrawer(campaign) {
       msContent = `
         <div class="outbound-mailserver-settings">
           <div class="outbound-settings-section">
-            <h4>${escapeHtml(t('customDomainsTitle', 'Custom Domains & DNS'))}</h4>
-            <p class="outbound-muted outbound-settings-desc">
-              ${escapeHtml(t('customDomainsDesc', 'Füge deine Domains hinzu. CTOX generiert automatisch DKIM-Signaturen und liefert dir die SPF- und DMARC-Einträge für deinen Domain-Registrar.'))}
-            </p>
+            <h4 title="${escapeHtml(t('customDomainsDesc', 'Füge deine Domains hinzu. CTOX generiert automatisch DKIM-Signaturen und liefert dir die SPF- und DMARC-Einträge für deinen Domain-Registrar.'))}">${escapeHtml(t('customDomainsTitle', 'Eigene Domains & DNS'))}</h4>
 
             <div class="outbound-mailserver-add-domain-form">
               <div class="outbound-mailserver-form-row">
@@ -5097,10 +4840,7 @@ function renderResearchSettingsDrawer(campaign) {
           </div>
 
           <div class="outbound-settings-section outbound-settings-section--divided">
-            <h4>${escapeHtml(t('emailAccountsTitle', 'E-Mail-Konten'))}</h4>
-            <p class="outbound-muted outbound-settings-desc">
-              ${escapeHtml(t('emailAccountsDesc', 'Erstelle vollwertige Mail-Accounts für den Empfang und Versand über IMAP und SMTP.'))}
-            </p>
+            <h4 title="${escapeHtml(t('emailAccountsDesc', 'Erstelle vollwertige Mail-Accounts für den Empfang und Versand über IMAP und SMTP.'))}">${escapeHtml(t('emailAccountsTitle', 'E-Mail-Konten'))}</h4>
 
             <div class="outbound-mailserver-add-user-form">
               <div class="outbound-mailserver-form-row is-grid">
@@ -5126,7 +4866,6 @@ function renderResearchSettingsDrawer(campaign) {
 
   let footerHtml = `
     <footer class="outbound-research-footer">
-      <span class="outbound-muted">${escapeHtml(t('settingsFooterHint', 'Gilt für diese Campaign. Änderungen an Spalten und Prompts werden direkt übernommen.'))}</span>
       <button class="ctox-button" type="button" data-action="close-research-settings">${escapeHtml(t('cancel', 'Abbrechen'))}</button>
       <button class="ctox-button is-primary" type="button" data-action="save-research-settings">${escapeHtml(t('save', 'Speichern'))}</button>
     </footer>
@@ -5146,7 +4885,7 @@ function renderResearchSettingsDrawer(campaign) {
       <header class="outbound-research-header">
         <div>
           <span class="ctox-pane-kicker">${escapeHtml(t('funnelSettings', 'Funnel Einstellungen'))}</span>
-          <h3 class="ctox-pane-title">${escapeHtml(t('configureCampaign', 'Campaign konfigurieren'))}</h3>
+          <h3 class="ctox-pane-title">${escapeHtml(t('configureCampaign', 'Kampagne konfigurieren'))}</h3>
         </div>
         <button class="ctox-pane-icon" type="button" data-action="close-research-settings" aria-label="${escapeHtml(t('close', 'Schließen'))}">${actionIcon('close')}</button>
       </header>
@@ -5315,7 +5054,7 @@ function renderResearchColumnRow(side, field, checkedFull = true, checkedCompact
 
 async function saveResearchSettings() {
   const campaign = selectedCampaign();
-  const drawer = state.ctx?.host?.querySelector('.outbound-research-drawer');
+  const drawer = state.root?.querySelector('.outbound-research-drawer');
   if (!campaign || !drawer) return;
 
   const beforeSettings = getCampaignResearchSettings(campaign);
@@ -5357,7 +5096,7 @@ async function saveResearchSettings() {
 }
 
 function setResearchSettingsSelection(checked) {
-  const drawer = state.ctx?.host?.querySelector('.outbound-research-drawer');
+  const drawer = state.root?.querySelector('.outbound-research-drawer');
   drawer?.querySelectorAll('input[type="checkbox"][data-column-setting-kind]').forEach((input) => {
     input.checked = checked;
   });
@@ -5381,7 +5120,7 @@ function setResearchSettingsCoreSelection() {
     'revenue_eur',
     'employee_count',
   ]);
-  const drawer = state.ctx?.host?.querySelector('.outbound-research-drawer');
+  const drawer = state.root?.querySelector('.outbound-research-drawer');
   drawer?.querySelectorAll('input[type="checkbox"][data-column-setting-kind]').forEach((input) => {
     const isFull = input.hasAttribute('data-column-setting-full');
     const fieldId = isFull ? input.dataset.columnSettingFull : input.dataset.columnSettingCompact;
@@ -5403,7 +5142,7 @@ function setResearchSettingsCoreSelection() {
 }
 
 function addResearchSettingsField(side = 'company') {
-  const drawer = state.ctx?.host?.querySelector('.outbound-research-drawer');
+  const drawer = state.root?.querySelector('.outbound-research-drawer');
   const input = drawer?.querySelector(`[data-custom-field-label="${cssEscape(side)}"]`);
   const list = drawer?.querySelector(`[data-custom-field-list="${cssEscape(side)}"]`);
   if (!drawer || !input || !list) return;
@@ -5411,7 +5150,7 @@ function addResearchSettingsField(side = 'company') {
   if (!label) return;
   const id = side === 'contact' ? customContactFieldId(label) : customResearchFieldId(label);
   if (drawer.querySelector(`[data-column-setting-id="${cssEscape(id)}"]`)) {
-    showBusinessAlert('Diese Spalte gibt es bereits.');
+    reportStatus('warn', 'outbound.research_settings.input', 'Diese Spalte gibt es bereits.');
     return;
   }
   list.insertAdjacentHTML('beforeend', renderResearchColumnRow(side, { id, label, prompt: '', custom: true }, true));
@@ -5421,20 +5160,20 @@ function addResearchSettingsField(side = 'company') {
 
 function removeResearchSettingsField(fieldId, side = 'company') {
   if (!fieldId) return;
-  const drawer = state.ctx?.host?.querySelector('.outbound-research-drawer');
+  const drawer = state.root?.querySelector('.outbound-research-drawer');
   const row = drawer?.querySelector(`[data-column-setting-side="${cssEscape(side)}"][data-custom-field-id="${cssEscape(fieldId)}"]`);
   row?.remove();
 }
 
 function addResearchSettingsSource() {
-  const drawer = state.ctx?.host?.querySelector('.outbound-research-drawer');
+  const drawer = state.root?.querySelector('.outbound-research-drawer');
   if (!drawer || !state.tempResearchSettings) return;
   saveResearchSettingsTemporaryState(drawer);
   const urlInput = drawer.querySelector('[data-research-source-new-url]');
   const secretInput = drawer.querySelector('[data-research-source-new-secret]');
   const rawUrl = urlInput?.value?.trim() || '';
   if (!rawUrl) {
-    showBusinessAlert(t('sourceUrlRequired', 'Bitte eine Quellen-URL eingeben.'));
+    reportStatus('warn', 'outbound.research_settings.input', t('sourceUrlRequired', 'Bitte eine Quellen-URL eingeben.'));
     return;
   }
   const source = normalizeResearchSource({
@@ -5460,12 +5199,12 @@ function removeResearchSettingsSource(row) {
   const id = row.dataset.sourceId || '';
   state.tempResearchSettings.researchSources = normalizeResearchSources(state.tempResearchSettings.researchSources)
     .filter((source) => source.id !== id || source.builtin);
-  const next = state.ctx?.host?.querySelector('.outbound-research-drawer');
+  const next = state.root?.querySelector('.outbound-research-drawer');
   if (next) next.innerHTML = renderResearchSettingsDrawer(selectedCampaign());
 }
 
 function resetResearchSettingsSources() {
-  const drawer = state.ctx?.host?.querySelector('.outbound-research-drawer');
+  const drawer = state.root?.querySelector('.outbound-research-drawer');
   if (!drawer || !state.tempResearchSettings) return;
   state.tempResearchSettings.researchSources = defaultResearchSources();
   drawer.innerHTML = renderResearchSettingsDrawer(selectedCampaign());
@@ -5499,80 +5238,21 @@ async function requestResearchSourceAdapterCommand(row, commandType, statusPatch
   saveResearchSettingsTemporaryState(drawer);
   const source = researchSourceFromRow(row);
   if (!source.id && !source.url) return;
-  // Die Startargumente der Anmeldung (Ziel-URL, erlaubte Domains, Sitzung)
-  // stehen erst im Kommandoergebnis — das Fenster kann also nicht frueher mit
-  // Inhalt aufgehen. Es kann aber SOFORT aufgehen: bis zur Antwort sah der
-  // Nutzer sonst 60 Sekunden lang gar nichts und hielt den Knopf fuer tot.
-  // Das leere Fenster mit Wartezustand ist die ehrlichere Rueckmeldung.
-  // Liefert der Befehl keine Startargumente (Dispatch ohne Capability
-  // abgelehnt, Befehl serverseitig gescheitert), darf das vorab geoeffnete
-  // Fenster nicht leer stehen bleiben: es wird wieder geschlossen.
-  const preopenedBrowserWindowId = commandType === 'outbound.research_source.auth_assist'
-    ? await preopenAuthAssistBrowserWindow(state.ctx)
-    : null;
-  let browserLaunched = false;
-  try {
-    browserLaunched = await runResearchSourceAdapterCommand(
-      campaign,
-      source,
-      commandType,
-      statusPatch,
-    );
-  } finally {
-    if (!browserLaunched) {
-      await closePreopenedAuthAssistBrowserWindow(state.ctx, preopenedBrowserWindowId);
-    }
-  }
+  // v4: kein vorab geöffnetes Browserfenster (4.0 hat keinen Fenstermanager für Apps). Der Browser öffnet
+  // sich über api.shell.navigate, sobald der Befehl die Startargumente der Anmeldung liefert.
+  await runResearchSourceAdapterCommand(campaign, source, commandType, statusPatch);
 }
 
-async function preopenAuthAssistBrowserWindow(ctx) {
-  try {
-    const existing = new Set((ctx?.windowManager?.listWindows?.() || []).map((win) => win?.id));
-    const windowId = await ctx?.openDesktopApp?.('browser', { title: t('browser', 'Browser'), mode: 'maximized' });
-    // Nur ein selbst erzeugtes Fenster darf spaeter wieder geschlossen werden;
-    // ein bereits offenes Browserfenster des Nutzers bleibt unberuehrt.
-    return windowId && !existing.has(windowId) ? windowId : null;
-  } catch (error) {
-    console.warn('[outbound] Browserfenster konnte nicht vorab geoeffnet werden', error);
-    return null;
-  }
-}
-
-async function closePreopenedAuthAssistBrowserWindow(ctx, windowId) {
-  if (!windowId) return false;
-  try {
-    await ctx?.windowManager?.destroy?.(windowId);
-    return true;
-  } catch (error) {
-    console.warn('[outbound] Vorab geoeffnetes Browserfenster konnte nicht geschlossen werden', error);
-    return false;
-  }
-}
-
-async function runResearchSourceAdapterCommand(campaign, source, commandType, statusPatch) {
-  const adapter = await upsertResearchAdapterDocumentForCampaign(campaign, source, statusPatch);
-  if (!adapter) {
-    showBusinessAlert(t('adapterCollectionMissing', 'Research-Adapter konnten nicht gespeichert werden.'));
-    return false;
-  }
-  const command = buildResearchAdapterCommand(commandType, campaign, adapter);
-  const result = await state.ctx?.commandBus?.dispatch?.(command).catch((error) => ({
-    ok: false,
-    status: 'dispatch_failed',
-    error: error?.message || String(error),
-  }));
+function adapterPatchFromCommandOutcome(adapter, commandId, commandType, statusPatch, result) {
   const completed = result?.status === 'completed' || result?.result?.ok === true || result?.ok === true;
   const resultAdapter = researchAdapterFromCommandResult(result);
-  const authAssist = commandType === 'outbound.research_source.auth_assist'
-    ? authAssistFromCommandResult(result)
-    : null;
-  const nextAdapterPatch = resultAdapter
+  return resultAdapter
     ? {
         ...researchAdapterPatchFromServer(resultAdapter),
         payload: {
           ...(adapter.payload || {}),
           ...(resultAdapter.payload || {}),
-          last_command_id: command.id,
+          last_command_id: commandId,
           last_command_type: commandType,
           last_command_status: result?.status || (result?.ok === false ? 'failed' : 'queued'),
         },
@@ -5580,27 +5260,53 @@ async function runResearchSourceAdapterCommand(campaign, source, commandType, st
     : {
         ...statusPatch,
         status: completed ? adapter.status : statusPatch.status,
-        last_run_id: command.id,
+        last_run_id: commandId,
         last_error: result?.error || result?.result?.error || '',
         payload: {
           ...(adapter.payload || {}),
-          last_command_id: command.id,
+          last_command_id: commandId,
           last_command_type: commandType,
           last_command_status: result?.status || (result?.ok === false ? 'failed' : 'queued'),
         },
       };
-  await upsertResearchAdapterDocumentForCampaign(campaign, source, {
-    ...nextAdapterPatch,
-  });
-  await loadAll({ hydrateKnowledge: false, skipImportRecovery: true });
-  const next = state.ctx?.host?.querySelector('.outbound-research-drawer');
+}
+
+function rerenderResearchDrawer(campaign) {
+  const next = state.root?.querySelector('.outbound-research-drawer');
   if (next) next.innerHTML = renderResearchSettingsDrawer(campaign);
-  const browserArgs = browserAuthAssistLaunchArgs(authAssist);
-  if (!browserArgs) return false;
-  await state.ctx?.openDesktopApp?.('browser', {
-    title: t('browser', 'Browser'),
-    mode: 'maximized',
-    args: browserArgs,
+}
+
+async function runResearchSourceAdapterCommand(campaign, source, commandType, statusPatch) {
+  const adapter = await upsertResearchAdapterDocumentForCampaign(campaign, source, statusPatch);
+  if (!adapter) {
+    reportStatus('error', 'outbound.research_adapter.write', t('adapterCollectionMissing', 'Research-Adapter konnten nicht gespeichert werden.'));
+    return false;
+  }
+  const command = buildResearchAdapterCommand(commandType, campaign, adapter);
+  const { id: commandId, settled } = sendCommand(commandType, command.payload, {
+    record_id: adapter.id,
+    client_context: command.client_context,
+  });
+  // Lokal sofort: Auftrag steht als „queued“ am Adapter (wie früher vor der Antwort).
+  await upsertResearchAdapterDocumentForCampaign(campaign, source,
+    adapterPatchFromCommandOutcome(adapter, commandId, commandType, statusPatch, null));
+  deriveState({ skipImportRecovery: true });
+  rerenderResearchDrawer(campaign);
+  settled.then(async (commandState) => {
+    const result = { status: 'completed', result: commandState?.result || {} };
+    await upsertResearchAdapterDocumentForCampaign(campaign, source,
+      adapterPatchFromCommandOutcome(adapter, commandId, commandType, statusPatch, result));
+    deriveState({ skipImportRecovery: true });
+    rerenderResearchDrawer(campaign);
+    const authAssist = commandType === 'outbound.research_source.auth_assist' ? authAssistFromCommandResult(result) : null;
+    const browserArgs = browserAuthAssistLaunchArgs(authAssist);
+    if (browserArgs) state.api?.shell.navigate('browser', { title: t('browser', 'Browser'), mode: 'maximized', args: browserArgs });
+  }, async (error) => {
+    const result = { ok: false, status: 'failed', error: error?.message || String(error) };
+    await upsertResearchAdapterDocumentForCampaign(campaign, source,
+      adapterPatchFromCommandOutcome(adapter, commandId, commandType, statusPatch, result));
+    deriveState({ skipImportRecovery: true });
+    rerenderResearchDrawer(campaign);
   });
   return true;
 }
@@ -5725,8 +5431,8 @@ async function upsertResearchAdapterDocumentForCampaign(campaign, source, patch 
   const normalized = normalizeResearchSource(source);
   const now = Date.now();
   const id = normalized.adapterId || researchAdapterId(campaign, normalized);
-  const existingDoc = await collection.findOne(id).exec();
-  const existing = existingDoc?.toJSON ? existingDoc.toJSON() : existingDoc;
+  const existingDoc = readOne(collection, id);
+  const existing = existingDoc;
   const mergedPayload = {
     ...(existing?.payload || {}),
     ...(patch.payload || {}),
@@ -5761,9 +5467,9 @@ async function upsertResearchAdapterDocumentForCampaign(campaign, source, patch 
     updated_at_ms: now,
   };
   if (existingDoc) {
-    await existingDoc.incrementalPatch(doc);
+    patchDocById(collection, id, doc);
   } else {
-    await collection.insert(doc);
+    putDoc(collection, doc);
   }
   state.researchAdapters = [
     doc,
@@ -6372,8 +6078,8 @@ function automationStatusKind(value) {
 
 function automationStatusLabel(value) {
   const kind = automationStatusKind(value);
-  if (kind === 'running') return 'läuft gerade';
-  if (kind === 'waiting') return 'wartet in CTOX';
+  if (kind === 'running') return 'läuft gerade'; // v4-allow: label
+  if (kind === 'waiting') return 'wartet in CTOX'; // v4-allow: label
   if (kind === 'failed') return 'Fehler';
   if (kind === 'blocked') return 'blockiert';
   if (kind === 'cancelled') return 'abgebrochen';
@@ -6526,7 +6232,7 @@ function renderCompanyWorkbench() {
       </div>
       <div class="ctox-pane-scroll outbound-scroll">
         <div class="ctox-list">
-          ${companies.map(renderCompanyRow).join('') || '<div class="ctox-empty">Keine Firmen für diesen Filter.</div>'}
+          ${companies.map(renderCompanyRow).join('') || ''}
         </div>
       </div>
     </div>
@@ -6564,7 +6270,7 @@ function renderPipelineWorkbench() {
       </div>
       <div class="ctox-pane-scroll outbound-scroll">
         <div class="ctox-list">
-          ${items.map(renderPipelineItem).join('') || '<div class="ctox-empty">Noch keine Firmen in der Pipeline.</div>'}
+          ${items.map(renderPipelineItem).join('') || ''}
         </div>
       </div>
     </div>
@@ -6587,7 +6293,7 @@ function renderPipelineItem(item) {
 
 function renderCompanyDetail() {
   const company = selectedCompany();
-  if (!company) return '<div class="ctox-empty">Firma auswählen.</div>';
+  if (!company) return '';
   const runs = state.runs.filter((run) => run.company_id === company.id);
   const source = state.sources.find((item) => item.id === company.source_id);
   const item = pipelineItemForCompany(company);
@@ -6627,7 +6333,7 @@ function renderCompanyDetail() {
       </div>
       <div class="outbound-detail-block">
         <div class="ctox-field-label">Research Runs</div>
-        ${runs.map((run) => `<div class="outbound-muted${run.id === state.focusedRunId ? ' is-selected' : ''}" data-context-record-type="outbound_research_run" data-context-record-id="${escapeHtml(run.id)}" data-context-label="${escapeHtml(run.run_type || run.id)}" aria-current="${run.id === state.focusedRunId}">${escapeHtml(run.run_type)} · ${escapeHtml(run.status)} · ${new Date(run.updated_at_ms).toLocaleString()}</div>`).join('') || '<div class="outbound-muted">Noch keine Research Runs.</div>'}
+        ${runs.map((run) => `<div class="outbound-muted${run.id === state.focusedRunId ? ' is-selected' : ''}" data-context-record-type="outbound_research_run" data-context-record-id="${escapeHtml(run.id)}" data-context-label="${escapeHtml(run.run_type || run.id)}" aria-current="${run.id === state.focusedRunId}">${escapeHtml(run.run_type)} · ${escapeHtml(run.status)} · ${new Date(run.updated_at_ms).toLocaleString()}</div>`).join('') || ''}
       </div>
       <div class="outbound-detail-block">
         <div class="ctox-field-label">Details</div>
@@ -6639,7 +6345,7 @@ function renderCompanyDetail() {
 
 function renderPipelineDetail() {
   const item = selectedPipelineItem();
-  if (!item) return '<div class="ctox-empty">Pipeline-Eintrag auswählen.</div>';
+  if (!item) return '';
   const company = state.companies.find((entry) => entry.id === item.company_id);
   const runs = state.runs.filter((run) => run.pipeline_id === item.id || run.company_id === item.company_id);
   return `
@@ -6672,12 +6378,12 @@ function renderPipelineDetail() {
           ['Firma', company?.name || item.company_name || 'offen'],
           ['Pipeline-ID', item.id],
           ['Kontakte', String((item.contacts || []).length)],
-          ['Letzter Run', runs[0] ? `${runs[0].run_type || 'Run'} · ${runs[0].status || 'offen'}` : 'kein Run'],
+          ['Letzter Run', runs[0] ? `${runs[0].run_type || 'Run'} · ${runs[0].status || 'offen'}` : '—'],
         ])}
       </div>
       <div class="outbound-detail-block">
         <div class="ctox-field-label">Research Runs</div>
-        ${runs.map((run) => `<div class="outbound-muted${run.id === state.focusedRunId ? ' is-selected' : ''}" data-context-record-type="outbound_research_run" data-context-record-id="${escapeHtml(run.id)}" data-context-label="${escapeHtml(run.run_type || run.id)}" aria-current="${run.id === state.focusedRunId}">${escapeHtml(run.run_type)} · ${escapeHtml(run.status)} · ${new Date(run.updated_at_ms).toLocaleString()}</div>`).join('') || '<div class="outbound-muted">Noch keine Research Runs.</div>'}
+        ${runs.map((run) => `<div class="outbound-muted${run.id === state.focusedRunId ? ' is-selected' : ''}" data-context-record-type="outbound_research_run" data-context-record-id="${escapeHtml(run.id)}" data-context-label="${escapeHtml(run.run_type || run.id)}" aria-current="${run.id === state.focusedRunId}">${escapeHtml(run.run_type)} · ${escapeHtml(run.status)} · ${new Date(run.updated_at_ms).toLocaleString()}</div>`).join('') || ''}
       </div>
     </div>
   `;
@@ -6692,12 +6398,12 @@ function companyDiagnostics(company, source, item, runs) {
     ['Company-ID', company.id],
     ['Campaign-ID', company.campaign_id || 'nicht gesetzt'],
     ['Datenquelle', source ? `${source.source_type || 'Quelle'} · ${source.status || 'offen'}` : 'keine Quelle'],
-    ['Import-Command', sourceCommand || source?.payload?.task_status || 'kein Status'],
+    ['Import-Command', sourceCommand || source?.payload?.task_status || '—'],
     ['Research-Status', companyResearchStatus(company) || company.research_status || 'nicht gestartet'],
     ['Kontrolle', companyValidationLabel(company)],
     ['Pipeline-Eintrag', item ? `${item.stage || 'Pipeline'} · ${item.contact_research_status || 'offen'}` : 'noch nicht übernommen'],
-    ['Letzter Run', latestRun ? `${latestRun.run_type || 'Run'} · ${latestRun.status || 'offen'}` : 'kein Run'],
-    ['Run-Log', latestRun?.log_path || latestRun?.log_manifest_path || 'noch kein Log'],
+    ['Letzter Run', latestRun ? `${latestRun.run_type || 'Run'} · ${latestRun.status || 'offen'}` : '—'],
+    ['Run-Log', latestRun?.log_path || latestRun?.log_manifest_path || '—'],
   ];
 }
 
@@ -6714,11 +6420,11 @@ async function createCampaign() {
   const id = `draft_campaign_${crypto.randomUUID()}`;
   const draft = {
     id,
-    name: t('defaultCampaignName', 'Neue Outbound Campaign'),
+    name: t('defaultCampaignName', 'Neue Outbound Kampagne'),
     objective: t('campaignObjectiveDefault', 'Outbound Firmenqualifizierung'),
     market: 'DACH',
     status: 'active',
-    owner_id: state.ctx?.session?.user?.id || '',
+    owner_id: state.api?.actor?.id || '',
     source_count: 0,
     company_count: 0,
     qualified_count: 0,
@@ -6745,7 +6451,7 @@ async function saveCampaignInlineEdit(campaignId) {
   const campaign = state.campaigns.find((item) => item.id === campaignId)
     || (state.campaignCreateDraft?.id === campaignId ? state.campaignCreateDraft : null);
   if (!campaign) return;
-  const editor = state.ctx?.host?.querySelector(`.outbound-campaign-edit[data-id="${cssEscape(campaign.id)}"]`);
+  const editor = state.root?.querySelector(`.outbound-campaign-edit[data-id="${cssEscape(campaign.id)}"]`);
   if (!editor) return;
   const isCreateDraft = Boolean(campaign.payload?.create_draft);
   const name = editor.querySelector('[data-campaign-edit-field="name"]')?.value?.trim() || '';
@@ -6793,7 +6499,7 @@ async function saveCampaignInlineEdit(campaignId) {
     name,
     objective,
     payload,
-    owner_id: campaign.owner_id || state.ctx?.session?.user?.id || '',
+    owner_id: campaign.owner_id || state.api?.actor?.id || '',
     source_count: Number(campaign.source_count || 0),
     company_count: Number(campaign.company_count || 0),
     qualified_count: Number(campaign.qualified_count || 0),
@@ -6802,7 +6508,7 @@ async function saveCampaignInlineEdit(campaignId) {
     updated_at_ms: updatedAtMs,
   };
   if (isCreateDraft) {
-    await outboundCollection('outbound_campaigns').insert(nextCampaign);
+    putDoc('outbound_campaigns', nextCampaign);
     state.campaignCreateDraft = null;
     state.campaignEditDrafts.delete(campaign.id);
     state.selectedCampaignId = nextCampaign.id;
@@ -6811,41 +6517,30 @@ async function saveCampaignInlineEdit(campaignId) {
     render();
     return;
   }
-  const updateCommand = {
-    id: updateCommandId,
-    command_id: updateCommandId,
-    module: 'outbound',
-    command_type: 'outbound.campaign.briefing.update',
-    record_id: campaign.id,
-    status: 'pending_sync',
-    payload: {
-      campaign_id: campaign.id,
-      name,
-      objective,
-      payload_patch: {
-        subtitle,
-        scope,
-        briefing,
-        briefing_template_id: templateId === 'custom' ? '' : templateId,
-        briefing_language: campaignTemplateLanguage(),
-        ...(setupRequired ? { campaign_setup_task: payload.campaign_setup_task } : {}),
-      },
+  // Nie warten: Befehl in die Outbox, lokal sofort weiter; Fehler → Zustandszone.
+  sendCommand('outbound.campaign.briefing.update', {
+    campaign_id: campaign.id,
+    name,
+    objective,
+    payload_patch: {
+      subtitle,
+      scope,
+      briefing,
+      briefing_template_id: templateId === 'custom' ? '' : templateId,
+      briefing_language: campaignTemplateLanguage(),
     },
+  }, {
+    record_id: campaign.id,
     client_context: {
       module: 'outbound',
       action: 'campaign-briefing-update',
       source: 'outbound-campaign-editor',
+      client_command_id: updateCommandId,
     },
-  };
-  try {
-    await state.ctx.commandBus.dispatch(updateCommand, { timeoutMs: 5000 });
-  } catch (error) {
-    showBusinessAlert(error?.message || String(error));
-    return;
-  }
+  });
   state.campaigns = state.campaigns.map((item) => (item.id === campaign.id ? nextCampaign : item));
   if (setupRequired) {
-    dispatchCampaignSetupPromptTask({
+    requestCampaignSetup({
       ...nextCampaign,
     }, setupCommandId);
   }
@@ -6854,147 +6549,35 @@ async function saveCampaignInlineEdit(campaignId) {
   render();
 }
 
-function dispatchCampaignSetupPromptTask(campaign, commandId) {
+// Strang SKL-O (Kern §16.30): App-Befehl statt Chat-Auftrag über die CTOX-App. Prompt (prompts/campaign-setup.md), Skill
+// (skills/campaign-setup) und Rückruf (outbound.campaign.setup.done/.failed → apply_setup) liegen im Paket/Handler.
+function requestCampaignSetup(campaign, commandId) {
   const briefing = campaignBriefing(campaign);
   if (!briefing || !commandId) return;
   const template = campaignIdeaTemplateById(campaign.payload?.briefing_template_id || '', campaign.payload?.briefing_language || state.lang);
-  const title = `${t('campaignSetupTaskTitle', 'Outbound Campaign einrichten')} · ${campaign.name}`;
-  const instruction = campaignSetupPrompt(campaign, commandId, template);
-  const requiredSkills = [OUTBOUND_CAMPAIGN_SETUP_SKILL];
-  const writebackContract = {
-    command_type: 'outbound.campaign.apply_setup',
+  sendCommand('outbound.campaign.setup.request', {
     campaign_id: campaign.id,
     source_command_id: commandId,
-    collection: 'outbound_campaigns',
+    briefing,
+    ...(template ? { template: { id: template.id, title: template.title } } : {}),
+  }, {
     record_id: campaign.id,
-    allowed_top_level_fields: ['status'],
-    allowed_payload_fields: [
-      'campaign_setup',
-      'research_settings',
-      'active_outreach',
-      'communication_strategy',
-      'sequence_strategy',
-      'landing_page',
-      'app_extension_requests',
-    ],
-  };
-  dispatchOutboundPromptTask({
-    text: briefing,
-    commandId,
-    recordId: campaign.id,
-    title,
-    instruction,
-    requiredSkills,
-    writebackContract,
-    payload: {
-      title,
-      instruction,
-      prompt: briefing,
-      user_message: briefing,
-      mode: 'data',
-      target: 'data',
-      required_skills: requiredSkills,
-      selected_campaign: campaign,
-      selected_template: template || null,
-      writeback_contract: writebackContract,
-      thread_key: `business-os/outbound/${campaign.id}`,
-    },
-    clientContext: {
-      outbound_action: 'campaign-setup-briefing',
-      mode: 'data',
+    client_context: {
       module: 'outbound',
-      record_type: 'outbound_campaign',
-      record_id: campaign.id,
-      required_skill: OUTBOUND_CAMPAIGN_SETUP_SKILL,
+      action: 'campaign-setup-request',
+      source: 'outbound-campaign-editor',
+      client_command_id: commandId,
     },
   });
-}
-
-function dispatchOutboundPromptTask({
-  text,
-  commandId,
-  recordId,
-  title,
-  instruction,
-  requiredSkills = [],
-  writebackContract = null,
-  payload = {},
-  clientContext = {},
-  openBusinessChat = state.ctx?.openBusinessChat,
-}) {
-  const userText = String(text || '').trim();
-  if (!userText) return null;
-  const detail = {
-    text: userText,
-    draft: userText,
-    module: 'outbound',
-    source_module: 'outbound',
-    source_title: 'Outbound',
-    action: 'context-chat',
-    reuseActive: false,
-    command_id: commandId,
-    command_type: 'business_os.chat.task',
-    record_id: recordId,
-    title,
-    command_title: title,
-    instruction,
-    mode: 'data',
-    target: 'data',
-    required_skills: requiredSkills,
-    writeback_contract: writebackContract,
-    payload,
-    client_context: {
-      ...clientContext,
-      action: 'context-chat',
-      source: 'outbound-prompt-task',
-      module: 'outbound',
-    },
-  };
-  if (typeof openBusinessChat !== 'function') {
-    throw new Error('CTOX Business Chat is required for outbound prompt tasks');
-  }
-  openBusinessChat(detail);
-  return detail;
-}
-
-function campaignSetupPrompt(campaign, commandId, template) {
-  return [
-    `Nutze den CTOX Skill ${OUTBOUND_CAMPAIGN_SETUP_SKILL}.`,
-    '',
-    'Aufgabe:',
-    'Richte die Outbound Campaign anhand des natuerlich formulierten Briefings ein. Verwende keine lokalen Heuristiken der App und keine HTTP-Datenkanaele. Die Outbound-App ist nur der Task-Produzent.',
-    '',
-    'Nicht verhandelbar:',
-    '- Keine Nachricht senden.',
-    '- Keine E-Mail, keinen Brief und keine externe HTTP-Integration ausloesen.',
-    '- Alle Daten- und App-Aenderungen nur ueber den CTOX Business-OS-Befehlspfad zurueckschreiben.',
-    '- Outbound-Kommunikation bleibt approval-gated.',
-    '- Wenn ein Wunsch nicht durch vorhandene Outbound-Settings abbildbar ist, schreibe ihn als konkreten App-Extension-Request in den Writeback.',
-    '',
-    'Campaign:',
-    `- campaign_id: ${campaign.id}`,
-    `- name: ${campaign.name}`,
-    `- command_id_for_writeback: ${commandId}`,
-    template ? `- selected_template_id: ${template.id}` : '- selected_template_id: custom',
-    template ? `- selected_template_title: ${template.title}` : '- selected_template_title: custom',
-    '',
-    'User-Briefing:',
-    campaignBriefing(campaign),
-    '',
-    'Erwartetes Ergebnis:',
-    '1. Interpretiere Zielgruppe, Kanal, Angebot, Timing, Landingpage-/Webinar-Wuensche und manuelle Schritte.',
-    '2. Erstelle passende Campaign Settings, Research Settings, Outreach-Strategie und Kommunikations-/Approval-Plan.',
-    '3. Schreibe die Ergebnisse ausschliesslich per Command `outbound.campaign.apply_setup` fuer diese campaign_id zurueck.',
-    '4. Wenn die App eine benoetigte Faehigkeit noch nicht hat, notiere sie unter `app_extension_requests` statt clientseitig zu improvisieren.',
-  ].join('\n');
 }
 
 async function deleteCampaign(campaignId) {
   const campaign = state.campaigns.find((item) => item.id === campaignId);
   if (!campaign) return;
-  const ok = await showBusinessConfirm(t('deleteConfirm', 'Campaign "{0}" löschen? Importjobs, Firmen und Pipeline-Einträge dieser Campaign werden entfernt.', campaign.name), {
-    title: t('deleteTitle', 'Campaign löschen'),
-    confirmLabel: t('delete', 'Löschen'),
+  const ok = await confirmDialog(t('deleteConfirm', 'Kampagne "{0}" löschen? Importjobs, Firmen und Pipeline-Einträge dieser Kampagne werden entfernt.', campaign.name), {
+    title: t('deleteTitle', 'Kampagne löschen'),
+    confirm_label: t('delete', 'Löschen'),
+    danger: true,
   });
   if (!ok) return;
   await removeWhere(outboundCollection('outbound_sources'), (item) => item.campaign_id === campaign.id);
@@ -7004,7 +6587,8 @@ async function deleteCampaign(campaignId) {
   await removeWhere(outboundCollection('outbound_research_adapters'), (item) => item.campaign_id === campaign.id);
   await removeDoc(outboundCollection('outbound_campaigns'), campaign.id);
   state.selectedCampaignId = '';
-  await ensureDefaultCampaign();
+  state.defaultCampaignChecked = false;
+  ensureDefaultCampaign();
   await loadAll();
   render();
 }
@@ -7012,7 +6596,8 @@ async function deleteCampaign(campaignId) {
 async function openCompanyImporter() {
   const campaign = selectedCampaign();
   if (!campaign) return;
-  const drawer = await openUniversalImporter(state.ctx, {
+  // shared/universal-importer.js ist noch v3 (Shared-Strang): bekommt nur das App-root als Wirt.
+  const drawer = await openUniversalImporter({ host: state.root }, {
     side: 'right',
     moduleId: 'outbound',
     entityType: 'company_source',
@@ -7126,7 +6711,7 @@ async function importCompaniesFromPayload(campaign, payload) {
   const sourceStatus = rows.length
     ? filteredRows.length ? 'importing' : 'filtered_empty'
     : 'queued_parser';
-  await outboundCollection('outbound_sources').insert({
+  putDoc('outbound_sources', {
     id: sourceId,
     campaign_id: campaign.id,
     title: payload.title,
@@ -7394,7 +6979,7 @@ function researchWritebackContract(campaign, refs, stage, record, fields = []) {
     runbook_id: refs.runbookId,
     campaign_id: campaign.id,
     campaign_name: campaign.name,
-    rule: 'Append a new row with the same stable id and updated_at_ms. Do not create a separate datastore. Do not research persons before the pipeline contact stage.',
+    rule: 'Append a new row with the same stable id and updated_at_ms. Do not create a separate datastore. Do not research persons before the pipeline contact stage.', // v4-allow: text (Writeback-Regel)
   };
   if (stage === 'company_research') {
     return {
@@ -7462,7 +7047,7 @@ async function queueOutboundImportCommand(campaign, payload, sourceId) {
       ...payload,
       source_id: sourceId,
       instruction: [
-        t('importPromptLabel', 'Lies den Importjob als Firmenliste, folge bei Listen/Verzeichnissen den noetigen Unternehmensdetailseiten und schreibe alle gefundenen Unternehmen als record-shaped Knowledge in den Campaign Companies DataFrame. Keine Personen recherchieren.'),
+        t('importPrompt', 'Lies den Importjob als Firmenliste, folge bei Listen/Verzeichnissen den noetigen Unternehmensdetailseiten und schreibe alle gefundenen Unternehmen als record-shaped Knowledge in den Campaign Companies DataFrame. Keine Personen recherchieren.'), // v4-allow: text (Agenten-Auftrag)
         payload.filter_prompt ? t('importFilterStrict', 'Importfilter strikt anwenden: {0}', payload.filter_prompt) : '',
       ].filter(Boolean).join('\n'),
       writeback_contract: {
@@ -7510,7 +7095,22 @@ async function queueOutboundImportCommand(campaign, payload, sourceId) {
       knowledge_table_key: refs.companiesKey,
     },
   };
-  return state.ctx.commandBus.dispatch(command);
+  const sent = dispatchOutboundRecordCommand(command);
+  return sent.settled.then((commandState) => ({
+    ...(commandState?.result && typeof commandState.result === 'object' ? commandState.result : {}),
+    status: 'completed',
+    command_id: sent.command_id,
+  }));
+}
+
+// v4: Befehl ohne Warten auf Annahme. Liefert sofort den lokalen Stand {status:'queued', command_id}; der
+// weitere Verlauf steht im gepushten business_commands-Dokument (commandStatusForRun), Fehler in der Zone.
+function dispatchOutboundRecordCommand(command) {
+  const { id, settled } = sendCommand(command.command_type || command.type, command.payload || {}, {
+    record_id: command.record_id,
+    client_context: command.client_context || {},
+  });
+  return { ok: true, status: 'queued', command_id: id, error: '', settled };
 }
 
 async function extractRowsFromPayload(payload) {
@@ -7553,8 +7153,8 @@ async function queueCompanyResearch(companyId, options = {}) {
       run_id: runId,
       title: t('researchCompanyDataTitle', 'Unternehmensdaten recherchieren: {0}', company.name),
       instruction: options.reason === 'custom_fields_added'
-        ? t('researchCompanyDataNew', 'Recherchiere die neu hinzugefügten Unternehmensdaten-Kategorien für die Outbound-Qualifizierung. Schreibe das Ergebnis ausschließlich in den angegebenen Knowledge DataFrame. Keine Personen adressieren und keine Outreach-Nachricht erstellen.')
-        : t('researchCompanyDataStandard', 'Recherchiere nur Unternehmensdaten für die Outbound-Qualifizierung. Schreibe das Ergebnis ausschließlich in den angegebenen Knowledge DataFrame. Keine Personen adressieren und keine Outreach-Nachricht erstellen.'),
+        ? t('researchCompanyDataNewPrompt', 'Recherchiere die neu hinzugefügten Unternehmensdaten-Kategorien für die Outbound-Qualifizierung. Schreibe das Ergebnis ausschließlich in den angegebenen Knowledge DataFrame. Keine Personen adressieren und keine Outreach-Nachricht erstellen.') // v4-allow: text (Agenten-Auftrag)
+        : t('researchCompanyDataStandardPrompt', 'Recherchiere nur Unternehmensdaten für die Outbound-Qualifizierung. Schreibe das Ergebnis ausschließlich in den angegebenen Knowledge DataFrame. Keine Personen adressieren und keine Outreach-Nachricht erstellen.'), // v4-allow: text (Agenten-Auftrag)
       research_request: {
         tool: 'ctox web research',
         mode: 'new_record',
@@ -7563,7 +7163,7 @@ async function queueCompanyResearch(companyId, options = {}) {
         fields: researchFields,
         custom_instruction: [
           researchSettings.customInstruction,
-          options.reason === 'custom_fields_added' ? t('researchMissingOrNew', 'Nur fehlende oder neue Kategorien nachrecherchieren und bestehende Unternehmensdaten nicht entfernen.') : '',
+          options.reason === 'custom_fields_added' ? t('researchMissingOrNewPrompt', 'Nur fehlende oder neue Kategorien nachrecherchieren und bestehende Unternehmensdaten nicht entfernen.') : '', // v4-allow: text (Agenten-Auftrag)
         ].filter(Boolean).join('\n'),
         include_private: sourcePolicy.include_private,
         preferred_sources: sourcePolicy.preferred_sources,
@@ -7598,9 +7198,9 @@ async function queueCompanyResearch(companyId, options = {}) {
       conflict_strategy: sourcePolicy.conflict_strategy,
     },
   };
-  const result = await state.ctx.commandBus.dispatch(command).catch((error) => ({ ok: false, status: 'pending_sync_failed', error: error?.message || String(error) }));
+  const result = dispatchOutboundRecordCommand(command);
   const now = Date.now();
-  await outboundCollection('outbound_research_runs').insert({
+  putDoc('outbound_research_runs', {
     id: runId,
     campaign_id: campaign.id,
     company_id: company.id,
@@ -7687,9 +7287,9 @@ async function queueContactResearch(pipelineId) {
       conflict_strategy: sourcePolicy.conflict_strategy,
     },
   };
-  const result = await state.ctx.commandBus.dispatch(command).catch((error) => ({ ok: false, status: 'pending_sync_failed', error: error?.message || String(error) }));
+  const result = dispatchOutboundRecordCommand(command);
   const now = Date.now();
-  await outboundCollection('outbound_research_runs').insert({
+  putDoc('outbound_research_runs', {
     id: runId,
     campaign_id: item.campaign_id,
     company_id: item.company_id,
@@ -7765,9 +7365,9 @@ async function queueLeadQualification(pipelineId) {
       knowledge_runbook_id: refs.runbookId,
     },
   };
-  const result = await state.ctx.commandBus.dispatch(command).catch((error) => ({ ok: false, status: 'pending_sync_failed', error: error?.message || String(error) }));
+  const result = dispatchOutboundRecordCommand(command);
   const now = Date.now();
-  await outboundCollection('outbound_research_runs').insert({
+  putDoc('outbound_research_runs', {
     id: runId,
     campaign_id: item.campaign_id,
     company_id: item.company_id,
@@ -7831,7 +7431,7 @@ async function validateCompanyResearch(companyId) {
   const campaign = state.campaigns.find((item) => item.id === company?.campaign_id) || selectedCampaign();
   if (!company || !campaign) return;
   const now = Date.now();
-  const userId = state.ctx?.session?.user?.id || state.ctx?.session?.user?.email || 'business-os-user';
+  const userId = state.api?.actor?.id || 'business-os-user';
   const latestRun = latestCompanyResearchRun(company.id);
   const validation = {
     status: 'validated',
@@ -7934,7 +7534,7 @@ function downloadJson(fileName, payload) {
   anchor.href = url;
   anchor.download = fileName;
   anchor.style.display = 'none';
-  (state.ctx?.host || document.documentElement).append(anchor);
+  (state.root || document.documentElement).append(anchor);
   anchor.click();
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 500);
@@ -7965,7 +7565,7 @@ async function sendCompanyToPipeline(companyId, options = {}) {
       created_at_ms: now,
       updated_at_ms: now,
     };
-    await outboundCollection('outbound_pipeline_items').insert(pipelineItem);
+    putDoc('outbound_pipeline_items', pipelineItem);
   }
   await patchDoc(outboundCollection('outbound_companies'), company.id, {
     pipeline_status: 'pipeline',
@@ -8106,8 +7706,8 @@ function loadHiddenCompanies() {
   const campaignId = state.selectedCampaignId;
   if (!campaignId) return [];
   try {
-    const data = state.ctx?.storageScope?.get?.(`${OUTBOUND_HIDDEN_COMPANIES_KEY_PREFIX}${campaignId}`);
-    const parsed = data ? JSON.parse(data) : [];
+    // v4: Fensterzustand (snapshot/restored) statt ctx.storageScope (V4-PORT.md OFFEN-6).
+    const parsed = state.hiddenCompaniesByCampaign?.[`${OUTBOUND_HIDDEN_COMPANIES_KEY_PREFIX}${campaignId}`] || [];
     return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : [];
   } catch (error) {
     console.warn('[outbound] hidden company state could not be read', error);
@@ -8119,10 +7719,10 @@ function saveHiddenCompanies(list) {
   const campaignId = state.selectedCampaignId;
   if (!campaignId) return;
   try {
-    state.ctx?.storageScope?.set?.(
-      `${OUTBOUND_HIDDEN_COMPANIES_KEY_PREFIX}${campaignId}`,
-      JSON.stringify(Array.isArray(list) ? list : []),
-    );
+    state.hiddenCompaniesByCampaign = {
+      ...(state.hiddenCompaniesByCampaign || {}),
+      [`${OUTBOUND_HIDDEN_COMPANIES_KEY_PREFIX}${campaignId}`]: Array.isArray(list) ? [...list] : [],
+    };
   } catch (error) {
     console.warn('[outbound] hidden company state could not be saved', error);
   }
@@ -8235,7 +7835,7 @@ function renderCenterPreservingInput(input) {
   const selectionEnd = input.selectionEnd;
   renderCenter();
   const selector = isSearch ? '[data-search]' : `[data-table-filter="${cssEscape(filterKey)}"]`;
-  const next = state.ctx?.host?.querySelector(selector);
+  const next = state.root?.querySelector(selector);
   next?.focus?.();
   if (next && selectionStart != null && selectionEnd != null) next.setSelectionRange?.(selectionStart, selectionEnd);
 }
@@ -8250,7 +7850,7 @@ function scheduleCenterRenderPreservingInput(input) {
   state.centerRenderTimer = window.setTimeout(() => {
     state.centerRenderTimer = null;
     renderCenter();
-    const next = state.ctx?.host?.querySelector(selector);
+    const next = state.root?.querySelector(selector);
     next?.focus?.();
     if (next && selectionStart != null && selectionEnd != null) next.setSelectionRange?.(selectionStart, selectionEnd);
   }, 120);
@@ -8282,73 +7882,34 @@ function ensureSelectedCompanyInFilter() {
   }
 }
 
+// Datenhelfer auf dem lokalen Spiegel (Collection = Name). Schreiben ist lokal sofort sichtbar (Outbox).
 async function findAll(collection) {
-  if (!collection) return [];
-  const docs = await collection.find().exec();
-  return docs.map((doc) => doc.toJSON ? doc.toJSON() : doc).sort((a, b) => (b.updated_at_ms || 0) - (a.updated_at_ms || 0));
+  return readAll(collection);
 }
 
 async function upsertDoc(collection, id, doc) {
-  const existing = await collection.findOne(id).exec();
-  if (existing) {
-    await existing.incrementalPatch({ ...doc, created_at_ms: existing.created_at_ms || doc.created_at_ms });
-    return;
-  }
-  await collection.insert(doc);
+  upsertDocById(collection, { ...doc, id: doc?.id || id });
 }
 
 async function upsertCompanyDocs(collection, docs) {
   if (!collection || !docs?.length) return 0;
-  const existingDocs = await collection.find().exec();
-  const existingById = new Map(existingDocs.map((doc) => {
-    const json = doc.toJSON ? doc.toJSON() : doc;
-    return [json.id, doc];
-  }));
-  const inserts = [];
-  const patches = [];
-  for (const doc of docs) {
-    const existing = existingById.get(doc.id);
-    if (existing) {
-      patches.push({ existing, doc });
-    } else {
-      inserts.push(doc);
-    }
-  }
-  if (inserts.length) {
-    if (typeof collection.bulkInsert === 'function') {
-      await collection.bulkInsert(inserts);
-    } else {
-      for (const doc of inserts) await collection.insert(doc);
-    }
-  }
-  for (const { existing, doc } of patches) {
-    const current = existing.toJSON ? existing.toJSON() : existing;
-    await existing.incrementalPatch({ ...doc, created_at_ms: current.created_at_ms || doc.created_at_ms });
-  }
+  for (const doc of docs) upsertDocById(collection, doc);
   const ids = new Set(docs.map((doc) => doc.id));
-  const persisted = await collection.find().exec();
-  return persisted.reduce((count, doc) => {
-    const json = doc.toJSON ? doc.toJSON() : doc;
-    return count + (ids.has(json.id) ? 1 : 0);
-  }, 0);
+  return readAll(collection).reduce((count, doc) => count + (ids.has(doc.id) ? 1 : 0), 0);
 }
 
 async function patchDoc(collection, id, patch) {
-  const existing = await collection.findOne(id).exec();
-  if (existing) await existing.incrementalPatch(patch);
+  patchDocById(collection, id, patch);
 }
 
 async function removeDoc(collection, id) {
-  const existing = await collection?.findOne(id).exec();
-  if (existing) await existing.remove();
+  removeDocById(collection, id);
 }
 
 async function removeWhere(collection, predicate) {
   if (!collection) return;
-  const docs = await collection.find().exec();
-  for (const doc of docs) {
-    const json = doc.toJSON ? doc.toJSON() : doc;
-    if (predicate(json)) await doc.remove();
+  for (const doc of readAll(collection)) {
+    if (predicate(doc)) removeDocById(collection, doc.id);
   }
 }
 
@@ -8358,7 +7919,7 @@ function field(label, value) {
 
 function renderEvidence(company) {
   const evidence = company.evidence || [];
-  if (!evidence.length) return '<div class="outbound-muted">Noch keine belastbaren Quellen hinterlegt.</div>';
+  if (!evidence.length) return '';
   return `<ul class="outbound-evidence">${evidence.map((item) => `<li>${escapeHtml(item.title || item.url || item.note || 'Quelle')}</li>`).join('')}</ul>`;
 }
 
@@ -8534,7 +8095,7 @@ function setupCenterSplitResizing(root) {
 
 function readCenterSplitRatio() {
   try {
-    const value = Number(state.ctx?.storageScope?.get?.(OUTBOUND_CENTER_SPLIT_KEY));
+    const value = Number(state.centerSplitRatio);
     return Number.isFinite(value) && value > 0.25 && value < 0.78 ? value : null;
   } catch {
     return null;
@@ -8543,7 +8104,7 @@ function readCenterSplitRatio() {
 
 function writeCenterSplitRatio(value) {
   try {
-    if (Number.isFinite(value)) state.ctx?.storageScope?.set?.(OUTBOUND_CENTER_SPLIT_KEY, String(value));
+    if (Number.isFinite(value)) state.centerSplitRatio = value;
   } catch {
     // Ignore unavailable scoped storage.
   }
@@ -8586,20 +8147,35 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
+// 4.0 hat keine Icon-API (OFFEN-D): app-lokale Glyphen (gleiche Pfade wie shared/icons.js actionIconPaths).
+const ACTION_ICON_PATHS = Object.freeze({
+  add: 'M12 5v14M5 12h14',
+  book: 'M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5v-15ZM4 18a2.5 2.5 0 0 1 2.5-2.5H20M8 7h8',
+  close: 'M6 6l12 12M18 6L6 18',
+  columns: 'M4 4h16v16H4zM10 4v16M16 4v16',
+  download: 'M12 4v11M12 15l-4-4M12 15l4-4M5 19h14',
+  edit: 'M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3ZM14.5 6.5l3 3',
+  export: 'M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7',
+  settings: 'M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6',
+  trash: 'M5 7h14M10 7V5h4v2M8 7l1 13h6l1-13M10.5 11v5M13.5 11v5',
+});
+
 function actionIcon(name) {
-  return state.ctx?.getActionIcon?.(name) || '';
+  const path = ACTION_ICON_PATHS[name];
+  if (!path) return '';
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${path}"></path></svg>`;
 }
 
 async function updateContactInPipelineItem(pipelineItemId, contactIndex, mutator) {
   const collection = outboundCollection('outbound_pipeline_items');
   if (!collection) return;
-  const existing = await collection.findOne(pipelineItemId).exec();
+  const existing = readOne(collection, pipelineItemId);
   if (!existing) return;
 
   const contacts = Array.isArray(existing.contacts) ? JSON.parse(JSON.stringify(existing.contacts)) : [];
   if (contacts[contactIndex]) {
     mutator(contacts[contactIndex]);
-    await existing.incrementalPatch({ contacts });
+    patchDocById(collection, pipelineItemId, { contacts });
     await loadAll({ hydrateKnowledge: false });
     render();
   }
@@ -8627,13 +8203,13 @@ function setSelectedContactIndexForCompany(companyId, index) {
 async function deleteContactFromPipelineItem(pipelineItemId, contactIndex) {
   const collection = outboundCollection('outbound_pipeline_items');
   if (!collection) return;
-  const existing = await collection.findOne(pipelineItemId).exec();
+  const existing = readOne(collection, pipelineItemId);
   if (!existing) return;
 
   const contacts = Array.isArray(existing.contacts) ? JSON.parse(JSON.stringify(existing.contacts)) : [];
   if (contactIndex >= 0 && contactIndex < contacts.length) {
     contacts.splice(contactIndex, 1);
-    await existing.incrementalPatch({ contacts });
+    patchDocById(collection, pipelineItemId, { contacts });
 
     if (state.selectedContactByCompany) {
       const saved = state.selectedContactByCompany.get(existing.company_id);
@@ -8797,7 +8373,7 @@ function closeMultiSelectOverlay() {
 function showMultiSelectOverlay(hostCell, { currentValues, allOptions, labelSingular, onSave }) {
   closeMultiSelectOverlay();
 
-  const moduleHost = state.ctx?.host || hostCell?.closest?.('[data-outbound-root]');
+  const moduleHost = state.root || hostCell?.closest?.('[data-outbound-root]');
   if (!moduleHost) return;
   const rect = hostCell.getBoundingClientRect();
   const overlay = document.createElement('div');
@@ -8898,7 +8474,7 @@ function trim(str) {
 }
 
 function toggleResearchSettingsTab(tabName) {
-  const drawer = state.ctx?.host?.querySelector('.outbound-research-drawer');
+  const drawer = state.root?.querySelector('.outbound-research-drawer');
   if (!drawer) return;
   saveResearchSettingsTemporaryState(drawer);
   state.researchSettingsActiveTab = tabName;
@@ -8908,51 +8484,25 @@ function toggleResearchSettingsTab(tabName) {
   }
 }
 
-async function loadMailserverConfig() {
-  if (!state.ctx?.commandBus?.dispatch) return;
-  state.mailserver = state.mailserver || { domains: [], users: [], loading: false, error: null };
-  state.mailserver.loading = true;
-  state.mailserver.error = null;
-  
-  // Render loading state
-  const drawer = state.ctx?.host?.querySelector('.outbound-research-drawer');
-  if (drawer && state.researchSettingsActiveTab === 'mailserver') {
-    drawer.innerHTML = renderResearchSettingsDrawer(selectedCampaign());
-  }
+// Mailserver = Plattformfähigkeit (cap.mail.server, Befehle ctox.mailserver.*). Nie warten: das Ergebnis von
+// get_config kommt über den gepushten Befehlsstatus; Fehler stehen in der Zustandszone.
+function mailserverCommand(type, payload) {
+  const { settled } = sendCommand(type, payload, { client_context: { command_path: 'mailserver' } });
+  settled.then(() => loadMailserverConfig(), () => loadMailserverConfig());
+}
 
-  try {
-    const commandId = `cmd_mailserver_get_config_${crypto.randomUUID()}`;
-
-    const result = await state.ctx.commandBus.dispatch({
-      id: commandId,
-      module: 'ctox',
-      command_type: 'ctox.mailserver.get_config',
-      record_id: commandId,
-      inbound_channel: 'business_os.outbound',
-      payload: {},
-      client_context: {
-        source_module: 'outbound',
-      },
-    });
-
-    if (result && (result.status === 'completed' || result.result)) {
-      const outcome = result.result || result.payload?.outcome || result;
-      state.mailserver.domains = outcome.domains || [];
-      state.mailserver.users = outcome.users || [];
-    } else {
-      throw new Error('Fehler beim Laden der Mailserver-Konfiguration.');
-    }
-  } catch (err) {
-    console.error('[outbound] Failed to load mailserver config', err);
-    state.mailserver.error = err.message || String(err);
-  } finally {
-    state.mailserver.loading = false;
-    // Re-render if tab is still active
-    const currentDrawer = state.ctx?.host?.querySelector('.outbound-research-drawer');
+function loadMailserverConfig() {
+  state.mailserver = state.mailserver || { domains: [], users: [] };
+  const { settled } = sendCommand('ctox.mailserver.get_config', {}, { client_context: { command_path: 'mailserver' } });
+  settled.then((commandState) => {
+    const outcome = commandState?.result || {};
+    state.mailserver.domains = outcome.domains || [];
+    state.mailserver.users = outcome.users || [];
+    const currentDrawer = state.root?.querySelector('.outbound-research-drawer');
     if (currentDrawer && state.researchSettingsActiveTab === 'mailserver') {
       currentDrawer.innerHTML = renderResearchSettingsDrawer(selectedCampaign());
     }
-  }
+  }, (err) => console.error('[outbound] Failed to load mailserver config', err));
 }
 
 function saveResearchSettingsTemporaryState(drawer) {
@@ -9076,9 +8626,9 @@ async function generateOutreachForContact(itemId, contactIndex) {
   const campaign = selectedCampaign();
   const settings = getCampaignResearchSettings(campaign);
 
-  // Transient spinner hint. The durable spinner is driven by the persisted
-  // contact.outreach_generating flag, which the CTOX agent clears when it writes
-  // the draft back via the outbound.pipeline.write_outreach_draft command.
+  // Transient spinner hint until the command settles. The durable spinner is the persisted
+  // contact.outreach_generating flag: the handler outbound.pipeline.outreach_draft sets it, its callbacks
+  // (.done → write_outreach_draft, .failed) clear it (Strang SKL-O).
   state.generatingOutreach.set(contactKey, { statusText: t('outreachHandedToCtox', 'An CTOX übergeben...') });
   renderCenter();
 
@@ -9123,17 +8673,10 @@ async function generateOutreachForContact(itemId, contactIndex) {
     record_id: item.id,
     inbound_channel: 'business_os.outbound',
     payload: {
-      title: t('outreachDraftTitle', 'Anschreiben generieren: {0}', company.name),
-      instruction: t('outreachDraftInstruction', 'Erstelle ein personalisiertes Outbound-Anschreiben (Betreff, Mailtext und zwei Follow-ups) für den angegebenen Ansprechpartner. Nutze Produkt-/ICP-Beschreibung, CTA, Signatur, Landingpage-Checkliste und die Prompt-Templates aus drafting_request. Schreibe das Ergebnis ausschließlich über den CTOX-Command outbound.pipeline.write_outreach_draft mit pipeline_id und contact_index zurück. Sende keine Nachricht und rufe keinen externen Dienst auf.'),
+      // Anweisung (prompts/outreach-draft.md), Skill und Rückruf setzt der Handler (Strang SKL-O).
       pipeline_id: item.id,
       contact_index: contactIndex,
       company_id: company.id,
-      writeback: {
-        command_type: 'outbound.pipeline.write_outreach_draft',
-        pipeline_id: item.id,
-        contact_index: contactIndex,
-        message_fields: ['message_mail_subject', 'message_mail_body', 'message_followup_1', 'message_followup_2'],
-      },
       drafting_request: {
         Produkt_und_Dienstleistungsbeschreibung: settings.icpCore,
         CTA: settings.cta,
@@ -9159,26 +8702,16 @@ async function generateOutreachForContact(itemId, contactIndex) {
   };
 
   try {
-    await updateContactInPipelineItem(itemId, contactIndex, (c) => {
-      c.outreach_generating = true;
-      c.outreach_status = 'queued';
-    });
-    const result = await state.ctx.commandBus.dispatch(command)
-      .catch((error) => ({ ok: false, status: 'pending_sync_failed', error: error?.message || String(error) }));
-    if (result && result.ok === false) {
-      throw new Error(result.error || 'Command konnte nicht zugestellt werden.');
-    }
-    state.generatingOutreach.delete(contactKey);
-    renderCenter();
+    // Nie warten: Befehl in die Outbox. Der Handler setzt outreach_generating/queued am Kontakt; scheitert der
+    // Befehl, steht der Fehler in der Zustandszone (outbound.command.outbound.pipeline.outreach_draft).
+    const { settled } = dispatchOutboundRecordCommand(command);
+    const release = () => { state.generatingOutreach.delete(contactKey); renderCenter(); };
+    settled.then(release, release);
   } catch (err) {
     console.error('[outbound] error dispatching outreach generation:', err);
     state.generatingOutreach.delete(contactKey);
-    await updateContactInPipelineItem(itemId, contactIndex, (c) => {
-      c.outreach_generating = false;
-      c.outreach_status = 'draft_failed';
-    }).catch(() => {});
     renderCenter();
-    showBusinessAlert(`Fehler bei der Outreach-Generierung: ${err.message}`);
+    reportStatus('error', 'outbound.outreach.generate', `Fehler bei der Outreach-Generierung: ${err.message}`);
   }
 }
 
@@ -9193,7 +8726,7 @@ export function toggleHiddenCompaniesPanel() {
 }
 
 export function closeHiddenCompaniesPanel() {
-  const panel = state.ctx?.host?.querySelector?.('.hidden-company-panel');
+  const panel = state.root?.querySelector?.('.hidden-company-panel');
   if (panel) {
     panel.remove();
   }
@@ -9203,7 +8736,7 @@ export function closeHiddenCompaniesPanel() {
 export function buildHiddenCompaniesPanel() {
   closeHiddenCompaniesPanel();
 
-  const moduleHost = state.ctx?.host;
+  const moduleHost = state.root;
   if (!moduleHost) return;
   const panel = document.createElement('div');
   panel.className = 'hidden-company-panel';
@@ -9290,8 +8823,6 @@ export function buildHiddenCompaniesPanel() {
 export const __outboundTestHooks = {
   campaignBriefing,
   campaignBriefingSummary,
-  campaignSetupPrompt,
-  dispatchOutboundPromptTask,
   campaignIdeaTemplates,
   campaignScopedRows,
   extractRowsFromPayload,
@@ -9299,8 +8830,6 @@ export const __outboundTestHooks = {
   normalizeResearchSources,
   authAssistFromCommandResult,
   browserAuthAssistLaunchArgs,
-  closePreopenedAuthAssistBrowserWindow,
-  preopenAuthAssistBrowserWindow,
   researchAdapterFromCommandResult,
   researchAdapterPatchFromServer,
   researchSourcePolicyForPrompt,

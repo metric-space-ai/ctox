@@ -1,0 +1,15 @@
+{
+  "collections": {
+    "items": {
+      "type": "object",
+      "primaryKey": "id",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "count": { "type": "number" }
+      },
+      "required": ["id", "title"]
+    }
+  },
+  "migrations": {}
+}

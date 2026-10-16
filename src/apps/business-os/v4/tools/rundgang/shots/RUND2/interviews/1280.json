@@ -1,0 +1,434 @@
+{
+ "app": "interviews",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Interviews",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 748
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neuer Termin",
+    "button:Importieren",
+    "button:Exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Alle (6)",
+    "nav:Offen (2)",
+    "nav:Erledigt (4)",
+    "button:candidate-001 → vacancy-001 Vo",
+    "button:candidate-002 → vacancy-002 No",
+    "button:candidate-003 → vacancy-003 St",
+    "button:candidate-001 → vacancy-001 No",
+    "button:candidate-002 → vacancy-002 Be",
+    "button:candidate-003 → vacancy-003 Ab"
+   ],
+   "shot": "interviews/1280-01-open.png"
+  },
+  {
+   "step": "nav Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "interviews/1280-02-nav_Alle_6_.png"
+  },
+  {
+   "step": "nav Offen (2)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "interviews/1280-03-nav_Offen_2_.png"
+  },
+  {
+   "step": "nav Erledigt (4)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "interviews/1280-04-nav_Erledigt_4_.png"
+  },
+  {
+   "step": "zurück zu Reiter Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "interviews/1280-05-zur_ck_zu_Reiter_Alle_6_.png"
+  },
+  {
+   "step": "button Neuer Termin",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "interviews/1280-06-button_Neuer_Termin.png"
+  },
+  {
+   "step": "formular 6 Felder → Termin anlegen",
+   "changed": true,
+   "ops": [
+    "put interview_meetings/imeet_1792086809661_809661 local=ok result=accepted {\"id\":\"imeet_1792086809661_809661\",\"candidate_id\":\"Rundgang Test\",\"vacancy_id\":\"Rundgang Test\",\"parties\":[{\"name\":\"Rundgang Test\"}],\"start\":"
+   ],
+   "zone": [
+    "clear interviews.form.candidate_required",
+    "clear interviews.meeting.create_failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "interviews/1280-07-formular_6_Felder_Termin_anlegen.png"
+  },
+  {
+   "step": "nav Alle (7)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Offen (3)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "interviews/1280-08-nav_Offen_3_.png"
+  },
+  {
+   "step": "button Importieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Exportieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Als Liste anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "interviews/1280-09-button_Als_Liste_anzeigen.png"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "interviews/1280-10-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "interviews/1280-11-button_Filter.png"
+  },
+  {
+   "step": "button Rundgang Test → Rundgang Test Vorgeschlagen 20.10.26, 10:00 ",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "interviews/1280-12-button_Rundgang_Test_Rundgang_Test_Vorge.png"
+  },
+  {
+   "step": "button candidate-001 → vacancy-001 Vorgeschlagen 01.01.70, 01:00 st",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "interviews/1280-13-button_candidate-001_vacancy-001_Vorgesc.png"
+  },
+  {
+   "step": "button candidate-002 → vacancy-002 Bestätigt 01.01.70, 01:00 email ",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "interviews/1280-14-button_candidate-002_vacancy-002_Best_ti.png"
+  },
+  {
+   "step": "button Spaltenbreite anpassen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Einklappen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "interviews/1280-15-button_Einklappen.png"
+  },
+  {
+   "step": "auswahl Status filtern → proposed",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "interviews/1280-16-auswahl_Status_filtern_proposed.png"
+  },
+  {
+   "step": "nav Alle (2)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "interviews/1280-17-nav_Alle_2_.png"
+  },
+  {
+   "step": "nav Erledigt (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "interviews/1280-18-nav_Erledigt_0_.png"
+  },
+  {
+   "step": "button Filter zurücksetzen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "interviews/1280-19-button_Filter_zur_cksetzen.png"
+  },
+  {
+   "step": "button candidate-002 → vacancy-002 No-Show 01.01.70, 01:00 email · ",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "interviews/1280-20-button_candidate-002_vacancy-002_No-Show.png"
+  },
+  {
+   "step": "formular 1 Felder → Änderungen speichern",
+   "changed": true,
+   "ops": [
+    "patch interview_meetings/interview-meet-002 local=ok result=accepted {\"candidate_id\":\"candidate-002\",\"vacancy_id\":\"vacancy-002\",\"parties\":[{\"name\":\"Rundgang Test\"}],\"start\":0,\"end\":0,\"location_mode\":\"video\",\"v"
+   ],
+   "zone": [
+    "clear interviews.form.candidate_required",
+    "clear interviews.meeting.missing",
+    "clear interviews.meeting.update_failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "interviews/1280-21-formular_1_Felder_nderungen_speichern.png"
+  },
+  {
+   "step": "button candidate-002 → vacancy-002 No-Show ohne Termin Video · 1 Pa",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "interviews/1280-22-button_candidate-002_vacancy-002_No-Show.png"
+  },
+  {
+   "step": "button candidate-003 → vacancy-003 Stattgefunden 01.01.70, 01:00 in",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "interviews/1280-23-button_candidate-003_vacancy-003_Stattge.png"
+  },
+  {
+   "step": "button candidate-001 → vacancy-001 No-Show 01.01.70, 01:00 standard",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "interviews/1280-24-button_candidate-001_vacancy-001_No-Show.png"
+  },
+  {
+   "step": "button candidate-003 → vacancy-003 Abgesagt 01.01.70, 01:00 interna",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "interviews/1280-25-button_candidate-003_vacancy-003_Abgesag.png"
+  },
+  {
+   "step": "auswahl Video Vor Ort Telefon → video",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 878,
+   "shot": "interviews/1280-26-suche_ohne_Treffer.png",
+   "textAfter": 556
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "interviews/1280-27-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "interview_meetings",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "patch",
+   "coll": "interview_meetings",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "interviews",
+  "Interviews"
+ ]
+}

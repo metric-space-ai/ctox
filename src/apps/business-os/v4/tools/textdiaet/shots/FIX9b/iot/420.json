@@ -1,0 +1,167 @@
+{
+ "app": "iot",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "IoT",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 812
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Zurück zur Liste",
+    "button:Auftrag anlegen",
+    "button:Als Liste anzeigen"
+   ],
+   "shot": "iot/420-01-open.png"
+  },
+  {
+   "step": "button Zurück zur Liste",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-filterbar 302>274"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "iot/420-02-button_Zur_ck_zur_Liste.png"
+  },
+  {
+   "step": "nav Alle (6)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-filterbar 302>274"
+   ],
+   "open": true,
+   "kind": "nav",
+   "shot": "iot/420-03-nav_Alle_6_.png"
+  },
+  {
+   "step": "nav Signale (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-filterbar 302>274"
+   ],
+   "open": true,
+   "kind": "nav",
+   "shot": "iot/420-04-nav_Signale_0_.png"
+  },
+  {
+   "step": "nav Alarme (0)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-filterbar 302>274"
+   ],
+   "open": true,
+   "kind": "nav",
+   "shot": "iot/420-05-nav_Alarme_0_.png"
+  },
+  {
+   "step": "button Asset anlegen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-filterbar 302>274"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "iot/420-06-button_Asset_anlegen.png"
+  },
+  {
+   "step": "formular 1 Felder → Anlegen",
+   "changed": true,
+   "ops": [
+    "command ctox.iot.asset.upsert local=ok result=accepted {\"realm\":\"master\",\"name\":\"Rundgang Test\",\"asset_type\":\"Building\",\"parent_id\":null,\"module\":\"iot\",\"record_id\":\"Rundgang Test\",\"inbound_channe"
+   ],
+   "zone": [
+    "clear iot.command.ctox.iot.asset.upsert"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-filterbar 302>274"
+   ],
+   "open": true,
+   "kind": "submit",
+   "shot": "iot/420-07-formular_1_Felder_Anlegen.png"
+  },
+  {
+   "step": "button Importieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-filterbar 302>274"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "iot/420-08-button_Importieren.png"
+  },
+  {
+   "step": "button Exportieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-filterbar 302>274"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "iot/420-09-button_Exportieren.png"
+  },
+  {
+   "step": "button Als Liste anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "iot/420-10-button_Als_Liste_anzeigen.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "command",
+   "coll": "ctox.iot.asset.upsert",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "iot",
+  "IoT"
+ ]
+}

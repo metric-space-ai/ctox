@@ -4,38 +4,31 @@ import {
   normalizeCompanyRow,
   openUniversalImporter,
   parseDelimitedText,
-} from '../../shared/universal-importer.js?v=20261006-import-preview-groups-v1';
+} from 'ctox:shared/universal-importer.js';
 import { extractImportRows, finalizeImportAnalysis, buildImportPreviewExtras } from './import-preview-groups.js';
-import {
-  showBusinessAlert as shellAlert,
-  showBusinessConfirm as shellConfirm,
-  showBusinessPrompt as shellPrompt,
-} from '../../shared/dialogs.js';
+import { APP_ID, createPort } from './v4-port.mjs';
 
-// Rueckfragen und Hinweise IMMER im eigenen Fenster. Die Shell merkt sich das
-// Dialogziel global; nach einem Wechsel zu einer anderen App (z. B.
-// "Zugaenge") und zurueck landete jeder Dialog der Outbound-App unsichtbar im
-// Fenster darunter und wartete dort auf eine Antwort — die App wirkte
-// blockiert (Klicktest P0e, Owner-Befund 11.09.2026 abends).
-function eigenesDialogZiel() {
-  const host = globalThis.__olgDialogZiel;
-  return host && host.isConnected ? host : undefined;
-}
-function showBusinessAlert(message, options = {}) { return shellAlert(message, { host: eigenesDialogZiel(), ...options }); }
-function showBusinessConfirm(message, options = {}) { return shellConfirm(message, { host: eigenesDialogZiel(), ...options }); }
-function showBusinessPrompt(message, options = {}) { return shellPrompt(message, { host: eigenesDialogZiel(), ...options }); }
-import { loadModuleMessages } from '../../shared/i18n.js';
-import { createCollectionReloader } from './collection-reloader.mjs';
-import { loadLeadList, loadFullLeadRows, leadListRow, withLeadQueryAuthority } from './lead-list-loader.mjs';
+// Rueckfragen und Hinweise IMMER im eigenen Fenster: api.shell.dialog oeffnet nur innerhalb des
+// App-Fensters (Owner-Befund 11.09.2026: Dialoge landeten im Fenster einer anderen App).
+function zeigeMeldung(message, options = {}) { return state.port.meldung(message, options); }
+function frageBestaetigung(message, options = {}) { return state.port.bestaetigung(message, options); }
+function frageEingabe(message, options = {}) { return state.port.eingabe(message, options); }
+// Ersetzt RxDB doc.incrementalPatch / doc.remove (v4-port.mjs: flach zusammenfuehren, api.put / api.remove).
+function aendereDok(doc, patch) { return state.port.aendereDok(doc, patch); }
+function entferneDok(doc) { return state.port.entferneDok(doc); }
+async function aendereDokWennDa(doc, patch) { return doc ? aendereDok(doc, patch) : undefined; }
 import { captureResearchExport, openResearchSnapshot } from './current-state-export.mjs';
+import { revealDetailIfStacked } from './stacked-detail-reveal.mjs';
+import { doppelteAdapterIds } from './adapter-dedupe.mjs';
 import { optionalKeysForRequiredCheckbox } from './required-field-selection.mjs';
-import { readErrorEntry, visibleReadErrorKeys } from './read-error-grace.mjs';
 import { inFlightLeadsOutsideWindow, IN_FLIGHT_SWEEP_INTERVAL_MS } from './in-flight-lead-sweep.mjs';
 import { abgleichBasisVeraltet, hatBelegteFelder } from './reconcile-basis.mjs';
+// Scrape-Registry = OLG-eigene Collections (Strang OLGSCR); dieselben Lese-Sichten wie die Handler.
 import {
-  actionAllowedOnStartupSnapshot, buildStartupSnapshot, readStartupSnapshot,
-  startupCacheScope, writeStartupSnapshot,
-} from './startup-cache.mjs';
+  ACCOUNT_STATES as REGISTRY_ACCOUNT_STATES, RUNS as REGISTRY_RUNS, SCRIPTS as REGISTRY_SCRIPTS, TARGETS as REGISTRY_TARGETS,
+  accountStates as registryAccountStates, lastRuns as registryLastRuns, latestScript as registryLatestScript,
+  listTargets as registryListTargets,
+} from './handlers/_lib/scrape-registry.js';
 import {
   CUSTOM_GROUP_LABEL, customFieldKey, fieldGroupsFor, isCustomFieldKey, normalizeCustomFields, normalizeFieldLabels,
 } from './field-catalog.mjs';
@@ -460,27 +453,7 @@ const RESEARCH_FIELD_VALUE_KEYS = Object.freeze({
   fachliche_entscheidung_begruendung: ['fachliche_entscheidung_begruendung', 'human_decision_reason'],
 });
 
-// ACHTUNG: jede Aenderung an index.css braucht hier eine NEUE Nummer. Das
-// Stylesheet wird unter genau dieser URL geholt, und Cloudflare speichert
-// jede URL ein Jahr lang unveraenderlich. Blieb die Nummer stehen, kam keine
-// einzige CSS-Aenderung beim Nutzer an — neun Tage lang unbemerkt.
-// Der Cache-Buster des Stylesheets darf NICHT eingefroren sein. Bis zum
-// 03.09.2026 stand hier eine feste Zeichenkette von Ende August: die Shell lud
-// index.css korrekt mit ihrem eigenen Buster, die App haengte danach ein
-// ZWEITES <link> mit dem alten Buster an, der Browser lieferte dafuer die alte
-// Datei aus dem Cache - und weil sie zuletzt kam, gewann sie. Jede
-// CSS-Aenderung war damit unsichtbar, obwohl sie ausgeliefert war.
-// Der Buster kommt jetzt aus der eigenen Modul-URL und wechselt mit jedem
-// Deploy mit.
-const STYLE_BUILD = (() => {
-  try {
-    const eigener = new URL(import.meta.url).searchParams.get('v');
-    if (eigener) return eigener;
-  } catch { /* import.meta.url ohne Query - Rueckfall unten */ }
-  return '20260831-outbound-lead-generation-v2-conform-v36';
-})();
 const COMMAND_REFRESH_MS = 5000;
-const REPLICATION_WRITE_TIMEOUT_MS = 60_000;
 const CAMPAIGN_TERMINAL_REPAIR_GRACE_MS = 30_000;
 const CAMPAIGN_PARENT_PLACEHOLDER_STALE_MS = 30 * 60_000;
 const SOURCE_REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
@@ -531,37 +504,30 @@ const NICHT_ZURUECKGEMELDET = 'Der Vorgang hat sich nicht zurueckgemeldet. Reche
 // abschloss. Die Frist deckt jetzt die gemessene Oberkante ab.
 const RECIPIENT_ELIGIBILITY_TIMEOUT_MS = 90_000;
 const LEGACY_RESEARCH_POLICY_IMPORT_ID = 'settings_research_policy';
-const REPLICATED_COLLECTIONS = Object.freeze([
-  'outbound_lead_generation_sources',
-  'outbound_lead_generation_adapters',
-  'outbound_lead_generation_imports',
-  'outbound_lead_generation_research_policies',
-  'outbound_lead_generation_leads',
-]);
 const DEFAULT_RESEARCH_POLICY = [
-  "0. Zuerst prüfen, ob Unternehmen und Ansprechpartner bereits in Sellify vorhanden sind. Der Sellify-Bestand ist der Ausgangswert jedes Feldes und zugleich eine Quelle. Er wird nur geändert, wenn eine externe Quelle etwas anderes belegt.",
+  "0. Zuerst prüfen, ob Unternehmen und Ansprechpartner bereits in Sellify vorhanden sind. Der Sellify-Bestand ist der Ausgangswert jedes Feldes und zugleich eine Quelle. Er wird nur geändert, wenn eine externe Quelle etwas anderes belegt.", // v4-allow: text (Recherche-Standardablauf)
   "1. Identität und Registerdaten zuerst klären: Firmenname einschließlich früherer Namen und Umfirmierungen, Rechtsform, Aktivitätsstatus sowie Geschäftsführung aus dem Register. Nur amtierende Geschäftsführer übernehmen; Ausgeschiedene („nicht mehr Geschäftsführer“, „ausgeschieden“) nie eintragen. Prokura wird nicht recherchiert, weder als Feld noch als Ansprechpartner. Deutschland: Handelsregister, Northdata, Bundesanzeiger, CompanyHouse. Österreich: Firmenbuch/JustizOnline, FirmenABC, Northdata. Schweiz: Zefix/Handelsregister, SHAB, Moneyhouse, Northdata.",
-  "2. Danach Website, Anschrift und Kommunikation: zuerst die Domain, weil Impressum und Unternehmensseite ohne sie nicht auffindbar sind. Dann Anschrift, PLZ, Ort, Länderkennzeichen, Firmen-E-Mail und Firmen-Telefon. Priorität der Adresssuche in allen drei Ländern: 1. Impressum der offiziellen Website, 2. FirmenABC (Österreich) bzw. Zefix (Schweiz) bzw. D&B Hoovers (Deutschland, Schweiz), 3. Northdata als letzte Quelle.",
-  "2a. Besucheradresse und Postadresse: Nennt keine Quelle eine abweichende Besucher- oder Postadresse, sind beide gleich der Anschrift. Dann beide mit dem Wert und dem Beleg der Anschrift eintragen und als Begründung „keine abweichende Angabe gefunden“ vermerken. Nur eine ausdrücklich abweichende Angabe (z. B. „Besucheranschrift:“, „Postanschrift:“, „Lieferadresse“) wird getrennt geführt.",
+  "2. Danach Website, Anschrift und Kommunikation: zuerst die Domain, weil Impressum und Unternehmensseite ohne sie nicht auffindbar sind. Dann Anschrift, PLZ, Ort, Länderkennzeichen, Firmen-E-Mail und Firmen-Telefon. Priorität der Adresssuche in allen drei Ländern: 1. Impressum der offiziellen Website, 2. FirmenABC (Österreich) bzw. Zefix (Schweiz) bzw. D&B Hoovers (Deutschland, Schweiz), 3. Northdata als letzte Quelle.", // v4-allow: text (Recherche-Standardablauf)
+  "2a. Besucheradresse und Postadresse: Nennt keine Quelle eine abweichende Besucher- oder Postadresse, sind beide gleich der Anschrift. Dann beide mit dem Wert und dem Beleg der Anschrift eintragen und als Begründung „keine abweichende Angabe gefunden“ vermerken. Nur eine ausdrücklich abweichende Angabe (z. B. „Besucheranschrift:“, „Postanschrift:“, „Lieferadresse“) wird getrennt geführt.", // v4-allow: text (Recherche-Standardablauf)
   "2b. Optionale Felder wie Fax, Postfach und frühere Namen nur eintragen, wenn sie bei der Suche nach den anderen Feldern auftauchen. Für sie keine eigene Suche; ihr Fehlen blockiert nichts.",
   "3. Danach die Kennzahlen: WZ-Code, Umsatz, Mitarbeiter und Geschäftstätigkeit. WZ-Code in allen drei Ländern ausschließlich aus D&B Hoovers und/oder Leadfeeder; Deutschland zusätzlich Bundesanzeiger. Kennzahlen gehören zur exakten juristischen Person des Leads, nicht zum Konzern. Umsatz und Mitarbeiter mit Geschäftsjahr im Zitat; den jüngsten Jahresabschluss im Bundesanzeiger bevorzugen, D&B-Schätzwerte als Schätzung kennzeichnen. Die Geschäftstätigkeit über D&B Hoovers oder eine Google-Suche nach Unternehmensname und Tätigkeit klären; aus der Homepage einen Firmensteckbrief erstellen (Homepage-Fact-Sheet).",
-  "4. Zuletzt die Ansprechpartner: Vorname, Nachname, Funktion, Position, E-Mail, Telefon, LinkedIn und XING. Gesucht wird mindestens eine Person aus jeder dieser Kategorien, in dieser Reihenfolge: Geschäftsführung/Gesamtverantwortung, Leitung Finanzen, Einkauf, Supply Chain Management, Operations, Technik, Entwicklung. Personen über die Namenssuche in LinkedIn und XING ansteuern, nicht über angeklickte Suchtreffer.",
+  "4. Zuletzt die Ansprechpartner: Vorname, Nachname, Funktion, Position, E-Mail, Telefon, LinkedIn und XING. Gesucht wird mindestens eine Person aus jeder dieser Kategorien, in dieser Reihenfolge: Geschäftsführung/Gesamtverantwortung, Leitung Finanzen, Einkauf, Supply Chain Management, Operations, Technik, Entwicklung. Personen über die Namenssuche in LinkedIn und XING ansteuern, nicht über angeklickte Suchtreffer.", // v4-allow: text (Recherche-Standardablauf)
   "4a. Geschlecht und Titel jeder Person selbst bestimmen, nicht suchen: Das Geschlecht ergibt sich aus dem Vornamen (männlich/weiblich). Als Beleg die Quelle der Person mit dem Zitat, das ihren Vornamen nennt, und als Begründung „aus dem Vornamen abgeleitet“. Nur bei einem nicht eindeutigen Vornamen (z. B. Kim, Andrea im Ausland) das Feld als prüfbedürftig melden. Titel ist ein akademischer Titel, wenn eine Quelle ihn nennt (z. B. Dr., Prof., Dipl.-Ing.); sonst „Herr“ oder „Frau“ nach dem Geschlecht.",
   "4b. E-Mail der Person: Steht die Adresse wörtlich auf der Unternehmensseite oder in einer anderen Quelle, ist sie damit belegt. Sonst die Adresse aus dem Muster anderer bekannter Adressen derselben Firma bilden: Adressen anderer Mitarbeiter auf der Website, in Sellify, in Registern, Pressemitteilungen, Leadfeeder oder RocketReach (z. B. vorname.nachname@, v.nachname@, vorname@). Umlaute und ß wie im Muster umsetzen (ü → ue). Die gebildete Adresse über den Adapter experte-de prüfen, bei unklarem Ergebnis einmal über mailtester-com. Nur ein Ergebnis „gültig“ bzw. „zustellbar“ belegt die Adresse: dann die E-Mail eintragen mit dem Prüfergebnis als Beleg und der Musterquelle als zweitem Beleg, und das Ergebnis in E-Mail-Prüfung festhalten. Bei „ungültig“ das nächste plausible Muster prüfen, höchstens drei Varianten je Person. Bei „unbekannt“ oder Catch-All die beste Variante eintragen und als prüfbedürftig melden. Jede Adresse höchstens einmal je Prüfdienst; ist ein Dienst blockiert, das Feld als prüfbedürftig mit diesem Grund melden.",
   "4c. Telefon der Person: Durchwahl aus Website, Signatur, Pressemitteilung, Leadfeeder oder RocketReach. Ohne eigene Durchwahl bleibt das Feld leer; die Zentrale gehört in Firmen-Telefon, nicht zur Person.",
-  "5. Belegregel (Owner 07.10.2026: „Qualität geht immer vor Quantität. Wenn es nur eine Quelle gibt, ist die Recherche nicht gut, das sollte nur im Notfall sein.“): Für jedes Feld, das Dritte unabhängig prüfen können (Firmenname, Anschrift, PLZ, Ort, Länderkennzeichen, Aktivitätsstatus, frühere Namen, Geschäftstätigkeit, Geschäftsführung, WZ-Code, Umsatz, Mitarbeiter), zwei unabhängige Quellen (verschiedene Anbieter) mit URL und wörtlichem Zitat, das den konkreten Wert nennt. Nur wenn nach allen dafür genannten Quellen nur eine den Wert belegt, den Wert mit Begründung „single source: …“ eintragen. So viele Quellen wie möglich, jede aber nur einmal. Zwei Seiten derselben Quelle sind eine Quelle, und Sellify allein belegt nichts. Eine Spanne (z. B. 11–100) belegt keinen Einzelwert.",
-  "5a. Selbstauskünfte wie Domain, Firmen-E-Mail, Firmen-Telefon, Fax, Postfach, Besucheradresse, Postadresse, Homepage-Fact-Sheet sowie alle Felder der Ansprechpartner belegt die Unternehmensseite (Impressum, Kontakt, Team) bzw. das Profil selbst, mit URL und wörtlichem Zitat. Einen so belegten Wert eintragen, niemals als nicht gefunden verwerfen mit der Begründung, er stehe nur auf der eigenen Website.",
+  "5. Belegregel (Owner 07.10.2026: „Qualität geht immer vor Quantität. Wenn es nur eine Quelle gibt, ist die Recherche nicht gut, das sollte nur im Notfall sein.“): Für jedes Feld, das Dritte unabhängig prüfen können (Firmenname, Anschrift, PLZ, Ort, Länderkennzeichen, Aktivitätsstatus, frühere Namen, Geschäftstätigkeit, Geschäftsführung, WZ-Code, Umsatz, Mitarbeiter), zwei unabhängige Quellen (verschiedene Anbieter) mit URL und wörtlichem Zitat, das den konkreten Wert nennt. Nur wenn nach allen dafür genannten Quellen nur eine den Wert belegt, den Wert mit Begründung „single source: …“ eintragen. So viele Quellen wie möglich, jede aber nur einmal. Zwei Seiten derselben Quelle sind eine Quelle, und Sellify allein belegt nichts. Eine Spanne (z. B. 11–100) belegt keinen Einzelwert.", // v4-allow: text (Recherche-Standardablauf)
+  "5a. Selbstauskünfte wie Domain, Firmen-E-Mail, Firmen-Telefon, Fax, Postfach, Besucheradresse, Postadresse, Homepage-Fact-Sheet sowie alle Felder der Ansprechpartner belegt die Unternehmensseite (Impressum, Kontakt, Team) bzw. das Profil selbst, mit URL und wörtlichem Zitat. Einen so belegten Wert eintragen, niemals als nicht gefunden verwerfen mit der Begründung, er stehe nur auf der eigenen Website.", // v4-allow: text (Recherche-Standardablauf)
   "5b. Werte in der Schreibweise der Quelle übernehmen, mit Umlauten und ß. Keine Umschrift: Nürnberg, nicht Nuernberg; Lechstraße, nicht Lechstrasse. Schweizer Adressen behalten ihr ss.",
   "5c. Belege als reine JSON-Liste senden: \"sources\": [ { … }, { … } ]. Kein Trägerobjekt wie {\"item\": [ … ]}. Das gilt auch für result.person_records und result.evidence.",
-  "6. Bei Zugriffshürden Web-Stack-Unlocking verwenden; bei Anmeldung den CTOX-Browser öffnen und erst nach sichtbarer Bestätigung des Nutzers mit derselben persistenten Sitzung fortsetzen. Eine Quelle, die blockiert oder vorübergehend nicht erreichbar ist, belegt nichts, weder den Wert noch sein Fehlen.",
-  "7. Unklare oder widersprüchliche Daten als prüfbedürftig markieren und nicht automatisch an Sellify übergeben. Bei Widerspruch zwischen zwei Quellen das Feld leer lassen und beide Werte mit ihrer Quelle festhalten.",
-  "8. Abschlussbericht: Nach dem letzten Rückschreiben den gespeicherten Lead-Datensatz neu lesen (get_record) und den Bericht ausschließlich daraus erstellen. Zahlen (belegt, nicht gefunden, offen), Personen, Kontakte, E-Mail-Prüfungen, LinkedIn-/XING-Profile und Quellen nur so nennen, wie sie im gespeicherten Datensatz stehen. Was nicht gespeichert werden konnte, ausdrücklich als nicht gespeichert benennen.",
+  "6. Bei Zugriffshürden Web-Stack-Unlocking verwenden; bei Anmeldung den CTOX-Browser öffnen und erst nach sichtbarer Bestätigung des Nutzers mit derselben persistenten Sitzung fortsetzen. Eine Quelle, die blockiert oder vorübergehend nicht erreichbar ist, belegt nichts, weder den Wert noch sein Fehlen.", // v4-allow: label
+  "7. Unklare oder widersprüchliche Daten als prüfbedürftig markieren und nicht automatisch an Sellify übergeben. Bei Widerspruch zwischen zwei Quellen das Feld leer lassen und beide Werte mit ihrer Quelle festhalten.", // v4-allow: text (Recherche-Standardablauf)
+  "8. Abschlussbericht: Nach dem letzten Rückschreiben den gespeicherten Lead-Datensatz neu lesen (get_record) und den Bericht ausschließlich daraus erstellen. Zahlen (belegt, nicht gefunden, offen), Personen, Kontakte, E-Mail-Prüfungen, LinkedIn-/XING-Profile und Quellen nur so nennen, wie sie im gespeicherten Datensatz stehen. Was nicht gespeichert werden konnte, ausdrücklich als nicht gespeichert benennen.", // v4-allow: text (Recherche-Standardablauf)
   "",
   "Tipps aus den bisherigen Läufen:",
-  "- Zuerst die registrierten Adapter der Quellen ausführen (ctox_web_scrape execute), erst ohne Adapter den Browser. Liefert ein Adapter nichts oder ist er veraltet, das Skript reparieren und testen, dann ausführen.",
+  "- Zuerst die registrierten Adapter der Quellen ausführen (ctox_web_scrape execute), erst ohne Adapter den Browser. Liefert ein Adapter nichts oder ist er veraltet, das Skript reparieren und testen, dann ausführen.", // v4-allow: label; v4-allow: text (Recherche-Standardablauf)
   "- Jede Quelle je Feldgruppe genau einmal fragen. Keine Wiederholung bei blocked, authorization_required oder temporary_unreachable; die nächste Quelle nehmen. „Nicht gefunden“ erst, wenn alle für das Feld genannten Quellen gefragt sind, mit diesen Versuchen als attempts.",
-  "- Registerfelder (Regel 5) erst zurückschreiben, wenn die zweite Quelle gefragt wurde.",
-  "- Zwischenstände früh sichern: nach den Registerdaten einmal zurückschreiben, am Ende höchstens zwei weitere Rückschreibungen.",
+  "- Registerfelder (Regel 5) erst zurückschreiben, wenn die zweite Quelle gefragt wurde.", // v4-allow: text (Recherche-Standardablauf)
+  "- Zwischenstände früh sichern: nach den Registerdaten einmal zurückschreiben, am Ende höchstens zwei weitere Rückschreibungen.", // v4-allow: text (Recherche-Standardablauf)
 ].join('\n');
 const CURRENT_USER_COPY = Object.freeze({
   de: {
@@ -615,8 +581,6 @@ const state = {
   researchCommandQueryLogged: false,
   reconcilingCampaignRuns: false,
   reconcilingAdapterCommands: false,
-  commandRefreshTimer: null,
-  collectionReloadTimer: null,
   sellifyCompanies: null,
   sellifyPeople: null,
   sellifyLookupCache: new Map(),
@@ -654,184 +618,128 @@ const state = {
   subscriptions: [],
   messages: {},
   campaignRuns: new Map(),
-  replicationBridges: new Map(),
   campaignMutationMessage: '',
   adapterInspectorSourceId: '',
-  syncPending: true,
-  nurZwischenstand: false,
   // Waehrend des Starts schreibt die App nichts automatisch (25.09.2026: ein
   // frisch gestarteter Browser schrieb 13 Leads mit altem Stand zurueck).
   startLaeuft: true,
-  syncError: '',
-  syncMessage: 'Daten werden verbunden',
-  syncRetryTimer: null,
-  syncInFlight: false,
-  syncWaitingCollections: new Set(REPLICATED_COLLECTIONS),
 };
 
-export async function mount(ctx) {
-  await ensureStyles();
-  state.ctx = ctx;
+// Zustand der Ansicht, der einen Live-Remount ueberlebt (snapshot/restored, PORTING.md §2).
+const SNAPSHOT_VIEW_KEYS = ['selectedCampaign', 'selectedLeadId', 'activeDetailTab', 'campaignViewMode', 'search',
+  'sourceSearch', 'leadSortKey', 'leadSortDir', 'sourcePanelOpen', 'sourcePanelView', 'leadEditorOpen', 'leadEditorId',
+  'researchPolicyDraft', 'researchPolicyFollowupDraft', 'digestPeriod', 'digestDirty'];
+
+function snapshot() {
+  const snap = { v: 1 };
+  for (const key of SNAPSHOT_VIEW_KEYS) snap[key] = state[key];
+  snap.selectedLeadIds = [...state.selectedLeadIds];
+  snap.leadStatusFilter = [...state.leadStatusFilter];
+  snap.researchFieldKeysDraft = [...(state.researchFieldKeysDraft || [])];
+  snap.optionalFieldsDraft = state.optionalFieldsDraft ? structuredClone(state.optionalFieldsDraft) : null;
+  snap.leadDraft = state.leadDraft ? structuredClone(state.leadDraft) : null;
+  snap.digestDraft = state.digestDirty && state.digestDraft ? structuredClone(state.digestDraft) : null;
+  snap.policyDraftOffen = state.researchPolicyLoaded === true && state.researchPolicyDraft !== state.researchPolicy;
+  captureScrollPositions();
+  snap.scroll = { campaigns: state.scrollPositions.campaigns, leads: state.scrollPositions.leads };
+  return snap;
+}
+
+function wendeSnapshotAn(restored) {
+  if (!restored || typeof restored !== 'object' || restored.v !== 1) return;
+  for (const key of SNAPSHOT_VIEW_KEYS) {
+    if (restored[key] !== undefined && typeof restored[key] === typeof state[key]) state[key] = restored[key];
+  }
+  if (Array.isArray(restored.selectedLeadIds)) state.selectedLeadIds = new Set(restored.selectedLeadIds.map(String));
+  if (Array.isArray(restored.leadStatusFilter)) state.leadStatusFilter = new Set(restored.leadStatusFilter.map(String));
+  if (Array.isArray(restored.researchFieldKeysDraft)) state.researchFieldKeysDraft = restored.researchFieldKeysDraft.map(String);
+  if (restored.optionalFieldsDraft && typeof restored.optionalFieldsDraft === 'object') state.optionalFieldsDraft = restored.optionalFieldsDraft;
+  if (restored.leadDraft && typeof restored.leadDraft === 'object') state.leadDraft = restored.leadDraft;
+  if (restored.digestDraft && typeof restored.digestDraft === 'object') state.digestDraft = restored.digestDraft;
+  // Offener Prompt-Entwurf: als offen markieren, damit die erste Live-Emission ihn nicht ersetzt.
+  if (restored.policyDraftOffen === true) {
+    state.researchPolicyLoaded = true;
+    state.researchPolicy = undefined;
+    state.researchPolicyFollowup = undefined;
+  }
+  if (restored.scroll && typeof restored.scroll === 'object') {
+    state.scrollPositions.campaigns = Number(restored.scroll.campaigns) || 0;
+    state.scrollPositions.leads = Number(restored.scroll.leads) || 0;
+  }
+}
+
+export async function mount(root, api, { restored } = {}) {
+  if (!root.dataset.app) root.dataset.app = APP_ID;
+  state.root = root;
+  state.api = api;
+  const port = createPort(api);
+  state.port = port;
   state.uiMounted = true;
-  globalThis.__olgDialogZiel = ctx.host;
-  ctx.host.classList.add('outbound-lead-generation');
-  const locale = ctx.locale === 'en' ? 'en' : 'de';
-  const loadedMessages = await loadModuleMessages(import.meta.url, locale).catch(() => ({}));
-  state.messages = { ...loadedMessages, ...CURRENT_USER_COPY[locale] };
+  state.startLaeuft = true;
+  root.classList.add('outbound-lead-generation');
+  const sprache = (wert) => (String(wert || '').startsWith('en') ? 'en' : 'de');
+  state.locale = sprache(api.shell.locale.get());
+  state.messages = { ...CURRENT_USER_COPY[state.locale] };
+  state.port.abo(api.shell.locale.subscribe((wert) => {
+    const neu = sprache(wert);
+    if (neu === state.locale) return;
+    state.locale = neu;
+    state.messages = { ...CURRENT_USER_COPY[neu] };
+    if (state.uiMounted) render();
+  }));
+  api.shell.setTitle(tr('title', 'Outbound Lead Generation'));
   state.collections = {
-    sources: ctx.db.collection('outbound_lead_generation_sources'),
-    adapters: ctx.db.collection('outbound_lead_generation_adapters'),
-    imports: ctx.db.collection('outbound_lead_generation_imports'),
-    researchPolicies: ctx.db.collection('outbound_lead_generation_research_policies'),
-    leads: ctx.db.collection('outbound_lead_generation_leads'),
+    sources: state.port.daten('outbound_lead_generation_sources'),
+    adapters: state.port.daten('outbound_lead_generation_adapters'),
+    imports: state.port.daten('outbound_lead_generation_imports'),
+    researchPolicies: state.port.daten('outbound_lead_generation_research_policies'),
+    leads: state.port.daten('outbound_lead_generation_leads'),
   };
   state.sellifyCompanies = createSellifyLookupFacade('company');
   state.sellifyPeople = createSellifyLookupFacade('person');
-  // Lokales Replikat der CRM-Firmen (im Manifest deklariert; die Shell
-  // registriert das Schema des Sellify-Moduls mit). Damit laeuft die
-  // Sellify-Weiche komplett OHNE Kanal-Rundreise — die Rundreise brauchte
-  // unter Last ~60s und liess die Weiche fail-closed abbrechen.
-  try {
-    state.sellifyCompaniesLocal = ctx.db.collection('sellify_companies') || null;
-  } catch {
-    state.sellifyCompaniesLocal = null;
-  }
-  state.syncPending = true;
-  state.syncError = '';
-  state.syncMessage = navigator.onLine === false ? 'Keine Netzwerkverbindung' : 'Daten werden verbunden';
-  state.collectionReadErrors = new Map();
+  // Lokales Replikat der CRM-Firmen (im Manifest deklariert): die Sellify-Weiche laeuft komplett lokal.
+  state.sellifyCompaniesLocal = state.port.daten('sellify_companies');
   state.collectionsEverLoaded = new Set();
-  state.syncWaitingCollections = new Set(REPLICATED_COLLECTIONS);
-  const handleOffline = () => {
-    state.syncPending = false;
-    state.syncError = 'offline';
-    state.syncMessage = 'Keine Netzwerkverbindung. Vorhandene Daten bleiben sichtbar.';
-    render();
-  };
-  const handleOnline = () => {
-    state.syncMessage = 'Netzwerk wieder verfügbar. Daten werden synchronisiert';
-    void retryInitialSync();
-  };
-  globalThis.addEventListener('offline', handleOffline);
-  globalThis.addEventListener('online', handleOnline);
+  wendeSnapshotAn(restored);
   bindCollections();
   bindUi();
-  // Zuerst zeichnen, dann laden. Am 03.09.2026 auf Kundeninstanz gemessen: vom
-  // Seitenaufruf bis zur nutzbaren Oberflaeche vergingen 167 Sekunden, davon
-  // fast alles im `await reload()` - die fuenf Collections antworten erst,
-  // wenn ihre Replikation steht, und die Shell faehrt 201 Collections hoch.
-  // Der Nutzer sah in dieser Zeit ein totes "Modul-Workspace wird geladen".
-  // Die Daten kommen dadurch nicht frueher, aber die App ist sofort da und
-  // sagt ehrlich, dass sie noch synchronisiert.
   render();
-  void zeigeStartZwischenstand();
-  reload()
-    .then(() => render())
-    .catch((error) => {
-      console.warn('[outbound-lead-generation] Erstes Laden fehlgeschlagen', String(error?.message || error).slice(0, 140));
-    });
-  retryInitialSync();
-  state.kampagnenPersonenTimer = globalThis.setInterval(() => {
-    if (!/^fertig/.test(String(globalThis.document?.documentElement?.dataset?.olgBoot || ''))) return;
-    kampagnenPersonenPflege().catch(() => {});
-  }, 20_000);
-  state.commandRefreshTimer = globalThis.setInterval(() => {
-    Promise.all([
-      reconcileCampaignResearchRuns({ authoritative: true }),
-      reconcileResearchCommands({ authoritative: true }),
-      reconcileAdapterCommands({ authoritative: true }),
-    ]).then(async (changes) => {
-      if (!changes.some(Boolean)) return;
-      const keys = new Set();
-      if (changes[0]) { keys.add('imports'); keys.add('leads'); }
-      if (changes[1]) keys.add('leads');
-      if (changes[2]) { keys.add('adapters'); keys.add('sources'); }
-      await reload([...keys]);
-      render();
-    }).catch(() => {});
-  }, COMMAND_REFRESH_MS);
-  return () => {
-    state.uiMounted = false;
-    state.collectionReloader?.dispose();
-    state.collectionReloader = null;
-    state.collectionBindingGeneration = (state.collectionBindingGeneration || 0) + 1;
-    if (state.leerNachladenTimer) globalThis.clearTimeout(state.leerNachladenTimer);
-    state.leerNachladenTimer = null;
-    if (state.commandRefreshTimer) globalThis.clearInterval(state.commandRefreshTimer);
-    if (state.startupSnapshotTimer) globalThis.clearTimeout(state.startupSnapshotTimer);
-    state.startupSnapshotTimer = null;
-    state.nurZwischenstand = false;
-    if (state.kampagnenPersonenTimer) globalThis.clearInterval(state.kampagnenPersonenTimer);
-    if (state.freitextTakt) globalThis.clearInterval(state.freitextTakt);
-    state.freitextTakt = null;
-    state.commandRefreshTimer = null;
-    state.replicationBridges.clear();
-    if (state.syncRetryTimer) globalThis.clearTimeout(state.syncRetryTimer);
-    state.syncRetryTimer = null;
-    globalThis.removeEventListener('offline', handleOffline);
-    globalThis.removeEventListener('online', handleOnline);
-    if (state.collectionReloadTimer) globalThis.clearTimeout(state.collectionReloadTimer);
-    state.collectionReloadTimer = null;
-    state.subscriptions.forEach((subscription) => subscription?.unsubscribe?.());
-    state.subscriptions = [];
-    ctx.host.classList.remove('outbound-lead-generation');
-    ctx.host.replaceChildren();
+  queueMicrotask(() => { void startPflege(); });
+  return {
+    unmount() {
+      // Abos gehoeren dieser Montage (port); Modulzustand nur raeumen, wenn sie noch die aktuelle ist.
+      port.abmelden();
+      if (state.port === port) {
+        state.uiMounted = false;
+        for (const key of ['kampagnenPersonenTimer', 'befehlsabgleichTimer', 'quellenRenderTimer']) {
+          if (state[key]) globalThis.clearTimeout(state[key]);
+          state[key] = null;
+        }
+        state.datenAbos = [];
+        state.befehlsAbo = null;
+        state.registryAbos = [];
+      }
+      root.classList.remove('outbound-lead-generation');
+      root.replaceChildren();
+    },
+    snapshot,
   };
 }
 
-// P0-Selbstheilung (31.08.): Nach einem CTOX-Service-Neustart ist der
-// business_commands-Kanal "cancelled" und erholt sich im lebenden Tab nicht -
-// jeder Recherche-Start, jedes Speichern und Loeschen starb daran, dialoglos.
-// Die Modul-Fassade exponiert restartCollection auf der GETEILTEN Shell-Sync-
-// Runtime: Kanal neu aufbauen, Collection-Handles neu aufloesen, Operation
-// genau EINMAL wiederholen.
 function istKanalAbriss(error) {
-  return /was cancelled|wurde abgebrochen|MODULE_CONTEXT_CLOSED|nicht mit CTOX verbunden|no authenticated WebRTC peer|collection peer: not-connected/i.test(String(error?.message || error));
+  return /was cancelled|wurde abgebrochen|MODULE_CONTEXT_CLOSED|no authenticated WebRTC peer|collection peer: not-connected/i.test(String(error?.message || error));
 }
 
-// Der Auftrag hat CTOX nie erreicht: der Browser hatte keine Sync-Verbindung
-// ("business_commands has no authenticated WebRTC peer after 45000 ms").
-// Kundeninstanz 23.09.2026: CARBAGAS, DuPont und CHT standen danach als
-// "fehlgeschlagen" da, obwohl am Server kein einziger Befehl ankam.
+// Der Auftrag hat CTOX nie erreicht (Kundeninstanz 23.09.2026: CARBAGAS, DuPont und CHT standen
+// danach als "fehlgeschlagen" da, obwohl am Server kein einziger Befehl ankam).
 function auftragNichtZugestellt(error) {
-  return /no authenticated WebRTC peer|collection peer: not-connected|nicht mit CTOX verbunden/i.test(String(error?.message || error));
+  return /no authenticated WebRTC peer|collection peer: not-connected/i.test(String(error?.message || error));
 }
-const NICHT_ZUGESTELLT_HINWEIS = 'Der Auftrag hat CTOX nicht erreicht: Die Verbindung dieses Browsers zu CTOX ist unterbrochen. Der Lead bleibt offen. Bitte die Seite neu laden und die Recherche erneut starten.';
+const NICHT_ZUGESTELLT_HINWEIS = 'Auftrag nicht bei CTOX angekommen – Lead bleibt offen, Recherche erneut starten.';
 
-async function recoverCommandChannel(reason) {
-  console.info('[olg] Kanal-Selbstheilung', { reason });
-  try { await state.ctx?.sync?.restartCollection?.('business_commands'); } catch (error) {
-    console.warn('[olg] restartCollection business_commands fehlgeschlagen', error);
-  }
-  const namen = {
-    sources: 'outbound_lead_generation_sources',
-    adapters: 'outbound_lead_generation_adapters',
-    imports: 'outbound_lead_generation_imports',
-    researchPolicies: 'outbound_lead_generation_research_policies',
-    leads: 'outbound_lead_generation_leads',
-  };
-  for (const [key, name] of Object.entries(namen)) {
-    try {
-      await state.ctx?.sync?.restartCollection?.(name);
-      state.collections[key] = state.ctx.db.collection(name);
-    } catch (error) {
-      console.warn('[olg] Handle-Neuaufloesung fehlgeschlagen', { name, message: String(error?.message || error) });
-    }
-  }
-  // Recovered handles need new invalidation subscriptions, not observers on
-  // the cancelled handles. Rebinding also invalidates their in-flight reads.
-  if (state.uiMounted !== false) bindCollections();
-}
-
-// Generischer Einmal-Retry fuer Kanalabrisse.
-async function mitKanalHeilung(operation, label) {
-  try {
-    return await operation();
-  } catch (error) {
-    if (!istKanalAbriss(error)) throw error;
-    await recoverCommandChannel(label);
-    return operation();
-  }
+// v4: es gibt keinen Kanal, der abreissen kann; Schreiben ist lokal. Name bleibt fuer die Aufrufer.
+async function mitKanalHeilung(operation) {
+  return operation();
 }
 
 function bootSchritt(name) {
@@ -843,354 +751,41 @@ function bootFehler(schritt, error) {
   try { document.documentElement.dataset.olgBootFehler = text; } catch { /* nur Diagnose */ }
 }
 // Reparatur- und Abgleichsschritte beim Start sind Pflege, keine Voraussetzung.
-// Warf einer, verwarf retryInitialSync den ganzen Start und begann nach 8 s von
-// vorn - gemessen 25.09.2026: seed -> reload -> repair im 20-s-Takt, "fertig"
-// nie erreicht, jede Runde mit Schreibvorgaengen. Jetzt laeuft der Rest weiter.
 async function pflegeSchritt(schritt, arbeit) {
   try { return await arbeit(); } catch (error) {
     bootFehler(schritt, error);
-    // Ein gescheitertes Laden (QUERY_COLLECTOR_TIMEOUT im frischen Browser,
-    // 26.09.2026) liess die Kampagnenliste ~2,5 min leer, bis zufaellig ein
-    // spaeteres Nachladen kam. Jetzt sofort erneut, gedrosselt.
-    if (/^reload/.test(schritt)) scheduleCollectionReload();
     return null;
   }
 }
 
-async function synchronizeInitialData() {
-  bootSchritt('start-collections');
-  await Promise.all(REPLICATED_COLLECTIONS.map(async (collection) => {
-    const bridge = await withTimeout(
-      Promise.resolve(state.ctx.sync?.startCollection?.(collection)),
-      `${collection} konnte nicht gestartet werden.`,
-    );
-    state.replicationBridges.set(collection, bridge);
-  }));
-  bootSchritt('readiness');
-  // Die Liste erscheint sofort mit dem vorhandenen Stand; der Hinweis "wird
-  // synchronisiert" bleibt, bis der Start fertig ist (vorher 6-7 s leer).
-  const ersteLadung = reload().then(() => { render(); return true; })
-    .catch(() => { scheduleCollectionReload(); return false; });
-  // Readiness ist eine BESCHRIFTUNG, kein Tor. `catching-up` ist im
-  // Readiness-Vertrag der Sammeleimer fuer JEDEN nicht-terminalen Zustand -
-  // auch fuer den dauerhaften: ein Tab, der nicht Multi-Tab-Leader ist,
-  // bekommt Follower-Bridges ohne `initialReplicationState` und meldet
-  // deshalb bis zum Seitenschluss `catching-up`. Weil der Listener nur bei
-  // ZUSTANDSWECHSELN feuert, kommt nie ein Signal, der 60-s-Timeout wirft,
-  // der ganze Bootlauf wird verworfen und alle 4 s neu versucht - die App
-  // haengt dann dauerhaft in "CTOX-Verbindung wird hergestellt (0/5)".
-  // Jedes andere Business-OS-Modul rendert unabhaengig von Readiness und
-  // nutzt sie nur, um eine leere Liste als "laedt noch" zu beschriften.
-  // Wir warten weiterhin, aber ein nicht erreichter Live-Zustand darf den
-  // Start nicht mehr abbrechen.
-  const nichtLive = [];
-  await Promise.all(REPLICATED_COLLECTIONS.map((collection) => (DEMAND_ONLY_COLLECTIONS.has(collection)
-    ? waitForDemandCollection(collection, ersteLadung)
-    : waitForCollectionReadiness(collection))
-    .catch((error) => {
-      nichtLive.push(collection);
-      console.info('[outbound-lead-generation] collection not live yet, continuing', {
-        collection,
-        message: error?.message || String(error),
-      });
-      return null;
-    })));
+// Startpflege (frueher synchronizeInitialData nach der Readiness): Quellen anlegen, Drift reparieren,
+// Befehle abgleichen. Der lokale Stand ist in v4 vollstaendig; ein Warten auf Readiness entfaellt.
+async function startPflege() {
+  if (state.uiMounted === false) return;
   bootSchritt('seed-sources');
   const sourceContractChanged = await pflegeSchritt('seed-sources', () => seedSources());
-  bootSchritt('reload');
-  // Die Leads hat die erste Ladung schon vollstaendig vom Server gelesen;
-  // ein zweites Blaettern ueber alle Leads kostete den Start 10-40 s.
-  await pflegeSchritt('reload-0', () => reload(Object.keys(state.collections)
-    .filter((key) => key !== 'leads' || !state.collectionsEverLoaded?.has('leads'))));
-  if (!listLeads().length) planeLeerNachladen();
-  // Reparatur- und Abgleichsroutinen schreiben ganze Datensaetze. Auf einem
-  // noch nicht live abgeglichenen Stand schrieben sie alte Staende zurueck
-  // (needs_review -> failed, CH -> DE; 25.09.2026). Sie laufen deshalb nur,
-  // wenn alle Sammlungen live sind; sonst beim naechsten Start.
-  if (!nichtLive.length) {
-    bootSchritt('repair-adapters');
-    // Nachladen nur, wenn ein Schritt etwas geaendert hat: jedes reload sind
-    // mehrere Abfragen gegen das Abfragekontingent des Browsers.
-    if (await pflegeSchritt('repair-adapters', () => repairAdapterActivationDrift())) {
-      await pflegeSchritt('reload-1', () => reload());
-    }
-    bootSchritt('repair-status');
-    if (await pflegeSchritt('repair-status', () => repairUntrackedResearchStatuses())) {
-      await pflegeSchritt('reload-2', () => reload());
-    }
-    bootSchritt('reconcile');
-    await pflegeSchritt('reconcile-campaign', () => reconcileCampaignResearchRuns({ authoritative: true }));
-    await pflegeSchritt('reconcile-research', () => reconcileResearchCommands({ authoritative: true }));
-    await pflegeSchritt('reconcile-adapter', () => reconcileAdapterCommands({ authoritative: true }));
-    await pflegeSchritt('reload-3', () => reload());
-  } else {
-    console.info('[outbound-lead-generation] Abgleich beim Start ausgelassen, nicht live:', nichtLive);
-  }
+  await reload();
+  bootSchritt('repair-adapters');
+  await pflegeSchritt('dedupe-adapters', () => entferneDoppelteAdapter());
+  if (await pflegeSchritt('repair-adapters', () => repairAdapterActivationDrift())) await reload();
+  bootSchritt('repair-status');
+  if (await pflegeSchritt('repair-status', () => repairUntrackedResearchStatuses())) await reload();
+  bootSchritt('reconcile');
+  await pflegeSchritt('reconcile-campaign', () => reconcileCampaignResearchRuns({ authoritative: true }));
+  await pflegeSchritt('reconcile-research', () => reconcileResearchCommands({ authoritative: true }));
+  await pflegeSchritt('reconcile-adapter', () => reconcileAdapterCommands({ authoritative: true }));
+  await reload();
   bootSchritt('fertig');
   state.startLaeuft = false;
-  if (!nichtLive.includes('outbound_lead_generation_leads')) starteLaenderkorrektur();
-  state.syncPending = false;
-  state.syncError = '';
-  state.syncWaitingCollections.clear();
+  if (state.uiMounted === false) return;
+  starteLaenderkorrektur();
   render();
-  // Die Sellify-Sperrvermerk-Pruefung lief je neuem Lead nacheinander (bis zu
-  // 20 s) und hielt die ganze App in "Daten werden synchronisiert" — gemessen
-  // 93 s (Klicktest P2 BG-09 / V10). Sie laeuft jetzt im Hintergrund; bis zu
-  // ihrem Ergebnis stehen Empfaenger als "wird geprueft".
   void enforceRecipientEligibility().catch((fehler) => {
     console.warn('[outbound-lead-generation] Empfaengerpruefung im Hintergrund fehlgeschlagen', fehler);
   });
   if (sourceContractChanged) {
     void queueAdapterReconciliationAfterSourceChange('builtin_source_contract_upgraded');
   }
-}
-
-async function retryInitialSync() {
-  if (state.syncInFlight) return;
-  state.syncInFlight = true;
-  if (state.syncRetryTimer) globalThis.clearTimeout(state.syncRetryTimer);
-  state.syncRetryTimer = null;
-  state.syncPending = true;
-  state.syncError = '';
-  // "Netzwerk wieder verfügbar" wurde hier sofort ueberschrieben und war nie
-  // zu sehen (Klicktest P1 SYN-03a).
-  state.syncMessage = navigator.onLine === false
-    ? 'Keine Netzwerkverbindung'
-    : (String(state.syncMessage || '').startsWith('Netzwerk wieder') ? state.syncMessage : 'Daten werden synchronisiert');
-  state.syncWaitingCollections = new Set(REPLICATED_COLLECTIONS);
-  state.replicationBridges.clear();
-  render();
-  try {
-    await synchronizeInitialData();
-    state.syncMessage = '';
-    // Endet ein Abgleich, waehrend das Netz schon weg ist, blieb die Fusszeile
-    // leer statt "offline" zu sagen (Klicktest P1 SYN-01a).
-    if (navigator.onLine === false) {
-      state.syncError = 'offline';
-      state.syncMessage = 'Keine Netzwerkverbindung. Vorhandene Daten bleiben sichtbar.';
-      render();
-    }
-  } catch (error) {
-    bootFehler('start', error);
-    const message = error?.message || String(error);
-    const offline = navigator.onLine === false;
-    const catchingUp = /status:\s*catching-up/i.test(message);
-    const transportPending = /nicht mit CTOX verbunden|offline-pending/i.test(message);
-    state.syncPending = catchingUp || transportPending;
-    state.syncError = offline ? 'offline' : (catchingUp || transportPending) ? '' : message;
-    state.syncMessage = offline
-      ? 'Keine Netzwerkverbindung. Vorhandene Daten bleiben sichtbar.'
-      : (catchingUp || transportPending)
-        ? 'CTOX-Verbindung wird hergestellt'
-        : 'CTOX ist gerade nicht erreichbar. Erneuter Versuch läuft.';
-    ((catchingUp || transportPending) ? console.info : console.warn)('[outbound-lead-generation] synchronization delayed', { message, offline, catchingUp, transportPending });
-    render();
-    state.syncRetryTimer = globalThis.setTimeout(() => {
-      state.syncRetryTimer = null;
-      void retryInitialSync();
-    }, (catchingUp || transportPending) ? 4_000 : 8_000);
-  } finally {
-    state.syncInFlight = false;
-  }
-}
-
-async function flushReplicatedCollection(collection, documents = []) {
-  let bridge = state.replicationBridges.get(collection);
-  if (!bridge) {
-    bridge = await withTimeout(
-      Promise.resolve(state.ctx.sync?.startCollection?.(collection)),
-      `${collection} konnte nicht gestartet werden.`,
-    );
-    state.replicationBridges.set(collection, bridge);
-  }
-  if (!bridge?.state && bridge?.ready) {
-    bridge = await withTimeout(Promise.resolve(bridge.ready), `${collection} konnte nicht verbunden werden.`);
-    state.replicationBridges.set(collection, bridge);
-  }
-  if (bridge?.mode === 'follower' && typeof bridge.flush === 'function') {
-    await withTimeout(
-      Promise.resolve(bridge.flush()),
-      `${collection} konnte nicht repliziert werden.`,
-      REPLICATION_WRITE_TIMEOUT_MS,
-    );
-    return;
-  }
-  const replicationState = bridge?.state;
-  await waitForReplicationPeer(replicationState, collection);
-  if (documents.length && typeof replicationState?.pushDocumentsToRemotePeers === 'function') {
-    await withTimeout(
-      Promise.resolve(replicationState.pushDocumentsToRemotePeers(documents)),
-      `${collection} konnte nicht repliziert werden.`,
-      REPLICATION_WRITE_TIMEOUT_MS,
-    );
-    return;
-  }
-  if (typeof replicationState?.pushToRemotePeers === 'function') {
-    await withTimeout(
-      Promise.resolve(replicationState.pushToRemotePeers({ requireSuccess: true })),
-      `${collection} konnte nicht repliziert werden.`,
-      REPLICATION_WRITE_TIMEOUT_MS,
-    );
-    return;
-  }
-  if (typeof replicationState?.scheduleLocalWritePush === 'function') {
-    await withTimeout(
-      Promise.resolve(replicationState.scheduleLocalWritePush()),
-      `${collection} konnte nicht repliziert werden.`,
-      REPLICATION_WRITE_TIMEOUT_MS,
-    );
-    return;
-  }
-  throw new Error(`${collection} hat keinen aktiven Replikationskanal.`);
-}
-
-async function waitForReplicationPeer(replicationState, collection) {
-  if (!replicationState) throw new Error(`${collection} hat keinen aktiven Replikationskanal.`);
-  const deadline = Date.now() + REPLICATION_WRITE_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    if (String(replicationState.activeRemotePeerId || '').trim()) return;
-    const status = replicationState.getTransportStatus?.() || {};
-    if (Number(status.activePeerCount || 0) > 0) return;
-    const connections = Array.isArray(status.connectionStates) ? status.connectionStates : [];
-    if (connections.some((connection) => {
-      const channelState = connection?.channelState || connection?.channelReadyState || '';
-      const peerState = connection?.peerConnectionState || '';
-      return connection?.open === true
-        || (channelState === 'open' && !['closed', 'failed', 'disconnected'].includes(peerState));
-    })) return;
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 100));
-  }
-  throw new Error(`${collection} ist nicht mit dem CTOX-Server verbunden.`);
-}
-
-async function withTimeout(promise, message, timeoutMs = 20000) {
-  let timer = null;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-async function waitForReplicationBridge(bridge, collection, timeoutMs = REPLICATION_WRITE_TIMEOUT_MS) {
-  let readyBridge = bridge;
-  if (!readyBridge?.state && readyBridge?.ready) {
-    readyBridge = await withTimeout(
-      Promise.resolve(readyBridge.ready),
-      `${collection} konnte nicht verbunden werden.`,
-      REPLICATION_WRITE_TIMEOUT_MS,
-    );
-    state.replicationBridges.set(collection, readyBridge);
-  }
-  const replicationState = readyBridge?.state;
-  if (!replicationState) {
-    throw new Error(`${collection} hat keinen aktiven Replikationskanal.`);
-  }
-  const wait = typeof replicationState?.awaitInSync === 'function'
-    ? replicationState.awaitInSync.bind(replicationState)
-    : typeof replicationState?.awaitInitialReplication === 'function'
-      ? replicationState.awaitInitialReplication.bind(replicationState)
-      : null;
-  if (!wait) {
-    await waitForReplicationPeer(replicationState, collection);
-    return;
-  }
-  await Promise.race([
-    wait(),
-    new Promise((_, reject) => {
-      setTimeout(() => reject(new Error(`${collection} konnte nicht synchronisiert werden.`)), timeoutMs);
-    }),
-  ]);
-}
-
-// Demand-only collections (collections.schema.json syncProfile) are never
-// replicated as a whole, so their readiness never turns "live". Waiting for
-// it cost every start the full 60-s timeout and skipped the start-up
-// reconciliation (thesen 10.10.2026, after the leads became demand-only on
-// 09.10.). For them "ready" is the first complete authoritative read.
-const DEMAND_ONLY_COLLECTIONS = new Set(['outbound_lead_generation_leads']);
-async function waitForDemandCollection(collection, ersteLadung, timeoutMs = REPLICATION_WRITE_TIMEOUT_MS) {
-  const key = collection === 'outbound_lead_generation_leads' ? 'leads' : collection;
-  let timer = null;
-  const timeout = new Promise((resolve) => { timer = globalThis.setTimeout(() => resolve(false), timeoutMs); });
-  try {
-    await Promise.race([ersteLadung, timeout]);
-  } finally {
-    globalThis.clearTimeout(timer);
-  }
-  if (!state.collectionsEverLoaded?.has(key)) {
-    throw new Error(`${collection} konnte nicht vollständig aus CTOX gelesen werden.`);
-  }
-  state.syncWaitingCollections.delete(collection);
-}
-
-async function waitForCollectionReadiness(collection, timeoutMs = REPLICATION_WRITE_TIMEOUT_MS) {
-  const read = state.ctx.sync?.collectionReadiness;
-  const subscribe = state.ctx.sync?.subscribeCollectionReadiness;
-  if (typeof read !== 'function' || typeof subscribe !== 'function') {
-    return waitForReplicationBridge(state.replicationBridges.get(collection), collection, timeoutMs);
-  }
-
-  const initial = read.call(state.ctx.sync, collection);
-  if (initial?.ready === true || initial?.state === 'live') {
-    state.syncWaitingCollections.delete(collection);
-    return;
-  }
-
-  await new Promise((resolve, reject) => {
-    let settled = false;
-    let unsubscribe = () => {};
-    const finish = (handler, value) => {
-      if (settled) return;
-      settled = true;
-      globalThis.clearTimeout(timer);
-      unsubscribe();
-      handler(value);
-    };
-    const timer = globalThis.setTimeout(() => {
-      const snapshot = read.call(state.ctx.sync, collection);
-      const readiness = String(snapshot?.state || 'unbekannt');
-      finish(reject, new Error(`${collection} konnte nicht synchronisiert werden (Status: ${readiness}).`));
-    }, timeoutMs);
-    const onReadiness = (snapshot) => {
-      if (snapshot?.ready === true || snapshot?.state === 'live') {
-        state.syncWaitingCollections.delete(collection);
-        finish(resolve);
-        return;
-      }
-      if (snapshot?.state === 'offline-pending') {
-        finish(reject, new Error(`${collection} ist derzeit nicht mit CTOX verbunden.`));
-      }
-    };
-    const subscription = subscribe.call(state.ctx.sync, collection, onReadiness);
-    unsubscribe = typeof subscription === 'function' ? subscription : () => {};
-    if (settled) unsubscribe();
-  });
-}
-
-async function ensureStyles() {
-  const href = new URL(`./index.css?v=${STYLE_BUILD}`, import.meta.url).href;
-  // Die Wiedererkennung fragte ein Attribut ab, das nie gesetzt wurde
-  // (data-outbound-lead-generation-styles gegen dataset.leadgenOutboundStyles).
-  // Sie traf deshalb nie, und jeder Mount haengte ein weiteres <link> an.
-  if (document.querySelector(`link[data-leadgen-outbound-styles="${STYLE_BUILD}"]`)) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = href;
-  link.dataset.leadgenOutboundStyles = STYLE_BUILD;
-  document.head.append(link);
-  await new Promise((resolve) => {
-    link.addEventListener('load', resolve, { once: true });
-    link.addEventListener('error', () => {
-      console.warn('[outbound-lead-generation] styles could not be loaded; mounting with cached shell styles');
-      resolve();
-    }, { once: true });
-  });
 }
 
 function source(id, label, url, countries, fieldKeys, credentialSecretName = '', options = {}) {
@@ -1234,19 +829,19 @@ async function entferneScheinquellen(quellDokumente = null) {
   // Beide wurden als "eigene" Quellen (builtin: false) angelegt; entfernt
   // werden sie trotzdem, sie sind keine.
   let entfernt = 0;
-  const adapter = await state.collections.adapters.find().exec();
+  const adapter = await state.collections.adapters.alle();
   for (const doc of adapter) {
     const daten = doc.toJSON?.() || doc;
     if (!ENTFERNTE_QUELLEN.includes(String(daten?.source_id || ''))) continue;
-    await doc.remove();
+    await entferneDok(doc);
     entfernt += 1;
   }
   for (const id of ENTFERNTE_QUELLEN) {
     const quelle = quellDokumente
       ? (quellDokumente.get(id) || null)
-      : await state.collections.sources.findOne(id).exec();
+      : await state.collections.sources.eins(id);
     if (quelle) {
-      await quelle.remove();
+      await entferneDok(quelle);
       entfernt += 1;
     }
   }
@@ -1259,7 +854,7 @@ async function entferneScheinquellen(quellDokumente = null) {
 // Einzelabfragen beim Start liefen am 25.09.2026 in RATE_LIMITED, der Start
 // begann dann endlos von vorn.
 async function alleQuellDokumente() {
-  const docs = await state.collections.sources.find().exec();
+  const docs = await state.collections.sources.alle();
   return new Map((docs || []).map((doc) => [String(doc?.id ?? doc?.get?.('id') ?? doc?.toJSON?.().id ?? ''), doc]));
 }
 
@@ -1289,6 +884,8 @@ async function seedSources() {
     };
     if (existing) {
       const current = existing.toJSON?.() || existing;
+      // Vom Nutzer entfernte mitgelieferte Quelle bleibt entfernt (Owner 15.10.2026).
+      if (current.payload?.removed === true) continue;
       if (current.payload?.builtin !== false) {
         // Built-in bedeutet „mitgeliefert“, nicht „unveränderlich“. Beim
         // Upgrade ergänzen wir neue Pflichtabdeckung additiv, lassen aber die
@@ -1359,13 +956,13 @@ async function seedSources() {
           || current.payload?.definition_version !== '1.0.45'
           || Object.keys(patch).some((key) => !['field_keys', 'countries', 'payload', 'updated_at_ms'].includes(key));
         if (definitionChanged) {
-          await existing.incrementalPatch(patch);
+          await aendereDok(existing, patch);
           adapterContractChanged = true;
         }
       }
       continue;
     }
-    await state.collections.sources.insert({
+    await state.collections.sources.schreibe({
       ...builtinDefinition,
       enabled: true,
       adapter_status: 'draft',
@@ -1385,7 +982,7 @@ async function seedSources() {
   }
   const sellifyVorhanden = quellDokumente.get(SELLIFY_SOURCE_ID) || null;
   if (!sellifyVorhanden) {
-    await state.collections.sources.insert(sellifyQuellenEintrag(now));
+    await state.collections.sources.schreibe(sellifyQuellenEintrag(now));
   }
   return adapterContractChanged;
 }
@@ -1441,10 +1038,10 @@ function sellifySourceStatus() {
   if (eintrag?.enabled === false) {
     return { code: 'disabled', label: tr('sourceDisabled', 'Deaktiviert — wird bei der Recherche übersprungen.'), chip: null };
   }
-  const projectionDa = Boolean(state.sellifyCompanies?.find);
+  const projectionDa = Boolean(state.sellifyCompanies?.alle);
   const match = state.sellifyMatch;
   if (!projectionDa && match?.reachable !== true) {
-    return { code: 'internal_unavailable', label: tr('sellifyProjectionMissing', 'CRM-Projektion nicht erreichbar'), chip: null };
+    return { code: 'internal_unavailable', label: tr('sellifyProjectionMissing', 'CRM-Projektion nicht erreichbar'), chip: null }; // v4-allow: label
   }
   const lead = selectedLead();
   if (lead && match?.leadId === lead.id && match.contactId) {
@@ -1460,84 +1057,101 @@ function sellifySourceStatus() {
   return { code: 'internal_ready', label: 'Bereit · interne Quelle, keine Anmeldung', chip: null };
 }
 
+// v4: je Collection ein Live-Abo (api.query, ruft sofort mit dem aktuellen Stand). Abos gehoeren
+// der Montage (state.port) und werden bei unmount abgemeldet.
 function bindCollections() {
-  state.collectionReloader?.dispose();
-  state.collectionBindingGeneration = (state.collectionBindingGeneration || 0) + 1;
-  state.collectionReloader = createCollectionReloader({
-    collections: state.collections,
-    // Running research writes leads continuously; with the 1 s default the
-    // whole paged lead list (~7 pages) was fetched again almost every second
-    // after start (thesen 07.10.2026), a permanent query load on the shared
-    // native peer. Background changes may show up to 5 s later; user actions
-    // reload explicitly and are not throttled.
-    intervalMs: 5000,
-    reload: (keys, changesByKey) => reload(keys, changesByKey),
-    afterReload: (keys) => {
-      if (keys.length === 1 && keys[0] === 'leads' && state.lastLeadReloadChanged === false && listLeads().length) return;
-      render();
-      if (!keys.includes('leads')) return;
-      if (listLeads().length) state.nachladenFehlschlaege = 0;
-      else planeLeerNachladen();
-      void loadSelectedLeadDetails();
-    },
-    onError: (error) => {
-      render();
-      console.warn('[outbound-lead-generation] Nachladen fehlgeschlagen, neuer Versuch', error?.message || String(error), JSON.stringify(error?.details || {}));
-    },
+  for (const off of state.datenAbos || []) off();
+  state.datenAbos = Object.entries(state.collections).map(([key, daten]) => daten.abonniere({}, (rows) => {
+    uebernimmZeilen(key, rows);
+    planeNachDatenaenderung(key);
+  }));
+  // Befehlsstatus kommt gepusht: die drei Abgleiche und die Freitext-Antworten laufen bei jeder
+  // Aenderung an business_commands (entprellt) statt im 5-s-/20-s-Takt.
+  state.befehlsAbo?.();
+  state.befehlsAbo = state.port.daten('business_commands').abonniere({ selector: { app_id: APP_ID } }, () => planeBefehlsabgleich());
+  // Scrape-Registry live aus den OLG-Collections (frueher Befehl outbound.research_source.registry_read).
+  for (const off of state.registryAbos || []) off();
+  state.registryAbos = [REGISTRY_TARGETS, REGISTRY_RUNS, REGISTRY_ACCOUNT_STATES]
+    .map((name) => state.port.daten(name).abonniere({}, () => planeRegistry()));
+  state.registryAbos.push(state.port.daten(REGISTRY_SCRIPTS).abonniere({}, () => {
+    if (state.adapterInspectorSourceId) void ladeAdapterSkript(state.adapterInspectorSourceId);
+  }));
+}
+
+function planeRegistry() {
+  if (state.registryGeplant) return;
+  state.registryGeplant = true;
+  queueMicrotask(() => {
+    state.registryGeplant = false;
+    if (state.uiMounted !== false) void ladeQuellenRegistry();
   });
 }
 
-// Only invalidated collections are reloaded, with one serialized consumer.
-// Explicit action reloads still read complete documents through the Shell's
-// demand path; no projected document is used for provenance or a mutation.
-// Eine abgebrochene Bedarfsabfrage liefert kein Fehlersignal, sondern eine
-// leere Liste; ohne spaetere Datenaenderung blieb die App dann bei „Noch keine
-// Kampagne“ stehen (30.09.2026). Leere oder gescheiterte Ergebnisse werden mit
-// wachsendem Abstand (2 s bis 60 s) erneut geladen.
-function planeLeerNachladen() {
-  if (state.leerNachladenTimer) return;
-  state.nachladenFehlschlaege = (state.nachladenFehlschlaege || 0) + 1;
-  const warten = Math.min(60_000, 2_000 * 2 ** Math.min(state.nachladenFehlschlaege - 1, 5));
-  state.leerNachladenTimer = globalThis.setTimeout(() => {
-    state.leerNachladenTimer = null;
-    scheduleCollectionReload(['leads']);
-  }, warten);
+const geaenderteSammlungen = new Set();
+function planeNachDatenaenderung(key) {
+  geaenderteSammlungen.add(key);
+  if (state.renderGeplant) return;
+  state.renderGeplant = true;
+  queueMicrotask(() => {
+    state.renderGeplant = false;
+    const keys = [...geaenderteSammlungen];
+    geaenderteSammlungen.clear();
+    if (state.uiMounted === false) return;
+    if (keys.length === 1 && keys[0] === 'leads' && state.lastLeadReloadChanged === false && listLeads().length) return;
+    render();
+    if (!keys.includes('leads')) return;
+    void loadSelectedLeadDetails();
+    planeKampagnenPersonenPflege();
+  });
+}
+
+// Entprellung (UI): Kampagnenpersonen-Pflege fruehestens 20 s nach der letzten Lead-Aenderung.
+function planeKampagnenPersonenPflege() {
+  if (state.startLaeuft) return;
+  if (state.kampagnenPersonenTimer) globalThis.clearTimeout(state.kampagnenPersonenTimer);
+  state.kampagnenPersonenTimer = globalThis.setTimeout(() => {
+    state.kampagnenPersonenTimer = null;
+    kampagnenPersonenPflege().catch(() => {});
+  }, 20_000);
+}
+
+function planeBefehlsabgleich() {
+  if (state.befehlsabgleichTimer || state.startLaeuft) return;
+  state.befehlsabgleichTimer = globalThis.setTimeout(() => {
+    state.befehlsabgleichTimer = null;
+    if (state.uiMounted === false) return;
+    Promise.all([
+      reconcileCampaignResearchRuns({ authoritative: true }),
+      reconcileResearchCommands({ authoritative: true }),
+      reconcileAdapterCommands({ authoritative: true }),
+    ]).then((changes) => {
+      if (changes.some(Boolean)) render();
+    }).catch(() => {});
+  }, COMMAND_REFRESH_MS);
 }
 
 function scheduleCollectionReload(keys) {
-  state.collectionReloader?.request(keys);
+  void reload(keys).then(() => render());
 }
 
 function meldeAktionsfehler(event, error) {
   const aktion = event?.target?.closest?.('[data-action]')?.dataset?.action || 'unbekannt';
   const text = String(error?.message || error || 'Unbekannter Fehler');
   console.error('[olg] Aktion fehlgeschlagen', { aktion, text });
-  const wartung = /wird aktualisiert|schreibgesch|read-?only|MAINTENANCE/i.test(text);
-  const meldung = wartung
-    ? `Das hat nicht geklappt: CTOX wird gerade aktualisiert und Apps sind vorübergehend schreibgeschützt. Bitte in ein paar Minuten erneut versuchen.\n\n(${text})`
-    : `Das hat nicht geklappt: ${text}`;
-  void showBusinessAlert(meldung);
+  state.port?.melde(`action.${aktion}`, `Das hat nicht geklappt: ${text}`);
 }
 
 function bindUi() {
-  state.ctx.host.addEventListener('change', (event) => {
+  state.root.addEventListener('change', (event) => {
     const sortSel = event.target?.closest?.('[data-action="lead-sort"]');
     if (sortSel) { state.leadSortKey = sortSel.value || 'name'; renderCenter(); }
   });
-  const host = state.ctx.host;
-  // Antworten des CTOX-Agenten auf Sellify-Vermerkpruefungen einsammeln.
-  if (!state.freitextTakt) state.freitextTakt = globalThis.setInterval(() => { void verarbeiteFreitextAntworten().catch(() => {}); }, 20_000);
+  const host = state.root;
+  // Antworten des CTOX-Agenten auf Sellify-Vermerkpruefungen: planeBefehlsabgleich (gepushter Befehlsstatus).
   host.addEventListener('pointerdown', () => { state.sourcePanelPointerAt = Date.now(); }, true);
   host.addEventListener('click', (event) => {
     const actionElement = event.target?.closest?.('[data-action]');
     if (actionElement) state.sourcePanelUserActionAt = Date.now();
-    if (state.nurZwischenstand && actionElement && !actionAllowedOnStartupSnapshot(actionElement.dataset.action)) {
-      event.preventDefault();
-      event.stopPropagation();
-      state.zwischenstandHinweisAt = Date.now();
-      renderSyncLine();
-      return undefined;
-    }
     // Jede Aktion ist async; ein Fehler (Wartung/Schreibschutz, abgerissene
     // Verbindung, Validierung) flog bisher als unbehandelte Ablehnung aus dem
     // Klick und der Nutzer sah nichts. Klicktest 11.09.2026: ~15 stille
@@ -1600,7 +1214,7 @@ function quellenGlossar() {
 // (v32, 23.09. 13:13) trug weiter die alte Zwei-Quellen-Regel, der Agent liess
 // Registerfelder, WZ-Code und Land deshalb offen (25.09.2026). Ersetzt werden
 // nur die beiden alten Zeilen, wortgleich; jede eigene Fassung bleibt stehen.
-const VERALTETE_BELEGREGEL = Object.freeze(["5. Belegregel. Angaben, die Dritte unabhängig prüfen können, brauchen zwei unabhängige Quellen: firma_name, firma_anschrift, firma_plz, firma_ort, firma_land, firma_aktivitaetsstatus, firma_fruehere_namen, firma_geschaeftstaetigkeit, firma_geschaeftsfuehrung, wz_code, umsatz, mitarbeiter. Zwei Seiten derselben Quelle sind eine Quelle, und Sellify allein belegt nichts.", "5a. Selbstauskünfte genügen mit EINER Quelle, weil es dafür keine zweite unabhängige geben kann: firma_domain, firma_email, firma_telefon, firma_fax, firma_postfach, firma_besucheranschrift, firma_postanschrift, firma_homepage_fact_sheet sowie alle person_-Felder. Beleg ist die Unternehmensseite (Impressum, Kontakt, Team) bzw. das Profil selbst, mit URL und wörtlichem Zitat. Einen so belegten Wert eintragen, niemals als no_match verwerfen mit der Begründung, er stehe nur auf der eigenen Website."]);
+const VERALTETE_BELEGREGEL = Object.freeze(["5. Belegregel. Angaben, die Dritte unabhängig prüfen können, brauchen zwei unabhängige Quellen: firma_name, firma_anschrift, firma_plz, firma_ort, firma_land, firma_aktivitaetsstatus, firma_fruehere_namen, firma_geschaeftstaetigkeit, firma_geschaeftsfuehrung, wz_code, umsatz, mitarbeiter. Zwei Seiten derselben Quelle sind eine Quelle, und Sellify allein belegt nichts.", "5a. Selbstauskünfte genügen mit EINER Quelle, weil es dafür keine zweite unabhängige geben kann: firma_domain, firma_email, firma_telefon, firma_fax, firma_postfach, firma_besucheranschrift, firma_postanschrift, firma_homepage_fact_sheet sowie alle person_-Felder. Beleg ist die Unternehmensseite (Impressum, Kontakt, Team) bzw. das Profil selbst, mit URL und wörtlichem Zitat. Einen so belegten Wert eintragen, niemals als no_match verwerfen mit der Begründung, er stehe nur auf der eigenen Website."]); // v4-allow: text (Altfassung, wortgleicher Abgleich)
 function aktuelleBelegregel() {
   const zeilen = DEFAULT_RESEARCH_POLICY.split('\n');
   return [zeilen.find((z) => z.startsWith('5. Belegregel')), zeilen.find((z) => z.startsWith('5a. '))];
@@ -1652,7 +1266,7 @@ function researchPolicyRecord(
     title: String(existing?.title ?? 'CTOX Quellenstandard'),
     version_number: (Number.isFinite(currentVersion) ? currentVersion : 0) + 1,
     status: String(existing?.status ?? 'active'),
-    skill_name: String(existing?.skill_name ?? 'outbound-lead-generation-research'),
+    skill_name: String(existing?.skill_name ?? 'outbound-lead-generation/research'),
     skill_version: String(existing?.skill_version ?? '1.0.0'),
     min_independent_sources: 1,
     rules: Array.isArray(existing?.rules) ? existing.rules : [],
@@ -1668,230 +1282,49 @@ function researchPolicyRecord(
 
 // Explicit action reads may overlap. Results are ordered per collection so
 // an older response cannot overwrite newer data or suppress unrelated data.
-function reload(keys = Object.keys(state.collections), changesByKey = null) {
-  const lauf = (state.reloadLauf = (state.reloadLauf || 0) + 1);
-  const promise = reloadAusfuehren(lauf, keys, state.collectionBindingGeneration, changesByKey);
-  state.reloadPromise = promise;
-  return promise;
-}
-
-// Die Business-OS-Datenschicht liefert je Abfrage hoechstens 200 Dokumente
-// (DEFAULT_WINDOW_LIMIT), ohne Fehler. find() ohne Blaettern zeigte am
-// 25.09.2026 193 von 209 Leads: Kampagnen wirkten unvollstaendig importiert
-// (Maschinenbau 27/29, Chemie D 73/81). Geblaettert wird ueber den
-// Primaerschluessel, nicht ueber skip: geloeschte Zeilen fallen clientseitig
-// aus dem Fenster (200 -> 193), ein skip-Zaehler wuerde Leads ueberspringen.
-const SEITENGROESSE = 200;
-// Leads sind gross (~100 KB je Lead). Eine 200er-Seite ueber die
-// Bedarfsabfrage waren ~20 MB in einer Antwort; am Kunden-Knoten lief sie in
-// QUERY_COLLECTOR_TIMEOUT, reload() scheiterte, und die App zeigte „Noch keine
-// Kampagne“ ueber einem vollstaendigen Datenbestand (30.09.2026).
-const LEAD_SEITENGROESSE = 25;
-async function alleDokumente(collection, selector = {}, seitengroesse = SEITENGROESSE) {
-  const alle = [];
-  const gesehen = new Set();
-  let letzteId = '';
-  for (let seite = 0; seite < 100; seite += 1) {
-    const bedingung = letzteId ? { ...selector, id: { $gt: letzteId } } : { ...selector };
-    const docs = await collection.find({ selector: bedingung, sort: [{ id: 'asc' }], limit: seitengroesse }).exec();
-    let neu = 0;
-    for (const doc of docs || []) {
-      const daten = doc?.toJSON?.() || doc;
-      const id = String(daten?.id || '');
-      if (!id || gesehen.has(id)) continue;
-      gesehen.add(id);
-      alle.push(doc);
-      neu += 1;
-      if (id > letzteId) letzteId = id;
-    }
-    if (!neu) break;
+// v4 (App-API 4.0): Lesen ist lokal, vollstaendig und live (api.query je Collection, bindCollections).
+// Die fruehere Lade-/Blaetter-/Revisionsmaschinerie (Seiten zu 25/200, Leases, requireRevision,
+// Startzwischenstand im Browser) entfaellt ersatzlos; `reload` liest den aktuellen lokalen Stand.
+function reload(keys = Object.keys(state.collections)) {
+  for (const key of new Set(keys)) {
+    const daten = state.collections[key];
+    if (daten) uebernimmZeilen(key, daten.jetzt());
   }
-  return alle;
+  return Promise.resolve();
 }
 
-// Start, the first scheduled reload and the collection reloader each asked for
-// the full lead list at the same moment; every call paged all leads with its
-// own revision token, so the native peer served the same 200-row pages three
-// times (thesen 07.10.2026: 2.3/4.4/5.7 s for one page). Callers that arrive
-// while a list load of the same binding is running share it. The whole paged
-// list (≈7 pages over a relayed WebRTC link) also outgrew the 15 s single-query
-// budget, was aborted and started over; give it 45 s.
-const LEAD_LIST_LOAD_TIMEOUT_MS = 45000;
-function sharedLeadListLoad(collection, previousLeads, bindingGeneration) {
-  const running = state.leadListLoad;
-  if (running && running.bindingGeneration === bindingGeneration) return running.promise;
-  const promise = withLeadQueryAuthority(state.ctx.sync,
-    signal => loadLeadList(collection, previousLeads, { signal }), {
-      collection,
-      isCurrent: () => state.collectionBindingGeneration === bindingGeneration,
-      timeoutMs: LEAD_LIST_LOAD_TIMEOUT_MS,
-    });
-  const entry = { bindingGeneration, promise };
-  state.leadListLoad = entry;
-  const clear = () => { if (state.leadListLoad === entry) state.leadListLoad = null; };
-  promise.then(clear, clear);
-  return promise;
-}
-
-// The sync layer names the changed leads with their revision. Rows whose
-// revision the list already holds are refreshed windows of our own reads, not
-// changes; only the rest is fetched and patched into the list. Without names,
-// or for many changes, the full paged list is read as before.
-const LEAD_DELTA_MAX_ROWS = 100;
-async function loadLeadDelta(collection, changes, bindingGeneration) {
-  const current = new Map(listLeads().map(row => [row.id, row]));
-  const removed = new Set();
-  const fetchIds = [];
-  for (const change of changes.values()) {
-    const row = current.get(change.id);
-    if (change.deleted) {
-      if (row) removed.add(change.id);
-      continue;
-    }
-    if (!row || !change.rev || row._rev !== change.rev) fetchIds.push(change.id);
-  }
-  if (fetchIds.length > LEAD_DELTA_MAX_ROWS) return null;
-  const fetched = fetchIds.length
-    ? await withLeadQueryAuthority(state.ctx.sync,
-      signal => loadFullLeadRows(collection, fetchIds, { signal }), {
-        collection,
-        isCurrent: () => state.collectionBindingGeneration === bindingGeneration,
-      })
-    : [];
+// App-API-Zeilen sind tief eingefroren; der Fachcode arbeitet mit veraenderlichen Kopien (wie RxDB
+// toJSON()). Kopiert wird nur, was sich geaendert hat (gleiche Zeilen-Referenz = unveraendert).
+function spiegeleZeilen(key, rows) {
+  const cache = (state.zeilenCache ||= new Map());
+  const vorher = cache.get(key) || new Map();
+  const nachher = new Map();
   const changedIds = new Set();
-  for (const full of fetched) {
-    const row = leadListRow(full);
-    if (current.get(full.id)?._rev !== row._rev) changedIds.add(full.id);
-    current.set(full.id, row);
-  }
-  for (const id of removed) current.delete(id);
-  return { rows: [...current.values()], changedIds, removedIds: removed };
-}
-
-async function reloadAusfuehren(lauf, keys, bindingGeneration, changesByKey = null) {
-  const collections = state.collections;
-  const requested = [...new Set(keys)].filter((key) => collections[key]);
-  let leadChanges = null;
-  const previousLeads = state.leadHydrationBindingGeneration === bindingGeneration ? listLeads() : [];
-  const outcomes = await Promise.allSettled(requested.map(async (key) => {
-    const collection = collections[key];
-    if (key === 'leads') {
-      const changes = changesByKey?.get?.('leads');
-      const canPatch = changes instanceof Map && state.leadListRows && !state.nurZwischenstand
-        && state.leadHydrationBindingGeneration === bindingGeneration;
-      if (canPatch) {
-        try {
-          leadChanges = await loadLeadDelta(collection, changes, bindingGeneration);
-        } catch {
-          leadChanges = null; // e.g. a row vanished meanwhile: read the full list
-        }
-      }
-      if (!leadChanges) leadChanges = await sharedLeadListLoad(collection, previousLeads, bindingGeneration);
-      return [key, leadChanges.rows];
-    }
-    const collectionName = `outbound_lead_generation_${key === 'researchPolicies' ? 'research_policies' : key}`;
-    const docs = await withLeadQueryAuthority(state.ctx.sync,
-      signal => collection.find().exec({ signal }), { collectionName, collection,
-        isCurrent: () => state.collectionBindingGeneration === bindingGeneration });
-    return [key, docs.map((doc) => doc.toJSON())];
-  }));
-  // Unmount or a recovered collection handle invalidates the old read. Order
-  // results per collection: a newer source read must not discard a lead read.
-  if (bindingGeneration !== state.collectionBindingGeneration) return;
-  const applied = (state.reloadAngewendetJeSammlung ||= new Map());
-  const readErrors = (state.collectionReadErrors ||= new Map());
-  const failures = [];
-  const results = [];
-  for (let index = 0; index < outcomes.length; index++) {
-    const key = requested[index];
-    if (lauf < (applied.get(key) || 0)) continue;
-    const outcome = outcomes[index];
-    if (outcome.status === 'fulfilled') {
-      results.push(outcome.value);
-      readErrors.delete(key);
-      (state.collectionsEverLoaded ||= new Set()).add(key);
-    } else {
-      // Keep the last complete data, but never present a rejected read as
-      // empty/successful. One failed collection must not discard healthy reads.
-      applied.set(key, lauf);
-      readErrors.set(key, readErrorEntry(readErrors.get(key), outcome.reason, Date.now(),
-        { neverLoaded: !state.collectionsEverLoaded?.has(key) }));
-      failures.push(key);
-    }
-  }
-  try {
-  const fresh = new Map(results.filter(([key]) => lauf >= (applied.get(key) || 0)));
-  for (const key of fresh.keys()) applied.set(key, lauf);
-  if (!fresh.size) return;
-  if (fresh.has('leads')) state.nurZwischenstand = false;
-  applyFreshCollections(fresh, bindingGeneration, leadChanges);
-  if (fresh.has('leads')) scheduleStartupSnapshotSave();
-  } finally {
-    if (failures.length) {
-      throw Object.assign(new Error('Daten konnten nicht geladen werden: ' + failures.join(', ')), {
-        code: 'OUTBOUND_COLLECTION_READ_FAILED', failedKeys: failures,
-        details: Object.fromEntries(failures.map(key => [key, readErrors.get(key)?.message])),
-      });
-    }
-  }
-}
-
-function startupSnapshotScope() {
-  return startupCacheScope({
-    host: globalThis.location?.host || '',
-    userId: state.ctx?.session?.user?.id || state.ctx?.session?.userId || '',
+  const kopien = rows.map((row) => {
+    const alt = vorher.get(row.id);
+    if (alt && alt.ref === row) { nachher.set(row.id, alt); return alt.copy; }
+    const copy = structuredClone(row);
+    nachher.set(row.id, { ref: row, copy });
+    changedIds.add(row.id);
+    return copy;
   });
+  const removedIds = new Set([...vorher.keys()].filter((id) => !nachher.has(id)));
+  cache.set(key, nachher);
+  return { rows: kopien, changedIds, removedIds };
 }
 
-// Shows this browser's last list (startup-cache.mjs) until the live read lands.
-async function zeigeStartZwischenstand() {
-  const generation = state.collectionBindingGeneration;
-  const snapshot = await readStartupSnapshot(startupSnapshotScope());
-  if (!snapshot || !state.uiMounted || generation !== state.collectionBindingGeneration) return;
-  if (state.reloadAngewendetJeSammlung?.has('leads')) return;
-  const fresh = new Map([
-    ['sources', snapshot.sources], ['adapters', snapshot.adapters], ['imports', snapshot.imports],
-    ['researchPolicies', snapshot.researchPolicies], ['leads', snapshot.leads],
-  ]);
-  state.nurZwischenstand = true;
-  state.zwischenstandVomMs = snapshot.savedAtMs;
-  try {
-    applyFreshCollections(fresh, generation, { changedIds: new Set(), removedIds: new Set() });
-  } catch (error) {
-    state.nurZwischenstand = false;
-    console.warn('[outbound-lead-generation] Gespeicherter Stand nicht anzeigbar', String(error?.message || error).slice(0, 140));
-    return;
-  }
-  render();
+function uebernimmZeilen(key, rows) {
+  const { rows: kopien, changedIds, removedIds } = spiegeleZeilen(key, rows);
+  (state.collectionsEverLoaded ||= new Set()).add(key);
+  applyFreshCollections(new Map([[key, kopien]]), { changedIds, removedIds });
 }
 
-const STARTUP_SNAPSHOT_MIN_INTERVAL_MS = 60_000;
-const STARTUP_SNAPSHOT_KEYS = ['sources', 'adapters', 'imports', 'researchPolicies', 'leads'];
-function scheduleStartupSnapshotSave() {
-  if (state.startupSnapshotTimer) return;
-  const wait = Math.max(5000, STARTUP_SNAPSHOT_MIN_INTERVAL_MS - (Date.now() - (state.startupSnapshotSavedAt || 0)));
-  state.startupSnapshotTimer = globalThis.setTimeout(() => {
-    state.startupSnapshotTimer = null;
-    void saveStartupSnapshot();
-  }, wait);
+async function alleDokumente(daten, selector = {}) {
+  return daten.alle({ selector, sort: [{ id: 'asc' }] });
 }
 
-async function saveStartupSnapshot() {
-  if (!state.uiMounted || state.nurZwischenstand) return;
-  if (!STARTUP_SNAPSHOT_KEYS.every(key => state.collectionsEverLoaded?.has(key))) return;
-  state.startupSnapshotSavedAt = Date.now();
-  await writeStartupSnapshot(startupSnapshotScope(), buildStartupSnapshot({
-    sources: state.sources,
-    adapters: state.adapters,
-    imports: state.imports,
-    researchPolicies: [state.researchPolicyRecord, state.digestRecord, state.digestStatus],
-    leads: listLeads(),
-  }));
-}
-
-// Applies loaded collection rows to the app state. Used by the live reload
-// and, once at start, by the browser's last list snapshot (startup-cache.mjs).
-function applyFreshCollections(fresh, bindingGeneration, leadChanges) {
+// Applies loaded collection rows to the app state.
+function applyFreshCollections(fresh, leadChanges) {
   const sources = fresh.get('sources');
   const adapters = fresh.get('adapters');
   const imports = fresh.get('imports');
@@ -1901,7 +1334,7 @@ function applyFreshCollections(fresh, bindingGeneration, leadChanges) {
   // sie bestaetigt: ein Nachladen mit dem aelteren Serverstand liess ihn sonst
   // zuruckspringen, und der naechste Klick schaltete falsch herum (Rundgang
   // 25.09.2026). Nach zwei Minuten gilt wieder, was die Datenbank sagt.
-  if (fresh.has('sources')) state.sources = sources.map((source) => {
+  if (fresh.has('sources')) state.sources = sources.filter((source) => source.payload?.removed !== true).map((source) => {
     const absicht = state.sourceToggleIntent.get(source.id);
     if (!absicht) return source;
     if ((source.enabled !== false) === absicht.enabled || Date.now() > absicht.bis) {
@@ -1909,7 +1342,7 @@ function applyFreshCollections(fresh, bindingGeneration, leadChanges) {
       return source;
     }
     return { ...source, enabled: absicht.enabled };
-  }).sort((a, b) => a.label.localeCompare(b.label, 'de'));
+  }).sort((a, b) => String(a.label || '').localeCompare(String(b.label || ''), 'de'));
   if (fresh.has('adapters')) state.adapters = adapters;
   if (fresh.has('researchPolicies')) {
   const policy = researchPolicies.find((item) => item.id === RESEARCH_POLICY_ID);
@@ -1918,7 +1351,7 @@ function applyFreshCollections(fresh, bindingGeneration, leadChanges) {
   state.digestStatus = researchPolicies.find((item) => item.id === UPDATE_DIGEST_STATUS_ID) || null;
   if (!state.digestDirty) state.digestDraft = updateDigestDraftFrom(state.digestRecord);
   // Ungespeicherte Entwuerfe ueberleben das Nachladen. Vorher setzte jeder
-  // Sync-Tick den Entwurf auf den gespeicherten Stand zurueck, und "Speichern"
+  // Tick den Entwurf auf den gespeicherten Stand zurueck, und "Speichern"
   // speicherte still den alten Text (Klicktest-Befund P4 V7 / Inventar).
   const hatteStand = state.researchPolicyLoaded === true;
   const policyEntwurfOffen = hatteStand && state.researchPolicyDraft !== state.researchPolicy;
@@ -1939,22 +1372,10 @@ function applyFreshCollections(fresh, bindingGeneration, leadChanges) {
     .filter((item) => item.id !== LEGACY_RESEARCH_POLICY_IMPORT_ID)
     .sort((a, b) => b.updated_at_ms - a.updated_at_ms);
   if (fresh.has('leads')) {
-    const sameBinding = state.leadHydrationBindingGeneration === bindingGeneration;
-    state.leadHydrationBindingGeneration = bindingGeneration;
     state.lastLeadReloadChanged = Boolean(leadChanges.changedIds.size || leadChanges.removedIds.size);
-    state.leadListRows = leads.sort((a, b) => b.updated_at_ms - a.updated_at_ms);
-    const revisions = new Map(leads.map(lead => [lead.id, lead._rev]));
-    const vorherigeAuswahl = state.leads.find(lead => lead.id === state.selectedLeadId) || null;
-    state.leads = sameBinding ? state.leads.filter(lead => revisions.get(lead.id) === lead._rev) : [];
-    // Eine neue Revision des gewaehlten Leads leerte bisher das Detail ("wird
-    // geladen"), bis die volle Fassung nachkam: die Rechercheangaben
-    // verschwanden und erschienen einen Augenblick spaeter wieder (thesen
-    // 09.10.2026). Bis dahin bleibt die bisherige Fassung sichtbar. Sie dient
-    // nur der Anzeige; Abgleich und Aktionen lesen state.leads.
-    if (sameBinding && vorherigeAuswahl && revisions.has(vorherigeAuswahl.id)
-      && !state.leads.some(lead => lead.id === vorherigeAuswahl.id)) {
-      state.detailAnzeigeVorher = vorherigeAuswahl;
-    }
+    state.leadListRows = null;
+    state.leads = applyPendingLeadPatches(leads.map((lead) => normalizeLeadRecipientShape(lead)))
+      .sort((a, b) => b.updated_at_ms - a.updated_at_ms);
     if (state.lastLeadReloadChanged) invalidateChangedRecipientEligibility(state.leads);
   }
   if (!fresh.has('leads') && !fresh.has('imports')) return;
@@ -1967,10 +1388,9 @@ function applyFreshCollections(fresh, bindingGeneration, leadChanges) {
     }
     state.kampagneNachImport = null;
   }
-  // Ein Tick, der kurz KEINE Leads sieht (Replikation laeuft noch), verwarf
-  // bisher gewaehlte Kampagne, Auswahl und Detail-Lead (Klicktest P2 V13).
-  // Ohne Leads bleibt die Auswahl stehen, bis wieder Daten da sind.
-  if (fresh.has('leads') && !leads.length && state.selectedCampaign && (state.syncPending || (state.syncWaitingCollections?.size || 0) > 0)) return;
+  // Ein Stand ohne Leads verwirft gewaehlte Kampagne, Auswahl und Detail-Lead
+  // nicht (Klicktest P2 V13); sie bleiben stehen, bis wieder Leads da sind.
+  if (fresh.has('leads') && !leads.length && state.selectedCampaign) return;
   if (!state.selectedCampaign || !campaigns.some((campaign) => campaign.name === state.selectedCampaign)) {
     state.selectedCampaign = campaigns[0]?.name || '';
   }
@@ -1982,87 +1402,26 @@ function applyFreshCollections(fresh, bindingGeneration, leadChanges) {
   if (!selectedCampaignLeads.some((lead) => lead.id === state.selectedLeadId)) {
     state.selectedLeadId = selectedCampaignLeads[0]?.id || '';
   }
-  void loadSelectedLeadDetails();
 }
 
 function listLeads() { return state.leadListRows || state.leads; }
 function campaignListLeads(campaign) { return listLeads().filter(lead => leadKampagnen(lead).includes(campaign)); }
 
-const FULL_LEAD_READ_PACKAGE = 40;
+// Vollstaendige Leads liegen lokal vor; `fresh` liest den aktuellen Stand neu ein.
 async function ensureFullLeads(ids, { fresh = false } = {}) {
-  const generation = state.collectionBindingGeneration;
-  const requested = [...new Set(ids.filter(Boolean))];
-  const summaries = new Map(listLeads().map(row => [row.id, row]));
-  const cached = new Map(state.leads.map(row => [row.id, row]));
-  const missing = requested.filter(id => fresh || !cached.has(id) || cached.get(id)._rev !== summaries.get(id)?._rev);
-  if (!missing.length) return requested.map(id => cached.get(id));
-  const sequence = ++state.fullLeadReadSequence;
-  // Ein Lesefenster (15 s) je Paket: alle 498 Leads einer Kampagne in einem
-  // Fenster waren 63 Achter-Abfragen und liefen auf thesen (08.10.2026)
-  // regelmaessig in "Daten konnten nicht rechtzeitig aus CTOX geladen werden".
-  const rows = [];
-  for (let offset = 0; offset < missing.length; offset += FULL_LEAD_READ_PACKAGE) {
-    const paket = missing.slice(offset, offset + FULL_LEAD_READ_PACKAGE);
-    rows.push(...await withLeadQueryAuthority(state.ctx.sync,
-      signal => loadFullLeadRows(state.collections.leads, paket, { signal }), {
-        collection: state.collections.leads,
-        isCurrent: () => state.collectionBindingGeneration === generation && state.uiMounted !== false,
-      }));
-  }
-  if (generation !== state.collectionBindingGeneration || state.uiMounted === false) {
-    throw new Error('Die CTOX-Verbindung hat sich geändert. Bitte die Aktion erneut versuchen.');
-  }
-  const currentSummaries = new Map(listLeads().map(row => [row.id, row]));
-  for (const row of rows) {
-    if (summaries.get(row.id)?._rev !== currentSummaries.get(row.id)?._rev
-      && row._rev !== currentSummaries.get(row.id)?._rev) {
-      throw new Error('Der Lead wurde während des Ladens aktualisiert. Bitte die Aktion erneut versuchen.');
-    }
-  }
-  const current = new Map(state.leads.map(row => [row.id, row]));
-  for (const row of rows) {
-    if (sequence < (state.fullLeadAppliedSequence.get(row.id) || 0)) continue;
-    state.fullLeadAppliedSequence.set(row.id, sequence);
-    const full = normalizeLeadRecipientShape(row);
-    current.set(row.id, full);
-    if (state.leadListRows) {
-      const index = state.leadListRows.findIndex(entry => entry.id === row.id);
-      if (index >= 0) state.leadListRows[index] = leadListRow(full);
-    }
-  }
-  state.leads = applyPendingLeadPatches([...current.values()]);
-  return requested.map(id => state.leads.find(row => row.id === id));
+  if (fresh) reload(['leads']);
+  const byId = new Map(state.leads.map((row) => [row.id, row]));
+  return [...new Set(ids.filter(Boolean))].map((id) => byId.get(id));
 }
 
 async function loadSelectedLeadDetails() {
   const id = state.selectedLeadId;
   if (!id || !listLeads().some(row => row.id === id)) return;
-  const generation = state.collectionBindingGeneration;
-  const key = `${generation}:${id}:${listLeads().find(row => row.id === id)?._rev}`;
-  state.selectedDetailRequestedKey = key;
-  // Selected-lead revisions can change every second during research. Keep one
-  // detail read in flight and coalesce changes instead of piling up full reads.
-  if (state.selectedDetailLoadingKey) return;
-  state.selectedDetailLoadingKey = key;
-  try {
-    await ensureFullLeads([id]);
-    if (state.selectedLeadId !== id || generation !== state.collectionBindingGeneration) return;
-    state.selectedDetailError = '';
-    renderDetail();
-    const lead = selectedLead();
-    if (lead && !state.recipientEligibilityReady.has(id)) {
-      void refreshLeadRecipientEligibility(lead)
-        .then(() => { if (state.selectedLeadId === id && generation === state.collectionBindingGeneration) renderDetail(); })
-        .catch(() => {});
-    }
-  } catch (error) {
-    if (state.selectedLeadId === id && generation === state.collectionBindingGeneration) {
-      state.selectedDetailError = String(error?.message || error);
-      renderDetail();
-    }
-  } finally {
-    if (state.selectedDetailLoadingKey === key) state.selectedDetailLoadingKey = '';
-    if (state.selectedDetailRequestedKey !== key && state.uiMounted !== false) void loadSelectedLeadDetails();
+  const lead = selectedLead();
+  if (lead && !state.recipientEligibilityReady.has(id)) {
+    void refreshLeadRecipientEligibility(lead)
+      .then(() => { if (state.selectedLeadId === id && state.uiMounted !== false) renderDetail(); })
+      .catch(() => {});
   }
 }
 
@@ -2081,21 +1440,12 @@ async function prepareFullLeadAction(action, id, campaign) {
   else if (FULL_CAMPAIGN_ACTIONS.has(action)) ids = campaignListLeads(campaign).map(row => row.id);
   else if (FULL_SINGLE_ACTIONS.has(action)) ids = [id || state.selectedLeadId].filter(Boolean);
   if (!ids.length) return;
-  const previousNotice = state.notice;
-  const notice = `Vollständige Leads werden geladen (${ids.length}) …`;
-  state.notice = notice;
-  renderCenter();
-  try {
-    await ensureFullLeads(ids, { fresh: !action.startsWith('export-') });
-    if (FULL_SELECTION_ACTIONS.has(action) && (ids.length !== state.selectedLeadIds.size || ids.some(id => !state.selectedLeadIds.has(id)))) {
-      throw new Error('Die Auswahl hat sich während des Ladens geändert. Bitte die Aktion erneut ausführen.');
-    }
-    if (FULL_SINGLE_ACTIONS.has(action) && !id && ids[0] !== state.selectedLeadId) {
-      throw new Error('Der ausgewählte Lead hat sich geändert. Bitte die Aktion erneut ausführen.');
-    }
-  } finally {
-    if (state.notice === notice) state.notice = previousNotice;
-    renderCenter();
+  await ensureFullLeads(ids, { fresh: !action.startsWith('export-') });
+  if (FULL_SELECTION_ACTIONS.has(action) && (ids.length !== state.selectedLeadIds.size || ids.some(id => !state.selectedLeadIds.has(id)))) {
+    throw new Error('Die Auswahl hat sich zwischenzeitlich geändert. Bitte die Aktion erneut ausführen.');
+  }
+  if (FULL_SINGLE_ACTIONS.has(action) && !id && ids[0] !== state.selectedLeadId) {
+    throw new Error('Der ausgewählte Lead hat sich geändert. Bitte die Aktion erneut ausführen.');
   }
 }
 
@@ -2115,8 +1465,8 @@ async function repairAdapterActivationDrift() {
   const now = Date.now();
   await Promise.all(mismatches.map(async (adapter) => {
     const source = sourceById.get(adapter.source_id);
-    const adapterDoc = await state.collections.adapters.findOne(adapter.id).exec();
-    await adapterDoc?.incrementalPatch({
+    const adapterDoc = await state.collections.adapters.eins(adapter.id);
+    await aendereDokWennDa(adapterDoc, {
       enabled: source.enabled,
       field_keys: source.field_keys || [],
       countries: source.countries || [],
@@ -2129,7 +1479,7 @@ async function repairAdapterActivationDrift() {
 }
 
 function captureScrollPositions() {
-  const host = state.ctx?.host;
+  const host = state.root;
   if (!host) return;
   const campaigns = host.querySelector('[data-campaigns-pane] .leadgen-scroll');
   const leads = host.querySelector('[data-leads-pane] .leadgen-scroll');
@@ -2140,7 +1490,7 @@ function captureScrollPositions() {
 }
 
 function restoreScrollPositions() {
-  const host = state.ctx?.host;
+  const host = state.root;
   if (!host) return;
   const campaigns = host.querySelector('[data-campaigns-pane] .leadgen-scroll');
   const leads = host.querySelector('[data-leads-pane] .leadgen-scroll');
@@ -2156,7 +1506,6 @@ function render() {
   if (state.uiMounted === false) return;
   captureScrollPositions();
   ensureLayoutSkeleton();
-  renderSyncLine();
   renderCampaigns();
   renderCenter();
   renderDetail();
@@ -2173,7 +1522,7 @@ function render() {
 // der Shell), einheitliche Zeilenhoehen ueber alle Spalten, keine
 // Scroll-Spruenge und keine Animations-Neustarts durch innerHTML-Neubau.
 function ensureLayoutSkeleton() {
-  const host = state.ctx.host;
+  const host = state.root;
   if (host.querySelector('.outbound-lead-generation-layout')) return;
   host.innerHTML = `
     <div class="outbound-lead-generation-layout" data-resize-frame>
@@ -2192,7 +1541,7 @@ function ensureLayoutSkeleton() {
           <button class="leadgen-settings-button" type="button" data-action="open-sources" title="${tr('sourceSettings', 'Recherche-Einstellungen: Quellen, Rechercheablauf, Pflichtfelder, Update-Verteiler')}">${icon('settings')}<span>Einstellungen</span></button>
         </div>
         <div class="leadgen-scroll leadgen-campaign-list" data-campaigns-body></div>
-        <footer class="ctox-pane-footer leadgen-pane-footer"><span data-sync-line role="status" aria-live="polite"></span></footer>
+        <footer class="ctox-pane-footer leadgen-pane-footer"></footer>
       </section>
       <button class="ctox-column-resizer leadgen-resizer" type="button" data-resizer="left" data-resizer-var="--leadgen-left" data-resizer-min="220" data-resizer-max="520" aria-label="Kampagnenbreite ändern"></button>
       <section class="ctox-pane leadgen-pane leadgen-leads" data-leads-pane>
@@ -2224,40 +1573,10 @@ function ensureLayoutSkeleton() {
     <div data-app-dialog></div>`;
 }
 
-// Sync-Zustand als Fusszeilen-Text statt als layoutverschiebendes Banner.
-function renderSyncLine() {
-  const line = state.ctx.host.querySelector('[data-sync-line]');
-  if (!line) return;
-  const waiting = state.syncWaitingCollections.size;
-  const visibleErrors = visibleReadErrorKeys(state.collectionReadErrors);
-  if (visibleErrors.length) {
-    const labels = { leads: 'Leads', sources: 'Quellen', adapters: 'Adapter', imports: 'Kampagnen', researchPolicies: 'Einstellungen' };
-    const failed = visibleErrors.map(key => labels[key] || key).join(', ');
-    line.innerHTML = `${escapeHtml(failed)} konnten nicht geladen werden. Der vorhandene Stand bleibt erhalten. <button class="leadgen-approve-link" data-action="retry-sync">Neu verbinden</button>`;
-    line.className = 'is-error';
-  } else if (state.nurZwischenstand) {
-    const vom = new Date(state.zwischenstandVomMs || Date.now()).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-    const gesperrt = Date.now() - (state.zwischenstandHinweisAt || 0) < 8000;
-    line.textContent = gesperrt
-      ? `Gespeicherter Stand vom ${vom}. Änderungen sind möglich, sobald der aktuelle Stand aus CTOX geladen ist.`
-      : `Gespeicherter Stand vom ${vom} – wird mit CTOX abgeglichen`;
-    line.className = 'is-syncing';
-  } else if (state.syncPending || state.collectionReadErrors?.size) {
-    line.textContent = `${state.syncMessage || 'Daten werden verbunden'} (${REPLICATED_COLLECTIONS.length - waiting}/${REPLICATED_COLLECTIONS.length})`;
-    line.className = 'is-syncing';
-  } else if (state.syncError) {
-    line.innerHTML = `${escapeHtml(state.syncMessage || 'Datenverbindung konnte nicht hergestellt werden.')} <button class="leadgen-approve-link" data-action="retry-sync">Neu verbinden</button>`;
-    line.className = 'is-error';
-  } else {
-    line.textContent = '';
-    line.className = '';
-  }
-}
-
 // Ein Bereich wird nur neu geschrieben, wenn der Nutzer nicht gerade darin
 // tippt - sonst verliert das Suchfeld bei jedem Sync-Tick den Fokus.
 function regionHasFocus(node) {
-  const active = state.ctx.host.ownerDocument?.activeElement || globalThis.document?.activeElement;
+  const active = state.root.ownerDocument?.activeElement || globalThis.document?.activeElement;
   if (!active || !node || !node.contains(active)) return false;
   // Nur TIPPEN schuetzt vor dem Neuschreiben. Chromium fokussiert Knoepfe und
   // Checkboxen beim Klick; dann blieb z. B. nach "Auswahl aufheben" die alte
@@ -2312,7 +1631,7 @@ function setPaneHtml(pane, html) {
 }
 
 function renderCampaigns() {
-  const pane = state.ctx.host.querySelector('[data-campaigns-pane]');
+  const pane = state.root.querySelector('[data-campaigns-pane]');
   if (!pane) return;
   const campaigns = campaignRows();
   const count = pane.querySelector('[data-campaign-count]');
@@ -2338,7 +1657,7 @@ function renderCampaigns() {
             <button class="ctox-pane-icon" data-action="rename-campaign" data-campaign="${escapeHtml(campaign.name)}" title="Kampagne umbenennen" aria-label="${escapeHtml(campaign.name)} umbenennen">${icon('edit')}</button>
             <button class="ctox-pane-icon is-danger" data-action="delete-campaign" data-campaign="${escapeHtml(campaign.name)}" title="Kampagne „${escapeHtml(campaign.name)}“ löschen" aria-label="${escapeHtml(campaign.name)} löschen">${icon('trash')}</button>
           </div>
-        </div>`).join('') || `<div class="leadgen-empty">${escapeHtml(emptyCollectionText(['leads', 'imports'], 'Kampagnen werden geladen …', tr('noCampaigns', 'Noch keine Kampagne.'), 'Kampagnen konnten nicht geladen werden. Neu verbinden und erneut versuchen.'))}</div>`}`;
+        </div>`).join('')}`;
   if (state.kampagnenHtml === kampagnenHtml && body.childElementCount) return;
   state.kampagnenHtml = kampagnenHtml;
   body.innerHTML = kampagnenHtml;
@@ -2346,7 +1665,7 @@ function renderCampaigns() {
 }
 
 function filtereQuellenZeilen() {
-  const mount = state.ctx.host.querySelector('[data-source-panel]');
+  const mount = state.root.querySelector('[data-source-panel]');
   if (!mount) return;
   const needle = String(state.sourceSearch || '').trim().toLowerCase();
   const eintraege = new Map(listedSources().map((item) => [item.id, item]));
@@ -2366,7 +1685,7 @@ function planeQuellenRender(ms) {
 }
 
 function renderSourcePanel() {
-  const mount = state.ctx.host.querySelector('[data-source-panel]');
+  const mount = state.root.querySelector('[data-source-panel]');
   if (!mount) return;
   if (!state.sourcePanelOpen) {
     state.sourcePanelSignature = '';
@@ -2509,7 +1828,7 @@ function renderOptionalFieldSettings() {
     </div>`;
   };
   return `<section class="leadgen-optional-fields" aria-label="Pflichtfelder">
-    <label class="leadgen-policy-label">Pflichtfelder<span class="leadgen-policy-hint"> — angehakt = Pflicht für die Freigabe, ohne Haken optional (wird recherchiert, blockiert nicht). ✎ benennt um; der Name gilt in der App und im Rechercheablauf. „Aus“ = wird nicht recherchiert. Eigene Felder unten anlegen.</span></label>
+    <label class="leadgen-policy-label" title="Angehakt = Pflicht für die Freigabe, ohne Haken optional (wird recherchiert, blockiert nicht). ✎ benennt um; der Name gilt in der App und im Rechercheablauf. „Aus“ = wird nicht recherchiert.">Pflichtfelder</label>
     ${gruppen.map((group) => `<fieldset class="leadgen-optional-group"><legend>${escapeHtml(group.label)}</legend>
       ${group.fields.map(([key, label]) => zeile(key, label)).join('')}
     </fieldset>`).join('')}
@@ -2531,7 +1850,7 @@ async function renameResearchField(key) {
   const katalog = editableFieldCatalogDraft();
   const eigen = katalog.custom.find((field) => field.key === key);
   const bisher = katalog.labels[key] || eigen?.label || REVIEW_FIELD_LABELS[key] || key;
-  const name = String(await showBusinessPrompt('Neuer Name für das Feld', {
+  const name = String(await frageEingabe('Neuer Name für das Feld', {
     title: 'Feld umbenennen', defaultValue: bisher, confirmLabel: 'Übernehmen', cancelLabel: 'Abbrechen',
   }) || '').trim().slice(0, 80);
   if (!name || name === bisher) return;
@@ -2545,7 +1864,7 @@ function addCustomResearchField(trigger) {
   const form = trigger.closest('.leadgen-field-add');
   const wert = (name) => form?.querySelector(`[data-field-add="${name}"]`);
   const label = String(wert('label')?.value || '').trim().slice(0, 80);
-  if (!label) { showBusinessAlert('Bitte einen Namen für das neue Feld eingeben.'); return; }
+  if (!label) { zeigeMeldung('Bitte einen Namen für das neue Feld eingeben.'); return; }
   const katalog = editableFieldCatalogDraft();
   const vorhanden = [...RESEARCH_FIELDS, ...katalog.custom.map((field) => field.key)];
   const key = customFieldKey(label, vorhanden);
@@ -2565,7 +1884,7 @@ async function deleteCustomResearchField(key) {
   const katalog = editableFieldCatalogDraft();
   const feld = katalog.custom.find((field) => field.key === key);
   if (!feld) return;
-  const ok = await showBusinessConfirm(`Das Feld „${feld.label}“ löschen? Bereits recherchierte Werte bleiben an den Leads gespeichert, werden aber nicht mehr angezeigt.`, {
+  const ok = await frageBestaetigung(`Feld „${feld.label}“ löschen? Recherchierte Werte bleiben gespeichert, nur nicht sichtbar.`, {
     title: 'Feld löschen', confirmLabel: 'Löschen', kind: 'confirm',
   });
   if (!ok) return;
@@ -2582,9 +1901,9 @@ async function saveOptionalFields() {
   const katalog = fieldCatalogDraft();
   const eigeneSchluessel = new Set(katalog.custom.map((field) => field.key));
   const keys = [...draft].filter((key) => !isCustomFieldKey(key) || eigeneSchluessel.has(key)).sort();
-  const doc = await mitKanalHeilung(() => state.collections.researchPolicies.findOne(RESEARCH_POLICY_ID).exec(), 'save-optional-read');
+  const doc = await mitKanalHeilung(() => state.collections.researchPolicies.eins(RESEARCH_POLICY_ID), 'save-optional-read');
   if (!doc) {
-    showBusinessAlert('Der Rechercheablauf ist noch nicht geladen. Bitte kurz warten und erneut speichern.');
+    zeigeMeldung('Rechercheablauf noch nicht geladen – gleich erneut speichern.');
     return;
   }
   // Nur die Feldliste aendern: kein neuer Prompt, keine Version, kein
@@ -2599,14 +1918,14 @@ async function saveOptionalFields() {
       custom_fields: normalizeCustomFields(katalog.custom),
     });
   }
-  await mitKanalHeilung(() => doc.incrementalPatch({ ...felder, updated_at_ms: jetzt }), 'save-optional-write');
+  await mitKanalHeilung(() => aendereDok(doc, { ...felder, updated_at_ms: jetzt }), 'save-optional-write');
   state.optionalFieldsSaved = { keys, at: jetzt };
   state.researchPolicyRecord = { ...(state.researchPolicyRecord || {}), ...felder, updated_at_ms: jetzt };
   state.optionalFieldsDraft = null;
   state.fieldCatalogDraft = null;
   renderSourcePanel();
   render();
-  showBusinessAlert(`${requiredResearchFieldCount(new Set(keys), fieldCatalog())} Pflichtfelder gespeichert. Nicht angehakte Felder bleiben optional.`);
+  zeigeMeldung(`${requiredResearchFieldCount(new Set(keys), fieldCatalog())} Pflichtfelder gespeichert. Nicht angehakte Felder bleiben optional.`);
 }
 
 // Ein Feld ohne gefundene Information fuer DIESEN Lead freigeben: es bleibt
@@ -2654,18 +1973,17 @@ function renderResearchPolicy() {
     : state.adapterReconciliationPending
     ? 'Adapter-Abgleich wird übergeben …'
     : reconciliationStatus === 'completed'
-      ? 'Alle Adapter wurden für diesen Rechercheablauf abgeglichen.'
+      ? 'Alle Adapter wurden für diesen Rechercheablauf abgeglichen.' // v4-allow: label
       : reconciliationStatus === 'queued' || reconciliationStatus === 'running'
-        ? 'Adapter-Abgleich läuft.'
+        ? 'Adapter-Abgleich läuft.' // v4-allow: label
         : reconciliationStatus === 'failed'
           ? `Adapter-Abgleich fehlgeschlagen${reconciliationError ? `: ${reconciliationError}` : '.'}`
           : 'Beim Speichern werden alle Adapter automatisch geprüft und aktualisiert.';
   return `<section class="leadgen-policy-editor">
     <label class="leadgen-policy-label">${tr('policyNew', 'Prompt: Neue Recherche')}</label>
-    <textarea data-research-policy placeholder="${state.researchPolicyLoaded ? '' : 'Prompt wird geladen – Synchronisierung läuft …'}" aria-label="${tr('policyNew', 'Prompt: Neue Recherche')}">${escapeHtml(state.researchPolicyDraft)}</textarea>
-    <label class="leadgen-policy-label">${tr('policyFollowup', 'Prompt: Nachrecherche')}<span class="leadgen-policy-hint"> — ${tr('policyFollowupHint', 'leer = Prompt der Neuen Recherche wird verwendet')}</span></label>
+    <textarea data-research-policy placeholder="" aria-label="${tr('policyNew', 'Prompt: Neue Recherche')}">${escapeHtml(state.researchPolicyDraft)}</textarea>
+    <label class="leadgen-policy-label">${tr('policyFollowup', 'Prompt: Nachrecherche')}</label>
     <textarea data-research-policy-followup placeholder="${tr('policyFollowupHint', 'leer = Prompt der Neuen Recherche wird verwendet')}" aria-label="${tr('policyFollowup', 'Prompt: Nachrecherche')}">${escapeHtml(state.researchPolicyFollowupDraft || '')}</textarea>
-    <p class="leadgen-muted">Welche Felder für die Freigabe Pflicht sind, steht im Reiter „Pflichtfelder“.</p>
     <div class="leadgen-adapter-state ${reconciliationStatus === 'completed' ? 'is-ready' : ''}" role="status">
       ${reconciliationStatus === 'completed' ? icon('check') : '<i></i>'}${escapeHtml(reconciliationLabel)}
       ${reconciliationTaskId ? `<button class="ctox-button ctox-button--sm" data-action="track-task" data-task-id="${escapeHtml(reconciliationTaskId)}" data-command-id="${escapeHtml(record.reconciliation_command_id || '')}">Vorgang öffnen</button>` : ''}
@@ -2778,8 +2096,7 @@ function renderUpdateDigest() {
   const preview = state.digestPreview;
   return `<section class="leadgen-digest" aria-label="Update-Verteiler">
     <div class="leadgen-digest-scroll">
-      <p class="leadgen-digest-intro">CTOX schickt zu den gewählten Zeiten eine Zusammenfassung dieser App: abgeschlossene Recherchen, belegte Felder, Übergaben an Sellify und was blockiert — jeweils seit dem letzten Update.</p>
-      <label class="leadgen-digest-switch">
+      <label class="leadgen-digest-switch" title="CTOX schickt zu den gewählten Zeiten eine Zusammenfassung: abgeschlossene Recherchen, belegte Felder, Übergaben an Sellify und was blockiert – jeweils seit dem letzten Update.">
         <input type="checkbox" data-digest-field="enabled" ${draft.enabled ? 'checked' : ''} />
         <span>Update-Verteiler aktiv</span>
       </label>
@@ -2804,8 +2121,7 @@ function renderUpdateDigest() {
       </div>
       <label class="leadgen-digest-field">
         <span>Absender-Postfach</span>
-        <input type="email" data-digest-field="sender_email" value="${escapeHtml(draft.sender_email)}" placeholder="leer = Postfach der CTOX-Instanz" spellcheck="false" />
-        <small>Ein in der Mail-App verbundenes Postfach, z. B. das persönliche Exchange-Postfach.</small>
+        <input type="email" data-digest-field="sender_email" value="${escapeHtml(draft.sender_email)}" placeholder="leer = Postfach der CTOX-Instanz" spellcheck="false" title="Ein in der Mail-App verbundenes Postfach, z. B. das persönliche Exchange-Postfach" />
       </label>
       <label class="leadgen-digest-field">
         <span>Zeitraum für Vorschau und „Jetzt senden“</span>
@@ -2831,7 +2147,7 @@ function renderUpdateDigest() {
       </div>` : ''}
     </div>
     <footer>
-      <button class="ctox-button" data-action="digest-preview" ${busy ? 'disabled' : ''}>${busy === 'preview' ? 'Vorschau lädt …' : 'Vorschau'}</button>
+      <button class="ctox-button" data-action="digest-preview" ${busy ? 'disabled' : ''}>${busy === 'preview' ? 'Vorschau …' : 'Vorschau'}</button>
       <button class="ctox-button" data-action="digest-send" ${busy || !config.recipients.length ? 'disabled' : ''}>${busy === 'send' ? 'Sendet …' : 'Jetzt senden'}</button>
       <button class="ctox-button is-primary" data-action="digest-save" ${busy ? 'disabled' : ''}>${icon('check')}<span>${busy === 'save' ? 'Speichert …' : tr('save', 'Speichern')}</span></button>
     </footer>
@@ -2843,19 +2159,19 @@ async function saveUpdateDigest() {
   const config = updateDigestConfigFromDraft(draft);
   const { invalid } = updateDigestRecipients(draft.recipients);
   if (invalid.length) {
-    await showBusinessAlert(`Diese Empfänger sind keine gültigen Adressen: ${invalid.join(', ')}`);
+    await zeigeMeldung(`Diese Empfänger sind keine gültigen Adressen: ${invalid.join(', ')}`);
     return;
   }
   if (config.sender_email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(config.sender_email)) {
-    await showBusinessAlert('Das Absender-Postfach ist keine gültige Adresse.');
+    await zeigeMeldung('Das Absender-Postfach ist keine gültige Adresse.');
     return;
   }
   if (config.enabled && !config.recipients.length) {
-    await showBusinessAlert('Für einen aktiven Update-Verteiler braucht es mindestens einen Empfänger.');
+    await zeigeMeldung('Für einen aktiven Update-Verteiler braucht es mindestens einen Empfänger.');
     return;
   }
   if (config.enabled && !config.weekdays.length) {
-    await showBusinessAlert('Bitte mindestens einen Wochentag wählen.');
+    await zeigeMeldung('Bitte mindestens einen Wochentag wählen.');
     return;
   }
   state.digestBusy = 'save';
@@ -2863,7 +2179,7 @@ async function saveUpdateDigest() {
   try {
     const now = Date.now();
     await mitKanalHeilung(async () => {
-      const doc = await state.collections.researchPolicies.findOne(UPDATE_DIGEST_ID).exec();
+      const doc = await state.collections.researchPolicies.eins(UPDATE_DIGEST_ID);
       const record = {
         id: UPDATE_DIGEST_ID,
         title: 'Update-Verteiler',
@@ -2877,8 +2193,8 @@ async function saveUpdateDigest() {
         created_at_ms: Number(doc?.created_at_ms) || now,
         updated_at_ms: now,
       };
-      if (doc) await doc.incrementalPatch(record);
-      else await state.collections.researchPolicies.insert(record);
+      if (doc) await aendereDok(doc, record);
+      else await state.collections.researchPolicies.schreibe(record);
     }, 'save-update-digest');
     state.digestDirty = false;
     state.digestRecord = { ...(state.digestRecord || {}), id: UPDATE_DIGEST_ID, update_digest: config, updated_at_ms: now };
@@ -2917,10 +2233,10 @@ async function runUpdateDigest(dryRun) {
   const config = updateDigestConfigFromDraft();
   if (!dryRun) {
     if (!config.recipients.length) {
-      await showBusinessAlert('Bitte zuerst mindestens einen Empfänger eintragen.');
+      await zeigeMeldung('Bitte zuerst mindestens einen Empfänger eintragen.');
       return;
     }
-    const ok = await showBusinessConfirm(`Das aktuelle Update jetzt an ${config.recipients.join(', ')} senden?`, { title: 'Update senden', confirmLabel: 'Senden', kind: 'confirm' });
+    const ok = await frageBestaetigung(`Das aktuelle Update jetzt an ${config.recipients.join(', ')} senden?`, { title: 'Update senden', confirmLabel: 'Senden', kind: 'confirm' });
     if (!ok) return;
   }
   state.digestBusy = dryRun ? 'preview' : 'send';
@@ -2941,9 +2257,10 @@ async function runUpdateDigest(dryRun) {
         ...(updateDigestSinceMs() ? { since_ms: updateDigestSinceMs() } : {}),
       },
       client_context: { source_module: 'outbound-lead-generation', record_id: UPDATE_DIGEST_ID, business_chat_auto_focus: false },
-    }, { until: 'terminal', timeoutMs: dryRun ? 45_000 : 120_000, sync_queue_tasks: false });
+    }, { ergebnis: true });
+    if (receipt?.ok === false) throw new Error(receipt.error || 'CTOX hat das Update abgelehnt.');
     const result = receipt?.result?.result || receipt?.result || receipt;
-    if (result?.ok !== true) throw new Error(result?.error || result?.message || 'CTOX hat das Update nicht bestätigt.');
+    if (result?.ok !== true) throw new Error(result?.error || result?.message || 'CTOX hat das Update abgelehnt.');
     state.digestPreview = {
       sent: !dryRun,
       subject: result.subject || '',
@@ -2962,7 +2279,7 @@ async function runUpdateDigest(dryRun) {
     // Die Vorschau steht unter dem Formular; ohne Scrollen sah man nach dem
     // Klick keine Reaktion (Rundgang 28.09.2026).
     globalThis.requestAnimationFrame?.(() => {
-      state.ctx?.host?.querySelector?.('.leadgen-digest-preview')?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+      state.root?.querySelector?.('.leadgen-digest-preview')?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
     });
   }
 }
@@ -2988,9 +2305,9 @@ function fehlerInKlartext(rohtext) {
   if (klein.includes('was not found for this tenant') || (klein.includes('404') && klein.includes('llm.ctox.dev'))) {
     return 'der interne Sprachdienst hat die Anfrage nicht wiedergefunden';
   }
-  if (klein.includes('temporary_unreachable') || klein.includes('temporarily unreachable')) return 'die Quelle war vorübergehend nicht erreichbar';
-  if (klein.includes('timed out') || klein.includes('timeout') || klein.includes('zeitüberschreitung')) {
-    return 'Zeitüberschreitung';
+  if (klein.includes('temporary_unreachable') || klein.includes('temporarily unreachable')) return 'die Quelle war vorübergehend nicht erreichbar'; // v4-allow: label
+  if (klein.includes('timed out') || klein.includes('timeout') || klein.includes('zeitüberschreitung')) { // v4-allow: label
+    return 'Zeitüberschreitung'; // v4-allow: label
   }
   if (klein.includes('captcha')) return 'die Quelle verlangt eine Captcha-Freigabe';
   if (klein.includes('429') || klein.includes('rate limit') || klein.includes('too many requests')) {
@@ -2999,17 +2316,17 @@ function fehlerInKlartext(rohtext) {
   if (klein.includes('403') || klein.includes('forbidden')) return 'die Quelle hat den Zugriff verweigert';
   if (klein.includes('401') || klein.includes('unauthorized')) return 'die Quelle verlangt eine Anmeldung';
   if (klein.includes('5xx') || klein.includes('502') || klein.includes('503') || klein.includes('500')) {
-    return 'die Quelle war nicht erreichbar';
+    return 'die Quelle war nicht erreichbar'; // v4-allow: label
   }
   if (klein.includes('dns') || klein.includes('enotfound') || klein.includes('econnrefused')) {
-    return 'die Quelle war nicht erreichbar';
+    return 'die Quelle war nicht erreichbar'; // v4-allow: label
   }
   // Klicktest P4 T49/T17: Server-Antworten, die sonst als Rohtext oder
   // "Grund unbekannt" erschienen.
   if (klein.includes('no registered script')) return 'für diese Quelle ist noch kein Skript registriert';
-  if (klein.includes('queue lease') || klein.includes('adapter_reconcile')) return 'der Adapter-Abgleich konnte nicht laufen (interner Warteschlangenfehler)';
+  if (klein.includes('queue lease') || klein.includes('adapter_reconcile')) return 'der Adapter-Abgleich konnte nicht laufen (interner Warteschlangenfehler)'; // v4-allow: label
   if (klein.includes('peer-not-open') || klein.includes('no authenticated webrtc peer') || klein.includes('rc_push')) {
-    return 'die Verbindung dieses Browsers zu CTOX war unterbrochen – bitte die Seite neu laden';
+    return 'Verbindung zu CTOX unterbrochen – Seite neu laden';
   }
   // Unbekannt: ersten Satz zeigen, ohne Klammergeruest und ohne Kennungen.
   const kern = text
@@ -3066,7 +2383,7 @@ function fehlerInKlartext(rohtext) {
   // aktuellen Stand zeigen (Leadfeeder stand heute erfolgreich, die Liste
   // zeigte "fehlgeschlagen 18.09."; 25.09.2026).
   if (!state.registryStand && state.registryLaeuft && item?.target_key) {
-    return { code: 'registry_loading', label: 'Aktueller Stand wird aus CTOX geladen …', detail: '', chip };
+    return { code: 'registry_loading', label: '—', detail: '', chip };
   }
   const registryZiel = state.registry?.get?.(String(item?.target_key || item?.id || '').trim())
     || state.registry?.get?.(String(item?.id || '').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, ''));
@@ -3141,7 +2458,7 @@ function fehlerInKlartext(rohtext) {
         code: 'check_running',
         label: status === 'generation_queued'
           ? tr('adapterBuilding', 'Datenzugriff wird eingerichtet')
-          : tr('checkRunning', 'Prüfung läuft …'),
+          : tr('checkRunning', 'Prüfung läuft …'), // v4-allow: label
         chip,
       };
     }
@@ -3250,14 +2567,13 @@ function renderSourceRow(item) {
   const needsBrowserAuthorization = intern || istSchluesselZugang(item.credential_secret_name)
     ? false
     : item.payload?.input_driven !== true;
-  const userManaged = item.payload?.builtin === false;
   const hintergrund = intern
     ? ' · interne Quelle'
     : item.payload?.input_driven === true
       ? ' · pro Unternehmensdomain'
       : '';
   return `<div class="leadgen-source-row" data-source-id="${escapeHtml(item.id)}" data-context-record-id="${escapeHtml(item.id)}" data-context-record-type="research-source" data-context-label="${escapeHtml(item.label)}">
-    <button class="leadgen-source-toggle" data-action="toggle-source" aria-pressed="${item.enabled}" ${state.sourceTogglePending.has(item.id) ? 'aria-busy="true" disabled title="Wird gespeichert …"' : `title="Quelle ${item.enabled ? 'deaktivieren' : 'aktivieren'}"`}><span class="leadgen-toggle-dot"></span></button>
+    <button class="leadgen-source-toggle" data-action="toggle-source" aria-pressed="${item.enabled}" ${state.sourceTogglePending.has(item.id) ? 'aria-busy="true" disabled title="Wird gespeichert …"' : `title="Quelle ${item.enabled ? 'deaktivieren' : 'aktivieren'}"`}><span class="leadgen-toggle-dot"></span></button>${'' /* v4-allow: label */}
     <div class="leadgen-source-copy">
       <strong>${escapeHtml(item.label)}</strong>
       <span>${escapeHtml(item.countries.join('/'))} · ${escapeHtml(item.field_keys.map(researchFieldLabel).join(', '))}${escapeHtml(hintergrund)}</span>
@@ -3279,8 +2595,7 @@ function renderSourceRow(item) {
       <button class="ctox-pane-icon" data-action="test-adapter" title="${tr('testAdapter', 'Datenzugriff prüfen')}" aria-label="${tr('testAdapter', 'Datenzugriff prüfen')}">${icon('test')}</button>
       ${item.requires_credential ? `<button class="ctox-pane-icon" data-action="check-credential" title="Zugang prüfen" aria-label="Zugang von ${escapeHtml(item.label)} prüfen">${icon('key')}</button>` : ''}
       ${needsBrowserAuthorization ? `<button class="ctox-pane-icon" data-action="auth-source" title="${tr('browserSignIn', 'Im CTOX-Browser anmelden / entsperren')}" aria-label="${tr('signIn', 'Anmelden')}">${icon('login')}</button>` : ''}
-      <button class="ctox-pane-icon is-danger" data-action="delete-adapter" title="Adapter entfernen" aria-label="Adapter für ${escapeHtml(item.label)} entfernen">${icon('trash')}</button>
-      ${userManaged ? `<button class="ctox-pane-icon is-danger" data-action="delete-source" title="Quelle vollständig löschen" aria-label="${escapeHtml(item.label)} vollständig löschen">${icon('close')}</button>` : ''}
+      <button class="ctox-pane-icon is-danger" data-action="delete-source" title="Quelle entfernen" aria-label="${escapeHtml(item.label)} entfernen">${icon('trash')}</button>
     </div>`}
   </div>`;
 }
@@ -3327,7 +2642,7 @@ function prefetchCampaignLeads() {
 
 function renderCenter() {
   queueMicrotask(prefetchCampaignLeads);
-  const pane = state.ctx.host.querySelector('[data-leads-pane]');
+  const pane = state.root.querySelector('[data-leads-pane]');
   if (!pane) return;
   const statusFilter = state.leadStatusFilter;
   const leads = angezeigteLeads();
@@ -3355,7 +2670,7 @@ function renderCenter() {
   const title = pane.querySelector('[data-center-title]');
   if (title) title.textContent = state.selectedCampaign || tr('newResearch', 'Neu- und Nachrecherche');
   const count = pane.querySelector('[data-center-count]');
-  if (count) count.textContent = `${leads.length} Leads`;
+  if (count) count.textContent = `${anzahl(leads.length, 'Lead', 'Leads')}`;
   const actions = pane.querySelector('[data-center-actions]');
   if (actions) {
     setzeHtmlWennGeaendert(actions, `
@@ -3371,7 +2686,7 @@ function renderCenter() {
             && (!fullById.has(lead.id) || offeneRecherchefelder(fullById.get(lead.id)).length));
           const alleDetailsBekannt = leads.every(lead => fullById.has(lead.id));
           return mitLuecken.length
-            ? `<button class="ctox-button" data-action="research-campaign-gaps" data-campaign="${escapeHtml(state.selectedCampaign)}" data-lead-ids="${escapeHtml(mitLuecken.map((lead) => lead.id).join(','))}" title="Noch offene Felder anhand der vollständigen Leads prüfen und recherchieren">${icon('search')}<span>Lücken schließen${alleDetailsBekannt ? ` (${mitLuecken.length})` : ''}</span></button>`
+            ? `<button class="ctox-button" data-action="research-campaign-gaps" data-campaign="${escapeHtml(state.selectedCampaign)}" data-lead-ids="${escapeHtml(mitLuecken.map((lead) => lead.id).join(','))}" title="Offene Felder der vollständigen Leads recherchieren">${icon('search')}<span>Lücken schließen${alleDetailsBekannt ? ` (${mitLuecken.length})` : ''}</span></button>`
             : '';
         })()}
         ${(() => {
@@ -3401,9 +2716,7 @@ function renderCenter() {
       if (!fokusKnopf) return;
       toolbar.querySelector(`[data-action="${fokusKnopf}"]`)?.focus?.({ preventScroll: true });
     });
-    const hinweisMarkup = state.notice
-      ? `<span class="leadgen-status-note" role="status">${escapeHtml(state.notice)}</span>`
-      : '';
+    const hinweisMarkup = '';
     setzeHtmlWennGeaendert(toolbar, selectedCount ? `
         ${hinweisMarkup}
         <strong>${selectedCount} ausgewählt</strong>
@@ -3440,14 +2753,14 @@ function renderCenter() {
         <button type="button" class="leadgen-sort-dir leadgen-filter-reset" data-action="lead-filter-reset" aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
       </div>
       <div class="leadgen-filter-chips" role="group" aria-label="Recherche-Status">
-        ${[['new', 'Neu'], ['queued', 'Wartet'], ['running', 'Läuft'], ['needs_review', 'Prüfung nötig'], ['completed', 'Abgeschlossen'], ['failed', 'Unvollständig']].map(([k, l]) => `<button type="button" class="ctox-chip" data-action="lead-status-chip" data-status="${k}" aria-pressed="${statusFilter.has(k)}">${l}</button>`).join('')}
+        ${[['new', 'Neu'], ['queued', 'Wartet'], ['running', 'Läuft'], ['needs_review', 'Prüfung nötig'], ['completed', 'Abgeschlossen'], ['failed', 'Unvollständig']].map(([k, l]) => `<button type="button" class="ctox-chip" data-action="lead-status-chip" data-status="${k}" aria-pressed="${statusFilter.has(k)}">${l}</button>`).join('')}${'' /* v4-allow: label */}
       </div>`);
   }
   const status = pane.querySelector('[data-center-status]');
   if (status) {
     // <details>-Zustand ueberlebt den Neuaufbau (gleiche Falle wie im Detail).
     const openDisclosures = new Set([...status.querySelectorAll('details[open][data-disclosure]')].map((node) => node.dataset.disclosure));
-    setzeHtmlWennGeaendert(status, `${renderCampaignProgress(campaignProgress)}${renderUnvollstaendigerImport(state.selectedCampaign)}${renderCampaignRecipientExclusions(state.selectedCampaign)}`);
+    setzeHtmlWennGeaendert(status, `${renderCampaignProgress(campaignProgress)}${renderUnvollstaendigerImport(state.selectedCampaign)}`);
     openDisclosures.forEach((key) => {
       const node = status.querySelector(`details[data-disclosure="${key}"]`);
       if (node) node.open = true;
@@ -3456,7 +2769,7 @@ function renderCenter() {
   const foot = pane.querySelector('[data-center-foot]');
   // Letzter Import DIESER Kampagne, nicht irgendeiner (Nachtest P3).
   const letzterImport = state.imports.find((job) => String(job?.title || '').trim() === String(state.selectedCampaign || '').trim()) || null;
-  if (foot) foot.textContent = letzterImport ? `${tr('lastImport', 'Letzter Import')}: ${letzterImport.title}` : datenLadenNoch() ? '' : tr('noImport', 'Noch kein Import');
+  if (foot) foot.textContent = letzterImport ? `${tr('lastImport', 'Letzter Import')}: ${letzterImport.title}` : '';
   const body = pane.querySelector('[data-leads-body]');
   if (!body) return;
   const scrollTop = body.scrollTop;
@@ -3470,18 +2783,17 @@ function renderCenter() {
   // Leere Liste unterscheiden: gar nichts importiert vs. Suche/Filter treffen
   // nichts (vorher immer "Noch keine Leads importiert", Klicktest-Befund P2 V6).
   const filterAktiv = Boolean(String(state.search || '').trim()) || (state.leadStatusFilter?.size || 0) > 0;
+  // v4: eine leere Collection rendert nichts (PORTING.md R11); nur der Filterbefund bleibt.
   const leerText = filterAktiv && campaignListLeads(state.selectedCampaign).length
     ? 'Keine Leads passen zu Suche oder Filter.'
-    : emptyCollectionText(['leads'], 'Leads werden geladen …',
-      tr('noLeads', 'Noch keine Leads importiert.'),
-      'Leads konnten nicht geladen werden. Neu verbinden und erneut versuchen.');
+    : '';
   // Wie die Kampagnenliste: unveraenderte Liste NICHT neu schreiben, sonst
   // verliert jede Sekunde ein Klick oder der Zeiger seine Zeile
   // (Owner-Befund 18.09.2026).
   const leadsHtml = state.campaignViewMode === 'shards'
-    ? `<div class="leadgen-lead-shards">${leads.map(renderLeadShard).join('') || `<div class="leadgen-empty">${escapeHtml(leerText)}</div>`}</div>`
+    ? `<div class="leadgen-lead-shards">${leads.map(renderLeadShard).join('') || (leerText ? `<div class="leadgen-empty">${escapeHtml(leerText)}</div>` : '')}</div>`
     : `<table class="leadgen-table"><thead><tr><th class="leadgen-select-column"><input type="checkbox" data-action="toggle-visible-leads" aria-label="Alle sichtbaren Leads auswählen" ${allVisibleSelected ? 'checked' : ''} ${someVisibleSelected ? 'data-indeterminate="true"' : ''}></th><th>${tr('organization', 'Organisation')}</th><th>${tr('location', 'Ort')}</th><th>${tr('research', 'Recherche')}</th><th>Sellify</th></tr></thead>
-          <tbody>${leads.map(renderLeadRow).join('') || `<tr><td colspan="5" class="leadgen-empty">${escapeHtml(leerText)}</td></tr>`}</tbody></table>`;
+          <tbody>${leads.map(renderLeadRow).join('') || (leerText ? `<tr><td colspan="5" class="leadgen-empty">${escapeHtml(leerText)}</td></tr>` : '')}</tbody></table>`;
   const leadsUnveraendert = state.leadsHtml === leadsHtml && body.childElementCount;
   if (!leadsUnveraendert) {
     state.leadsHtml = leadsHtml;
@@ -3497,27 +2809,9 @@ function renderCenter() {
   if (headerCheckbox) headerCheckbox.indeterminate = someVisibleSelected;
 }
 
-function campaignRecipientExclusions(campaign) {
-  const rows = [];
-  const removedKeys = new Set();
-  for (const [leadId, notices] of state.recipientRemovalNotices) {
-    for (const notice of notices || []) removedKeys.add(recipientEligibilityKey(leadId, notice.contact?.id));
-  }
-  for (const lead of campaignLeads(campaign)) {
-    for (const contact of lead.contacts || []) {
-      const decision = currentContactEligibility(lead, contact);
-      if (decision.status === 'free') continue;
-      rows.push({
-        lead,
-        contact,
-        decision,
-        removed: removedKeys.has(recipientEligibilityKey(lead.id, contact.id)),
-      });
-    }
-  }
-  return rows;
-}
-
+// Kein Sammelfeld „gesperrt · ungeprüft · Prüfung wiederholen“ mehr (Owner 15.10.2026:
+// „wenn einer gesperrt ist, dann darf er nicht ausgewählt werden“). Der Sperrvermerk
+// steht am Kontakt in der Empfängerauswahl, der Kontakt ist dort nicht wählbar.
 function renderUnvollstaendigerImport(campaign) {
   const job = unvollstaendigerImport(campaign);
   if (!job) return '';
@@ -3528,83 +2822,6 @@ function renderUnvollstaendigerImport(campaign) {
     <button class="ctox-button" data-action="resume-import" data-import-id="${escapeHtml(job.id)}">Fortsetzen</button>
   </div>`;
 }
-function renderCampaignRecipientExclusions(campaign) {
-  const cached = new Set(state.leads.map(lead => lead.id));
-  const missing = campaignListLeads(campaign).filter(lead => !cached.has(lead.id)).length;
-  const notice = missing ? `<div class="leadgen-recipient-exclusions is-pending is-compact" role="status"><span>Kontaktdaten von ${missing} Leads werden erst bei Auswahl oder Prüfung geladen.</span><button class="ctox-button" data-action="recheck-sellify">Kontakte prüfen</button></div>` : '';
-  return notice + renderLoadedCampaignRecipientExclusions(campaign);
-}
-function renderLoadedCampaignRecipientExclusions(campaign) {
-  const rows = campaignRecipientExclusions(campaign);
-  if (!rows.length) return '';
-  // Owner-Befund 03.09.: Das Feld nannte einen Systemzustand und keine
-  // Aufgabe — 48 Zeilen, derselbe Name mehrfach, Kontakte fremder Firmen,
-  // und keine Handlung. Ein Kontakt, der geprueft werden MUSS, ist eine
-  // Aufgabe; ein Abgleich, der nicht laufen KANN, ist genau eine Meldung mit
-  // genau einem Knopf.
-  const seen = new Set();
-  const unique = [];
-  for (const row of rows) {
-    const name = personDisplayName(row.contact) || '';
-    const key = `${row.lead.id}|${name.toLowerCase()}|${String(row.contact?.person_email || '').toLowerCase()}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(row);
-  }
-  const pending = unique.filter((row) => row.decision.pending === true
-    || /nicht prüfbar|wird geprüft/i.test(String(row.decision.label || '')));
-  const blocked = unique.filter((row) => !pending.includes(row));
-  if (!blocked.length) {
-    // Nichts ist ausgeschlossen — die Pruefung konnte nur nicht laufen.
-    // Laufende Pruefung von ausgebliebener Antwort unterscheiden: eine Pruefung
-    // dauert gemessen bis 75 Sekunden. "Hat nicht geantwortet" waehrend sie noch
-    // laeuft las sich wie ein Defekt.
-    const laeuft = unique.some((row) => state.recipientEligibilityBusy.has(row.lead?.id));
-    const zeitueberschritten = unique.filter((row) => state.recipientEligibilityTimedOut.has(row.lead?.id)).length;
-    // Rundgang 11.09.2026: der rote Kasten nahm in schmalen Fenstern die ganze
-    // Leadliste ein. Eine Zeile reicht; die Begruendung steht im Hinweistext.
-    const erklaerung = 'Solange ein Kontakt nicht gegen Sellify geprüft ist, bleibt er für die Übergabe gesperrt – ohne Prüfung darf niemand angeschrieben werden. '
-      + (laeuft ? 'Die Prüfung dauert je Lead bis zu 90 Sekunden.' : '');
-    const text = laeuft
-      ? `Sperrvermerk-Prüfung läuft · ${unique.length} Kontakt${unique.length === 1 ? '' : 'e'}`
-      : zeitueberschritten
-        ? `Sperrvermerk-Prüfung ohne Antwort · ${zeitueberschritten} Kontakt${zeitueberschritten === 1 ? '' : 'e'}`
-        : `Sperrvermerk-Prüfung ausstehend · ${unique.length} Kontakt${unique.length === 1 ? '' : 'e'}`;
-    return `<div class="leadgen-recipient-exclusions is-pending is-compact" role="status" title="${escapeHtml(erklaerung)}">
-      <span>${escapeHtml(text)}</span>
-      <button class="ctox-button" data-action="recheck-sellify"${laeuft ? ' disabled' : ''}>${laeuft ? 'Prüfung läuft …' : 'Jetzt prüfen'}</button>
-    </div>`;
-  }
-  const foreign = unique.filter((row) => {
-    const company = String(row.contact?.company || row.contact?.firma_name || '').trim().toLowerCase();
-    return company && company !== String(row.lead?.name || '').trim().toLowerCase();
-  });
-  const shown = blocked.slice(0, 5);
-  // "gesperrt" und "zu prüfen" getrennt zaehlen (Klicktest P2 V9) und eine
-  // laufende Pruefung auch in dieser Form zeigen (PRG-02a).
-  const hartGesperrt = blocked.filter((row) => row.decision?.status === 'blocked').length;
-  const zuPruefen = blocked.length - hartGesperrt;
-  const pruefungLaeuft = unique.some((row) => state.recipientEligibilityBusy.has(row.lead?.id));
-  const teile = [
-    hartGesperrt ? `${hartGesperrt} Kontakt${hartGesperrt === 1 ? '' : 'e'} gesperrt` : '',
-    zuPruefen ? `${zuPruefen} zu prüfen` : '',
-    pending.length ? `${pending.length} ungeprüft` : '',
-    pruefungLaeuft ? 'Prüfung läuft …' : '',
-  ].filter(Boolean);
-  return `<details class="leadgen-recipient-exclusions" data-disclosure="recipient-exclusions">
-    <summary>${escapeHtml(teile.join(' · '))}</summary>
-    <ul>${shown.map(({ lead, contact, decision, removed }) => `<li>
-      <strong>${escapeHtml(personDisplayName(contact) || tr('contact', 'Kontakt'))}</strong>
-      <span>${escapeHtml(lead.name)} · ${escapeHtml(decision.label)}${removed ? ' · abgewählt' : ''}</span>
-      ${decision.originalRemark ? `<q>${escapeHtml(decision.originalRemark)}</q>` : `<span>${escapeHtml(decision.reason || '')}</span>`}
-    </li>`).join('')}</ul>
-    ${blocked.length > shown.length ? `<p>… und ${blocked.length - shown.length} weitere.</p>` : ''}
-    ${pending.length ? `<p>${pending.length} Kontakt${pending.length === 1 ? '' : 'e'} konnten nicht geprüft werden.
-      <button class="ctox-button" data-action="recheck-sellify"${pruefungLaeuft ? ' disabled' : ''}>${pruefungLaeuft ? 'Prüfung läuft …' : 'Prüfung wiederholen'}</button></p>` : ''}
-    ${foreign.length ? `<p role="status">${foreign.length} Kontakt${foreign.length === 1 ? '' : 'e'} gehören laut Datensatz zu einer anderen Firma als der Lead — bitte im Lead prüfen.</p>` : ''}
-  </details>`;
-}
-
 function renderCampaignProgress(progress) {
   // Owner-Vorgabe 31.08.: Die Leiste ist ein LAUF-Monitor, kein Dauerzustand.
   // Ohne aktive Recherche ist sie ueberfluessig und verschwindet.
@@ -3624,7 +2841,7 @@ function renderCampaignProgress(progress) {
       <div class="leadgen-progress-track" aria-hidden="true"><i style="width:${progress.percent}%"></i></div>
       <div class="leadgen-progress-states">
         ${campaignProgressState('new', tr('statusNew', 'Neu'), progress.counts.new)}
-        ${campaignProgressState('queued', tr('statusQueued', 'Wartet'), progress.counts.queued)}
+        ${campaignProgressState('queued', tr('statusQueued', 'Wartet'), progress.counts.queued)}${'' /* v4-allow: label */}
         ${campaignProgressState('running', tr('statusRunning', 'Laufend'), progress.counts.running)}
         ${campaignProgressState('completed', tr('statusCompleted', 'Abgeschlossen'), progress.counts.completed)}
         ${campaignProgressState('failed', tr('statusFailed', 'Unvollständig'), progress.counts.failed)}
@@ -3657,7 +2874,7 @@ function renderLeadShard(lead) {
       <span>${escapeHtml([lead.city, lead.country].filter(Boolean).join(', ') || lead.domain || '—')}</span>
       <footer><span class="ctox-badge ${lead.validation_status === 'validated' ? 'is-success' : ''}">${escapeHtml(researchLabel(lead))}</span><span>${escapeHtml(lead.sellify_status === 'completed' ? 'Sellify' : '')}</span></footer>
     </button>
-    <button class="ctox-pane-icon leadgen-shard-research" data-action="research-lead" data-id="${escapeHtml(lead.id)}" title="${submissionPending ? 'Recherche wird gestartet' : researchInFlight(lead) ? 'Recherche läuft' : 'Lead nachrecherchieren'}" aria-label="${escapeHtml(lead.name)} nachrecherchieren" ${submissionPending || researchInFlight(lead) ? 'disabled' : ''}>${icon('search')}</button>
+    <button class="ctox-pane-icon leadgen-shard-research" data-action="research-lead" data-id="${escapeHtml(lead.id)}" title="${submissionPending ? 'Recherche wird gestartet' : researchInFlight(lead) ? 'Recherche läuft' : 'Lead nachrecherchieren'}" aria-label="${escapeHtml(lead.name)} nachrecherchieren" ${submissionPending || researchInFlight(lead) ? 'disabled' : ''}>${icon('search')}</button>${'' /* v4-allow: label */}
   </article>`;
 }
 
@@ -3667,7 +2884,7 @@ function renderLeadShard(lead) {
 // Nutzer in diesem Bereich schreibt, wird der Neuaufbau aufgeschoben und nach
 // dem Verlassen des Feldes einmal nachgeholt.
 function detailPaneHasActiveInput(pane) {
-  const active = state.ctx.host.ownerDocument?.activeElement || globalThis.document?.activeElement;
+  const active = state.root.ownerDocument?.activeElement || globalThis.document?.activeElement;
   if (!active || !pane.contains(active)) return false;
   // Checkboxen sind kein Tippen: nach dem Anhaken eines Empfaengers blieb
   // "Sellify aktualisieren" gesperrt, bis der Fokus wanderte (Klicktest P3).
@@ -3675,12 +2892,12 @@ function detailPaneHasActiveInput(pane) {
 }
 
 function renderDetail() {
-  const pane = state.ctx.host.querySelector('[data-detail-pane]');
+  const pane = state.root.querySelector('[data-detail-pane]');
   if (!pane) return;
   if (detailPaneHasActiveInput(pane)) {
     if (!state.detailRenderDeferred) {
       state.detailRenderDeferred = true;
-      const active = state.ctx.host.ownerDocument?.activeElement || globalThis.document?.activeElement;
+      const active = state.root.ownerDocument?.activeElement || globalThis.document?.activeElement;
       active.addEventListener('blur', () => {
         state.detailRenderDeferred = false;
         renderDetail();
@@ -3704,10 +2921,10 @@ function renderDetail() {
     title.textContent = summary?.name || '—';
     if (actions) actions.innerHTML = '';
     if (tabsHost) tabsHost.innerHTML = '';
-    body.innerHTML = `<div class="leadgen-empty" role="status">${escapeHtml(summary
-      ? state.selectedDetailError || 'Details und Belege werden geladen …'
-      : tr('selectLead', 'Lead auswählen.'))}${summary && state.selectedDetailError
-        ? `<button class="ctox-button" data-action="select-lead" data-id="${escapeHtml(summary.id)}">Details erneut laden</button>` : ''}</div>`;
+    // v4: ohne Lead rendert das Detail nichts (PORTING.md R11).
+    body.innerHTML = summary && state.selectedDetailError
+      ? `<div class="leadgen-empty">${escapeHtml(state.selectedDetailError)}<button class="ctox-button" data-action="select-lead" data-id="${escapeHtml(summary.id)}">Details erneut laden</button></div>`
+      : '';
     return;
   }
   const scrollTop = body.scrollTop;
@@ -3737,9 +2954,9 @@ function renderDetail() {
   const handoffRunning = (lead.sellify_status === 'queued' && !handoffUnterbrochen) || handoffVorbereitung;
   const handoffDisabled = Boolean(handoffPrecondition) || handoffRunning;
   const handoffTitle = handoffVorbereitung
-    ? 'Übergabe wird vorbereitet: Sellify-Sperrvermerke werden unmittelbar vor dem Schreiben erneut geprüft …'
-    : handoffRunning ? tr('handoffRunning', 'Übergabe läuft')
-      : handoffPrecondition || (handoffUnterbrochen ? 'Die letzte Übergabe wurde unterbrochen (Browser geschlossen). Erneut übergeben: bereits angelegte Datensätze werden erkannt und aktualisiert.' : '');
+    ? 'Übergabe wird vorbereitet: Sperrvermerke werden geprüft …' // v4-allow: label
+    : handoffRunning ? tr('handoffRunning', 'Übergabe läuft') // v4-allow: label
+      : handoffPrecondition || (handoffUnterbrochen ? 'Letzte Übergabe unterbrochen – erneut übergeben, Angelegtes wird erkannt.' : '');
   const activeTab = DETAIL_TAB_IDS.includes(state.activeDetailTab) ? state.activeDetailTab : 'overview';
   // Owner-Vorgabe 31.08.: zwei getrennte Wege mit harter Sellify-Weiche.
   // "Neue Recherche" bricht ab, wenn die Firma bereits im CRM existiert;
@@ -3758,7 +2975,7 @@ function renderDetail() {
     ? `<button class="ctox-button" data-action="research-lead-gaps" data-id="${escapeHtml(lead.id)}" title="${escapeHtml(`Nur die ${luecken.length} noch nicht belegten Felder erneut recherchieren: ${luecken.map(researchFieldLabel).join(', ')}`)}">${icon('search')}<span>Lücken schließen (${luecken.length})</span></button>`
     : '';
   const researchAction = researchSubmissionRunning
-    ? `<button class="ctox-button is-primary" data-action="research-lead" data-id="${escapeHtml(lead.id)}" disabled>${icon('search')}<span>Recherche wird gestartet …</span></button>`
+    ? `<button class="ctox-button is-primary" data-action="research-lead" data-id="${escapeHtml(lead.id)}" disabled>${icon('search')}<span>Recherche wird gestartet …</span></button>` // v4-allow: label
     : researchInFlight(lead)
       ? (state.researchCancelling?.has(lead.id)
         ? `<button class="ctox-button" disabled>${icon('close')}<span>Wird abgebrochen …</span></button>`
@@ -3773,9 +2990,9 @@ function renderDetail() {
   const decisionActions = `<div class="leadgen-detail-actions">
     ${researchAction}
     <button class="ctox-button" data-action="validate-lead" data-id="${escapeHtml(lead.id)}" ${readyForValidation && !alreadyValidated ? '' : 'disabled'} title="${escapeHtml(validationDetails)}">${alreadyValidated || readyForValidation ? icon('check') : ''}<span>${escapeHtml(validateLabel)}</span></button>
-    <button class="ctox-button" data-action="sellify-update-only" data-id="${escapeHtml(lead.id)}" ${handoffDisabled ? 'disabled' : ''} title="${escapeHtml(handoffTitle || tr('sellifyUpdateOnlyTitle', 'Organisation und ausgewählte Personen in Sellify aktualisieren.'))}">${icon('send')}<span>${handoffVorbereitung ? 'Wird vorbereitet …' : handoffRunning ? 'Übergabe läuft …' : tr('sellifyUpdateOnly', 'Sellify aktualisieren')}</span></button>
+    <button class="ctox-button" data-action="sellify-update-only" data-id="${escapeHtml(lead.id)}" ${handoffDisabled ? 'disabled' : ''} title="${escapeHtml(handoffTitle || tr('sellifyUpdateOnlyTitle', 'Organisation und ausgewählte Personen in Sellify aktualisieren.'))}">${icon('send')}<span>${handoffVorbereitung ? 'Wird vorbereitet …' : handoffRunning ? 'Übergabe läuft …' : tr('sellifyUpdateOnly', 'Sellify aktualisieren')}</span></button>${'' /* v4-allow: label */}
     <button class="ctox-button" data-action="export-lead-xlsx" data-id="${escapeHtml(lead.id)}" title="${escapeHtml(tr('exportLeadXlsxTitle', 'Recherche dieses Leads als Excel-Datei herunterladen'))}" aria-label="${escapeHtml(tr('exportLeadXlsxTitle', 'Recherche dieses Leads als Excel-Datei herunterladen'))}">${icon('download')}<span>${tr('exportXlsx', 'Excel')}</span></button>
-    <button class="ctox-button" data-action="sellify-update-campaign" data-id="${escapeHtml(lead.id)}" ${handoffDisabled ? 'disabled' : ''} title="${escapeHtml(handoffTitle || tr('sellifyUpdateCampaignTitle', 'Organisation und ausgewählte Personen aktualisieren und der Kampagne hinzufügen.'))}">${icon('send')}<span>${handoffVorbereitung ? 'Wird vorbereitet …' : handoffRunning ? 'Übergabe läuft …' : tr('sellifyUpdateCampaign', 'Sellify + Kampagne')}</span></button>
+    <button class="ctox-button" data-action="sellify-update-campaign" data-id="${escapeHtml(lead.id)}" ${handoffDisabled ? 'disabled' : ''} title="${escapeHtml(handoffTitle || tr('sellifyUpdateCampaignTitle', 'Organisation und ausgewählte Personen aktualisieren und der Kampagne hinzufügen.'))}">${icon('send')}<span>${handoffVorbereitung ? 'Wird vorbereitet …' : handoffRunning ? 'Übergabe läuft …' : tr('sellifyUpdateCampaign', 'Sellify + Kampagne')}</span></button>${'' /* v4-allow: label */}
   </div>`;
   const tabContent = activeTab === 'overview'
     ? `${renderResearchReviewSummary(review, contactScopedLead)}${decisionActions}${!readyForValidation ? `<details class="leadgen-validation-details" data-disclosure="validation-blockers"><summary>${blockers.length || 1} offene Punkte bis zur Freigabe</summary><ul>${(blockerDetails.length ? blockerDetails : [{ text: validationDetails, key: '' }]).map((blocker) => `<li>${escapeHtml(blocker.text)}${renderBlockerActions(blocker.key)}</li>`).join('')}</ul></details>` : ''}${renderReleasedEmptyFields(lead)}${renderContactRecipientSelection(lead)}`
@@ -3803,7 +3020,7 @@ function renderDetail() {
 }
 
 function renderLeadEditor() {
-  const mount = state.ctx.host.querySelector('[data-app-dialog]');
+  const mount = state.root.querySelector('[data-app-dialog]');
   if (!mount) return;
   if (state.adapterInspectorSourceId) {
     const source = state.sources.find((entry) => entry.id === state.adapterInspectorSourceId);
@@ -3813,9 +3030,8 @@ function renderLeadEditor() {
       mount.replaceChildren();
       return;
     }
-    // Das Skript kommt aus der Scrape-Registry (Kern liefert es mit
-    // registry_read/include_script_target); vorher konnte der Dialog nie ein
-    // Skript zeigen (Klicktest-Befund P4 V14).
+    // Das Skript kommt aus der Scrape-Registry (OLG-Collection scrape_scripts + api.files, live
+    // gelesen in ladeAdapterSkript); vorher konnte der Dialog nie ein Skript zeigen (Klicktest-Befund P4 V14).
     const registriert = state.adapterInspectorScript;
     const skriptBereit = registriert && registriert.target_key === source.target_key;
     const script = skriptBereit && registriert.available ? String(registriert.text || '') : adapterScriptText(adapter);
@@ -3877,7 +3093,7 @@ function renderLeadEditor() {
               <input type="search" data-sellify-campaign-query value="${escapeHtml(state.sellifyImportQuery || '')}" placeholder="Kampagnenname suchen …" ${busy ? 'disabled' : ''} />
               <button class="ctox-button is-primary" data-action="sellify-campaign-search" ${busy || state.sellifyImportSucheLaeuft ? 'disabled' : ''}>${icon('search')}<span>Suchen</span></button>
             </div>
-            ${state.sellifyImportNotice ? `<p class="leadgen-import-notice" role="status" data-sellify-import-notice>${escapeHtml(state.sellifyImportNotice)}</p>` : ''}
+            ${state.sellifyImportNotice ? `<p class="leadgen-inline-msg" role="status" data-sellify-import-notice>${escapeHtml(state.sellifyImportNotice)}</p>` : ''}
             <div class="leadgen-sellify-campaign-list">${resultRows || (busy ? '' : '<p class="leadgen-empty">Noch keine Suche – Kampagnenname eingeben.</p>')}</div>
           </div>
           <footer class="leadgen-dialog-actions">
@@ -3895,8 +3111,10 @@ function renderLeadEditor() {
   // ersetzte das Formular und verschluckte Tastendruecke (Klicktest P3
   // EDT-F42a: 2 von 7 Zeichen verloren). Der Entwurf steht ohnehin im Zustand
   // (input-Handler); gleicher Lead = nichts Neues zu zeigen.
+  // Ausnahme Speichern (main #725): der Wechsel in den gesperrten Zustand und zurueck muss gezeichnet werden,
+  // auch wenn der Fokus noch im Formular steht.
   const offenerEditor = mount.querySelector('[data-lead-editor]');
-  if (offenerEditor && offenerEditor.dataset.leadId === String(state.leadEditorId || '')) {
+  if (!state.leadEditorSaving && offenerEditor && offenerEditor.dataset.leadId === String(state.leadEditorId || '')) {
     const aktiv = mount.ownerDocument?.activeElement;
     if (aktiv && offenerEditor.contains(aktiv)) return;
   }
@@ -3911,7 +3129,7 @@ function renderLeadEditor() {
   const fieldInput = (key, label, value, options = {}) => `
     <label class="leadgen-form-field ${options.wide ? 'is-wide' : ''}">
       <span>${escapeHtml(label)}</span>
-      <input data-lead-edit-field="${escapeHtml(key)}" value="${escapeHtml(value || '')}" ${options.required ? 'required' : ''}${suggestions[key] ? ` list="leadgen-suggest-${escapeHtml(key)}"` : ''}>
+      <input data-lead-edit-field="${escapeHtml(key)}" value="${escapeHtml(value || '')}" ${options.required ? 'required' : ''}${state.leadEditorSaving ? ' disabled' : ''}${suggestions[key] ? ` list="leadgen-suggest-${escapeHtml(key)}"` : ''}>
       ${suggestions[key] ? `<datalist id="leadgen-suggest-${escapeHtml(key)}">${suggestions[key].map((item) => `<option value="${escapeHtml(item)}"></option>`).join('')}</datalist>` : ''}
     </label>`;
   // firma_land hat im Editor genau EIN Feld ("Land (Länderkennzeichen)" =
@@ -3925,10 +3143,10 @@ function renderLeadEditor() {
   )).join('');
   mount.innerHTML = `
     <div class="leadgen-source-backdrop" data-action="close-lead-editor">
-      <section class="leadgen-lead-editor" role="dialog" aria-modal="true" aria-label="Lead bearbeiten" data-lead-editor data-lead-id="${escapeHtml(String(state.leadEditorId || ''))}">
+      <section class="leadgen-lead-editor" role="dialog" aria-modal="true" aria-label="Lead bearbeiten" data-lead-editor data-lead-id="${escapeHtml(String(state.leadEditorId || ''))}"${state.leadEditorSaving ? ' aria-busy="true"' : ''}>
         <header class="ctox-pane-header ctox-pane-band leadgen-header">
           <div><span class="ctox-pane-kicker">Lead</span><h2 class="ctox-pane-title">Bearbeiten</h2></div>
-          <button class="ctox-pane-icon" data-action="close-lead-editor" title="Schließen" aria-label="Schließen">${icon('close')}</button>
+          <button class="ctox-pane-icon" data-action="close-lead-editor" title="Schließen" aria-label="Schließen" ${state.leadEditorSaving ? 'disabled' : ''}>${icon('close')}</button>
         </header>
         <div class="leadgen-lead-form">
           ${fieldInput('name', 'Organisation', draft.name, { required: true, wide: true })}
@@ -3951,8 +3169,8 @@ function renderLeadEditor() {
           </details>` : ''}
         </div>
         <footer class="leadgen-dialog-actions">
-          <button class="ctox-button" data-action="close-lead-editor">Abbrechen</button>
-          <button class="ctox-button is-primary" data-action="save-lead-editor">Speichern</button>
+          <button class="ctox-button" data-action="close-lead-editor" ${state.leadEditorSaving ? 'disabled' : ''}>Abbrechen</button>
+          <button class="ctox-button is-primary" data-action="save-lead-editor" ${state.leadEditorSaving ? 'disabled aria-busy="true"' : ''}>Speichern</button>
         </footer>
       </section>
     </div>`;
@@ -3964,10 +3182,6 @@ async function handleClick(event) {
   const action = trigger.dataset.action;
   const id = trigger.dataset.id || trigger.closest('[data-source-id]')?.dataset.sourceId || '';
   await prepareFullLeadAction(action, id, trigger.dataset.campaign || state.selectedCampaign);
-  if (action === 'retry-sync') {
-    await retryInitialSync();
-    return;
-  }
   if (action === 'adapter-settings') {
     await editSource(id);
     return;
@@ -4021,9 +3235,6 @@ async function handleClick(event) {
     selectLeadAndRefreshEligibility(first?.id || '');
   }
   if (action === 'open-sources') {
-    // Beim Oeffnen einmal die Registry nachladen, damit die Liste nicht auf
-    // App-Vermutungen sitzen bleibt.
-    if (!state.registryStand || Date.now() - state.registryStand > 300_000) void ladeQuellenRegistry();
     if (!state.secretKatalogStand || Date.now() - state.secretKatalogStand > 60_000) void ladeSecretKatalog();
     state.sourcePanelView = 'sources';
     state.sourcePanelOpen = true;
@@ -4183,7 +3394,6 @@ async function handleClick(event) {
   if (action === 'check-credential') await pruefeZugang(id);
   if (action === 'test-adapter') await runAdapterCommand(id, 'outbound.research_source.test');
   if (action === 'auth-source') await runAdapterCommand(id, 'outbound.research_source.auth_assist');
-  if (action === 'delete-adapter') await deleteSourceAdapter(id);
   if (action === 'edit-source') await editSource(id);
   if (action === 'delete-source') await deleteSource(id);
   if (action === 'research-campaign') await startCampaignResearch(trigger.dataset.campaign || state.selectedCampaign);
@@ -4261,7 +3471,7 @@ function handleKeydown(event) {
   if (event.key === 'Escape') {
     // Ein offener Dialog schliesst sich selbst; Escape darf nicht zusaetzlich
     // das Panel oder den Editor darunter schliessen (Klicktest-Befund P4 V9).
-    if (state.ctx.host.querySelector('.business-dialog-layer')) return;
+    if (state.root.querySelector('.business-dialog-layer')) return;
     // App-Dialoge im [data-app-dialog]: Escape schloss sie nicht (Klicktest P1
     // SIM-04b). Waehrend eines Sellify-Imports bleibt der Dialog offen.
     if (state.sellifyImportOpen) {
@@ -4297,7 +3507,7 @@ function handleKeydown(event) {
     if (leadId && DETAIL_TAB_IDS.includes(tabId)) {
       setActiveDetailTab(tabId);
       renderDetail();
-      queueMicrotask(() => state.ctx.host.querySelector(`[data-action="select-detail-tab"][data-detail-tab="${tabId}"]`)?.focus());
+      queueMicrotask(() => state.root.querySelector(`[data-action="select-detail-tab"][data-detail-tab="${tabId}"]`)?.focus());
     }
     return;
   }
@@ -4349,6 +3559,8 @@ function selectLeadAndRefreshEligibility(id) {
   state.selectedDetailError = '';
   renderCenter();
   renderDetail();
+  const host = state.root;
+  revealDetailIfStacked({ leads: host?.querySelector('.leadgen-leads'), detail: host?.querySelector('.leadgen-detail') });
   void loadSelectedLeadDetails();
 }
 
@@ -4423,26 +3635,29 @@ function laufanzeige(textFuerSekunden) {
   const start = Date.now();
   const zeige = () => {
     state.sellifyImportNotice = textFuerSekunden(Math.floor((Date.now() - start) / 1000));
-    const ziel = state.ctx?.host?.querySelector?.('[data-sellify-import-notice]');
+    const ziel = state.root?.querySelector?.('[data-sellify-import-notice]');
     if (ziel) ziel.textContent = state.sellifyImportNotice;
     else renderLeadEditor();
   };
-  zeige();
-  const timer = setInterval(zeige, 1000);
-  return () => clearInterval(timer);
+  // Sekundenanzeige (UI): selbst nachplanender Timer, endet mit dem Rueckgabe-Aufruf.
+  let timer = 0;
+  const takt = () => { zeige(); timer = setTimeout(takt, 1000); };
+  takt();
+  return () => clearTimeout(timer);
 }
 
+// v4: Rueckmeldungen gehen in die Zustandszone der Shell (api.status.report), nicht in den Inhalt.
 function zeigeHinweis(text, verweildauerMs = 12000) {
-  state.notice = String(text || '');
+  const hinweis = String(text || '');
   if (hinweisTimer) { clearTimeout(hinweisTimer); hinweisTimer = 0; }
-  if (state.notice && verweildauerMs > 0) {
+  if (!hinweis) { state.port?.raeume('hinweis'); return; }
+  state.port?.melde('hinweis', hinweis, 'info');
+  if (verweildauerMs > 0) {
     hinweisTimer = setTimeout(() => {
       hinweisTimer = 0;
-      state.notice = '';
-      renderCenter();
+      state.port?.raeume('hinweis');
     }, verweildauerMs);
   }
-  renderCenter();
 }
 
 function sellifyBekanntOhneAbfrage(lead) {
@@ -4465,7 +3680,7 @@ async function startSelectionResearch(variant = 'followup') {
   // Die Auswahl IST der Umfang. Sie braucht keinen Kampagnenfilter.
   const leads = state.leads.filter((lead) => state.selectedLeadIds.has(lead.id));
   if (!leads.length) {
-    await showBusinessAlert('Bitte mindestens einen Lead auswählen.');
+    await zeigeMeldung('Bitte mindestens einen Lead auswählen.');
     return null;
   }
   const bezeichnung = variant === 'new' ? 'Neurecherche' : 'Nachrecherche';
@@ -4486,7 +3701,7 @@ async function startSelectionResearch(variant = 'followup') {
   if (variant === 'new') {
     const bekannt = leads.filter(sellifyBekanntOhneAbfrage);
     if (bekannt.length) {
-      const umstellen = await showBusinessConfirm(
+      const umstellen = await frageBestaetigung(
         `${bekannt.length} von ${leads.length} ausgewählten Firmen sind bereits in Sellify geführt (aus Sellify importiert). `
         + 'Für sie ist nur eine Nachrecherche möglich.'
         + (bekannt.length < leads.length ? ` Die übrigen ${leads.length - bekannt.length} werden neu recherchiert.` : ''),
@@ -4506,14 +3721,14 @@ async function startSelectionResearch(variant = 'followup') {
       ergebnis = await startScopedResearch(kampagne, nach, {
         scope: 'selection',
         variant: 'followup',
-        title: `Nachrecherche: ${nach.length} ausgewählte Leads`,
+        title: `Nachrecherche: ${anzahl(nach.length, 'ausgewählter Lead', 'ausgewählte Leads')}`,
       });
     }
     if (neu.length) {
       ergebnis = await startScopedResearch(kampagne, neu, {
         scope: 'selection',
         variant,
-        title: `${bezeichnung}: ${neu.length} ausgewählte Leads`,
+        title: `${bezeichnung}: ${anzahl(neu.length, 'ausgewählter Lead', 'ausgewählte Leads')}`,
       }) || ergebnis;
     }
     return ergebnis;
@@ -4593,7 +3808,7 @@ async function resetSelectionResearch() {
   const leads = campaignLeads(campaign)
     .filter((lead) => state.selectedLeadIds.has(lead.id));
   if (!leads.length) {
-    await showBusinessAlert('Bitte mindestens einen Lead auswählen.');
+    await zeigeMeldung('Bitte mindestens einen Lead auswählen.');
     return 0;
   }
   const running = leads.filter((lead) => (
@@ -4601,11 +3816,11 @@ async function resetSelectionResearch() {
     && !staleCampaignParentPlaceholder(lead, state.campaignRuns.get(campaign))
   ));
   if (running.length) {
-    await showBusinessAlert(`Die Ergebnisse können nicht gelöscht werden, solange ${running.length} Recherche-Lauf${running.length === 1 ? '' : 'e'} aktiv ${running.length === 1 ? 'ist' : 'sind'}.`);
+    await zeigeMeldung(`Die Ergebnisse können nicht gelöscht werden, solange ${running.length} Recherche-Lauf${running.length === 1 ? '' : 'e'} aktiv ${running.length === 1 ? 'ist' : 'sind'}.`);
     return 0;
   }
-  const confirmed = await showBusinessConfirm(
-    `Die bisherigen Rechercheergebnisse, Belege und Ansprechpartner von ${leads.length} Lead${leads.length === 1 ? '' : 's'} in „${campaign}“ werden dauerhaft gelöscht. Firmenstammdaten und Kampagnenzuordnung bleiben erhalten.`,
+  const confirmed = await frageBestaetigung(
+    `Ergebnisse, Belege und Ansprechpartner von ${leads.length} Lead${leads.length === 1 ? '' : 's'} in „${campaign}“ werden gelöscht. Stammdaten bleiben.`,
     {
       title: 'Rechercheergebnisse löschen',
       confirmLabel: 'Ergebnisse löschen',
@@ -4618,7 +3833,7 @@ async function resetSelectionResearch() {
   state.campaignRuns.delete(campaign);
   await reload();
   render();
-  await showBusinessAlert(`${leads.length === 1 ? 'Das Rechercheergebnis wurde' : `${leads.length} Rechercheergebnisse wurden`} gelöscht. Die Auswahl bleibt für den Neustart erhalten.`);
+  await zeigeMeldung(`${leads.length === 1 ? 'Das Rechercheergebnis wurde' : `${leads.length} Rechercheergebnisse wurden`} gelöscht. Die Auswahl bleibt für den Neustart erhalten.`);
   return leads.length;
 }
 
@@ -4628,8 +3843,7 @@ async function befehlAmServer(commandId) {
   const id = String(commandId || '').trim();
   if (!id) return false;
   try {
-    const doc = await state.ctx?.db?.collection?.('business_commands')?.findOne(id).exec();
-    const befehl = doc?.toJSON?.() || doc;
+    const befehl = state.port.befehlsDokument(id);
     if (!befehl) return false;
     const phase = String(befehl.replication_phase || '').toLowerCase();
     const status = String(befehl.status || '').toLowerCase();
@@ -4660,7 +3874,7 @@ async function startScopedResearch(campaign, leads, options = {}) {
     if (configuration.reconcile) {
       void queueAdapterReconciliationAfterSourceChange('research_start_requires_current_adapters');
     }
-    showBusinessAlert(configuration.error);
+    zeigeMeldung(configuration.error);
     return null;
   }
   const campaignRun = state.campaignRuns.get(campaign);
@@ -4674,11 +3888,11 @@ async function startScopedResearch(campaign, leads, options = {}) {
   const eligibleLeads = (leads || []).filter((lead) => eligibleIds.has(lead.id));
   const validation = validateCampaignResearchRequest({ campaign, leads: eligibleLeads });
   if (!validation.valid) {
-    showBusinessAlert(validation.error);
+    zeigeMeldung(validation.error);
     return null;
   }
   if (options.scope === 'campaign' && state.campaignRuns.get(campaign)?.status === 'running') {
-    showBusinessAlert(tr('campaignAlreadyRunning', 'Für diese Kampagne läuft bereits eine Recherche.'));
+    zeigeMeldung(tr('campaignAlreadyRunning', 'Für diese Kampagne läuft bereits eine Recherche.')); // v4-allow: label
     return null;
   }
 
@@ -4704,6 +3918,9 @@ async function startScopedResearch(campaign, leads, options = {}) {
   // frueher hier erzeugte Orchestrator-Chat mit Riesen-Prompt entfaellt.
   const queued = [];
   const failed = [];
+  // Strang SKL-C: researchLead sammelt je Lead den Auftrag (Sellify-Vorabgleich bleibt je Lead im Browser);
+  // aufgefaechert wird im Handler outbound.campaign.research, je Lead ein Agenten-Task mit idempotency_key.
+  const gesammelt = [];
   // Owner-Befund 04.09.2026: "wenn ich auf Auswahl Recherchieren klicke,
   // passiert absolut gar nichts". Die Laeufe starteten sehr wohl - aber ohne
   // Chatfenster und ohne Hinweis war das nicht zu sehen. Der erste Lauf oeffnet
@@ -4731,6 +3948,7 @@ async function startScopedResearch(campaign, leads, options = {}) {
         // Dialog - bei 19 Firmen 19 Dialoge hintereinander. Die Gruende
         // sammelt der Lauf und nennt sie einmal am Ende.
         suppressAlerts: true,
+        collect: gesammelt,
       });
       const gestartet = (ergebnis) => ergebnis && ['queued', 'running', 'submitting'].includes(ergebnis.status);
       if (!gestartet(outcome) && istUnbestaetigt(outcome?.error || outcome?.status)) {
@@ -4795,6 +4013,35 @@ async function startScopedResearch(campaign, leads, options = {}) {
     }
   };
   await Promise.all(Array.from({ length: Math.min(3, eligibleLeads.length) }, arbeiter));
+  if (gesammelt.length) {
+    const gesammeltIds = new Set(gesammelt.map((eintrag) => eintrag.lead_id));
+    const ohneSammlung = queued.filter((eintrag) => !gesammeltIds.has(eintrag.id));
+    queued.length = 0;
+    queued.push(...ohneSammlung);
+    const geteilt = {};
+    for (const key of ['fields', 'field_labels', 'custom_fields', 'custom_fields_note', 'field_labels_note', 'include_private',
+      'person_priorities', 'research_instructions', 'research_instructions_variant', 'research_instructions_default',
+      'source_policy', 'auto_browser_capture', 'writeback_contract']) {
+      if (gesammelt[0].payload?.[key] !== undefined) geteilt[key] = gesammelt[0].payload[key];
+    }
+    const leadsFuerAuftrag = gesammelt.map((eintrag) => ({
+      lead_id: eintrag.lead_id,
+      payload: Object.fromEntries(Object.entries(eintrag.payload || {}).filter(([key, wert]) => !(key in geteilt) || JSON.stringify(wert) !== JSON.stringify(geteilt[key]))),
+    }));
+    try {
+      const antwort = await state.port.befehl({
+        command_type: 'outbound.campaign.research',
+        id: runId,
+        record_id: `campaign:${campaign}`,
+        payload: { campaign, run_id: runId, scope: options.scope || 'campaign', shared: geteilt, leads: leadsFuerAuftrag },
+      }, { ergebnis: true });
+      if (!antwort.ok) throw new Error(antwort.error || 'Kampagnenauftrag abgelehnt');
+      for (const eintrag of antwort.result?.queued || []) queued.push({ id: eintrag.lead_id, commandId: eintrag.command_id || runId });
+      for (const eintrag of antwort.result?.failed || []) failed.push({ id: eintrag.lead_id, error: eintrag.error });
+    } catch (error) {
+      for (const eintrag of gesammelt) failed.push({ id: eintrag.lead_id, error: String(error?.message || error) });
+    }
+  }
   if (!queued.length) {
     const message = failed.length
       ? `Kein Lead konnte gestartet werden (${failed.length} Fehler): ${failed.slice(0, 3).map((entry) => entry.error).join(' \u00b7 ')}`
@@ -4802,13 +4049,13 @@ async function startScopedResearch(campaign, leads, options = {}) {
     zeigeHinweis(message);
     Object.assign(run, { status: 'failed', finishedAtMs: Date.now(), error: message });
     renderCenter();
-    showBusinessAlert(message);
+    zeigeMeldung(message);
     return null;
   }
   if (failed.length) {
     const gruende = [...new Set(failed.map((eintrag) => String(eintrag.error || '').trim()).filter(Boolean))];
     zeigeHinweis(`${queued.length} gestartet, ${failed.length} nicht gestartet.`, 30000);
-    await showBusinessAlert(
+    await zeigeMeldung(
       `${queued.length} Recherche${queued.length === 1 ? '' : 'n'} gestartet. `
       + `${failed.length} Lead${failed.length === 1 ? '' : 's'} wurde${failed.length === 1 ? '' : 'n'} nicht gestartet:\n\n`
       + gruende.slice(0, 5).map((grund) => `\u2022 ${grund}`).join('\n')
@@ -4847,7 +4094,7 @@ async function startScopedResearch(campaign, leads, options = {}) {
   renderCenter();
   try {
     await Promise.all(gestarteteLeads.map(async (lead) => {
-      const doc = await state.collections.leads.findOne(lead.id).exec();
+      const doc = await state.collections.leads.eins(lead.id);
       const current = doc?.toJSON?.() || aktuellerStand(lead);
       return patchCampaignQueuedLeadIfCurrent(
         lead.id,
@@ -4891,7 +4138,7 @@ async function researchConfigurationReadiness() {
     // Abgleich im Hintergrund anstossen, aber den Lauf nicht aufhalten.
     void queueAdapterReconciliationAfterSourceChange('research_start_refreshes_adapters');
   }
-  return { ready: true, reconcile: false, error: '', note: digestChanged ? 'Adapter werden im Hintergrund abgeglichen.' : '' };
+  return { ready: true, reconcile: false, error: '', note: digestChanged ? 'Adapter werden im Hintergrund abgeglichen.' : '' }; // v4-allow: label
 }
 
 // `lead` muss der AKTUELLE Stand sein: researchLead hat den Lead beim Start
@@ -4928,7 +4175,7 @@ function campaignQueuedLeadPatch(lead, submission, runId, queuedAtMs = Date.now(
 // leeren Daten ueberschreiben. Innerhalb desselben Kampagnenlaufs gewinnt daher
 // immer ein bereits beobachteter Child-Command gegen den Parent-Platzhalter.
 async function patchCampaignQueuedLeadIfCurrent(id, patch) {
-  const doc = await state.collections.leads.findOne(id).exec();
+  const doc = await state.collections.leads.eins(id);
   if (!doc) return false;
   const current = doc.toJSON?.() || doc;
   const currentRunId = String(current?.payload?.campaign_run_id || '').trim();
@@ -4983,7 +4230,7 @@ function campaignTaskStatus(command) {
 function campaignResearchCommandForCampaign(campaign, commands = []) {
   const recordId = `campaign:${String(campaign || '').trim()}`;
   return commands
-    .filter((command) => command?.command_type === 'business_os.chat.task')
+    .filter((command) => command?.command_type === 'outbound.campaign.research')
     .filter((command) => String(command?.source_module || command?.module || '').trim() === 'outbound-lead-generation')
     .filter((command) => String(command?.record_id || '').trim() === recordId)
     .sort((left, right) => Number(
@@ -5028,7 +4275,7 @@ function terminalCampaignQueuedLeadPatch(lead, command, nowMs = Date.now()) {
     research_status: 'failed',
     task_id: '',
     command_id: '',
-    research_error: 'Der Kampagnen-Task ist beendet, bevor für diesen Lead ein Recherche-Command gestartet wurde. Der Lead kann erneut eingeplant werden.',
+    research_error: 'Kampagnenlauf endete vor dem Start dieser Recherche – Lead erneut einplanen.',
     research_updated_at_ms: nowMs,
     payload: {
       ...(lead?.payload || {}),
@@ -5042,7 +4289,6 @@ function terminalCampaignQueuedLeadPatch(lead, command, nowMs = Date.now()) {
 
 async function reconcileCampaignResearchRuns({ authoritative = false } = {}) {
   // Background reconciliation writes leads; never on the startup snapshot.
-  if (state.nurZwischenstand) return false;
   if (state.reconcilingCampaignRuns) return false;
   const campaigns = campaignRows().map((campaign) => campaign.name).filter(Boolean);
   if (!campaigns.length) return false;
@@ -5119,116 +4365,8 @@ function validateCampaignResearchRequest({ campaign, leads }) {
   return { valid: true, error: '' };
 }
 
-function campaignResearchPrompt(campaign, leads, runId, options = {}) {
-  const leadList = leads.map((lead, index) => `${index + 1}. ${lead.name} [${lead.id}]`).join('\n');
-  const includePrivate = enabledPrivateResearchSources();
-  return [
-    'Nutze den CTOX Skill outbound-lead-generation-research und den CTOX Web Stack.',
-    '',
-    `Kampagne: ${campaign}`,
-    `Umfang: ${options.scope === 'selection' ? `Auswahl mit ${leads.length} Leads` : `gesamte Kampagne mit ${leads.length} Leads`}`,
-    `Workflow-ID: ${runId}`,
-    `Leads: ${leads.length}`,
-    '',
-    'Aufgabe:',
-    'Du bist der alleinige dauerhafte Orchestrator dieser Kampagnenrecherche. Die Ausführung darf nicht von einem geöffneten Browser-Tab abhängen.',
-    'Verbindlicher Rechercheablauf:',
-    state.researchPolicy,
-    '',
-    '--- RECHERCHEABLAUF (verbindlich fuer jeden Lead) ---',
-    researchPolicyInstructions(state.researchPolicyRecord) || state.researchPolicy || DEFAULT_RESEARCH_POLICY,
-    '--- ENDE RECHERCHEABLAUF ---',
-    'Arbeite in zwei dauerhaften Phasen. Phase 1: Lies die Datensätze über business_os.query_records aus outbound_lead_generation_leads und starte für JEDEN Lead exakt eine business_os.execute_action mit module_id outbound-lead-generation, action_id web_stack.person_research und der jeweiligen Lead-ID sowohl als record_id als auch als payload.operation_id. Sende zuerst alle Actions ab; warte zwischen den Starts nicht auf deren terminalen Abschluss. Jeder angenommene Child-Command ist selbst dauerhaft und darf parallel oder durch den nativen Worker seriell abgearbeitet werden.',
-    `Der Payload ist strikt: {"operation_id":"<Lead-ID>","company":"<Lead-Name>","country":"DE|AT|CH","mode":"new_record|update_firm","fields":${JSON.stringify(activeResearchFields())},"include_private":${JSON.stringify(includePrivate)},"person_priorities":${JSON.stringify(PERSON_RESEARCH_PRIORITIES)},"auto_browser_capture":true}. Verwende company, niemals company_name. Sende keine Felder research_scope, min_independent_sources oder campaign im Recherche-Payload.`,
-    'Phase 2 beginnt erst, wenn für alle Lead-IDs ein Child-Command angenommen oder bereits terminal zurückgegeben wurde. Prüfe dann jeden Child-Command über business_os.get_command_status bis completed, failed, blocked oder cancelled. Ein anfänglicher running-Status ist ausdrücklich kein Erfolg. Beende oder berichte den Kampagnenlauf niemals nach einer bloßen Teilmenge; nenne offen jede noch nicht angenommene Operation. Der native Recherchebefehl schreibt den typisierten Lead-Zustand selbst zurück; prüfe ihn danach über business_os.get_record. Verwende keinen direkten Upsert.',
-    '',
-    'Validierungsregeln:',
-    '- Für jedes Feld genügt EINE passende belegte Quelle (URL + wörtliches Zitat, das den konkreten Wert nennt). Weitere unabhängige Quellen stärken den Wert, sind aber keine Pflicht. Sellify allein belegt nichts; eine Spanne belegt keinen Einzelwert.',
-    `- Selbstauskünfte (${[...SELF_REPORTED_FIELDS].join(', ')}) belegst du von der Unternehmensseite bzw. dem Profil selbst und trägst den Wert ein, statt ihn zu verwerfen. Eine persönliche E-Mail, die genau so auf der offiziellen Unternehmensseite steht, ist belegt, auch ohne SMTP-Prüfung.`,
-    '- Widersprechen sich Quellen, das Feld NICHT still auflösen: action_required mit beiden Werten und ihren Quellen.',
-    '- Einen gefundenen Wert nie stillschweigend fallen lassen: jeder Beleg wird erfasst, auch wenn er allein steht.',
-    '- Listen als reine JSON-Listen senden: "sources": [ {…} ]. Niemals ein Trägerobjekt wie {"item": [ … ]} — solche Belege gehen verloren.',
-    '- Nutze konfigurierte Playwright-Adapter; bei Zugriffshürden den Web-Stack-Unlocking- und Browser-Anmeldeprozess.',
-    '- Terminal, Shell, curl, direkte HTTP-Aufrufe oder eigene Browserautomation sind kein Ersatz für business_os.execute_action.',
-    '- Keine stillen Fehler: Fehler je Lead protokollieren und mit dem nächsten Lead fortfahren.',
-    '- Setze je Lead queued -> running -> completed, needs_review oder failed und erhalte campaign_run_id sowie alle bestehenden Felder.',
-    '- Keine direkte Übergabe an Sellify und keine SQL-Schreiboperation in diesem Lauf.',
-    '- Ergebnisse ausschließlich in den zugehörigen outbound_lead_generation_leads zurückschreiben.',
-    '',
-    'Lead-Liste:',
-    leadList,
-  ].join('\n');
-}
-
-async function openCampaignResearchChat({
-  campaign,
-  leads,
-  runId,
-  prompt,
-  title: requestedTitle = '',
-  scope = 'campaign',
-  submitTask = state.ctx?.businessChat?.submitTask,
-}) {
-  const validation = validateCampaignResearchRequest({ campaign, leads });
-  if (!validation.valid) throw new Error(validation.error);
-  if (!String(prompt || '').trim() || !String(runId || '').trim()) {
-    throw new Error(tr('campaignTaskInvalid', 'Der Recherche-Task ist unvollständig und wurde nicht gestartet.'));
-  }
-  if (typeof submitTask !== 'function') {
-    throw new Error(tr('chatUnavailable', 'CTOX Chat ist nicht verfügbar. Die Recherche wurde nicht gestartet.'));
-  }
-  const title = String(requestedTitle || `${tr('campaignResearchTitle', 'Kampagnenrecherche')}: ${campaign}`).trim();
-  const detail = {
-    text: prompt,
-    module: 'outbound-lead-generation',
-    source_module: 'outbound-lead-generation',
-    source_title: tr('title', 'Outbound Lead Generation'),
-    action: 'context-chat',
-    reuseActive: false,
-    open: true,
-    command_id: runId,
-    command_type: 'business_os.chat.task',
-    record_id: `campaign:${campaign}`,
-    title,
-    command_title: title,
-    instruction: prompt,
-    mode: 'data',
-    target: 'data',
-    required_skills: ['outbound-lead-generation-research', 'universal-scraping', 'web-unlock'],
-    writeback_contract: {
-      collection: 'outbound_lead_generation_leads',
-      allowed_collections: ['outbound_lead_generation_leads'],
-      command_type: 'web_stack.person_research',
-      record_ids: leads.map((lead) => lead.id),
-      allowed_actions: [{
-        module_id: 'outbound-lead-generation',
-        action_id: 'web_stack.person_research',
-        operation_ids: leads.map((lead) => lead.id),
-      }],
-      min_independent_sources: 1,
-    },
-    payload: {
-      campaign,
-      scope,
-      lead_ids: leads.map((lead) => lead.id),
-      lead_count: leads.length,
-      prompt,
-      response_channel: 'business_os_chat',
-      thread_key: `business-os/outbound-lead-generation/campaign/${runId}`,
-    },
-    client_context: {
-      action: 'context-chat',
-      source: 'outbound-lead-generation-campaign-research',
-      module: 'outbound-lead-generation',
-      campaign,
-      scope,
-      workflow_id: runId,
-      response_channel: 'business_os_chat',
-    },
-  };
-  const submission = requireTrackedSubmission(await submitTask(detail));
-  return { ...submission, detail };
-}
+// campaignResearchPrompt/openCampaignResearchChat (Agent als Kampagnen-Planer per MCP) entfielen mit Strang SKL-C:
+// der Handler outbound.campaign.research faechert je Lead auf (handlers/_lib/lead-research.js).
 
 function requireTrackedSubmission(submission, { allowTerminalCommand = false, allowControlCommand = false } = {}) {
   const taskId = String(submission?.task_id || submission?.taskId || '').trim();
@@ -5572,37 +4710,12 @@ function freitextBestaetigungAusstehend(error) {
   return /R(ü|ue)ckmeldung steht (noch )?aus|nicht rechtzeitig|nicht best(ä|ae)tigt|timed? ?out|Zeit(ü|ue)berschreitung/i.test(String(error?.message || error || ''));
 }
 
-function freitextPruefungPrompt() {
-  return [
-    'Werte die Freitextvermerke aus dem CRM Sellify semantisch aus: Darf das Unternehmen bzw. die Person angeschrieben werden (Serienbrief, E-Mail, Anruf)?',
-    'Urteile nach dem Sinn des Vermerks, nicht nach Stichworten. Vermerke sind oft Gesprächsnotizen mit Datum; der jüngste Stand zählt.',
-    '- "gesperrt": Der Vermerk besagt, dass nicht (mehr) angeschrieben oder kontaktiert werden soll, oder dass die Person nicht mehr erreichbar bzw. nicht mehr im Unternehmen ist (ausgeschieden, Ruhestand, verstorben).',
-    '- "pruefen": Der Vermerk wirft eine Frage auf, die ein Mensch vor der Ansprache klären sollte (z. B. angekündigter Wechsel oder Nachfolge, unklare Zuständigkeit, widersprüchliche Angaben).',
-    '- "frei": Der Vermerk enthält nichts, was gegen eine Ansprache spricht.',
-    '"firma" gilt für das ganze Unternehmen und für Kontakte ohne eigenes Urteil. Setze "firma" nur auf "gesperrt", wenn der Vermerk das ganze Unternehmen betrifft; betrifft er nur eine Person, bewerte diese Person.',
-    '"personen": ein Urteil für JEDE aufgeführte person_id, auch ohne eigenen Vermerk (dann das, was der Firmenvermerk für diese Person bedeutet).',
-    '"namen": optional, für Personen, die ein Vermerk namentlich nennt, die aber keine person_id haben (z. B. ein genannter Nachfolger), Schlüssel "Vorname Nachname".',
-    'Zu jedem Urteil außer "frei" gehören "grund" (kurz, deutsch) und "zitat" (die wörtliche Stelle aus dem Vermerk).',
-    // Der Harness verlangt fuer Queue-Auftraege einen Plan: "keine Werkzeuge"
-    // liess ihn bei 0/1 Schritten stehen, die Finalisierung scheiterte und der
-    // Auftrag startete endlos neu (6 Auftraege, bis 135 Versuche, 28.09.2026).
-    // Als Auftragsbestandteil formuliert pruefte der Reviewer den Plan aber in
-    // fremden Tabellen (planned_steps), fand nichts und verwarf 60 richtige
-    // Urteile (30.09.2026). Deshalb als Ablaufhinweis, nicht als Ergebnis.
-    'Ablaufhinweis, kein Teil des Ergebnisses: Führe den vom System verlangten Plan mit genau einem Schritt „Vermerke beurteilen“ und setze ihn auf erledigt, bevor du antwortest. Sonst benutze keine Werkzeuge, recherchiere nicht und ändere keine Datensätze.',
-    'Das Ergebnis ist ausschließlich genau ein JSON-Block in diesem Format; geprüft wird nur, ob die Urteile zu den Vermerken passen:',
-    '```json',
-    '{"leads":{"<lead_id>":{"firma":{"status":"frei|pruefen|gesperrt","grund":"","zitat":""},"personen":{"<person_id>":{"status":"frei|pruefen|gesperrt","grund":"","zitat":""}},"namen":{}}}}',
-    '```',
-    '',
-    'Die Leads mit ihren Vermerken stehen vollständig unten im Payload JSON unter "freitext_leads". Urteile genau über diese Leads.',
-  ].join('\n');
-}
+// Prompt der Vermerkpruefung: prompts/sellify-remarks.md (Handler outbound.sellify.remarks.check, Strang SKL-C).
 
 async function sendeFreitextPruefung() {
   state.freitextPlan = null;
-  const submitTask = state.ctx?.businessChat?.submitTask;
-  if (typeof submitTask !== 'function' || state.freitextSendet) return 0;
+  const sendeBefehl = state.port?.befehl;
+  if (typeof sendeBefehl !== 'function' || state.freitextSendet) return 0;
   const bedarf = [...(state.freitextBedarf?.values?.() || [])];
   state.freitextBedarf?.clear?.();
   const offen = bedarf.filter((eintrag) => {
@@ -5626,47 +4739,25 @@ async function sendeFreitextPruefung() {
   try {
     for (const [index, teil] of pakete.entries()) {
       const commandId = `leadgen-sperrvermerk-${crypto.randomUUID()}`;
-      const prompt = freitextPruefungPrompt();
       const title = teil.length === 1 ? `Sellify-Vermerk prüfen: ${teil[0].name}` : `Sellify-Vermerke prüfen: ${teil.length} Leads`;
       try {
-        requireTrackedSubmission(await mitKanalHeilung(() => submitTask({
-          text: prompt,
-          module: 'outbound-lead-generation',
-          source_module: 'outbound-lead-generation',
-          source_title: tr('title', 'Outbound Lead Generation'),
-          action: 'context-chat',
-          reuseActive: false,
-          open: false,
-          command_id: commandId,
-          command_type: 'business_os.chat.task',
-          // Nie die Lead-ID: der Server projiziert einen Befehl mit
-          // record_id=Lead als Recherche-Auftrag auf den Lead (command_id,
-          // research_status "queued"), und "Alle recherchieren" uebersprang
-          // den Lead danach als laufend (30.09.2026: 3 Kundenleads).
+        // Strang SKL-C: eigener Befehl statt Chat-Auftrag; der Handler legt den Agenten-Task an, schreibt den
+        // Pruefvermerk (mit Task-ID) und wertet die Antwort im Rueckruf aus (outbound.sellify.remarks.complete).
+        // Nie die Lead-ID als record_id (30.09.2026: der Server projizierte sie als Recherche-Auftrag).
+        await mitKanalHeilung(() => sendeBefehl({
+          command_type: 'outbound.sellify.remarks.check',
+          id: commandId,
           record_id: `sperrvermerk:${commandId}`,
-          title,
-          command_title: title,
-          instruction: prompt,
-          prompt,
-          mode: 'chat',
-          target: 'chat',
-          priority: FREITEXT_PRIORITAET,
-          required_skills: [],
           payload: {
-            prompt,
-            lead_ids: teil.map((eintrag) => eintrag.leadId),
-            freitext_leads: teil.map(freitextLeadDaten),
-            priority: FREITEXT_PRIORITAET,
-            response_channel: 'business_os_chat',
-            thread_key: `business-os/outbound-lead-generation/sperrvermerk/${commandId}`,
+            title,
+            entries: teil.map((eintrag) => ({
+              lead_id: eintrag.leadId,
+              signatur: eintrag.signatur,
+              pruefpersonen: eintrag.texte.personen.map((person) => person.person_id),
+              lead_data: freitextLeadDaten(eintrag),
+            })),
           },
-          client_context: {
-            action: 'context-chat',
-            source: 'outbound-lead-generation-sperrvermerk',
-            module: 'outbound-lead-generation',
-            response_channel: 'business_os_chat',
-          },
-        }), 'sellify-vermerkpruefung'));
+        }), 'sellify-vermerkpruefung');
       } catch (error) {
         // Der Befehl liegt schon dauerhaft in der lokalen Datenbank und wird
         // nachgereicht; nur die Bestaetigung kam zu spaet. Ohne Vermerk am
@@ -5686,11 +4777,12 @@ async function sendeFreitextPruefung() {
         }
       }
       gesendet += teil.length;
+      // Den Pruefvermerk schreibt der Handler (mit Task-ID); lokal nur vormerken, damit bis zur Live-Aktualisierung
+      // kein zweiter Auftrag fuer dieselbe Lage entsteht.
       for (const eintrag of teil) {
+        const lead = state.leads.find((entry) => entry.id === eintrag.leadId);
         const pruefpersonen = eintrag.texte.personen.map((person) => person.person_id);
-        await patchLead(eintrag.leadId, {
-          payload: { sellify_freitext_pruefung: { command_id: commandId, signatur: eintrag.signatur, at_ms: Date.now(), pruefpersonen } },
-        }, { payloadMerge: true }).catch((error) => console.warn('[outbound-lead-generation] Prüfauftrag nicht am Lead vermerkt', error));
+        if (lead) lead.payload = { ...(lead.payload || {}), sellify_freitext_pruefung: { command_id: commandId, signatur: eintrag.signatur, at_ms: Date.now(), pruefpersonen } };
       }
     }
   } finally {
@@ -5710,140 +4802,9 @@ async function sendeFreitextPruefung() {
   return gesendet;
 }
 
-function freitextAntwortText(befehl) {
-  return [befehl?.answer, befehl?.response, befehl?.result?.outbound_text, befehl?.outbound_text]
-    .find((text) => typeof text === 'string' && text.includes('{')) || '';
-}
-
-function leseFreitextAntwort(text) {
-  const quelle = String(text || '');
-  const kandidaten = [...quelle.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)].map((treffer) => treffer[1]).reverse();
-  const anfang = quelle.indexOf('{');
-  const ende = quelle.lastIndexOf('}');
-  if (anfang >= 0 && ende > anfang) kandidaten.push(quelle.slice(anfang, ende + 1));
-  for (const kandidat of kandidaten) {
-    // Das erste vollstaendige Objekt zaehlt: eine ueberzaehlige schliessende
-    // Klammer am Ende verwarf sonst die ganze Antwort als "ohne vollstaendiges
-    // Urteil" (leadgen-sperrvermerk-9365bf16…, 29.09.2026).
-    for (const text of [kandidat, ersterJsonBlock(kandidat)]) {
-      if (!text) continue;
-      try {
-        const wert = JSON.parse(text);
-        if (wert?.leads && typeof wert.leads === 'object') return wert.leads;
-      } catch { /* naechster Versuch */ }
-    }
-  }
-  return null;
-}
-
-function ersterJsonBlock(text) {
-  const quelle = String(text || '');
-  const anfang = quelle.indexOf('{');
-  if (anfang < 0) return '';
-  let tiefe = 0;
-  let inText = false;
-  for (let index = anfang; index < quelle.length; index += 1) {
-    const zeichen = quelle[index];
-    if (inText) {
-      if (zeichen === '\\') index += 1;
-      else if (zeichen === '"') inText = false;
-    } else if (zeichen === '"') {
-      inText = true;
-    } else if (zeichen === '{') {
-      tiefe += 1;
-    } else if (zeichen === '}') {
-      tiefe -= 1;
-      if (tiefe === 0) return quelle.slice(anfang, index + 1);
-    }
-  }
-  return '';
-}
-
-function freitextEintrag(roh) {
-  const status = String(roh?.status || '').trim().toLowerCase().replace('prüfen', 'pruefen');
-  if (!FREITEXT_STATUS[status]) return null;
-  return { status, grund: String(roh?.grund || '').trim().slice(0, 300), zitat: String(roh?.zitat || '').trim().slice(0, 600) };
-}
-
-// Ein Urteil gilt nur vollstaendig: Firma und jede geprüfte Person. Fehlt eine
-// Person, faellt sie nicht still auf das Firmenurteil zurueck.
-function baueFreitextUrteil(roh, pruefung, commandId) {
-  const firma = freitextEintrag(roh?.firma);
-  if (!firma) return null;
-  const personen = {};
-  for (const personId of pruefung?.pruefpersonen || []) {
-    const eintrag = freitextEintrag(roh?.personen?.[personId] ?? roh?.personen?.[String(personId)]);
-    if (!eintrag) return null;
-    personen[personId] = eintrag;
-  }
-  const namen = {};
-  for (const [name, wert] of Object.entries(roh?.namen || {})) {
-    const eintrag = freitextEintrag(wert);
-    const schluessel = normalizeProtectionText(name);
-    if (eintrag && schluessel.split(' ').length >= 2) namen[schluessel] = eintrag;
-  }
-  return { version: FREITEXT_URTEIL_VERSION, signatur: pruefung.signatur, command_id: commandId, geprueft_at_ms: Date.now(), firma, personen, namen };
-}
-
-async function verarbeiteFreitextAntworten() {
-  if (state.nurZwischenstand) return;
-  if (state.freitextVerarbeitung) return;
-  const collection = state.ctx?.db?.collection?.('business_commands');
-  if (!collection?.findOne) return;
-  state.freitextVerarbeitung = true;
-  const geaendert = [];
-  try {
-    const nachBefehl = new Map();
-    for (const lead of state.leads) {
-      const pruefung = lead?.payload?.sellify_freitext_pruefung;
-      if (!pruefung?.command_id || pruefung.fehler) continue;
-      if (freitextUrteil(lead, pruefung.signatur)) continue;
-      if (!nachBefehl.has(pruefung.command_id)) nachBefehl.set(pruefung.command_id, []);
-      nachBefehl.get(pruefung.command_id).push(lead);
-    }
-    // Eine Abfrage je 50 Befehle: jede Einzelabfrage dauerte am Kunden-Knoten
-    // 9-16 s, ein Durchgang ueber 60 Pruefauftraege also ~10 min, und fertige
-    // Urteile kamen stundenlang nicht am Lead an (29.09.2026).
-    const befehle = new Map();
-    const ids = [...nachBefehl.keys()];
-    for (let start = 0; start < ids.length; start += 50) {
-      const teil = ids.slice(start, start + 50);
-      try {
-        const docs = typeof collection.find === 'function'
-          ? await collection.find({ selector: { id: { $in: teil } }, limit: teil.length }).exec()
-          : await Promise.all(teil.map((id) => collection.findOne(id).exec()));
-        for (const doc of docs || []) {
-          const befehl = doc?.toJSON?.() || doc;
-          if (befehl?.id) befehle.set(befehl.id, befehl);
-        }
-      } catch { /* naechster Takt versucht es erneut */ }
-    }
-    for (const [commandId, leads] of nachBefehl) {
-      const befehl = befehle.get(commandId) || null;
-      if (!befehl) continue;
-      const status = String(befehl?.terminal_status || befehl?.status || '').toLowerCase();
-      const fehlschlag = ['failed', 'blocked', 'cancelled', 'canceled'].includes(status);
-      if (!fehlschlag && status !== 'completed') continue;
-      const antwort = fehlschlag ? null : leseFreitextAntwort(freitextAntwortText(befehl));
-      for (const lead of leads) {
-        const pruefung = lead.payload.sellify_freitext_pruefung;
-        const urteil = antwort ? baueFreitextUrteil(antwort[lead.id], pruefung, commandId) : null;
-        const patch = urteil
-          ? { sellify_freitext_urteil: urteil }
-          : { sellify_freitext_pruefung: { ...pruefung, at_ms: Date.now(), fehler: fehlschlag ? (befehl?.error_message || status) : 'Antwort ohne vollständiges Urteil' } };
-        await patchLead(lead.id, { payload: patch }, { payloadMerge: true }).catch((error) => console.warn('[outbound-lead-generation] Vermerk-Urteil nicht gespeichert', error));
-        geaendert.push(lead.id);
-      }
-    }
-  } finally {
-    state.freitextVerarbeitung = false;
-  }
-  if (!geaendert.length) return;
-  for (const leadId of geaendert) state.recipientEligibilityReady.delete(leadId);
-  const offen = state.leads.find((lead) => lead.id === state.selectedLeadId && geaendert.includes(lead.id));
-  if (offen) void refreshLeadRecipientEligibility(offen, { force: true }).catch(() => {});
-  renderCenter();
-}
+// Antwortauswertung der Vermerkpruefung (frueher freitextAntwortText/leseFreitextAntwort/baueFreitextUrteil/
+// verarbeiteFreitextAntworten im Browser nach Status-Polling) liegt im Handler outbound.sellify.remarks.complete
+// (handlers/_lib/sellify-remarks.js). Die UI liest nur das Urteil am Lead (payload.sellify_freitext_urteil).
 
 // Kampagnenweit: Sellify-Kontext je Lead laden und fehlende Urteile beim
 // CTOX-Agenten anfordern. Seriell, damit die Sellify-Abfragen die App nicht
@@ -5878,13 +4839,13 @@ async function pruefeKampagnenVermerke(campaign) {
     renderCenter();
   }
   console.info('[outbound-lead-generation] Vermerkprüfung', campaign, JSON.stringify({ ...zaehler, gesendet }));
-  await showBusinessAlert([
-    `Sellify-Vermerke in „${campaign}“: ${leads.length} Leads.`,
+  await zeigeMeldung([
+    `Sellify-Vermerke in „${campaign}“: ${anzahl(leads.length, 'Lead', 'Leads')}.`,
     `${zaehler.ohne} ohne Freitextvermerk, ${zaehler.geprueft} bereits vom CTOX-Agenten beurteilt, ${zaehler.offen} mit Vermerk ohne Urteil.`,
     gesendet ? `${gesendet} davon an den CTOX-Agenten übergeben; die Urteile erscheinen, sobald er antwortet.`
       : (zaehler.offen && state.freitextLetzterFehler ? `Übergabe an den CTOX-Agenten fehlgeschlagen: ${state.freitextLetzterFehler}`
         : (zaehler.offen ? 'Die offenen Vermerke sind bereits beim CTOX-Agenten in Prüfung.' : '')),
-    zaehler.fehler ? `${zaehler.fehler} Leads konnten nicht geprüft werden (Sellify-Kontext nicht geladen); bitte erneut starten.` : '',
+    zaehler.fehler ? `${zaehler.fehler} Leads konnten nicht geprüft werden (Sellify-Kontext fehlte); bitte erneut starten.` : '',
   ].filter(Boolean).join('\n'));
 }
 
@@ -5898,7 +4859,7 @@ function currentContactEligibility(lead, contact) {
   const cached = state.recipientEligibility.get(recipientEligibilityKey(lead?.id, contact?.id));
   if (cached) return cached;
   return {
-    ...personEligibilityDecision('review', { label: 'Sellify-Sperrvermerk wird geprüft' }, '', '', ''),
+    ...personEligibilityDecision('review', { label: 'Sellify-Sperrvermerk wird geprüft' }, '', '', ''), // v4-allow: label
     pending: true,
   };
 }
@@ -5989,9 +4950,8 @@ function persistRecipientEligibility(lead, decisions) {
     at: Date.now(),
     decisions: [...decisions.entries()],
   };
-  try {
-    globalThis.localStorage?.setItem(recipientEligibilityStorageKey(lead.id), JSON.stringify(record));
-  } catch { /* Ein voller oder gesperrter Speicher darf die Pruefung nicht kippen. */ }
+  // v4: Zwischenspeicher je Montage statt Browserspeicher; das geteilte Urteil steht am Lead.
+  (state.empfaengerUrteile ||= new Map()).set(recipientEligibilityStorageKey(lead.id), record);
   const shared = lead?.recipient_eligibility;
   // Nicht bei jeder Pruefung schreiben: nur wenn sich die Kontakte geaendert
   // haben oder das gemeinsame Urteil aelter als eine Stunde ist.
@@ -6005,10 +4965,8 @@ function persistRecipientEligibility(lead, decisions) {
 function restoreRecipientEligibility(lead, signature, { maxAgeMs = RECIPIENT_ELIGIBILITY_CACHE_MS } = {}) {
   const hash = recipientSignatureHash(signature);
   const candidates = [];
-  try {
-    const raw = globalThis.localStorage?.getItem(recipientEligibilityStorageKey(lead.id));
-    if (raw) candidates.push(JSON.parse(raw));
-  } catch { /* Browserspeicher nicht lesbar: dann gilt das Urteil am Lead. */ }
+  const gemerkt = state.empfaengerUrteile?.get(recipientEligibilityStorageKey(lead.id));
+  if (gemerkt) candidates.push(gemerkt);
   if (lead?.recipient_eligibility) candidates.push(lead.recipient_eligibility);
   // Vorlaeufige Urteile („wird geprueft“, „nicht pruefbar“) sind kein Stand,
   // den man wiederherstellt: sie hielten nach jedem Neuladen ein Etikett fest,
@@ -6027,9 +4985,7 @@ function restoreRecipientEligibility(lead, signature, { maxAgeMs = RECIPIENT_ELI
   return true;
 }
 function forgetRecipientEligibility(leadIds) {
-  try {
-    for (const leadId of leadIds) globalThis.localStorage?.removeItem(recipientEligibilityStorageKey(leadId));
-  } catch { /* nichts zu tun */ }
+  for (const leadId of leadIds) state.empfaengerUrteile?.delete(recipientEligibilityStorageKey(leadId));
 }
 function invalidateChangedRecipientEligibility(leads) {
   const liveLeadIds = new Set((leads || []).map((lead) => lead.id));
@@ -6066,8 +5022,8 @@ function uniqueSellifyRecords(records) {
 }
 
 async function findSellifyRecords(collection, selector) {
-  if (!collection?.find) return [];
-  const docs = await collection.find({ selector }).exec();
+  if (!collection?.alle) return [];
+  const docs = await collection.alle({ selector });
   return (docs || []).map(docJson).filter((record) => !record?.is_deleted);
 }
 
@@ -6080,7 +5036,7 @@ async function loadSellifyRecipientContext(lead) {
   // deaktiviert, und damit endete die Kette vor der Uebergabe. Das System hat
   // dabei richtig gehandelt — ohne Pruefung der Kontaktsperre darf niemand
   // angeschrieben werden; es konnte nur nicht pruefen.
-  if (!state.sellifyPeople?.find || !state.sellifyCompanies?.find) {
+  if (!state.sellifyPeople?.alle || !state.sellifyCompanies?.alle) {
     try {
       sellifyReadCollection('company');
       sellifyReadCollection('person');
@@ -6088,7 +5044,7 @@ async function loadSellifyRecipientContext(lead) {
       console.warn('[outbound-lead-generation] Sellify-Projektion fuer die Sperrvermerkspruefung nicht erreichbar', error);
     }
   }
-  if (!state.sellifyPeople?.find || !state.sellifyCompanies?.find) {
+  if (!state.sellifyPeople?.alle || !state.sellifyCompanies?.alle) {
     merkeSellifyProjektion(false, lead, null);
     return { people: [], companies: [], contextAvailable: false };
   }
@@ -6488,19 +5444,15 @@ const SELLIFY_PRECHECK_VERSION = 2;
 // ein Erfolg gespeichert wird (25.09.2026).
 const VORABGLEICH_SPEICHER = 'ctox.olg.vorabgleich-versuche.v1';
 function vorabgleichVersuchGespeichert(leadId) {
-  try {
-    const wert = JSON.parse(globalThis.localStorage?.getItem(VORABGLEICH_SPEICHER) || '{}')[leadId];
-    return typeof wert === 'number' ? wert : undefined;
-  } catch { return undefined; }
+  const wert = state.vorabgleichVersuche?.[VORABGLEICH_SPEICHER]?.[leadId];
+  return typeof wert === 'number' ? wert : undefined;
 }
 function merkeVorabgleichVersuch(leadId) {
-  try {
-    const alle = JSON.parse(globalThis.localStorage?.getItem(VORABGLEICH_SPEICHER) || '{}');
-    const grenze = Date.now() - 24 * 3600_000;
-    for (const [id, t] of Object.entries(alle)) if (!(t > grenze)) delete alle[id];
-    alle[leadId] = Date.now();
-    globalThis.localStorage?.setItem(VORABGLEICH_SPEICHER, JSON.stringify(alle));
-  } catch { /* nur Komfort */ }
+  // v4: im Speicher der Montage statt im Browserspeicher.
+  const alle = ((state.vorabgleichVersuche ||= {})[VORABGLEICH_SPEICHER] ||= {});
+  const grenze = Date.now() - 24 * 3600_000;
+  for (const [id, t] of Object.entries(alle)) if (!(t > grenze)) delete alle[id];
+  alle[leadId] = Date.now();
 }
 async function nachgeladeneSellifyStammsaetze() {
   const offen = (state.leads || []).filter((lead) => !lead?.payload?.sellify_snapshot
@@ -6509,11 +5461,7 @@ async function nachgeladeneSellifyStammsaetze() {
   if (!offen.length) return new Map();
   for (const lead of offen) state.sellifyPrecheckTried.set(`snapshot:${lead.id}`, Date.now());
   const ids = [...new Set(offen.map((lead) => `sellify-company-${sellifyContactIdOfLead(lead)}`))];
-  const firmen = await withTimeout(
-    sellifyReadCollection('company').lookup({ ids, limit: ids.length }),
-    'Sellify-Stammsaetze zu langsam',
-    60000,
-  );
+  const firmen = await sellifyReadCollection('company').lookup({ ids, limit: ids.length });
   const nachId = new Map((firmen || [])
     .filter((firma) => firma && !firma.is_deleted)
     .map((firma) => [String(firma.contact_id || '').trim(), firma]));
@@ -6563,7 +5511,7 @@ async function repairDerivedMaintenanceFields() {
       state.sellifyPrecheckTried.set(lead.id, Date.now());
       merkeVorabgleichVersuch(lead.id);
       try {
-        vorabgleiche.set(lead.id, { firma: await withTimeout(sellifyVorwissen(lead), 'Sellify-Vorabgleich zu langsam', 20000) });
+        vorabgleiche.set(lead.id, { firma: await sellifyVorwissen(lead) });
       } catch (fehler) {
         console.warn('[outbound-lead-generation] Vorabgleich fuer Aenderungsart fehlgeschlagen', lead.id, fehler);
       }
@@ -6760,7 +5708,6 @@ async function ergaenzeKampagnenPersonen(lead) {
   return ergaenzt + verknuepft;
 }
 async function kampagnenPersonenPflege() {
-  if (state.nurZwischenstand) return;
   if (state.kampagnenPersonenLaeuft) return;
   state.kampagnenPersonenLaeuft = true;
   try {
@@ -6769,7 +5716,7 @@ async function kampagnenPersonenPflege() {
     for (const lead of offen.slice(0, 5)) {
       if (state.sellifyUebergabeVorbereitung?.size || state.recipientEligibilityBusy?.size || state.hintergrundImport) break;
       try {
-        await withTimeout(ergaenzeKampagnenPersonen(lead), 'Kampagnenpersonen: Sellify zu langsam', 30000);
+        await ergaenzeKampagnenPersonen(lead);
       } catch (fehler) {
         if (!state.kampagnenPersonenFehler) state.kampagnenPersonenFehler = new Map();
         state.kampagnenPersonenFehler.set(lead.id, Date.now());
@@ -6915,7 +5862,7 @@ async function repairLeadRecipientSelections() {
       else state.recipientRemovalNotices.delete(normalized.id);
     }
     if (!contactsChanged && !selectionChanged && Array.isArray(current.selected_contact_ids)) continue;
-    await doc.incrementalPatch({
+    await aendereDok(doc, {
       contacts: normalized.contacts,
       selected_contact_ids,
       updated_at_ms: Date.now(),
@@ -6965,21 +5912,21 @@ async function toggleSource(id) {
   state.sources = state.sources.map((source) => source.id === id ? { ...source, enabled } : source);
   renderSourcePanel();
   try {
-    const doc = await mitKanalHeilung(() => state.collections.sources.findOne(id).exec(), 'toggle-source');
+    const doc = await mitKanalHeilung(() => state.collections.sources.eins(id), 'toggle-source');
     if (!doc) {
       state.sourceToggleIntent.delete(id);
       state.sources = state.sources.map((source) => source.id === id ? { ...source, enabled: !enabled } : source);
-      await showBusinessAlert(`Die Quelle „${id}“ ist lokal nicht auffindbar – bitte neu laden.`);
+      await zeigeMeldung(`Die Quelle „${id}“ ist lokal nicht auffindbar – bitte neu laden.`);
       return;
     }
     const now = Date.now();
-    await doc.incrementalPatch({ enabled, updated_at_ms: now });
+    await aendereDok(doc, { enabled, updated_at_ms: now });
     // Der Adapter folgt der Quelle: vorher blieb er enabled=1, auch nach dem
     // Neuladen (Nachtest F, T52) — der Abgleich beim Start sah nichts.
     const adapter = state.adapters.find((entry) => entry.source_id === id);
-    const adapterDoc = adapter ? await state.collections.adapters.findOne(adapter.id).exec() : null;
+    const adapterDoc = adapter ? await state.collections.adapters.eins(adapter.id) : null;
     if (adapterDoc) {
-      await adapterDoc.incrementalPatch({ ...adapterPflichtfelder({ ...doc.toJSON(), enabled }), enabled, updated_at_ms: now });
+      await aendereDok(adapterDoc, { ...adapterPflichtfelder({ ...doc, enabled }), enabled, updated_at_ms: now });
       state.adapters = state.adapters.map((entry) => entry.id === adapter.id ? { ...entry, enabled, updated_at_ms: now } : entry);
     }
     state.sources = state.sources.map((source) => source.id === id ? { ...source, enabled } : source);
@@ -6989,7 +5936,7 @@ async function toggleSource(id) {
   } catch (error) {
     state.sourceToggleIntent.delete(id);
     state.sources = state.sources.map((source) => source.id === id ? { ...source, enabled: !enabled } : source);
-    await showBusinessAlert(`Umschalten fehlgeschlagen: ${String(error?.message || error)}`);
+    await zeigeMeldung(`Umschalten fehlgeschlagen: ${String(error?.message || error)}`);
   } finally {
     if (state.sourceTogglePending.delete(id)) renderSourcePanel();
   }
@@ -7012,11 +5959,10 @@ function showSourceCredentialDialog({ existingSecretName = '', onSave = null } =
       <section class="business-dialog" role="dialog" aria-modal="true" aria-labelledby="leadgenCredentialTitle">
         <div class="business-dialog-copy">
           <h2 id="leadgenCredentialTitle">Zugang sicher speichern</h2>
-          <p>E-Mail/Benutzername und Passwort werden als ein verschlüsseltes Credential im CTOX Secret Store gespeichert. In App-Daten, Agent-Prompts und Logs steht nur die Referenz.</p>
           ${existingSecretName ? `<p>Vorhandene Referenz: <code>${escapeHtml(existingSecretName)}</code>. „Beibehalten“ ändert sie nicht.</p>` : ''}
         </div>
         <label class="leadgen-form-field is-wide"><span>E-Mail oder Benutzername</span><input data-credential-username autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore></label>
-        <label class="leadgen-form-field is-wide"><span>Passwort</span><input data-credential-password type="password" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore></label>
+        <label class="leadgen-form-field is-wide" title="Verschlüsselt im CTOX Secret Store; App-Daten, Prompts und Logs sehen nur die Referenz"><span>Passwort</span><input data-credential-password type="password" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore></label>
         <div class="business-dialog-actions">
           <button class="business-dialog-secondary" type="button" data-credential-cancel>Abbrechen</button>
           <button class="business-dialog-secondary" type="button" data-credential-none>${existingSecretName ? 'Zugang entfernen' : 'Ohne Zugang'}</button>
@@ -7028,7 +5974,7 @@ function showSourceCredentialDialog({ existingSecretName = '', onSave = null } =
     // Vollbild-Schichten schluckten ALLE Klicks der Shell, sobald eine nicht
     // sauber schloss. Der Dialog lebt im App-Host, ist einzeln (alte Schicht
     // wird ersetzt) und schliesst per Escape und Backdrop-Klick.
-    const dialogHost = state.ctx?.host || document.body;
+    const dialogHost = state.root || document.body;
     dialogHost.querySelectorAll(':scope > .business-dialog-layer').forEach((alt) => alt.remove());
     const escapeHandler = (event) => {
       if (event.key !== 'Escape' || !layer.isConnected) return;
@@ -7076,7 +6022,7 @@ function showSourceCredentialDialog({ existingSecretName = '', onSave = null } =
       let hinweis = layer.querySelector('[data-credential-hinweis]');
       if (!hinweis) {
         hinweis = document.createElement('p');
-        hinweis.className = 'leadgen-import-notice';
+        hinweis.className = 'leadgen-inline-msg';
         hinweis.dataset.credentialHinweis = '';
         layer.querySelector('.business-dialog-actions')?.before(hinweis);
       }
@@ -7099,8 +6045,8 @@ function showSourceCredentialDialog({ existingSecretName = '', onSave = null } =
         knoepfe.forEach((knopf) => { if (!knopf.matches('[data-ss-cancel], [data-credential-cancel]')) knopf.disabled = true; });
         username.readOnly = true;
         password.readOnly = true;
-        speichern.textContent = 'Wird gespeichert …';
-        zeigeHinweis('Wird gespeichert …', 'status');
+        speichern.textContent = 'Speichern …';
+        zeigeHinweis('Speichern …', 'status');
         try {
           await onSave({ username: nextUsername, password: nextPassword });
         } catch (error) {
@@ -7134,42 +6080,17 @@ function showSourceCredentialDialog({ existingSecretName = '', onSave = null } =
 // Und: nichts wartet unbegrenzt — nach Ablauf der Frist kommt ein Fehler.
 // Letzter Lebenszyklus-Schritt je Befehl (die Shell meldet ihn als Ereignis):
 // haengt ein Befehl, nennt die Meldung den Schritt statt nur "timeout".
-const befehlsSchritte = new Map();
-globalThis.addEventListener?.('ctox-business-command-lifecycle', (event) => {
-  const id = String(event?.detail?.command_id || '');
-  if (!id.startsWith('cmd_outbound') && !id.startsWith('cmd_leadgen')) return;
-  befehlsSchritte.set(id, String(event.detail.phase || ''));
-  if (befehlsSchritte.size > 200) befehlsSchritte.delete(befehlsSchritte.keys().next().value);
-});
-function befehlsSchritt(commandId) {
-  return befehlsSchritte.get(String(commandId || '')) || 'vor dispatch_started';
-}
-
+// v4: Befehle gehen ueber api.command (v4-port.mjs) – kein Warten auf Annahme, keine Frist. Wer
+// ein Ergebnis braucht, uebergibt { ergebnis: true } und bekommt den gepushten Endstand.
 async function sendeBefehl(command, options = {}) {
-  const bus = state.ctx?.commandBus;
-  if (typeof bus?.dispatch !== 'function') throw new Error('Der CTOX-Befehlskanal ist in dieser Sitzung nicht verfügbar.');
-  const befehl = options.sync_queue_tasks === false ? { ...command, sync_queue_tasks: false } : command;
-  const warte = (ms) => new Promise((resolve) => { globalThis.setTimeout(resolve, ms); });
-  try {
-    await Promise.race([Promise.resolve(state.ctx?.sync?.startCollection?.('business_commands')), warte(5_000)]);
-  } catch { /* laeuft ggf. schon */ }
-  const fristMs = Number(options.timeoutMs || 45_000) + 10_000;
-  let timer = null;
   const t0 = Date.now();
   try {
-    const antwort = await Promise.race([
-      bus.dispatch(befehl, options),
-      new Promise((_, reject) => {
-        timer = globalThis.setTimeout(() => reject(new Error(`CTOX hat nicht innerhalb von ${Math.round(fristMs / 1000)} s geantwortet (timeout, letzter Schritt: ${befehlsSchritt(command?.id)})`)), fristMs);
-      }),
-    ]);
-    befehlsDiagnose(command, `ok ${Date.now() - t0} ms`);
+    const antwort = await state.port.befehl(command, { ergebnis: options.ergebnis === true });
+    befehlsDiagnose(command, antwort?.ok === false ? `FEHLER ${Date.now() - t0} ms: ${String(antwort.error || '').slice(0, 160)}` : `ok ${Date.now() - t0} ms`);
     return antwort;
   } catch (error) {
     befehlsDiagnose(command, `FEHLER ${Date.now() - t0} ms: ${String(error?.message || error).slice(0, 160)}`);
     throw error;
-  } finally {
-    if (timer) globalThis.clearTimeout(timer);
   }
 }
 
@@ -7181,7 +6102,7 @@ function befehlsDiagnose(command, text) {
   else if (/^ok /.test(text)) state.wartungGesehenAt = 0;
   try {
     const bisher = JSON.parse(document.documentElement.dataset.olgBefehle || '{}');
-    bisher[String(command?.command_type || '?')] = `${new Date().toISOString().slice(11, 19)} ${text} · ${befehlsSchritt(command?.id)}`;
+    bisher[String(command?.command_type || '?')] = `${new Date().toISOString().slice(11, 19)} ${text}`;
     document.documentElement.dataset.olgBefehle = JSON.stringify(bisher);
   } catch { /* nur Diagnose */ }
 }
@@ -7213,16 +6134,11 @@ function zugangsFehlerText(roh) {
 
 async function verfolgeZugangUebertragung(receipt, commandId, secretName) {
   try {
-    const ergebnis = await Promise.race([
-      receipt?.tracking?.waitForTerminal
-        ? receipt.tracking.waitForTerminal({ timeoutMs: 120_000, sync_queue_tasks: false })
-        : Promise.reject(new Error('keine Verfolgung')),
-      new Promise((_, reject) => { globalThis.setTimeout(() => reject(new Error(`nicht innerhalb von 130 s beim Server angekommen (letzter Schritt: ${befehlsSchritt(commandId)})`)), 130_000); }),
-    ]);
-    if (ergebnis?.ok === false || ergebnis?.status === 'failed' || ergebnis?.terminal_status === 'failed') {
-      throw new Error(ergebnis?.error || ergebnis?.result?.error || 'CTOX hat den Speicherbefehl abgelehnt.');
+    const ergebnis = await state.port.endstand(receipt.handle);
+    if (ergebnis?.status === 'failed') {
+      throw new Error(ergebnis?.error || 'CTOX hat den Speicherbefehl abgelehnt.');
     }
-    await entferneLokalenZugangswert(commandId, secretName);
+    await entferneLokalenZugangswert(receipt.kernel_id, secretName);
     // Server hat bestaetigt: sofort als hinterlegt fuehren, der Katalog
     // bestaetigt im Hintergrund (sonst blitzte kurz "Zugang fehlt" auf).
     if (!(state.secretKatalog instanceof Map)) state.secretKatalog = new Map();
@@ -7231,7 +6147,7 @@ async function verfolgeZugangUebertragung(receipt, commandId, secretName) {
     setzeZugangUebertragung(secretName, null);
     void ladeSecretKatalog();
   } catch (error) {
-    console.warn('[olg] Zugang nicht uebertragen', secretName, befehlsSchritt(commandId), String(error?.message || error));
+    console.warn('[olg] Zugang nicht uebertragen', secretName, String(error?.message || error));
     setzeZugangUebertragung(secretName, { commandId, fehler: zugangsFehlerText(String(error?.message || error)) });
   }
 }
@@ -7243,9 +6159,6 @@ function istSchluesselZugang(secretName) {
 }
 
 async function putSourceCredential(secretName, username, password) {
-  if (typeof state.ctx?.commandBus?.dispatch !== 'function') {
-    throw new Error('Der CTOX Secret Store ist in dieser Sitzung nicht verfügbar.');
-  }
   const commandId = `cmd_outbound_secret_put_${crypto.randomUUID()}`;
   const value = istSchluesselZugang(secretName) ? String(password || '') : JSON.stringify({ username, password });
   let receipt;
@@ -7261,12 +6174,9 @@ async function putSourceCredential(secretName, username, password) {
       client_context: {
         source: 'outbound-lead-generation.source-credentials',
         source_module: 'outbound-lead-generation',
-        actor: { id: state.ctx?.session?.user?.id || state.ctx?.session?.userId || '' },
+        actor: { id: state.api?.actor?.id || '' },
       },
-      // Lokal einfuegen, ohne vorher auf den Peer zu warten; die Replikation
-      // liefert, sobald der Kanal steht (wie der Fehlerberichter der Shell).
-      allow_local_intent_without_peer: true,
-    }, { until: 'local', timeoutMs: 15_000, sync_queue_tasks: false });
+    });
   } catch (error) {
     throw new Error(`Der Zugang wurde NICHT gespeichert: ${zugangsFehlerText(String(error?.message || error))}`);
   }
@@ -7279,12 +6189,11 @@ async function putSourceCredential(secretName, username, password) {
 // ersetzt; eine lokale Folgeaenderung schob ihn erneut hoch (UI-Test
 // 11.09.2026: Klartext Sekunden nach "gespeichert" im replizierten Dokument).
 // Wie das Zugaenge-Modul: Wert lokal entfernen, sobald der Befehl durch ist.
-async function entferneLokalenZugangswert(commandId, secretName) {
+async function entferneLokalenZugangswert(kernelId, secretName) {
   try {
-    const collection = state.ctx?.db?.collection?.('business_commands');
-    const doc = collection ? await collection.findOne(commandId).exec() : null;
+    const doc = await state.port.daten('business_commands').eins(kernelId);
     if (doc?.payload && Object.prototype.hasOwnProperty.call(doc.payload, 'value')) {
-      await doc.incrementalPatch({ payload: { name: secretName } });
+      await aendereDok(doc, { payload: { ...doc.payload, value: undefined, name: secretName } });
     }
   } catch {
     // Der Server entfernt den Wert ohnehin aus seinem Stand.
@@ -7292,7 +6201,7 @@ async function entferneLokalenZugangswert(commandId, secretName) {
 }
 
 async function deleteSourceCredential(secretName) {
-  if (!secretName || typeof state.ctx?.commandBus?.dispatch !== 'function') return;
+  if (!secretName) return;
   const commandId = `cmd_outbound_secret_delete_${crypto.randomUUID()}`;
   const result = await sendeBefehl({
     id: commandId,
@@ -7306,7 +6215,7 @@ async function deleteSourceCredential(secretName) {
       source: 'outbound-lead-generation.source-credentials',
       source_module: 'outbound-lead-generation',
     },
-  }, { until: 'terminal', timeoutMs: 60_000, sync_queue_tasks: false });
+  }, { ergebnis: true });
   if (result?.ok === false || result?.status === 'failed' || result?.terminal_status === 'failed') {
     throw new Error(`Der Zugang wurde NICHT entfernt: ${result?.error || result?.result?.error || 'CTOX hat den Befehl abgelehnt.'}`);
   }
@@ -7318,7 +6227,6 @@ async function deleteSourceCredential(secretName) {
 // die App nicht (XING: Verweis gesetzt, Wert vom 21.07.). Sie fragt jetzt den
 // Secret Store — nur Namen und Zeitstempel, nie Werte.
 async function ladeSecretKatalog() {
-  if (typeof state.ctx?.commandBus?.dispatch !== 'function') return;
   // Laeuft schon eine Abfrage, kann sie den gerade gespeicherten Zugang noch
   // nicht kennen: danach genau einmal nachladen statt still zu ueberspringen.
   if (state.secretKatalogLaeuft) { state.secretKatalogNochmal = true; return; }
@@ -7339,7 +6247,8 @@ async function ladeSecretKatalog() {
         source_module: 'outbound-lead-generation',
         business_chat_auto_focus: false,
       },
-    }, { until: 'terminal', timeoutMs: 30_000, sync_queue_tasks: false });
+    }, { ergebnis: true });
+    if (receipt?.ok === false) throw new Error(receipt.error || 'ctox.secret.list abgelehnt');
     const outcome = receipt?.result?.result || receipt?.result || receipt || {};
     const eintraege = [...(outcome.catalog || []), ...(outcome.extra || [])];
     state.secretKatalog = new Map(eintraege
@@ -7350,12 +6259,6 @@ async function ladeSecretKatalog() {
   } catch (error) {
     // Ohne Antwort bleibt der Stand unbekannt; nichts wird als hinterlegt behauptet.
     console.warn('[olg] Secret-Katalog nicht lesbar', String(error?.message || error));
-    // Frische Tabs verloren den ersten Befehl, solange der Peer nicht
-    // angemeldet war (Klicktest P1 B1). Einmal nach 15 s nachfassen.
-    if (!state.secretKatalogNachgefasst) {
-      state.secretKatalogNachgefasst = true;
-      globalThis.setTimeout(() => { void ladeSecretKatalog(); }, 15_000);
-    }
   } finally {
     state.secretKatalogLaeuft = false;
     if (state.secretKatalogNochmal) void ladeSecretKatalog();
@@ -7407,22 +6310,21 @@ async function queueAdapterReconciliationAfterSourceChange(reason) {
     // ("collection ... was cancelled"). Das ist transient: einmal kurz warten
     // und neu versuchen, bevor der Nutzer eine Fehlermeldung sieht.
     if (/cancelled|abgebrochen/i.test(message)) {
-      await recoverCommandChannel('adapter-reconcile');
       await new Promise((resolve) => setTimeout(resolve, 4000));
       try {
         await queueAdapterReconciliation(reason, state.researchPolicyRecord);
         return;
       } catch (retryError) {
-        showBusinessAlert(`Die Quelle wurde gespeichert, aber der Adapter-Abgleich konnte nicht gestartet werden: ${String(retryError?.message || retryError)}`);
+        zeigeMeldung(`Quelle gespeichert, Adapter-Abgleich nicht gestartet: ${String(retryError?.message || retryError)}`);
         return;
       }
     }
-    showBusinessAlert(`Die Quelle wurde gespeichert, aber der Adapter-Abgleich konnte nicht gestartet werden: ${message}`);
+    zeigeMeldung(`Quelle gespeichert, Adapter-Abgleich nicht gestartet: ${message}`);
   }
 }
 
 async function addSource() {
-  const url = String(await showBusinessPrompt('Vollständige Adresse der Recherchequelle', {
+  const url = String(await frageEingabe('Vollständige Adresse der Recherchequelle', {
     title: 'Quelle hinzufügen',
     defaultValue: 'https://',
     confirmLabel: 'Weiter',
@@ -7430,22 +6332,22 @@ async function addSource() {
   }) || '').trim();
   if (!url) return;
   let parsed;
-  try { parsed = new URL(url); } catch { showBusinessAlert('Bitte eine gültige URL eingeben.'); return; }
+  try { parsed = new URL(url); } catch { zeigeMeldung('Bitte eine gültige URL eingeben.'); return; }
   if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname) {
-    showBusinessAlert('Recherchequellen müssen eine vollständige HTTP- oder HTTPS-Adresse verwenden.');
+    zeigeMeldung('Recherchequellen müssen eine vollständige HTTP- oder HTTPS-Adresse verwenden.');
     return;
   }
   const id = parsed.hostname.replace(/^www\./, '').toLowerCase();
   // Host UND Anbieter pruefen: der Anbieter von "x.invalid" ist "x" und fiel
   // durch, obwohl die Meldung .invalid/.test nennt (Klicktest-Befund P4 V3).
   if (isDocumentationSourceKey(id) || isDocumentationSourceKey(evidenceSourceKey({ source_id: id, source_url: url }))) {
-    showBusinessAlert(`${id} ist eine Beispiel- oder Testadresse (example, .invalid, .test) und kann keine Recherchequelle sein.`);
+    zeigeMeldung(`${id} ist eine Testadresse (example, .invalid, .test) – keine Recherchequelle.`);
     return;
   }
   // Erst pruefen, dann Zugang abfragen: vorher wurde der Zugang gespeichert
   // (und ein vorhandener gleichnamiger ueberschrieben), bevor "bereits
   // vorhanden" kam.
-  if (await state.collections.sources.findOne(id).exec()) { showBusinessAlert('Diese Quelle ist bereits vorhanden.'); return; }
+  if (await state.collections.sources.eins(id)) { zeigeMeldung('Diese Quelle ist bereits vorhanden.'); return; }
   // Erst die Quelle, dann der Zugang: umgekehrt hinterliess ein Neuladen
   // waehrend "Sicher speichern" einen gespeicherten Zugang ohne Quelle
   // (Klicktest P4 T37b). Jetzt verweist die Quelle schon auf den Namen; der
@@ -7464,7 +6366,7 @@ async function addSource() {
       adapter_status: 'draft', scrape_status: 'target_available', auth_status: credentialSecretName ? 'credential_available' : 'not_required',
       payload: { builtin: false, secret_value_in_payload: false }, created_at_ms: now, updated_at_ms: now,
     };
-    await state.collections.sources.insert(source);
+    await state.collections.sources.schreibe(source);
     quelleAngelegt = true;
     // The durable RxDB subscription remains authoritative, but its reflected
     // collection event may arrive after the currently open modal has rendered.
@@ -7495,8 +6397,8 @@ function zugangsLegende(secretName) {
   const code = `<code>${escapeHtml(secretName)}</code>`;
   const stand = secretStand(secretName);
   if (!stand) return state.secretKatalogLaeuft
-    ? ` · Verweis auf ${code} (Stand wird geprüft …)`
-    : ` · Verweis auf ${code} (Secret Store nicht erreichbar, Stand unbekannt)`;
+    ? ` · Verweis auf ${code} (Stand wird geprüft …)` // v4-allow: label
+    : ` · Verweis auf ${code} (Secret-Store-Stand unbekannt)`;
   if (!stand.vorhanden) return ` · Verweis auf ${code}, im Secret Store liegt aber KEIN Wert`;
   return ` · hinterlegt${stand.datum ? ` am ${stand.datum}` : ''} (${code})`;
 }
@@ -7513,7 +6415,7 @@ async function editSource(sourceId) {
       for (let i = 0; i < 60 && state.secretKatalogLaeuft; i += 1) {
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
-      const legende = state.ctx.host.querySelector('.leadgen-source-settings legend');
+      const legende = state.root.querySelector('.leadgen-source-settings legend');
       if (legende) legende.innerHTML = `Zugang${zugangsLegende(item.credential_secret_name)}`;
     });
   }
@@ -7532,7 +6434,7 @@ async function editSource(sourceId) {
           <h2 id="leadgenSourceSettingsTitle">Quelle: ${escapeHtml(item.label)}</h2>
         </div>
         ${inputDriven
-          ? `<p class="leadgen-muted">Diese Quelle nutzt automatisch die Unternehmensdomain des jeweiligen Leads - keine feste URL.</p>`
+          ? `<p class="leadgen-muted">Nutzt die Domain des jeweiligen Leads.</p>`
           : `<label class="leadgen-form-field is-wide"><span>URL</span><input data-ss-url value="${escapeHtml(item.url || '')}"></label>`}
         <fieldset class="leadgen-source-settings-cred">
           <legend>Zugang${zugangsLegende(item.credential_secret_name)}</legend>
@@ -7557,7 +6459,7 @@ async function editSource(sourceId) {
     // Vollbild-Schichten schluckten ALLE Klicks der Shell, sobald eine nicht
     // sauber schloss. Der Dialog lebt im App-Host, ist einzeln (alte Schicht
     // wird ersetzt) und schliesst per Escape und Backdrop-Klick.
-    const dialogHost = state.ctx?.host || document.body;
+    const dialogHost = state.root || document.body;
     dialogHost.querySelectorAll(':scope > .business-dialog-layer').forEach((alt) => alt.remove());
     const escapeHandler = (event) => {
       if (event.key !== 'Escape' || !layer.isConnected) return;
@@ -7603,7 +6505,7 @@ async function editSource(sourceId) {
         let hinweis = layer.querySelector('[data-ss-konflikt]');
         if (!hinweis) {
           hinweis = document.createElement('p');
-          hinweis.className = 'leadgen-import-notice';
+          hinweis.className = 'leadgen-inline-msg';
           hinweis.setAttribute('role', 'alert');
           hinweis.dataset.ssKonflikt = '';
           layer.querySelector('.business-dialog-actions')?.before(hinweis);
@@ -7611,7 +6513,7 @@ async function editSource(sourceId) {
         hinweis.textContent = text;
       };
       if (entfernen && neueDaten) {
-        zeigeFehler('Bitte entweder neue Zugangsdaten eingeben oder „Zugang entfernen“ wählen – nicht beides.');
+        zeigeFehler('Neue Zugangsdaten oder „Zugang entfernen“ – nicht beides.');
         return;
       }
       // Pruefungen IM Dialog: vorher schloss er erst und verwarf dann alle
@@ -7630,7 +6532,7 @@ async function editSource(sourceId) {
           return;
         }
         if (item.payload?.builtin !== true && geprueft.hostname.replace(/^www\./, '').toLowerCase() !== item.id) {
-          zeigeFehler('Die Domain ist die stabile Quellen-ID. Für eine andere Domain bitte eine neue Quelle anlegen.');
+          zeigeFehler('Domain nicht änderbar – für eine andere Domain neue Quelle anlegen.');
           return;
         }
       }
@@ -7653,8 +6555,8 @@ async function editSource(sourceId) {
         // Abbrechen bleibt IMMER bedienbar (Owner-Befund: Dialog sperrte die App).
         knoepfe.forEach((knopf) => { if (!knopf.matches('[data-ss-cancel], [data-credential-cancel]')) knopf.disabled = true; });
         layer.querySelectorAll('input, textarea').forEach((feld) => { feld.readOnly = true; });
-        speichern.textContent = 'Wird gespeichert …';
-        zeigeFehler('Wird gespeichert …');
+        speichern.textContent = 'Speichern …';
+        zeigeFehler('Speichern …');
         layer.querySelector('[data-ss-konflikt]')?.setAttribute('role', 'status');
         try {
           await putSourceCredential(secretName, value.username, value.password);
@@ -7680,14 +6582,14 @@ async function editSource(sourceId) {
   if (!inputDriven) {
     url = result.url;
     let parsed;
-    try { parsed = new URL(url); } catch { showBusinessAlert('Bitte eine gültige URL eingeben.'); return; }
+    try { parsed = new URL(url); } catch { zeigeMeldung('Bitte eine gültige URL eingeben.'); return; }
     if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname) {
-      showBusinessAlert('Recherchequellen müssen eine vollständige HTTP- oder HTTPS-Adresse verwenden.');
+      zeigeMeldung('Recherchequellen müssen eine vollständige HTTP- oder HTTPS-Adresse verwenden.');
       return;
     }
     const nextId = parsed.hostname.replace(/^www\./, '').toLowerCase();
     if (item.payload?.builtin !== true && nextId !== item.id) {
-      showBusinessAlert('Die Domain ist die stabile Quellen-ID. Für eine andere Domain bitte eine neue Quelle anlegen.');
+      zeigeMeldung('Domain nicht änderbar – für eine andere Domain neue Quelle anlegen.');
       return;
     }
   }
@@ -7739,11 +6641,11 @@ async function editSource(sourceId) {
     payload: { ...(item.payload || {}), instructions: result.instructions, secret_value_in_payload: false },
     updated_at_ms: now,
   };
-  const sourceDoc = await state.collections.sources.findOne(item.id).exec();
-  await sourceDoc?.incrementalPatch(patch);
+  const sourceDoc = await state.collections.sources.eins(item.id);
+  await aendereDokWennDa(sourceDoc, patch);
   const adapter = state.adapters.find((entry) => entry.source_id === item.id);
-  const adapterDoc = adapter ? await state.collections.adapters.findOne(adapter.id).exec() : null;
-  await adapterDoc?.incrementalPatch({
+  const adapterDoc = adapter ? await state.collections.adapters.eins(adapter.id) : null;
+  await aendereDokWennDa(adapterDoc, {
     status: 'draft',
     scrape_status: 'target_available',
     auth_status: patch.auth_status,
@@ -7759,7 +6661,7 @@ async function editSource(sourceId) {
     try {
       await deleteSourceCredential(zuLoeschendesSecret);
     } catch (error) {
-      await showBusinessAlert(`Der Verweis ist entfernt, aber der gespeicherte Zugang ${zuLoeschendesSecret} konnte nicht gelöscht werden: ${error?.message || error}`);
+      await zeigeMeldung(`Der Verweis ist entfernt, aber der gespeicherte Zugang ${zuLoeschendesSecret} konnte nicht gelöscht werden: ${error?.message || error}`);
       return;
     }
   }
@@ -7767,49 +6669,78 @@ async function editSource(sourceId) {
   // uebertragen …" und danach "hinterlegt (Datum)" (Owner-Vorgabe: nichts
   // blockiert die App, um zwei Werte zu speichern).
   if (zugangEntfernt) {
-    await showBusinessAlert(`Zugang für ${item.label} wurde aus dem CTOX Secret Store entfernt.`);
+    await zeigeMeldung(`Zugang für ${item.label} wurde aus dem CTOX Secret Store entfernt.`);
   }
   await queueAdapterReconciliationAfterSourceChange('source_settings_changed');
 }
 
+// Alle Adapter einer Quelle: auf der Kundeninstanz lagen je Quelle zwei (adapter_thesen_* vom
+// 22.09. und adapter_leadgen_*); geloescht wurde nur der erste, die Zeile blieb
+// (Owner 15.10.2026: „ich habe zwei adapter gelöscht, aber es ist gar nichts passiert“).
+async function entferneDoppelteAdapter() {
+  const docs = await state.collections.adapters.alle();
+  const ids = new Set(doppelteAdapterIds(docs));
+  for (const doc of docs) {
+    if (ids.has(doc.id)) await entferneDok(doc);
+  }
+  if (ids.size) state.adapters = state.adapters.filter((entry) => !ids.has(entry.id));
+  return ids.size > 0;
+}
+
+async function removeAllSourceAdapters(sourceId) {
+  const docs = await state.collections.adapters.alle({ selector: { source_id: sourceId } });
+  for (const doc of docs) await entferneDok(doc);
+  state.adapters = state.adapters.filter((entry) => entry.source_id !== sourceId);
+}
+
 async function deleteSource(sourceId) {
   const item = state.sources.find((entry) => entry.id === sourceId);
-  if (!item || item.payload?.builtin !== false) return;
-  const confirmed = await showBusinessConfirm(
-    `Die Quelle „${item.label}“ und ihr eingerichteter Datenzugriff werden vollständig gelöscht.`,
+  if (!item) return;
+  const mitgeliefert = item.payload?.builtin !== false;
+  const confirmed = await frageBestaetigung(
+    `Die Quelle „${item.label}“ wird entfernt und bei Recherchen nicht mehr verwendet.`,
     {
-      title: 'Quelle löschen',
-      confirmLabel: 'Quelle löschen',
+      title: 'Quelle entfernen',
+      confirmLabel: 'Quelle entfernen',
       kind: 'danger',
     },
   );
   if (!confirmed) return;
-  const adapter = state.adapters.find((entry) => entry.source_id === sourceId);
-  const adapterDoc = adapter ? await state.collections.adapters.findOne(adapter.id).exec() : null;
-  if (adapterDoc) await adapterDoc.remove();
-  const sourceDoc = await state.collections.sources.findOne(sourceId).exec();
-  const geloeschterStand = sourceDoc ? (sourceDoc.toJSON?.() || sourceDoc) : null;
-  if (sourceDoc) await sourceDoc.remove();
+  await removeAllSourceAdapters(sourceId);
+  if (mitgeliefert) {
+    // Mitgelieferte Quellen legt seedSources bei jedem Start an; sie bleiben
+    // deshalb als entfernt markiert statt geloescht.
+    const now = Date.now();
+    const current = await state.collections.sources.eins(sourceId);
+    if (current) {
+      await aendereDok(current, {
+        enabled: false,
+        payload: { ...(current.payload || {}), removed: true, removed_at_ms: now },
+        updated_at_ms: now,
+      });
+    }
+    state.sources = state.sources.filter((entry) => entry.id !== sourceId);
+    renderSourcePanel();
+    return;
+  }
+  const sourceDoc = await state.collections.sources.eins(sourceId);
+  const loeschung = sourceDoc ? await entferneDok(sourceDoc) : null;
   state.adapters = state.adapters.filter((entry) => entry.source_id !== sourceId);
   state.sources = state.sources.filter((entry) => entry.id !== sourceId);
   renderSourcePanel();
-  // Erst wenn CTOX die Loeschung der Quelle bestaetigt hat, geht ihr Zugang.
-  // Umgekehrt blieb in einem Tab mit gestoerter Verbindung die Quelle am
-  // Server aktiv und zeigte auf einen geloeschten Zugang (Nachtest P4 N1).
+  // Erst wenn CTOX die Loeschung der Quelle bestaetigt hat (WriteHandle.result), geht ihr Zugang.
+  // Umgekehrt blieb die Quelle am Server aktiv und zeigte auf einen geloeschten Zugang (Nachtest P4 N1).
   if (item.credential_secret_name && item.credential_secret_name === sourceCredentialSecretName(item.id)) {
-    try {
-      // Ohne Dokumentliste: alle ausstehenden lokalen Schreibvorgaenge der
-      // Sammlung hochschieben und Erfolg verlangen (pushToRemotePeers).
-      if (geloeschterStand) await flushReplicatedCollection('outbound_lead_generation_sources', []);
-    } catch (error) {
-      await showBusinessAlert(`Die Quelle ist hier gelöscht, CTOX hat die Löschung aber noch nicht bestätigt (${error?.message || error}). Der gespeicherte Zugang bleibt deshalb vorerst erhalten; bitte die Seite neu laden und prüfen.`);
+    const bestaetigt = loeschung ? await loeschung.result : { status: 'accepted' };
+    if (bestaetigt?.status !== 'accepted') {
+      state.port.melde('source.delete', `Die Quelle „${item.label}“ wurde von CTOX nicht übernommen (${bestaetigt?.reason || bestaetigt?.status}). Der gespeicherte Zugang bleibt erhalten.`);
       await queueAdapterReconciliationAfterSourceChange('source_deleted');
       return;
     }
     try {
       await deleteSourceCredential(item.credential_secret_name);
     } catch (error) {
-      await showBusinessAlert(`Die Quelle ist gelöscht, ihr gespeicherter Zugang konnte aber nicht entfernt werden: ${error?.message || error}`);
+      state.port.melde('source.credential.delete', `Quelle gelöscht, Zugang nicht entfernt: ${error?.message || error}`);
     }
   }
   await queueAdapterReconciliationAfterSourceChange('source_deleted');
@@ -7844,7 +6775,7 @@ async function pruefeZugang(sourceId) {
   if (!item) return;
   const name = String(item.credential_secret_name || '').trim();
   if (!name) {
-    await showBusinessAlert(`Für „${item.label}“ ist kein Zugang vorgesehen.`);
+    await zeigeMeldung(`Für „${item.label}“ ist kein Zugang vorgesehen.`);
     return;
   }
   // Im frisch geoeffneten Tab kann der erste Befehl noch ins Leere laufen
@@ -7856,11 +6787,11 @@ async function pruefeZugang(sourceId) {
     stand = secretStand(name);
   }
   if (!stand) {
-    await showBusinessAlert('Der Stand des Zugangs ist unbekannt: Der CTOX Secret Store war in drei Versuchen nicht erreichbar. Bitte die Seite neu laden (⌘R) und erneut prüfen.');
+    await zeigeMeldung('Zugangsstand unbekannt (kein Katalog vom Secret Store) – erneut prüfen.');
     return;
   }
   if (!stand.vorhanden) {
-    await showBusinessAlert(`Für „${item.label}“ liegt KEIN Zugang im CTOX Secret Store (${name}). Über das Zahnrad eintragen, dann erneut prüfen.`);
+    await zeigeMeldung(`Für „${item.label}“ liegt KEIN Zugang im CTOX Secret Store (${name}). Über das Zahnrad eintragen, dann erneut prüfen.`);
     return;
   }
   // Der eigentliche Beweis ist die Quelle selbst: derselbe Pruefbefehl wie beim
@@ -7890,50 +6821,16 @@ function pruefFirma(item) {
   return { company: PRUEF_FIRMEN[country], country, ...(istPruefer ? { email: PRUEF_EMAIL } : {}) };
 }
 
+// v4: kein Vorab-Browserfenster (4.0 hat keine Fensterliste und kein gezieltes Schliessen). Die
+// Browser-App oeffnet erst mit der Sitzung aus dem Befehlsergebnis; ein gescheiterter Befehl
+// hinterlaesst so kein leeres Fenster (thesen 14.10.2026).
 async function runAdapterCommand(sourceId, commandType) {
   const item = state.sources.find((entry) => entry.id === sourceId);
   if (!item) return;
-  // Ein vorab geoeffnetes Browserfenster bleibt nur, wenn die Anmeldung
-  // wirklich startet. Scheitert der Befehl (z. B. ohne gueltige Capability
-  // abgelehnt), wird genau dieses Fenster wieder geschlossen statt leer
-  // stehen zu bleiben (thesen 14.10.2026).
-  const preopened = { windowId: null, launched: false };
-  try {
-    await runAdapterCommandInner(item, commandType, preopened);
-  } finally {
-    if (!preopened.launched) await closePreopenedBrowserWindow(state.ctx, preopened.windowId);
-  }
+  await runAdapterCommandInner(item, commandType);
 }
 
-async function preopenBrowserWindow(ctx) {
-  const openApp = ctx?.openApp || ctx?.openDesktopApp;
-  if (typeof openApp !== 'function') return null;
-  try {
-    const existing = new Set((ctx?.windowManager?.listWindows?.() || []).map((win) => win?.id));
-    const windowId = await openApp.call(ctx, 'browser', { title: 'Browser', mode: 'maximized' });
-    // Nur ein selbst erzeugtes Fenster darf spaeter geschlossen werden.
-    return windowId && !existing.has(windowId) ? windowId : null;
-  } catch (error) {
-    // Immediate feedback is best effort. The durable auth request must
-    // still be submitted so a transient shell/window error cannot turn
-    // the source action into a dead button.
-    console.warn('[outbound-lead-generation] Browser konnte nicht vorab geöffnet werden', error);
-    return null;
-  }
-}
-
-async function closePreopenedBrowserWindow(ctx, windowId) {
-  if (!windowId) return false;
-  try {
-    await ctx?.windowManager?.destroy?.(windowId);
-    return true;
-  } catch (error) {
-    console.warn('[outbound-lead-generation] Vorab geöffnetes Browserfenster konnte nicht geschlossen werden', error);
-    return false;
-  }
-}
-
-async function runAdapterCommandInner(item, commandType, preopened) {
+async function runAdapterCommandInner(item, commandType) {
   try {
   const commandId = `cmd_leadgen_source_${crypto.randomUUID()}`;
   const adapter = {
@@ -7968,12 +6865,6 @@ async function runAdapterCommandInner(item, commandType, preopened) {
   // interpret prose. What the operator reads is a plain sentence naming exactly
   // that operation and target — deterministic underneath, legible on screen.
   const operationText = `${title} — ${operation.operation} · Ziel ${operation.target_key}`;
-  // Die serverseitig erzeugten Sitzungsdaten kommen erst mit dem
-  // Kommandoergebnis. Das Browserfenster selbst muss aber sofort sichtbar
-  // werden, damit der Klick niemals wie ein toter Knopf wirkt.
-  if (commandType.endsWith('.auth_assist')) {
-    preopened.windowId = await preopenBrowserWindow(state.ctx);
-  }
   const command = {
     id: commandId, command_id: commandId, module: 'outbound', command_type: commandType,
     operation: operation.operation, target_key: operation.target_key,
@@ -7982,7 +6873,7 @@ async function runAdapterCommandInner(item, commandType, preopened) {
     payload: {
       ...operation,
       adapter_id: adapter.id, source_id: item.id, adapter,
-      required_skills: ['outbound-lead-generation-research', 'universal-scraping', 'web-unlock'],
+      required_skills: ['outbound-lead-generation/research', 'universal-scraping', 'web-unlock'],
       scrape_contract: scrapeContract(item), secret_value_in_payload: false,
       ...(commandType.endsWith('.test') ? { test_input: pruefFirma(item) } : {}),
     },
@@ -7990,7 +6881,7 @@ async function runAdapterCommandInner(item, commandType, preopened) {
       source_module: 'outbound-lead-generation',
       source_id: item.id,
       actor: {
-        id: state.ctx?.session?.user?.id || state.ctx?.session?.userId || '',
+        id: state.api?.actor?.id || '',
       },
     },
   };
@@ -8016,11 +6907,11 @@ async function runAdapterCommandInner(item, commandType, preopened) {
     created_at_ms: requestedAt,
     updated_at_ms: requestedAt,
   };
-  const requestedDoc = await state.collections.adapters.findOne(adapter.id).exec();
-  if (requestedDoc) await requestedDoc.incrementalPatch(requestedPatch);
-  else await state.collections.adapters.insert(requestedPatch);
-  const requestedSourceDoc = await state.collections.sources.findOne(item.id).exec();
-  await requestedSourceDoc?.incrementalPatch({
+  const requestedDoc = await state.collections.adapters.eins(adapter.id);
+  if (requestedDoc) await aendereDok(requestedDoc, requestedPatch);
+  else await state.collections.adapters.schreibe(requestedPatch);
+  const requestedSourceDoc = await state.collections.sources.eins(item.id);
+  await aendereDokWennDa(requestedSourceDoc, {
     adapter_status: requestedPatch.status,
     scrape_status: requestedPatch.scrape_status,
     auth_status: requestedPatch.auth_status,
@@ -8033,7 +6924,7 @@ async function runAdapterCommandInner(item, commandType, preopened) {
   renderSourcePanel();
   let result;
   try {
-    result = requireTrackedSubmission(await state.ctx.businessChat.submitTask({
+    result = requireTrackedSubmission(await state.port?.auftrag({
       ...command,
       title,
       text: operationText,
@@ -8051,11 +6942,11 @@ async function runAdapterCommandInner(item, commandType, preopened) {
     }), { allowTerminalCommand: true, allowControlCommand: true });
   } catch (error) {
     result = { status: 'failed', error: String(error?.message || error), command_id: commandId, task_id: '' };
-    showBusinessAlert(result.error);
+    zeigeMeldung(result.error);
   }
   if (commandType.endsWith('.auth_assist') && result.status !== 'failed') {
     const authAssist = authAssistFromCommandResult(result);
-    preopened.launched = await openSourceAuthorization(item, authAssist);
+    await openSourceAuthorization(item, authAssist);
   }
   const serverAdapter = result?.result?.adapter || result?.result?.outcome?.adapter || result?.adapter || {};
   const now = Date.now();
@@ -8064,7 +6955,7 @@ async function runAdapterCommandInner(item, commandType, preopened) {
   ).trim();
   const functionalFailure = /^(failed|failure|error|blocked|rejected|unreachable|temporary_unreachable|unavailable|temporary_unavailable)$/i.test(functionalStatus);
   const status = functionalStatus || (result.task_id ? requestedStatus : result.status || 'failed');
-  const doc = await state.collections.adapters.findOne(adapter.id).exec();
+  const doc = await state.collections.adapters.eins(adapter.id);
   const patch = {
     ...adapterPflichtfelder(item),
     id: adapter.id, source_id: item.id, status,
@@ -8077,9 +6968,9 @@ async function runAdapterCommandInner(item, commandType, preopened) {
     payload: { result: sanitizeCommandResult(result), secret_value_in_payload: false },
     created_at_ms: doc?.created_at_ms || now, updated_at_ms: now,
   };
-  if (doc) await doc.incrementalPatch(patch); else await state.collections.adapters.insert(patch);
-  const sourceDoc = await state.collections.sources.findOne(item.id).exec();
-  await sourceDoc?.incrementalPatch({ adapter_status: patch.status, scrape_status: patch.scrape_status, auth_status: patch.auth_status, updated_at_ms: now });
+  if (doc) await aendereDok(doc, patch); else await state.collections.adapters.schreibe(patch);
+  const sourceDoc = await state.collections.sources.eins(item.id);
+  await aendereDokWennDa(sourceDoc, { adapter_status: patch.status, scrape_status: patch.scrape_status, auth_status: patch.auth_status, updated_at_ms: now });
   state.adapters = [...state.adapters.filter((entry) => entry.id !== adapter.id), patch];
   state.sources = state.sources.map((entry) => entry.id === item.id
     ? { ...entry, adapter_status: patch.status, scrape_status: patch.scrape_status, auth_status: patch.auth_status, updated_at_ms: now }
@@ -8088,57 +6979,8 @@ async function runAdapterCommandInner(item, commandType, preopened) {
   } catch (error) {
     const message = String(error?.message || error || 'Der Datenzugriff konnte nicht gestartet werden.');
     console.error('[outbound-lead-generation] adapter command failed', error);
-    showBusinessAlert(message);
+    zeigeMeldung(message);
   }
-}
-
-async function deleteSourceAdapter(sourceId) {
-  const item = state.sources.find((entry) => entry.id === sourceId);
-  const adapter = state.adapters.find((entry) => entry.source_id === sourceId);
-  if (!item) return;
-  // Ohne Adapterdatensatz warf der Abschluss einen TypeError (adapter.id) —
-  // die Quelle war schon zurueckgesetzt, eine Meldung kam nie
-  // (Klicktest-Befund P4 V4).
-  if (!adapter) {
-    await showBusinessAlert(`Für „${item.label}“ ist kein Datenzugriff eingerichtet.`);
-    return;
-  }
-  const confirmed = await showBusinessConfirm(
-    `Der eingerichtete Datenzugriff für „${item.label}“ wird gelöscht. Die Quelle selbst bleibt erhalten.`,
-    {
-      title: 'Datenzugriff löschen',
-      confirmLabel: 'Datenzugriff löschen',
-      kind: 'danger',
-    },
-  );
-  if (!confirmed) return;
-  const adapterDoc = adapter ? await state.collections.adapters.findOne(adapter.id).exec() : null;
-  if (adapterDoc) await adapterDoc.remove();
-  const now = Date.now();
-  // Ein hinterlegter Zugang bleibt hinterlegt; nur der Datenzugriff geht
-  // (vorher immer "required", Klicktest-Befund P4 V19).
-  // Der Secret-Katalog entscheidet, sonst Quelle ODER Adapter: die Quelle
-  // selbst stand oft noch auf "required", obwohl ein Zugang liegt (Nachtest F, T54).
-  const katalog = secretStand(item.credential_secret_name);
-  const zugangLiegt = katalog
-    ? katalog.vorhanden
-    : ['credential_available', 'authenticated'].includes(item.auth_status)
-      || ['credential_available', 'authenticated'].includes(adapter.auth_status);
-  const authStatus = !item.requires_credential
-    ? 'not_required'
-    : (zugangLiegt ? 'credential_available' : 'required');
-  const sourceDoc = await state.collections.sources.findOne(item.id).exec();
-  await sourceDoc?.incrementalPatch({
-    adapter_status: 'draft',
-    scrape_status: 'target_available',
-    auth_status: authStatus,
-    updated_at_ms: now,
-  });
-  state.adapters = state.adapters.filter((entry) => entry.id !== adapter.id);
-  state.sources = state.sources.map((entry) => entry.id === item.id
-    ? { ...entry, adapter_status: 'draft', scrape_status: 'target_available', auth_status: authStatus, updated_at_ms: now }
-    : entry);
-  renderSourcePanel();
 }
 
 function authAssistFromCommandResult(result) {
@@ -8180,26 +7022,18 @@ function browserAuthAssistLaunchArgs(authAssist) {
 }
 
 async function openSourceAuthorization(item, authAssist) {
-  const openApp = state.ctx?.openApp || state.ctx?.openDesktopApp;
-  if (typeof openApp !== 'function') {
-    showBusinessAlert('Die Browser-App konnte nicht geöffnet werden. Öffnen Sie „Browser“ und wählen Sie die angeforderte Anmeldung.');
-    return false;
-  }
   const args = browserAuthAssistLaunchArgs(authAssist);
   if (!args) {
-    showBusinessAlert('CTOX hat keine gültige Browser-Sitzung für diese Anmeldung zurückgegeben.');
+    zeigeMeldung('CTOX hat keine gültige Browser-Sitzung für diese Anmeldung zurückgegeben.');
     return false;
   }
-  await openApp.call(state.ctx, 'browser', {
-    title: 'Browser',
-    mode: 'maximized',
-    args,
-  });
-  return true;
+  // navigate meldet ein unbekanntes Ziel selbst in die Zustandszone.
+  // Routenform der Browser-App (modules/browser/index.js browserRouteArgs/browserAuthRequestFromArgs):
+  // die Startargumente flach als params; `title`/`mode` waren v3-Fensterhinweise und kennt 4.0 nicht.
+  return state.api.shell.navigate('browser', args);
 }
 
 async function reconcileAdapterCommands({ authoritative = false } = {}) {
-  if (state.nurZwischenstand) return false;
   if (state.reconcilingAdapterCommands) return false;
   const trackedAdapters = state.adapters.filter((adapter) => {
     const commandId = String(adapter.last_command_id || '').trim();
@@ -8218,11 +7052,11 @@ async function reconcileAdapterCommands({ authoritative = false } = {}) {
       const command = commands.get(String(adapter.last_command_id || '').trim());
       const patch = adapterCommandRecordPatch(adapter, command);
       if (!patch) continue;
-      const adapterDoc = await state.collections.adapters.findOne(adapter.id).exec();
+      const adapterDoc = await state.collections.adapters.eins(adapter.id);
       if (!adapterDoc) continue;
-      await adapterDoc.incrementalPatch(patch);
-      const sourceDoc = await state.collections.sources.findOne(adapter.source_id).exec();
-      await sourceDoc?.incrementalPatch({
+      await aendereDok(adapterDoc, patch);
+      const sourceDoc = await state.collections.sources.eins(adapter.source_id);
+      await aendereDokWennDa(sourceDoc, {
         adapter_status: patch.status,
         scrape_status: patch.scrape_status,
         auth_status: patch.auth_status,
@@ -8298,8 +7132,8 @@ function rxdbIdSlug(value) {
 
 function scrapeContract(item) {
   return {
-    skill: 'outbound-lead-generation-research',
-    skills: ['outbound-lead-generation-research', 'universal-scraping', 'web-unlock'],
+    skill: 'outbound-lead-generation/research',
+    skills: ['outbound-lead-generation/research', 'universal-scraping', 'web-unlock'],
     target_key: item.target_key,
     source_id: item.id,
     input_driven: item.payload?.input_driven === true,
@@ -8316,7 +7150,7 @@ function scrapeContract(item) {
 }
 
 async function createCampaign() {
-  const name = String(await showBusinessPrompt(tr('campaignNamePrompt', 'Name der neuen Kampagne'), {
+  const name = String(await frageEingabe(tr('campaignNamePrompt', 'Name der neuen Kampagne'), {
     title: tr('newCampaign', 'Neue Kampagne'),
     placeholder: tr('campaignName', 'Kampagnenname'),
     confirmLabel: tr('continue', 'Weiter'),
@@ -8326,7 +7160,7 @@ async function createCampaign() {
   // (Klicktest-Befund P1 #12).
   const vorhanden = campaignRows().some((campaign) => campaign.name.localeCompare(name, 'de', { sensitivity: 'base' }) === 0);
   if (vorhanden) {
-    const weiter = await showBusinessConfirm(
+    const weiter = await frageBestaetigung(
       `Die Kampagne „${name}“ gibt es schon. Der Import ergänzt sie um die neuen Leads.`,
       { title: 'Kampagne vorhanden', confirmLabel: 'In bestehende Kampagne importieren' },
     );
@@ -8348,7 +7182,7 @@ async function leadDokumenteInPaketen(leads) {
   const karte = await ladeLeadDokumente(leads.map((lead) => lead.id));
   const fehlend = leads.filter((lead) => !karte.has(lead.id));
   await inPaketen(fehlend, async (lead) => {
-    const doc = await state.collections.leads.findOne(lead.id).exec();
+    const doc = await state.collections.leads.eins(lead.id);
     if (doc) karte.set(lead.id, doc);
   });
   return leads.map((lead) => karte.get(lead.id)).filter(Boolean);
@@ -8362,7 +7196,7 @@ async function verschiebeAuswahlInKampagne() {
   const vorhandene = campaignRows().map((campaign) => campaign.name).filter(Boolean);
   // Keine fremde Kampagne vorbelegen (Klicktest P2 V5): leer lassen.
   const vorschlag = '';
-  const ziel = String(await showBusinessPrompt(
+  const ziel = String(await frageEingabe(
     `${leads.length} Lead${leads.length === 1 ? '' : 's'} in welche Kampagne verschieben?${vorhandene.length ? ` Vorhanden: ${vorhandene.join(' · ')}` : ''}`,
     { title: 'In Kampagne verschieben', defaultValue: vorschlag, confirmLabel: 'Verschieben' },
   ) || '').trim();
@@ -8378,7 +7212,7 @@ async function verschiebeAuswahlInKampagne() {
       const lead = doc.toJSON?.() || doc;
       if (String(lead.campaign || '').trim() === ziel) return;
       verschoben += 1;
-      await doc.incrementalPatch({
+      await aendereDok(doc, {
         campaign: ziel,
         payload: {
           ...(lead.payload || {}),
@@ -8388,10 +7222,6 @@ async function verschiebeAuswahlInKampagne() {
         updated_at_ms: Date.now(),
       });
     });
-    await flushReplicatedCollection(
-      'outbound_lead_generation_leads',
-      docs.map((doc) => doc.toJSON?.() || doc),
-    );
     state.selectedCampaign = ziel;
     state.selectedLeadIds = new Set();
     await reload();
@@ -8399,7 +7229,7 @@ async function verschiebeAuswahlInKampagne() {
       ? `${verschoben} Lead${verschoben === 1 ? '' : 's'} nach „${ziel}“ verschoben.`
       : `Die Leads sind bereits in „${ziel}“.`);
   } catch (error) {
-    await showBusinessAlert(`Verschieben fehlgeschlagen: ${error?.message || error}`);
+    await zeigeMeldung(`Verschieben fehlgeschlagen: ${error?.message || error}`);
   } finally {
     state.campaignMutationMessage = '';
     render();
@@ -8409,17 +7239,17 @@ async function verschiebeAuswahlInKampagne() {
 async function renameCampaign(currentName) {
   const current = String(currentName || '').trim();
   if (!current) return;
-  const next = String(await showBusinessPrompt('Neuer Name der Kampagne', {
+  const next = String(await frageEingabe('Neuer Name der Kampagne', {
     title: 'Kampagne umbenennen',
     defaultValue: current,
     confirmLabel: 'Umbenennen',
   }) || '').trim();
   if (!next || next === current) return;
   if (campaignRows().some((campaign) => campaign.name === next)) {
-    await showBusinessAlert('Eine Kampagne mit diesem Namen existiert bereits.');
+    await zeigeMeldung('Eine Kampagne mit diesem Namen existiert bereits.');
     return;
   }
-  state.campaignMutationMessage = `Kampagne „${current}“ wird gespeichert …`;
+  state.campaignMutationMessage = `Kampagne „${current}“: Speichern …`;
   renderCampaigns();
   try {
   const leads = campaignLeads(current);
@@ -8430,10 +7260,10 @@ async function renameCampaign(currentName) {
     // der Eintrag in weitere_kampagnen wird umbenannt.
     if (heimatKampagne(lead) !== current) {
       const weitere = (lead.payload?.weitere_kampagnen || []).map((name) => (name === current ? next : name));
-      await doc.incrementalPatch({ payload: { ...(lead.payload || {}), weitere_kampagnen: weitere }, updated_at_ms: Date.now() });
+      await aendereDok(doc, { payload: { ...(lead.payload || {}), weitere_kampagnen: weitere }, updated_at_ms: Date.now() });
       return;
     }
-    await doc.incrementalPatch({
+    await aendereDok(doc, {
       campaign: next,
       payload: {
         ...(lead.payload || {}),
@@ -8443,10 +7273,6 @@ async function renameCampaign(currentName) {
       updated_at_ms: Date.now(),
     });
   });
-  await flushReplicatedCollection(
-    'outbound_lead_generation_leads',
-    leadDocs.map((doc) => doc.toJSON?.() || doc),
-  );
   // Import records are immutable audit evidence: their title records the name
   // under which the import was confirmed. Campaign identity and membership
   // live exclusively on the lead records (see campaignRows/campaignLeads).
@@ -8469,13 +7295,9 @@ async function renameCampaign(currentName) {
   } catch (error) {
     state.campaignMutationMessage = '';
     render();
-    await withTimeout(
-      reload(),
-      'Der aktuelle Kampagnenstand konnte nicht neu geladen werden.',
-      5_000,
-    ).catch(() => {});
+    await reload().catch(() => {});
     render();
-    await showBusinessAlert(`Die Kampagne konnte nicht vollständig gespeichert werden: ${error?.message || error}`);
+    await zeigeMeldung(`Die Kampagne konnte nicht vollständig gespeichert werden: ${error?.message || error}`);
   }
 }
 
@@ -8496,15 +7318,15 @@ async function deleteCampaign(campaignName) {
     lead.research_updated_at_ms || lead.payload?.research_started_at_ms || lead.research_started_at_ms || lead.updated_at_ms || 0,
   ) < RESEARCH_HEARTBEAT_STALE_MS);
   if (live.length > 0) {
-    await showBusinessAlert(`Die Kampagne kann nicht gelöscht werden, solange ${live.length === 1 ? 'eine Recherche läuft' : `${live.length} Recherchen laufen`}.`);
+    await zeigeMeldung(`Die Kampagne kann nicht gelöscht werden, solange ${live.length === 1 ? 'eine Recherche läuft' : `${live.length} Recherchen laufen`}.`); // v4-allow: label
     return;
   }
   const staleNote = running.length
-    ? ` ${running.length} Lauf${running.length === 1 ? '' : 'e'} steht noch auf „läuft“, meldet sich aber nicht mehr — der wird mitgelöscht.`
+    ? ` ${running.length} Lauf${running.length === 1 ? '' : 'e'} steht noch auf „läuft“, meldet sich aber nicht mehr — der wird mitgelöscht.` // v4-allow: label
     : '';
-  const confirmed = await showBusinessConfirm(
+  const confirmed = await frageBestaetigung(
     `Die Kampagne „${campaign}“ und ${leads.length} Lead${leads.length === 1 ? '' : 's'} werden dauerhaft gelöscht.${staleNote}`
-      + (mitglieder.length ? ` ${mitglieder.length} weitere Firma/Firmen bleiben in ihrer eigenen Kampagne und verlieren nur die Zuordnung zu dieser.` : ''),
+      + (mitglieder.length ? ` ${mitglieder.length} weitere Firma/Firmen bleiben in ihrer Kampagne, nur die Zuordnung entfällt.` : ''),
     {
       title: 'Kampagne löschen',
       confirmLabel: 'Endgültig löschen',
@@ -8521,11 +7343,11 @@ async function deleteCampaign(campaignName) {
   if (!confirmed) return;
   for (const lead of mitglieder) {
     try {
-      const doc = await state.collections.leads.findOne(lead.id).exec();
+      const doc = await state.collections.leads.eins(lead.id);
       const current = doc?.toJSON?.() || doc;
       if (!doc) continue;
       const weitere = (current.payload?.weitere_kampagnen || []).filter((name) => name !== campaign);
-      await doc.incrementalPatch({ payload: { ...(current.payload || {}), weitere_kampagnen: weitere }, updated_at_ms: Date.now() });
+      await aendereDok(doc, { payload: { ...(current.payload || {}), weitere_kampagnen: weitere }, updated_at_ms: Date.now() });
       lead.payload = { ...(lead.payload || {}), weitere_kampagnen: weitere };
     } catch (fehler) {
       console.warn('[olg] Mitgliedschaft nicht entfernt', lead.id, fehler);
@@ -8562,10 +7384,10 @@ async function deleteCampaign(campaignName) {
   render();
   try {
     const leadDocs = (await Promise.all(
-      [...leadIds].map((id) => state.collections.leads.findOne(id).exec()),
+      [...leadIds].map((id) => state.collections.leads.eins(id)),
     )).filter(Boolean);
     const importDocs = (await Promise.all(
-      [...importIds].map((id) => state.collections.imports.findOne(id).exec()),
+      [...importIds].map((id) => state.collections.imports.eins(id)),
     )).filter(Boolean);
     await Promise.all(leadDocs.map((doc) => doc.remove()));
     await Promise.all(importDocs.map((doc) => doc.remove()));
@@ -8574,7 +7396,7 @@ async function deleteCampaign(campaignName) {
     state.imports = vorherImports;
     state.selectedCampaign = vorherKampagne;
     render();
-    await showBusinessAlert(`Die Kampagne „${campaign}“ wurde NICHT gelöscht: ${zugangsFehlerText(String(error?.message || error))}`);
+    await zeigeMeldung(`Die Kampagne „${campaign}“ wurde NICHT gelöscht: ${zugangsFehlerText(String(error?.message || error))}`);
     return;
   } finally {
     state.kampagnenLoeschen.delete(campaign);
@@ -8626,7 +7448,7 @@ function openLeadEditor(id) {
   if (fokus) {
     const editorKey = fokus.startsWith('person_') ? `person:${fokus}` : (EDITOR_KEY_FOR_FIELD[fokus] || fokus);
     queueMicrotask(() => {
-      const input = state.ctx.host.querySelector(`[data-lead-edit-field="${editorKey}"]`);
+      const input = state.root.querySelector(`[data-lead-edit-field="${editorKey}"]`);
       if (!input) return;
       input.scrollIntoView({ block: 'center' });
       input.focus();
@@ -8635,6 +7457,7 @@ function openLeadEditor(id) {
 }
 
 function closeLeadEditor() {
+  if (state.leadEditorSaving) return;
   state.leadEditorOpen = false;
   state.leadEditorId = '';
   state.leadEditorContactId = '';
@@ -8644,13 +7467,14 @@ function closeLeadEditor() {
 }
 
 async function saveLeadEditor() {
+  if (state.leadEditorSaving) return;
   const lead = state.leads.find((entry) => entry.id === state.leadEditorId);
   const draft = state.leadDraft;
   if (!lead || !draft) return;
   const name = String(draft.name || '').trim();
   const campaign = String(draft.campaign || '').trim();
   if (!name || !campaign) {
-    await showBusinessAlert('Organisation und Kampagne sind Pflichtfelder.');
+    await zeigeMeldung('Organisation und Kampagne sind Pflichtfelder.');
     return;
   }
   // Eine Website ohne https:// loeschte die Domain des Leads (domainFromUrl
@@ -8789,13 +7613,15 @@ async function saveLeadEditor() {
       label: tr('operatorEdited', 'Vom Nutzer geändert'),
     });
   }
-  // Das Fenster schliesst sofort; gespeichert wird im Hintergrund mit sichtbarer
-  // Rueckmeldung. Vorher blieb es offen, bis Datenbankabfrage und Schreiben
-  // durch den Abgleich waren - unter Last sah "Speichern" tot aus (25.09.2026).
-  state.selectedCampaign = campaign;
-  closeLeadEditor();
-  zeigeHinweis(`„${name}“ wird gespeichert …`, 0);
-  render();
+  // main #725 (2f7771874): Die Maske schliesst erst, wenn der Schreibvorgang lokal
+  // bestaetigt ist (api.put → handle.local = in der Outbox, dauerhaft). Scheitert
+  // das Lesen des Datensatzes (z. B. RATE_LIMITED) oder das Schreiben, bleibt der
+  // Entwurf samt Ansprechpartner im gesperrten Editor fuer einen neuen Versuch.
+  // Der Zustand "wird gespeichert" steht in der Zustandszone (zeigeHinweis), der
+  // Editor zeigt nur gesperrte Felder (aria-busy), keinen Statustext (§ Anf. 27).
+  state.leadEditorSaving = true;
+  zeigeHinweis(`„${name}“: Speichern …`, 0);
+  renderLeadEditor();
   const speichern = patchLead(lead.id, {
     ...(personChanges.length ? { contacts: nextContacts } : {}),
     name,
@@ -8815,10 +7641,16 @@ async function saveLeadEditor() {
   });
   try {
     await speichern;
+    state.leadEditorSaving = false;
+    state.selectedCampaign = campaign;
+    closeLeadEditor();
     zeigeHinweis(`„${name}“ gespeichert.`, 6000);
   } catch (error) {
+    state.leadEditorSaving = false;
+    renderLeadEditor();
     zeigeHinweis(`Speichern von „${name}“ fehlgeschlagen.`, 30000);
-    await showBusinessAlert(`Die Änderungen an „${name}“ konnten nicht gespeichert werden: ${String(error?.message || error)}`);
+    await zeigeMeldung(`Die Änderungen an „${name}“ konnten nicht gespeichert werden: ${String(error?.message || error)}`);
+    return;
   }
   await reload().catch(() => {});
   render();
@@ -8831,20 +7663,17 @@ async function saveLeadEditor() {
 // So bleiben lange Instruktionen aus dem Chat-Prompt heraus und stehen auch
 // einer Fortsetzung nach Anmeldung oder einer Reparaturaufgabe zur Verfuegung.
 async function publishResearchPolicyToScrapeStore(record) {
-  const dispatch = state.ctx?.commandBus?.dispatch;
-  if (typeof dispatch !== 'function') return { ok: false, reason: 'command-bus-unavailable' };
   const commandId = `cmd_leadgen_policy_${crypto.randomUUID?.() || Date.now()}`;
   try {
-    const result = await dispatch({
+    const result = await sendeBefehl({
       id: commandId,
       command_id: commandId,
       module: 'outbound-lead-generation',
       command_type: 'outbound.research_policy.publish',
       record_id: 'policy:outbound-lead-generation',
-      status: 'pending_sync',
       payload: {
         app: 'outbound-lead-generation',
-        skill: 'outbound-lead-generation-research',
+        skill: 'outbound-lead-generation/research',
         research_instructions: hebeBelegregelAn(String(record?.instructions || '').trim()),
         followup_instructions: String(record?.followup_instructions || '').trim(),
         fields: normalizeResearchFieldKeys(record?.field_keys || RESEARCH_FIELDS),
@@ -8855,10 +7684,8 @@ async function publishResearchPolicyToScrapeStore(record) {
         updated_at_ms: Number(record?.updated_at_ms || Date.now()),
       },
       client_context: { source: 'outbound-lead-generation.research-policy-save' },
-    // Kontrollbefehl ohne Aufgabe: ohne sync_queue_tasks:false und Frist
-    // konnte das Veroeffentlichen haengen wie frueher das Zugang-Speichern
-    // (Klicktest-Befund P4 V6).
-    }, { until: 'accepted', timeoutMs: 45_000, sync_queue_tasks: false });
+    // v4: Befehl ohne Warten; Fehlschlag meldet die Zustandszone.
+    });
     console.info('[olg-trace] policy published to scrape store', result?.status || 'dispatched');
     return { ok: true };
   } catch (error) {
@@ -8872,10 +7699,10 @@ async function saveResearchPolicy() {
   const fieldKeys = [...RESEARCH_FIELDS];
   console.info('[olg-trace] savePolicy start', { len: instructions.length });
   if (!instructions) {
-    showBusinessAlert(tr('policyRequired', 'Der Rechercheablauf darf nicht leer sein.'));
+    zeigeMeldung(tr('policyRequired', 'Der Rechercheablauf darf nicht leer sein.'));
     return;
   }
-  const existingDoc = await mitKanalHeilung(() => state.collections.researchPolicies.findOne(RESEARCH_POLICY_ID).exec(), 'save-policy-read');
+  const existingDoc = await mitKanalHeilung(() => state.collections.researchPolicies.eins(RESEARCH_POLICY_ID), 'save-policy-read');
   console.info('[olg-trace] savePolicy findOne ok', { existiert: Boolean(existingDoc) });
   const existing = existingDoc?.toJSON?.() || existingDoc;
   const followupInstructions = String(state.researchPolicyFollowupDraft || '').trim();
@@ -8888,8 +7715,8 @@ async function saveResearchPolicy() {
     // frueher gescheitertes Veroeffentlichen haette sonst nie nachgeholt
     // werden koennen (Review 7).
     const erneut = await publishResearchPolicyToScrapeStore(existing);
-    showBusinessAlert(erneut?.ok
-      ? 'Keine Änderung – der Rechercheablauf ist so gespeichert und wurde erneut an CTOX übergeben.'
+    zeigeMeldung(erneut?.ok
+      ? 'Keine Änderung – Rechercheablauf erneut an CTOX übergeben.'
       : `Keine Änderung am Rechercheablauf; die Übergabe an CTOX ist fehlgeschlagen: ${erneut?.reason || 'unbekannt'}`);
     return;
   }
@@ -8901,9 +7728,9 @@ async function saveResearchPolicy() {
     followupInstructions,
   );
   await mitKanalHeilung(async () => {
-    const doc = await state.collections.researchPolicies.findOne(RESEARCH_POLICY_ID).exec();
-    if (doc) await doc.incrementalPatch(record);
-    else await state.collections.researchPolicies.insert(record);
+    const doc = await state.collections.researchPolicies.eins(RESEARCH_POLICY_ID);
+    if (doc) await aendereDok(doc, record);
+    else await state.collections.researchPolicies.schreibe(record);
   }, 'save-policy-write');
   console.info('[olg-trace] savePolicy write ok');
   state.researchPolicy = instructions;
@@ -8921,24 +7748,24 @@ async function saveResearchPolicy() {
     adapterRelevant = String(existing?.configuration_digest || '').trim() !== erwartet;
   } catch { adapterRelevant = true; }
   if (!adapterRelevant) {
-    showBusinessAlert('Rechercheablauf gespeichert. Die Adapter sind davon nicht betroffen.');
+    zeigeMeldung('Rechercheablauf gespeichert. Die Adapter sind davon nicht betroffen.');
     return;
   }
   try {
     const submission = await queueAdapterReconciliation('research_policy_changed', record);
-    showBusinessAlert(submission?.deferred
+    zeigeMeldung(submission?.deferred
       ? 'Rechercheablauf gespeichert. Er gilt ab dem nächsten Recherchestart.'
       : submission?.deduplicated
         ? 'Rechercheablauf gespeichert. Der passende Adapter-Stand ist bereits aktiv.'
-        : 'Rechercheablauf gespeichert. CTOX gleicht jetzt alle Adapter in einem Vorgang ab.');
+        : 'Rechercheablauf gespeichert – CTOX gleicht die Adapter ab.');
   } catch (error) {
-    showBusinessAlert(`Der Rechercheablauf wurde gespeichert, aber der Adapter-Abgleich konnte nicht gestartet werden: ${String(error?.message || error)}`);
+    zeigeMeldung(`Rechercheablauf gespeichert, Adapter-Abgleich nicht gestartet: ${String(error?.message || error)}`);
   }
 }
 
 async function adapterConfigurationDigest(policy, sources) {
   if (!globalThis.crypto?.subtle || typeof TextEncoder !== 'function') {
-    throw new Error('Der sichere Konfigurationsabgleich ist in diesem Browser nicht verfügbar.');
+    throw new Error('Der sichere Konfigurationsabgleich fehlt in diesem Browser.');
   }
   // Ein Adapter liest Felder aus einer Quelle; der Wortlaut der
   // Rechercheanweisung aendert daran nichts. Frueher ging der Text in den
@@ -9010,11 +7837,11 @@ async function markAdaptersForReconciliation(sources, commandId, configurationDi
       created_at_ms: Number(existing?.created_at_ms || now),
       updated_at_ms: now,
     };
-    const doc = await state.collections.adapters.findOne(adapterId).exec();
-    if (doc) await doc.incrementalPatch(patch);
-    else await state.collections.adapters.insert(patch);
-    const sourceDoc = await state.collections.sources.findOne(source.id).exec();
-    await sourceDoc?.incrementalPatch({
+    const doc = await state.collections.adapters.eins(adapterId);
+    if (doc) await aendereDok(doc, patch);
+    else await state.collections.adapters.schreibe(patch);
+    const sourceDoc = await state.collections.sources.eins(source.id);
+    await aendereDokWennDa(sourceDoc, {
       adapter_status: patch.status,
       scrape_status: patch.scrape_status,
       auth_status: patch.auth_status,
@@ -9067,8 +7894,8 @@ async function queueAdapterReconciliation(reason, policyRecord = state.researchP
       task_id: policy.reconciliation_task_id || '',
     };
   }
-  if (typeof state.ctx?.businessChat?.submitTask !== 'function') {
-    throw new Error('CTOX Agent-Aufgaben sind derzeit nicht verfügbar.');
+  if (typeof state.port?.auftrag !== 'function') {
+    throw new Error('CTOX Agent-Aufgaben fehlen in dieser Sitzung.');
   }
   state.adapterReconciliationPending = true;
   renderSourcePanel();
@@ -9094,14 +7921,14 @@ async function queueAdapterReconciliation(reason, policyRecord = state.researchP
       }],
     };
     const instruction = [
-      'Gleiche in EINEM dauerhaften Agent-Lauf alle Playwright-Scraper dieser Outbound-Recherchekonfiguration ab.',
-      'Erkenne Anbieter oder Quellen, die in der Rechercheanweisung ausdrücklich genannt sind, aber in sources fehlen, und nimm sie in discovered_sources auf.',
-      'Erzeuge oder aktualisiere für jede aktive und jede neu entdeckte Quelle den CTOX Universal-Scraping-Adapter unter runtime/scraping/targets/<target_key>/scripts/.',
+      'Gleiche in EINEM dauerhaften Agent-Lauf alle Playwright-Scraper dieser Outbound-Recherchekonfiguration ab.', // v4-allow: text (Agenten-Auftrag)
+      'Erkenne Anbieter oder Quellen, die in der Rechercheanweisung ausdrücklich genannt sind, aber in sources fehlen, und nimm sie in discovered_sources auf.', // v4-allow: text (Agenten-Auftrag)
+      'Erzeuge oder aktualisiere für jede aktive und jede neu entdeckte Quelle den CTOX Universal-Scraping-Adapter unter runtime/scraping/targets/<target_key>/scripts/.', // v4-allow: text (Agenten-Auftrag)
       'Registriere jeden Stand mit `ctox scrape upsert-target` und `ctox scrape register-script` und teste ihn anschließend mit `ctox scrape execute --target-key <target_key> --allow-heal`.',
-      'Die Skripte müssen genau die angeforderten field_keys liefern und die Rechercheanweisung berücksichtigen.',
+      'Die Skripte müssen genau die angeforderten field_keys liefern und die Rechercheanweisung berücksichtigen.', // v4-allow: text (Agenten-Auftrag)
       'Falls eine Anmeldung, MFA, CAPTCHA oder menschliche Freigabe nötig ist: status=auth_required, scrape_status=auth_required; niemals Zugangswerte lesen, ausgeben oder in Code/Logs schreiben. Nur credential_ref darf verwendet werden.',
-      'Bei Fehlern einen expliziten scrape_status und last_error setzen. Kein stiller Fallback und keine erfundenen Testresultate.',
-      'Antworte ausschließlich mit einem minifizierten JSON-Objekt exakt nach dem Ergebnisvertrag, ohne Markdown oder Begleittext.',
+      'Bei Fehlern einen expliziten scrape_status und last_error setzen. Kein stiller Fallback und keine erfundenen Testresultate.', // v4-allow: text (Agenten-Auftrag)
+      'Antworte ausschließlich mit einem minifizierten JSON-Objekt exakt nach dem Ergebnisvertrag, ohne Markdown oder Begleittext.', // v4-allow: text (Agenten-Auftrag)
       `configuration_digest: ${configurationDigest}`,
       `reason: ${reason}`,
       `research_instruction:\n${researchPolicyInstructions(policy)}`,
@@ -9109,7 +7936,7 @@ async function queueAdapterReconciliation(reason, policyRecord = state.researchP
       `sources: ${JSON.stringify(sourceContract)}`,
       `result_contract: ${JSON.stringify(resultContract)}`,
     ].join('\n\n');
-    const submission = requireTrackedSubmission(await state.ctx.businessChat.submitTask({
+    const submission = requireTrackedSubmission(await state.port?.auftrag({
       instruction,
       prompt: instruction,
       user_message: `Adapter-Abgleich für Recherchekonfiguration ${configurationDigest}`,
@@ -9125,7 +7952,7 @@ async function queueAdapterReconciliation(reason, policyRecord = state.researchP
       record_id: RESEARCH_POLICY_ID,
       thread_key: `business-os/outbound-lead-generation/adapter-reconciliation/${configurationDigest}`,
       target: 'data',
-      required_skills: ['outbound-lead-generation-research', 'universal-scraping', 'web-unlock'],
+      required_skills: ['outbound-lead-generation/research', 'universal-scraping', 'web-unlock'],
       response_channel: 'business_os_chat',
       payload: {
         title: 'Recherche-Adapter abgleichen',
@@ -9138,7 +7965,7 @@ async function queueAdapterReconciliation(reason, policyRecord = state.researchP
         research_instruction: researchPolicyInstructions(policy),
         field_keys: activeResearchFields(),
         sources: sourceContract,
-        required_skills: ['outbound-lead-generation-research', 'universal-scraping', 'web-unlock'],
+        required_skills: ['outbound-lead-generation/research', 'universal-scraping', 'web-unlock'],
         writeback_contract: {
           schema: 'ctox.outbound.adapter_reconciliation.v1',
           source_collection: 'outbound_lead_generation_sources',
@@ -9156,7 +7983,7 @@ async function queueAdapterReconciliation(reason, policyRecord = state.researchP
       },
     }));
     const now = Date.now();
-    const policyDoc = await state.collections.researchPolicies.findOne(RESEARCH_POLICY_ID).exec();
+    const policyDoc = await state.collections.researchPolicies.eins(RESEARCH_POLICY_ID);
     const reconciliationPatch = {
       configuration_digest: configurationDigest,
       reconciliation_status: 'queued',
@@ -9165,24 +7992,24 @@ async function queueAdapterReconciliation(reason, policyRecord = state.researchP
       reconciliation_error: '',
       updated_at_ms: now,
     };
-    await policyDoc?.incrementalPatch(reconciliationPatch);
+    await aendereDokWennDa(policyDoc, reconciliationPatch);
     state.researchPolicyRecord = { ...(state.researchPolicyRecord || policy), ...reconciliationPatch };
     for (const adapter of state.adapters.filter((entry) => entry.last_command_id === commandId)) {
-      const doc = await state.collections.adapters.findOne(adapter.id).exec();
-      await doc?.incrementalPatch({ last_task_id: submission.task_id || '', updated_at_ms: now });
+      const doc = await state.collections.adapters.eins(adapter.id);
+      await aendereDokWennDa(doc, { last_task_id: submission.task_id || '', updated_at_ms: now });
       adapter.last_task_id = submission.task_id || '';
     }
     return submission;
   } catch (error) {
     const message = String(error?.message || error);
-    const policyDoc = await state.collections.researchPolicies.findOne(RESEARCH_POLICY_ID).exec();
+    const policyDoc = await state.collections.researchPolicies.eins(RESEARCH_POLICY_ID);
     const failurePatch = {
       reconciliation_status: 'failed',
       reconciliation_command_id: commandId,
       reconciliation_error: message,
       updated_at_ms: Date.now(),
     };
-    await policyDoc?.incrementalPatch(failurePatch);
+    await aendereDokWennDa(policyDoc, failurePatch);
     state.researchPolicyRecord = { ...(state.researchPolicyRecord || policy), ...failurePatch };
     throw error;
   } finally {
@@ -9191,110 +8018,31 @@ async function queueAdapterReconciliation(reason, policyRecord = state.researchP
   }
 }
 
-// Sellify-Abfragen: der direkte Weg ueber den Datenkanal startet sofort. Kommt
-// nach 1,5 s keine Antwort, laeuft der Befehlsweg parallel an; die erste
-// gueltige Antwort gewinnt. Vorher wartete jede Abfrage erst 6 s auf den
-// direkten Weg und ging danach allein auf den langsamen Befehlsweg - jede
-// Kampagnensuche und jeder Importschritt kostete so 15-100 s (25.09.2026).
-// ctox-rxdb-js (bis Shell-Build v399) schickt bei requestNative das
-// RxCollection-OBJEKT als frame.collection; der CTOX-Server verwirft solche
-// Frames still, jede direkte Sellify-Abfrage lief deshalb in ihren Timeout und
-// jeder Abgleich ging den 12-s-Umweg ueber einen Befehl. Mit dem Collection-
-// NAMEN antwortet derselbe Weg in unter einer Sekunde (Kundeninstanz 26.09.2026).
-// Bis der Shell-Fix ueberall geladen ist, fragt die App den Peer selbst.
-async function sellifyDirektAnfrage(payload, timeoutMs) {
-  const sync = state.ctx?.sync;
-  const collection = 'outbound_lead_generation_leads';
-  try {
-    let bridge = await sync?.startCollection?.(collection, { pin: false, forceDirect: true });
-    if (!bridge?.state && bridge?.ready) bridge = await bridge.ready;
-    const replication = bridge?.state;
-    const verhandelt = await replication?.shared?.ensureNegotiatedPeer?.();
-    if (verhandelt?.peerId && typeof replication?.peer?.request === 'function') {
-      return await replication.peer.request(
-        verhandelt.peerId,
-        'ctox.outbound.sellify_lookup.v1',
-        [payload],
-        timeoutMs,
-        collection,
-      );
-    }
-  } catch (error) {
-    if (!/Timed out|not open|not connected/i.test(String(error?.message || error))) throw error;
-  }
-  if (typeof sync?.requestNative !== 'function') throw new Error('Direkter Sellify-Weg nicht verfügbar.');
-  // Die native Autorisierung ist collection-gebunden (Lead-Lesezugriff).
-  return sync.requestNative('ctox.outbound.sellify_lookup.v1', payload, { timeoutMs, collection });
-}
-
-async function sellifyNativeLookup(payload, { commandTimeoutMs = 90_000 } = {}) {
+// v4: der Sellify-Lookup ist ein Befehl (Handler outbound.sellify.lookup liest die replizierten
+// Sellify-Collections). Der frühere Direktweg ueber den nativen Peer (requestNative) entfaellt.
+async function sellifyNativeLookup(payload) {
   const gueltig = (antwort) => {
     const inhalt = antwort?.result?.records || antwort?.result?.groups ? antwort.result : antwort;
     if (inhalt?._omitted) throw new Error('Das Sellify-Ergebnis ist zu gross fuer die Uebertragung; bitte genauer suchen.');
     if (!Array.isArray(inhalt?.records) && !Array.isArray(inhalt?.groups)) throw new Error('Sellify lieferte kein gültiges Ergebnis.');
     return { records: Array.isArray(inhalt.records) ? inhalt.records : [], groups: inhalt.groups, truncated: inhalt.truncated };
   };
-  let fertig = false;
-  const direkt = (async () => {
-    if (typeof state.ctx?.sync?.requestNative !== 'function') throw new Error('Direkter Sellify-Weg nicht verfügbar.');
-    if (Date.now() < Number(state.sellifyDirectDownUntil || 0)) throw new Error('Direkter Sellify-Weg vorübergehend aus.');
-    try {
-      const ergebnis = gueltig(await withTimeout(
-        sellifyDirektAnfrage(payload, 20_000),
-        'Die direkte Sellify-Abfrage hat zu lange gedauert.',
-        21_000,
-      ));
-      fertig = true;
-      return ergebnis;
-    } catch (error) {
-      if (!fertig) state.sellifyDirectDownUntil = Date.now() + 60_000;
-      befehlsDiagnose({ command_type: 'native.sellify_lookup' }, `FEHLER ${String(error?.message || error).slice(0, 160)}`);
-      throw error;
-    }
-  })();
-  const befehl = (async () => {
-    // Nur wenn der direkte Weg nicht schnell antwortet.
-    await Promise.race([direkt.catch(() => {}), new Promise((resolve) => setTimeout(resolve, 4_000))]);
-    if (fertig) throw new Error('bereits beantwortet');
-    let letzterFehler = null;
-    for (let versuch = 0; versuch < 2 && !fertig; versuch += 1) {
-      const commandId = `cmd_leadgen_sellify_lookup_${crypto.randomUUID()}`;
-      try {
-        const receipt = await sendeBefehl({
-          id: commandId,
-          command_id: commandId,
-          module: 'outbound',
-          command_type: 'outbound.sellify.lookup',
-          record_id: String(payload?.entity || 'company'),
-          inbound_channel: 'business_os.outbound_lead_generation',
-          payload,
-          client_context: {
-            source_module: 'outbound-lead-generation',
-            record_id: String(payload?.entity || 'company'),
-            business_chat_auto_focus: false,
-            // Diagnose (25.09.2026): der Server protokolliert je Befehl Warte-
-            // und Ausfuehrungszeit (command_intake_queue_sample), um die
-            // 13-33 s je Sellify-Abgleich Transport, Warteschlange oder
-            // Sperren zuzuordnen.
-            command_timing_probe: true,
-          },
-        }, { until: 'terminal', timeoutMs: commandTimeoutMs, sync_queue_tasks: false });
-        return gueltig(receipt?.result?.result || receipt?.result || receipt);
-      } catch (error) {
-        letzterFehler = error;
-        console.warn('[olg-sellify-lookup] Command-Versuch', versuch + 1, 'fehlgeschlagen', String(error?.message || error).slice(0, 120));
-      }
-    }
-    throw letzterFehler || new Error('Sellify-Abfrage fehlgeschlagen.');
-  })();
-  try {
-    return await Promise.any([direkt, befehl]);
-  } catch (sammel) {
-    const fehler = (sammel?.errors || []).find((error) => !/bereits beantwortet/.test(String(error?.message || '')));
-    throw fehler || new Error('Sellify-Abfrage fehlgeschlagen.');
-  } finally {
-    fertig = true;
-  }
+  const commandId = `cmd_leadgen_sellify_lookup_${crypto.randomUUID()}`;
+  const receipt = await sendeBefehl({
+    id: commandId,
+    command_id: commandId,
+    module: 'outbound',
+    command_type: 'outbound.sellify.lookup',
+    record_id: String(payload?.entity || 'company'),
+    payload,
+    client_context: {
+      source_module: 'outbound-lead-generation',
+      record_id: String(payload?.entity || 'company'),
+      business_chat_auto_focus: false,
+    },
+  }, { ergebnis: true });
+  if (receipt?.ok === false) throw new Error(receipt.error || 'Sellify-Abfrage fehlgeschlagen.');
+  return gueltig(receipt?.result?.result || receipt?.result || receipt);
 }
 
 // Die WAHRHEIT ueber eine Quelle steht in der Scrape-Registry, nicht in den
@@ -9302,28 +8050,47 @@ async function sellifyNativeLookup(payload, { commandTimeoutMs = 90_000 } = {}) 
 // adapter liste steht ueberall nur status geht nicht". Gemessen: die Registry
 // fuehrte 21 Ziele, alle `active`, waehrend die Liste Pruefergebnisse vom
 // 31.08. und "noch nie geprueft" zeigte.
+// Lese-Kontext der Registry-Sichten (handlers/_lib/scrape-registry.js) ueber die App-API: lokal, vollstaendig.
+function registryKontext() {
+  const api = state.api;
+  return {
+    read: async (name, filter = {}) => api.query(name, Object.keys(filter).length ? { selector: filter } : {}).get(),
+    get: async (name, id) => api.get(name, String(id)).get() ?? null,
+    now: () => Date.now(),
+    // CAP-3b #844 (caps/files.rs): die Registry-Bibliothek (handlers/_lib/scrape-registry.js) ruft
+    // files.get({ref}) → {id, ref, name, mime, size, owner_app, created_at_ms, text?} und
+    // files.put({name, mime, text}) → {id, ref}. VERMERK: der eingefrorene Shell-v4-Kern-Stub-Pin 74137b1
+    // fährt noch die alte Form (get(ref:string) → Blob, put(blob, meta) → Handle). Dieser Adapter übersetzt
+    // auf den CAP-3b-Vertrag; er entfällt, sobald der Kern die CAP-3b-files-Bindung ausliefert.
+    cap: {
+      files: {
+        get: async (arg) => {
+          const ref = typeof arg === 'string' ? arg : (arg?.ref ?? arg?.id);
+          const blob = await api.files.get(ref);
+          if (blob == null) { const e = new Error('file not found'); e.code = 'not_found'; throw e; }
+          const text = typeof blob === 'string' ? blob
+            : (typeof blob.text === 'function' ? await blob.text() : (typeof blob.text === 'string' ? blob.text : null));
+          return { id: arg?.id ?? null, ref, name: '', mime: blob?.type ?? 'application/octet-stream',
+            size: blob?.size ?? 0, owner_app: 'outbound-lead-generation', created_at_ms: 0, text };
+        },
+        put: async ({ name, mime, text }) => {
+          const handle = api.files.put(new Blob([text], { type: mime || 'application/octet-stream' }), { name, mime });
+          return { id: null, ref: await handle.ref };
+        },
+      },
+    },
+  };
+}
+
 async function ladeAdapterSkript(sourceId) {
   const item = state.sources.find((entry) => entry.id === sourceId);
   const targetKey = String(item?.target_key || '').trim();
   if (!targetKey) return;
   state.adapterInspectorScriptLaeuft = true;
-  const commandId = `cmd_leadgen_registry_script_${crypto.randomUUID()}`;
   try {
-    const receipt = await sendeBefehl({
-      id: commandId,
-      command_id: commandId,
-      module: 'outbound',
-      command_type: 'outbound.research_source.registry_read',
-      record_id: 'registry',
-      inbound_channel: 'business_os.outbound_lead_generation',
-      payload: { target_keys: [targetKey], include_script_target: targetKey },
-      client_context: { source_module: 'outbound-lead-generation', record_id: 'registry', business_chat_auto_focus: false },
-    }, { until: 'terminal', timeoutMs: 45_000, sync_queue_tasks: false });
-    const result = receipt?.result?.result || receipt?.result || receipt;
+    const script = await registryLatestScript(registryKontext(), targetKey, 150_000);
     if (state.adapterInspectorSourceId !== sourceId) return;
-    state.adapterInspectorScript = result?.script && typeof result.script === 'object'
-      ? result.script
-      : { target_key: targetKey, available: false, error: 'CTOX liefert das Skript in dieser Version noch nicht mit.' };
+    state.adapterInspectorScript = script;
   } catch (error) {
     if (state.adapterInspectorSourceId !== sourceId) return;
     state.adapterInspectorScript = { target_key: targetKey, available: false, error: String(error?.message || error) };
@@ -9333,61 +8100,47 @@ async function ladeAdapterSkript(sourceId) {
   }
 }
 
-// Der letzte bekannte Registry-Stand erscheint sofort (Browserspeicher), die
-// Antwort des Servers ersetzt ihn, sobald sie da ist. Vorher stand die Liste
-// bis zu 27 s auf "wird geladen" (Rundgang 25.09.2026).
-function registryAusSpeicher() {
-  if (state.registryStand) return;
-  try {
-    const gespeichert = JSON.parse(globalThis.localStorage?.getItem('ctox.olg.registry.v1') || 'null');
-    if (!Array.isArray(gespeichert?.ziele) || !gespeichert.ziele.length) return;
-    state.registry = new Map(gespeichert.ziele.map((z) => [String(z.target_key || ''), z]));
-    state.registryStand = Number(gespeichert.at) || 1;
-  } catch { /* nichts gespeichert */ }
+// Ein Registry-Eintrag wie outbound.research_source.registry_read ihn lieferte (ref: dessen handle()).
+function registryEintrag(ziel, laeufe, konten) {
+  const text = (key) => (typeof ziel?.[key] === 'string' ? ziel[key] : '');
+  const targetId = text('target_id');
+  const lauf = Object.hasOwn(laeufe, targetId) ? laeufe[targetId] : null;
+  return {
+    target_key: text('target_key'),
+    target_id: targetId,
+    display_name: text('display_name'),
+    status: text('status'),
+    target_kind: text('target_kind'),
+    start_url: text('start_url'),
+    latest_script_revision_no: Object.hasOwn(ziel, 'latest_script_revision_no') ? ziel.latest_script_revision_no : null,
+    last_run: lauf ? (lauf.last_run ?? null) : null,
+    last_successful_run: lauf ? (lauf.last_successful_run ?? null) : null,
+    account_state: Object.hasOwn(konten, targetId) ? konten[targetId] : null,
+  };
 }
 
 async function ladeQuellenRegistry() {
-  registryAusSpeicher();
-  if (state.registryLaeuft) return;
+  if (state.registryLaeuft) { state.registryNochmal = true; return; }
   state.registryLaeuft = true;
-  const commandId = `cmd_leadgen_registry_read_${crypto.randomUUID()}`;
   try {
-    const receipt = await sendeBefehl({
-      id: commandId,
-      command_id: commandId,
-      module: 'outbound',
-      command_type: 'outbound.research_source.registry_read',
-      record_id: 'registry',
-      inbound_channel: 'business_os.outbound_lead_generation',
-      payload: {},
-      client_context: {
-        source_module: 'outbound-lead-generation',
-        record_id: 'registry',
-        business_chat_auto_focus: false,
-      },
-    }, { until: 'terminal', timeoutMs: 45_000, sync_queue_tasks: false });
-    const result = receipt?.result?.result || receipt?.result || receipt;
-    const ziele = Array.isArray(result?.targets) ? result.targets : [];
-    state.registry = new Map(ziele.map((z) => [String(z.target_key || ''), z]));
+    const ctx = registryKontext();
+    const [ziele, laeufe, konten] = await Promise.all([registryListTargets(ctx), registryLastRuns(ctx), registryAccountStates(ctx)]);
+    state.registry = new Map(ziele.map((ziel) => registryEintrag(ziel, laeufe, konten))
+      .filter((eintrag) => eintrag.target_key).map((eintrag) => [eintrag.target_key, eintrag]));
     state.registryStand = Date.now();
-    try { globalThis.localStorage?.setItem('ctox.olg.registry.v1', JSON.stringify({ at: state.registryStand, ziele })); } catch { /* nur Komfort */ }
+    state.registryFehler = '';
     renderSourcePanel();
   } catch (error) {
-    // Kein Ersatzwert erfinden: ohne Antwort bleibt die Liste bei dem, was sie
-    // selbst weiss, und sagt das auch.
     state.registryFehler = String(error?.message || error).slice(0, 140);
     console.warn('[olg] Registry nicht lesbar', state.registryFehler);
-    if (!state.registryNachgefasst) {
-      state.registryNachgefasst = true;
-      globalThis.setTimeout(() => { void ladeQuellenRegistry(); }, 15_000);
-    }
   } finally {
     state.registryLaeuft = false;
+    if (state.registryNochmal) { state.registryNochmal = false; planeRegistry(); }
   }
 }
 
 async function sucheSellifyKampagnen() {
-  const input = state.ctx.host.querySelector('[data-sellify-campaign-query]');
+  const input = state.root.querySelector('[data-sellify-campaign-query]');
   const query = String(input?.value || '').trim();
   state.sellifyImportQuery = query;
   if (query.length < 2) {
@@ -9436,7 +8189,7 @@ async function sucheSellifyKampagnen() {
       .sort((a, b) => datumAusName(b.name) - datumAusName(a.name) || b.count - a.count || a.name.localeCompare(b.name, 'de'))
       .slice(0, 200);
     state.sellifyImportNotice = state.sellifyImportResults.length
-      ? `${state.sellifyImportResults.length} Kampagnen gefunden, neueste zuerst. Ein Klick importiert die Firmen der Kampagne.`
+      ? `${anzahl(state.sellifyImportResults.length, 'Kampagne', 'Kampagnen')} gefunden, neueste zuerst. Ein Klick importiert die Firmen der Kampagne.`
       : `Keine Sellify-Kampagne mit „${query}“ gefunden.`;
   } catch (error) {
     state.sellifyImportResults = [];
@@ -9545,7 +8298,7 @@ async function importiereSellifyKampagne(kampagnenName) {
   const name = String(kampagnenName || '').trim();
   if (!name) return;
   if (state.hintergrundImport) {
-    zeigeHinweis(`Es läuft bereits ein Import („${state.hintergrundImport}“). Bitte kurz warten.`, 8000);
+    zeigeHinweis(`Es läuft bereits ein Import („${state.hintergrundImport}“). Bitte kurz warten.`, 8000); // v4-allow: label
     return;
   }
   // Der Import laeuft im Hintergrund: der Dialog schliesst sofort, die Leiste
@@ -9557,10 +8310,14 @@ async function importiereSellifyKampagne(kampagnenName) {
   renderLeadEditor();
   const titel = `Sellify: ${name}`;
   const start = Date.now();
-  let stufe = 'Mitglieder werden aus Sellify geladen';
+  let stufe = 'Mitglieder aus Sellify';
   const zeige = () => zeigeHinweis(`Import „${name}“: ${stufe} … ${Math.floor((Date.now() - start) / 1000)} s`, 0);
   zeige();
-  const uhr = setInterval(zeige, 1000);
+  // Sekundenanzeige (UI): selbst nachplanender Timer, endet im finally.
+  let uhrTimer = 0;
+  const uhrTakt = () => { zeige(); uhrTimer = setTimeout(uhrTakt, 1000); };
+  uhrTimer = setTimeout(uhrTakt, 1000);
+  const uhr = { stopp: () => clearTimeout(uhrTimer) };
   try {
     const mitglieder = await sellifyNativeLookup({
       entity: 'campaign',
@@ -9576,7 +8333,7 @@ async function importiereSellifyKampagne(kampagnenName) {
       .map((row) => String(row.contact_id || row.company_id || '').trim())
       .filter((id) => id && id !== '0'))];
     if (!contactIds.length) {
-      clearInterval(uhr);
+      uhr.stopp();
       zeigeHinweis(`„${name}“ hat keine importierbaren Firmen.`, 15000);
       return;
     }
@@ -9584,7 +8341,7 @@ async function importiereSellifyKampagne(kampagnenName) {
     const bloecke = [];
     for (let offset = 0; offset < contactIds.length; offset += 30) bloecke.push(contactIds.slice(offset, offset + 30));
     let geladen = 0;
-    stufe = `${rows.length} Kontakte aus ${contactIds.length} Firmen gefunden · Firmendaten 0 / ${contactIds.length}`;
+    stufe = `${anzahl(rows.length, 'Kontakt', 'Kontakte')} aus ${anzahl(contactIds.length, 'Firma', 'Firmen')} gefunden · Firmendaten 0 / ${contactIds.length}`;
     zeige();
     let naechster = 0;
     const arbeiter = async () => {
@@ -9600,14 +8357,14 @@ async function importiereSellifyKampagne(kampagnenName) {
           if (record && !record.is_deleted) firmen.push(record);
         }
         geladen += teil.length;
-        stufe = `${rows.length} Kontakte aus ${contactIds.length} Firmen gefunden · Firmendaten ${Math.min(geladen, contactIds.length)} / ${contactIds.length}`;
+        stufe = `${anzahl(rows.length, 'Kontakt', 'Kontakte')} aus ${anzahl(contactIds.length, 'Firma', 'Firmen')} gefunden · Firmendaten ${Math.min(geladen, contactIds.length)} / ${contactIds.length}`;
         zeige();
       }
     };
     await Promise.all(Array.from({ length: Math.min(3, bloecke.length) }, arbeiter));
     if (!firmen.length) {
-      clearInterval(uhr);
-      zeigeHinweis(`Zu „${name}“ wurden ${contactIds.length} Firmen gefunden, aber keine Firmendatensätze.`, 20000);
+      uhr.stopp();
+      zeigeHinweis(`Zu „${name}“ wurden ${anzahl(contactIds.length, 'Firma', 'Firmen')} gefunden, aber keine Firmendatensätze.`, 20000);
       return;
     }
     const leadRows = firmen.map((firma, index) => normalizeCompanyRow({
@@ -9627,7 +8384,7 @@ async function importiereSellifyKampagne(kampagnenName) {
       title: titel,
       rows: leadRows,
     }, { fortschritt: (text) => { stufe = text; zeige(); } });
-    clearInterval(uhr);
+    uhr.stopp();
     await reload();
     if (Number(ergebnis?.lead_count || 0) > 0) {
       if (campaignListLeads(titel).length) state.selectedCampaign = titel;
@@ -9640,10 +8397,10 @@ async function importiereSellifyKampagne(kampagnenName) {
       zeigeHinweis(`${ergebnis?.message || ''} Keine neue Firma übrig – keine Kampagne „${titel}“ angelegt.`.trim(), 20000);
     }
   } catch (error) {
-    clearInterval(uhr);
+    uhr.stopp();
     zeigeHinweis(`Import „${name}“ fehlgeschlagen: ${String(error?.message || error)}`, 30000);
   } finally {
-    clearInterval(uhr);
+    uhr.stopp();
     state.hintergrundImport = '';
     renderLeadEditor();
   }
@@ -9723,10 +8480,12 @@ function urspruenglicheImportzeile(value) {
 }
 
 async function openImporter(defaultTitle = '') {
-  await openUniversalImporter(state.ctx, {
+  // shared/universal-importer.js erwartet noch das v3-Objekt; die App reicht nur ihr Fenster (host) –
+  // Dateiexplorer und Befehlsversand sind hier aus (showFileExplorer:false, dispatch:false).
+  await openUniversalImporter({ host: state.root }, {
     side: 'right', moduleId: 'outbound-lead-generation', entityType: 'lead', commandType: 'outbound-lead-generation.import',
     title: 'Leads importieren', kicker: 'Neu- und Nachrecherche', defaultSource: 'excel', showFileExplorer: false,
-    defaultTitle: defaultTitle || `Recherche ${new Date().getFullYear()}`, helperText: 'Excel, Text oder URL importieren. Die Recherche beginnt erst nach der Sichtprüfung.',
+    defaultTitle: defaultTitle || `Recherche ${new Date().getFullYear()}`, helperText: 'Excel, Text oder URL – Recherche erst nach der Sichtprüfung.',
     // Das Importfenster ist ein Vollbild-Overlay ueber der GESAMTEN Shell, nicht
     // nur ueber dieser App. Es offen zu halten blockiert das ganze System,
     // solange der Import laeuft. Es schliesst deshalb sofort; die Rueckmeldung
@@ -9770,9 +8529,9 @@ async function openImporter(defaultTitle = '') {
         const grund = String(fehler?.message || fehler);
         console.error('[outbound-lead-generation] Import fehlgeschlagen', fehler);
         zeigeHinweis(`Import fehlgeschlagen: ${grund}`, 0);
-        await showBusinessAlert(
+        await zeigeMeldung(
           `Der Import wurde nicht ausgeführt.\n\n${grund}\n\n`
-          + 'Es wurde nichts gespeichert. Bitte erneut versuchen; bleibt es dabei, ist die Datenverbindung noch nicht bereit.',
+          + 'Es wurde nichts gespeichert. Bitte erneut versuchen.',
         );
         throw fehler;
       }
@@ -9915,11 +8674,11 @@ async function importPreview(payload) {
   ];
   const zielLeads = zielKampagne ? campaignListLeads(zielKampagne).length : 0;
   if (zielKampagne.startsWith('Sellify:')) {
-    items.unshift({ kind: 'error', text: `„${zielKampagne}“ ist eine Sellify-Kampagne und nimmt keine Datei-Importe auf. Bitte oben einen eigenen Titel eintragen.` });
+    items.unshift({ kind: 'error', text: `„${zielKampagne}“ ist eine Sellify-Kampagne – oben einen eigenen Titel eintragen.` });
   } else if (zielLeads) {
     items.unshift({ kind: 'warning', text: `Ziel ist die bestehende Kampagne „${zielKampagne}“ (${zielLeads} Leads); die neuen Leads werden dort ergänzt. Für eine neue Kampagne oben den Titel ändern.` });
   }
-  if (existingCount) items.push({ kind: 'warning', text: `${existingCount} vorhandene Leads werden aktualisiert, nicht dupliziert.` });
+  if (existingCount) items.push({ kind: 'warning', text: `${existingCount} vorhandene Leads werden aktualisiert, nicht dupliziert.` }); // v4-allow: label
   if (andereKampagne) items.push({ kind: 'warning', text: `${andereKampagne === 1 ? '1 Firma ist' : `${andereKampagne} Firmen sind`} bereits in einer anderen Kampagne und ${andereKampagne === 1 ? 'bleibt' : 'bleiben'} dort.` });
   const extras = buildImportPreviewExtras(analysis);
   items.push(...extras.items);
@@ -9949,7 +8708,7 @@ async function importPayload(payload, { resumeImportId = '', fortschritt = null 
     throw new Error(analysis.message || 'Bitte eine gültige Auswahl mit höchstens 5.000 Firmen wählen.');
   }
   if (!resumeImportId) {
-    await state.collections.imports.insert({
+    await state.collections.imports.schreibe({
       id: importId, title: payload.title || 'Lead-Import', source_type: payload.source_type || 'text',
       status: normalizedRows.length ? 'importing' : 'empty', lead_count: 0,
       payload: {
@@ -10004,14 +8763,13 @@ async function importPayload(payload, { resumeImportId = '', fortschritt = null 
       && String(lead.domain || '').trim().toLowerCase() === domain);
     if (gleich) vorabIds.add(gleich.id);
   }
-  if (vorabIds.size) melde(`Vorhandene Firmen werden geladen (${vorabIds.size})`);
   const vorab = await ladeLeadDokumente([...vorabIds]);
   const holeDoc = (leadId) => (vorab.has(leadId)
     ? Promise.resolve(vorab.get(leadId))
-    : withTimeout(state.collections.leads.findOne(leadId).exec(), 'Lead konnte nicht geladen werden.', 8000).catch(() => null));
+    : state.collections.leads.eins(leadId).catch(() => null));
   for (const [index, { raw, row, id: zeilenId }] of zeilen.entries()) {
     let id = zeilenId;
-    if (index % 5 === 0) melde(`Firmen werden abgeglichen: ${index} / ${gesamt}`);
+    if (index % 5 === 0) melde(`Firmenabgleich: ${index} / ${gesamt}`);
     // Kampagnenpruefung aus der geladenen Liste; die Datenbank wird nur gefragt,
     // wenn der Lead in DIESER Kampagne aktualisiert werden muss (mit Frist).
     // Eine haengende Einzelabfrage liess Importe auf "importing" stehen.
@@ -10048,10 +8806,10 @@ async function importPayload(payload, { resumeImportId = '', fortschritt = null 
       if (!weitere.includes(zielKampagne)) {
         const neuePayload = { ...(current.payload || {}), weitere_kampagnen: [...weitere, zielKampagne] };
         if (typeof existing.incrementalPatch === 'function') {
-          await existing.incrementalPatch({ payload: neuePayload, updated_at_ms: now });
+          await aendereDok(existing, { payload: neuePayload, updated_at_ms: now });
         } else {
           const doc = await holeDoc(current.id);
-          if (doc) await doc.incrementalPatch({ payload: neuePayload, updated_at_ms: now });
+          if (doc) await aendereDok(doc, { payload: neuePayload, updated_at_ms: now });
         }
         const lokal = state.leads.find((lead) => lead.id === current.id);
         if (lokal) lokal.payload = neuePayload;
@@ -10066,7 +8824,7 @@ async function importPayload(payload, { resumeImportId = '', fortschritt = null 
       // Unveraenderte Importzeile nicht neu schreiben: jeder Schreibvorgang
       // geht einzeln ueber den Abgleich zum Server.
       if (JSON.stringify(current.payload?.imported_row ?? null) !== JSON.stringify(importzeile ?? null)) {
-        await existing.incrementalPatch({
+        await aendereDok(existing, {
           payload: { ...(current.payload || {}), imported_row: importzeile, import_id_last: importId },
           updated_at_ms: now,
         });
@@ -10109,19 +8867,19 @@ async function importPayload(payload, { resumeImportId = '', fortschritt = null 
       for (const fehler of (ergebnis.error || [])) {
         const doc = teil.find((lead) => lead.id === (fehler?.documentId || fehler?.documentInDb?.id));
         if (!doc) continue;
-        try { await state.collections.leads.upsert(doc); importiert += 1; } catch (einzel) { console.warn('[olg-import] Lead nicht angelegt', doc.id, einzel); }
+        try { await state.collections.leads.schreibe(doc); importiert += 1; } catch (einzel) { console.warn('[olg-import] Lead nicht angelegt', doc.id, einzel); }
       }
     } else {
       for (const lead of teil) {
-        await state.collections.leads.insert(lead);
+        await state.collections.leads.schreibe(lead);
         importiert += 1;
       }
     }
   }
-  const job = await state.collections.imports.findOne(importId).exec();
+  const job = await state.collections.imports.eins(importId);
   if (job) {
     const current = job.toJSON?.() || job;
-    await job.incrementalPatch({
+    await aendereDok(job, {
       status: importiert + zugeordnet ? 'imported' : 'empty',
       lead_count: importiert + zugeordnet,
       payload: { ...(current.payload || {}), resume_rows: [], skipped_other_campaign: verschoben, also_member_count: zugeordnet },
@@ -10149,11 +8907,7 @@ async function ladeLeadDokumente(ids) {
   for (let offset = 0; offset < liste.length; offset += 100) {
     const teil = liste.slice(offset, offset + 100);
     try {
-      const docs = await withTimeout(
-        state.collections.leads.find({ selector: { id: { $in: teil } }, limit: 200 }).exec(),
-        'Vorhandene Leads konnten nicht geladen werden.',
-        30_000,
-      );
+      const docs = await state.collections.leads.alle({ selector: { id: { $in: teil } }, limit: 200 });
       for (const doc of docs || []) {
         const leadId = String((doc?.toJSON?.() || doc)?.id || '');
         if (leadId) karte.set(leadId, doc);
@@ -10184,13 +8938,13 @@ async function setzeImportFort(importId) {
   const job = (state.imports || []).find((entry) => entry.id === importId);
   const rows = Array.isArray(job?.payload?.resume_rows) ? job.payload.resume_rows : [];
   if (!job || !rows.length) {
-    showBusinessAlert('Dieser Import lässt sich nicht fortsetzen – die Zeilen sind nicht gespeichert. Bitte erneut importieren.');
+    zeigeMeldung('Import nicht fortsetzbar (Zeilen nicht gespeichert) – neu importieren.');
     return;
   }
   const ergebnis = await importPayload({ title: job.title, source_type: job.payload?.resume_source_type || job.source_type, rows }, { resumeImportId: job.id });
   await reload();
   render();
-  showBusinessAlert(`Import fortgesetzt. ${ergebnis?.message || ''}`);
+  zeigeMeldung(`Import fortgesetzt. ${ergebnis?.message || ''}`);
 }
 
 function resetLeadForImport(existing) {
@@ -10290,9 +9044,9 @@ async function schliesseKampagnenLuecken(kampagne, sichtbareIds = '') {
     && !researchInFlight(lead) && !researchSubmissionPending(lead) && offeneRecherchefelder(lead).length);
   if (!leads.length) return;
   const felderGesamt = leads.reduce((summe, lead) => summe + offeneRecherchefelder(lead).length, 0);
-  const ok = await showBusinessConfirm(
-    `Bei ${leads.length} Leads werden nur die noch nicht belegten Felder erneut recherchiert (${felderGesamt} Felder insgesamt). Belegte Werte bleiben unverändert.`,
-    { title: 'Lücken schließen', confirmLabel: `${leads.length} Leads starten` },
+  const ok = await frageBestaetigung(
+    `Bei ${anzahl(leads.length, 'Lead', 'Leads')} werden nur die noch nicht belegten Felder erneut recherchiert (${anzahl(felderGesamt, 'Feld', 'Felder')} insgesamt). Belegte Werte bleiben unverändert.`,
+    { title: 'Lücken schließen', confirmLabel: `${anzahl(leads.length, 'Lead', 'Leads')} starten` },
   );
   if (!ok) return;
   let gestartet = 0;
@@ -10301,7 +9055,7 @@ async function schliesseKampagnenLuecken(kampagne, sichtbareIds = '') {
   // hiess bei 18 Leads rund zwoelf Minuten ohne Rueckmeldung (26.09.2026).
   let fertig = 0;
   let naechster = 0;
-  const melde = () => zeigeHinweis(`Lücken schließen: ${fertig} / ${leads.length} Leads gestartet oder geprüft …`, 0);
+  const melde = () => zeigeHinweis(`Lücken schließen: ${fertig} / ${anzahl(leads.length, 'Lead', 'Leads')} gestartet oder geprüft …`, 0);
   melde();
   const arbeiter = async () => {
     while (naechster < leads.length) {
@@ -10319,8 +9073,8 @@ async function schliesseKampagnenLuecken(kampagne, sichtbareIds = '') {
     }
   };
   await Promise.all(Array.from({ length: Math.min(3, leads.length) }, arbeiter));
-  zeigeHinweis(`Lückenschluss für ${gestartet} von ${leads.length} Leads gestartet.`, 15000);
-  showBusinessAlert(`Lückenschluss für ${gestartet} von ${leads.length} Leads gestartet.${nichtGesendet ? ` ${nichtGesendet} Aufträge haben CTOX nicht erreicht – bitte Seite neu laden und erneut starten.` : ''}`);
+  zeigeHinweis(`Lückenschluss für ${gestartet} von ${anzahl(leads.length, 'Lead', 'Leads')} gestartet.`, 15000);
+  zeigeMeldung(`Lückenschluss für ${gestartet} von ${anzahl(leads.length, 'Lead', 'Leads')} gestartet.${nichtGesendet ? ` ${nichtGesendet} Aufträge haben CTOX nicht erreicht – bitte Seite neu laden und erneut starten.` : ''}`);
 }
 
 function rechercheFortsetzung(lead, felder) {
@@ -10372,17 +9126,8 @@ async function researchLead(id, options = {}) {
   let vorwissen = null;
   let vorwissenFehler = null;
   try {
-    // Die Weichen-Varianten DUERFEN nicht blind starten — sie bekommen ein
-    // ehrliches Budget (Punktabfragen + Fuzzy-Fallback brauchen unter Last
-    // mehrere Runden über den nativen Kanal). Der alte 6s-Deckel liess die
-    // Weiche unter Live-Last permanent "Abgleich fehlgeschlagen" melden.
-    vorwissen = await withTimeout(
-      sellifyVorwissen(lead),
-      'Sellify-Vorabgleich hat zu lange gedauert; die Recherche wird ohne Vorwissen gestartet.',
-      // 6 s reichten unter Last nicht; die Recherche lief dann ohne jedes
-      // Sellify-Wissen los (AKEMI, 10.09.2026).
-      options.variant ? 120000 : 30000,
-    );
+    // v4: ohne Frist; der Lookup ist ein Befehl mit gepushtem Ergebnis.
+    vorwissen = await sellifyVorwissen(lead);
     bekannteFirma = vorwissen;
     // Das Ergebnis des Vorabgleichs wurde bisher nach dem Start verworfen.
     // Die Pflegefeld "Aenderungsart" (Neuanlage oder Aktualisierung) haengt
@@ -10420,7 +9165,7 @@ async function researchLead(id, options = {}) {
       state.pendingResearchIds.delete(id);
       renderCenter();
       renderDetail();
-      if (!options.suppressAlerts) showBusinessAlert(hinweis);
+      if (!options.suppressAlerts) zeigeMeldung(hinweis);
       return { status: 'blocked', commandId: '', error: hinweis };
     };
     // Befund 06.09.2026: Bei verstopfter Sendewarteschlange im Browser brauchte
@@ -10436,12 +9181,12 @@ async function researchLead(id, options = {}) {
     const vorabgleichTimeout = Boolean(vorwissenFehler)
       && /zu lange gedauert|wartet noch auf die R(ue|ü)ckmeldung|Rueckmeldung steht aus|timed out|Timeout/i.test(String(vorwissenFehler?.message || vorwissenFehler));
     if (vorwissenFehler && !vorabgleichTimeout) {
-      return abbruch('Der Sellify-Abgleich ist fehlgeschlagen. Da Sellify die Primärquelle ist, wurde keine Recherche gestartet — bitte erneut versuchen.');
+      return abbruch('Sellify-Abgleich fehlgeschlagen, keine Recherche gestartet – erneut versuchen.');
     }
     if (vorabgleichTimeout) {
       console.warn('[outbound-lead-generation] Sellify-Vorabgleich ohne Antwort in 120 s - Recherche startet ohne Vorwissen', { leadId: id, variant });
       if (!options.suppressAlerts) {
-        zeigeHinweis('Sellify hat nicht rechtzeitig geantwortet – Recherche startet ohne Vorwissen, Sellify wird im Lauf erneut geprüft.', 20000);
+        zeigeHinweis('Kein Sellify-Treffer – Recherche startet ohne Vorwissen.', 20000);
       }
     }
     if (variant === 'new' && bekannteFirma) {
@@ -10449,7 +9194,7 @@ async function researchLead(id, options = {}) {
       return abbruch(`Diese Firma wird bereits in Sellify geführt (${kennung}). Hier ist nur eine Nachrecherche möglich.`);
     }
     if (variant === 'followup' && !bekannteFirma && !vorabgleichTimeout) {
-      return abbruch('Diese Firma wurde in Sellify nicht gefunden (auch nicht unter Namensvarianten). Hier ist nur eine Neue Recherche möglich.');
+      return abbruch('Firma nicht in Sellify (auch keine Namensvariante) – nur Neue Recherche möglich.');
     }
   }
   const researchMode = variant === 'new'
@@ -10466,68 +9211,23 @@ async function researchLead(id, options = {}) {
   // recherchiert; Belegtes bleibt unangetastet.
   const nurFelder = Array.isArray(options.nurFelder) && options.nurFelder.length ? options.nurFelder : null;
   const fortsetzung = nurFelder ? rechercheFortsetzung(lead, nurFelder) : null;
-  // Agenten liessen D&B trotz Pflichtvorgabe im Skill gelegentlich aus
-  // ("Login-Quelle, in dieser Sitzung nicht ausgefuehrt", 26.09.2026); WZ,
-  // Umsatz und Mitarbeiter blieben dann offen, obwohl D&B sie liefert. Fehlt
-  // ein D&B-Beleg, nennt der Auftragssatz den Adapter ausdruecklich.
-  const dnbFelder = ['wz_code', 'umsatz', 'mitarbeiter', 'firma_geschaeftstaetigkeit'];
-  const ohneDnb = fortsetzung
-    && nurFelder.some((key) => dnbFelder.includes(key))
-    && enabledPrivateResearchSources().includes('dnbhoovers.com')
-    && !JSON.stringify(lead.evidence || []).includes('dnbhoovers')
-    && !JSON.stringify(lead.field_status || {}).includes('dnbhoovers');
-  const dnbPflicht = ohneDnb
-    ? ' Pflicht vor allem anderen: ctox_web_scrape mit target_key "dnbhoovers-com" (mode execute, timeout_seconds 400, task_id = diese Auftrags-ID) ausführen; D&B meldet sich selbst an, ein Login ist kein Grund, es auszulassen.'
-    : '';
-  const prompt = fortsetzung
-    ? `Setze die Outbound-Recherche für ${lead.name} [${lead.id}] fort (Auftrag ${commandId}): Lücken schließen, nur diese ${nurFelder.length} Felder: ${nurFelder.join(', ')}. Bereits verifizierte Felder weder erneut recherchieren noch senden. Quellen, die beim letzten Lauf ausgefallen, gesperrt oder nicht angemeldet waren, jetzt erneut versuchen.${dnbPflicht}`
-    : `Starte eine Outbound ${researchMode === 'update_firm' ? 'Nachrecherche' : 'Neurecherche'} für ${lead.name} [${lead.id}] (Auftrag ${commandId}).${enabledPrivateResearchSources().includes('dnbhoovers.com') ? ' Die registrierten Adapter aus source_policy laufen zuerst, dnbhoovers-com eingeschlossen (timeout_seconds 400, task_id = diese Auftrags-ID); D&B meldet sich selbst an.' : ''}`;
+  // Auftragssatz, D&B-Hinweis, Rechercheablauf-Block und Payload-Vorschau baut seit Strang SKL-C der Handler
+  // outbound.lead.research (Templates prompts/lead-research*.md, Paket-Skill outbound-lead-generation/research);
+  // das Ergebnis kommt als Rueckruf outbound.lead.research.done in den Lead, nicht mehr per MCP-Writeback.
   try {
-    if (typeof state.ctx?.businessChat?.submitTask !== 'function') {
-      throw new Error('CTOX Chat ist nicht verfügbar. Die Recherche wurde nicht gestartet.');
+    if (typeof state.port?.auftrag !== 'function') {
+      throw new Error('CTOX fehlt in dieser Sitzung. Die Recherche wurde nicht gestartet.');
     }
-    const result = requireTrackedSubmission(await state.ctx.businessChat.submitTask({
-      instruction: prompt,
-      prompt,
-      user_message: prompt,
-      title: fortsetzung ? `Lücken schließen: ${lead.name}` : `${researchMode === 'update_firm' ? 'Nachrecherche' : 'Neurecherche'}: ${lead.name}`,
-      // Owner-Prinzip: der EINZELNE Nachrecherche-Klick oeffnet sofort das
-      // Chatfenster mit dem Auftrag; Bulk-/Kampagnenlaeufe halten es zu.
-      open: options.openChat === true,
+    const auftrag = {
+      command_type: 'outbound.lead.research',
       module: 'outbound-lead-generation',
       source_module: 'outbound-lead-generation',
       command_id: commandId,
-      // Kein Steuerbefehl, keine Sonderlogik: ein normaler Chat-Task, den der
-      // CTOX-Agent mit dem Skill `outbound-lead-generation-research` abarbeitet.
       record_id: lead.id,
       thread_key: options.threadKey || `business-os/outbound-lead-generation/lead/${lead.id}`,
-      mode: researchMode,
-      target: 'data',
-      required_skills: ['outbound-lead-generation-research', 'universal-scraping', 'web-unlock'],
-      writeback_contract: {
-        collection: 'outbound_lead_generation_leads',
-        allowed_collections: ['outbound_lead_generation_leads'],
-        record_ids: [lead.id],
-        min_independent_sources: 1,
-        // Befund 04.09.2026: Der Vertrag nannte das Ziel, aber nicht den WEG.
-        // Vier Recherchen (BEWI RAW, BNT, BUEFA, CHEMOFAST) waren inhaltlich
-        // fertig - Identitaet, Anschrift, Kennzahlen, Ansprechpartner - und
-        // gingen verloren, weil der Agent den Writeback ueber die CLI
-        // versuchte. Sein eigener Schritt 6 protokolliert:
-        // "Writeback-Befehl via CLI (Sandbox blockiert SQLite - writeback
-        // nicht moeglich)". Der Weg steht jetzt im Vertrag.
-        command_type: 'outbound.lead.research_writeback',
-        mechanism: 'business_command',
-        forbidden_mechanisms: ['cli', 'shell', 'terminal', 'sqlite', 'direct_sql'],
-        note: 'Das Ergebnis ausschliesslich ueber das MCP-Werkzeug business_os.execute_writeback '
-          + '(record_id = diese lead_id, payload = field_status + result) zurueckschreiben; '
-          + 'es erzeugt den Business-Command "outbound.lead.research_writeback" gebunden an diesen Auftrag. '
-          + 'Terminal, Shell, CLI (ctox business-os commands dispatch), direkter SQLite-Zugriff sowie '
-          + 'business_os.execute_action/propose_action sind KEIN Writeback; ein Writeback ueber diese Wege '
-          + 'verliert die gesamte Recherche und die Aufgabe gilt als nicht erledigt.',
-      },
       payload: {
         lead_id: lead.id,
+        lead_name: lead.name,
         // Was der Agent über den Lead schon weiss (er hat keinen Record-Lesebefehl):
         lead_snapshot: { data: lead.data || {}, contacts: lead.contacts || [] },
         company: researchCompanyName(lead),
@@ -10537,12 +9237,12 @@ async function researchLead(id, options = {}) {
         field_labels: researchFieldLabelMap([...(nurFelder || activeResearchFields()), ...fieldCatalog().custom.map((field) => field.key)]),
         custom_fields: fieldCatalog().custom,
         custom_fields_note: fieldCatalog().custom.length
-          ? 'Die eigenen Felder (custom_fields) zusätzlich recherchieren, mit derselben Belegregel. Zurückschreiben '
+          ? 'Die eigenen Felder (custom_fields) zusätzlich recherchieren, mit derselben Belegregel. Zurückschreiben ' // v4-allow: text (Agenten-Hinweis)
             + 'nur in result.custom_fields.<key> = {"value": …, "sources": [{"url": …, "quote": …, "source_id": …}], '
             + '"reason": …}; nie in field_status oder result.fields. Nicht gefunden: value null und reason.'
           : '',
-        field_labels_note: 'Der Rechercheablauf nennt Felder mit ihrem Namen aus der App. field_labels ordnet jedem '
-          + 'Feldschlüssel diesen Namen zu ("Bereich: Name"). Zurückgeschrieben wird immer unter dem Feldschlüssel.',
+        field_labels_note: 'Der Rechercheablauf nennt Felder mit ihrem Namen aus der App. field_labels ordnet jedem ' // v4-allow: text (Agenten-Hinweis)
+          + 'Feldschlüssel diesen Namen zu ("Bereich: Name"). Zurückgeschrieben wird immer unter dem Feldschlüssel.', // v4-allow: text (Agenten-Hinweis)
         ...(fortsetzung ? { continuation: fortsetzung } : {}),
         include_private: enabledPrivateResearchSources(),
         person_priorities: [...PERSON_RESEARCH_PRIORITIES],
@@ -10567,8 +9267,6 @@ async function researchLead(id, options = {}) {
         auto_browser_capture: true,
         campaign_run_id: options.campaignRunId || '',
         workflow_id: options.campaignRunId || '',
-        response_channel: 'business_os_chat',
-        title: fortsetzung ? `Lücken schließen: ${lead.name}` : `${researchMode === 'update_firm' ? 'Nachrecherche' : 'Neurecherche'}: ${lead.name}`,
         source_policy: enabledSourcePolicy(),
         // Harness liest den Vertrag aus command.payload.writeback_contract -
         // also DIESEN, nicht den auf Task-Ebene. Gemessen 05.09.2026: der
@@ -10587,21 +9285,24 @@ async function researchLead(id, options = {}) {
         },
       },
       client_context: {
-        action: 'context-chat',
         source: 'outbound-lead-generation-lead-research',
         source_module: 'outbound-lead-generation',
         record_id: lead.id,
-        response_channel: 'business_os_chat',
-        writeback_required: true,
         campaign_run_id: options.campaignRunId || '',
       },
-    }), { allowControlCommand: true });
+    };
+    // Kampagnenlauf: der Handler outbound.campaign.research faechert die gesammelten Leads selbst auf.
+    if (Array.isArray(options.collect)) {
+      options.collect.push({ lead_id: lead.id, payload: auftrag.payload });
+      return { status: 'queued', commandId: '', collected: true };
+    }
+    const result = requireTrackedSubmission(await state.port.auftrag(auftrag), { allowControlCommand: true });
     lead.research_status = 'running';
     lead.command_id = result.command_id;
+    // task_id setzt der Handler (echte Agenten-Task-ID); die Quittung traegt nur die Befehls-ID.
     await patchLead(id, {
       research_status: 'running',
       command_id: result.command_id,
-      task_id: result.task_id,
       payload: {
         ...lead.payload,
         campaign_run_id: options.campaignRunId || '',
@@ -10612,7 +9313,6 @@ async function researchLead(id, options = {}) {
   } catch (error) {
     const message = String(error?.message || error);
     if (istKanalAbriss(error) && options._kanalRetry !== true) {
-      await recoverCommandChannel('research-lead');
       state.pendingResearchIds.delete(id);
       return researchLead(id, { ...options, _kanalRetry: true });
     }
@@ -10649,7 +9349,7 @@ async function researchLead(id, options = {}) {
           research_not_sent_reason: message,
         },
       });
-      if (!options.suppressAlerts) showBusinessAlert(NICHT_ZUGESTELLT_HINWEIS);
+      if (!options.suppressAlerts) zeigeMeldung(NICHT_ZUGESTELLT_HINWEIS);
       return { status: 'not_sent', commandId, error: message };
     }
     const startPatch = fehlerOhneErgebnisverlust(lead, message, {
@@ -10659,7 +9359,7 @@ async function researchLead(id, options = {}) {
     lead.research_status = startPatch.research_status;
     lead.command_id = commandId;
     await patchLead(id, { ...startPatch, command_id: commandId });
-    if (!options.suppressAlerts) showBusinessAlert(message);
+    if (!options.suppressAlerts) zeigeMeldung(message);
     return { status: 'failed', commandId, error: message };
   } finally {
     state.pendingResearchIds.delete(id);
@@ -10753,7 +9453,6 @@ function abgleichDiagnose(stufe, daten = {}) {
   state.abgleichDiagnoseStufe = { stufe, seit: Date.now(), daten };
 }
 async function reconcileResearchCommands({ authoritative = false } = {}) {
-  if (state.nurZwischenstand) return false;
   if (state.reconcilingCommands) {
     const haengt = state.abgleichDiagnoseStufe;
     if (haengt && Date.now() - haengt.seit > 30_000 && Date.now() - Number(state.abgleichDiagnoseHaengtGemeldet || 0) > 60_000) {
@@ -10790,12 +9489,7 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
       try {
         const bekannt = new Set(pendingLeads.map((lead) => lead.id));
         const ausserhalb = await inFlightLeadsOutsideWindow(async (query) => {
-          const docs = await withTimeout(
-            state.collections.leads.find(query).exec(),
-            'Laufende Leads konnten nicht geladen werden.',
-            30_000,
-          );
-          return (docs || []).map((doc) => doc?.toJSON?.() || doc);
+          return state.collections.leads.alle(query);
         }, bekannt);
         for (const lead of ausserhalb) pendingLeads.push(normalizeLeadRecipientShape(lead));
         abgleichDiagnose('fenster', { ausserhalb: ausserhalb.length });
@@ -10851,13 +9545,6 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
       // stand am 27.09.2026 um 13:06:37 wieder auf running, obwohl der
       // Abgleich um 13:05:58 den gescheiterten Vorgang angewendet und den
       // Schluessel gesetzt hatte; danach wurde er nie wieder abgeglichen.
-      if (String(lead.research_status || '') === 'failed'
-        && command?.command_type === 'business_os.chat.task'
-        && vorgangNochOffen(command)) {
-        const wieder = chatResearchTaskLeadPatch(lead, command);
-        if (wieder && await patchLeadImAbgleich(lead.id, wieder, lead)) changed = true;
-        continue;
-      }
       const zurueckgefallen = researchInFlight(lead) && befehlIstEndgueltig(command);
       if (lead.payload?.observed_research_command_key === observationKey && !zurueckgefallen) {
         // Nicht terminale Vorgaenge behalten ihren Schluessel (id:none), waehrend
@@ -10912,7 +9599,7 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
 async function patchLeadImAbgleich(id, patch, basis = null) {
   try {
     if (basis) {
-      const doc = await state.collections.leads.findOne(id).exec();
+      const doc = await state.collections.leads.eins(id);
       const current = doc?.toJSON?.() || doc;
       if (!current) return false;
       if (abgleichBasisVeraltet(basis, current)) {
@@ -10965,12 +9652,9 @@ async function loadResearchCommandsForLeads(leads = []) {
   const recordIds = [...new Set((leads || [])
     .map((lead) => String(lead?.id || '').trim())
     .filter(Boolean))];
-  const bus = state.ctx?.commandBus;
-  if (!recordIds.length || typeof bus?.getStatusesByRecordIds !== 'function') return [];
+  if (!recordIds.length) return [];
   try {
-    const commands = await bus.getStatusesByRecordIds(recordIds, {
-      commandType: 'web_stack.person_research',
-    });
+    const commands = state.port.befehleFuerRecords(recordIds, 'web_stack.person_research');
     if (!state.researchCommandQueryLogged) {
       state.researchCommandQueryLogged = true;
       console.info('[outbound-lead-generation] Recherche-Child-Abgleich', {
@@ -10986,40 +9670,9 @@ async function loadResearchCommandsForLeads(leads = []) {
   }
 }
 
-// Die drei Abgleiche (Recherche, Kampagnenlaeufe, Adapter) laufen alle 5 s und
-// fragten dabei JEDEN je gesehenen Befehl erneut einzeln beim Server ab, auch
-// laengst abgeschlossene, alle gleichzeitig. Bei 207 Leads waren das je Tab
-// hunderte Abfragen alle 5 s; die Abfragewarteschlange des Servers lief voll
-// (75 offen, 74 s je Abfrage) und jede andere Aktion der App blieb haengen
-// (Kundeninstanz 26.09.2026). Abgeschlossene Befehle aendern sich nicht mehr und
-// werden gemerkt; hoechstens vier Abfragen laufen gleichzeitig.
 const BEFEHL_ENDZUSTAENDE = new Set([
   'completed', 'failed', 'cancelled', 'canceled', 'blocked', 'rejected', 'succeeded', 'handled', 'timed_out', 'expired',
 ]);
-const BEFEHL_ENDGUELTIG_MERKEN_MS = 10 * 60 * 1000;
-const BEFEHL_UNBEKANNT_MERKEN_MS = 30 * 1000;
-const BEFEHLSSTATUS_PARALLEL = 3;
-const befehlsstatusCache = new Map();
-// Gemeinsame Grenze fuer ALLE Abgleiche: die Shell hat je Tab nur sechs
-// Abfrage-Plaetze; belegten die Abgleiche sie, warteten Einstellungen,
-// Katalog und Leads beim Start 15-26 s (26.09.2026).
-let befehlsstatusLaufend = 0;
-const befehlsstatusWarteschlange = [];
-async function mitBefehlsstatusPlatz(arbeit) {
-  // Ein freiwerdender Platz geht direkt an den naechsten Wartenden.
-  if (befehlsstatusLaufend >= BEFEHLSSTATUS_PARALLEL) {
-    await new Promise((resolve) => befehlsstatusWarteschlange.push(resolve));
-  } else {
-    befehlsstatusLaufend += 1;
-  }
-  try {
-    return await arbeit();
-  } finally {
-    const naechster = befehlsstatusWarteschlange.shift();
-    if (naechster) naechster();
-    else befehlsstatusLaufend -= 1;
-  }
-}
 
 function befehlIstEndgueltig(command) {
   const terminal = String(command?.terminal_status || '').trim().toLowerCase();
@@ -11028,108 +9681,15 @@ function befehlIstEndgueltig(command) {
   return BEFEHL_ENDZUSTAENDE.has(String(command?.status || '').trim().toLowerCase());
 }
 
-async function loadCommandStatuses(commandIds = [], _options = {}) {
-  const bus = state.ctx?.commandBus;
-  const zaehler = { quelle: String(_options?.quelle || ''), angefragt: new Set(commandIds).size, leerBeispiele: [], messzeit: new Date().toISOString(), cacheLeer: 0, cacheTreffer: 0, lokalNull: 0, lokalFehler: 0, lokalFehlerText: '', serverKeineCollection: 0, serverNull: 0, serverFehlerText: '', serverTreffer: 0, gefunden: 0 };
-  if (typeof bus?.getStatus !== 'function') {
-    befehlsstatusDiagnose({ ...zaehler, grund: 'kein commandBus.getStatus' });
-    return [];
-  }
-  const jetzt = Date.now();
+// v4: Befehlsdokumente liegen lokal und live vor (business_commands); kein Einzelabruf beim
+// Server, keine Merkliste, kein Parallelitaetsdeckel mehr noetig.
+async function loadCommandStatuses(commandIds = []) {
   const ergebnisse = new Map();
-  const offen = [];
   for (const commandId of new Set(commandIds)) {
-    const gemerkt = befehlsstatusCache.get(commandId);
-    if (gemerkt && gemerkt.bis > jetzt) {
-      if (gemerkt.command) { ergebnisse.set(commandId, gemerkt.command); zaehler.cacheTreffer += 1; } else zaehler.cacheLeer += 1;
-      continue;
-    }
-    offen.push(commandId);
+    const command = state.port.befehlsDokument(commandId);
+    if (command) ergebnisse.set(commandId, command);
   }
-  let naechster = 0;
-  const arbeiter = async () => {
-    while (naechster < offen.length) {
-      const commandId = offen[naechster];
-      naechster += 1;
-      let command = null;
-      if (!(state.befehlsstatusOffen instanceof Map)) state.befehlsstatusOffen = new Map();
-      state.befehlsstatusOffen.set(commandId, Date.now());
-      const abfrageStart = Date.now();
-      let abfrageFehler = '';
-      try {
-        command = await mitBefehlsstatusPlatz(() => bus.getStatus(commandId));
-      } catch (error) {
-        abfrageFehler = String(error?.message || error).slice(0, 120);
-        command = null;
-      }
-      const lokalMs = Date.now() - abfrageStart;
-      if (abfrageFehler) { zaehler.lokalFehler += 1; zaehler.lokalFehlerText ||= abfrageFehler; } else if (!command) zaehler.lokalNull += 1;
-      // getStatus liest nur den lokal replizierten Stand. Fehlt der Befehl dort,
-      // blieb ein Lead mit gescheitertem Auftrag bis zu 24 h auf "laeuft" (LUZI,
-      // 27.09.2026: Auftrag seit 11:19 failed, Lead weiter running). Dann
-      // einmal verbindlich beim Server nachfragen.
-      // Auch ein lokal vorhandener, aber nicht terminaler Stand kann veraltet
-      // sein (Codex-Review: LUZI lokal "running", derselbe Serverbefehl
-      // failed/terminal). Dann ebenfalls verbindlich nachfragen, je Befehl
-      // hoechstens alle zwei Minuten.
-      if (!command || !befehlIstEndgueltig(command)) {
-        if (!(state.befehlVerbindlichGelesen instanceof Map)) state.befehlVerbindlichGelesen = new Map();
-        const zuletzt = Number(state.befehlVerbindlichGelesen.get(commandId) || 0);
-        if (!command || Date.now() - zuletzt > 120_000) {
-          state.befehlVerbindlichGelesen.set(commandId, Date.now());
-          const frisch = await befehlVerbindlichLesen(commandId, zaehler);
-          if (frisch) command = frisch;
-        }
-      }
-      state.befehlsstatusOffen.delete(commandId);
-      if (Date.now() - abfrageStart > 5_000 || abfrageFehler) {
-        console.info('[olg-abgleich] befehl', JSON.stringify({ id: commandId.slice(-12), lokal_ms: lokalMs, gesamt_ms: Date.now() - abfrageStart, gefunden: Boolean(command), status: command?.status || '', phase: command?.execution_phase || '', fehler: abfrageFehler }));
-      }
-      if (command) ergebnisse.set(commandId, command);
-      const merken = command
-        ? (befehlIstEndgueltig(command) ? BEFEHL_ENDGUELTIG_MERKEN_MS : 0)
-        : BEFEHL_UNBEKANNT_MERKEN_MS;
-      if (merken) befehlsstatusCache.set(commandId, { command, bis: Date.now() + merken });
-      else befehlsstatusCache.delete(commandId);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(BEFEHLSSTATUS_PARALLEL, offen.length) }, arbeiter));
-  zaehler.gefunden = ergebnisse.size;
-  zaehler.leerBeispiele = [...new Set(commandIds)].filter((id) => !ergebnisse.has(id)).slice(0, 3);
-  if (zaehler.angefragt && zaehler.gefunden < zaehler.angefragt) befehlsstatusDiagnose(zaehler);
   return [...ergebnisse.values()];
-}
-function befehlsstatusDiagnose(zaehler) {
-  // Je Aufrufer gedrosselt, und nur Ergebnisse mit echtem Lesen (nicht die
-  // 30-s-Merkliste), damit die Zeile zeigt, was getStatus/Server liefern.
-  if (!(zaehler.lokalNull || zaehler.lokalFehler || zaehler.grund)) return;
-  if (!(state.befehlsstatusDiagnoseAm instanceof Map)) state.befehlsstatusDiagnoseAm = new Map();
-  if (Date.now() - Number(state.befehlsstatusDiagnoseAm.get(zaehler.quelle) || 0) < 60_000) return;
-  state.befehlsstatusDiagnoseAm.set(zaehler.quelle, Date.now());
-  console.info('[olg-abgleich] befehlsstatus', JSON.stringify(zaehler));
-}
-
-async function befehlVerbindlichLesen(commandId, zaehler = {}) {
-  const collection = state.ctx?.db?.collection?.('business_commands');
-  if (!collection?.find || !commandId) {
-    zaehler.serverKeineCollection = Number(zaehler.serverKeineCollection || 0) + 1;
-    return null;
-  }
-  try {
-    const docs = await mitBefehlsstatusPlatz(() => collection.find({
-      selector: { id: { $eq: commandId } },
-      limit: 1,
-      requireRevision: `olg-befehl:${commandId}:${Date.now()}`,
-    }).exec());
-    const doc = (docs || [])[0];
-    const gefunden = doc?.toJSON?.() || doc || null;
-    if (gefunden) zaehler.serverTreffer = Number(zaehler.serverTreffer || 0) + 1;
-    else zaehler.serverNull = Number(zaehler.serverNull || 0) + 1;
-    return gefunden;
-  } catch (error) {
-    zaehler.serverFehlerText ||= String(error?.message || error).slice(0, 160);
-    return null;
-  }
 }
 
 function uniqueCommands(commands = []) {
@@ -11187,12 +9747,8 @@ function researchCommandForLead(lead, commands = []) {
   // hier nie an: ein gescheiterter Lauf liess den Lead auf "Läuft" stehen
   // (Kiesow, 10.09.2026 21:48). Die Chat-Aufgabe des AKTUELLEN Auftrags hat
   // Vorrang, solange der Lead auf sie wartet.
-  const aktuellerAuftrag = String(lead?.command_id || '').trim();
-  if (aktuellerAuftrag && ['queued', 'running', 'failed'].includes(String(lead?.research_status || ''))) {
-    const chatAufgabe = commands.find((command) => command?.command_type === 'business_os.chat.task'
-      && String(command.command_id || command.id || '').trim() === aktuellerAuftrag);
-    if (chatAufgabe) return chatAufgabe;
-  }
+  // Recherchen laufen seit Strang SKL-C als eigener Befehl outbound.lead.research; Ergebnis und Fehlschlag schreiben
+  // dessen Rueckruf-Handler in den Lead. Hier bleibt nur der Abgleich nativer web_stack.person_research-Befehle.
   const campaignRunId = String(lead?.payload?.campaign_run_id || '').trim();
   return commands
     .filter((command) => command?.command_type === 'web_stack.person_research')
@@ -11304,7 +9860,7 @@ async function validateLead(id) {
   const lead = state.leads.find((entry) => entry.id === id);
   if (!lead) return;
   if (!leadReadyForValidation(lead)) {
-    showBusinessAlert(`Freigabe blockiert:\n${validationBlockers(lead).map((blocker) => `• ${blocker}`).join('\n')}`);
+    zeigeMeldung(`Freigabe blockiert:\n${validationBlockers(lead).map((blocker) => `• ${blocker}`).join('\n')}`);
     return;
   }
   await patchLead(id, {
@@ -11312,7 +9868,7 @@ async function validateLead(id) {
     payload: {
       ...lead.payload,
       validated_at_ms: Date.now(),
-      validated_by: String(state.ctx?.user?.name || state.ctx?.user?.id || '').trim(),
+      validated_by: String(state.api?.actor?.display_name || state.api?.actor?.id || '').trim(),
       admission_decision: 'human_approved',
     },
   });
@@ -11338,19 +9894,19 @@ function sellifyHandoffPrecondition(lead) {
     return 'Bitte zuerst mindestens eine Person auswählen.';
   }
   if (wartungAktiv() && (!state.recipientEligibilityReady.has(lead.id) || state.recipientEligibilityTimedOut.has(lead.id))) {
-    return 'CTOX wird gerade aktualisiert. Die Sperrvermerke werden danach automatisch geprüft.';
+    return 'CTOX wird aktualisiert – Sperrvermerke werden danach geprüft.'; // v4-allow: label
   }
   if (!state.recipientEligibilityReady.has(lead.id)) {
-    return 'Die Sellify-Sperrvermerke werden noch geprüft.';
+    return 'Die Sellify-Sperrvermerke werden noch geprüft.'; // v4-allow: label
   }
   if (state.recipientEligibilityTimedOut.has(lead.id)) {
-    return 'Sellify war gerade nicht erreichbar. Die Sperrvermerke werden in Kürze automatisch erneut geprüft.';
+    return 'Sellify nicht erreichbar – Sperrvermerke werden bald erneut geprüft.'; // v4-allow: label
   }
   const plan = buildCampaignRecipientList(lead);
   if (!plan.recipients.length) {
     return plan.excluded.length
       ? 'Alle ausgewählten Personen sind gesperrt oder müssen zuerst geprüft werden.'
-      : 'Bitte mindestens eine Person auswählen, bevor der Lead an Sellify übergeben wird.';
+      : 'Mindestens eine Person für die Übergabe auswählen.';
   }
   return '';
 }
@@ -11397,7 +9953,7 @@ function uebergabeUnterbrochen(lead) {
 
 async function sendLeadToSellify(id, { includeCampaign = false } = {}) {
   const lead = state.leads.find((entry) => entry.id === id);
-  if (!lead || lead.validation_status !== 'validated') { showBusinessAlert('Bitte den Lead vor der Übergabe validieren.'); return; }
+  if (!lead || lead.validation_status !== 'validated') { zeigeMeldung('Bitte den Lead vor der Übergabe validieren.'); return; }
   // Sofortige Rueckmeldung: die Sperrvermerkspruefung vor dem Schreiben dauert
   // gemessen 25-45 s (25.09.2026); bis dahin sah der Klick wie ein toter Knopf aus.
   if (!(state.sellifyUebergabeVorbereitung instanceof Set)) state.sellifyUebergabeVorbereitung = new Set();
@@ -11424,7 +9980,7 @@ async function sendLeadToSellifyAusfuehren(lead, id, { includeCampaign = false }
   // jeder Zeitueberschreitung abgewaehlt und musste neu gesetzt werden
   // (Uebergabetest 25.09.2026).
   if (recipientPlan.excluded.some(({ decision }) => decision?.pending)) {
-    showBusinessAlert('Sellify hat die Sperrvermerke gerade nicht rechtzeitig bestätigt. Es wurde nichts übertragen und die Auswahl bleibt erhalten. Bitte in einer Minute erneut übergeben.');
+    zeigeMeldung('Sperrvermerke nicht bestätigt – nichts übertragen, in einer Minute erneut.'); // v4-allow: label
     return;
   }
   if (recipientPlan.excluded.length) {
@@ -11436,9 +9992,9 @@ async function sendLeadToSellifyAusfuehren(lead, id, { includeCampaign = false }
     renderDetail();
   }
   if (!selectedContacts.length) {
-    showBusinessAlert(recipientPlan.excluded.length
-      ? 'Die ausgewählten Personen sind gesperrt oder müssen zuerst geprüft werden und wurden abgewählt.'
-      : 'Bitte mindestens eine Person auswählen, bevor der Lead an Sellify übergeben wird.');
+    zeigeMeldung(recipientPlan.excluded.length
+      ? 'Ausgewählte Personen sind gesperrt oder ungeprüft und wurden abgewählt.'
+      : 'Mindestens eine Person für die Übergabe auswählen.');
     return;
   }
   // Gehoert der Lead mehreren Kampagnen an, zaehlt die Kampagne, in der
@@ -11446,11 +10002,11 @@ async function sendLeadToSellifyAusfuehren(lead, id, { includeCampaign = false }
   const gewaehlt = String(state.selectedCampaign || '').trim();
   const campaignName = (gewaehlt && leadKampagnen(lead).includes(gewaehlt) ? gewaehlt : String(lead.campaign || '')).trim();
   if (includeCampaign && !campaignName) {
-    showBusinessAlert('Der Lead hat keine Kampagne. Ohne Kampagnenname kann er nicht als Kampagne übertragen werden.');
+    zeigeMeldung('Lead ohne Kampagne – Übertragung als Kampagne nicht möglich.');
     return;
   }
   const workflowId = `leadgen-sellify-${crypto.randomUUID()}`;
-  const prompt = `Übergebe den validierten Lead ${lead.name} kontrolliert an Sellify. Prüfe Dubletten, schreibe ausschließlich über typisierte SQL-Operationen und bestätige jeden Datensatz durch den synchronisierten Readback.`;
+  const prompt = `Übergebe den validierten Lead ${lead.name} kontrolliert an Sellify. Prüfe Dubletten, schreibe ausschließlich über typisierte SQL-Operationen und bestätige jeden Datensatz durch den synchronisierten Readback.`; // v4-allow: label; v4-allow: text (Agenten-Auftrag)
   await patchLead(id, {
     sellify_status: 'queued',
     command_id: workflowId,
@@ -11529,8 +10085,8 @@ async function sendLeadToSellifyAusfuehren(lead, id, { includeCampaign = false }
         sellify_finished_at_ms: Date.now(),
       },
     });
-    showBusinessAlert(pending
-      ? `${String(error?.message || error)} Der Lead wird als „Übergeben, Bestätigung ausstehend“ geführt.`
+    zeigeMeldung(pending
+      ? `${String(error?.message || error)} Der Lead wird als „Übergeben, Bestätigung ausstehend“ geführt.` // v4-allow: label
       : uebergabeFehlerText(error));
   }
 }
@@ -11541,10 +10097,10 @@ async function sendLeadToSellifyAusfuehren(lead, id, { includeCampaign = false }
 function uebergabeFehlerText(error) {
   const roh = String(error?.message || error || 'Unbekannter Fehler');
   if (/peer-not-open|peer-peer|QUERY_CANCELLED|webrtc|RATE_LIMITED|timed? ?out|nicht innerhalb|Rückmeldung steht noch aus/i.test(roh)) {
-    return `Die Verbindung zu CTOX war während der Übergabe kurz unterbrochen. Bitte erneut übergeben: bereits in Sellify angelegte Firmen und Personen werden erkannt und nicht doppelt angelegt.\n\n(${roh})`;
+    return `Übergabe unterbrochen – erneut übergeben, nichts wird doppelt angelegt.\n\n(${roh})`;
   }
   if (/wird aktualisiert|schreibgesch|read-?only|MAINTENANCE/i.test(roh)) {
-    return `CTOX wird gerade aktualisiert. Bitte nach dem Update erneut übergeben.\n\n(${roh})`;
+    return `CTOX-Update aktiv. Bitte nach dem Update erneut übergeben.\n\n(${roh})`;
   }
   return roh;
 }
@@ -11606,7 +10162,7 @@ async function findSellifyCompanyDuplicateLokal(lead) {
   if (!collection) return undefined;
   let repliziert = 0;
   try {
-    const stichprobe = await collection.find({ limit: 1 }).exec();
+    const stichprobe = await collection.alle({ limit: 1 });
     repliziert = stichprobe.length;
   } catch (error) {
     console.warn('[olg-sellify-lokal] Replikat nicht lesbar', error);
@@ -11628,9 +10184,8 @@ async function findSellifyCompanyDuplicateLokal(lead) {
   for (const selector of selektoren) {
     const t0 = Date.now();
     try {
-      const treffer = await collection.find({ selector }).exec();
+      const treffer = await collection.alle({ selector });
       const lebend = treffer
-        .map((doc) => (typeof doc?.toJSON === 'function' ? doc.toJSON() : doc))
         .filter((entry) => entry && !entry.is_deleted);
       if (lebend.length) {
         console.info('[olg-sellify-lokal] Treffer', lebend.length, 'ms', Date.now() - t0);
@@ -11707,7 +10262,7 @@ async function findSellifyCompanyDuplicate(lead) {
         });
         treffer = Array.isArray(antwort?.records) ? antwort.records : [];
       } else {
-        treffer = await collection.find({ selector: probe.selector }).exec();
+        treffer = await collection.alle({ selector: probe.selector });
       }
       const lebend = treffer.filter((entry) => !entry.is_deleted);
       console.info('[olg-sellify-probe]', probe.name, 'hits', lebend.length, 'ms', Date.now() - t0);
@@ -11775,8 +10330,7 @@ async function sellifyVorwissen(lead) {
   let personen = [];
   try {
     const gefunden = await sellifyReadCollection('person')
-      .find({ selector: { contact_id: { $eq: firma.contact_id } } })
-      .exec();
+      .alle({ selector: { contact_id: { $eq: firma.contact_id } } });
     personen = gefunden
       .filter((entry) => !entry.is_deleted)
       .map((entry) => ({
@@ -11854,8 +10408,8 @@ function sellifySnapshotAusVorwissen(vorwissen) {
 function sellifyVorwissenAlsText(vorwissen) {
   if (!vorwissen) return '';
   const zeilen = [
-    'BEKANNT AUS DEM EIGENEN CRM (Sellify) — diese Angaben sind gepflegt und haben Vorrang',
-    'vor extern Gefundenem. Pruefe sie, widerlege sie wenn noetig, aber erfinde sie nicht neu:',
+    'BEKANNT AUS DEM EIGENEN CRM (Sellify) — diese Angaben sind gepflegt und haben Vorrang', // v4-allow: text (Agenten-Vorwissen)
+    'vor extern Gefundenem. Pruefe sie, widerlege sie wenn noetig, aber erfinde sie nicht neu:', // v4-allow: text (Agenten-Vorwissen)
     `- Organisation: ${vorwissen.name}${vorwissen.contact_id ? ` [contact_id ${vorwissen.contact_id}]` : ''}`,
   ];
   if (vorwissen.anschrift || vorwissen.plz || vorwissen.ort) {
@@ -11874,7 +10428,7 @@ function sellifyVorwissenAlsText(vorwissen) {
       const teile = [[p.vorname, p.nachname].filter(Boolean).join(' '), p.funktion, p.email, p.telefon].filter(Boolean);
       zeilen.push(`  · ${teile.join(' | ')}${p.id ? ` [${p.id}]` : ''}`);
     }
-    zeilen.push('  Diese Personen NICHT erneut erraten. Ergaenze fehlende Angaben und suche zusaetzliche Ansprechpartner.');
+    zeilen.push('  Diese Personen NICHT erneut erraten. Ergaenze fehlende Angaben und suche zusaetzliche Ansprechpartner.'); // v4-allow: text (Agenten-Vorwissen)
   } else {
     zeilen.push('- Im CRM sind zu dieser Organisation noch keine Ansprechpartner gefuehrt.');
   }
@@ -11884,10 +10438,10 @@ function sellifyVorwissenAlsText(vorwissen) {
   // den Bestand liest, nicht nur tief im Skill.
   if (vorwissen.contact_id) {
     zeilen.push(
-      'SELLIFY ALS BELEG: Jeder Wert oben ist eine Quelle. Stimmt dein Wert mit Sellify ueberein und bestaetigt',
-      '  EINE externe Quelle ihn, melde das Feld verified mit dieser einen externen Quelle - der Server',
+      'SELLIFY ALS BELEG: Jeder Wert oben ist eine Quelle. Stimmt dein Wert mit Sellify ueberein und bestaetigt', // v4-allow: text (Agenten-Vorwissen)
+      '  EINE externe Quelle ihn, melde das Feld verified mit dieser einen externen Quelle - der Server', // v4-allow: text (Agenten-Vorwissen)
       `  ergaenzt Sellify (sellify://company/${vorwissen.contact_id}) selbst als zweite Quelle. Nie no_match wegen "nur einer Quelle".`,
-      '  Fuer Personen: person_key = die Sellify-id in eckigen Klammern. Sellify allein belegt nichts.',
+      '  Fuer Personen: person_key = die Sellify-id in eckigen Klammern. Sellify allein belegt nichts.', // v4-allow: text (Agenten-Vorwissen)
     );
   }
   return zeilen.join('\n');
@@ -12042,8 +10596,8 @@ async function upsertSellifyPerson(company, contact, workflowId, prompt) {
 
 async function findSellifyPersonDuplicate(contactId, values) {
   const matches = values.email
-    ? await sellifyReadCollection('person').find({ selector: { email: { $eq: values.email } } }).exec()
-    : await sellifyReadCollection('person').find({ selector: { contact_id: { $eq: contactId } } }).exec();
+    ? await sellifyReadCollection('person').alle({ selector: { email: { $eq: values.email } } })
+    : await sellifyReadCollection('person').alle({ selector: { contact_id: { $eq: contactId } } });
   return matches.find((entry) => !entry.is_deleted
     && entry.contact_id === contactId
     && (values.email
@@ -12230,7 +10784,7 @@ async function dispatchExternalSqlWrite(operationId, recordId, values, workflowI
       response_channel: 'business_os_chat',
       writeback_required: true,
     },
-  }, { until: 'terminal', timeoutMs: 90_000 });
+  }, { ergebnis: true });
   if (result?.status !== 'completed') {
     throw new Error(result?.error_message || result?.result?.error || `Sellify-Operation ${operationId} ist fehlgeschlagen.`);
   }
@@ -12252,16 +10806,29 @@ class SellifyReadbackPending extends Error {
   }
 }
 
+// v4: die Rueckprojektion kommt als Live-Aenderung der replizierten Sellify-Collection (api.get),
+// statt sie im 250-ms-Takt abzufragen. Die Frist bleibt: danach gilt der Vorgang als bestaetigt,
+// nur die lokale Kopie zeigt ihn noch nicht.
 async function waitForProjectedRecord(collection, id, predicate, options = {}) {
-  const deadline = Date.now() + Math.max(5_000, Number(options.timeoutMs) || 25_000);
-  while (Date.now() < deadline) {
-    const record = await collection.findOne(id).exec();
+  const name = collection?.sammlung;
+  const fristMs = Math.max(5_000, Number(options.timeoutMs) || 25_000);
+  if (!name) {
+    const record = await collection.eins(id);
     if (record && predicate(record)) return record;
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    throw new SellifyReadbackPending('Sellify hat den Schreibvorgang bestaetigt; die lokale CRM-Kopie zeigt ihn noch nicht.');
   }
-  throw new SellifyReadbackPending(
-    'Sellify hat den Schreibvorgang bestaetigt. Die Ruecksynchronisierung in die lokale Kopie steht noch aus.',
-  );
+  return new Promise((resolve, reject) => {
+    let fertig = false;
+    let off = null;
+    const ende = (fn, wert) => { if (fertig) return; fertig = true; globalThis.clearTimeout(frist); off?.(); fn(wert); };
+    const frist = globalThis.setTimeout(() => ende(reject, new SellifyReadbackPending(
+      'Sellify hat den Schreibvorgang bestaetigt; die lokale CRM-Kopie zeigt ihn noch nicht.',
+    )), fristMs);
+    off = state.port.abo(state.api.get(name, String(id)).subscribe((record) => {
+      if (record && predicate(record)) ende(resolve, structuredClone(record));
+    }));
+    if (fertig) off();
+  });
 }
 
 // Nach Sellify geht, was die Recherche BELEGT hat. Bis 23.09.2026 las die
@@ -12415,7 +10982,7 @@ function normalizedDomain(value) {
 function sellifyReadCollection(entity) {
   const collection = entity === 'company' ? state.sellifyCompanies : state.sellifyPeople;
   if (!collection) {
-    throw new Error('Der serverseitige Sellify-Lesezugriff ist noch nicht verfügbar.');
+    throw new Error('Der Sellify-Lesezugriff fehlt.');
   }
   return collection;
 }
@@ -12440,7 +11007,7 @@ function createSellifyLookupFacade(entity) {
     if (pending) return pending;
     const request = (async () => {
       const payload = { entity, selectors, ids: normalizedIds, limit };
-      const antwort = await sellifyNativeLookup(payload, { commandTimeoutMs: 50_000 });
+      const antwort = await sellifyNativeLookup(payload);
       const records = Array.isArray(antwort?.records) ? antwort.records : [];
       state.sellifyLookupCache.set(cacheKey, { at: Date.now(), records });
       return records;
@@ -12454,11 +11021,12 @@ function createSellifyLookupFacade(entity) {
   };
   return {
     lookup,
-    find(query = {}) {
-      return { exec: () => lookup({ selector: query?.selector || {}, limit: query?.limit || 25 }) };
+    sammlung: entity === 'company' ? 'sellify_companies' : 'sellify_people',
+    alle(query = {}) {
+      return lookup({ selector: query?.selector || {}, limit: query?.limit || 25 });
     },
-    findOne(id) {
-      return { exec: async () => (await lookup({ ids: [String(id || '')], limit: 1 }))[0] || null };
+    async eins(id) {
+      return (await lookup({ ids: [String(id || '')], limit: 1 }))[0] || null;
     },
   };
 }
@@ -12479,7 +11047,7 @@ function sellifyWritebackContract() {
 
 function enabledSourcePolicy() {
   return {
-    skill: 'outbound-lead-generation-research', min_independent_sources: 1, verification_scope: 'per_field', validation_only_sources: ['experte.de'],
+    skill: 'outbound-lead-generation/research', min_independent_sources: 1, verification_scope: 'per_field', validation_only_sources: ['experte.de'],
     sources: state.sources
       .filter((item) => item.enabled && !isInternalResearchSource(item)
         && !isDocumentationSourceKey(evidenceSourceKey({ source_id: item.id, source_url: item.url })))
@@ -12619,7 +11187,6 @@ function fehlerOhneErgebnisverlust(lead, fehlertext, zusatzPayload = {}) {
 }
 
 function researchCommandLeadPatch(lead, command) {
-  if (command?.command_type === 'business_os.chat.task') return chatResearchTaskLeadPatch(lead, command);
   if (command?.command_type !== 'web_stack.person_research') return null;
   const status = normalizedResearchCommandStatus(command);
   const commandId = String(command.command_id || command.id || lead.command_id || '').trim();
@@ -12644,6 +11211,9 @@ function researchCommandLeadPatch(lead, command) {
   }
   if (!['completed', 'handled', 'success', 'done', 'passed'].includes(status)) return null;
   if (!command.result || command.result.ok === false) return null;
+  // Strang OLG4: der Befehl endet mit der Übergabe an den Agentenauftrag ({status:'running', task_id}); den Lead
+  // projizieren die Rückrufe web_stack.person_research.done/.failed, hier gibt es nichts abzugleichen.
+  if (command.result.status === 'running') return null;
   const writeback = researchOutcomeWriteback(lead, command);
   return {
     ...writeback,
@@ -12659,55 +11229,14 @@ function researchCommandLeadPatch(lead, command) {
   };
 }
 
-// Die Chat-Aufgabe liefert ihr Ergebnis ueber das Rueckschreiben, das den Lead
-// selbst aktualisiert. Hier zaehlt nur ihr Scheitern: dann steht der Lead auf
-// "Unvollständig" mit dem Grund, den der Worker genannt hat, statt auf "Läuft".
-// Massgeblich ist der Core-Lebenszyklus: "blocked" oder "accepted" bei
-// execution_phase retry_wait heisst Warten auf Wiederholung, nicht Ende. Am
-// 08.10.2026 wurden sonst 15 Leads mit weiterlaufendem Vorgang als
-// "Unvollständig" beendet.
-function vorgangNochOffen(command) {
-  const phase = String(command?.execution_phase || '').trim().toLowerCase();
-  const terminal = String(command?.terminal_status || '').trim().toLowerCase();
-  return Boolean(phase) && phase !== 'terminal' && (!terminal || terminal === 'none');
-}
-
-function chatResearchTaskLeadPatch(lead, command) {
-  if (vorgangNochOffen(command)) {
-    if (String(lead?.research_status || '') === 'failed') {
-      return {
-        research_status: 'running',
-        research_error: '',
-        payload: { ...(lead?.payload || {}), research_error: '', research_resumed_waiting_at_ms: Date.now() },
-      };
-    }
-    return ausfuehrungsphasePatch(lead, command);
-  }
-  const status = normalizedResearchCommandStatus(command);
-  if (!['failed', 'blocked', 'cancelled', 'canceled', 'error'].includes(status)) return ausfuehrungsphasePatch(lead, command);
-  if (['cancelled', 'canceled'].includes(status)) {
-    return fehlerOhneErgebnisverlust(lead, 'Recherche abgebrochen.', {
-      reconciled_research_command_id: String(command.command_id || command.id || ''),
-      research_finished_at_ms: Date.now(),
-    });
-  }
-  const worker = String(command?.result?.user_message || command?.result?.user_reply || '').trim();
-  const grund = worker
-    ? worker.split(/(?<=[.!?])\s+/).slice(0, 2).join(' ').slice(0, 400)
-    : 'Die Recherche endete ohne Ergebnis.';
-  return fehlerOhneErgebnisverlust(lead, `Recherche ohne Ergebnis beendet: ${grund}`, {
-    reconciled_research_command_id: String(command.command_id || command.id || ''),
-    research_finished_at_ms: Date.now(),
-  });
-}
 // "Läuft" hiess bisher nur "abgeschickt". LUZI (lead_10blqvp) zeigte am
 // 27.09.2026 ueber eine Stunde "Läuft", waehrend sein Queue-Task seit 12:01
 // unveraendert queued stand (attempt 0, kein Lease). Die Anzeige folgt deshalb
 // der tatsaechlichen Ausfuehrungsphase des Vorgangs; der Status bleibt running.
 const WARTENDE_AUSFUEHRUNGSPHASEN = new Map([
-  ['queued', 'Wartet auf Ausführung'],
-  ['retry_wait', 'Wartet auf Wiederholung'],
-  ['blocked', 'Wartet · blockiert'],
+  ['queued', 'Wartet auf Ausführung'], // v4-allow: label
+  ['retry_wait', 'Wartet auf Wiederholung'], // v4-allow: label
+  ['blocked', 'Wartet · blockiert'], // v4-allow: label
 ]);
 function ausfuehrungsphasePatch(lead, command) {
   if (!['queued', 'running'].includes(String(lead?.research_status || ''))) return null;
@@ -12797,8 +11326,9 @@ function deduplicateEvidence(entries) {
 // zu 20 s) schrieben sonst die ganze payload aus einem alten Schnappschuss
 // zurueck und loeschten zwischenzeitlich Geschriebenes (Klicktest P2 V15).
 async function patchLead(id, patch, { payloadMerge = false, dataMerge = false } = {}) {
-  const doc = await state.collections.leads.findOne(id).exec();
-  if (!doc) return;
+  const doc = await state.collections.leads.eins(id);
+  // main #725: ein fehlender Datensatz ist kein stiller Erfolg (sonst meldete der Editor "gespeichert").
+  if (!doc) throw new Error('LEAD_NOT_FOUND: Der Lead wurde zwischenzeitlich entfernt.');
   const current = doc.toJSON?.() || doc;
   if (payloadMerge && patch?.payload) patch = { ...patch, payload: { ...(current.payload || {}), ...patch.payload } };
   if (dataMerge && patch?.data) patch = { ...patch, data: { ...(current.data || {}), ...patch.data } };
@@ -12815,7 +11345,7 @@ async function patchLead(id, patch, { payloadMerge = false, dataMerge = false } 
   const before = index >= 0 ? state.leads[index] : null;
   if (index >= 0) state.leads[index] = normalizeLeadRecipientShape({ ...state.leads[index], ...applied });
   try {
-    await doc.incrementalPatch(applied);
+    await aendereDok(doc, applied);
   } catch (error) {
     // Nicht gespeichert: die Anzeige darf keinen Stand behalten, den es nicht gibt.
     state.pendingLeadPatches.delete(id);
@@ -12847,24 +11377,6 @@ function setzeHtmlWennGeaendert(element, html) {
   element.innerHTML = text;
   element.__olgHtml = text;
   return true;
-}
-
-// Solange die Synchronisation noch Sammlungen nachlaedt, ist eine leere Liste
-// kein Befund. Rundgang 28.09.2026: ~50 s lang stand „Noch keine Kampagne“ und
-// „Noch keine Leads importiert“ da, obwohl 12 Kampagnen gleich kamen.
-function emptyCollectionText(keys, loadingText, emptyText, errorText) {
-  // A failed read is not a pending read, even while other collections reconnect.
-  // A transient failure during a CTOX (re)start stays "loading" for a grace period.
-  const visibleErrors = visibleReadErrorKeys(state.collectionReadErrors);
-  if (keys.some(key => visibleErrors.includes(key))) return errorText;
-  if (keys.some(key => state.collectionReadErrors?.has(key))) return loadingText;
-  if (keys.every(key => state.reloadAngewendetJeSammlung?.has(key))) return emptyText;
-  if (state.syncError) return errorText;
-  return datenLadenNoch() ? loadingText : emptyText;
-}
-
-function datenLadenNoch() {
-  return Boolean(state.syncPending) || (state.syncWaitingCollections?.size || 0) > 0;
 }
 
 function selectedLead() { return state.leads.find((lead) => lead.id === state.selectedLeadId) || null; }
@@ -13092,10 +11604,10 @@ function emailValidationBlocker(lead) {
   if (checked.length === addresses.length) {
     return `Ansprechpartner-E-Mail als unzustellbar geprüft: ${checked.map((entry) => entry.email).join(', ')}`;
   }
-  if (failed.length) return `E-Mail-Prüfung fehlgeschlagen, CTOX versucht es erneut: ${failed.join(', ')}`;
+  if (failed.length) return `E-Mail-Prüfung fehlgeschlagen, CTOX versucht es erneut: ${failed.join(', ')}`; // v4-allow: label
   // CTOX prueft neue Adressen im stuendlichen Durchlauf (contact_email_validation
   // sweep); "prueft selbst" ohne Zeitangabe las sich wie ein Haenger (Nachtest P3 N-3).
-  return 'E-Mail-Prüfung ausstehend – CTOX prüft neue Adressen automatisch, spätestens innerhalb einer Stunde';
+  return 'E-Mail-Prüfung ausstehend – CTOX prüft neue Adressen binnen einer Stunde'; // v4-allow: label
 }
 function leadReadyForValidation(lead) {
   return validationBlockers(lead).length === 0;
@@ -13112,16 +11624,11 @@ async function cancelResearch(id) {
   const lead = state.leads.find((entry) => entry.id === id);
   if (!lead || !researchInFlight(lead)) return;
   const commandId = String(lead.command_id || '').trim();
-  const confirmed = await showBusinessConfirm(
+  const confirmed = await frageBestaetigung(
     `Die laufende Recherche für „${lead.name || 'diesen Lead'}“ wird abgebrochen. Bereits gespeicherte Werte und Belege bleiben erhalten.`,
     { title: 'Recherche abbrechen', confirmLabel: 'Recherche abbrechen', cancelLabel: 'Weiterlaufen lassen', kind: 'danger' },
   );
   if (!confirmed) return;
-  const bus = state.ctx?.commandBus;
-  if (typeof bus?.cancel !== 'function') {
-    await showBusinessAlert('Abbrechen ist in dieser Sitzung nicht verfügbar.');
-    return;
-  }
   // Bis zur Rueckmeldung sichtbar "wird abgebrochen" statt 15 s Stille
   // (Klicktest-Nachtest P2).
   state.researchCancelling = state.researchCancelling || new Set();
@@ -13129,7 +11636,8 @@ async function cancelResearch(id) {
   zeigeHinweis(`Recherche für „${lead.name || 'diesen Lead'}“ wird abgebrochen …`, 0);
   renderDetail();
   try {
-    await bus.cancel(commandId, { reason: 'Recherche in der Outbound-App abgebrochen', until: 'terminal' });
+    const antwort = await state.port.abbrechen(commandId, 'Recherche in der Outbound-App abgebrochen');
+    if (antwort?.ok === false) throw new Error(antwort.error || 'ctox.command.cancel abgelehnt');
   } catch (error) {
     state.researchCancelling.delete(id);
     const message = String(error?.message || error);
@@ -13137,7 +11645,7 @@ async function cancelResearch(id) {
     // nichts mehr - dann nur den Lead aus "Läuft" holen, sonst bliebe er dort
     // ohne jeden Ausweg stehen.
     if (!/not found|no cancellable|already terminal|invalid_transition|nicht gefunden/i.test(message)) {
-      await showBusinessAlert(`Die Recherche konnte nicht abgebrochen werden: ${message}`);
+      await zeigeMeldung(`Die Recherche konnte nicht abgebrochen werden: ${message}`);
       return;
     }
   }
@@ -13165,7 +11673,7 @@ async function exportResearchXlsx(leads, label) {
   if (state.exportXlsxBusy) return;
   const liste = (Array.isArray(leads) ? leads : []).filter(Boolean);
   if (!liste.length) {
-    await showBusinessAlert('Keine Leads zum Exportieren.');
+    await zeigeMeldung('Keine Leads zum Exportieren.');
     return;
   }
   state.exportXlsxBusy = true;
@@ -13219,14 +11727,23 @@ async function exportResearchXlsx(leads, label) {
       },
       researchLabel: (lead) => labels.get(lead)?.research || 'Offen',
       sellifyLabel: (lead) => labels.get(lead)?.sellify || '—',
-      jszipUrl: new URL('../../vendor/jszip/jszip.mjs', import.meta.url).href,
+      jszipUrl: new URL('./vendor/jszip/jszip.mjs', import.meta.url).href,
     });
     const fileName = exporter.exportFileName(label);
-    exporter.downloadBlob(blob, fileName, eigenesDialogZiel() || document.body);
+    exporter.downloadBlob(blob, fileName, state.root || document.body);
     zeigeHinweis(liste.length > 1 ? `Excel mit ${liste.length} Leads heruntergeladen.` : 'Excel heruntergeladen.');
     // The download has already happened; a failed receiver cannot discard it.
     try {
-      await openResearchSnapshot(state.ctx?.actions, blob, fileName, snapshot);
+      // v4: Datei ueber api.files ablegen, dann die Spreadsheet-App mit ihrer Routenform oeffnen
+      // (modules/spreadsheets/index.js handleRoute: file_ref + Herkunft flach in params).
+      await openResearchSnapshot({
+        ablegen: async (file) => {
+          const upload = state.api.files.put(file, { name: file.name, mime: file.type });
+          await upload.local;
+          return upload.ref;
+        },
+        navigate: (ziel, params) => state.api.shell.navigate(ziel, params),
+      }, blob, fileName, snapshot);
     } catch (error) {
       console.warn('[outbound-lead-generation] Spreadsheet konnte nicht geöffnet werden', error);
       zeigeHinweis(`Excel heruntergeladen. Spreadsheet nicht geöffnet: ${error?.message || error}`);
@@ -13234,7 +11751,7 @@ async function exportResearchXlsx(leads, label) {
   } catch (error) {
     console.warn('[outbound-lead-generation] Excel-Export fehlgeschlagen', error);
     zeigeHinweis('');
-    await showBusinessAlert(`Der Excel-Export ist fehlgeschlagen: ${error?.message || error}`);
+    await zeigeMeldung(`Der Excel-Export ist fehlgeschlagen: ${error?.message || error}`);
   } finally {
     state.exportXlsxBusy = false;
     render();
@@ -13242,20 +11759,20 @@ async function exportResearchXlsx(leads, label) {
 }
 
 function researchLabel(lead, pendingIds = state.pendingResearchIds) {
-  if (researchSubmissionPending(lead, pendingIds)) return 'Wird gestartet';
+  if (researchSubmissionPending(lead, pendingIds)) return 'Wird gestartet'; // v4-allow: label
   if (lead.validation_status === 'validated') return 'Validiert';
-  if (lead.research_status === 'queued') return 'Wartet';
-  if (lead.research_status === 'running') return wartendeAusfuehrungsphase(lead) || 'Läuft';
+  if (lead.research_status === 'queued') return 'Wartet'; // v4-allow: label
+  if (lead.research_status === 'running') return wartendeAusfuehrungsphase(lead) || 'Läuft'; // v4-allow: label
   if (lead.research_status === 'completed') return 'Geprüft';
   if (lead.research_status === 'needs_review') return 'Prüfung nötig';
   if (lead.research_status === 'failed') return 'Unvollständig';
   return 'Offen';
 }
 function sellifyLabel(lead) {
-  if (lead.sellify_status === 'queued') return uebergabeUnterbrochen(lead) ? 'Übergabe unterbrochen' : 'Übergabe läuft';
+  if (lead.sellify_status === 'queued') return uebergabeUnterbrochen(lead) ? 'Übergabe unterbrochen' : 'Übergabe läuft'; // v4-allow: label
   if (lead.sellify_status === 'completed') return 'Übergeben';
   // Sellify hat geschrieben, nur die lokale Kopie steht noch aus.
-  if (lead.sellify_status === 'pending_readback') return 'Übergeben · Bestätigung ausstehend';
+  if (lead.sellify_status === 'pending_readback') return 'Übergeben · Bestätigung ausstehend'; // v4-allow: label
   if (lead.sellify_status === 'failed') return 'Fehlgeschlagen';
   // Vor der Uebergabe sagt die Spalte, was der Vorabgleich weiss; bisher
   // stand bei allen Leads "—", auch bei den 13 bekannten Firmen.
@@ -13524,8 +12041,8 @@ function validationBlockers(lead) {
 }
 function validationBlockerDetails(lead) {
   const blockers = [];
-  if (researchSubmissionPending(lead)) blockers.push('Recherche wird gestartet');
-  if (['queued', 'running'].includes(String(lead?.research_status || ''))) blockers.push('Recherche läuft noch');
+  if (researchSubmissionPending(lead)) blockers.push('Recherche wird gestartet'); // v4-allow: label
+  if (['queued', 'running'].includes(String(lead?.research_status || ''))) blockers.push('Recherche läuft noch'); // v4-allow: label
   // Dieselbe Personensicht wie der Personenreiter (erste Person nach
   // Prioritaet): Freigaben gelten je Person, sonst wirkte eine Freigabe im
   // Standardreiter nicht auf die Freigabe-Blocker (Review 4).
@@ -13581,7 +12098,7 @@ function validationBlockerDetails(lead) {
   // (Rundgang 11.09.2026). Verneinung zuerst, Ausschluss nach Wortanfang.
   const fit = normalizeProtectionText(researchFieldValue(lead, 'firma_aufnahmeeignung'));
   const fitNegated = /\b(nicht|ungeeignet|kein|keine|nein)\b/.test(fit);
-  if (fit && (fitNegated || !['geeignet', 'passend', 'ja'].some((term) => fit.includes(term)))) blockers.push('fachliche Eignung ist nicht bestätigt');
+  if (fit && (fitNegated || !['geeignet', 'passend', 'ja'].some((term) => fit.includes(term)))) blockers.push('fachliche Eignung ist nicht bestätigt'); // v4-allow: label
   const exclusion = normalizeProtectionText(researchFieldValue(lead, 'firma_ausschlussgrund'));
   const exclusionPassed = /^(kein|nein|bestanden|nicht ausgeschlossen)/.test(exclusion);
   if (exclusion && !exclusionPassed) blockers.push('Ausschlussliste ist nicht bestanden');
@@ -13851,8 +12368,7 @@ function renderResearchReviewSummary(review, lead) {
   const optionalOffen = (review.optionalOpenKeys || []).length;
   return `<section class="leadgen-detail-section leadgen-review-summary">
     <div class="leadgen-summary-heading"><h3>${tr('reviewTitle', 'Recherche')}</h3><span class="leadgen-status-pill">${escapeHtml(untouched ? tr('researchNotStartedShort', 'Nicht gestartet') : researchLabel(lead))}</span></div>
-    ${review.evidenceUnloaded ? `<p class="leadgen-review-notice">${escapeHtml(tr('evidenceUnloadedTitle', 'Belege werden noch geladen'))}</p>` : ''}
-    ${letzterRechercheFehler(lead) ? `<p class="leadgen-review-notice">${escapeHtml(letzterRechercheFehler(lead))}</p>` : ''}
+    ${letzterRechercheFehler(lead) ? `<p class="leadgen-review-error">${escapeHtml(letzterRechercheFehler(lead))}</p>` : ''}
     <div class="leadgen-review-metrics" aria-label="Recherchefortschritt">
       <div><strong>${untouched ? 0 : review.researchedCount}<span> / ${review.total}</span></strong><small>recherchiert</small></div>
       <div><strong>${review.filledCount}</strong><small>Werte vorhanden (inkl. Import)</small></div>
@@ -14136,21 +12652,12 @@ const DETAIL_TAB_IDS = ['overview', 'company', 'contact', 'classification'];
 // "temporal dead zone", der ReferenceError fiel ins catch, und der gespeicherte
 // Reiter wurde nie wiederhergestellt (Klicktest P3 DET-02b).
 function detailTabSpeicherSchluessel() { return 'ctox.olg.detail-tab.v1'; }
+// v4: der Reiter ueberlebt den Remount ueber snapshot()/restored (activeDetailTab), nicht im Browserspeicher.
 function restoreActiveDetailTab() {
-  try {
-    const stored = globalThis.localStorage?.getItem(detailTabSpeicherSchluessel()) || '';
-    return ['overview', 'company', 'contact', 'classification'].includes(stored) ? stored : 'overview';
-  } catch {
-    return 'overview';
-  }
+  return 'overview';
 }
 function setActiveDetailTab(tabId) {
-  state.activeDetailTab = tabId;
-  try {
-    globalThis.localStorage?.setItem(detailTabSpeicherSchluessel(), tabId);
-  } catch {
-    // Ohne Browserspeicher gilt der Reiter nur bis zum Neuladen.
-  }
+  state.activeDetailTab = ['overview', 'company', 'contact', 'classification'].includes(tabId) ? tabId : 'overview';
 }
 function renderDetailTabs(lead, activeTab) {
   const tabs = [
@@ -14246,44 +12753,23 @@ async function openCtoxTask(taskId, commandId) {
   const normalizedTaskId = String(taskId || '').trim();
   const normalizedCommandId = String(commandId || '').trim();
   if (!normalizedTaskId || !normalizedCommandId) {
-    showBusinessAlert('Für diese Automatisierung wurde kein verfolgbarer CTOX Task bestätigt.');
+    zeigeMeldung('Für diese Automatisierung wurde kein verfolgbarer CTOX Task bestätigt.');
     return;
   }
-  const focus = {
-    taskId: normalizedTaskId,
-    commandId: normalizedCommandId,
-    taskStatus: 'queued',
-    sourceModule: 'outbound-lead-generation',
-    openDrawer: true,
-  };
-  try {
-    sessionStorage.setItem('ctox.businessOs.focusTask', JSON.stringify(focus));
-  } catch {}
-  const params = new URLSearchParams({
+  // v4: Navigation zur CTOX-App mit dem Aufgabenfokus als Route-Parameter (api.shell.navigate);
+  // sessionStorage-Uebergabe und location.hash entfallen.
+  state.api.shell.navigate('ctox', {
     task_id: normalizedTaskId,
     command_id: normalizedCommandId,
     task_status: 'queued',
     source: 'outbound-lead-generation',
     drawer: '1',
   });
-  await state.ctx?.businessChat?.open?.({
-    title: 'Kampagnenrecherche',
-    task_id: normalizedTaskId,
-    command_id: normalizedCommandId,
-    focus: {
-      task_id: normalizedTaskId,
-      command_id: normalizedCommandId,
-    },
-    source_module: 'outbound-lead-generation',
-    reuseActive: false,
-  });
-  location.hash = `#ctox?${params.toString()}`;
-  await state.ctx?.openApp?.('ctox');
 }
 function campaignResearchStatusLabel(status) {
   const labels = {
     new: tr('statusNew', 'Neu'),
-    queued: tr('statusQueued', 'Wartet'),
+    queued: tr('statusQueued', 'Wartet'), // v4-allow: label
     running: tr('statusRunning', 'Laufend'),
     completed: tr('statusCompleted', 'Abgeschlossen'),
     failed: tr('statusFailed', 'Unvollständig'),
@@ -14294,6 +12780,12 @@ function campaignResearchStatusLabel(status) {
 function domainFromUrl(value) { try { return new URL(value).hostname.replace(/^www\./, ''); } catch { return ''; } }
 function fingerprint(value) { let hash = 2166136261; for (const char of String(value).toLowerCase()) { hash ^= char.charCodeAt(0); hash = Math.imul(hash, 16777619); } return (hash >>> 0).toString(36); }
 function sanitizeCommandResult(result) { return { status: result?.status || '', command_id: result?.command_id || '', task_id: result?.task_id || '', error: result?.error || '', secret_value_in_payload: false }; }
+// Textdiät R2: Zahl + Wort in Einzahl/Mehrzahl („1 Lead“, nicht „1 Leads“).
+function anzahl(wert, eins, viele) {
+  const n = Number(wert) || 0;
+  return `${n} ${n === 1 ? eins : viele}`;
+}
+
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]); }
 function tr(key, fallback) { return String(state.messages?.[key] || fallback || key); }
 
@@ -14301,7 +12793,7 @@ function startResize(event) {
   const handle = event.target.closest('[data-resizer]');
   if (!handle) return;
   event.preventDefault();
-  const layout = state.ctx.host.querySelector('.outbound-lead-generation-layout');
+  const layout = state.root.querySelector('.outbound-lead-generation-layout');
   const side = handle.dataset.resizer;
   const startX = event.clientX;
   const styles = getComputedStyle(layout);
@@ -14343,8 +12835,7 @@ function icon(name) {
 }
 
 export const __leadgenOutboundTestHooks = {
-  closePreopenedBrowserWindow,
-  preopenBrowserWindow,
+  openSourceAuthorization,
   listLeads,
   ensureFullLeads,
   loadSelectedLeadDetails,
@@ -14376,39 +12867,33 @@ export const __leadgenOutboundTestHooks = {
   researchAnsweredNotFound,
   setEmptyFieldRelease,
   patchLead,
-  freitextPruefungPrompt,
+  saveLeadEditor,
   freitextPakete,
   freitextLeadDaten,
   freitextBestaetigungAusstehend,
   vermerkPruefungErledigt,
   reload,
-  renderSyncLine,
   renderCampaigns,
   renderCenter,
   bindCollections,
-  recoverCommandChannel,
   scheduleCollectionReload,
   testState: () => state,
-  planeLeerNachladen,
+  ladeQuellenRegistry,
+  ladeAdapterSkript,
   recipientEligibilitySignature,
   recipientSignatureHash,
-  verarbeiteFreitextAntworten,
   repairUntrackedResearchStatuses,
   sendeFreitextPruefung,
-  leseFreitextAntwort,
-  baueFreitextUrteil,
   loadSellifyRecipientContext,
   normalizeProtectionText,
   repairLeadRecipientSelections,
   refreshLeadRecipientEligibility,
-  renderCampaignRecipientExclusions,
   adapterCommandRecordPatch,
   adapterReady,
   campaignResearchProgress,
   campaignResearchCommandForCampaign,
   campaignRunFromCommand,
   campaignTaskStatus,
-  campaignResearchPrompt,
   campaignResearchQueue,
   campaignQueuedLeadPatch,
   staleCampaignParentPlaceholder,
@@ -14440,7 +12925,6 @@ export const __leadgenOutboundTestHooks = {
   numericBusinessMetric,
   leadResearchMode,
   normalizedResearchCountry,
-  openCampaignResearchChat,
   requireTrackedSubmission,
   repairUntrackedResearchStatuses,
   researchPolicyInstructions,

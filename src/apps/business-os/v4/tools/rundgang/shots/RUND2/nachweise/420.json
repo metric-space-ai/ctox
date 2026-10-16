@@ -1,0 +1,394 @@
+{
+ "app": "nachweise",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Nachweise",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neuer Nachweis",
+    "button:Importieren",
+    "button:Exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Alle (6)",
+    "nav:Gültig (0)",
+    "nav:Ablaufend (3)",
+    "nav:Kritisch (3)",
+    "button:standard läuft ab Subjekt: sub",
+    "button:email nicht verifiziert Subjek",
+    "button:internal läuft ab Subjekt: sub",
+    "button:standard nicht verifiziert Sub",
+    "button:email läuft ab Subjekt: subjec",
+    "button:internal nicht verifiziert Sub",
+    "button:Prüfung & Sign-off",
+    "select:Staplerschein G25 (Fahr-/Steue",
+    "button:Nachweis hinzufügen",
+    "row:standard läuft ab Subjekt: sub",
+    "row:email nicht verifiziert Subjek",
+    "row:internal läuft ab Subjekt: sub",
+    "row:standard nicht verifiziert Sub",
+    "row:email läuft ab Subjekt: subjec",
+    "row:internal nicht verifiziert Sub"
+   ],
+   "shot": "nachweise/420-01-open.png"
+  },
+  {
+   "step": "nav Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "nachweise/420-02-nav_Alle_6_.png"
+  },
+  {
+   "step": "nav Gültig (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "nachweise/420-03-nav_G_ltig_0_.png"
+  },
+  {
+   "step": "nav Ablaufend (3)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "nachweise/420-04-nav_Ablaufend_3_.png"
+  },
+  {
+   "step": "nav Kritisch (3)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "nachweise/420-05-nav_Kritisch_3_.png"
+  },
+  {
+   "step": "zurück zu Reiter Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "nachweise/420-06-zur_ck_zu_Reiter_Alle_6_.png"
+  },
+  {
+   "step": "row standard läuft ab Subjekt: subject-001 · Aussteller: Liefera",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "nachweise/420-07-row_standard_l_uft_ab_Subjekt_subject-00.png"
+  },
+  {
+   "step": "row email nicht verifiziert Subjekt: subject-002 · Aussteller: O",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "nachweise/420-08-row_email_nicht_verifiziert_Subjekt_subj.png"
+  },
+  {
+   "step": "button Neuer Nachweis",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "nachweise/420-09-button_Neuer_Nachweis.png"
+  },
+  {
+   "step": "button Importieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Exportieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Als Liste anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "nachweise/420-10-button_Als_Liste_anzeigen.png"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "nachweise/420-11-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "nachweise/420-12-button_Filter.png"
+  },
+  {
+   "step": "button standard läuft ab Subjekt: subject-001 · Aussteller: Liefera: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button email nicht verifiziert Subjekt: subject-002 · Aussteller: O: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button internal läuft ab Subjekt: subject-003 · Aussteller: Rahmenv: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button standard nicht verifiziert Subjekt: subject-001 · Aussteller: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button email läuft ab Subjekt: subject-002 · Aussteller: Budgetplan: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button internal nicht verifiziert Subjekt: subject-003 · Aussteller: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button Prüfung & Sign-off",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "nachweise/420-13-button_Pr_fung_Sign-off.png"
+  },
+  {
+   "step": "formular 10 Felder → Nachweis hinzufügen",
+   "changed": true,
+   "ops": [
+    "put business_credentials/cred_1792087687999_687999 local=ok result=accepted {\"id\":\"cred_1792087687999_687999\",\"subject_id\":\"Rundgang Test\",\"subject_type\":\"candidate\",\"credential_type\":\"staplerschein\",\"issuer\":\"Rundga"
+   ],
+   "zone": [
+    "clear nachweise.form.subject_required",
+    "clear nachweise.credential.save_failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "nachweise/420-14-formular_10_Felder_Nachweis_hinzuf_gen.png"
+  },
+  {
+   "step": "nav Alle (7)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Kritisch (4)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "nachweise/420-15-nav_Kritisch_4_.png"
+  },
+  {
+   "step": "button Staplerschein nicht verifiziert Subjekt: Rundgang Test · Aus: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button Einsatzbereitschaft prüfen",
+   "changed": 1,
+   "ops": [
+    "command ats.deployment.check local=ok result=accepted {\"subject_id\":\"Rundgang Test\",\"required_types\":[\"Rundgang Test\"]}"
+   ],
+   "zone": [
+    "clear nachweise.form.subject_required",
+    "clear nachweise.command.ats.deployment.check",
+    "{\"level\":\"warn\",\"code\":\"nachweise.deployment.check\",\"text\":\"✗ Nicht einsatzbereit: Rundgang Test\",\"ref\":\"Rundgang Test\"}"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "nachweise/420-16-button_Einsatzbereitschaft_pr_fen.png"
+  },
+  {
+   "step": "button Entleiher-Sign-off → Abrechnung freigeben",
+   "changed": 1,
+   "ops": [
+    "command ats.leistungsnachweis.signoff local=ok result=accepted {\"record_id\":\"Rundgang Test\",\"collection\":\"Rundgang Test\",\"charge_rate\":42,\"entleiher_account_id\":\"Rundgang Test\",\"signature_request_id\":\"Ru"
+   ],
+   "zone": [
+    "clear nachweise.form.record_required",
+    "clear nachweise.command.ats.leistungsnachweis.signoff",
+    "{\"level\":\"info\",\"code\":\"nachweise.signoff.result\",\"text\":\"Entleiher-Sign-off gespeichert. · Leistungsnachweis: Rundgang Test · Abrechnung freigegeben: nein\",\"ref\":\"Rundgang Test\"}"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "nachweise/420-17-button_Entleiher-Sign-off_Abrechnung_fre.png"
+  },
+  {
+   "step": "auswahl Status filtern → valid",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "nachweise/420-18-auswahl_Status_filtern_valid.png"
+  },
+  {
+   "step": "auswahl Staplerschein G25 (Fahr-/Steuertätigkeit) G37 (Bildschirmarb → g25",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true
+  },
+  {
+   "step": "button Filter zurücksetzen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "nachweise/420-19-button_Filter_zur_cksetzen.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 1198,
+   "shot": "nachweise/420-20-suche_ohne_Treffer.png",
+   "textAfter": 743
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "nachweise/420-21-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "business_credentials",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "ats.deployment.check",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "ats.leistungsnachweis.signoff",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "nachweise",
+  "Nachweise"
+ ]
+}

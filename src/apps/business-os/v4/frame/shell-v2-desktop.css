@@ -1,0 +1,1297 @@
+/* GENERIERT von v4/frame/lab/extract-desktop-css.mjs – nicht von Hand ändern (Strang FR6d, 15.10.2026).
+   Shell-V2-Startmenü, -Desktop und -Crew-Leiste wörtlich aus ui-contract/v1/workjet-ui-contract.css, app.css, mobile-host.css, modules/desktop/index.css, shared/business-chat.js#installChatStyles: Deklarationen,
+   @media und Reihenfolge unverändert, Selektoren mechanisch auf die Hülle [data-v4-v2] begrenzt (Spezifität gleich;
+   [data-app="desktop"] → [data-v4-desktop-v2]). Änderungen nur in den Quellen, dann neu erzeugen; FR6d-G0 im
+   Rahmen-Labor vergleicht beide Pfade pixelweise. */
+
+/* --- Tokens aus :root/html der Quellen (transitiv benutzt), an der Hülle --- */
+/* ui-contract/v1/workjet-ui-contract.css */
+[data-v4-v2],
+:root[data-theme="light"] :where([data-v4-v2]) {
+  --workjet-shadow-panel: 0 4px 12px rgb(0 0 0 / 0.12);
+  --workjet-category-imported-accent: #71717a;
+  --workjet-category-imported-accent-foreground: #ffffff;
+  --workjet-category-imported-accent-soft: #e4e4e7;
+  --workjet-category-imported-accent-border: #a1a1aa;
+}
+/* ui-contract/v1/workjet-ui-contract.css */
+:root[data-theme="dark"] :where([data-v4-v2]) {
+  --workjet-category-imported-accent-soft: #27272a;
+  --workjet-category-imported-accent-border: #52525b;
+}
+/* app.css */
+[data-v4-v2] {
+  --bg: var(--ctox-host-bg, #fcfcfc);
+  --surface: var(--ctox-host-surface, #ffffff);
+  --surface-2: var(--ctox-host-surface-2, #fcfcfc);
+  --line: var(--ctox-host-line, #e4e4e7);
+  --text: var(--ctox-host-text, #52525b);
+  --text-strong: var(--ctox-host-text-strong, #27272a);
+  --muted: var(--ctox-host-muted, #71717b);
+  --accent: var(--ctox-host-accent, #1b4ed8);
+  --accent-soft: var(--ctox-host-accent-soft, #e0e6f7);
+  --shadow: 0 8px 24px oklch(0.22 0.015 235 / 0.12);
+  --shadow-md: 0 4px 12px oklch(0.22 0.015 235 / 0.12);
+  --shadow-lg: 0 8px 24px oklch(0.22 0.015 235 / 0.18);
+  --hairline: var(--ctox-host-hairline, #e4e4e7);
+  --panel-radius: 6px;
+  --control-radius: 4px;
+  --surface-3: var(--ctox-host-surface-3, #ffffff);
+  --glass-bg: var(--surface);
+  --glass-blur: none;
+  --shell-topbar-height: 48px;
+  --motion-fast: 120ms;
+  --motion-base: 160ms;
+  --motion-slow: 200ms;
+  --ease-standard: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --elev-float: #ffffff;
+  --elev-float-2: #f5f6f8;
+  --elev-float-3: #eceef2;
+  --elev-inner-line: rgb(15 23 42 / 0.08);
+  --elev-edge: rgb(15 23 42 / 0.14);
+  --elev-outline: rgb(255 255 255 / 0.9);
+  --elev-bar-shadow: 0 0 0 1px rgb(15 23 42 / 0.05), 0 10px 30px oklch(0.22 0.015 235 / 0.18);
+  --chrome-edge-inset: rgba(255, 255, 255, 0.45);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+/* app.css */
+:root[data-theme="dark"] :where([data-v4-v2]) {
+  --bg: var(--ctox-host-bg, #0a0a0a);
+  --surface: var(--ctox-host-surface, #111111);
+  --surface-2: var(--ctox-host-surface-2, #141414);
+  --line: var(--ctox-host-line, #191919);
+  --text: var(--ctox-host-text, #d4d4d8);
+  --text-strong: var(--ctox-host-text-strong, #f5f5f5);
+  --muted: var(--ctox-host-muted, #818181);
+  --accent: var(--ctox-host-accent, #346bf1);
+  --accent-soft: var(--ctox-host-accent-soft, #16264f);
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.42);
+  --hairline: var(--ctox-host-hairline, #191919);
+  --panel-radius: 6px;
+  --control-radius: 4px;
+  --surface-3: var(--ctox-host-surface-3, #191919);
+  --glass-bg: var(--surface);
+  --glass-blur: none;
+  --elev-float: #1c1f25;
+  --elev-float-2: #252a32;
+  --elev-float-3: #2e343d;
+  --elev-inner-line: rgb(255 255 255 / 0.08);
+  --elev-edge: rgb(255 255 255 / 0.15);
+  --elev-outline: rgb(0 0 0 / 0.85);
+  --elev-bar-shadow: 0 0 0 1px var(--elev-outline), 0 14px 38px rgb(0 0 0 / 0.58);
+  --chrome-edge-inset: rgba(255, 255, 255, 0.07);
+}
+/* app.css */
+[data-v4-v2] {
+  color: var(--text);
+  font-size: var(--fs-base);
+}
+/* app.css */
+@media (max-width: 767px) {
+[data-v4-v2] {
+  --ctox-shell-topbar-h: 56px;
+}
+}
+
+/* --- Regeln --- */
+
+/* ===== app.css ===== */
+:where([data-v4-v2]) * {
+  box-sizing: border-box;
+}
+:where([data-v4-v2]) input,
+:where([data-v4-v2]) [contenteditable]:not([contenteditable="false"]),
+:where([data-v4-v2]) [role="textbox"],
+:where([data-v4-v2]) [data-ctox-text-selectable] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+:where([data-v4-v2]) ::selection {
+  background: color-mix(in oklab, var(--accent) 24%, transparent);
+  color: inherit;
+}
+:where([data-v4-v2]) button,
+:where([data-v4-v2]) input {
+  font: inherit;
+}
+:where([data-v4-v2]) button {
+  cursor: pointer;
+}
+:where([data-v4-v2]) [data-maintenance-empty-state="true"] {
+  display: none !important;
+}
+body.is-workspace-col-resizing :where([data-v4-v2]),
+body.is-workspace-col-resizing :where([data-v4-v2]) * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+:where([data-v4-v2]) [data-resizer] {
+  align-self: stretch;
+  width: 12px;
+  min-width: 12px;
+  max-width: 12px;
+  flex: 0 0 12px;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  padding: 0;
+  margin: 0;
+  position: relative;
+  z-index: 10;
+  touch-action: none;
+  box-sizing: border-box;
+  box-shadow: none;
+  outline: none;
+  appearance: none;
+}
+:where([data-v4-v2]) [data-resizer][hidden] {
+  display: none !important;
+}
+:where([data-v4-v2]) [data-resizer]::after {
+  content: none !important;
+  display: none !important;
+}
+:where([data-v4-v2]) [data-resizer]::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 4px;
+  height: 48px;
+  border-radius: 999px;
+  background: var(--line);
+  opacity: 0.5;
+  transition: opacity var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
+  pointer-events: none;
+}
+:where([data-v4-v2]) [data-resizer]:hover::before,
+:where([data-v4-v2]) [data-resizer].is-active::before,
+:where([data-v4-v2]) [data-resizer].is-dragging::before {
+  opacity: 1;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+body.is-resizing :where([data-v4-v2]),
+body.is-resizing :where([data-v4-v2]) * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+:where([data-v4-v2]) .shell-start-menu-panel {
+  position: fixed;
+  top: var(--shell-topbar-height);
+  left: 14px;
+  width: 360px;
+  max-height: calc(100vh - var(--shell-topbar-height) - var(--space-4));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--panel-radius);
+  background: var(--glass-bg, var(--surface));
+  color: var(--text);
+  box-shadow: var(--shadow-lg, var(--shadow));
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-10px) scale(0.98);
+  transition: opacity var(--motion-base) var(--ease-standard), transform var(--motion-base) var(--ease-standard);
+  z-index: 9999;
+}
+:where([data-v4-v2]) .shell-start-menu-panel.is-active {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+}
+:where([data-v4-v2]) .start-menu-header {
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--hairline, var(--line));
+  background: color-mix(in srgb, var(--surface) 20%, transparent);
+}
+:where([data-v4-v2]) .start-menu-search-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+:where([data-v4-v2]) .start-menu-search-input {
+  width: 100%;
+  height: 36px;
+  padding: 0 var(--space-3) 0 34px;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+  color: var(--text-strong, var(--text));
+  outline: none;
+  font-size: var(--fs-base);
+}
+:where([data-v4-v2]) .start-menu-search-input:focus {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
+  box-shadow: var(--focus-ring);
+}
+:where([data-v4-v2]) .start-menu-search-icon {
+  position: absolute;
+  left: 12px;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+  pointer-events: none;
+}
+:where([data-v4-v2]) .start-menu-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  overflow-y: auto;
+  padding: var(--space-3);
+}
+:where([data-v4-v2]) .start-menu-body::-webkit-scrollbar {
+  width: 6px;
+}
+:where([data-v4-v2]) .start-menu-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+:where([data-v4-v2]) .start-menu-body::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 50%, transparent);
+}
+:where([data-v4-v2]) .start-menu-category {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+:where([data-v4-v2]) .start-menu-category-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2) var(--space-1);
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 20%, transparent);
+  color: var(--muted);
+  font-size: var(--fs-micro);
+  font-weight: 780;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+:where([data-v4-v2]) .start-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--control-radius);
+  background: transparent;
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
+}
+:where([data-v4-v2]) .start-menu-item:hover {
+  background: var(--kit-hover);
+  transform: translateX(2px);
+}
+:where([data-v4-v2]) .start-menu-item-left {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  gap: var(--space-3);
+  min-width: 0;
+}
+:where([data-v4-v2]) .start-menu-item-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+  color: var(--accent);
+}
+:where([data-v4-v2]) .start-menu-item-icon img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+:where([data-v4-v2]) .start-menu-item-label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-base);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:where([data-v4-v2]) .start-menu-item-copy {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-1);
+}
+:where([data-v4-v2]) .start-menu-item:hover .start-menu-item-label {
+  color: var(--text-strong, var(--text));
+}
+:where([data-v4-v2]) .start-menu-item-pin-btn {
+  display: grid;
+  place-items: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+  transform: scale(0.9);
+  transition: opacity var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
+}
+:where([data-v4-v2]) .start-menu-item:hover .start-menu-item-pin-btn,
+:where([data-v4-v2]) .start-menu-item-pin-btn.is-pinned {
+  opacity: 1;
+  transform: scale(1);
+}
+:where([data-v4-v2]) .start-menu-item-pin-btn:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+:where([data-v4-v2]) .start-menu-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--hairline, var(--line));
+  background: color-mix(in srgb, var(--surface) 30%, transparent);
+}
+:where([data-v4-v2]) .start-menu-footer-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 34px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  background: color-mix(in srgb, var(--surface-2) 30%, transparent);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+}
+:where([data-v4-v2]) .start-menu-footer-btn:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--surface-2) 80%, transparent);
+  color: var(--accent);
+}
+:where([data-v4-v2]) .start-menu-footer-btn svg {
+  width: 14px;
+  height: 14px;
+}
+body[data-shell-chat-dock-side] :where([data-v4-v2]) .ctox-chat-root {
+  left: auto !important;
+  right: 96px !important;
+  width: 340px !important;
+  max-width: min(340px, calc(100vw - 176px)) !important;
+}
+body[data-shell-chat-dock-side] :where([data-v4-v2]) .ctox-chat-dock {
+  display: flex !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  scrollbar-width: thin;
+}
+:where([data-v4-v2]) :where(button, [role="button"], input, select, textarea):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+:where([data-v4-v2]) :where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]), select, textarea) {
+  color: var(--text);
+  -webkit-text-fill-color: currentColor;
+  caret-color: var(--accent);
+}
+:where([data-v4-v2]) input::placeholder {
+  /* WICHTIG: kein :where() um Pseudo-ELEMENTE - :where() nimmt nur
+     Pseudo-KLASSEN; Chrome verwirft sonst die komplette Regel und es gilt der
+     UA-Default (#757575, ~4,0:1). Seit jeher kaputt; entdeckt im UI-Review
+     31.08.2026 (r3-B1/r4). 60%-Mischung: erreicht auch im dunkleren
+     Kopfband-Kontext (~--muted #55) die Leerzustand-Stufe ~#939393 >= 4,5:1. */
+  color: color-mix(in srgb, var(--text) 22%, var(--muted));
+  -webkit-text-fill-color: color-mix(in srgb, var(--text) 22%, var(--muted));
+  opacity: 1;
+}
+:where([data-v4-v2]) :where(button, input, select, textarea):disabled,
+:where([data-v4-v2]) :where(button, input, select, textarea)[aria-disabled="true"] {
+  cursor: not-allowed !important;
+  opacity: 0.55;
+  box-shadow: none !important;
+}
+:where([data-v4-v2]) [data-resizer]:focus-visible {
+  outline: none;
+}
+:where([data-v4-v2]) [data-resizer]:focus-visible::before {
+  opacity: 1;
+  background: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+:where([data-v4-v2]) [data-resize-frame] { position: relative; }
+body.is-resizing :where([data-v4-v2]) * { cursor: col-resize !important; }
+body.is-resizing-horizontal :where([data-v4-v2]),
+body.is-resizing-horizontal :where([data-v4-v2]) * { cursor: row-resize !important; }
+:where([data-v4-v2]) .shell-start-menu-panel {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+:where([data-v4-v2]) .shell-start-menu-panel {
+  transition: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+:where([data-v4-v2]) *,
+:where([data-v4-v2]) *::before,
+:where([data-v4-v2]) *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+@media (max-width: 600px) {
+:where([data-v4-v2]) .shell-start-menu-panel {
+    top: var(--shell-topbar-height);
+    left: 0;
+    width: 100%;
+    max-height: calc(100dvh - var(--shell-topbar-height) - env(safe-area-inset-bottom, 0px));
+    border-radius: 0;
+  }
+}
+:where([data-v4-v2]) .desktop-icon .desktop-icon-glyph > .workjet-app-raster-icon {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+  pointer-events: none;
+}
+:where([data-v4-v2]) .desktop-icon.is-app-open .desktop-icon-glyph,
+:where([data-v4-v2]) .desktop-icon.is-app-open:hover .desktop-icon-glyph {
+  transform: none !important;
+  filter: grayscale(1) saturate(0) brightness(0.7) !important;
+  opacity: 0.62;
+  outline: 0 solid transparent !important;
+  box-shadow: none !important;
+}
+:where([data-v4-v2]) .desktop-icon.is-app-open .desktop-icon-label {
+  color: color-mix(in srgb, var(--text, #fff) 58%, transparent) !important;
+}
+[data-v4-v2][data-shell-style="ctox"] .shell-start-menu-panel {
+  top: var(--shell-topbar-height);
+  left: 16px;
+  border-radius: 18px !important;
+  border: 1px solid color-mix(in srgb, var(--line) 46%, transparent);
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  backdrop-filter: blur(28px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(28px) saturate(180%) !important;
+  box-shadow:
+    0 28px 72px rgba(0, 0, 0, 0.2),
+    0 4px 14px rgba(0, 0, 0, 0.08),
+    inset 0 1px 0 var(--chrome-edge-inset);
+}
+:root[data-theme="dark"] :where([data-v4-v2])[data-shell-style="ctox"] .shell-start-menu-panel {
+  background: color-mix(in srgb, var(--surface) 68%, transparent);
+  box-shadow:
+    0 28px 72px rgba(0, 0, 0, 0.56),
+    0 4px 14px rgba(0, 0, 0, 0.3);
+}
+:where([data-v4-v2]) [data-workjet-category] {
+  --shell-category-accent: var(--workjet-category-imported-accent);
+  --shell-category-foreground: var(--workjet-category-imported-accent-foreground);
+  --shell-category-soft: var(--workjet-category-imported-accent-soft);
+  --shell-category-border: var(--workjet-category-imported-accent-border);
+}
+:root :where([data-v4-v2]) [data-workjet-category].start-menu-item:focus-within {
+  background: var(--shell-category-soft) !important;
+}
+:root :where([data-v4-v2]) [data-workjet-category].start-menu-item:focus-within .start-menu-item-icon {
+  border-color: var(--shell-category-border) !important;
+  background: color-mix(in srgb, var(--shell-category-soft) 74%, var(--surface)) !important;
+  color: var(--shell-category-accent) !important;
+}
+:root :where([data-v4-v2]) [data-workjet-category].start-menu-item:focus-within .start-menu-item-label {
+  color: var(--shell-category-accent) !important;
+}
+@media (max-width: 767px) {
+:where([data-v4-v2]) .shell-start-menu-panel {
+    top: var(--ctox-shell-topbar-h, 56px);
+    left: 0;
+    right: 0;
+    width: auto;
+    max-width: none;
+    max-height: calc(100dvh - var(--ctox-shell-topbar-h, 56px) - env(safe-area-inset-bottom, 0px));
+    border-radius: 0;
+  }
+}
+@media (max-width: 767px) {
+:where([data-v4-v2]) .ctox-chat-root {
+    left: 8px !important;
+    right: 8px !important;
+    bottom: calc(8px + env(safe-area-inset-bottom, 0px)) !important;
+    max-width: none !important;
+  }
+}
+@media (max-width: 767px) {
+:where([data-v4-v2]) .ctox-chat-root.is-collapsed {
+    right: 8px !important;
+    max-width: none !important;
+  }
+}
+@media (max-width: 767px) {
+:where([data-v4-v2]) .ctox-chat-dock {
+    --ctox-date-pill-width: 118px !important;
+    width: max-content !important;
+    max-width: calc(100vw - 16px) !important;
+    gap: 6px !important;
+    /* Keep every portrait inside Crew's own track. On the narrowest screens
+       scroll the bounded dock instead of painting over the date controls. */
+    overflow-x: auto;
+    overflow-y: hidden;
+    grid-template-columns: max-content var(--ctox-date-pill-width) 44px !important;
+  }
+}
+@media (max-width: 767px) {
+:where([data-v4-v2]) .ctox-chat-dock.is-collapsed {
+    width: auto !important;
+    grid-template-columns: max-content var(--ctox-date-pill-width) !important;
+  }
+}
+@media (max-width: 767px) {
+:where([data-v4-v2]) .ctox-chat-fab {
+    width: max-content !important;
+    min-width: 0 !important;
+    height: 44px !important;
+  }
+}
+@media (max-width: 767px) {
+:where([data-v4-v2]) .ctox-chat-date-pill {
+    height: 44px !important;
+    min-width: var(--ctox-date-pill-width) !important;
+  }
+}
+@media (max-width: 767px) {
+:where([data-v4-v2]) .ctox-date-nav-btn {
+    width: 32px !important;
+    height: 32px !important;
+  }
+}
+
+/* ===== mobile-host.css ===== */
+:root[data-workjet-mobile-host="true"] :where([data-v4-v2]) {
+  width: 100%;
+  height: 100%;
+  min-height: 100dvh;
+  overflow: hidden;
+  background: var(--bg);
+}
+:root[data-workjet-mobile-host="true"] :where([data-v4-v2]) [data-shell-start-menu],
+:root[data-workjet-mobile-host="true"] :where([data-v4-v2]) [data-chat-dock],
+:root[data-workjet-mobile-host="true"] :where([data-v4-v2]) [data-taskbar] {
+  display: none !important;
+}
+:root[data-workjet-mobile-host="true"] :where([data-v4-v2]) .desktop-module {
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  --desktop-mobile-icon-size: 64px;
+  --desktop-mobile-cell-height: 132px;
+}
+:root[data-workjet-mobile-host="true"] :where([data-v4-v2]) .desktop-icons {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: var(--desktop-mobile-cell-height);
+  align-content: start;
+  align-items: start;
+  justify-items: center;
+  gap: 12px 8px;
+  padding: 20px 16px 72px;
+  overflow-x: auto;
+  overflow-y: auto;
+  touch-action: pan-x pan-y;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
+}
+:root[data-workjet-mobile-host="true"] :where([data-v4-v2]) .desktop-icon {
+  position: relative;
+  left: auto !important;
+  top: auto !important;
+  width: min(116px, 100%);
+  height: 124px;
+  gap: 9px;
+  padding: 8px 4px 10px;
+  touch-action: pan-x pan-y;
+  -webkit-user-select: none;
+  user-select: none;
+}
+:root[data-workjet-mobile-host="true"] :where([data-v4-v2]) .desktop-icon:focus,
+:root[data-workjet-mobile-host="true"] :where([data-v4-v2]) .desktop-icon:focus-visible {
+  outline: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+:root[data-workjet-mobile-host="true"] :where([data-v4-v2]) .desktop-icon:focus-visible .desktop-icon-glyph {
+  outline: 0 !important;
+  box-shadow: none !important;
+  filter: drop-shadow(0 7px 10px color-mix(in srgb, var(--accent) 34%, transparent));
+  transform: scale(1.035);
+}
+:root[data-workjet-mobile-host="true"] :where([data-v4-v2]) .desktop-icons.is-touch-reordering {
+  overflow: hidden;
+}
+:root[data-workjet-mobile-host="true"] :where([data-v4-v2]) .desktop-icon .desktop-icon-glyph {
+  width: var(--desktop-mobile-icon-size);
+  height: var(--desktop-mobile-icon-size);
+  border-radius: 16px;
+}
+:root[data-workjet-mobile-host="true"] :where([data-v4-v2]) .desktop-icon .desktop-icon-label {
+  font-size: 12px;
+  line-height: 1.3;
+}
+@media (min-width: 600px) {
+:root[data-workjet-mobile-host="true"] :where([data-v4-v2]) .desktop-icons {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap-inline: 12px;
+    padding-inline: 24px;
+  }
+}
+@media (min-width: 840px) {
+:root[data-workjet-mobile-host="true"] :where([data-v4-v2]) .desktop-icons {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap-inline: 16px;
+    padding-inline: 32px;
+  }
+}
+:root[data-workjet-mobile-host="true"] :where([data-v4-v2]) :where(button, select, input, [role="button"]) {
+  min-height: 44px;
+  touch-action: manipulation;
+}
+:root[data-workjet-mobile-host="true"] :where([data-v4-v2]) :where(button, [role="button"]):has(> svg:only-child) {
+  min-width: 44px;
+}
+@media (prefers-reduced-motion: reduce) {
+:root[data-workjet-mobile-host="true"] :where([data-v4-v2]) *,
+:root[data-workjet-mobile-host="true"] :where([data-v4-v2]) *::before,
+:root[data-workjet-mobile-host="true"] :where([data-v4-v2]) *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ===== modules/desktop/index.css ===== */
+:where([data-v4-v2]) [data-v4-desktop-v2] .desktop-module {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  /* The desktop canvas is the same flat ground as the rest of the shell.
+     Windows and icons read as layers through their own hairline, not
+     against a tinted radial mesh. */
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  overflow: hidden;
+  isolation: isolate;
+  container-type: inline-size;
+  --desktop-icon-cell-w: 120px;
+  --desktop-icon-cell-h: 140px;
+  --desktop-icon-padding: 24px;
+}
+:where([data-v4-v2]) [data-v4-desktop-v2] .desktop-module::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+:where([data-v4-v2]) [data-v4-desktop-v2] .desktop-surface {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  z-index: 1;
+}
+:where([data-v4-v2]) [data-v4-desktop-v2] .desktop-icons {
+  position: absolute;
+  inset: 0;
+  padding: var(--desktop-icon-padding);
+  /* The icon layer is the desktop's vertical scroll container: absolutely
+     positioned icons extend its scrollable overflow area, so rows below the
+     fold stay reachable on every viewport (previously the overflow:hidden
+     chain clipped them). pointer-events:auto is required so touch/wheel
+     scrolling also starts on empty cells; icon children keep their own
+     pointer-events:auto and the surface context-menu/drop handlers still
+     receive bubbled events. */
+  pointer-events: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+:where([data-v4-v2]) [data-v4-desktop-v2] .desktop-icon {
+  position: absolute;
+  width: 112px;
+  /* Two-line labels need headroom for descenders. The 140px grid cell leaves
+     a four-pixel row gutter around the 136px launcher. */
+  height: 136px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 4px 10px;
+  border-radius: 18px;
+  cursor: pointer;
+  user-select: none;
+  pointer-events: auto;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform-origin: center bottom;
+}
+:where([data-v4-v2]) [data-v4-desktop-v2] .desktop-icon:hover {
+  background: transparent;
+  transform: translateY(-2px);
+  box-shadow: none;
+}
+:where([data-v4-v2]) [data-v4-desktop-v2] .desktop-icon .desktop-icon-glyph {
+  width: 80px;
+  height: 80px;
+  display: grid;
+  place-items: center;
+  border-radius: 16px;
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: 0 solid transparent;
+  outline-offset: 3px;
+  transition: transform 180ms ease, filter 180ms ease, outline-color 120ms ease !important;
+  color: var(--text);
+}
+:where([data-v4-v2]) [data-v4-desktop-v2] .desktop-icon:hover .desktop-icon-glyph {
+  background: transparent !important;
+  transform: scale(1.06) !important;
+  filter: drop-shadow(0 8px 12px rgba(0, 0, 0, 0.18));
+  box-shadow: none !important;
+}
+:where([data-v4-v2]) [data-v4-desktop-v2] .desktop-icon:focus-visible .desktop-icon-glyph {
+  outline-width: 2px;
+  outline-color: color-mix(in srgb, var(--accent) 78%, white 12%);
+}
+:where([data-v4-v2]) [data-v4-desktop-v2] .desktop-icon .desktop-icon-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.3;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  display: -webkit-box;
+  min-height: calc(2 * 1.3em);
+  max-height: calc(2 * 1.3em);
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  /* Keep recognizable app names on word boundaries. Breaking anywhere caused
+     ugly orphan glyphs (for example the final "n" in "Zugangsdaten"). The
+     two-line clamp truncates genuinely unbreakable identifiers instead. */
+  overflow-wrap: normal;
+  word-break: normal;
+  hyphens: none;
+  color: var(--text);
+  letter-spacing: 0;
+  text-shadow: 
+    0 1px 3px color-mix(in srgb, var(--bg) 95%, transparent),
+    0 1px 6px color-mix(in srgb, var(--bg) 70%, transparent);
+  padding: 2px 4px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  transition: color 200ms ease, background-color 200ms ease, border-color 200ms ease;
+}
+@container (max-width: 767px) {
+:where([data-v4-v2]) [data-v4-desktop-v2] .desktop-icons {
+    --desktop-icon-cell-w: 88px;
+    --desktop-icon-cell-h: 132px;
+    --desktop-icon-padding: 12px;
+  }
+}
+@container (max-width: 767px) {
+:where([data-v4-v2]) [data-v4-desktop-v2] .desktop-icon {
+    position: relative;
+    left: auto !important;
+    top: auto !important;
+    width: 88px;
+    height: 128px;
+    gap: 7px;
+    padding: 6px 2px 8px;
+    border-radius: 12px;
+  }
+}
+@container (max-width: 767px) {
+:where([data-v4-v2]) [data-v4-desktop-v2] .desktop-icons {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+    grid-auto-rows: var(--desktop-icon-cell-h);
+    align-content: start;
+    align-items: start;
+    justify-items: center;
+    gap: 8px 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: var(--desktop-icon-padding) var(--desktop-icon-padding) 104px;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+@container (max-width: 767px) {
+:where([data-v4-v2]) [data-v4-desktop-v2] .desktop-icon .desktop-icon-glyph {
+    width: 64px;
+    height: 64px;
+    border-radius: 16px;
+  }
+}
+@container (max-width: 767px) {
+:where([data-v4-v2]) [data-v4-desktop-v2] .desktop-icon .desktop-icon-label {
+    font-size: 10px;
+    line-height: 1.25;
+    padding: 2px;
+    min-height: calc(2 * 1.25em + 2px);
+    max-height: calc(2 * 1.25em + 2px);
+  }
+}
+
+/* ===== shared/business-chat.js#installChatStyles ===== */
+:where([data-v4-v2]) .ctox-chat-root {
+      position: fixed;
+      left: 18px;
+      /* Die ausgeklappte Leiste laeuft ueber die gesamte Fensterbreite. Sie
+         sparte hier 132px fuer den Kaefer-Melder aus; der waechst beim
+         Ueberfahren aber auf bis zu 280px und lag ohnehin ueber der Leiste —
+         die Luecke kostete nur sichtbare Laenge. Der Melder sitzt jetzt im
+         rechten Ende der Leiste (Freiraum: --ctox-chat-reporter-slot). */
+      right: 18px;
+      bottom: 18px;
+      z-index: 60;
+      display: grid;
+      grid-template-rows: auto auto;
+      gap: var(--space-2);
+      width: auto;
+      max-width: calc(100dvw - 36px);
+      box-sizing: border-box;
+      pointer-events: none;
+      min-width: 0;
+    }
+:where([data-v4-v2]) .ctox-chat-root button {
+      font: inherit;
+    }
+:where([data-v4-v2]) .ctox-chat-dock {
+      --ctox-date-pill-width: 146px;
+      /* Die Leiste faengt nur dort Klicks, wo sie etwas anzeigt.
+         .ctox-chat-root steht bewusst auf pointer-events:none, damit die App
+         darunter bedienbar bleibt — das Dock hob das fuer seine GESAMTE Flaeche
+         wieder auf, einschliesslich der durchsichtigen Zwischenraeume zwischen
+         Knopf, Datumspille und Streifen. Am 11.08.2026 lag die
+         Empfaengerauswahl von Outbound Lead Generation genau in diesem toten Streifen:
+         der Detailbereich war bis zum Anschlag gescrollt, das Haekchen sichtbar,
+         und jeder Klick landete im Dock. Ohne Empfaenger keine Sellify-Uebergabe,
+         kein Serienbrief, keine Serien-E-Mail — die gesamte Kette endete an
+         einem unsichtbaren Rechteck.
+         Die Kinder holen sich pointer-events unten einzeln zurueck. */
+      pointer-events: none;
+      grid-row: 2;
+      display: grid;
+      box-sizing: border-box;
+      grid-template-columns: 88px var(--ctox-date-pill-width) 34px;
+      align-items: center;
+      gap: var(--space-2);
+      min-width: 0;
+      width: max-content;
+      max-width: 100%;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: var(--control-radius);
+      background: var(--surface-2);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      box-shadow: var(--workjet-shadow-panel, var(--shadow-md));
+      transition: border-color var(--motion-slow) var(--ease-spring), box-shadow var(--motion-slow) var(--ease-spring);
+    }
+:where([data-v4-v2]) .ctox-chat-dock:hover {
+      border-color: color-mix(in srgb, var(--line) 55%, transparent);
+    }
+:where([data-v4-v2]) .ctox-chat-dock > *,
+:where([data-v4-v2]) .ctox-chat-fab,
+:where([data-v4-v2]) .ctox-chat-date-pill {
+      pointer-events: auto;
+    }
+:where([data-v4-v2]) .ctox-chat-date-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 34px;
+      width: var(--ctox-date-pill-width);
+      min-width: var(--ctox-date-pill-width);
+      border: 1px solid color-mix(in srgb, var(--line) 20%, transparent);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--surface) 15%, transparent);
+      padding: 0 2px;
+      box-sizing: border-box;
+      gap: 2px;
+      transition: border-color var(--motion-base) var(--ease-standard), background-color var(--motion-base) var(--ease-standard);
+    }
+:where([data-v4-v2]) .ctox-chat-date-pill:hover {
+      border-color: color-mix(in srgb, var(--line) 55%, transparent);
+      background: color-mix(in srgb, var(--surface) 35%, transparent);
+    }
+:where([data-v4-v2]) .ctox-date-nav-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      border: none;
+      border-radius: 50%;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      transition: transform var(--motion-fast) var(--ease-spring), background-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
+      padding: 0;
+    }
+:where([data-v4-v2]) .ctox-date-nav-btn:hover {
+      background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+      color: var(--text);
+      transform: scale(1.05);
+    }
+:where([data-v4-v2]) .ctox-date-nav-btn:active {
+      transform: scale(0.95);
+    }
+:where([data-v4-v2]) .ctox-date-picker-trigger {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 5px;
+      flex: 1;
+      height: 28px;
+      border-radius: 8px;
+      color: var(--text);
+      cursor: pointer;
+      min-width: 0;
+      padding: 0 2px;
+      transition: background-color var(--motion-fast) var(--ease-standard);
+    }
+:where([data-v4-v2]) .ctox-date-picker-trigger:hover {
+      background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+    }
+:where([data-v4-v2]) .ctox-date-picker-trigger svg {
+      flex-shrink: 0;
+      color: var(--muted);
+      transition: color var(--motion-fast) var(--ease-standard);
+    }
+:where([data-v4-v2]) .ctox-date-picker-trigger:hover svg {
+      color: var(--text);
+    }
+:where([data-v4-v2]) .ctox-date-native-picker {
+      position: absolute;
+      bottom: 38px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: var(--ctox-date-pill-width);
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+      -webkit-appearance: none;
+      appearance: none;
+      z-index: 10;
+    }
+:where([data-v4-v2]) .ctox-chat-root.is-collapsed {
+      right: auto;
+      width: auto;
+      max-width: none;
+    }
+:where([data-v4-v2]) .ctox-chat-dock.is-collapsed {
+      grid-template-columns: max-content var(--ctox-date-pill-width);
+      width: auto;
+    }
+:where([data-v4-v2]) .ctox-chat-fab {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+      height: 34px;
+      width: 88px;
+      min-width: 82px;
+      border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+      color: var(--text);
+      padding: 0 10px;
+      font-weight: 760;
+      cursor: pointer;
+      transition: transform var(--motion-slow) var(--ease-spring), background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
+    }
+:where([data-v4-v2]) .ctox-chat-fab:hover {
+      transform: translateY(-1px) scale(1.02);
+      background: color-mix(in srgb, var(--accent) 15%, var(--surface));
+    }
+:where([data-v4-v2]) .ctox-chat-fab:active {
+      transform: scale(0.98);
+    }
+:where([data-v4-v2]) .ctox-crew-creature {
+      position: relative;
+      display: inline-grid;
+      place-items: center;
+      width: 100%;
+      height: 100%;
+      contain: layout style;
+    }
+:where([data-v4-v2]) .ctox-crew-creature[data-crew-away] {
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--crew-color) 18%, var(--elev-float-2, #1f232a));
+      box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--crew-color) 72%, transparent);
+    }
+:where([data-v4-v2]) .ctox-crew-creature.is-window {
+      width: 38px;
+      height: 38px;
+      flex: 0 0 38px;
+    }
+:where([data-v4-v2]) .ctox-chat-crew-slot { touch-action: none; }
+@media (prefers-reduced-motion: reduce) {
+:where([data-v4-v2]) .ctox-crew-creature,
+:where([data-v4-v2]) .ctox-crew-creature * {
+        animation: none !important;
+        transition: none !important;
+      }
+}
+@media (max-width: 780px) {
+:where([data-v4-v2]) .ctox-chat-root {
+        right: 18px;
+        width: auto;
+        max-width: calc(100vw - 36px);
+        grid-template-columns: minmax(0, 1fr);
+      }
+}
+@media (max-width: 780px) {
+:where([data-v4-v2]) .ctox-chat-dock {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        gap: 6px !important;
+        overflow-x: auto !important;
+        width: calc(100vw - 36px) !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        box-sizing: border-box !important;
+        scrollbar-width: none !important;
+      }
+}
+@media (max-width: 780px) {
+:where([data-v4-v2]) .ctox-chat-dock::-webkit-scrollbar {
+        display: none !important;
+      }
+}
+:where([data-v4-v2]) .ctox-crew-creature.is-window {
+      position: relative;
+      width: 40px;
+      height: 40px;
+      flex-basis: 40px;
+      isolation: isolate;
+    }
+:where([data-v4-v2]) .ctox-crew-creature.is-window::before {
+      content: '';
+      position: absolute;
+      inset: -2px;
+      z-index: -1;
+      border-radius: 50%;
+      background: conic-gradient(from -90deg,
+        color-mix(in srgb, var(--crew-color) 72%, transparent) 0 var(--ctox-progress-angle),
+        color-mix(in srgb, var(--line) 34%, transparent) var(--ctox-progress-angle) 360deg);
+      -webkit-mask: radial-gradient(circle, transparent 66%, #000 68%);
+      mask: radial-gradient(circle, transparent 66%, #000 68%);
+      opacity: 0.75;
+    }
+:where([data-v4-v2]) .ctox-chat-dock {
+      /* Two 24px day arrows, a 30px calendar, gaps, padding and border. */
+      --ctox-date-pill-width: 88px;
+      /* Resolve shell theme here, before chips introduce category tokens. */
+      --ctox-dock-control-accent: var(--accent);
+      --ctox-dock-control-accent-soft: var(--accent-soft);
+      grid-template-columns: max-content var(--ctox-date-pill-width) 36px;
+      gap: 6px;
+      padding: 5px;
+      /* The crew bar floats like a dock: its own surface ladder, a light
+         edge, a dark outline and a blur of whatever app lies beneath. */
+      --surface: var(--elev-float-2, #252a32);
+      --surface-2: var(--elev-float, #1c1f25);
+      --surface-3: var(--elev-float-3, #2e343d);
+      --line: var(--elev-inner-line, rgb(255 255 255 / 0.08));
+      border: 1px solid var(--elev-edge, var(--line));
+      border-radius: 16px;
+      background: color-mix(in srgb, var(--elev-float, var(--surface-2)) 92%, transparent);
+      box-shadow: var(--elev-bar-shadow, var(--shadow-lg));
+      backdrop-filter: blur(18px) saturate(1.35);
+      -webkit-backdrop-filter: blur(18px) saturate(1.35);
+    }
+:where([data-v4-v2]) .ctox-chat-dock > :is(.ctox-chat-date-pill, .ctox-chat-nav, .ctox-chat-new),
+:where([data-v4-v2]) .ctox-chat-date-pill > .ctox-date-nav-btn {
+      flex-shrink: 0;
+    }
+:where([data-v4-v2]) .ctox-chat-fab {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      align-items: center;
+      gap: 6px;
+      /* Reserve the full overlapping member row, including all six portraits. */
+      width: max-content;
+      flex-shrink: 0;
+      min-width: 108px;
+      height: 42px;
+      padding: 0 8px;
+      border-color: transparent;
+      background: transparent;
+    }
+:where([data-v4-v2]) .ctox-chat-fab-creatures {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      width: max-content;
+      height: 34px;
+      padding-left: 8px;
+    }
+:where([data-v4-v2]) .ctox-chat-fab-label {
+      color: var(--text-strong);
+      font-size: var(--fs-sm);
+      font-weight: 760;
+    }
+:where([data-v4-v2]) .ctox-chat-fab-creatures .ctox-crew-creature {
+      width: 28px;
+      height: 28px;
+      flex: 0 0 28px;
+      margin-left: -8px;
+      filter: saturate(0.9);
+    }
+:where([data-v4-v2]) .ctox-chat-fab-creatures.is-members {
+      gap: 1px;
+      padding-left: 0;
+    }
+:where([data-v4-v2]) .ctox-chat-fab-creatures.is-members .ctox-chat-crew-slot {
+      display: inline-grid;
+      width: 21px;
+      height: 21px;
+      flex: 0 0 21px;
+      margin-left: 0;
+    }
+:where([data-v4-v2]) .ctox-chat-fab-creatures.is-members .ctox-crew-creature {
+      margin-left: 0;
+    }
+:where([data-v4-v2]) .ctox-chat-crew-slot {
+      display: inline-grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      cursor: grab;
+      touch-action: none;
+      transition: transform 140ms ease;
+    }
+:where([data-v4-v2]) .ctox-chat-crew-slot { position: relative; }
+:where([data-v4-v2]) .ctox-chat-crew-slot[data-crew-load]:not([data-crew-load="0"])::after {
+      content: attr(data-crew-load);
+      position: absolute;
+      top: -5px;
+      right: -4px;
+      min-width: 12px;
+      height: 12px;
+      padding: 0 3px;
+      box-sizing: border-box;
+      border-radius: 6px;
+      background: var(--accent, #1685ee);
+      color: #fff;
+      font: 700 8.5px/12px system-ui, -apple-system, sans-serif;
+      text-align: center;
+      box-shadow: 0 0 0 1.5px var(--elev-float, #1c1f25);
+      pointer-events: none;
+    }
+:where([data-v4-v2]) .ctox-chat-crew-slot:hover {
+      transform: translateY(-2px) scale(1.06);
+    }
+:where([data-v4-v2]) .ctox-chat-crew-slot:active {
+      cursor: grabbing;
+    }
+:where([data-v4-v2]) .ctox-chat-crew-slot .ctox-crew-creature {
+      width: 100%;
+      height: 100%;
+    }
+:where([data-v4-v2]) .ctox-chat-date-pill {
+      height: 42px;
+      border-color: transparent;
+      background: transparent;
+    }
+:where([data-v4-v2]) .ctox-date-picker-trigger {
+      justify-content: center;
+      flex: 0 0 30px;
+      padding: 0;
+    }
+:where([data-v4-v2]) .ctox-chat-dock .ctox-chat-date-pill {
+      border-color: var(--muted);
+      background: var(--surface);
+    }
+:where([data-v4-v2]) .ctox-chat-dock :is(.ctox-chat-fab, .ctox-date-nav-btn, .ctox-date-picker-trigger, .ctox-chat-nav, .ctox-chat-new, .ctox-chat-chip) {
+      color: var(--text-strong);
+      background: var(--surface);
+    }
+:where([data-v4-v2]) .ctox-chat-dock .ctox-date-picker-trigger svg {
+      color: currentColor;
+    }
+:where([data-v4-v2]) .ctox-chat-dock :is(.ctox-chat-fab, .ctox-date-nav-btn, .ctox-date-picker-trigger, .ctox-chat-nav, .ctox-chat-new, .ctox-chat-chip):not(:disabled):not([aria-disabled="true"]):hover {
+      color: var(--text-strong);
+      background: var(--surface-3);
+    }
+:where([data-v4-v2]) .ctox-chat-dock :is(.ctox-chat-fab, .ctox-date-nav-btn, .ctox-date-picker-trigger, .ctox-chat-nav, .ctox-chat-new, .ctox-chat-chip):not(:disabled):not([aria-disabled="true"]):active {
+      color: var(--text-strong);
+      background: var(--ctox-dock-control-accent-soft);
+      border-color: var(--ctox-dock-control-accent);
+    }
+:where([data-v4-v2]) .ctox-chat-dock :is(button, [role="button"], [tabindex]):focus-visible {
+      /* A solid accent outline stays visible beside the translucent kit ring. */
+      outline: 2px solid var(--ctox-dock-control-accent);
+      outline-offset: -2px;
+      box-shadow: var(--focus-ring);
+    }
+:where([data-v4-v2]) .ctox-chat-root.is-collapsed {
+      right: auto;
+      width: max-content;
+      max-width: max-content;
+    }
+:where([data-v4-v2]) .ctox-chat-dock.is-collapsed {
+      justify-self: start;
+      width: max-content !important;
+      max-width: max-content !important;
+    }
+:where([data-v4-v2]) .ctox-chat-dock:not(.is-collapsed) {
+      justify-self: start;
+      width: max-content;
+      max-width: 100%;
+    }

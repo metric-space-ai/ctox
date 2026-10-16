@@ -1,0 +1,19 @@
+{
+ "app": "coding-agents",
+ "width": 1280,
+ "steps": [
+  {
+   "label": "Lauf abgebrochen",
+   "problem": "page.waitForFunction: Timeout 30000ms exceeded."
+  }
+ ],
+ "flags": [
+  {
+   "step": 0,
+   "label": "Lauf abgebrochen",
+   "probs": [
+    "page.waitForFunction: Timeout 30000ms exceeded."
+   ]
+  }
+ ]
+}

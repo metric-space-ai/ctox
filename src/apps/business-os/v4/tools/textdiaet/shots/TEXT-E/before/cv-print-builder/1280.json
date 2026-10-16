@@ -1,0 +1,109 @@
+{
+ "app": "cv-print-builder",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "CV Print Builder",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 744
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neuer CV",
+    "button:Profile importieren",
+    "button:Profile exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Alle (6)",
+    "nav:In Arbeit (6)",
+    "nav:Korrektur (0)",
+    "nav:Mehr ▾",
+    "button:Kandidatenspalte anpassen",
+    "button:Analysieren",
+    "button:Bühne ausblenden",
+    "nav:Original",
+    "row:NC Neuer CV PDF geladen Modern",
+    "row:NC Neuer CV PDF geladen Modern",
+    "row:NC Neuer CV PDF geladen Modern",
+    "row:NC Neuer CV PDF geladen Modern",
+    "row:NC Neuer CV PDF geladen Modern",
+    "row:NC Neuer CV PDF geladen Modern"
+   ],
+   "shot": "cv-print-builder/1280-01-open.png"
+  },
+  {
+   "step": "nav Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "cv-print-builder/1280-02-nav_Alle_6_.png"
+  },
+  {
+   "step": "nav In Arbeit (6)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Korrektur (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "cv-print-builder/1280-03-nav_Korrektur_0_.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 141,
+   "shot": "cv-print-builder/1280-04-suche_ohne_Treffer.png",
+   "textAfter": 141
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "cv-print-builder/1280-05-suche_geleert.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "cv-print-builder",
+  "CV Print Builder"
+ ]
+}

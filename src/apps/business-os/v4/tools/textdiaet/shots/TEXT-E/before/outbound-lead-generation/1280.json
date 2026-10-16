@@ -1,0 +1,374 @@
+{
+ "app": "outbound-lead-generation",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [
+    "put outbound_lead_generation_sources/handelsregister.de local=ok result=accepted {\"id\":\"handelsregister.de\",\"label\":\"Handelsregister\",\"url\":\"https://www.handelsregister.de/\",\"countries\":[\"DE\"],\"field_k",
+    "put outbound_lead_generation_sources/bundesanzeiger.de local=ok result=accepted {\"id\":\"bundesanzeiger.de\",\"label\":\"Bundesanzeiger\",\"url\":\"https://www.bundesanzeiger.de/\",\"countries\":[\"DE\"],\"field_keys",
+    "put outbound_lead_generation_sources/northdata.de local=ok result=accepted {\"id\":\"northdata.de\",\"label\":\"Northdata\",\"url\":\"https://www.northdata.de/\",\"countries\":[\"DE\",\"AT\",\"CH\"],\"field_keys\":[\"f",
+    "put outbound_lead_generation_sources/companyhouse.de local=ok result=accepted {\"id\":\"companyhouse.de\",\"label\":\"CompanyHouse\",\"url\":\"https://www.companyhouse.de/\",\"countries\":[\"DE\"],\"field_keys\":[\"fi",
+    "put outbound_lead_generation_sources/dnbhoovers.com local=ok result=accepted {\"id\":\"dnbhoovers.com\",\"label\":\"D&B Hoovers\",\"url\":\"https://app.dnbhoovers.com/\",\"countries\":[\"DE\",\"AT\",\"CH\"],\"field_key",
+    "put outbound_lead_generation_sources/leadfeeder.com local=ok result=accepted {\"id\":\"leadfeeder.com\",\"label\":\"Leadfeeder\",\"url\":\"https://app.leadfeeder.com/f/200538/dashboard?organization_id=wmNE2Md",
+    "put outbound_lead_generation_sources/linkedin.com local=ok result=accepted {\"id\":\"linkedin.com\",\"label\":\"LinkedIn (Bright Data People Scraper)\",\"url\":\"https://www.linkedin.com/\",\"countries\":[\"DE\"",
+    "put outbound_lead_generation_sources/xing.com local=ok result=accepted {\"id\":\"xing.com\",\"label\":\"XING\",\"url\":\"https://www.xing.com/\",\"countries\":[\"DE\",\"AT\",\"CH\"],\"field_keys\":[\"person_geschle",
+    "put outbound_lead_generation_sources/google.de local=ok result=accepted {\"id\":\"google.de\",\"label\":\"Google\",\"url\":\"https://www.google.de/\",\"countries\":[\"DE\",\"AT\",\"CH\"],\"field_keys\":[\"firma_name",
+    "put outbound_lead_generation_sources/maps.google.com local=ok result=accepted {\"id\":\"maps.google.com\",\"label\":\"Google Maps\",\"url\":\"https://www.google.de/maps\",\"countries\":[\"DE\",\"AT\",\"CH\"],\"field_key",
+    "put outbound_lead_generation_sources/impressum local=ok result=accepted {\"id\":\"impressum\",\"label\":\"Unternehmenswebsite / Impressum\",\"url\":\"\",\"countries\":[\"DE\",\"AT\",\"CH\"],\"field_keys\":[\"firma_a",
+    "put outbound_lead_generation_sources/rocketreach.com local=ok result=accepted {\"id\":\"rocketreach.com\",\"label\":\"RocketReach\",\"url\":\"https://rocketreach.co/\",\"countries\":[\"DE\",\"AT\",\"CH\"],\"field_keys\":",
+    "put outbound_lead_generation_sources/firmenabc.at local=ok result=accepted {\"id\":\"firmenabc.at\",\"label\":\"FirmenABC\",\"url\":\"https://www.firmenabc.at/\",\"countries\":[\"AT\"],\"field_keys\":[\"firma_name\"",
+    "put outbound_lead_generation_sources/moneyhouse.ch local=ok result=accepted {\"id\":\"moneyhouse.ch\",\"label\":\"Moneyhouse\",\"url\":\"https://www.moneyhouse.ch/\",\"countries\":[\"CH\"],\"field_keys\":[\"firma_na",
+    "put outbound_lead_generation_sources/zefix.ch local=ok result=accepted {\"id\":\"zefix.ch\",\"label\":\"Zefix\",\"url\":\"https://www.zefix.ch/\",\"countries\":[\"CH\"],\"field_keys\":[\"firma_name\",\"firma_frue",
+    "put outbound_lead_generation_sources/experte.de local=ok result=accepted {\"id\":\"experte.de\",\"label\":\"E-Mail-Prüfung\",\"url\":\"https://www.experte.de/email-pruefen\",\"countries\":[\"DE\",\"AT\",\"CH\"],\"f",
+    "put outbound_lead_generation_sources/mailtester.com local=ok result=accepted {\"id\":\"mailtester.com\",\"label\":\"MailTester\",\"url\":\"https://mailtester.com/\",\"countries\":[\"DE\",\"AT\",\"CH\"],\"field_keys\":[\"",
+    "put outbound_lead_generation_sources/evi.gv.at local=ok result=accepted {\"id\":\"evi.gv.at\",\"label\":\"EVI – Amtsblatt Österreich\",\"url\":\"https://www.evi.gv.at/\",\"countries\":[\"AT\"],\"field_keys\":[\"",
+    "put outbound_lead_generation_sources/justizonline.gv.at local=ok result=accepted {\"id\":\"justizonline.gv.at\",\"label\":\"Firmenbuch / JustizOnline\",\"url\":\"https://justizonline.gv.at/jop/web/firmenbuchabfra",
+    "put outbound_lead_generation_sources/shab.ch local=ok result=accepted {\"id\":\"shab.ch\",\"label\":\"SHAB – Schweizerisches Handelsamtsblatt\",\"url\":\"https://www.shab.ch/#!/gazette\",\"countries\":[\"C",
+    "put outbound_lead_generation_sources/sellify local=ok result=accepted {\"id\":\"sellify\",\"label\":\"Sellify (eigenes CRM)\",\"url\":\"\",\"countries\":[\"DE\",\"AT\",\"CH\"],\"field_keys\":[\"Firma\",\"Anschrift\",",
+    "put outbound_lead_generation_adapters/lead-generation-adapter-001 local=ok result=accepted {\"id\":\"lead-generation-adapter-001\",\"source_id\":\"lead-generation-source-001\",\"status\":\"digest_config\",\"scrape_status\":\"t",
+    "put outbound_lead_generation_adapters/lead-generation-adapter-002 local=ok result=accepted {\"id\":\"lead-generation-adapter-002\",\"source_id\":\"lead-generation-source-002\",\"status\":\"auth_requested\",\"scrape_status\":\"",
+    "put outbound_lead_generation_adapters/lead-generation-adapter-003 local=ok result=accepted {\"id\":\"lead-generation-adapter-003\",\"source_id\":\"lead-generation-source-003\",\"status\":\"generation_queued\",\"scrape_status",
+    "put outbound_lead_generation_adapters/lead-generation-adapter-004 local=ok result=accepted {\"id\":\"lead-generation-adapter-004\",\"source_id\":\"lead-generation-source-004\",\"status\":\"running\",\"scrape_status\":\"generat",
+    "put outbound_lead_generation_adapters/lead-generation-adapter-005 local=ok result=accepted {\"id\":\"lead-generation-adapter-005\",\"source_id\":\"lead-generation-source-005\",\"status\":\"free\",\"scrape_status\":\"target_ava",
+    "put outbound_lead_generation_adapters/lead-generation-adapter-006 local=ok result=accepted {\"id\":\"lead-generation-adapter-006\",\"source_id\":\"lead-generation-source-006\",\"status\":\"failed\",\"scrape_status\":\"not_requ",
+    "command outbound.sellify.lookup local=ok result=rejected:unknown_command:outbound.sellify.lookup {\"entity\":\"company\",\"selectors\":[],\"ids\":[],\"limit\":25,\"command_id\":\"cmd_leadgen_sellify_lookup_2fbd490b-9518-4eb0-a571-",
+    "command outbound.sellify.lookup local=ok result=rejected:unknown_command:outbound.sellify.lookup {\"entity\":\"company\",\"selectors\":[],\"ids\":[],\"limit\":25,\"command_id\":\"cmd_leadgen_sellify_lookup_8b13d860-9f25-4e7a-aa43-",
+    "command outbound.sellify.lookup local=ok result=rejected:unknown_command:outbound.sellify.lookup {\"entity\":\"company\",\"selectors\":[],\"ids\":[],\"limit\":25,\"command_id\":\"cmd_leadgen_sellify_lookup_79c5c6aa-5a63-4264-994f-",
+    "command outbound.sellify.lookup local=ok result=rejected:unknown_command:outbound.sellify.lookup {\"entity\":\"company\",\"selectors\":[],\"ids\":[],\"limit\":25,\"command_id\":\"cmd_leadgen_sellify_lookup_bd9a840b-4b09-4e4f-a865-",
+    "command outbound.sellify.lookup local=ok result=rejected:unknown_command:outbound.sellify.lookup {\"entity\":\"company\",\"selectors\":[],\"ids\":[],\"limit\":25,\"command_id\":\"cmd_leadgen_sellify_lookup_75159cc3-f60e-4571-9118-",
+    "command outbound.sellify.lookup local=ok result=rejected:unknown_command:outbound.sellify.lookup {\"entity\":\"company\",\"selectors\":[],\"ids\":[],\"limit\":25,\"command_id\":\"cmd_leadgen_sellify_lookup_011e05e6-c910-4316-b70f-",
+    "put outbound_lead_generation_leads/lead-generation-lead-001 local=ok result=accepted {\"id\":\"lead-generation-lead-001\",\"data\":{\"aenderungsart\":\"Neuanlage\"},\"payload\":{\"derived_field_keys\":[\"aenderungsart\"],",
+    "put outbound_lead_generation_leads/lead-generation-lead-002 local=ok result=accepted {\"id\":\"lead-generation-lead-002\",\"data\":{\"aenderungsart\":\"Neuanlage\"},\"payload\":{\"derived_field_keys\":[\"aenderungsart\"],",
+    "put outbound_lead_generation_leads/lead-generation-lead-003 local=ok result=accepted {\"id\":\"lead-generation-lead-003\",\"data\":{\"aenderungsart\":\"Neuanlage\"},\"payload\":{\"derived_field_keys\":[\"aenderungsart\"],",
+    "put outbound_lead_generation_leads/lead-generation-lead-004 local=ok result=accepted {\"id\":\"lead-generation-lead-004\",\"data\":{\"aenderungsart\":\"Neuanlage\"},\"payload\":{\"derived_field_keys\":[\"aenderungsart\"],",
+    "put outbound_lead_generation_leads/lead-generation-lead-005 local=ok result=accepted {\"id\":\"lead-generation-lead-005\",\"data\":{\"aenderungsart\":\"Neuanlage\"},\"payload\":{\"derived_field_keys\":[\"aenderungsart\"],",
+    "put outbound_lead_generation_leads/lead-generation-lead-006 local=ok result=accepted {\"id\":\"lead-generation-lead-006\",\"data\":{\"aenderungsart\":\"Neuanlage\"},\"payload\":{\"derived_field_keys\":[\"aenderungsart\"],"
+   ],
+   "title": "Outbound Lead Generation",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 744
+   },
+   "mode": "",
+   "issues": [
+    "seitlicher Scroll in nav.leadgen-detail-tabs 335>306"
+   ],
+   "errors": [],
+   "zoneText": "7 Änderung abgelehnt: unknown_command:outbound.sellify.lookup",
+   "cands": [
+    "button:Neue Kampagne",
+    "button:Leads aus Datei importieren (E",
+    "button:Leadliste einer Sellify-Kampag",
+    "button:Recherche-Einstellungen: Quell",
+    "button:Jahresrecherche 6",
+    "button:Jahresrecherche umbenennen",
+    "button:Jahresrecherche löschen",
+    "button:Kampagnenbreite ändern",
+    "button:Kampagne recherchieren",
+    "button:Sellify-Freitextvermerke aller",
+    "button:Kampagne als Excel-Datei herun",
+    "nav:Kartenansicht",
+    "nav:Tabellenansicht",
+    "button:Filter und Sortierung",
+    "check:Alle sichtbaren Leads auswähle",
+    "row:— Offen neu",
+    "row:auswählen",
+    "button:Detailbreite ändern",
+    "button:bearbeiten",
+    "nav:Übersicht",
+    "nav:Unternehmen",
+    "nav:Personen",
+    "nav:Einordnung",
+    "button:Startet nur, wenn die Firma no",
+    "button:Recherche dieses Leads als Exc",
+    "button:23 offene Punkte bis zur Freig"
+   ],
+   "shot": "outbound-lead-generation/1280-01-open.png"
+  },
+  {
+   "step": "nav Kartenansicht",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in nav.leadgen-detail-tabs 335>306"
+   ],
+   "open": true,
+   "kind": "nav",
+   "shot": "outbound-lead-generation/1280-02-nav_Kartenansicht.png"
+  },
+  {
+   "step": "nav Tabellenansicht",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in nav.leadgen-detail-tabs 335>306"
+   ],
+   "open": true,
+   "kind": "nav",
+   "shot": "outbound-lead-generation/1280-03-nav_Tabellenansicht.png"
+  },
+  {
+   "step": "nav Übersicht",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in nav.leadgen-detail-tabs 335>306"
+   ],
+   "open": true,
+   "kind": "nav",
+   "shot": "outbound-lead-generation/1280-04-nav_bersicht.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_sources",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_adapters",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_adapters",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_adapters",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_adapters",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_adapters",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_adapters",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "outbound.sellify.lookup",
+   "local": "ok",
+   "result": "rejected:unknown_command:outbound.sellify.lookup"
+  },
+  {
+   "m": "command",
+   "coll": "outbound.sellify.lookup",
+   "local": "ok",
+   "result": "rejected:unknown_command:outbound.sellify.lookup"
+  },
+  {
+   "m": "command",
+   "coll": "outbound.sellify.lookup",
+   "local": "ok",
+   "result": "rejected:unknown_command:outbound.sellify.lookup"
+  },
+  {
+   "m": "command",
+   "coll": "outbound.sellify.lookup",
+   "local": "ok",
+   "result": "rejected:unknown_command:outbound.sellify.lookup"
+  },
+  {
+   "m": "command",
+   "coll": "outbound.sellify.lookup",
+   "local": "ok",
+   "result": "rejected:unknown_command:outbound.sellify.lookup"
+  },
+  {
+   "m": "command",
+   "coll": "outbound.sellify.lookup",
+   "local": "ok",
+   "result": "rejected:unknown_command:outbound.sellify.lookup"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_leads",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_leads",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_leads",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_leads",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_leads",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "outbound_lead_generation_leads",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "outbound-lead-generation",
+  "Outbound Lead Generation"
+ ]
+}

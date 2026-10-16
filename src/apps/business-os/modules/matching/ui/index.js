@@ -10,21 +10,21 @@ import {
   shortlistObjectsForRequirement,
   shortlistRequirementsForObject
 } from './matchingTools.js';
-import { readViewState, patchViewState, setViewStateStorageScope } from './viewState.js';
+import { readViewState, patchViewState } from './viewState.js';
 import { normalizeCandidateStage } from '../core/pipeline.js';
-window.recomputeAllMatchScoresOnce = recomputeAllMatchScoresOnce;
 
-import { CtoxQueuedCommandError, llmChat, queueObjectParseTask, queueRequirementParseTask, setCtoxCommandBus } from './ctoxCommandAdapter.js';
-import {
-  getContactsCollection,
-  getMatchingCollectionReadiness,
-  subscribeMatchingCollectionReadiness
-} from './businessOsDataSource.js';
-import { createSyncFeedback } from './syncFeedback.js';
+import { CtoxQueuedCommandError, llmChat, queueObjectParseTask, queueRequirementParseTask } from './ctoxCommandAdapter.js';
+import { getContactsCollection } from './businessOsDataSource.js';
 import { getActiveMatchingDefinition, matchingText, setActiveMatchingDefinition } from './matchingDefinition.js';
-import { showBusinessAlert, showBusinessConfirm, showBusinessPrompt } from '../../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
-import { loadModuleMessages } from '../../../shared/i18n.js';
-import { renderListOrState } from '../../../shared/list-state.js';
+import {
+  getMatchingApi,
+  matchingAlert,
+  matchingConfirm,
+  matchingPrompt,
+  matchingStore,
+  onMatchingUnmount,
+  reportMatchingStatus
+} from './v4Runtime.js';
 
 const EMBEDDING_REQUEST_TIMEOUT_MS = 12_000;
 const MATCH_SCORE_FORMULA_VERSION = 3;
@@ -36,7 +36,9 @@ function defText(path, fallback = '') {
 }
 
 function uiText(key, fallback = '', replacements = {}) {
-  let text = String(matchingMessages?.[key] ?? fallback ?? key);
+  const translated = getMatchingApi()?.shell.t(`matching.${key}`);
+  const fromShell = translated && translated !== `matching.${key}` ? translated : null;
+  let text = String(fromShell ?? matchingMessages?.[key] ?? fallback ?? key);
   for (const [name, value] of Object.entries(replacements)) {
     text = text.replaceAll(`{${name}}`, String(value));
   }
@@ -78,8 +80,6 @@ let matchingViewState = readViewState(
   MATCHING_VIEW_STATE_DEFAULTS
 );
 
-const syncFeedback = createSyncFeedback({ scope: 'matching-view' });
-syncFeedback.wireWebRTCStatus();
 let matchingModuleHost = null;
 
 function getMatchingModuleHost() {
@@ -185,7 +185,7 @@ function resizeImageFileToDataUrl(file, size = 256) {
 
 async function importObjectImageFile(file, targetObjectId = '') {
   if (!rxdb || !rxdb.objects) await loadFromRxdb();
-  if (!rxdb || !rxdb.objects) throw new Error('Objekt-Datenbank ist nicht bereit.');
+  if (!rxdb || !rxdb.objects) throw new Error('Objekt-Collection fehlt.');
 
   const photo = await resizeImageFileToDataUrl(file, 256);
   const now = new Date().toISOString();
@@ -194,9 +194,9 @@ async function importObjectImageFile(file, targetObjectId = '') {
   const selectedId = String(targetObjectId || '').trim();
 
   if (selectedId) {
-    const existing = await rxdb.objects.findOne({ selector: { id: selectedId } }).exec();
+    const existing = await rxdb.objects.one({ selector: { id: selectedId } });
     if (existing) {
-      await existing.incrementalModify((prev) => ({
+      await existing.modify((prev) => ({
         ...prev,
         definitionId: prev.definitionId || activeDefinitionId(),
         schemaVersion: prev.schemaVersion || activeSchemaVersion(),
@@ -267,7 +267,7 @@ async function importObjectImageFile(file, targetObjectId = '') {
     status: 'active'
   };
 
-  await rxdb.objects.upsert(doc);
+  await rxdb.objects.save(doc);
   objectPhotoDataUrlCache.set(id, photo);
   __markObjectsDirty();
   await loadFromRxdb();
@@ -514,13 +514,8 @@ function renderObjectsEdits() {
 
     const avatarSrc = getObjectAvatarSrc(c); // nutzt normalizeImageSrc + fallback
 
-    // Status-Text für Placeholder
-    let placeholderLine = 'Warte auf Object-Service …';
-    if (c.importError) {
-      placeholderLine = `<span class="muted">Fehler: ${_escapeHtml(c.importError)}</span>`;
-    } else if (c.importStatus) {
-      placeholderLine = `Object-Service: ${_escapeHtml(c.importStatus)}`;
-    }
+    // Platzhalter tragen keinen Zustandstext mehr (Zustand → api.status.report, V4-PORT.md).
+    const placeholderLine = '';
 
     card.innerHTML = `
       <div class="object-head">
@@ -536,7 +531,7 @@ function renderObjectsEdits() {
           <div class="toggle-row small">
             ${
               isPlaceholder
-                ? '<span class="spinner" aria-label="Import läuft"></span>'
+                ? '<span class="spinner" aria-hidden="true"></span>'
                 : `
                   <div class="switch ${active ? 'is-on' : ''}" data-object-toggle="${c.id}">
                     <div class="switch-knob"></div>
@@ -550,7 +545,7 @@ function renderObjectsEdits() {
           <div class="c-tax">
             ${
               isPlaceholder
-                ? (c.importError ? 'Import fehlgeschlagen' : 'Import läuft …')
+                ? ''
                 : _escapeHtml(c.taxonomy || c.currentRole || '–')
             }
           </div>
@@ -604,9 +599,7 @@ function syncObjectDetailForms() {
 
   if (object.isPlaceholder) {
     if (hint) {
-      hint.textContent = object.importError
-        ? 'Import fehlgeschlagen – Details über den Import prüfen.'
-        : 'Import läuft – die Objekte-Daten werden automatisch geladen.';
+      hint.textContent = '';
     }
     if (fields) fields.style.display = 'none';
     return;
@@ -779,7 +772,7 @@ function createUiPlaceholderObject({ placeholderId, displayName, sourceLabel }) 
     definitionId: activeDefinitionId(),
     schemaVersion: activeSchemaVersion(),
     name,
-    tax: 'Import läuft …',
+    tax: '',
     skills: '',
     skillsSummary: '',
     photo: makeInitialsAvatarDataUrl({ name, seed: id, size: 100 }),
@@ -839,6 +832,12 @@ function _escapeHtml(s) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// Befund Port 15.10.: renderRequirementSelector u. a. riefen ein modulweites escapeHtml, das es nie gab
+// (nur funktionslokale Kopien) → ReferenceError, sobald eine Anforderung existiert.
+function escapeHtml(s) {
+  return _escapeHtml(s).replace(/'/g, '&#39;');
 }
 
 /**
@@ -964,19 +963,9 @@ let rxdb = null;
 let sources = [];
 let objects = [];
 let matches = [];
-let matchingRuntimeCtx = null;
-let matchingReadinessCleanup = null;
-const matchingReadinessByCollection = new Map();
-const MATCHING_SYNC_PROGRESS_ID = 'matching-initial-sync';
-const MATCHING_SYNC_COLLECTIONS = Object.freeze([
-  { name: 'matching_requirements', labelKey: 'syncCollectionRequirements', fallbackLabel: 'Anforderungen' },
-  { name: 'matching_objects', labelKey: 'syncCollectionObjects', fallbackLabel: 'Objekte' },
-  { name: 'matching_results', labelKey: 'syncCollectionResults', fallbackLabel: 'Matches' }
-]);
 
-// Standard action glyphs (shared/icons.js actionIconPaths) — used only when
-// the module runs without the shell ctx (standalone boot); the normal path is
-// ctx.getActionIcon from mountMatchingDashboard(ctx).
+// Standard action glyphs (shared/icons.js actionIconPaths). App-API 4.0 hat keine Icon-API
+// (app-api.d.ts OFFEN-D): die Glyphen bleiben app-lokal.
 const FALLBACK_ACTION_ICON_PATHS = Object.freeze({
   add: 'M12 5v14M5 12h14',
   close: 'M6 6l12 12M18 6L6 18',
@@ -992,103 +981,8 @@ const FALLBACK_ACTION_ICON_PATHS = Object.freeze({
 });
 
 function actionIcon(name, size = 16, strokeWidth = 1.8) {
-  const fromCtx = matchingRuntimeCtx?.getActionIcon?.(name, size, strokeWidth);
-  if (typeof fromCtx === 'string' && fromCtx) return fromCtx;
   const path = FALLBACK_ACTION_ICON_PATHS[name] || FALLBACK_ACTION_ICON_PATHS.more;
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="ctox-action-icon ctox-action-${name}"><path d="${path}"></path></svg>`;
-}
-
-function matchingCollectionReadiness(collectionName) {
-  const cached = matchingReadinessByCollection.get(collectionName);
-  if (cached) return cached;
-  const snapshot = getMatchingCollectionReadiness(collectionName);
-  matchingReadinessByCollection.set(collectionName, snapshot);
-  return snapshot;
-}
-
-function getMatchingInitialSyncProgress() {
-  let ready = 0;
-  const pendingLabels = [];
-  let syncing = false;
-
-  for (const item of MATCHING_SYNC_COLLECTIONS) {
-    const readiness = matchingCollectionReadiness(item.name);
-    if (readiness.ready) ready += 1;
-    if (readiness.syncing) {
-      syncing = true;
-      pendingLabels.push(uiText(item.labelKey, item.fallbackLabel));
-    }
-  }
-
-  return {
-    ready,
-    total: MATCHING_SYNC_COLLECTIONS.length,
-    pendingLabels,
-    syncing
-  };
-}
-
-function updateMatchingInitialSyncFeedback() {
-  const progress = getMatchingInitialSyncProgress();
-  if (!progress.syncing || progress.ready >= progress.total) {
-    syncFeedback.clearProgress?.(MATCHING_SYNC_PROGRESS_ID, { delayMs: 1200 });
-    return;
-  }
-
-  const pending = progress.pendingLabels.join(', ');
-  syncFeedback.upsertProgress?.(MATCHING_SYNC_PROGRESS_ID, {
-    title: uiText('syncingTitle', 'Matching wird synchronisiert'),
-    detail: pending
-      ? uiText('syncingCollections', 'Daten werden gerade geladen: {collections}.', { collections: pending })
-      : uiText('syncingPreparing', 'Lokale Daten werden vorbereitet.'),
-    meta: `${progress.ready}/${progress.total}`,
-    value: (progress.ready / progress.total) * 100,
-    indeterminate: false,
-    type: 'info'
-  });
-}
-
-function rerenderMatchingReadinessStates() {
-  renderSources();
-  renderRequirements();
-  renderObjects();
-  renderMap();
-}
-
-function setupMatchingCollectionReadiness() {
-  matchingReadinessCleanup?.();
-  matchingReadinessByCollection.clear();
-  let subscribing = true;
-  const unsubscribers = MATCHING_SYNC_COLLECTIONS.map((item) =>
-    subscribeMatchingCollectionReadiness(item.name, (snapshot) => {
-      const previous = matchingReadinessByCollection.get(item.name);
-      matchingReadinessByCollection.set(item.name, snapshot);
-      updateMatchingInitialSyncFeedback();
-      if (!subscribing && previous?.state !== snapshot.state) {
-        rerenderMatchingReadinessStates();
-      }
-    })
-  );
-  subscribing = false;
-  updateMatchingInitialSyncFeedback();
-
-  matchingReadinessCleanup = () => {
-    for (const unsubscribe of unsubscribers) {
-      try { unsubscribe?.(); } catch (_) {}
-    }
-    matchingReadinessByCollection.clear();
-    syncFeedback.clearProgress?.(MATCHING_SYNC_PROGRESS_ID);
-    matchingReadinessCleanup = null;
-  };
-  return matchingReadinessCleanup;
-}
-
-function renderCollectionListState(rows, collectionName, { empty, syncing } = {}) {
-  return renderListOrState(rows, matchingCollectionReadiness(collectionName), {
-    renderRows: () => '',
-    empty,
-    syncing
-  });
 }
 
 // requirement matching view globals
@@ -1171,8 +1065,7 @@ async function getObjectPhotoDataUrlFromChunks(objectId) {
 
   try {
     const docs = await rxdb.object_photo_chunks
-      .find({ selector: { objectId: objectId }, sort: [{ idx: 'asc' }] })
-      .exec();
+      .all({ selector: { objectId: objectId }, sort: [{ idx: 'asc' }] });
 
     const rows = (docs || []).map(d => d.toJSON());
     if (!rows.length) return null;
@@ -1250,7 +1143,7 @@ async function getObjectPhotoDataUrl(objectId, opts = {}) {
   }
 
   try {
-    const doc = await rxdb.objects.findOne({ selector: { id: objectId } }).exec();
+    const doc = await rxdb.objects.one({ selector: { id: objectId } });
     if (!doc) return null;
 
     // 1) Attachment versuchen
@@ -1289,12 +1182,12 @@ async function inspectObjectPhotoState(objectId) {
   if (!rxdb || !rxdb.objects) await loadFromRxdb();
   if (!rxdb || !rxdb.objects) return { objectId, exists: false, error: 'rxdb-not-ready' };
 
-  const doc = await rxdb.objects.findOne({ selector: { id: objectId } }).exec();
+  const doc = await rxdb.objects.one({ selector: { id: objectId } });
   if (!doc) return { objectId, exists: false };
 
   const json = doc.toJSON() || {};
   const chunks = rxdb.object_photo_chunks
-    ? await rxdb.object_photo_chunks.find({ selector: { objectId: objectId }, sort: [{ idx: 'asc' }] }).exec()
+    ? await rxdb.object_photo_chunks.all({ selector: { objectId: objectId }, sort: [{ idx: 'asc' }] })
     : [];
   const rows = (chunks || []).map(d => d.toJSON());
   const photoUrl = await getObjectPhotoDataUrl(objectId, { bustCache: true }).catch(() => null);
@@ -1523,11 +1416,11 @@ async function loadFromRxdb(){
       requirementSourceDocs,
       matchDocs
     ] = await Promise.all([
-      rxdb.sources.find().exec(),
-      rxdb.requirements.find().exec(),
-      rxdb.objects.find().exec(),
-      rxdb.requirementSources ? rxdb.requirementSources.find().exec() : [],
-      rxdb.matches ? rxdb.matches.find().exec() : []
+      rxdb.sources.all(),
+      rxdb.requirements.all(),
+      rxdb.objects.all(),
+      rxdb.requirementSources ? rxdb.requirementSources.all() : [],
+      rxdb.matches ? rxdb.matches.all() : []
     ]);
 
     const sourcesJson  = sourceDocs.map(d => d.toJSON());
@@ -1754,7 +1647,7 @@ async function loadFromRxdb(){
         return {
           id: c.id,
           name: fullname,
-          tax: isPlaceholder ? 'Import läuft …' : tax,
+          tax: isPlaceholder ? '' : tax,
           skills: skillsStr,
           skillsSummary: isPlaceholder ? '' : skillsStr,
           photo,
@@ -1909,15 +1802,17 @@ function __setUserInteracting() {
   __interactTimer = setTimeout(() => { __userInteracting = false; }, 500);
 }
 
-// global listeners once
-(function __installInteractionListenersOnce(){
-  if (window.__rxdbObjectInteractionListenersInstalled) return;
-  window.__rxdbObjectInteractionListenersInstalled = true;
-
-  ['wheel','scroll','keydown','pointerdown','touchstart','input'].forEach(ev => {
-    window.addEventListener(ev, __setUserInteracting, { passive: true, capture: true });
+// Interaktions-Listener je Montage am App-root (vorher einmalig global am window).
+function __installInteractionListeners(host) {
+  if (!host) return;
+  const events = ['wheel','scroll','keydown','pointerdown','touchstart','input'];
+  events.forEach(ev => host.addEventListener(ev, __setUserInteracting, { passive: true, capture: true }));
+  onMatchingUnmount(() => {
+    events.forEach(ev => host.removeEventListener(ev, __setUserInteracting, { capture: true }));
+    clearTimeout(__interactTimer);
+    __userInteracting = false;
   });
-})();
+}
 
 function __objectUiIsBusy() {
   const objectSearch = document.getElementById('objectSearch');
@@ -1928,25 +1823,29 @@ function __objectUiIsBusy() {
   return __userInteracting || noteOpen || focusedInObject || objectOpen;
 }
 
-// idle flush: zieht deferred object render nach
-(function __installDeferredFlushOnce(){
-  if (window.__rxdbObjectDeferredFlushInstalled) return;
-  window.__rxdbObjectDeferredFlushInstalled = true;
-
-  setInterval(() => {
-    if (__objectRenderDeferred && !__objectUiIsBusy()) {
-      __objectRenderDeferred = false;
-
-      // render objects now (only if still dirty)
-      if (__objectVersion !== __lastRenderedObjectVersion) {
-        if (typeof renderObjects === 'function') {
-          renderObjects({ reason: 'deferred', fromLiveSync: true });
-        }
-        __lastRenderedObjectVersion = __objectVersion;
+// idle flush: zieht deferred object render nach. Läuft nur, solange ein Render aufgeschoben ist
+// (vorher globales setInterval 300 ms, das nie stoppte).
+let __deferredFlushTimer = null;
+function __scheduleDeferredObjectFlush() {
+  if (__deferredFlushTimer) return;
+  __deferredFlushTimer = setTimeout(() => {
+    __deferredFlushTimer = null;
+    if (!__objectRenderDeferred) return;
+    if (__objectUiIsBusy()) { __scheduleDeferredObjectFlush(); return; }
+    __objectRenderDeferred = false;
+    if (__objectVersion !== __lastRenderedObjectVersion) {
+      if (typeof renderObjects === 'function') {
+        renderObjects({ reason: 'deferred', fromLiveSync: true });
       }
+      __lastRenderedObjectVersion = __objectVersion;
     }
   }, 300);
-})();
+}
+
+function __deferObjectRender() {
+  __objectRenderDeferred = true;
+  __scheduleDeferredObjectFlush();
+}
 
 function __scheduleReloadAllFromRxdb(reason = '', delayMs = 0) {
   if (__reloadTimer) return;
@@ -1990,7 +1889,7 @@ async function __reloadAllFromRxdbNow(reason = '') {
       // ✅ rechts: nur wenn objects dirty UND nicht busy
       if (shouldRenderObjects) {
         if (__objectUiIsBusy()) {
-          __objectRenderDeferred = true;
+          __deferObjectRender();
         } else {
           if (typeof renderObjects === 'function') {
             renderObjects({ reason: `rxdb:${reason}`, fromLiveSync: true });
@@ -2005,8 +1904,8 @@ async function __reloadAllFromRxdbNow(reason = '') {
       __scheduleReloadAllFromRxdb(`again:${reason}`, RXDB_UI_RELOAD_THROTTLE_MS);
     }
   } catch (e) {
-    console.error('[rxdb-live] reload failed:', reason, e);
-    syncFeedback.reportSyncFailure('Sync fehlgeschlagen: Änderungen konnten nicht geladen werden.');
+    console.error('[matching-live] render failed:', reason, e);
+    reportMatchingStatus('matching.render.failed', String(e?.message || e));
   } finally {
     __reloadInFlight = false;
   }
@@ -2014,12 +1913,17 @@ async function __reloadAllFromRxdbNow(reason = '') {
 
 function __unsubscribeAllRxdbLiveSubs() {
   try {
-    (__rxdbLiveSubs || []).forEach(s => {
-      try { s && typeof s.unsubscribe === 'function' && s.unsubscribe(); } catch (_) {}
+    (__rxdbLiveSubs || []).forEach(off => {
+      try { typeof off === 'function' && off(); } catch (_) {}
     });
   } finally {
     __rxdbLiveSubs = [];
   }
+  clearTimeout(__reloadTimer);
+  __reloadTimer = null;
+  clearTimeout(__deferredFlushTimer);
+  __deferredFlushTimer = null;
+  __objectRenderDeferred = false;
 }
 
 // optional: Object Photo Cache invalidieren
@@ -2043,7 +1947,7 @@ function __bustObjectPhotoCacheFromChangeEvent(evt) {
 async function loadObjectUiFromRxdbById(objectId){
   if (!rxdb || !rxdb.objects || !objectId) return null;
 
-  const doc = await rxdb.objects.findOne({ selector: { id: objectId } }).exec();
+  const doc = await rxdb.objects.one({ selector: { id: objectId } });
   if (!doc) return null;
 
   const c = doc.toJSON() || {};
@@ -2091,7 +1995,7 @@ async function loadObjectUiFromRxdbById(objectId){
   return {
     id: c.id,
     name: fullname,
-    tax: isPlaceholder ? 'Import läuft …' : tax,
+    tax: isPlaceholder ? '' : tax,
     skills: skillsStr,
     skillsSummary: isPlaceholder ? '' : skillsStr,
     photo,
@@ -2159,13 +2063,11 @@ async function setupRxdbLiveUiSync() {
   const NOISY = new Set();
 
   const subscribeTo = (col, name) => {
-    const obs = col && col.$;
-    if (!obs || typeof obs.subscribe !== 'function') return;
+    if (!col || typeof col.onChange !== 'function') return;
 
-    const sub = obs.subscribe((evt) => {
+    const sub = col.onChange((evt) => {
       try {
         if (name === 'objects') {
-          syncFeedback.reportDataChange({ collectionName: name });
 
           // ✅ Cache bust (Foto)
           __bustObjectPhotoCacheFromChangeEvent(evt);
@@ -2218,7 +2120,7 @@ async function setupRxdbLiveUiSync() {
               if (typeof __objectUiIsBusy !== 'function' || !__objectUiIsBusy()) {
                 renderObjects({ reason: 'rxdb:object-single', fromLiveSync: true });
               } else {
-                __objectRenderDeferred = true;
+                __deferObjectRender();
                 __markObjectsDirty();
               }
             } catch (e) {
@@ -2242,7 +2144,6 @@ async function setupRxdbLiveUiSync() {
         if (NOISY.has(name)) return;
       } catch (_) {}
 
-      syncFeedback.reportDataChange({ collectionName: name });
       __scheduleReloadAllFromRxdb(`change:${name}`);
     });
 
@@ -2266,14 +2167,10 @@ async function setupRxdbLiveUiSync() {
 
 // teardown bleibt gleich
 function teardownRxdbLiveUiSync() {
-  matchingReadinessCleanup?.();
   __unsubscribeAllRxdbLiveSubs();
   console.log('[rxdb-live] UI sync disabled');
 }
 
-window.__scheduleReloadAllFromRxdb = __scheduleReloadAllFromRxdb;
-window.setupRxdbLiveUiSync = setupRxdbLiveUiSync;
-window.teardownRxdbLiveUiSync = teardownRxdbLiveUiSync;
 
 // Requirement import: Die UI triggert nur einen CTOX-Task.
 
@@ -2310,8 +2207,7 @@ async function setSourceActive(sourceId, active){
   try {
     if (rxdb && rxdb.sources){
       const doc = await rxdb.sources
-        .findOne({ selector: { id: sourceId } })
-        .exec();
+        .one({ selector: { id: sourceId } });
 
       if (doc){
         const now = new Date().toISOString();
@@ -2325,8 +2221,8 @@ async function setSourceActive(sourceId, active){
           await doc.atomicPatch(data);
         } else if (typeof doc.atomicUpdate === 'function'){
           await doc.atomicUpdate(prev => ({ ...prev, ...data }));
-        } else if (typeof doc.incrementalModify === 'function'){
-          await doc.incrementalModify(prev => Object.assign(prev, data));
+        } else if (typeof doc.modify === 'function'){
+          await doc.modify(prev => Object.assign(prev, data));
         } else if (typeof doc.update === 'function'){
           await doc.update({ $set: data });
         }
@@ -2355,8 +2251,7 @@ async function setObjectActive(objectId, active){
   try {
     if (rxdb && rxdb.objects){
       const doc = await rxdb.objects
-        .findOne({ selector: { id: objectId } })
-        .exec();
+        .one({ selector: { id: objectId } });
 
       if (doc){
         const now = new Date().toISOString();
@@ -2370,8 +2265,8 @@ async function setObjectActive(objectId, active){
           await doc.atomicPatch(data);
         } else if (typeof doc.atomicUpdate === 'function'){
           await doc.atomicUpdate(prev => ({ ...prev, ...data }));
-        } else if (typeof doc.incrementalModify === 'function'){
-          await doc.incrementalModify(prev => Object.assign(prev, data));
+        } else if (typeof doc.modify === 'function'){
+          await doc.modify(prev => Object.assign(prev, data));
         } else if (typeof doc.update === 'function'){
           await doc.update({ $set: data });
         }
@@ -2397,8 +2292,7 @@ async function setSourceRelation(sourceId, hasRel){
   try {
     if (rxdb && rxdb.sources){
       const doc = await rxdb.sources
-        .findOne({ selector: { id: sourceId } })
-        .exec();
+        .one({ selector: { id: sourceId } });
 
       if (doc){
         const now = new Date().toISOString();
@@ -2412,8 +2306,8 @@ async function setSourceRelation(sourceId, hasRel){
           await doc.atomicPatch(data);
         } else if (typeof doc.atomicUpdate === 'function'){
           await doc.atomicUpdate(prev => ({ ...prev, ...data }));
-        } else if (typeof doc.incrementalModify === 'function'){
-          await doc.incrementalModify(prev => Object.assign(prev, data));
+        } else if (typeof doc.modify === 'function'){
+          await doc.modify(prev => Object.assign(prev, data));
         } else if (typeof doc.update === 'function'){
           await doc.update({ $set: data });
         }
@@ -2440,8 +2334,7 @@ async function setObjectRelation(objectId, hasRel){
   try {
     if (rxdb && rxdb.objects){
       const doc = await rxdb.objects
-        .findOne({ selector: { id: objectId } })
-        .exec();
+        .one({ selector: { id: objectId } });
 
       if (doc){
         const now = new Date().toISOString();
@@ -2455,8 +2348,8 @@ async function setObjectRelation(objectId, hasRel){
           await doc.atomicPatch(data);
         } else if (typeof doc.atomicUpdate === 'function'){
           await doc.atomicUpdate(prev => ({ ...prev, ...data }));
-        } else if (typeof doc.incrementalModify === 'function'){
-          await doc.incrementalModify(prev => Object.assign(prev, data));
+        } else if (typeof doc.modify === 'function'){
+          await doc.modify(prev => Object.assign(prev, data));
         } else if (typeof doc.update === 'function'){
           await doc.update({ $set: data });
         }
@@ -3968,9 +3861,9 @@ async function removeMatchDocsFromDb(matchRows = []){
   const uniqueRows = getUniqueActiveMatchesByPair(matchRows);
   await Promise.all(
     uniqueRows.map(async m => {
-      const docs = await rxdb.matches.find({
+      const docs = await rxdb.matches.all({
         selector: { requirementId: m.requirementId, objectId: m.objectId }
-      }).exec();
+      });
 
       if (Array.isArray(docs)) {
         for (const d of docs) {
@@ -4019,7 +3912,7 @@ async function removeRequirementsFromDb(requirementIds = []){
 
   await Promise.all(
     uniqueRequirementIds.map(async requirementId => {
-      const doc = await rxdb.requirements.findOne({ selector: { id: requirementId } }).exec();
+      const doc = await rxdb.requirements.one({ selector: { id: requirementId } });
       if (doc) await doc.remove();
     })
   );
@@ -4038,7 +3931,7 @@ async function confirmDeletionWithCount({ subject, dependencyLines = [], totalIt
     `Zum Fortfahren gib bitte genau diese Zahl ein: ${totalItemsToDelete}`
   ].filter(line => line !== '');
 
-  const confirmInput = await showBusinessPrompt(lines.join('\n'), {
+  const confirmInput = await matchingPrompt(lines.join('\n'), {
     title: 'Löschung bestätigen',
     confirmLabel: 'Löschen',
     kind: 'danger',
@@ -4109,8 +4002,7 @@ async function updateMatchState(requirementId, objectId, patch){
   // Persistenz in RxDB
   if (rxdb && rxdb.matches){
     const doc = await rxdb.matches
-      .findOne({ selector: { requirementId, objectId: objectId } })
-      .exec();
+      .one({ selector: { requirementId, objectId: objectId } });
 
     if (doc){
       const now = new Date().toISOString();
@@ -4140,8 +4032,8 @@ async function updateMatchState(requirementId, objectId, patch){
         await doc.atomicPatch(data);
       } else if (typeof doc.atomicUpdate === 'function'){
         await doc.atomicUpdate(prevDoc => ({ ...prevDoc, ...data }));
-      } else if (typeof doc.incrementalModify === 'function'){
-        await doc.incrementalModify(prevDoc => Object.assign(prevDoc, data));
+      } else if (typeof doc.modify === 'function'){
+        await doc.modify(prevDoc => Object.assign(prevDoc, data));
       } else if (typeof doc.update === 'function'){
         await doc.update({ $set: data });
       } else {
@@ -4185,23 +4077,23 @@ async function persistPendingMatchForCtox(match, queuedCommand) {
     await rxdb.matches.atomicUpsert(doc);
     return;
   }
-  if (typeof rxdb.matches.upsert === 'function') {
-    await rxdb.matches.upsert(doc);
+  if (typeof rxdb.matches.save === 'function') {
+    await rxdb.matches.save(doc);
     return;
   }
-  const existing = await rxdb.matches.findOne({ selector: { id: doc.id } }).exec();
+  const existing = await rxdb.matches.one({ selector: { id: doc.id } });
   if (existing) {
     const { id, ...patchData } = doc;
     if (typeof existing.atomicPatch === 'function') {
       await existing.atomicPatch(patchData);
     } else if (typeof existing.atomicUpdate === 'function') {
       await existing.atomicUpdate((prevDoc) => ({ ...prevDoc, ...patchData }));
-    } else if (typeof existing.incrementalModify === 'function') {
-      await existing.incrementalModify((prevDoc) => Object.assign(prevDoc, patchData));
+    } else if (typeof existing.modify === 'function') {
+      await existing.modify((prevDoc) => Object.assign(prevDoc, patchData));
     }
     return;
   }
-  await rxdb.matches.insert(doc);
+  await rxdb.matches.save(doc);
 }
 
 function isCtoxQueuedCommandError(error) {
@@ -4221,28 +4113,6 @@ function closeOpenTransientModal() {
   openModal.hidden = true;
   openModal.setAttribute('aria-hidden', 'true');
 }
-
-// Hilfsfunktion: Score-Bubble für bestimmtes Requirement/Objekt-Paar auf "Loading" setzen
-// WICHTIG: im Render-Code muss die Score-Bubble data-match-key="requirementId|objectId" bekommen (s.u.)
-function setScoreLoading(requirementId, objectId, loading) {
-  if (typeof key !== 'function') {
-    console.warn('setScoreLoading: key(requirementId, objectId) helper nicht vorhanden.');
-    return;
-  }
-  const matchKey = key(requirementId, objectId);
-  const scoreEl = getMatchingModuleHost().querySelector(`.score[data-match-key="${matchKey}"]`);
-  if (!scoreEl) return;
-
-  if (loading) {
-    scoreEl.classList.add('is-loading');
-    scoreEl.removeAttribute('data-pct');
-    scoreEl.innerHTML = '<span class="spinner"></span>';
-  } else {
-    scoreEl.classList.remove('is-loading');
-    // Inhalt wird von renderRequirements() neu gesetzt – wir fassen ihn hier nicht an
-  }
-}
-
 
 async function createMatch(sourceId, requirementId, objectId) {
   const object = getObject(objectId);
@@ -4365,7 +4235,7 @@ async function createMatch(sourceId, requirementId, objectId) {
     }
     console.error('Fehler beim Anlegen des LLM-basierten Matchings:', err);
     pendingMatchKeys.delete(procKey);
-    showBusinessAlert('Matching konnte nicht berechnet werden: ' + (err?.message || err), { title: 'Matching fehlgeschlagen' });
+    matchingAlert('Matching konnte nicht berechnet werden: ' + (err?.message || err), { title: 'Matching fehlgeschlagen' });
     renderRequirements();
   }
 }
@@ -4605,10 +4475,10 @@ async function removeMatchesHiddenByFilter(requirementId, settings = getMatchFil
   );
   const hidden = requirementMatches.filter((m) => !visibleKeys.has(key(m.requirementId, m.objectId)));
   if (!hidden.length) {
-    await showBusinessAlert('Es gibt keine ausgeblendeten Matches zum Entfernen.');
+    await matchingAlert('Es gibt keine ausgeblendeten Matches zum Entfernen.');
     return;
   }
-  const ok = await showBusinessConfirm(`${hidden.length} ausgeblendete Match(es) für diesen Requirement entfernen?`, {
+  const ok = await matchingConfirm(`${hidden.length} ausgeblendete Match(es) für diesen Requirement entfernen?`, {
     title: 'Matches entfernen',
     confirmLabel: 'Entfernen',
   });
@@ -4617,9 +4487,9 @@ async function removeMatchesHiddenByFilter(requirementId, settings = getMatchFil
   try {
     if (rxdb && rxdb.matches) {
       for (const match of hidden) {
-        const docs = await rxdb.matches.find({
+        const docs = await rxdb.matches.all({
           selector: { requirementId: match.requirementId, objectId: match.objectId }
-        }).exec();
+        });
         for (const doc of Array.isArray(docs) ? docs : []) {
           if (doc && doc.remove) await doc.remove();
         }
@@ -4632,7 +4502,7 @@ async function removeMatchesHiddenByFilter(requirementId, settings = getMatchFil
     renderMap();
   } catch (err) {
     console.error('removeMatchesHiddenByFilter Fehler:', err);
-    await showBusinessAlert('Ausgeblendete Matches konnten nicht entfernt werden.', { title: 'Aktion fehlgeschlagen' });
+    await matchingAlert('Ausgeblendete Matches konnten nicht entfernt werden.', { title: 'Aktion fehlgeschlagen' });
   }
 }
 
@@ -4656,7 +4526,7 @@ async function removeMatchesHiddenByFilter(requirementId, settings = getMatchFil
 async function handleBulkAutoMatch(requirementId, count) {
   const { requirement, source } = findRequirementAndSource(requirementId);
   if (!requirement || !source) {
-    await showBusinessAlert('Anforderung oder Quelle für Matching-Auswahl nicht gefunden.');
+    await matchingAlert('Anforderung oder Quelle für Matching-Auswahl nicht gefunden.');
     return;
   }
 
@@ -4682,7 +4552,7 @@ async function handleBulkAutoMatch(requirementId, count) {
       .map(c => c.id);
 
     if (!availableObjectIds.length) {
-      await showBusinessAlert('Für diese Anforderung gibt es keine weiteren Objekte ohne bestehendes Match.');
+      await matchingAlert('Für diese Anforderung gibt es keine weiteren Objekte ohne bestehendes Match.');
       return;
     }
 
@@ -4700,7 +4570,7 @@ async function handleBulkAutoMatch(requirementId, count) {
     const shortlist = filterShortlistByBulkMatchFilter(shortlistRaw);
     if (!shortlist.length) {
       const settings = getBulkMatchFilterSettings();
-      await showBusinessAlert(settings.enabled
+      await matchingAlert(settings.enabled
         ? `Keine Objekte erfüllen den Match-Filter ab ${settings.minScore}%.`
         : 'Das Modell hat keine passenden Objekte für diese Anforderung gefunden.');
       return;
@@ -4742,7 +4612,7 @@ async function handleBulkAutoMatch(requirementId, count) {
     renderRequirements();
   } catch (e) {
     console.error('handleBulkAutoMatch Fehler:', e);
-    await showBusinessAlert('Matching-Auswahl (+Objekte) ist fehlgeschlagen: ' + (e?.message || e), { title: 'Matching fehlgeschlagen' });
+    await matchingAlert('Matching-Auswahl (+Objekte) ist fehlgeschlagen: ' + (e?.message || e), { title: 'Matching fehlgeschlagen' });
   } finally {
     // Requirement aus "busy"-Set entfernen und Buttons wieder freigeben
     bulkMatchingRequirements.delete(requirementId);
@@ -4753,11 +4623,11 @@ async function handleBulkAutoMatch(requirementId, count) {
 async function handleBulkAutoMatchForObject(objectId, count) {
   const object = getObject(objectId);
   if (!object) {
-    await showBusinessAlert('Objekt nicht gefunden.');
+    await matchingAlert('Objekt nicht gefunden.');
     return;
   }
   if (object.isPlaceholder) {
-    await showBusinessAlert('Matching-Auswahl ist erst verfügbar, wenn der Objektimport abgeschlossen ist.');
+    await matchingAlert('Matching-Auswahl ist erst verfügbar, wenn der Objektimport abgeschlossen ist.');
     return;
   }
 
@@ -4784,7 +4654,7 @@ async function handleBulkAutoMatchForObject(objectId, count) {
     });
 
     if (!allRequirements.length) {
-      await showBusinessAlert('Keine Requirements gefunden.');
+      await matchingAlert('Keine Requirements gefunden.');
       return;
     }
 
@@ -4798,7 +4668,7 @@ async function handleBulkAutoMatchForObject(objectId, count) {
     const availableRequirements = allRequirements.filter(j => !alreadyMatchedRequirementIds.has(j.requirementId));
 
     if (!availableRequirements.length) {
-      await showBusinessAlert('Für diese:n Objekt gibt es keine weiteren Requirements ohne bestehendes Match.');
+      await matchingAlert('Für diese:n Objekt gibt es keine weiteren Requirements ohne bestehendes Match.');
       return;
     }
 
@@ -4817,7 +4687,7 @@ async function handleBulkAutoMatchForObject(objectId, count) {
     const shortlist = filterShortlistByBulkMatchFilter(shortlistRaw);
     if (!shortlist.length) {
       const settings = getBulkMatchFilterSettings();
-      await showBusinessAlert(settings.enabled
+      await matchingAlert(settings.enabled
         ? `Keine Requirements erfüllen den Match-Filter ab ${settings.minScore}%.`
         : 'Das Modell hat keine passenden Requirements für diese:n Objekt gefunden.');
       return;
@@ -4858,7 +4728,7 @@ async function handleBulkAutoMatchForObject(objectId, count) {
     renderObjects();
   } catch (e) {
     console.error('handleBulkAutoMatchForObject Fehler:', e);
-    await showBusinessAlert('Matching-Auswahl (+Requirements) ist fehlgeschlagen: ' + (e?.message || e), { title: 'Matching fehlgeschlagen' });
+    await matchingAlert('Matching-Auswahl (+Requirements) ist fehlgeschlagen: ' + (e?.message || e), { title: 'Matching fehlgeschlagen' });
   } finally {
     bulkMatchingObjects.delete(objectId);
     renderObjects();
@@ -4871,7 +4741,7 @@ async function handleBulkAutoMatchForObject(objectId, count) {
 async function removeMatch(requirementId, objectId){
   try {
     if (rxdb && rxdb.matches){
-      const docs = await rxdb.matches.find({ selector: { requirementId, objectId: objectId } }).exec();
+      const docs = await rxdb.matches.all({ selector: { requirementId, objectId: objectId } });
       if (Array.isArray(docs)) {
         for (const d of docs) {
           if (d && d.remove) await d.remove();
@@ -4888,7 +4758,7 @@ async function removeMatch(requirementId, objectId){
     renderMap();
   } catch (e){
     console.error('Fehler beim Entfernen des Matchings', e);
-    await showBusinessAlert('Matching konnte nicht entfernt werden.', { title: 'Aktion fehlgeschlagen' });
+    await matchingAlert('Matching konnte nicht entfernt werden.', { title: 'Aktion fehlgeschlagen' });
   }
 }
 
@@ -4911,7 +4781,7 @@ async function handleDeleteObject(objectId){
     purgeMatchesFromState(dependentMatches);
 
     if (rxdb && rxdb.objects){
-      const doc = await rxdb.objects.findOne({ selector: { id: objectId } }).exec();
+      const doc = await rxdb.objects.one({ selector: { id: objectId } });
       if (doc) await doc.remove();
     }
 
@@ -4935,7 +4805,7 @@ async function handleDeleteObject(objectId){
     renderMap();
   } catch (e){
     console.error('Fehler beim Löschen des Objekte', e);
-    await showBusinessAlert('Objekt konnte nicht gelöscht werden (siehe Konsole).', { title: 'Aktion fehlgeschlagen' });
+    await matchingAlert('Objekt konnte nicht gelöscht werden (siehe Konsole).', { title: 'Aktion fehlgeschlagen' });
   }
 }
 
@@ -4961,7 +4831,7 @@ async function handleDeleteRequirement(requirementId){
     purgeProcessesForRequirementIds([requirementId]);
 
     if (rxdb && rxdb.requirements){
-      const doc = await rxdb.requirements.findOne({ selector: { id: requirementId } }).exec();
+      const doc = await rxdb.requirements.one({ selector: { id: requirementId } });
       if (doc) await doc.remove();
     }
 
@@ -4982,7 +4852,7 @@ async function handleDeleteRequirement(requirementId){
     renderMap();
   } catch (e){
     console.error('Fehler beim Löschen der Anforderung', e);
-    await showBusinessAlert('Anforderung konnte nicht gelöscht werden (siehe Konsole).', { title: 'Aktion fehlgeschlagen' });
+    await matchingAlert('Anforderung konnte nicht gelöscht werden (siehe Konsole).', { title: 'Aktion fehlgeschlagen' });
   }
 }
 
@@ -5012,7 +4882,7 @@ async function handleDeleteSource(sourceId){
     await removeRequirementsFromDb(uniqueRequirementIds);
 
     if (rxdb && rxdb.sources){
-      const doc = await rxdb.sources.findOne({ selector: { id: sourceId } }).exec();
+      const doc = await rxdb.sources.one({ selector: { id: sourceId } });
       if (doc) await doc.remove();
     }
 
@@ -5030,7 +4900,7 @@ async function handleDeleteSource(sourceId){
     renderMap();
   } catch (e){
     console.error('Fehler beim Löschen des Quellens', e);
-    await showBusinessAlert('Quellen konnte nicht gelöscht werden (siehe Konsole).', { title: 'Aktion fehlgeschlagen' });
+    await matchingAlert('Quellen konnte nicht gelöscht werden (siehe Konsole).', { title: 'Aktion fehlgeschlagen' });
   }
 }
 
@@ -5335,16 +5205,7 @@ function renderRequirementSelector() {
   grid.classList.toggle('is-list-view', matchingPaneState.left.view === 'list');
   grid.replaceChildren();
   if (!visibleRows.length) {
-    if (allRows.length) {
-      const empty = el('div', 'ctox-empty');
-      empty.textContent = 'Keine Anforderungen im aktuellen Filter.';
-      grid.appendChild(empty);
-    } else {
-      grid.innerHTML = renderCollectionListState(allRows, 'matching_requirements', {
-        empty: uiText('emptyRequirements', 'Noch keine Anforderungen verfügbar.'),
-        syncing: uiText('syncingRequirements', 'Anforderungen werden synchronisiert.')
-      });
-    }
+    grid.innerHTML = '';
   } else {
     visibleRows.forEach(({ source, requirement }) => {
       const row = el('article', 'ctox-list-item matching-requirement-row');
@@ -5423,12 +5284,9 @@ function renderMatchWorkbench() {
   list.replaceChildren();
   if (!requirement || !source) {
     title.textContent = 'Anforderung auswählen';
-    kicker.textContent = 'Match Workbench';
+    kicker.textContent = '';
     runButton.disabled = true;
-    const empty = el('div', 'ctox-empty');
-    empty.innerHTML = '<strong>Keine Anforderung ausgewählt</strong><span>Wähle links eine Anforderung, um Scores und gerankte Kandidaten zu sehen.</span>';
-    list.appendChild(empty);
-    footer.textContent = 'Anforderung auswählen';
+    footer.textContent = '';
     updateGrammarSummary(pane, { ranking: 0, matrix: 0 }, 'Anforderung auswählen');
     setObjectsPaneVisibility();
     return;
@@ -5438,11 +5296,7 @@ function renderMatchWorkbench() {
   runButton.disabled = bulkMatchingRequirements.has(requirement.id) || !objects.some((object) => !object.isPlaceholder);
   runButton.classList.toggle('is-running', bulkMatchingRequirements.has(requirement.id));
   const rows = candidateRowsForSelectedRequirement();
-  if (!rows.length) {
-    const empty = el('div', 'ctox-empty');
-    empty.innerHTML = '<strong>Noch keine sichtbaren Matches</strong><span>Starte Matching, um den Objektpool für diese Anforderung zu bewerten.</span>';
-    list.appendChild(empty);
-  } else {
+  if (rows.length) {
     rows.forEach(({ match, object }, index) => {
       const score = scoreFromMatchItems(match.items);
       const proc = processes.get(key(requirement.id, object.id));
@@ -5521,11 +5375,8 @@ function renderSelectedObjectEvidence() {
   const entry = selectedMatchEntry();
   if (!entry) {
     title.textContent = 'Kein Match ausgewählt';
-    footer.textContent = 'Match auswählen · Pane ist standardmäßig verborgen';
+    footer.textContent = '';
     exportButton.disabled = true;
-    const empty = el('div', 'ctox-empty');
-    empty.textContent = 'Wähle einen Kandidaten in der Rangliste.';
-    host.appendChild(empty);
     setObjectsPaneVisibility();
     return;
   }
@@ -5567,19 +5418,9 @@ function renderSelectedRequirementMatrix() {
   if (!mapHost) return;
   mapHost.replaceChildren();
   const { requirement } = currentSelectedRequirement();
-  if (!requirement) {
-    const empty = el('div', 'ctox-empty');
-    empty.textContent = 'Wähle zuerst eine Anforderung.';
-    mapHost.appendChild(empty);
-    return;
-  }
+  if (!requirement) return;
   const rows = requirementMatchRows(requirement.id).sort((a, b) => (scoreFromMatchItems(b.match.items) ?? -1) - (scoreFromMatchItems(a.match.items) ?? -1));
-  if (!rows.length) {
-    const empty = el('div', 'ctox-empty');
-    empty.textContent = 'Noch keine Matches für die Matrix.';
-    mapHost.appendChild(empty);
-    return;
-  }
+  if (!rows.length) return;
   const wrap = el('div', 'ctox-table-wrap');
   wrap.innerHTML = `<table class="ctox-table"><thead><tr><th>Kandidat</th><th class="is-num">Score</th><th class="is-num">Nachweise</th><th>Status</th></tr></thead><tbody>${rows.map(({ match, object }) => `<tr tabindex="0" data-object-id="${escapeHtml(object.id)}" data-context-record-id="${escapeHtml(match.id || key(requirement.id, object.id))}" data-context-record-type="matching_result" data-context-label="${escapeHtml(`${requirement.title} × ${object.name}`)}"><td>${escapeHtml(object.name)}</td><td class="is-num">${scoreFromMatchItems(match.items) ?? '—'}%</td><td class="is-num">${(match.items || []).length}</td><td>${match.active === false ? 'Pausiert' : 'Aktiv'}</td></tr>`).join('')}</tbody></table>`;
   wrap.querySelectorAll('[data-object-id]').forEach((row) => row.addEventListener('click', () => selectCandidateInPlace(requirement.id, row.dataset.objectId)));
@@ -5597,8 +5438,8 @@ function downloadMatchingJson(filename, payload) {
 }
 
 async function collectionJsonRows(collection) {
-  if (!collection?.find) return [];
-  const docs = await collection.find().exec();
+  if (!collection?.all) return [];
+  const docs = await collection.all();
   return (docs || []).map((doc) => doc?.toJSON ? doc.toJSON() : doc).filter(Boolean);
 }
 
@@ -5611,8 +5452,8 @@ async function importJsonRecords(file, collection, label) {
   for (const record of records) {
     if (!record || typeof record !== 'object' || !String(record.id || '').trim()) continue;
     if (typeof collection.atomicUpsert === 'function') await collection.atomicUpsert(record);
-    else if (typeof collection.upsert === 'function') await collection.upsert(record);
-    else await collection.insert(record);
+    else if (typeof collection.save === 'function') await collection.save(record);
+    else await collection.save(record);
     imported += 1;
   }
   if (!imported) throw new Error(`${label}: kein Datensatz mit ID importiert.`);
@@ -5635,9 +5476,9 @@ async function exportRequirementsJson() {
 async function exportSelectedObjectJson() {
   const entry = selectedMatchEntry();
   if (!entry) return;
-  const requirementDoc = await rxdb?.requirements?.findOne({ selector: { id: entry.requirement.id } }).exec();
-  const objectDoc = await rxdb?.objects?.findOne({ selector: { id: entry.object.id } }).exec();
-  const matchDoc = await rxdb?.matches?.findOne({ selector: { requirementId: entry.requirement.id, objectId: entry.object.id } }).exec();
+  const requirementDoc = await rxdb?.requirements?.one({ selector: { id: entry.requirement.id } });
+  const objectDoc = await rxdb?.objects?.one({ selector: { id: entry.object.id } });
+  const matchDoc = await rxdb?.matches?.one({ selector: { requirementId: entry.requirement.id, objectId: entry.object.id } });
   downloadMatchingJson(`matching-evidence-${entry.object.id}.json`, {
     module: 'matching',
     exported_at: new Date().toISOString(),
@@ -5701,20 +5542,20 @@ function setupMatchingIaControls() {
   });
   requirementInput?.addEventListener('change', async () => {
     try { await importJsonRecords(requirementInput.files?.[0], rxdb?.requirements, 'Anforderungen'); }
-    catch (error) { matchingRuntimeCtx?.notifications?.show?.({ type: 'error', title: 'Import fehlgeschlagen', message: String(error?.message || error) }); }
+    catch (error) { reportMatchingStatus('matching.json.import', `Import fehlgeschlagen: ${String(error?.message || error)}`); }
     finally { requirementInput.value = ''; }
   });
   root.querySelector('#requirementExportBtn')?.addEventListener('click', () => exportRequirementsJson().catch((error) => {
-    matchingRuntimeCtx?.notifications?.show?.({ type: 'error', title: 'Export fehlgeschlagen', message: String(error?.message || error) });
+    reportMatchingStatus('matching.json.export', `Export fehlgeschlagen: ${String(error?.message || error)}`);
   }));
   root.querySelector('#objectExportBtn')?.addEventListener('click', () => exportSelectedObjectJson().catch((error) => {
-    matchingRuntimeCtx?.notifications?.show?.({ type: 'error', title: 'Export fehlgeschlagen', message: String(error?.message || error) });
+    reportMatchingStatus('matching.json.export', `Export fehlgeschlagen: ${String(error?.message || error)}`);
   }));
   root.querySelector('#objectImportPdfInput')?.addEventListener('change', async (event) => {
     const jsonFile = Array.from(event.target.files || []).find((file) => file.type === 'application/json' || file.name.toLowerCase().endsWith('.json'));
     if (!jsonFile) return;
     try { await importJsonRecords(jsonFile, rxdb?.objects, 'Objekte'); }
-    catch (error) { matchingRuntimeCtx?.notifications?.show?.({ type: 'error', title: 'Import fehlgeschlagen', message: String(error?.message || error) }); }
+    catch (error) { reportMatchingStatus('matching.json.import', `Import fehlgeschlagen: ${String(error?.message || error)}`); }
   });
 }
 
@@ -5726,10 +5567,7 @@ function renderSources(){
   grid.innerHTML = '';
 
   if (!sources.length){
-    grid.innerHTML = renderCollectionListState(sources, 'matching_requirements', {
-      empty: uiText('emptyRequirements', 'Noch keine Anforderungen verfügbar.'),
-      syncing: uiText('syncingRequirements', 'Anforderungen werden synchronisiert.')
-    });
+    grid.innerHTML = '';
     return;
   }
 
@@ -5931,10 +5769,7 @@ function renderRequirements(){
 
   if (!sources.length){
     compNameEl.textContent = 'Keine Anforderungen';
-    list.innerHTML = renderCollectionListState(sources, 'matching_requirements', {
-      empty: uiText('emptyRequirements', 'Noch keine Anforderungen verfügbar.'),
-      syncing: uiText('syncingRequirements', 'Anforderungen werden synchronisiert.')
-    });
+    list.innerHTML = '';
     return;
   }
 
@@ -5965,7 +5800,7 @@ function renderRequirements(){
     .filter(({ requirement, source }) => matchesFullTextSearch(buildRequirementSearchPayload(requirement, source), q));
 
   if (!visibleRequirementRows.length) {
-    list.innerHTML = '<div class="muted" style="padding:8px">Keine Anforderungen im aktuellen Filter.</div>';
+    list.innerHTML = '';
     return;
   }
 
@@ -6420,12 +6255,12 @@ function renderMatchDetailPanelInNoteModal(){
 
 
 
-const noteModal = $('#noteModal');
-const noteText = $('#noteText');
-const noteProgress = $('#noteProgress');
-const noteProgressVal = $('#noteProgressVal');
-const noteTitle = $('#noteTitle');
-const saveNoteBtn = $('#saveNote');
+let noteModal = null;
+let noteText = null;
+let noteProgress = null;
+let noteProgressVal = null;
+let noteTitle = null;
+let saveNoteBtn = null;
 let modalCtx = null; // {requirementId, objectId}
 let noteInitialText = '';
 
@@ -6471,43 +6306,6 @@ function commitProgressAutosave(){
 }
 
 
-if (saveNoteBtn) {
-  saveNoteBtn.addEventListener('click', ()=>{
-    if (!modalCtx) return;
-    const k = key(modalCtx.requirementId, modalCtx.objectId);
-    const prev = processes.get(k) || {
-      active: false,
-      notes: '',
-      progress: 0,
-      statuses: [],
-      status: 'prospecting'
-    };
-
-    const raw = parseInt(noteProgress.value, 10) || 0;
-    const effectiveProgress = (prev.active && raw === 0) ? 10 : raw;
-    const notes = noteText.value || '';
-
-    // zentrale Logik: updateMatchState kümmert sich jetzt um:
-    // - progress
-    // - notes
-    // - Status aus #tags → processes + DB
-    updateMatchState(modalCtx.requirementId, modalCtx.objectId, {
-      progress: effectiveProgress,
-      notes
-    }).catch(console.error);
-
-    noteInitialText = notes;
-    setNoteSaveButtonVisible(false);
-
-    const line = getMatchingModuleHost().querySelector(
-      `.object-badge[data-jid="${modalCtx.requirementId}"][data-cid="${modalCtx.objectId}"] .progress-line i`
-    );
-    if (line) line.style.width = effectiveProgress + '%';
-
-    closeNoteModal();
-    renderRequirements();
-  });
-}
 
 
 
@@ -6549,16 +6347,6 @@ function closeNoteModal(){
 
 
 
-document.querySelector('[data-close-modal]').addEventListener('click', closeNoteModal);
-noteModal.addEventListener('click', (e)=>{ if(e.target===noteModal) closeNoteModal(); });
-if (noteText) {
-  noteText.addEventListener('input', syncNoteSaveButtonVisibility);
-}
-noteProgress.addEventListener('input', ()=>{
-  noteProgressVal.textContent = noteProgress.value + '%';
-  commitProgressAutosave();
-});
-noteProgress.addEventListener('change', commitProgressAutosave);
 
 
 
@@ -6622,7 +6410,7 @@ function ensureMatchModal(){
     const requirementId = matchRequirementSelect.value;
 
     if (!currentMatchObjectId || !requirementId || !sourceId){
-      showBusinessAlert('Bitte Quellen und Anforderung wählen.');
+      matchingAlert('Bitte Quellen und Anforderung wählen.');
       return;
     }
 
@@ -6630,7 +6418,7 @@ function ensureMatchModal(){
     createMatch(sourceId, requirementId, currentMatchObjectId)
       .catch(err => {
         console.error('Fehler beim Matching:', err);
-        showBusinessAlert('Matching konnte nicht berechnet werden: ' + (err?.message || err), { title: 'Matching fehlgeschlagen' });
+        matchingAlert('Matching konnte nicht berechnet werden: ' + (err?.message || err), { title: 'Matching fehlgeschlagen' });
       });
 
     // Popup SOFORT schließen
@@ -6667,7 +6455,7 @@ function openMatchModalForObject(objectId){
   const object = getObject(objectId);
   if (!object) return;
   if (object.isPlaceholder) {
-    showBusinessAlert('Matching ist erst verfügbar, wenn der Objektimport abgeschlossen ist.');
+    matchingAlert('Matching ist erst verfügbar, wenn der Objektimport abgeschlossen ist.');
     return;
   }
   const titleEl = matchModalEl.querySelector('#matchTitle');
@@ -6687,13 +6475,13 @@ function openMatchModalForObject(objectId){
 }
 
 /* --------- Modal: Kontaktstatus (Quelle/Objekt) --------- */
-const relModal = $('#relModal');
-const relSaveBtn = $('#relSave');
-const relTitle = $('#relTitle');
+let relModal = null;
+let relSaveBtn = null;
+let relTitle = null;
 let relCtx = null; // { kind: 'source'|'object', id: string }
-const imageLightbox = $('#imageLightbox');
-const imageLightboxImg = $('#imageLightboxImg');
-const imageLightboxCloseBtn = $('#imageLightboxClose');
+let imageLightbox = null;
+let imageLightboxImg = null;
+let imageLightboxCloseBtn = null;
 
 function openImageLightbox(rawSrc, alt = 'Bild') {
   if (!imageLightbox || !imageLightboxImg) return;
@@ -6712,23 +6500,6 @@ function closeImageLightbox() {
   imageLightboxImg.removeAttribute('src');
 }
 
-if (imageLightboxCloseBtn) {
-  imageLightboxCloseBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    closeImageLightbox();
-  });
-}
-if (imageLightbox) {
-  imageLightbox.addEventListener('click', (e) => {
-    if (e.target === imageLightbox) closeImageLightbox();
-  });
-}
-document.addEventListener('keydown', (e) => {
-  if (e.key !== 'Escape') return;
-  if (!imageLightbox || !imageLightbox.classList.contains('open')) return;
-  e.stopPropagation();
-  closeImageLightbox();
-});
 
 function openRelationModal(kind, id){
   if (!relModal) return;
@@ -6819,41 +6590,12 @@ function closeRelationModal(){
   relCtx = null;
 }
 
-if (relModal){
-  const closeBtn = relModal.querySelector('[data-close-rel-modal]');
-  if (closeBtn){
-    closeBtn.addEventListener('click', (e)=>{
-      e.stopPropagation();
-      closeRelationModal();
-    });
-  }
-  relModal.addEventListener('click', (e)=>{
-    if (e.target === relModal) closeRelationModal();
-  });
-
-  if (relSaveBtn){
-    relSaveBtn.addEventListener('click', async (e)=>{
-      e.stopPropagation();
-      if (!relCtx) return;
-
-      const checked = relModal.querySelector('input[name="relState"]:checked');
-      const hasRel = checked && checked.value === '1';
-
-      if (relCtx.kind === 'source'){
-        await setSourceRelation(relCtx.id, hasRel);
-      } else {
-        await setObjectRelation(relCtx.id, hasRel);
-      }
-      closeRelationModal();
-    });
-  }
-}
 
 
 /* --------- Object Slide-over (rechts) --------- */
-const object = document.getElementById('objectPanel');
-const objectTitle = document.getElementById('objectTitle');
-const objectBody = document.getElementById('objectBody');
+let object = null;
+let objectTitle = null;
+let objectBody = null;
 
 function closeObject(){
   object.classList.remove('open');
@@ -6861,7 +6603,6 @@ function closeObject(){
   delete object.dataset.objectId;
 }
 
-document.getElementById('objectClose').addEventListener('click', closeObject);
 
 function openObject(objectId){
   const c = getObject(objectId);
@@ -7071,10 +6812,10 @@ function openObject(objectId){
 
 
 /* --------- Requirement Slide-over (links) --------- */
-const jp = document.getElementById('requirementPanel');
-const jpTitle = document.getElementById('jpTitle');
-const jpMeta = document.getElementById('jpMeta');
-const jpBody = document.getElementById('jpBody');
+let jp = null;
+let jpTitle = null;
+let jpMeta = null;
+let jpBody = null;
 
 function closeRequirementPanel(){
   jp.classList.remove('open');
@@ -7082,7 +6823,6 @@ function closeRequirementPanel(){
   delete jp.dataset.requirementId;
 }
 
-document.getElementById('jpClose').addEventListener('click', closeRequirementPanel);
 
 function openRequirement(requirement){
   if(!requirement) return;
@@ -7564,7 +7304,7 @@ function createObjectCard(objectUi){
         createMatch(sourceId, requirementId, objectId)
           .catch(err => {
             console.error('Fehler beim direkten Matching:', err);
-            showBusinessAlert('Matching konnte nicht berechnet werden: ' + (err?.message || err), { title: 'Matching fehlgeschlagen' });
+            matchingAlert('Matching konnte nicht berechnet werden: ' + (err?.message || err), { title: 'Matching fehlgeschlagen' });
           });
         return;
       }
@@ -7785,10 +7525,7 @@ function renderObjects(opts = {}){
     for (const [, node] of objectDomById) { try { node.remove(); } catch (_) {} }
     objectDomById.clear();
 
-    list.innerHTML = renderCollectionListState(objects, 'matching_objects', {
-      empty: uiText('emptyObjects', 'Noch keine Objekte verfügbar.'),
-      syncing: uiText('syncingObjects', 'Objekte werden synchronisiert.')
-    });
+    list.innerHTML = '';
     return;
   }
 
@@ -7874,8 +7611,7 @@ async function loadMatchItems(sourceId, requirementId, objectId){
   if (!rxdb || !rxdb.matches) return [];
   try {
     const doc = await rxdb.matches
-      .findOne({ selector: { sourceId, requirementId, objectId: objectId } })
-      .exec();
+      .one({ selector: { sourceId, requirementId, objectId: objectId } });
 
     const json = doc ? doc.toJSON() : null;
     const matchFromMemory = findMatch(requirementId, objectId);
@@ -8367,28 +8103,23 @@ async function openMatchDetailFor(sourceId, requirementId, objectId){
 
 
 /* --------- Match-Detail-Bar DOM --------- */
-const matchDetailBar      = document.getElementById('matchDetailBar');
-const matchBarRequirementLabel    = document.getElementById('matchBarRequirementLabel') || document.getElementById('matchBarAnforderungLabel');
-const matchBarObjectLabel   = document.getElementById('matchBarObjectLabel');
-const matchBarScore       = document.getElementById('matchBarScore');
-const matchBarTags        = document.getElementById('matchBarTags');
-const matchBarContent     = document.getElementById('matchBarContent');
-const matchBarCloseBtn    = document.getElementById('matchBarClose');
+let matchDetailBar = null;
+let matchBarRequirementLabel = null;
+let matchBarObjectLabel = null;
+let matchBarScore = null;
+let matchBarTags = null;
+let matchBarContent = null;
+let matchBarCloseBtn = null;
 
-if (matchBarCloseBtn){
-  matchBarCloseBtn.addEventListener('click', ()=>{
-    closeMatchDetailBar();
-  });
-}
 
 /* --------- Tabs Steuerung (Liste / Matrix) --------- */
-const tabList = document.getElementById('tabList');
-const tabMap = document.getElementById('tabMap');      // Tab "Matrix"
-const mapWrap = document.getElementById('mapWrap');    // Container für Matrix
-const requirementListEl = document.getElementById('requirementList');
-const listTools = document.getElementById('listTools');
-const mapEl = document.getElementById('map');
-const toggleUnknown = document.getElementById('toggleUnknown');
+let tabList = null;
+let tabMap = null; // Tab "Matrix"
+let mapWrap = null; // Container für Matrix
+let requirementListEl = null;
+let listTools = null;
+let mapEl = null;
+let toggleUnknown = null;
 
 // NEU: zentraler Cleanup, damit keine "Matrix-Artefakte" in der Listenansicht bleiben
 function cleanupMatrixViewArtifacts() {
@@ -8501,7 +8232,7 @@ function renderMap() {
     .filter(x => x.sourceMatches.length > 0);
 
   if (!sourcesWithMatches.length) {
-    mapEl.innerHTML = '<div class="ctox-empty">Keine Matches im aktuellen Matrix-Filter.</div>';
+    mapEl.innerHTML = '';
     return;
   }
 
@@ -8885,7 +8616,7 @@ function renderMap() {
   });
 
   if (!renderedSections) {
-    container.innerHTML = '<div class="ctox-empty">Keine Matches im aktuellen Matrix-Filter.</div>';
+    container.innerHTML = '';
   }
 }
 
@@ -8902,10 +8633,10 @@ function renderMap() {
 
 // --- NEU: Objekte-Import (PDF, LinkedIn, Freitext) ---
 
-const objectImportPdfBtn   = document.getElementById('objectImportPdfBtn');
-const objectImportPdfInput = document.getElementById('objectImportPdfInput');
-const objectImportText     = document.getElementById('objectImportText');
-const objectImportTextBtn  = document.getElementById('objectImportTextBtn');
+let objectImportPdfBtn = null;
+let objectImportPdfInput = null;
+let objectImportText = null;
+let objectImportTextBtn = null;
 
 function looksLikeLinkedinProfileUrl(value) {
   const trimmed = String(value || '').trim();
@@ -8971,7 +8702,7 @@ async function startPdfObjectImportMulti(files, opts = {}) {
       displayName: file?.name || 'PDF-Import',
       sourceLabel: 'upload:pdf'
     });
-    updateObjectPlaceholderStatus(placeholderId, 'wird gestartet …');
+    updateObjectPlaceholderStatus(placeholderId, '');
 
     return { file, importId, placeholderId };
   });
@@ -9060,7 +8791,7 @@ function bindObjectFileUpload(btnEl, inputEl) {
       // Optional: kurze UX-Info (kannst du entfernen)
       const allFailed = [...failed, ...imageFailures];
       if (allFailed.length) {
-        showBusinessAlert(
+        matchingAlert(
           `Import gestartet.\n\nErfolgreich: ${ok.length + imageResults.length}\nFehlgeschlagen: ${allFailed.length}\n\n` +
           allFailed.slice(0, 5).map(f => `- ${f.file?.name}: ${f.error?.message || f.error}`).join('\n') +
           (allFailed.length > 5 ? `\n… (+${allFailed.length - 5} weitere)` : ''),
@@ -9069,7 +8800,7 @@ function bindObjectFileUpload(btnEl, inputEl) {
       }
     } catch (e) {
       console.error('Objekt-Dateiimport Gesamtfehler', e);
-      showBusinessAlert('Objekt-Dateiimport fehlgeschlagen: ' + (e?.message || e), { title: 'Import fehlgeschlagen' });
+      matchingAlert('Objekt-Dateiimport fehlgeschlagen: ' + (e?.message || e), { title: 'Import fehlgeschlagen' });
     } finally {
       inputEl.value = '';
     }
@@ -9077,59 +8808,11 @@ function bindObjectFileUpload(btnEl, inputEl) {
 }
 
 // Aktivieren (Drop-in)
-if (objectImportPdfBtn && objectImportPdfInput) {
-  bindObjectFileUpload(objectImportPdfBtn, objectImportPdfInput);
-}
 
 
 // LinkedIn-URL oder Freitext (Textarea)
-if (objectImportText && objectImportTextBtn) {
-  async function handleTextImport() {
-    const raw = objectImportText.value;
-    const trimmed = String(raw || '').trim();
-    if (!trimmed) return;
-
-    try {
-      if (looksLikeLinkedinProfileUrl(trimmed)) {
-        // LinkedIn-Profil importieren
-        const { placeholderId, requirementId } = await startLinkedinObjectImport(trimmed);
-        console.log('LinkedIn-Import gestartet:', { placeholderId, requirementId });
-      } else {
-        // Object als Freitext / Markdown
-        const { placeholderId, requirementId } = await startTextObjectImport(trimmed);
-        console.log('Text-Import gestartet:', { placeholderId, requirementId });
-      }
-
-      objectImportText.value = '';
-    } catch (e) {
-      console.error('Objekte-Import Fehler', e);
-      showBusinessAlert('Objekte-Import fehlgeschlagen: ' + (e?.message || e), { title: 'Import fehlgeschlagen' });
-    }
-  }
-
-  objectImportTextBtn.addEventListener('click', (e) => {
-    e.preventDefault();
-    handleTextImport();
-  });
-
-  // Enter (ohne Shift) triggert Import, Shift+Enter erzeugt Zeilenumbruch
-  objectImportText.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleTextImport();
-    }
-  });
-}
 
 
-document.body.addEventListener('click', (e)=>{
-  if (!getMatchingModuleHost().contains(e.target)) return;
-  const sBtn = e.target.closest('[data-search]');
-  if(sBtn){
-    const requirementId = sBtn.getAttribute('data-search');
-    showBusinessAlert('Objektesuche starten für '+ requirementId +' …');
-  }
-});
 
 function applyMatchingDefinitionUi(root = getMatchingModuleHost()) {
   if (!root) return;
@@ -9183,32 +8866,28 @@ function applyMatchingDefinitionUi(root = getMatchingModuleHost()) {
 
 // Initial: erst RxDB laden, dann rendern
 // Initial: erst RxDB laden, dann rendern, dann Live-Sync aktivieren
-export async function mountMatchingDashboard(ctx = {}){
-  matchingRuntimeCtx = ctx;
-  matchingMessages = await loadModuleMessages(
-    new URL('../index.js', import.meta.url).href,
-    ctx.locale || document.documentElement.lang || 'de'
-  );
-  setViewStateStorageScope(ctx.storageScope);
+export async function mountMatchingDashboard({ host = null, restored = null } = {}){
+  matchingMessages = {};
   matchingViewState = readViewState(MATCHING_VIEW_STATE_KEY, MATCHING_VIEW_STATE_DEFAULTS);
   activeSource = matchingViewState.activeSource || null;
   activeRequirementForScoring = matchingViewState.activeRequirementForScoring || null;
   selectedObject = matchingViewState.selectedObject || null;
   matrixSelectedObjectId = matchingViewState.matrixSelectedObjectId || null;
   objectsPaneUserCollapsed = matchingViewState.objectsPaneUserCollapsed !== false;
-  setCtoxCommandBus(ctx.commandBus);
-  matchingModuleHost = ctx.host || document.querySelector('[data-matching-module="native"]') || null;
-  if (ctx.matchingDefinition || globalThis.CTOX_MATCHING_DEFINITION) {
-    setActiveMatchingDefinition(ctx.matchingDefinition || globalThis.CTOX_MATCHING_DEFINITION);
+  matchingModuleHost = host || null;
+  rxdb = null;
+  sources = [];
+  objects = [];
+  matches = [];
+  if (globalThis.CTOX_MATCHING_DEFINITION) {
+    setActiveMatchingDefinition(globalThis.CTOX_MATCHING_DEFINITION);
   }
+  wireMatchingStaticDom();
   applyMatchingDefinitionUi();
-  const matchingHost = getScopedMatchingHost();
-  syncFeedback.setHostRoot?.(matchingHost);
-  if (matchingHost) syncFeedback.ensureHost();
-  setupMatchingCollectionReadiness();
+  __installInteractionListeners(getScopedMatchingHost());
+  onMatchingUnmount(teardownRxdbLiveUiSync);
   await ensureMatchScoreFormulaUpdate();
   await loadFromRxdb();
-  updateMatchingInitialSyncFeedback();
 
   setupMatchingIaControls();
   renderSources();
@@ -9218,11 +8897,46 @@ export async function mountMatchingDashboard(ctx = {}){
   persistMatchingRuntimeState({ objectsPaneUserCollapsed });
   bindCreateRequirementButton();
 
-  // ✅ Live UI Sync: reagiert auf Background-Sync/Replication automatisch
+  // Live-Abo: api.query-Änderungen rendern ohne Neuladen.
   try {
     await setupRxdbLiveUiSync();
   } catch (e) {
-    console.warn('[rxdb-live] setup failed:', e);
+    console.warn('[matching-live] setup failed:', e);
+  }
+  restoreMatchingDrafts(restored);
+}
+
+// Offene Eingaben für snapshot()/restored (PORTING §2): Felder mit id im App-root und der
+// Formular-Entwurf „Neue Anforderung“.
+export function snapshotMatchingDrafts() {
+  const host = getScopedMatchingHost();
+  const fields = {};
+  if (host) {
+    host.querySelectorAll('input[id], textarea[id], select[id]').forEach((el) => {
+      if (el.type === 'file' || el.type === 'password') return;
+      const value = el.type === 'checkbox' || el.type === 'radio' ? (el.checked ? '1' : '') : String(el.value ?? '');
+      fields[el.id] = value;
+    });
+  }
+  const createRequirement = createRequirementDraft ? { ...createRequirementDraft } : null;
+  return { fields, createRequirement };
+}
+
+function restoreMatchingDrafts(restored) {
+  const drafts = restored && typeof restored === 'object' ? restored.drafts : null;
+  if (!drafts || typeof drafts !== 'object') return;
+  const host = getScopedMatchingHost();
+  if (host && drafts.fields && typeof drafts.fields === 'object') {
+    for (const [id, value] of Object.entries(drafts.fields)) {
+      if (typeof value !== 'string') continue;
+      const el = host.querySelector(`#${CSS.escape(id)}`);
+      if (!el || el.type === 'file') continue;
+      if (el.type === 'checkbox' || el.type === 'radio') el.checked = value === '1';
+      else if (el.value !== value) el.value = value;
+    }
+  }
+  if (drafts.createRequirement && typeof drafts.createRequirement === 'object') {
+    openCreateRequirementForm(drafts.createRequirement);
   }
 }
 
@@ -9294,23 +9008,30 @@ function setupMatchingOverflowMenus() {
   // Click outside any open menu closes it. The delegated column-drawer listener
   // already handles item clicks via [data-column-action], so we don't intercept
   // them here.
-  document.addEventListener('click', (event) => {
+  const onDocumentClick = (event) => {
     const target = event.target;
     if (!(target instanceof Element)) return;
     if (target.closest('[data-toggle-pane-options]')) return;
     if (target.closest('.matching-overflow-menu')) return;
     closeAll();
-  });
+  };
+  document.addEventListener('click', onDocumentClick);
 
   // Escape closes open menus.
-  document.addEventListener('keydown', (event) => {
+  const onDocumentKeydown = (event) => {
     if (event.key !== 'Escape') return;
     const anyOpen = Array.from(allMenus()).some((menu) => !menu.hidden);
     if (anyOpen) closeAll();
-  });
+  };
+  document.addEventListener('keydown', onDocumentKeydown);
 
   // Close menus on resize so the fixed coords don't drift from the trigger.
   window.addEventListener('resize', closeAll, { passive: true });
+  onMatchingUnmount(() => {
+    document.removeEventListener('click', onDocumentClick);
+    document.removeEventListener('keydown', onDocumentKeydown);
+    window.removeEventListener('resize', closeAll);
+  });
 }
 
 function bindCreateRequirementButton() {
@@ -9324,81 +9045,44 @@ function bindCreateRequirementButton() {
   });
 }
 
-function openCreateRequirementForm() {
-  // Lightweight modal, styled to match the existing column-drawer/business
-  // dialog look so it fits the column design without depending on the
-  // bottom-drawer flow.
-  const layer = document.createElement('div');
-  const root = getScopedMatchingHost();
-  if (!root) return;
-  layer.className = 'business-dialog-layer is-info is-open';
-  layer.style.zIndex = '260';
-  layer.innerHTML = `
-    <section class="business-dialog" role="dialog" aria-modal="true" aria-labelledby="createRequirementDialogTitle">
-      <div class="business-dialog-copy">
-        <h2 id="createRequirementDialogTitle">Neue Anforderung anlegen</h2>
-        <p>Hinterlege Titel und Beschreibung. Eine zugehörige Quelle wird automatisch angelegt, falls nicht ausgewählt.</p>
-      </div>
-      <label style="display:grid;gap:4px;margin-top:12px;font-size:11.5px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.04em;">
-        Quelle
-        <input class="business-dialog-input" data-field="sourceName" placeholder="z. B. Firmenname" style="text-transform:none;letter-spacing:0;font-weight:500;">
-      </label>
-      <label style="display:grid;gap:4px;margin-top:10px;font-size:11.5px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.04em;">
-        Titel der Anforderung
-        <input class="business-dialog-input" data-field="title" placeholder="z. B. Senior Backend Engineer" required style="text-transform:none;letter-spacing:0;font-weight:500;">
-      </label>
-      <label style="display:grid;gap:4px;margin-top:10px;font-size:11.5px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.04em;">
-        Beschreibung
-        <textarea class="business-dialog-input" data-field="description" rows="4" placeholder="Kurze Beschreibung der Anforderung…" style="text-transform:none;letter-spacing:0;font-weight:500;resize:vertical;min-height:90px;"></textarea>
-      </label>
-      <div class="business-dialog-actions" style="margin-top:14px;">
-        <button class="business-dialog-secondary" type="button" data-action="cancel">Abbrechen</button>
-        <button class="business-dialog-primary" type="button" data-action="save">Anlegen</button>
-      </div>
-    </section>
-  `;
-  root.append(layer);
-
-  const close = () => {
-    layer.classList.remove('is-open');
-    layer.classList.add('is-closing');
-    setTimeout(() => layer.remove(), 120);
-  };
-
-  layer.addEventListener('pointerdown', (event) => {
-    if (event.target === layer) close();
-  });
-
-  layer.querySelector('[data-action="cancel"]')?.addEventListener('click', close);
-
-  layer.querySelector('[data-action="save"]')?.addEventListener('click', async () => {
-    const titleEl = layer.querySelector('[data-field="title"]');
-    const sourceEl = layer.querySelector('[data-field="sourceName"]');
-    const descEl = layer.querySelector('[data-field="description"]');
-    const title = String(titleEl?.value || '').trim();
-    if (!title) {
-      titleEl?.focus?.();
-      return;
-    }
-    const sourceName = String(sourceEl?.value || '').trim() || 'Manuelle Anforderung';
-    const description = String(descEl?.value || '').trim();
-
-    try {
-      await createRequirementFromForm({ sourceName, title, description });
-      close();
-      await loadFromRxdb();
-      renderSources();
-      renderRequirements();
-      renderMap();
-    } catch (err) {
-      console.error('[matching] createRequirementFromForm failed', err);
-      if (typeof showBusinessAlert === 'function') {
-        showBusinessAlert(`Anforderung konnte nicht angelegt werden: ${err?.message || err}`);
-      }
-    }
-  });
-
-  requestAnimationFrame(() => layer.querySelector('[data-field="title"]')?.focus?.());
+// „Neue Anforderung“ als Blatt im App-Fenster (api.shell.dialog, R7) statt eigener V2-Dialogschicht.
+// Felder nacheinander: Titel (Pflicht), Quelle, Beschreibung; Abbrechen in jedem Schritt verwirft.
+let createRequirementDraft = null;
+async function openCreateRequirementForm(draft = null) {
+  if (createRequirementDraft) return;
+  const values = { title: '', sourceName: '', description: '', ...(draft && typeof draft === 'object' ? draft : {}) };
+  createRequirementDraft = values;
+  try {
+    const title = await matchingPrompt('Titel', {
+      title: 'Neue Anforderung', value: values.title, placeholder: 'z. B. Senior Backend Engineer', required: true, confirmLabel: 'Weiter',
+    });
+    if (title == null || !String(title).trim()) return;
+    values.title = String(title).trim();
+    const sourceName = await matchingPrompt('Quelle', {
+      title: 'Neue Anforderung', value: values.sourceName, placeholder: 'z. B. Firmenname', confirmLabel: 'Weiter',
+    });
+    if (sourceName == null) return;
+    values.sourceName = String(sourceName).trim();
+    const description = await matchingPrompt('Beschreibung', {
+      title: 'Neue Anforderung', value: values.description, multiline: true, confirmLabel: 'Anlegen',
+    });
+    if (description == null) return;
+    values.description = String(description).trim();
+    await createRequirementFromForm({
+      sourceName: values.sourceName || 'Manuelle Anforderung',
+      title: values.title,
+      description: values.description,
+    });
+    await loadFromRxdb();
+    renderSources();
+    renderRequirements();
+    renderMap();
+  } catch (err) {
+    console.error('[matching] createRequirementFromForm failed', err);
+    matchingAlert(`Anforderung konnte nicht angelegt werden: ${err?.message || err}`, { title: 'Anlegen fehlgeschlagen' });
+  } finally {
+    createRequirementDraft = null;
+  }
 }
 
 async function createRequirementFromForm({ sourceName, title, description }) {
@@ -9406,13 +9090,13 @@ async function createRequirementFromForm({ sourceName, title, description }) {
     await loadFromRxdb();
   }
   if (!rxdb?.sources || !rxdb?.requirements) {
-    throw new Error('Die lokalen Daten sind noch nicht bereit.');
+    throw new Error('Matching-Collections fehlen.');
   }
   const now = Date.now();
   const sourceId = `manualsrc_${now}_${Math.random().toString(16).slice(2, 8)}`;
   const requirementId = `manualreq_${now}_${Math.random().toString(16).slice(2, 8)}`;
 
-  await rxdb.sources.upsert({
+  await rxdb.sources.save({
     id: sourceId,
     name: sourceName,
     legalName: sourceName,
@@ -9428,7 +9112,7 @@ async function createRequirementFromForm({ sourceName, title, description }) {
     updated_at_ms: now,
   });
 
-  await rxdb.requirements.upsert({
+  await rxdb.requirements.save({
     id: requirementId,
     sourceId,
     title,
@@ -9450,23 +9134,229 @@ async function createRequirementFromForm({ sourceName, title, description }) {
   });
 }
 
-if (!document.querySelector('[data-matching-module="native"]')) {
-  mountMatchingDashboard();
-}
-
 async function ensureMatchScoreFormulaUpdate() {
   try {
-    const storedVersion = Number(matchingRuntimeCtx?.storageScope?.get?.(MATCH_SCORE_FORMULA_VERSION_KEY) || 0);
+    const storedVersion = Number(matchingStore.get(MATCH_SCORE_FORMULA_VERSION_KEY) || 0);
     if (storedVersion >= MATCH_SCORE_FORMULA_VERSION) {
       return { updated: false, total: 0 };
     }
 
     const result = await recomputeAllMatchScoresOnce();
-    matchingRuntimeCtx?.storageScope?.set?.(MATCH_SCORE_FORMULA_VERSION_KEY, String(MATCH_SCORE_FORMULA_VERSION));
+    matchingStore.set(MATCH_SCORE_FORMULA_VERSION_KEY, String(MATCH_SCORE_FORMULA_VERSION));
     console.info('[matching] Match-Scores mit neuer Formel neu berechnet:', result);
     return { ...result, updated: true };
   } catch (e) {
     console.error('[matching] Recompute fehlgeschlagen:', e);
     return { updated: false, total: 0, error: String(e?.message || e) };
   }
+}
+
+// Statische DOM-Verdrahtung je Montage (vorher Modul-Toplevel: band an das DOM der ersten Montage).
+let __matchingDomAbort = null;
+export function wireMatchingStaticDom() {
+  __matchingDomAbort?.abort();
+  __matchingDomAbort = new AbortController();
+  const __signal = __matchingDomAbort.signal;
+  onMatchingUnmount(() => __matchingDomAbort?.abort());
+  noteModal = $('#noteModal');
+  noteText = $('#noteText');
+  noteProgress = $('#noteProgress');
+  noteProgressVal = $('#noteProgressVal');
+  noteTitle = $('#noteTitle');
+  saveNoteBtn = $('#saveNote');
+  relModal = $('#relModal');
+  relSaveBtn = $('#relSave');
+  relTitle = $('#relTitle');
+  imageLightbox = $('#imageLightbox');
+  imageLightboxImg = $('#imageLightboxImg');
+  imageLightboxCloseBtn = $('#imageLightboxClose');
+  object = document.getElementById('objectPanel');
+  objectTitle = document.getElementById('objectTitle');
+  objectBody = document.getElementById('objectBody');
+  jp = document.getElementById('requirementPanel');
+  jpTitle = document.getElementById('jpTitle');
+  jpMeta = document.getElementById('jpMeta');
+  jpBody = document.getElementById('jpBody');
+  matchDetailBar = document.getElementById('matchDetailBar');
+  matchBarRequirementLabel = document.getElementById('matchBarRequirementLabel') || document.getElementById('matchBarAnforderungLabel');
+  matchBarObjectLabel = document.getElementById('matchBarObjectLabel');
+  matchBarScore = document.getElementById('matchBarScore');
+  matchBarTags = document.getElementById('matchBarTags');
+  matchBarContent = document.getElementById('matchBarContent');
+  matchBarCloseBtn = document.getElementById('matchBarClose');
+  tabList = document.getElementById('tabList');
+  tabMap = document.getElementById('tabMap');
+  mapWrap = document.getElementById('mapWrap');
+  requirementListEl = document.getElementById('requirementList');
+  listTools = document.getElementById('listTools');
+  mapEl = document.getElementById('map');
+  toggleUnknown = document.getElementById('toggleUnknown');
+  objectImportPdfBtn = document.getElementById('objectImportPdfBtn');
+  objectImportPdfInput = document.getElementById('objectImportPdfInput');
+  objectImportText = document.getElementById('objectImportText');
+  objectImportTextBtn = document.getElementById('objectImportTextBtn');
+
+  if (saveNoteBtn) {
+    saveNoteBtn.addEventListener('click', ()=>{
+      if (!modalCtx) return;
+      const k = key(modalCtx.requirementId, modalCtx.objectId);
+      const prev = processes.get(k) || {
+        active: false,
+        notes: '',
+        progress: 0,
+        statuses: [],
+        status: 'prospecting'
+      };
+
+      const raw = parseInt(noteProgress.value, 10) || 0;
+      const effectiveProgress = (prev.active && raw === 0) ? 10 : raw;
+      const notes = noteText.value || '';
+
+      // zentrale Logik: updateMatchState kümmert sich jetzt um:
+      // - progress
+      // - notes
+      // - Status aus #tags → processes + DB
+      updateMatchState(modalCtx.requirementId, modalCtx.objectId, {
+        progress: effectiveProgress,
+        notes
+      }).catch(console.error);
+
+      noteInitialText = notes;
+      setNoteSaveButtonVisible(false);
+
+      const line = getMatchingModuleHost().querySelector(
+        `.object-badge[data-jid="${modalCtx.requirementId}"][data-cid="${modalCtx.objectId}"] .progress-line i`
+      );
+      if (line) line.style.width = effectiveProgress + '%';
+
+      closeNoteModal();
+      renderRequirements();
+    });
+  }
+
+  document.querySelector('[data-close-modal]').addEventListener('click', closeNoteModal);
+
+  noteModal.addEventListener('click', (e)=>{ if(e.target===noteModal) closeNoteModal(); });
+
+  if (noteText) {
+    noteText.addEventListener('input', syncNoteSaveButtonVisibility);
+  }
+
+  noteProgress.addEventListener('input', ()=>{
+    noteProgressVal.textContent = noteProgress.value + '%';
+    commitProgressAutosave();
+  });
+
+  noteProgress.addEventListener('change', commitProgressAutosave);
+
+  if (imageLightboxCloseBtn) {
+    imageLightboxCloseBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeImageLightbox();
+    });
+  }
+
+  if (imageLightbox) {
+    imageLightbox.addEventListener('click', (e) => {
+      if (e.target === imageLightbox) closeImageLightbox();
+    });
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (!imageLightbox || !imageLightbox.classList.contains('open')) return;
+    e.stopPropagation();
+    closeImageLightbox();
+  }, { signal: __signal });
+
+  if (relModal){
+    const closeBtn = relModal.querySelector('[data-close-rel-modal]');
+    if (closeBtn){
+      closeBtn.addEventListener('click', (e)=>{
+        e.stopPropagation();
+        closeRelationModal();
+      });
+    }
+    relModal.addEventListener('click', (e)=>{
+      if (e.target === relModal) closeRelationModal();
+    });
+
+    if (relSaveBtn){
+      relSaveBtn.addEventListener('click', async (e)=>{
+        e.stopPropagation();
+        if (!relCtx) return;
+
+        const checked = relModal.querySelector('input[name="relState"]:checked');
+        const hasRel = checked && checked.value === '1';
+
+        if (relCtx.kind === 'source'){
+          await setSourceRelation(relCtx.id, hasRel);
+        } else {
+          await setObjectRelation(relCtx.id, hasRel);
+        }
+        closeRelationModal();
+      });
+    }
+  }
+
+  document.getElementById('objectClose').addEventListener('click', closeObject);
+
+  document.getElementById('jpClose').addEventListener('click', closeRequirementPanel);
+
+  if (matchBarCloseBtn){
+    matchBarCloseBtn.addEventListener('click', ()=>{
+      closeMatchDetailBar();
+    });
+  }
+
+  if (objectImportPdfBtn && objectImportPdfInput) {
+    bindObjectFileUpload(objectImportPdfBtn, objectImportPdfInput);
+  }
+
+  if (objectImportText && objectImportTextBtn) {
+    async function handleTextImport() {
+      const raw = objectImportText.value;
+      const trimmed = String(raw || '').trim();
+      if (!trimmed) return;
+
+      try {
+        if (looksLikeLinkedinProfileUrl(trimmed)) {
+          // LinkedIn-Profil importieren
+          const { placeholderId, requirementId } = await startLinkedinObjectImport(trimmed);
+          console.log('LinkedIn-Import gestartet:', { placeholderId, requirementId });
+        } else {
+          // Object als Freitext / Markdown
+          const { placeholderId, requirementId } = await startTextObjectImport(trimmed);
+          console.log('Text-Import gestartet:', { placeholderId, requirementId });
+        }
+
+        objectImportText.value = '';
+      } catch (e) {
+        console.error('Objekte-Import Fehler', e);
+        matchingAlert('Objekte-Import fehlgeschlagen: ' + (e?.message || e), { title: 'Import fehlgeschlagen' });
+      }
+    }
+
+    objectImportTextBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      handleTextImport();
+    });
+
+    // Enter (ohne Shift) triggert Import, Shift+Enter erzeugt Zeilenumbruch
+    objectImportText.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        handleTextImport();
+      }
+    });
+  }
+
+  document.body.addEventListener('click', (e)=>{
+    if (!getMatchingModuleHost().contains(e.target)) return;
+    const sBtn = e.target.closest('[data-search]');
+    if(sBtn){
+      const requirementId = sBtn.getAttribute('data-search');
+      matchingAlert('Objektesuche starten für '+ requirementId +' …');
+    }
+  }, { signal: __signal });
 }

@@ -1,0 +1,133 @@
+{
+ "app": "knowledge",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Knowledge",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Knowledge Book erstellen",
+    "button:Knowledge Book importieren",
+    "button:Knowledge Books exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "button:DataFrames · Skillbooks (0) · ",
+    "button:Rahmenvertrag über Wartung und",
+    "button:Budgetplanung Vertrieb Süd · S",
+    "button:Quartalsbericht Q3 2026 · Skil"
+   ],
+   "shot": "knowledge/420-01-open.png"
+  },
+  {
+   "step": "button Knowledge Book erstellen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/420-02-button_Knowledge_Book_erstellen.png"
+  },
+  {
+   "step": "formular 4 Felder → Erstellen lassen",
+   "changed": true,
+   "ops": [
+    "command ctox.knowledge.book.create local=ok result=accepted {\"title\":\"Knowledge Book erstellen · Rundgang Test\",\"knowledge_book\":{\"title\":\"Rundgang Test\",\"domain\":\"Rundgang Test\",\"status\":\"draft\",\"sum"
+   ],
+   "zone": [
+    "clear knowledge.command.ctox.knowledge.book.create"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "knowledge/420-03-formular_4_Felder_Erstellen_lassen.png"
+  },
+  {
+   "step": "button Knowledge Book importieren",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/420-04-button_Knowledge_Book_importieren.png"
+  },
+  {
+   "step": "formular 3 Felder → Import starten",
+   "changed": true,
+   "ops": [
+    "command ctox.knowledge.book.import local=ok result=accepted {\"title\":\"Knowledge Book importieren · Rundgang Test\",\"import_request\":{\"source_type\":\"path\",\"source\":\"Rundgang Test\",\"domain\":\"Rundgang Tes"
+   ],
+   "zone": [
+    "clear knowledge.command.ctox.knowledge.book.import"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "knowledge/420-05-formular_3_Felder_Import_starten.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 587,
+   "shot": "knowledge/420-06-suche_ohne_Treffer.png",
+   "textAfter": 27
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "knowledge/420-07-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "command",
+   "coll": "ctox.knowledge.book.create",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "ctox.knowledge.book.import",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "knowledge",
+  "Knowledge"
+ ]
+}
