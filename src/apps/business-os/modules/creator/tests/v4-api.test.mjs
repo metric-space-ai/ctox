@@ -64,12 +64,14 @@ before(async () => {
     window.__mod = await import(`/modules/${APP}/index.js`);
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, actor: { id: 'michael', role: 'admin' } });
     await kernel.ready;
-    // FIXT-8265: business_apps-Zeilen nach dem ctox-platform-Schema (additionalProperties:false). source/entry/description/
-    // category/version kennt das Schema nicht; creator/index.js:170-186 filtert aber darauf (Befund, kein Fixture-Fehler).
+    // FIXT-8265: business_apps-Zeilen nach dem ctox-platform-Schema (additionalProperties:false). creator erkennt Eigenbau-
+    // Apps in v4 an fehlender Release-Basis (provenance.base_release), nicht an V2-Feldern source/entry.
     await kernel.sim.push('business_apps', [
       { id: 'creator', app_id: 'creator', title: 'App Creator', updated_at_ms: 1 },
       { id: 'crm-kontakte', app_id: 'crm-kontakte', title: 'CRM Kontakte', active_ver: '0.3.0', updated_at_ms: 1 },
       { id: 'lager', app_id: 'lager', title: 'Lager & Bestand mit einem sehr langen Titel', active_ver: '1.0.0', updated_at_ms: 1 },
+      // Kern-App aus dem Release (provenance.base_release gesetzt) → keine Eigenbau-App.
+      { id: 'notes', app_id: 'notes', title: 'Notizen', active_ver: '1.0.0', provenance: { base_release: '0.2.0-beta.2', base_hash: 'sha256-notes', locally_modified: false }, updated_at_ms: 1 },
     ]);
     for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
     await kernel.sim.publishAppVersion(APP, '1', { title: 'App Creator', manifestExtra: window.__routes });
@@ -108,6 +110,7 @@ test('mount: Bibliothek zeigt installierte Apps live (business_apps), Titel übe
   const list = await text('[data-creator-list]');
   assert.match(list, /CRM Kontakte/);
   assert.doesNotMatch(list, /App Creator/, 'Kern-Apps sind keine Eigenbau-Apps');
+  assert.doesNotMatch(list, /Notizen/, 'App mit Release-Basis (provenance.base_release) ist keine Eigenbau-App');
   assert.equal(await page.$eval('#win', (el) => el.dataset.app), APP);
   assert.equal(await page.evaluate(() => window.__k.shell.window('creator').state.get().title), 'App Creator');
   assert.equal(await page.evaluate(() => window.__c.subscribers('business_apps')), 1);
