@@ -74,9 +74,25 @@ impl ApprovalGates for TicketGates<'_> {
             .filter(|item| item.kind == "approval-gate")
             .map(|item| item.state))
     }
+    /// The core never lets an agent close an `approval-gate` itself: only an
+    /// authorized owner reply (`[ctox-approve:<id>]`, ledger proof) does. So
+    /// an approval is accepted only once the gate is already closed that way.
     fn decide(&self, gate_id: &str, approved: bool) -> Result<()> {
-        tickets::set_ticket_self_work_state(self.root, gate_id, if approved { "closed" } else { "failed" })
-            .map(|_| ())
+        let state = self.state(gate_id)?.context("approval gate not found")?;
+        if approved {
+            if state != "closed" {
+                bail!("waiting_for_user: gate {gate_id} is `{state}`. The user approves by answering `[ctox-approve:{gate_id}]`; record the decision after that.");
+            }
+            return Ok(());
+        }
+        if state == "open" {
+            // Rejecting is always safe; if the core refuses the transition the
+            // toolhub decision record still blocks activation.
+            let _ = tickets::set_ticket_self_work_state_with_failure_reason(
+                self.root, gate_id, "failed", Some("toolhub: user rejected the adapter"),
+            );
+        }
+        Ok(())
     }
 }
 

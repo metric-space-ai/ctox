@@ -22,6 +22,14 @@ fn cli(root: &Path, args: &[&str]) -> Result<Value> {
     run(root, &args, Some(Arc::new(Mock)))
 }
 
+/// What the approval-reply sweep does for an authorized owner reply.
+fn owner_approves(root: &Path, gate: &str) {
+    let conn = rusqlite::Connection::open(crate::paths::core_db(root)).unwrap();
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS ticket_approval_reply_ledger (message_key TEXT PRIMARY KEY, work_id TEXT NOT NULL, action TEXT NOT NULL, sender_address TEXT NOT NULL, body_sha256 TEXT NOT NULL, residual_text TEXT NOT NULL, decision_status TEXT NOT NULL, followup_message_key TEXT, observed_at TEXT NOT NULL, applied_at TEXT);").unwrap();
+    conn.execute("INSERT INTO ticket_approval_reply_ledger VALUES ('owner-reply-1', ?1, 'approve', 'owner@example.org', 'abcdef0123456789abcdef', '', 'observed', NULL, '2026-10-16T00:00:00Z', NULL)", [gate]).unwrap();
+    tickets::set_ticket_approval_gate_state_from_authorized_reply(root, gate, "closed", "owner-reply-1").unwrap();
+}
+
 const PROBES: &str = r#"[{"tool":"ZIPPOPOTAM_LOOKUP_POSTAL_CODE","args":{"country":"de","postal_code":"10115"}}]"#;
 
 #[test]
@@ -35,8 +43,11 @@ fn cli_end_to_end_with_real_approval_gate_work_items() {
     let item = tickets::load_ticket_self_work_item(&r, &gate).unwrap().unwrap();
     assert_eq!(item.kind, "approval-gate");
     assert_eq!(item.state, "open");
-    assert_eq!(item.metadata["approval_modality"], json!("tui-only"));
     assert!(cli(&r, &["--as", "worker", "approve", "--gate", &gate, "--user-quote", "ja"]).is_err());
+    // No owner reply yet: even a supervisor cannot approve.
+    let err = cli(&r, &["--as", "supervisor", "approve", "--gate", &gate, "--user-quote", "ja"]).unwrap_err();
+    assert!(err.to_string().contains("waiting_for_user"), "{err}");
+    owner_approves(&r, &gate);
     cli(&r, &["--as", "supervisor", "approve", "--gate", &gate, "--decision", "approve", "--user-quote", "Ja, freigeben"]).unwrap();
     assert_eq!(tickets::load_ticket_self_work_item(&r, &gate).unwrap().unwrap().state, "closed");
     cli(&r, &["--as", "supervisor", "activate", "zippopotam", "1.0.0"]).unwrap();

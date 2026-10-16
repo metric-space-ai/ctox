@@ -426,7 +426,7 @@ impl<'a> Builder<'a> {
                     let req = GateRequest {
                         title: format!("Freigabe für {tool} / Approve {tool}"),
                         body: format!("DE: Die Aktion {tool} ({toolkit}) lässt sich nicht rückgängig machen. Bitte einmalig für genau diesen Aufruf freigeben oder ablehnen.\nEN: The action {tool} ({toolkit}) cannot be undone. Approve or reject this exact call once.\nargs sha256: {args_sha}"),
-                        metadata: json!({"source": "toolhub", "kind": "call", "tool": tool, "toolkit": toolkit, "args_sha256": args_sha, "approval_modality": "tui-only", "dedupe_key": format!("toolhub-call:{tool}:{args_sha}")}),
+                        metadata: json!({"source": "toolhub", "kind": "call", "tool": tool, "toolkit": toolkit, "args_sha256": args_sha, "dedupe_key": format!("toolhub-call:{tool}:{args_sha}")}),
                     };
                     let id = self.gates.open(&req)?;
                     write_json(&self.gate_path(&id)?, &GateRecord { gate_id: id.clone(), subject: GateSubject::Call { toolkit: toolkit.clone(), tool: tool.clone(), args_sha256: args_sha.clone() }, submitted_by: self.who(), submitted_at: self.now(), decision: None })?;
@@ -625,7 +625,7 @@ impl<'a> Builder<'a> {
         let req = GateRequest {
             title: format!("Neuer Adapter: {} {version} / New adapter", adapter.spec().name),
             body,
-            metadata: json!({"source": "toolhub", "kind": "adapter", "slug": slug, "version": version, "sha256": sha, "approval_modality": "tui-only", "dedupe_key": format!("toolhub-adapter:{slug}:{version}:{sha}")}),
+            metadata: json!({"source": "toolhub", "kind": "adapter", "slug": slug, "version": version, "sha256": sha, "dedupe_key": format!("toolhub-adapter:{slug}:{version}:{sha}")}),
         };
         let id = self.gates.open(&req)?;
         write_json(&self.gate_path(&id)?, &GateRecord { gate_id: id.clone(), subject: GateSubject::Adapter { slug: slug.into(), version: version.into(), sha256: sha.clone() }, submitted_by: self.who(), submitted_at: self.now(), decision: None })?;
@@ -634,7 +634,8 @@ impl<'a> Builder<'a> {
         Ok(json!({"gate_id": id, "state": "pending", "title": req.title, "card_text": req.body}))
     }
 
-    /// Record the user's decision (relayed by the supervisor) and close the gate.
+    /// Record the user's decision (relayed by the supervisor); the host closes or
+    /// confirms the gate.
     pub fn approve(&self, gate_id: &str, decision: Decision, user_quote: &str) -> Result<Value> {
         self.require(Tool::Approve, None)?;
         self.policy.check(Permission::IntegrationsManage)?;
@@ -650,11 +651,15 @@ impl<'a> Builder<'a> {
         }
         match self.gates.state(gate_id)?.as_deref() {
             Some("open") | Some("queued") | Some("publishing") => {}
+            // Host gates can be closed by the user's authorized reply first.
+            Some("closed") if decision != Decision::Reject => {}
             other => bail!("gate {gate_id} is not open ({})", other.unwrap_or("missing")),
         }
+        // The host may refuse (e.g. no authorized user reply yet): then
+        // nothing is recorded and the call can be repeated.
+        self.gates.decide(gate_id, decision != Decision::Reject)?;
         rec.decision = Some(DecisionRecord { decision, by: self.who(), at: self.now(), user_quote: user_quote.chars().take(500).collect() });
         write_json(&self.gate_path(gate_id)?, &rec)?;
-        self.gates.decide(gate_id, decision != Decision::Reject)?;
         let slug = match &rec.subject {
             GateSubject::Adapter { slug, .. } => slug.clone(),
             GateSubject::Call { toolkit, .. } => toolkit.clone(),
