@@ -117,3 +117,39 @@ Differences are loading only: `ctox:shared/` bound to `/src/apps/business-os/sha
 crew bar, X eyes on the failed creature).
 Counter-checks (each → exit 1): K-K1 slot no longer gets `is-selected` ("selected creature is not marked");
 K-K2 crew-motion ignores the reduced-motion change ("reduced motion must stop all creature motion").
+
+## 5. Workflows: steps per line
+
+Line = `${{ github.base_ref || github.ref_name }}` (PR: target branch; push: branch). `release.yml` is tag-triggered
+(`v*`), where `ref_name` is the tag: its new step `Select CI line` sets `release/v2` when the tagged commit is an
+ancestor of `origin/release/v2` (incl. commits before the split = V2 code), else `main`.
+Combined multi-command steps had their V2 commands moved into a V2-line step and a v4-line step; every other
+command in those steps is unchanged and stays where it was.
+
+| Workflow | Trigger change | main / v4 / PRs against them | release/v2 |
+|---|---|---|---|
+| `ci.yml` | push + pull_request `branches: [main]` → `[main, release/v2]` | `Business OS RxDB-only contract` (rest) → `… (v4 line)`: `--check` + run `assert-rxdb-only.v4.mjs`, `assert-module-conformance.v4.mjs`, `assert-command-consumer-inventory.v4.mjs` | `Business OS RxDB-only contract` (rest) → `… (V2 line)`: `assert-rxdb-only.mjs`, `assert-module-conformance.mjs`, `assert-command-consumer-inventory.mjs` |
+| `release.yml` | none (tags `v*`) | `Business OS production contract checks` (rest) → `Select CI line` → `… (v4 line)`: `assert-rxdb-only.v4.mjs`, `assert-module-conformance.v4.mjs` | same rest → `Select CI line` → `… (V2 line)`: `assert-rxdb-only.mjs`, `assert-module-conformance.mjs` |
+| `iot-soak.yml` | push `branches: [main]` → `[main, release/v2]`; paths + `assert-rxdb-only.v4.mjs` (pull_request and push) | `Run IoT module + RxDB-only contract checks` (iot + app-store tests) → `RxDB-only contract, no HTTP bridge (v4 line)`: `assert-rxdb-only.v4.mjs` | same → `… (V2 line)`: `assert-rxdb-only.mjs` |
+| `crew-ui-acceptance.yml` | none (pull_request without branch filter, workflow_dispatch) | `Module and chat behavior` (ctox test.js, tickets) → `Chat behavior (v4 line)`: same three files with `--test-skip-pattern "Web Research oeffnet den Chat"` → `Research chat handoff (v4 line)`: `node src/apps/business-os/scripts/research-chat-handoff.v4.mjs` (does not exist yet → red) … `Shell and data boundary contracts` (rest) → `RxDB-only and crew map contracts (v4 line)`: `assert-rxdb-only.v4.mjs`, `assert-ctox-crew-map.v4.mjs` | `Module and chat behavior` (rest) → `Chat behavior (V2 line)`: `node --test shared/business-chat.test.mjs shared/react-settings.test.mjs shared/shell-crew-health.test.mjs` … `Shell and data boundary contracts` (rest) → `… (V2 line)`: `assert-rxdb-only.mjs`, `assert-ctox-crew-map.mjs` |
+| `mail-ui-acceptance.yml` | none (pull_request without branch filter, workflow_dispatch) | `Mail browser behavior (v4 line)`: `mail-browser-qa.v4.mjs` with `CTOX_APP_API_STUB` = in-repo stub `modules/ctox/tests/fixtures/app-api-stub` (pin 68b83a3), evidence `mail-qa-v4/` uploaded | `Mail browser behavior`: `mail-browser-qa.mjs` (unchanged step, now `if: release/v2`) |
+| `business-os-shell-release.yml` | none | `Verify main release source`: 0.2.x must be an ancestor of `origin/main` | 0.1.x must be an ancestor of `origin/release/v2`; unknown series fails |
+
+Pre-existing reds, not touched (red before the port as well): `check-office-skill-gating`, `assert-ctox-data-state`,
+`assert-context-menu-lifecycle`.
+
+## 6. Verification (2026-10-16, branch `shell-v4/followup-1`)
+
+- All four `.v4.mjs` exit 0 from the repo root.
+- YAML: `/usr/bin/python3 -c "import yaml,sys; …" .github/workflows/*.yml` → 27 files OK (Homebrew python3 has no PyYAML).
+- `node /Volumes/tmp/rel-runs/wf-gates.cjs .github/workflows/business-os-shell-release.yml "$PWD" 0.2.0-beta.1
+  /Volumes/tmp/rel-runs/civ4-02` → failed=0. The runner starts at `Select release gate series`, so it does not
+  evaluate the ancestry check in `Verify main release source`. That check was tested separately in a temp repo:
+  0.1.x on release/v2 → 0, 0.1.x on main → 1, 0.2.x on main → 0, 0.2.x on release/v2 → 1, 0.3.0 → 1.
+  `release.yml` `Select CI line` was also tested: a tag on the release/v2 tip gives release/v2, a tag on the main tip
+  gives main, a tag before the split gives release/v2.
+- `mail-browser-qa.v4.mjs` with the in-repo stub (`CTOX_APP_API_STUB=modules/ctox/tests/fixtures/app-api-stub`)
+  → exit 0.
+- `node --test --test-skip-pattern "Web Research oeffnet den Chat" shared/business-chat.test.mjs
+  shared/react-settings.test.mjs shared/shell-crew-health.test.mjs` → 142/142 pass. Without the skip, that
+  test fails, as expected.
