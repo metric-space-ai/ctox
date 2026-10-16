@@ -18,6 +18,11 @@ pub(crate) fn read_registered_calendar(
         "calendar range must be ordered and at most 400 days"
     );
     anyhow::ensure!((1..=100).contains(&limit), "calendar limit must be 1..100");
+    if account.provider == "google" {
+        return super::super::google_calendar::read_calendar(
+            root, account, start_ms, end_ms, limit,
+        );
+    }
     let settings = super::super::email_accounts::account_runtime_overrides(root, account);
     let options = base_options_from_runtime(root, &settings, &root.join("runtime/ctox.sqlite3"));
     require_provider_credentials(&options)?;
