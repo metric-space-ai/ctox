@@ -15,7 +15,7 @@ test('timings distinguish durable queue, dispatch, receipt and terminal completi
   let finish; const gate = new Promise(r => {finish = r;});
   t.after(() => finish());
   const events = [];
-  const k = await setup(t, {diagnostics:{onCommandTiming(value){events.push(value); throw Error('broken observer');}}});
+  const k = await setup(t, {diagnostics:{onCommandTiming(value){events.push(value); if (value.sent === null) return Promise.reject(Error('broken async observer')); throw Error('broken observer');}}});
   await k.sim.setLink({state:'offline'});
   k.sim.onCommand('notes.timing', async () => {await gate; return {ok:true};});
   const api = k.appApi('notes','1');

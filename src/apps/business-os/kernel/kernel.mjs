@@ -301,7 +301,10 @@ export function createKernel(opts = {}) {
   const commandTimings = createCommandTimings((value, broadcast, patch) => {
     notify('metrics');
     if (broadcast) post({type:'command_timing', value:patch});
-    try { opts.diagnostics?.onCommandTiming?.(value); } catch { /* diagnostics cannot affect writes */ }
+    try {
+      const observed = opts.diagnostics?.onCommandTiming?.(value);
+      if (observed != null) Promise.resolve(observed).catch(() => {});
+    } catch { /* diagnostics cannot affect writes */ }
   });
   async function refreshOutboxStat() {
     if (!db || closed) return;

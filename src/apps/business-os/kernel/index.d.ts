@@ -120,7 +120,7 @@ export type CommandTiming = Readonly<{command_id:string; queued:number; sent:num
 /** Bridge adapter hook: forward timing snapshots here, never command payloads.
  * Exceptions are isolated from the data path. Cross-tab updates can repeat; key by command_id.
  */
-export interface CommandDiagnostics { onCommandTiming?(timing:CommandTiming):void; }
+export interface CommandDiagnostics { onCommandTiming?(timing:CommandTiming):void | Promise<void>; }
 export interface CommandMetrics extends LiveDoc<Metrics> { readonly commands:ReadonlyArray<CommandTiming>; }
 export type Metrics = {
   commands: ReadonlyArray<CommandTiming>;
