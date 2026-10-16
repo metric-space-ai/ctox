@@ -14,7 +14,6 @@ use std::{
         Arc, Mutex,
     },
     thread,
-    time::Duration,
 };
 use tiny_http::{Header, Method, Response, Server};
 
@@ -278,6 +277,7 @@ pub(crate) fn serve(root: &Path, addr: &str) -> anyhow::Result<()> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use std::time::Duration;
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn foreground_http_reuses_owned_stores_and_cli_ipc() -> anyhow::Result<()> {
         let _scope = super::super::store_startup::isolate_test_roots().await;
