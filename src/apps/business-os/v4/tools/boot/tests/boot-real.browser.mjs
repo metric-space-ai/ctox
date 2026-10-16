@@ -16,7 +16,7 @@
 //
 // Aufruf (aus dem Repo-Wurzelverzeichnis):
 //   PLAYWRIGHT_MODULE=$HOME/Documents/ctox/src/apps/business-os/node_modules/playwright \
-//     node src/apps/business-os/v4/tools/boot/boot-real.browser.mjs [counter] [--probe=routes,caps,swdb,files]
+//     node src/apps/business-os/v4/tools/boot/tests/boot-real.browser.mjs [counter] [--probe=routes,caps,swdb,files]
 //   counter  : Gegenprobe – das veröffentlichte Shell-Manifest trägt für v4/frame/index.js eine falsche sha256
 //              (der native CAS liefert unter diesem Schlüssel die echten Bytes) → Rahmen darf NICHT erscheinen, der Kern
 //              muss die Aktivierung als failed (hash_mismatch:v4/frame/index.js) melden. Lauf ist rot → Exit 1.
@@ -36,7 +36,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const BOS = path.resolve(HERE, '../../..');
+const BOS = path.resolve(HERE, '../../../..');
 const KERNEL = path.join(BOS, 'kernel');
 const COUNTER = process.argv.includes('counter');
 const PROBE = new Set((process.argv.find((a) => a.startsWith('--probe='))?.slice(8) ?? '').split(',').filter(Boolean));
@@ -106,7 +106,7 @@ if (PROBE.has('files')) for (const rel of ['shared/shell-v2-chrome.css', 'shared
 }
 
 // Zweite App 'notes' (Prüfstand, eine Datei), damit der Starter etwas zeigt; ihre Bytes liegen ebenfalls im nativen CAS.
-const notesFile = path.join(HERE, 'fixtures/notes/index.js');
+const notesFile = path.join(HERE, '../fixtures/notes/index.js');
 const notesSha = createHash('sha256').update(fs.readFileSync(notesFile)).digest('hex');
 cas.set(notesSha, notesFile);
 const EXTRA_APPS = [{ id: 'notes', title: 'Notizen', ver: '1.0.0', manifest: { app_id: 'notes', app_ver: '1.0.0', title: 'Notizen', entry: 'index.js',

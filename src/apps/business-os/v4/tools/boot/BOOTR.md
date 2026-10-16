@@ -3,7 +3,7 @@
 Stand: 2026-10-16, Zweig shell-v4/boot-real (Basis 62a71ed3e). Belege: /Volumes/tmp/shell-v4-boot-evidence/.
 
 Lauf (Repo-Wurzel):
-`PLAYWRIGHT_MODULE=$HOME/Documents/ctox/src/apps/business-os/node_modules/playwright node src/apps/business-os/v4/tools/boot/boot-real.browser.mjs [counter] [--probe=routes,caps,swdb,files]`
+`PLAYWRIGHT_MODULE=$HOME/Documents/ctox/src/apps/business-os/node_modules/playwright node src/apps/business-os/v4/tools/boot/tests/boot-real.browser.mjs [counter] [--probe=routes,caps,swdb,files]`
 Exit 0 = grün, 2 = rot an einem benannten offenen Bruch (EXPECTED_OPEN), 1 = sonst rot / Gegenprobe rot.
 
 Prüfstand: Laborserver mit genau den E38-Routen (/, /sw.js = echter v4/sw.js, /kernel/*, /business-os/*, Startkontext mit
