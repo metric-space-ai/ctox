@@ -56,8 +56,7 @@ pub async fn prepare_files(
     {
         let before = document_hash(&doc.body)?;
         for key in CHILDREN {
-            let bytes =
-                serde_json::to_vec(&doc.body[*key]).map_err(|_| invalid("meeting_field_json"))?;
+            let bytes = field_bytes(&doc.body[*key])?;
             if bytes.len() <= INLINE_LIMIT {
                 continue;
             }
@@ -111,23 +110,26 @@ const CHILDREN: &[&str] = &["slides", "comments", "transcript"];
 const OPTIONAL: &[&str] = &["previous_goal", "todos", "error"];
 pub const INLINE_LIMIT: usize = 256 * 1024;
 
-fn hash(value: Value) -> String {
-    fn ordered(value: Value) -> Value {
-        match value {
-            Value::Object(map) => Value::Object(
-                map.into_iter()
-                    .collect::<BTreeMap<_, _>>()
-                    .into_iter()
-                    .map(|(k, v)| (k, ordered(v)))
-                    .collect(),
-            ),
-            Value::Array(items) => Value::Array(items.into_iter().map(ordered).collect()),
-            other => other,
-        }
+fn canonical(value: Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .collect::<BTreeMap<_, _>>()
+                .into_iter()
+                .map(|(k, v)| (k, canonical(v)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.into_iter().map(canonical).collect()),
+        other => other,
     }
+}
+fn field_bytes(value: &Value) -> Result<Vec<u8>> {
+    serde_json::to_vec(&canonical(value.clone())).map_err(|_| invalid("meeting_field_json"))
+}
+fn hash(value: Value) -> String {
     format!(
         "{:x}",
-        Sha256::digest(ordered(value).to_string().as_bytes())
+        Sha256::digest(canonical(value).to_string().as_bytes())
     )
 }
 
@@ -201,7 +203,7 @@ fn required_head(body: &Value) -> Result<()> {
 /// omitted field. The source JSON's irrelevant object-key order is normalized.
 fn field_fingerprint(value: &Value) -> Result<Value> {
     if value.is_array() {
-        let bytes = serde_json::to_vec(value).map_err(|_| invalid("meeting_field_json"))?;
+        let bytes = field_bytes(value)?;
         return Ok(json!({"size":bytes.len(),"sha256":format!("{:x}", Sha256::digest(&bytes))}));
     }
     let object = value
@@ -434,7 +436,7 @@ pub(super) fn check_target_schema(tx: &Transaction<'_>, doc: &Document) -> Resul
             return Err(invalid(format!("import_jour_fixe_blob_not_prepared:{key}")));
         }
     }
-    required_head(&doc.body)
+    document_hash(&doc.body).map(|_| ())
 }
 
 pub(super) fn persisted_hash(tx: &Transaction<'_>, doc: &Document) -> Result<String> {
