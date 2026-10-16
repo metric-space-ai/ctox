@@ -101,6 +101,11 @@ impl SigningIdentity {
     pub fn public_identity(&self) -> String {
         format!("ed25519:{}", hex(self.key.public_key().as_ref()))
     }
+    /// Sign an already canonical native instance packet with this same key.
+    /// Callers retain the identity; no key export or secondary keypair exists.
+    pub fn sign_canonical_bytes(&self, canonical: &[u8]) -> Vec<u8> {
+        self.key.sign(canonical).as_ref().to_vec()
+    }
     /// A peer signs its own durable, complete copy, never a sender's replica list.
     /// The caller must run filesystem verification off the async control loop.
     pub fn acknowledge_checkpoint(
