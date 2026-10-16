@@ -45,8 +45,13 @@ def evaluate(profiles, command_override=None):
     component_pass=all(c['pass'] for c in criteria)
     return dict(profile='component profile, pre-cutover',pass_=False,component_profile_pass=component_pass,
         product_acceptance=False,product_blockers=['CUTOVER-3 productive participant/policy/executor bindings not exercised','TURN not measured'],
+        loss={str(r):{'udp_offered':p.get('impairment',{}).get('udp_offered'),
+            'udp_dropped':p.get('impairment',{}).get('udp_dropped'),
+            'logical_attempted':p.get('logical_sent'),'logical_received':p.get('logical_received'),
+            'logical_delivery_gap':max(0,p['logical_sent']-p['logical_received']) if 'logical_sent' in p and 'logical_received' in p else None,
+            'bulk_delivery_gap_bytes':sum(max(0,d.get('source',{}).get('bytes',0)-d.get('received',{}).get('bytes',0)) for d in p['directions']) if p.get('directions') else None} for r,p in profiles.items()},
         criteria=criteria,measured=rows,zero_silent_loss=all(c['pass'] for c in criteria if c['criterion']=='zero_silent_loss'),
-        replay={'application_duplicate_replays':sum(p.get('application_duplicate_replays',0) for p in profiles.values()),
+        replay={'application_duplicate_replays':sum(p['application_duplicate_replays'] for p in profiles.values()) if len(profiles)==3 and all('application_duplicate_replays' in p for p in profiles.values()) else None,
                 'session_reconnect_replay':'not exercised','sctp_retransmissions':None})
 def write(out, result):
     result['pass']=result.pop('pass_',False)

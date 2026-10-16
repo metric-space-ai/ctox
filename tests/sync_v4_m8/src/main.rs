@@ -2,6 +2,7 @@
 mod commands;
 mod network;
 use async_trait::async_trait;
+use futures::StreamExt;
 use rxdb::plugins::replication_webrtc::index_mod::{
     framing::{Framer, Reassembler},
     hello::{Codec, TransportSelection, WireSeq},
@@ -73,8 +74,12 @@ impl PeerConnectionEventHandler for Events {
             };
             let tx = incoming[lane_index].clone();
             let mut frames = Reassembler::new(Framer::new(transport()).unwrap());
-            opened.fetch_add(1, Ordering::SeqCst);
+            let mut counted = false;
             while let Some(event) = ch.poll().await {
+                if matches!(&event, DataChannelEvent::OnOpen) && !counted {
+                    opened.fetch_add(1, Ordering::SeqCst);
+                    counted = true;
+                }
                 if let DataChannelEvent::OnMessage(message) = event {
                     match frames.accept(&message.data) {
                         Ok(Some(packet)) => {
@@ -133,13 +138,15 @@ struct Observed {
     cursor: u64,
 }
 struct Endpoint {
-    sender: NativeSendScheduler,
+    sender: OnceLock<NativeSendScheduler>,
     waiters: Mutex<HashMap<u64, oneshot::Sender<Value>>>,
     id: AtomicU64,
     stats: Mutex<Observed>,
 }
 async fn send_json(e: &Endpoint, lane: Lane, id: u64, value: Value) {
     e.sender
+        .get()
+        .expect("native sender initialized")
         .send(
             lane,
             WireSeq(id),
@@ -304,12 +311,33 @@ async fn bulk(e: Arc<Endpoint>, stop: Arc<AtomicBool>, active: Arc<AtomicBool>) 
     while !stop.load(Ordering::SeqCst) || (id * data.len() as u64) < 50 * 1024 * 1024 {
         id += 1;
         e.sender
+            .get()
+            .expect("native sender initialized")
             .send(Lane::Transfer, WireSeq(id), &data, None)
             .await
             .unwrap();
         e.stats.lock().unwrap().source.accept(id, &data);
     }
     active.store(false, Ordering::SeqCst);
+}
+fn observe_sender(
+    sender: &NativeSendScheduler,
+    index: usize,
+    errors: Arc<Mutex<Vec<String>>>,
+    tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    collecting: Arc<AtomicBool>,
+) {
+    let mut failures = sender.failures();
+    tasks.lock().unwrap().push(tokio::spawn(async move {
+        while let Some(failure) = failures.next().await {
+            if !collecting.load(Ordering::SeqCst) {
+                break;
+            }
+            let message = format!("native sender {index}: {failure:?}");
+            eprintln!("M8_NATIVE_FAILURE {message}");
+            errors.lock().unwrap().push(message);
+        }
+    }));
 }
 async fn profile(rtt: u64, out: &std::path::Path, seconds: u64, use_shim: bool) -> Value {
     let counters = Arc::new(network::Counters::default());
@@ -323,12 +351,13 @@ async fn profile(rtt: u64, out: &std::path::Path, seconds: u64, use_shim: bool) 
     });
     let tasks = Arc::new(Mutex::new(Vec::new()));
     let errors = Arc::new(Mutex::new(Vec::new()));
+    let collecting = Arc::new(AtomicBool::new(true));
     let mut pcs: Vec<Arc<dyn PeerConnection>> = Vec::new();
     let mut ends = Vec::new();
     let mut receivers = Vec::new();
     let mut candidates = Vec::new();
     let mut opens = Vec::new();
-    for _ in 0..4 {
+    for index in 0..4 {
         let mut lane_receivers = Vec::new();
         let tx = std::array::from_fn(|_| {
             let (tx, rx) = mpsc::channel(16);
@@ -337,8 +366,17 @@ async fn profile(rtt: u64, out: &std::path::Path, seconds: u64, use_shim: bool) 
         });
         let (ct, cr) = mpsc::unbounded_channel();
         let opened = Arc::new(AtomicU64::new(0));
+        let mut settings = webrtc::peer_connection::SettingEngine::default();
+        settings
+            .set_answering_dtls_role(if index % 2 == 0 {
+                rtc::peer_connection::transport::RTCDtlsRole::Server
+            } else {
+                rtc::peer_connection::transport::RTCDtlsRole::Client
+            })
+            .unwrap();
         let pc: Arc<dyn PeerConnection> = Arc::new(
             PeerConnectionBuilder::new()
+                .with_setting_engine(settings)
                 .with_runtime(runtime.clone())
                 .with_handler(Arc::new(Events {
                     candidates: ct,
@@ -352,7 +390,12 @@ async fn profile(rtt: u64, out: &std::path::Path, seconds: u64, use_shim: bool) 
                 .await
                 .unwrap(),
         );
-        let sender = NativeSendScheduler::create(&pc, transport()).await.unwrap();
+        let sender = OnceLock::new();
+        if index%2==0 {
+            let native = NativeSendScheduler::create(&pc, transport()).await.unwrap();
+            observe_sender(&native,index,errors.clone(),tasks.clone(),collecting.clone());
+            sender.set(native).ok().unwrap();
+        }
         ends.push(Arc::new(Endpoint {
             sender,
             waiters: Mutex::new(HashMap::new()),
@@ -390,6 +433,11 @@ async fn profile(rtt: u64, out: &std::path::Path, seconds: u64, use_shim: bool) 
             let offer = pcs[a].create_offer(None).await.unwrap();
             pcs[a].set_local_description(offer.clone()).await.unwrap();
             pcs[b].set_remote_description(offer).await.unwrap();
+            // The answerer's effective DTLS role is now resolved, but SCTP has
+            // not started: create its channels before committing the answer.
+            let native=NativeSendScheduler::create(&pcs[b],transport()).await.unwrap();
+            observe_sender(&native,b,errors.clone(),tasks.clone(),collecting.clone());
+            ends[b].sender.set(native).ok().unwrap();
             let answer = pcs[b].create_answer(None).await.unwrap();
             pcs[b].set_local_description(answer.clone()).await.unwrap();
             pcs[a].set_remote_description(answer).await.unwrap();
@@ -426,7 +474,7 @@ async fn profile(rtt: u64, out: &std::path::Path, seconds: u64, use_shim: bool) 
     impaired.store(use_shim, Ordering::SeqCst);
     let started = Instant::now();
     let run=tokio::time::timeout(Duration::from_secs(seconds),async {
-        assert!(setup.is_ok(),"native SCTP channel setup timed out");
+        if setup.is_err(){return Err("native SCTP channel setup timed out".to_owned())}
         for i in 0..4 {load.spawn(bulk(ends[i].clone(),stop.clone(),active[i].clone()));}
         tokio::time::sleep(Duration::from_millis(600)).await;
         for i in 0..4 {
@@ -441,9 +489,9 @@ async fn profile(rtt: u64, out: &std::path::Path, seconds: u64, use_shim: bool) 
                 }
             });
         }
-        while let Some(result)=probes.join_next().await{result.unwrap();}
+        while let Some(result)=probes.join_next().await{result.map_err(|e|format!("native workload task failed: {e}"))?;}
         stop.store(true,Ordering::SeqCst);
-        while let Some(result)=load.join_next().await{result.unwrap();}
+        while let Some(result)=load.join_next().await{result.map_err(|e|format!("native workload task failed: {e}"))?;}
         // Wait for actual receiver hashes and signed live delivery, not send admission.
         loop {
             let complete=(0..4).all(|i|ends[i].stats.lock().unwrap().bulk.bytes==ends[i^1].stats.lock().unwrap().source.bytes)
@@ -451,8 +499,18 @@ async fn profile(rtt: u64, out: &std::path::Path, seconds: u64, use_shim: bool) 
             if complete {break}
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+        Ok::<(),String>(())
     }).await;
+    match &run {
+        Err(_) => errors
+            .lock()
+            .unwrap()
+            .push("native profile deadline expired".into()),
+        Ok(Err(e)) => errors.lock().unwrap().push(e.clone()),
+        _ => {}
+    }
     stop.store(true, Ordering::SeqCst);
+    collecting.store(false, Ordering::SeqCst);
     load.abort_all();
     probes.abort_all();
     while load.join_next().await.is_some() {}
@@ -460,7 +518,9 @@ async fn profile(rtt: u64, out: &std::path::Path, seconds: u64, use_shim: bool) 
     let duration = started.elapsed().as_secs_f64();
     // Stop and join all owned transports, forwarding, ingress and UDP send queues.
     for e in &ends {
-        e.sender.close_now();
+        if let Some(sender) = e.sender.get() {
+            sender.close_now();
+        }
     }
     for pc in &pcs {
         let _ = pc.close().await;
@@ -505,7 +565,7 @@ async fn profile(rtt: u64, out: &std::path::Path, seconds: u64, use_shim: bool) 
     }
     let d = driver.lock().await;
     let result = json!({"rtt_ms":rtt,"profile":"component profile, pre-cutover","transport":"native SCTP/DTLS/UDP; production V4 scheduler/framer",
-        "peers":["core","client-0","client-1"],"associations":2,"opened_reliable_channels":opens.iter().map(|n|n.load(Ordering::SeqCst)).collect::<Vec<_>>(),"duration_s":duration,"completed":run.is_ok(),
+        "peers":["core","client-0","client-1"],"associations":2,"opened_reliable_channels":opens.iter().map(|n|n.load(Ordering::SeqCst)).collect::<Vec<_>>(),"duration_s":duration,"completed":matches!(run,Ok(Ok(()))),
         "impairment":{"mode":if use_shim {"userspace UDP shim"} else {"unprivileged-netns-tc"},"location":"below DTLS/SCTP","requested_loss_pct":1,"one_way_delay_ms":rtt/2,
             "udp_offered":counters.offered.load(Ordering::Relaxed),"udp_dropped":counters.dropped.load(Ordering::Relaxed),"udp_sent":counters.sent.load(Ordering::Relaxed),
             "udp_send_errors":counters.failed.load(Ordering::Relaxed),"peak_queue_datagrams":counters.peak_queue.load(Ordering::Relaxed),"rate_bytes_per_s_per_direction":8388608,

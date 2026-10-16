@@ -45,7 +45,7 @@ def main():
         component=subprocess.check_output(['git','-C',str(REPO),'rev-parse','HEAD'],text=True).strip()
     manifest=source/'tests/sync_v4_m8/Cargo.toml'
     harness_paths=[REPO/'scripts/sync-v4/m8-native.sh']
-    harness_paths += [p for directory in (REPO/'tests/sync_v4_m8',HERE.parent) for p in directory.rglob('*') if p.is_file() and p.suffix in ('.rs','.toml','.py','.md')]
+    harness_paths += [p for directory in (REPO/'tests/sync_v4_m8',HERE.parent) for p in directory.rglob('*') if p.is_file() and p.suffix in ('.rs','.toml','.py','.md','.sh','.lock')]
     inputs={str(p.relative_to(REPO)):hashlib.sha256(p.read_bytes()).hexdigest() for p in harness_paths}
     provenance={'profile':'component profile, pre-cutover','component_source':component,'harness_source':subprocess.check_output(['git','-C',str(REPO),'rev-parse','HEAD'],text=True).strip(),
         'harness_files':inputs,'host':os.uname().nodename,'started':datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -92,40 +92,8 @@ def main():
         profiles={r:json.loads((out/f'profile-{r}.json').read_text()) for r in (20,150,600) if (out/f'profile-{r}.json').exists()}
         result=evaluate.evaluate(profiles);result.update(goal='M8',revisions=provenance,hosts=[os.uname().nodename],steps=['real native SCTP component profile'],artifacts=[str(out)],criterion='all native profile thresholds plus CUTOVER-3 product binding')
         evaluate.write(out,result)
-    # Mutate the actual evaluator production line, rerun the exact retained samples.
-    import importlib.util
-    path=HERE.parent/'evaluate.py';original=path.read_text()
-    locations={
-        'command_p99_ms':('command_limit=rtt+100 if command_override is None else command_override','command_limit=0.0'),
-        'terminal_echo_p95_ms':('terminal_limit=100','terminal_limit=0.0'),
-        'live_push_p95_ms':('live_p95_limit=150','live_p95_limit=0.0'),
-        'live_push_p99_ms':('live_p99_limit=500','live_p99_limit=0.0')}
-    candidates=[c for c in result['criteria'] if c['criterion'] in locations and c['pass']]
-    chosen=candidates[0]['criterion'] if candidates else 'command_p99_ms'
-    needle,replacement=locations[chosen]
-    assert original.count(needle)==1
-    mutant=out/'evaluate-mutant.py';mutant.write_text(original.replace(needle,replacement+' # mutation: impossibly low latency threshold'))
-    spec=importlib.util.spec_from_file_location('m8_mutant',mutant);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-    mutated=module.evaluate(profiles)
-    measured=[c for c in result['criteria'] if c['criterion']==chosen and c['measured'] is not None]
-    changed=[c for c in measured if c['pass']]
-    red=all(not c['pass'] for c in mutated['criteria'] if c['criterion']==chosen)
-    exits=[]
-    for c in changed:
-        for label,script in [('baseline',path),('mutant',mutant)]:
-            check=out/f'threshold-{label}-{c["profile_rtt_ms"]}'
-            check.mkdir()
-            for r in (20,150,600):shutil.copy2(out/f'profile-{r}.json',check/f'profile-{r}.json')
-            code=execute([sys.executable,str(script),str(check),'--assert-criterion',chosen,'--rtt',str(c['profile_rtt_ms'])],check/'evaluation.log',30)
-            exits.append(dict(variant=label,rtt_ms=c['profile_rtt_ms'],exit=code))
-    red=red and bool(exits) and all(e['exit']==(0 if e['variant']=='baseline' else 1) for e in exits)
-    proof={'mutation':needle+' -> '+replacement,'source_sha256':hashlib.sha256(original.encode()).hexdigest(),
-        'baseline_green_profiles':[c['profile_rtt_ms'] for c in changed],'mutant_criteria_red':red,
-        'pass':bool(changed) and red,'baseline_retained':True,'process_exits':exits}
-    (out/'threshold-mutation.json').write_text(json.dumps(proof,indent=2))
     provenance['finished']=datetime.datetime.now(datetime.timezone.utc).isoformat()
     (out/'provenance.json').write_text(json.dumps(provenance,indent=2))
-    print('M8_COMPONENT_RESULT '+str(out/'m8.json'),flush=True)
-    # A threshold miss really returns nonzero. Component success still leaves product pass:false.
-    return 0 if result['component_profile_pass'] and proof['pass'] else 1
+    from qualify import qualify
+    return qualify(out)
 if __name__=='__main__':sys.exit(main())

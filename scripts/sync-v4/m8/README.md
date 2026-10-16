@@ -41,7 +41,7 @@ Each profile is a bounded child process. Fatal native errors, timeout, absent
 samples, missing peers, incomplete artifacts, lost or duplicate logical messages,
 or a threshold miss fail the component result. Raw samples, source/binary hashes,
 UDP drop counts, per-direction artifact hashes and log paths are retained.
-SCTP retransmission statistics are unavailable through the current API and remain
+SCTP retransmission statistics are not collected by this harness and remain
 null; application replay/duplicate counts are separate. Reconnect replay is not
 exercised by this profile. Clock measurements share one process monotonic clock;
 there is no fabricated cross-host clock synchronization claim.
@@ -62,3 +62,9 @@ pre-cutover**, even when `component_profile_pass` is true. Rerunning a component
 fixture on a merged CUTOVER revision alone cannot certify production bindings.
 The production acceptance adapter must invoke the admitted policy/participant/
 executor path before product M8 can be claimed.
+
+The same entry point can reassess retained native samples without a second
+transport run: `m8-native.sh --qualify-only "$CARGO_TARGET_DIR/<run>"`.
+Runtime provenance and raw profile hashes stay intact; assessor hashes and the
+new threshold proof are recorded separately. Assessment still returns nonzero
+for any failed component criterion and cannot grant product acceptance.
