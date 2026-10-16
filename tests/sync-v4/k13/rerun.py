@@ -48,6 +48,8 @@ try:
  (OUT/'source-binding.json').write_text(json.dumps({'expected_revision':a.revision,'remote_git_metadata':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),'hashes':{p:hash_file(ROOT/p) for p in paths}},indent=2)+'\n')
  for file in HERE.glob('*.mjs'):
   if run('syntax-'+file.stem,['node','--check',file],30)[0]:raise RuntimeError('runner syntax failed')
+ if run('node-prepare',['bash','src/core/app_runtime/verify.sh','prepare'],150)[0]:raise RuntimeError('pinned Node bundle unavailable')
+ ENV['CTOX_APP_RUNTIME_NODE_BUNDLE']=str(Path(os.environ['CARGO_TARGET_DIR'])/'app-runtime-test-node/bin/node')
  if run('daemon-build',['cargo','build','--locked','--jobs','2','--bin','ctox','--features','app-runtime-node'],1800)[0]:raise RuntimeError('build unverified')
  binary=Path(os.environ['CARGO_TARGET_DIR'])/'debug/ctox'
  receipt=OUT/'build.json';receipt.write_text(json.dumps({'pass':True,'terminal':True,'revision':a.revision,'source':str(ROOT),'binary':str(binary),'binarySha256':hash_file(binary)},indent=2))
