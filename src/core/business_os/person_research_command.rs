@@ -776,6 +776,14 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
         }
     }
     deduplicate_contacts(&mut contacts);
+    // A contact the research instructions excluded stays out, whichever path
+    // (Sellify known persons, person records) would add it again.
+    let excluded_contacts = excluded_contact_identities(existing);
+    contacts.retain(|contact| {
+        !excluded_contacts
+            .iter()
+            .any(|excluded| contact_matches_exclusion(contact, excluded))
+    });
     let contact_ids = contacts
         .iter()
         .filter_map(|contact| contact.get("id").and_then(Value::as_str))
@@ -2117,6 +2125,115 @@ fn active_commands() -> std::sync::MutexGuard<'static, HashSet<ActiveResearchCom
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Fields the owner retired from outbound research ("Prokura gibt es nicht
+/// mehr", 15.10.2026). The app and stored leads still name them, so the field
+/// vocabulary keeps the key for reading old data; the research path no longer
+/// asks for it. Data a lead still carries is removed with the typed exclusion
+/// of the research writeback (`result.excluded`).
+pub(super) const RETIRED_RESEARCH_FIELDS: &[&str] = &["firma_prokura"];
+
+pub(super) fn without_retired_research_fields(
+    fields: impl IntoIterator<Item = String>,
+) -> Vec<String> {
+    fields
+        .into_iter()
+        .filter(|field| !RETIRED_RESEARCH_FIELDS.contains(&field.trim()))
+        .collect()
+}
+
+/// Where a lead remembers what the research instructions excluded:
+/// `payload.research_exclusions = {fields: {key: {reason, excluded_at_ms}},
+/// contacts: [<identity of a removed contact> + reason]}`.
+const RESEARCH_EXCLUSIONS_POINTER: &str = "/payload/research_exclusions";
+
+pub(super) fn excluded_contact_identities(lead: &Value) -> Vec<Value> {
+    lead.pointer(&format!("{RESEARCH_EXCLUSIONS_POINTER}/contacts"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// The members the contact merges identify a person by; nothing else of an
+/// excluded contact is kept.
+pub(super) fn contact_exclusion_identity(contact: &Value) -> Value {
+    let mut identity = serde_json::Map::new();
+    for key in [
+        "id",
+        "person_key",
+        "sellify_person_id",
+        "person_vorname",
+        "person_nachname",
+        "person_email",
+        "person_telefon",
+        "person_linkedin",
+        "person_xing",
+    ] {
+        let value = contact_string(contact, &[key]);
+        if !value.is_empty() {
+            identity.insert(key.to_string(), Value::String(value));
+        }
+    }
+    Value::Object(identity)
+}
+
+fn contact_identifiers(contact: &Value) -> Vec<String> {
+    let mut identifiers = Vec::new();
+    for key in ["id", "person_key", "sellify_person_id", "person_id"] {
+        let raw = match contact.get(key) {
+            Some(Value::String(text)) => text.trim().to_ascii_lowercase(),
+            Some(Value::Number(number)) => number.to_string(),
+            _ => continue,
+        };
+        if raw.is_empty() {
+            continue;
+        }
+        if raw.chars().all(|c| c.is_ascii_digit()) {
+            identifiers.push(format!("sellify-person-{raw}"));
+        }
+        identifiers.push(raw);
+    }
+    identifiers
+}
+
+/// True when `reference` (a contact id or person key the worker sent) names
+/// this contact.
+pub(super) fn contact_reference_matches(contact: &Value, reference: &str) -> bool {
+    let reference = reference.trim().to_ascii_lowercase();
+    !reference.is_empty() && contact_identifiers(contact).contains(&reference)
+}
+
+/// Same identity rules the merges use: shared id/key, or `contacts_match` /
+/// `same_person_by_name`. A Sellify person excluded once must not come back
+/// through `set_known_person_contacts` or a later person record.
+pub(super) fn contact_matches_exclusion(contact: &Value, excluded: &Value) -> bool {
+    let ids = contact_identifiers(contact);
+    contact_identifiers(excluded)
+        .iter()
+        .any(|id| ids.contains(id))
+        || contacts_match(contact, excluded)
+        || same_person_by_name(contact, excluded)
+}
+
+/// The contacts an exclusion may name: the stored contacts plus the Sellify
+/// persons the next writeback would add again.
+pub(super) fn research_exclusion_candidates(
+    lead: &Value,
+    known_person_records: &Value,
+) -> Vec<Value> {
+    let mut contacts = lead
+        .get("contacts")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    set_known_person_contacts(
+        lead.get("id").and_then(Value::as_str).unwrap_or("lead"),
+        &mut contacts,
+        known_person_records.as_array().cloned().unwrap_or_default(),
+        &lead_location_values(lead),
+    );
+    contacts
+}
+
 pub(super) fn parse_requested_fields(fields: &[String]) -> anyhow::Result<Vec<FieldKey>> {
     fields
         .iter()
@@ -2206,7 +2323,15 @@ fn execute(
     // The app and the native planner share one strict field vocabulary. A
     // misspelled or not-yet-implemented field must fail visibly instead of
     // making a partial result look like a complete research run.
-    let fields = parse_requested_fields(&request.fields)?;
+    let requested_any = !request.fields.is_empty();
+    let fields = parse_requested_fields(&without_retired_research_fields(request.fields))?;
+    // An empty list means "all fields" further down; a request that named only
+    // retired fields asks for nothing.
+    anyhow::ensure!(
+        !requested_any || !fields.is_empty(),
+        "person research requested only retired fields ({})",
+        RETIRED_RESEARCH_FIELDS.join(", ")
+    );
     let workspace = root
         .join("runtime")
         .join("research")
