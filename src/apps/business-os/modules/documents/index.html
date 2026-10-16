@@ -30,7 +30,7 @@
                the five filters live in the collapsed tray below, so this row
                stays exactly one header row high even in a narrow column. -->
           <div class="ctox-pane-tools ctox-filterbar documents-filter-bar" data-shell-v2-header-row="2">
-            <input class="ctox-pane-search" type="search" data-documents-search data-pg-search placeholder="Dokument suchen..." aria-label="Dokumente suchen" value="">
+            <input class="ctox-pane-search" type="search" data-documents-search data-pg-search placeholder="Suchen" aria-label="Dokumente suchen" value="">
             <button class="ctox-pane-icon" type="button" data-pg-view="list" data-pg-view-cycle="list,cards" aria-pressed="true" aria-label="Als Karten anzeigen" title="Als Karten anzeigen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
             <button class="ctox-pane-icon documents-filter-toggle" type="button" data-documents-filter-toggle data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"></path></svg></button>
           </div>
@@ -52,12 +52,7 @@
             <button class="ctox-pane-icon" type="button" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7M4 5v5h5"/></svg></button>
           </div>
         </header>
-        <div class="ctox-well documents-list" data-documents-list>
-          <div class="ctox-empty documents-empty" data-documents-list-placeholder>
-            <strong>Dokumente</strong>
-            <span>Dokumente werden geladen.</span>
-          </div>
-        </div>
+        <div class="ctox-well documents-list" data-documents-list></div>
         <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
       </section>
     </div>
@@ -80,12 +75,7 @@
          74x74 window-control clearance. index.js fills only the current
          document or mail-merge navigator; the head element itself is static. -->
     <header class="ctox-pane-header ctox-pane-band documents-document-strip" data-documents-document-strip></header>
-    <div class="documents-editor-shell" data-documents-editor>
-      <div class="ctox-empty documents-empty">
-        <strong>Dokumente</strong>
-        <span>Dokument wird vorbereitet.</span>
-      </div>
-    </div>
+    <div class="documents-editor-shell" data-documents-editor></div>
   </main>
 
   <button

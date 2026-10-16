@@ -35,7 +35,7 @@ const sourceArray = (name) => {
   assert.notEqual(end, -1, `${name} array is closed`);
   return source.slice(start + marker.length, end);
 };
-const requiredCollections = sourceArray('REQUIRED_COLLECTIONS');
+// v4: nur noch Live-Abos (keine Readiness-Liste); desktop_file_chunks wird nie abonniert.
 const liveCollections = sourceArray('LIVE_COLLECTIONS');
 assert.match(markup, /multiple\s+data-cv-upload/);
 assert.match(markup, /data-pg-search/);
@@ -45,30 +45,35 @@ assert.match(source, /label:\s*'Minimal'/);
 assert.match(source, /label:\s*'Klassisch'/);
 assert.match(source, /label:\s*'Modern'/);
 assert.match(source, /async function importPdfs/);
-assert.match(source, /title:\s*tr\('Print freigeben',\s*'Approve print'\)/);
+assert.match(source, /title:\s*tr\('Freigeben',\s*'Approve'\)/);
 assert.match(source, /phase:\s*'approved'/);
 assert.match(source, /view_mode:\s*'print'/);
 assert.match(source, /applyLiveWorkflowState/);
 assert.match(source, /buildLiveStatusIndex/);
-assert.match(source, /const commandId = `cmd_\$\{crypto\.randomUUID\(\)\}`/);
-assert.match(source, /id:\s*commandId/);
-assert.match(source, /command_type:\s*'business_os\.chat\.task'/);
-assert.match(source, /command_type:\s*'business_os\.chat\.task'/);
+// v4 (App-API 4.0): Parsing ist der eigene Befehl ctox.cv_print.apply_parse (Handler fertig), gesendet über
+// api.command ohne Warten; kein business_os.chat.task, kein commandBus, kein Chat-Dokument.
+assert.match(source, /const PARSE_COMMAND = 'ctox\.cv_print\.apply_parse'/);
+assert.match(source, /submitCommand\(state, PARSE_COMMAND, \{/);
+assert.match(source, /state\.api\.command\(type, payload, payload\?\.record_id \? \{ record_id: payload\.record_id \} : undefined\)/);
+assert.equal((source.match(/state\.api\.command\(/g) || []).length, 1, 'exactly one command path');
+const submitCommandSource = source.slice(source.indexOf('function submitCommand('), source.indexOf('function submitCommand(') + 1200);
+assert.match(submitCommandSource, /handle\.status\.subscribe[\s\S]*?'failed'[\s\S]*?status\.report[\s\S]*?'done'[\s\S]*?status\.clear/);
+assert.doesNotMatch(submitCommandSource, /await /, 'a command is never awaited (R5)');
+assert.doesNotMatch(source.replace(/^\s*\/\/.*$/gm, ''), /business_os\.chat\.task|commandBus|upsertBusinessChat|wait_timeout_ms/);
+assert.match(source, /command_id: commandId/);
+assert.match(source, /const commandId = handle\.id/);
 assert.match(source, /task_status:\s*'queued'/);
-assert.match(source, /ctx\.commandBus\.dispatch/);
 assert.match(source, /Flow öffnen/);
 assert.match(source, /record_snapshot:\s*parserRecordSnapshot\(item\)/);
 assert.doesNotMatch(source, /attachments:\s*\[/);
 assert.doesNotMatch(source, /async function insertBusinessCommand/);
-assert.match(source, /sync_collections:\s*\[/);
-assert.match(source, /'desktop_file_chunks'/);
-assert.doesNotMatch(requiredCollections, /'desktop_file_chunks'/);
+assert.doesNotMatch(source, /sync_collections:\s*\[/);
 assert.doesNotMatch(liveCollections, /'desktop_file_chunks'/);
-assert.match(source, /'business_chats'/);
+assert.doesNotMatch(liveCollections, /'business_chats'/);
 assert.match(source, /'ctox_queue_tasks'/);
 assert.match(source, /data-cv-open-task/);
-assert.match(source, /skill:\s*'ctox-cv-print-parser'/);
-assert.match(source, /command_type:\s*'ctox\.cv_print\.apply_parse'/);
+assert.doesNotMatch(source, /ctox-cv-print-parser/);
+assert.match(source, /Skill: `cv-print-builder\/parser`/);
 assert.match(source, /const taskInstruction = buildParserTaskInstruction\(item\)/);
 assert.match(source, /instruction:\s*taskInstruction/);
 assert.doesNotMatch(source, /instruction:\s*prompt,\s*\n\s*prompt,/);
@@ -90,48 +95,37 @@ assert.match(source, /cv\.skills: Objekt mit Gruppen/);
 assert.doesNotMatch(source, /Limits: max\./);
 assert.match(source, /importPdf\(state, file, \{ refresh: false, select: false \}\)/);
 assert.match(source, /return \{ documentId, fileId \}/);
+// v4: das Original-PDF geht über api.files (Ref = sha256), nicht mehr als Dokumente in die fremden
+// Collections desktop_files/desktop_file_chunks; ältere Profile werden aus den lokalen Chunks gelesen.
+assert.match(source, /state\.api\.files\.put\(file, \{ id: fileId, name: file\.name, mime: mimeType \}\)/);
+assert.match(source, /const fileRef = await upload\.ref/);
+assert.match(source, /file_ref: input\.fileRef/);
+assert.match(source, /state\.api\.files\.get\(source\.file_ref\)/);
+assert.doesNotMatch(source, /api\.(?:put|patch)\('desktop_file/, 'no writes into desktop_files/desktop_file_chunks');
+assert.doesNotMatch(source, /saveDesktopFile|writeChunkDocuments|canonicalDesktopFileChunkId|bulkUpsert|CHUNK_SIZE/);
 assert.match(source, /CONTENT_HASH_SCHEME\s*=\s*'sha256-bytes-v1'/);
-assert.match(source, /CHUNK_HASH_SCHEME\s*=\s*'sha256-base64-chunk-v1'/);
-assert.match(source, /CHUNK_SIZE\s*=\s*16\s*\*\s*1024/);
-assert.match(source, /chunk_hash:\s*chunkHash/);
-assert.match(source, /id:\s*canonicalDesktopFileChunkId\(input\.fileId,\s*input\.generationId,\s*idx\)/);
-assert.match(source, /function canonicalDesktopFileChunkId\(fileId,\s*generationId,\s*idx\)/);
-assert.match(source, /readStoredFileFromDemandChunks/);
-assert.doesNotMatch(source, /findAll\(state\.ctx,\s*'desktop_file_chunks'\)/);
-assert.match(source, /ensureParseSourceReady\(state,\s*item\)/);
-assert.match(source, /verifyDesktopFileSourceAvailable/);
-assert.match(source, /readDesktopFileFromDemand\(ctx,\s*fileId,\s*'application\/pdf'/);
-assert.doesNotMatch(source, /ensureCanonicalDesktopFileChunks/);
-assert.doesNotMatch(source, /readDesktopFileForCanonicalRepair/);
-assert.doesNotMatch(source, /fetchDesktopFileChunks\(ctx,\s*fileId,\s*generationId\)/);
-assert.match(source, /flushFileCollectionsForDispatch/);
-assert.doesNotMatch(source, /const blob = await readDesktopFileForCanonicalRepair\(ctx,\s*fileId,\s*generationId,\s*contentHash\)/);
-assert.doesNotMatch(source, /await writeChunkDocuments\(chunksCol,\s*chunkRows\)/);
-assert.doesNotMatch(source, /String\(chunk\.bytesBase64 \?\? chunk\.bytes_base64 \?\? ''\)/);
-assert.match(source, /source_prepare:\s*sourcePrepare/);
-assert.match(source, /source_prepare_ready:\s*sourcePrepare\.ready/);
-assert.match(source, /timeoutAfter\(60000/);
-assert.match(source, /pushToRemotePeers/);
-assert.match(source, /DEMAND_ONLY_SYNC_COLLECTIONS/);
-assert.match(source, /sync\.leaseCollection\(collection,\s*reason\)/);
-assert.match(source, /releaseSyncLeases/);
-assert.match(source, /bulkUpsert\(docs\)/);
+assert.match(source, /readStoredFileFromChunks\(chunks, source\.desktop_file_id, 'application\/pdf'/);
+assert.match(source, /state\.api\.query\('desktop_file_chunks', \{ selector: \{ file_id: source\.desktop_file_id \} \}\)\.get\(\)/);
+// Keine Sync-Kopplung, kein Readiness-Warten, keine Zeitüberschreitungs-Ketten (R4/R12).
+assert.doesNotMatch(source.replace(/^\s*\/\/.*$/gm, ''), /ctx\.sync|leaseCollection|startCollection|awaitInSync|pushToRemotePeers|DEMAND_ONLY_SYNC_COLLECTIONS|timeoutAfter|waitFor\w*Ready|collectionReadiness|setInterval/);
 assert.match(source, /function reparseCandidates\(state\)/);
-assert.match(source, /source\.desktop_file_id\)/);
+assert.match(source, /source\.file_ref \|\| source\.desktop_file_id\)\)/);
 assert.doesNotMatch(source, /source\.desktop_file_id && source\.generation_id/);
 assert.match(source, /state\.importing \|\| state\.bulkParsing/);
-assert.doesNotMatch(source, /Boolean\(busy\) \|\| !state\.ready \|\| !reparseCandidates/);
+assert.doesNotMatch(source, /state\.ready/);
 assert.match(source, /async function reparseAllPdfs\(state,\s*candidates = reparseCandidates\(state\)\)/);
-assert.match(source, /Alle CV-PDFs wurden erneut an CTOX uebergeben/);
 assert.match(source, /originalErrors:\s*new Map\(\)/);
-assert.match(source, /Original-PDF konnte nicht geladen werden/);
+// Fehler beim Öffnen des Original-PDF gehen in die Zustandszone, nicht als Kasten in den Inhalt (R11).
+assert.match(source, /notify\(state, 'error', 'original', tr\('Original-PDF konnte nicht geöffnet werden'/);
 assert.match(source, /\.catch\(\(error\) =>/);
-assert.match(source, /PDF-Daten konnten nicht lokal vorbereitet werden/);
-assert.match(source, /!sourcePrepare\.generation_id/);
-assert.match(source, /dispatching parser task with native source fallback/);
-assert.match(source, /timeoutAfter\(60000/);
 assert.doesNotMatch(source, /Parser-Task wird trotzdem gestartet/);
-assert.doesNotMatch(source, /ctx\.sync\.startCollection\('desktop_file_chunks'\)/);
+assert.doesNotMatch(source, /PDF wird geladen|noch nicht lokal materialisiert/);
+// Bestätigung und Druck bleiben im App-Fenster (api.shell.dialog, iframe in root), Flow öffnen über die Route.
+assert.match(source, /await state\.api\.shell\.dialog\(\{\s*kind: 'confirm'/);
+assert.match(source, /default: false/);
+assert.doesNotMatch(source.replace(/^\s*\/\/.*$/gm, ''), /window\.(?:confirm|alert|prompt|print)\(|sessionStorage|location\.hash/);
+assert.match(source, /function printApprovedSheet\(state, item\)/);
+assert.match(source, /state\.api\.shell\.navigate\('ctox', \{/);
 
 // ---------------------------------------------------------------------------
 // IA-Karte: candidate selector (left) + CV stage (main) on the shell-owned
@@ -147,8 +141,7 @@ assert.match(markup, /data-pg-reset/);
 assert.match(markup, /class="ctox-filterbar"/);
 assert.match(markup, /class="ctox-view-switch"/);
 assert.match(markup, /ctox-pane-body ctox-well/);
-assert.match(markup, /class="ctox-pane-footer"/);
-assert.match(markup, /data-pg-footer/);
+assert.doesNotMatch(markup, /data-pg-footer/, 'keine Fußzeile, die nur den Reiterzähler wiederholt (Textdiät Regel 5)');
 
 // Card/list switch = ONE control, an action and not a state (operator directive
 // 31.08.2026). It replaces the shell's two-button [data-pg-view] group, so the
@@ -222,27 +215,17 @@ assert.match(source, /function stageVisible\(state\)/);
 assert.match(source, /Boolean\(getSelectedItem\(state\)\)\s*&&\s*!state\.userCollapsed/);
 assert.match(source, /data-toggle-stage/);
 
-// Markup + CSS inherit the JS cache-buster (fresh JS over stale cached assets).
-assert.match(source, /const markupVersion = String\(import\.meta\.url\)\.split\('\?v='\)\[1\] \|\| BUILD/);
-assert.match(source, /const markupHref = new URL\('\.\/index\.html', import\.meta\.url\)\.pathname \+ \(markupVersion \? `\?v=\$\{markupVersion\}` : ''\)/);
-assert.match(source, /const cssVersion = String\(import\.meta\.url\)\.split\('\?v='\)\[1\] \|\| BUILD/);
-assert.match(source, /const cssHref = new URL\('\.\/index\.css', import\.meta\.url\)\.pathname \+ \(cssVersion \? `\?v=\$\{cssVersion\}` : ''\)/);
+// v4: Markup relativ zum Modul ohne Cache-Buster; CSS lädt die Shell aus dem Manifest (R10).
+assert.match(source, /fetch\(new URL\('\.\/index\.html', import\.meta\.url\)\)/);
+assert.doesNotMatch(source, /markupVersion|cssVersion|ensureStyles|BUILD|[?]v=/);
+assert.match(source, /export async function mount\(root, api, \{ restored \} = \{\}\)/);
+assert.match(source, /api\.shell\.setTitle\(/);
+assert.match(source, /autoWirePaneGrammar\(root\)/);
+assert.match(source, /from 'ctox:shared\/file-integrity\.js'/);
 
-// Canonical collection readiness: the candidate list's DATA empty is gated on
-// the `documents` readiness — syncing shell while unready, honest empty when live.
-assert.match(source, /const LIST_READINESS_COLLECTION = 'documents'/);
-assert.match(source, /ctx\?\.sync\?\.collectionReadiness/);
-assert.match(source, /ctx\?\.sync\?\.subscribeCollectionReadiness/);
-assert.match(source, /subscribe\.call\(state\.ctx\.sync, LIST_READINESS_COLLECTION/);
-assert.match(source, /state\.listReadiness = snapshot/);
-assert.match(source, /state\.disposers\.push\(unsubscribe\)/);
-assert.match(source, /function renderListEmptyState\(state\)/);
-assert.match(source, /state\.listReadiness\?\.ready === false/);
-assert.match(source, /<div class="ctox-syncing" role="status" aria-live="polite">/);
-assert.match(source, /Daten werden synchronisiert\./);
-assert.match(source, /Syncing data\./);
-// Filter empties and selection empties stay plain ctox-empty (not gated).
-assert.match(source, /Keine Kandidaten für diesen Filter\./);
-assert.match(source, /Kein CV ausgewählt/);
+// Leere Liste und leere Bühne rendern keinen Zustandstext (R11); keine Readiness-Anzeige.
+assert.match(source, /function renderListEmptyState\(\)/);
+assert.doesNotMatch(source, /ctox-syncing|Daten werden synchronisiert|Syncing data|listReadiness/);
+assert.doesNotMatch(source, /Keine Kandidaten für diesen Filter\.|Kein CV ausgewählt/);
 
 console.log('cv-print-builder module contract OK');

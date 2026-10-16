@@ -1,0 +1,1026 @@
+{
+  "_app_id": "outbound-lead-generation",
+  "_format": "ctox-v4-collections-a9",
+  "_base_release": "main@4794af03d",
+  "_generator": "src/apps/business-os/v4/schemas/build-schemas.mjs",
+  "_sources": {
+    "outbound_lead_generation_adapters": {
+      "source": "customer-modules/outbound-lead-generation/collections.schema.json",
+      "basis": "ownership.json: Entscheidung: §16.21 Eigentum (Registry, Basis-Release-Import): OLG; browser deklariert foreign"
+    },
+    "outbound_lead_generation_imports": {
+      "source": "customer-modules/outbound-lead-generation/collections.schema.json",
+      "basis": "ownership.json: neue Collection, nur in collections.schema.json dieser App definiert"
+    },
+    "outbound_lead_generation_leads": {
+      "source": "customer-modules/outbound-lead-generation/collections.schema.json",
+      "basis": "ownership.json: neue Collection, nur in collections.schema.json dieser App definiert"
+    },
+    "outbound_lead_generation_research_policies": {
+      "source": "customer-modules/outbound-lead-generation/collections.schema.json",
+      "basis": "ownership.json: neue Collection, nur in collections.schema.json dieser App definiert"
+    },
+    "outbound_lead_generation_sources": {
+      "source": "customer-modules/outbound-lead-generation/collections.schema.json",
+      "basis": "ownership.json: neue Collection, nur in collections.schema.json dieser App definiert"
+    },
+    "outbound_research_policies": {
+      "source": "(neu, Strang SCH)",
+      "basis": "Kern §16.21 Eigentum"
+    },
+    "sellify_campaigns": {
+      "source": "(neu, Strang SCH)",
+      "basis": "Kern §16.21 Eigentum"
+    },
+    "sellify_companies": {
+      "source": "(neu, Strang SCH)",
+      "basis": "Kern §16.21 Eigentum"
+    },
+    "sellify_people": {
+      "source": "(neu, Strang SCH)",
+      "basis": "Kern §16.21 Eigentum"
+    },
+    "outbound_lead_generation_scrape_targets": {
+      "source": "(neu, Strang OLGSCR)",
+      "basis": "Owner-Regel 15.10. (App-Logik raus aus dem Core); CATALOG.md „Kein scrape-/outbound-Primitiv“"
+    },
+    "outbound_lead_generation_scrape_scripts": {
+      "source": "(neu, Strang OLGSCR)",
+      "basis": "Owner-Regel 15.10. (App-Logik raus aus dem Core); CATALOG.md „Kein scrape-/outbound-Primitiv“"
+    },
+    "outbound_lead_generation_scrape_runs": {
+      "source": "(neu, Strang OLGSCR)",
+      "basis": "Owner-Regel 15.10. (App-Logik raus aus dem Core); CATALOG.md „Kein scrape-/outbound-Primitiv“"
+    },
+    "outbound_lead_generation_scrape_account_states": {
+      "source": "(neu, Strang OLGSCR)",
+      "basis": "Owner-Regel 15.10. (App-Logik raus aus dem Core); CATALOG.md „Kein scrape-/outbound-Primitiv“"
+    },
+    "outbound_lead_generation_field_status_witnesses": {
+      "source": "(neu, Strang OLGSCR)",
+      "basis": "Owner-Regel 15.10. (App-Logik raus aus dem Core); CATALOG.md „Kein scrape-/outbound-Primitiv“"
+    },
+    "outbound_lead_generation_policy_report_reviews": {
+      "source": "(neu, Strang OLG3)",
+      "basis": "Owner-Regel 15.10. (App-Logik raus aus dem Core); Policy-Report-Buchführung ist Fachverhalten des Update-Verteilers"
+    }
+  },
+  "collections": {
+    "outbound_lead_generation_adapters": {
+      "version": 2,
+      "primaryKey": "id",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "source_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "scrape_status": {
+          "type": "string"
+        },
+        "auth_status": {
+          "type": "string"
+        },
+        "last_command_id": {
+          "type": "string"
+        },
+        "last_task_id": {
+          "type": "string"
+        },
+        "last_error": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "source_id",
+        "status",
+        "scrape_status",
+        "auth_status",
+        "last_command_id",
+        "last_error",
+        "payload",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "additionalProperties": true
+    },
+    "outbound_lead_generation_imports": {
+      "version": 0,
+      "primaryKey": "id",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "title": {
+          "type": "string"
+        },
+        "source_type": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "lead_count": {
+          "type": "number"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "source_type",
+        "status",
+        "lead_count",
+        "payload",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "additionalProperties": true
+    },
+    "outbound_lead_generation_leads": {
+      "schema": {
+        "version": 1,
+        "primaryKey": "id",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 180
+          },
+          "import_id": {
+            "type": "string"
+          },
+          "campaign": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "website": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "country": {
+            "type": "string"
+          },
+          "research_status": {
+            "type": "string"
+          },
+          "validation_status": {
+            "type": "string"
+          },
+          "sellify_status": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "command_id": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "contacts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "selected_contact_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "field_status": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "person_field_status": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "id",
+          "import_id",
+          "campaign",
+          "name",
+          "domain",
+          "website",
+          "city",
+          "country",
+          "research_status",
+          "validation_status",
+          "sellify_status",
+          "task_id",
+          "command_id",
+          "data",
+          "contacts",
+          "selected_contact_ids",
+          "evidence",
+          "payload",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "additionalProperties": true
+      },
+      "syncProfile": "eager"
+    },
+    "outbound_lead_generation_research_policies": {
+      "version": 0,
+      "primaryKey": "id",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "title": {
+          "type": "string"
+        },
+        "version_number": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string"
+        },
+        "skill_name": {
+          "type": "string"
+        },
+        "skill_version": {
+          "type": "string"
+        },
+        "min_independent_sources": {
+          "type": "number"
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "instructions": {
+          "type": "string"
+        },
+        "field_keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "configuration_digest": {
+          "type": "string"
+        },
+        "reconciliation_status": {
+          "type": "string"
+        },
+        "reconciliation_command_id": {
+          "type": "string"
+        },
+        "reconciliation_task_id": {
+          "type": "string"
+        },
+        "reconciliation_error": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "version_number",
+        "status",
+        "skill_name",
+        "skill_version",
+        "min_independent_sources",
+        "rules",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "additionalProperties": true
+    },
+    "outbound_lead_generation_sources": {
+      "version": 0,
+      "primaryKey": "id",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "label": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "countries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "field_keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "requires_credential": {
+          "type": "boolean"
+        },
+        "credential_secret_name": {
+          "type": "string"
+        },
+        "target_key": {
+          "type": "string"
+        },
+        "adapter_status": {
+          "type": "string"
+        },
+        "scrape_status": {
+          "type": "string"
+        },
+        "auth_status": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "url",
+        "countries",
+        "field_keys",
+        "enabled",
+        "requires_credential",
+        "credential_secret_name",
+        "target_key",
+        "adapter_status",
+        "scrape_status",
+        "auth_status",
+        "payload",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "additionalProperties": true
+    },
+    "outbound_research_policies": {
+      "type": "object",
+      "version": 0,
+      "primaryKey": "id",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "app",
+        "published_at_ms",
+        "policy_contract",
+        "updated_at_ms"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "app": {
+          "type": "string"
+        },
+        "published_at_ms": {
+          "type": "number"
+        },
+        "policy_contract": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      }
+    },
+    "sellify_campaigns": {
+      "type": "object",
+      "version": 0,
+      "primaryKey": "id",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      }
+    },
+    "sellify_companies": {
+      "type": "object",
+      "version": 0,
+      "primaryKey": "id",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      }
+    },
+    "sellify_people": {
+      "type": "object",
+      "version": 0,
+      "primaryKey": "id",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "is_deleted",
+        "updated_at_ms"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      }
+    },
+    "outbound_lead_generation_scrape_targets": {
+      "type": "object",
+      "version": 0,
+      "primaryKey": "id",
+      "additionalProperties": true,
+      "description": "Scrape-Ziel (id = target_key). Vorher Core-SQLite scrape_target (capabilities/scrape/mod.rs:99). Strang OLGSCR.",
+      "required": [
+        "id",
+        "target_id",
+        "target_key",
+        "display_name",
+        "start_url",
+        "target_kind",
+        "status",
+        "config",
+        "output_schema",
+        "workspace_dir",
+        "created_at",
+        "updated_at",
+        "updated_at_ms"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "target_id": {
+          "type": "string"
+        },
+        "target_key": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "start_url": {
+          "type": "string"
+        },
+        "target_kind": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "schedule_hint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "config": {
+          "type": "object"
+        },
+        "output_schema": {
+          "type": "object"
+        },
+        "workspace_dir": {
+          "type": "string"
+        },
+        "latest_script_revision_no": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "latest_script_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "script_registered": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      }
+    },
+    "outbound_lead_generation_scrape_scripts": {
+      "type": "object",
+      "version": 0,
+      "primaryKey": "id",
+      "additionalProperties": true,
+      "description": "Skript-Revision (id = <target_key>:r<revision_no>); Text in files (script_ref). Vorher scrape_script_revision.script_body. Strang OLGSCR.",
+      "required": [
+        "id",
+        "target_key",
+        "target_id",
+        "revision_no",
+        "language",
+        "script_sha256",
+        "script_ref",
+        "created_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "target_key": {
+          "type": "string"
+        },
+        "target_id": {
+          "type": "string"
+        },
+        "revision_no": {
+          "type": "integer"
+        },
+        "language": {
+          "type": "string"
+        },
+        "entry_command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "script_sha256": {
+          "type": "string"
+        },
+        "script_ref": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "change_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "notes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      }
+    },
+    "outbound_lead_generation_scrape_runs": {
+      "type": "object",
+      "version": 0,
+      "primaryKey": "id",
+      "additionalProperties": true,
+      "description": "Scrape-Lauf (id = run_id); Manifest/Artefakte in files. Vorher scrape_run + scrape_artifact. Strang OLGSCR.",
+      "required": [
+        "id",
+        "run_id",
+        "target_id",
+        "trigger_kind",
+        "started_at",
+        "status",
+        "result"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "target_key": {
+          "type": "string"
+        },
+        "target_id": {
+          "type": "string"
+        },
+        "trigger_kind": {
+          "type": "string"
+        },
+        "command_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "finished_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "script_revision_no": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "script_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result": {
+          "type": "object"
+        },
+        "run_manifest_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      }
+    },
+    "outbound_lead_generation_scrape_account_states": {
+      "type": "object",
+      "version": 0,
+      "primaryKey": "id",
+      "additionalProperties": true,
+      "description": "Anbieterkonto inaktiv je Ziel (id = target_key). Vorher scrape_account_state (account_state.rs). Strang OLGSCR.",
+      "required": [
+        "id",
+        "target_id",
+        "generation",
+        "reason",
+        "causal_run_id",
+        "last_probe_run_id",
+        "failed_probes",
+        "next_probe_at_ms",
+        "probe_lease_until_ms",
+        "updated_at_ms"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "target_key": {
+          "type": "string"
+        },
+        "target_id": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "causal_run_id": {
+          "type": "string"
+        },
+        "last_probe_run_id": {
+          "type": "string"
+        },
+        "credential_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "credential_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failed_probes": {
+          "type": "integer"
+        },
+        "next_probe_at_ms": {
+          "type": "integer"
+        },
+        "probe_lease_owner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "probe_lease_until_ms": {
+          "type": "integer"
+        },
+        "updated_at_ms": {
+          "type": "integer"
+        }
+      }
+    },
+    "outbound_lead_generation_field_status_witnesses": {
+      "type": "object",
+      "version": 0,
+      "primaryKey": "id",
+      "additionalProperties": true,
+      "description": "Feld-Status-Zeugen je Lead (id = record_id), nur vom Writeback-Handler in derselben Transaktion wie der Lead geschrieben. Vorher SQLite outbound_native_field_status_witnesses. Strang OLGSCR.",
+      "required": [
+        "id",
+        "record_id",
+        "witnesses"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "record_id": {
+          "type": "string"
+        },
+        "witnesses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "scope",
+              "person_key",
+              "field",
+              "status"
+            ],
+            "properties": {
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "lead",
+                  "person",
+                  "contact"
+                ]
+              },
+              "person_key": {
+                "type": "string"
+              },
+              "field": {
+                "type": "string"
+              },
+              "status": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      }
+    },
+    "outbound_lead_generation_policy_report_reviews": {
+      "type": "object",
+      "version": 0,
+      "primaryKey": "id",
+      "additionalProperties": true,
+      "description": "Freigabe-Buchführung des Update-Verteilers je Versand (id = approval_key policy-report:<report_key>:<action_digest>). Vorher communication_founder_reply_reviews (reviewer policy-report) im Kern (record_and_send_policy_report_email). Nur der Handler outbound.update_digest.send_now schreibt. Strang OLG3.",
+      "required": [
+        "id",
+        "approval_key",
+        "inbound_message_key",
+        "action_digest",
+        "action_json",
+        "body_sha256",
+        "reviewer",
+        "review_summary",
+        "approved_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "approval_key": {
+          "type": "string"
+        },
+        "inbound_message_key": {
+          "type": "string"
+        },
+        "action_digest": {
+          "type": "string"
+        },
+        "action_json": {
+          "type": "string"
+        },
+        "body_sha256": {
+          "type": "string"
+        },
+        "reviewer": {
+          "type": "string"
+        },
+        "review_summary": {
+          "type": "string"
+        },
+        "account_key": {
+          "type": "string"
+        },
+        "report_key": {
+          "type": "string"
+        },
+        "approved_at": {
+          "type": "string"
+        },
+        "sent_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "send_result": {
+          "type": "object"
+        }
+      }
+    }
+  },
+  "migrations": {
+    "outbound_lead_generation_leads": {
+      "from_ver": "main@4794af03d",
+      "steps": [],
+      "_schema_version": {
+        "from": 0,
+        "to": 1
+      },
+      "_reasons": [
+        "Feld „field_status“ neu ohne Default",
+        "Feld „person_field_status“ neu ohne Default"
+      ]
+    }
+  },
+  "migration_strategies": {
+    "outbound_lead_generation_adapters": {
+      "1": {
+        "operations": [
+          {
+            "default": "",
+            "field": "last_task_id",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "last_task_id"
+            ]
+          }
+        ]
+      },
+      "2": {
+        "operations": [
+          {
+            "default": "",
+            "field": "last_task_id",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "last_task_id"
+            ]
+          }
+        ]
+      }
+    },
+    "outbound_lead_generation_leads": {
+      "1": {
+        "operations": []
+      }
+    }
+  }
+}

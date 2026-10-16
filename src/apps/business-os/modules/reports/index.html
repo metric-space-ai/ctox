@@ -3,13 +3,12 @@
        wires search / view toggle / tray / reset / active-dot / band / counts /
        footer (autoWirePaneGrammar); the module only renders lists and listens
        to ctox-pane-grammar-change. This file is the single source of truth for
-       the module markup: index.js fetches it with the JS cache-buster
-       (loadModuleMarkup), like ctox/coding-agents/knowledge/threads/app-store. -->
+       the module markup: index.js fetches it relative to itself (loadModuleMarkup, no cache-buster:
+       the service worker serves the versioned artifact, §16.15). -->
   <aside class="ctox-pane reports-rail" aria-label="Reports Liste">
     <header class="ctox-pane-header ctox-pane-band" data-shell-v2-header-row="1">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">CTOX Intake</span>
           <h2 class="ctox-pane-title">Bugs &amp; Features</h2>
         </div>
         <!-- Standing rail action: JSON export of the filtered list. No import
@@ -68,7 +67,7 @@
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker" data-report-kind-label></span>
-          <h2 class="ctox-pane-title" data-report-title>Eintrag auswählen</h2>
+          <h2 class="ctox-pane-title" data-report-title></h2>
         </div>
         <!-- Detail head: exactly ONE filled action — the dominant flow for a
              selected report is the handover to the coding agent. The actions

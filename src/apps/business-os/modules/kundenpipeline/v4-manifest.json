@@ -1,0 +1,25 @@
+{
+  "_basis": {
+    "foreign_collections": "modules/kundenpipeline/V4-HANDLERS.md „Manifest-Wünsche (Generator-Lauf)“",
+    "multi_instance": "modules/kundenpipeline/V4-PORT.md OFFEN 3; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "triggers": "modules/kundenpipeline/V4-HANDLERS.md „Manifest-Wünsche (Generator-Lauf)“; §16.34 (Triage = on-Trigger auf communication_messages)"
+  },
+  "_format": "ctox-shell-v4-app-declaration-1",
+  "_note": "Deklaration für gen-manifest.mjs (Strang MAN): nur Angaben, die sich nicht aus dem Code ableiten lassen. _basis = Fundstelle je Feld.",
+  "foreign_collections": {
+    "communication_messages": [
+      "read",
+      "watch"
+    ]
+  },
+  "multi_instance": false,
+  "triggers": [
+    {
+      "handler": "handlers/kundenpipeline.mail.inbound.js",
+      "on": {
+        "collection": "communication_messages",
+        "op": "insert"
+      }
+    }
+  ]
+}

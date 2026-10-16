@@ -7,9 +7,20 @@
    attachment preview, the rollback form, the collapsible actions column,
    and the stacked narrow-viewport layout. */
 
+/* v4: root (das App-Fenster) ist Container der Breitenabfragen – die Shell-Vorfahren liegen außerhalb von
+   root – und Bezugsrahmen des Delegationsdialogs, der im Fenster bleibt (nichts außerhalb der App). */
+[data-app="reports"] {
+  container: business-app-window / inline-size;
+  position: relative;
+}
+
+[data-app="reports"] .ctox-modal {
+  position: absolute;
+}
+
 /* Standard width defaults for the declarative resizers — the shell writes
    inline --ctox-*-width onto the frame element while dragging. */
-.reports-module {
+[data-app="reports"] .reports-module {
   --ctox-left-width: 320px;
   --ctox-right-width: 340px;
 }
@@ -17,33 +28,33 @@
 /* Right "Aktionen" column is collapsible and hidden by default so the
    primary detail column keeps the width; the detail-header toggle
    re-reveals it on demand. Mirrors the threads/tickets module pattern. */
-.reports-module.is-actions-hidden {
+[data-app="reports"] .reports-module.is-actions-hidden {
   grid-template-columns: var(--ctox-left-width, 320px) 12px minmax(0, 1fr);
 }
 
-.reports-module.is-actions-hidden .reports-actions,
-.reports-module.is-actions-hidden > [data-resizer="right"] {
+[data-app="reports"] .reports-module.is-actions-hidden .reports-actions,
+[data-app="reports"] .reports-module.is-actions-hidden > [data-resizer="right"] {
   display: none;
 }
 
-.reports-module > [data-toggle-actions][aria-pressed="true"] {
+[data-app="reports"] .reports-module > [data-toggle-actions][aria-pressed="true"] {
   color: var(--accent);
   background: var(--accent-soft);
 }
 
 /* Empty/loading states injected as a pane's only child: span both pane grid
    rows so .ctox-empty fills the whole column. */
-.reports-detail > .ctox-empty:only-child,
-.reports-actions > .ctox-empty:only-child {
+[data-app="reports"] .reports-detail > .ctox-empty:only-child,
+[data-app="reports"] .reports-actions > .ctox-empty:only-child {
   grid-row: 1 / -1;
 }
 
 /* Feature badges use the module's Governance category accent. */
-.reports-module {
+[data-app="reports"] .reports-module {
   --reports-feature: var(--app-accent);
 }
 
-.reports-module .ctox-badge.is-feature {
+[data-app="reports"] .reports-module .ctox-badge.is-feature {
   color: var(--reports-feature);
   background: color-mix(in srgb, var(--reports-feature) 10%, transparent);
   border-color: color-mix(in srgb, var(--reports-feature) 30%, transparent);
@@ -53,22 +64,21 @@
    lines that decide triage (type/status/severity badges, then module · date).
    Roomier padding than the kit default so the shard reads as a card, not a
    list line. Counterpart: .report-row-compact below (one dense line). */
-.reports-module .report-row {
+[data-app="reports"] .reports-module .report-row {
   display: grid;
   gap: 5px;
   padding: 12px 14px;
 }
 
-.reports-module .report-row .report-row-title {
+[data-app="reports"] .reports-module .report-row .report-row-title {
   font-size: 13px;
   font-weight: 600;
   line-height: 1.3;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Umbruch statt Ellipse: lange Titel bleiben vollständig lesbar (Geometrie G4). */
+  overflow-wrap: anywhere;
 }
 
-.reports-module .report-row .report-row-sub {
+[data-app="reports"] .reports-module .report-row .report-row-sub {
   font-size: 11px;
   line-height: 1.3;
   overflow: hidden;
@@ -76,13 +86,13 @@
   white-space: nowrap;
 }
 
-.reports-module .report-row small,
-.reports-attachment-meta,
-.reports-rollback-status {
+[data-app="reports"] .reports-module .report-row small,
+[data-app="reports"] .reports-attachment-meta,
+[data-app="reports"] .reports-rollback-status {
   color: var(--muted);
 }
 
-.reports-badges {
+[data-app="reports"] .reports-badges {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -91,8 +101,8 @@
 
 /* custom: detail/actions scroller rhythm — kit .ctox-pane-scroll is
    intentionally unpadded so panes choose their own content rhythm. */
-.reports-detail-scroll,
-.reports-actions-scroll {
+[data-app="reports"] .reports-detail-scroll,
+[data-app="reports"] .reports-actions-scroll {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -100,7 +110,7 @@
 }
 
 /* Long report texts keep a readable measure. */
-.reports-detail-scroll .ctox-card-body p {
+[data-app="reports"] .reports-detail-scroll .ctox-card-body p {
   margin: 0;
   max-width: 76ch;
   line-height: 1.45;
@@ -108,13 +118,13 @@
 
 /* custom: screenshot/markup attachment preview — the kit has no image
    preview component. */
-.reports-attachment {
+[data-app="reports"] .reports-attachment {
   display: grid;
   gap: 8px;
   max-width: 860px;
 }
 
-.reports-attachment img {
+[data-app="reports"] .reports-attachment img {
   max-width: 100%;
   max-height: 440px;
   object-fit: contain;
@@ -125,17 +135,17 @@
 
 /* custom: rollback form — version select stacked above the primary action,
    no inline grid (the right pane is narrow and stacked reads better). */
-.reports-rollback {
+[data-app="reports"] .reports-rollback {
   display: grid;
   gap: 8px;
   max-width: 520px;
 }
 
-.reports-rollback-prompt {
+[data-app="reports"] .reports-rollback-prompt {
   margin: 0;
 }
 
-.reports-rollback-action {
+[data-app="reports"] .reports-rollback-action {
   justify-self: start;
 }
 
@@ -147,23 +157,23 @@
    reservierte, leere Spur zurueckbleibt (der Fehler aus Vertrag §6). Beide
    Selektoren, weil `.is-actions-hidden` sonst die Desktop-Definition behaelt. */
 @container business-app-window (max-width: 1024px) {
-  .reports-module,
-  .reports-module.is-actions-hidden {
+  [data-app="reports"] .reports-module,
+  [data-app="reports"] .reports-module.is-actions-hidden {
     grid-template-columns: var(--ctox-left-width, 320px) 12px minmax(0, 1fr);
   }
 
-  .reports-module > [data-resizer="right"] {
+  [data-app="reports"] .reports-module > [data-resizer="right"] {
     display: none !important;
   }
 
   /* Die Aktionsspalte ist standardmaessig ausgeblendet; eingeblendet uebernimmt
      sie in der Zwei-Spalten-Form die Stelle des Details (eine Spur, ein
      Inhalt) — dieselbe Umschaltung wie zuvor, nur ohne dritte Spur. */
-  .reports-module:not(.is-actions-hidden) .reports-detail {
+  [data-app="reports"] .reports-module:not(.is-actions-hidden) .reports-detail {
     display: none;
   }
 
-  .reports-module:not(.is-actions-hidden) .reports-actions {
+  [data-app="reports"] .reports-module:not(.is-actions-hidden) .reports-actions {
     display: grid;
     min-width: 0;
   }
@@ -174,8 +184,8 @@
    Spur reserviert; `align-content: stretch` verteilt den Rest auf die
    auto-Spuren. */
 @container business-app-window (max-width: 768px) {
-  .reports-module,
-  .reports-module.is-actions-hidden {
+  [data-app="reports"] .reports-module,
+  [data-app="reports"] .reports-module.is-actions-hidden {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: none;
     grid-auto-flow: row;
@@ -193,16 +203,16 @@
     padding: 12px 14px;
   }
 
-  .reports-module > [data-resizer] {
+  [data-app="reports"] .reports-module > [data-resizer] {
     display: none !important;
   }
 
-  .reports-rail {
+  [data-app="reports"] .reports-rail {
     min-height: 300px;
   }
 
-  .reports-detail,
-  .reports-actions {
+  [data-app="reports"] .reports-detail,
+  [data-app="reports"] .reports-actions {
     min-height: 260px;
   }
 }
@@ -211,33 +221,33 @@
    reaches the 44px minimum, icon-only pane buttons in both dimensions, plus
    the fixed 28px filter-tray controls and the report list rows. */
 @media (pointer: coarse) {
-  .reports-module button,
-  .reports-module input,
-  .reports-module select,
-  .reports-module textarea {
+  [data-app="reports"] .reports-module button,
+  [data-app="reports"] .reports-module input,
+  [data-app="reports"] .reports-module select,
+  [data-app="reports"] .reports-module textarea {
     min-height: 44px;
   }
 
-  .reports-module .ctox-pane-icon {
+  [data-app="reports"] .reports-module .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
 
-  .reports-module .ctox-pane-tab {
+  [data-app="reports"] .reports-module .ctox-pane-tab {
     min-height: 44px;
   }
 
-  .reports-module .ctox-filter-row .ctox-select {
+  [data-app="reports"] .reports-module .ctox-filter-row .ctox-select {
     height: 44px;
   }
 
-  .reports-module .ctox-sort-dir {
+  [data-app="reports"] .reports-module .ctox-sort-dir {
     width: 44px;
     height: 44px;
   }
 
-  .reports-module .report-row,
-  .reports-module .report-row-compact {
+  [data-app="reports"] .reports-module .report-row,
+  [data-app="reports"] .reports-module .report-row-compact {
     min-height: 44px;
   }
 }
@@ -246,20 +256,20 @@
    coding-agent delegation status. Same vocabulary as knowledge/threads.
    ========================================================================== */
 /* The single view-action button keeps its width beside the shared search. */
-.reports-module [data-reports-view-toggle] { flex: 0 0 auto; }
+[data-app="reports"] .reports-module [data-reports-view-toggle] { flex: 0 0 auto; }
 /* Explizite Grammatik-Zeilen: Titel · Filter · optionale Filterablage ·
    gezaehltes Band · Well (fuellt) · Footer. Band, Well und Footer sind fest
    platziert, damit die ausgeblendete Filterablage die Spuren nicht verschiebt
    (ein [hidden] Kind ist kein Grid-Item mehr). */
-.reports-rail { grid-template-rows: auto auto auto auto minmax(0, 1fr) auto; }
-.reports-rail > .ctox-view-switch { grid-row: 4; }
-.reports-rail > .ctox-well { grid-row: 5; }
-.reports-rail > .ctox-pane-footer { grid-row: 6; }
-.reports-detail { grid-template-rows: auto minmax(0, 1fr) auto; }
+[data-app="reports"] .reports-rail { grid-template-rows: auto auto auto auto minmax(0, 1fr) auto; }
+[data-app="reports"] .reports-rail > .ctox-view-switch { grid-row: 4; }
+[data-app="reports"] .reports-rail > .ctox-well { grid-row: 5; }
+[data-app="reports"] .reports-rail > .ctox-pane-footer { grid-row: 6; }
+[data-app="reports"] .reports-detail { grid-template-rows: auto minmax(0, 1fr) auto; }
 /* LIST rendering — exactly one dense line per entry: title plus a single short
    meta on the right. Tight line-height, small type, no badges; the deliberate
    counterpart of the roomier .report-row shard above. */
-.report-row-compact {
+[data-app="reports"] .report-row-compact {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -268,32 +278,31 @@
   line-height: 1.3;
   font-size: 12px;
 }
-.reports-compact-title {
+[data-app="reports"] .reports-compact-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 500;
 }
-.reports-compact-meta {
+[data-app="reports"] .reports-compact-meta {
   flex: 0 0 auto;
   color: var(--muted);
   font-size: 11px;
   white-space: nowrap;
 }
 /* Delegation status line + dialog body. */
-.reports-delegation-status {
+[data-app="reports"] .reports-delegation-status {
   margin: 8px 0 0;
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 12px;
 }
-.reports-delegation-empty { color: var(--muted); }
-.reports-delegation-link { color: var(--accent); text-decoration: none; }
-.reports-delegation-link:hover { text-decoration: underline; }
-.reports-delegate-body { display: flex; flex-direction: column; gap: 6px; }
-.reports-delegate-hint { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+[data-app="reports"] .reports-delegation-empty { color: var(--muted); }
+[data-app="reports"] .reports-delegation-link { color: var(--accent); text-decoration: none; background: none; border: 0; padding: 0; font: inherit; cursor: pointer; }
+[data-app="reports"] .reports-delegation-link:hover { text-decoration: underline; }
+[data-app="reports"] .reports-delegate-body { display: flex; flex-direction: column; gap: 6px; }
 
 /* ============================================================================
    Shell-v2-Kopfgeometrie. Die Shell legt drei Zonen UEBER den App-Inhalt
@@ -306,15 +315,15 @@
    Zeile liegt noch innerhalb beider Zonen (2 x 37px = 74px = 80px - 6px
    Rahmen) und wird deshalb gleich behandelt.
    ========================================================================== */
-.shell-window[data-shell-contract="v2"] .reports-module .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .reports-module .ctox-filterbar {
+[data-app="reports"] .reports-module .ctox-pane-header,
+[data-app="reports"] .reports-module .ctox-filterbar {
   box-sizing: border-box;
   min-height: var(--shell-v2-header-row-size, 37px);
   height: var(--shell-v2-header-row-size, 37px);
   padding-block: 0;
 }
 
-.shell-window[data-shell-contract="v2"] .reports-module .ctox-pane-title-row {
+[data-app="reports"] .reports-module .ctox-pane-title-row {
   height: 100%;
   min-width: 0;
 }
@@ -324,13 +333,13 @@
    zugleich der Ausloeser des Shell-Versionsmenues (wireShellV2ModuleTitle
    sucht genau `.ctox-pane-header .ctox-pane-title`) und darf deshalb nicht
    auf wenige Pixel zusammengedrueckt werden. */
-.shell-window[data-shell-contract="v2"] .reports-module .ctox-pane-titles {
+[data-app="reports"] .reports-module .ctox-pane-titles {
   min-width: 0;
   padding-top: 0;
   overflow: hidden;
 }
 
-.shell-window[data-shell-contract="v2"] .reports-module .ctox-pane-title {
+[data-app="reports"] .reports-module .ctox-pane-title {
   min-width: 0;
   margin-top: 0;
   line-height: 1.15;
@@ -340,20 +349,20 @@
 }
 
 /* Linke Spalte: Icon-Zone (80px) freihalten — Titelzeile UND Filterzeile. */
-.shell-window[data-shell-contract="v2"] .reports-module .reports-rail > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .reports-module .reports-rail > .ctox-filterbar {
+[data-app="reports"] .reports-module .reports-rail > .ctox-pane-header,
+[data-app="reports"] .reports-module .reports-rail > .ctox-filterbar {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
   padding-right: 14px;
 }
 
 /* Rechte Spalte: Fenstersteuerung (74x74) freihalten. */
-.shell-window[data-shell-contract="v2"] .reports-module .reports-detail > .ctox-pane-header {
-  padding-right: 70px;
+[data-app="reports"] .reports-module .reports-detail > .ctox-pane-header {
+  padding-right: var(--shell-v2-control-inset, 70px);
 }
 
 /* Die Aktionsspalte hat keinen eigenen Kopf. Eingeblendet wird sie zur letzten
    Spalte der obersten Zeile und liefe sonst unter die Fenstersteuerung. */
-.shell-window[data-shell-contract="v2"] .reports-module:not(.is-actions-hidden) .reports-actions > .reports-actions-scroll {
+[data-app="reports"] .reports-module:not(.is-actions-hidden) .reports-actions > .reports-actions-scroll {
   padding-top: calc(var(--shell-v2-header-row-size, 37px) + 14px);
 }
 
@@ -362,7 +371,7 @@
    Fenstersteuerung, der Vorschub bleibt also. Gestapelt (unter 768px) liegt
    sie nicht mehr oben rechts; dort gilt wieder der normale Innenabstand. */
 @container business-app-window (max-width: 768px) {
-  .shell-window[data-shell-contract="v2"] .reports-module:not(.is-actions-hidden) .reports-actions > .reports-actions-scroll {
+  [data-app="reports"] .reports-module:not(.is-actions-hidden) .reports-actions > .reports-actions-scroll {
     padding-top: 14px;
   }
 
@@ -370,14 +379,24 @@
      links die Icon-Zone (80px) und rechts die Fenstersteuerung (74x74) frei.
      Die Filterzeile liegt noch in der Icon-Zone (2 x 37px = 74px), aber nicht
      mehr unter der Steuerung — sie behaelt ihren rechten Regelabstand. */
-  .shell-window[data-shell-contract="v2"] .reports-module .reports-rail > .ctox-pane-header,
-  .shell-window[data-shell-contract="v2"] .reports-module .reports-rail > .ctox-filterbar {
-    padding-right: 70px;
+  [data-app="reports"] .reports-module .reports-rail > .ctox-pane-header,
+  [data-app="reports"] .reports-module .reports-rail > .ctox-filterbar {
+    padding-right: var(--shell-v2-control-inset, 70px);
   }
 
   /* Das Detail steht gestapelt in Zeile 2 und liegt damit unter beiden
      Shell-Zonen — der Vorschub fuer die Fenstersteuerung entfaellt. */
-  .shell-window[data-shell-contract="v2"] .reports-module .reports-detail > .ctox-pane-header {
+  [data-app="reports"] .reports-module .reports-detail > .ctox-pane-header {
     padding-right: 14px;
   }
+}
+
+/* Textdiät R2 (15.10.): Listen-Fuß ohne Inhalt (Zählerwiederholung entfernt) nimmt keinen Platz ein. */
+[data-app="reports"] .ctox-pane-footer:has(> [data-pg-footer]:empty) { display: none; }
+
+/* Textdiät R2 (15.10.): schmale Fenster – Spaltentitel einzeilig mit Ellipse statt Wort-/Silbenbruch
+   (420: „Kunden / konten“, „Kampagnen / & Sequenzen“). Voller Titel bleibt im title-Attribut bzw. im Fenster. */
+@container business-app-window (max-width: 768px) {
+  [data-app="reports"] .ctox-pane-titles { min-width: 0; }
+  [data-app="reports"] .ctox-pane-title { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; hyphens: manual; overflow-wrap: normal; }
 }

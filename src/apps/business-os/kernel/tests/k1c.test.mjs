@@ -120,10 +120,10 @@ test('K-1c 6: Handler-Laufzeit (Routing app_id+type, relative Importe, ctx.put/r
   const r = await cmdDone(api.command('crm.add', { id: 'l1', name: ' ada ' }));
   assert.deepEqual([r.status, r.result], ['done', { id: 'l1', count: 1 }], JSON.stringify(r));
   await until(() => api.get('leads', 'l1').get()?.name === 'ADA Hallo', 4000, 'Handler-Write live im Client');
-  // Schemafehler und fremde, nicht deklarierte Collection → failed; ohne Handler → no_handler (nie mehr {ok:true})
+  // Schemafehler und fremde, nicht deklarierte Collection → failed; ohne Route → beim Schreiben unknown_command (E27.2, nie {ok:true})
   assert.match((await cmdDone(api.command('crm.bad', {}))).error, /^invalid/);
   assert.match((await cmdDone(api.command('crm.foreign', {}))).error, /^forbidden/);
-  assert.match((await cmdDone(api.command('crm.unknown', {}))).error, /^no_handler/);
+  assert.match((await cmdDone(api.command('crm.unknown', {}))).error, /^unknown_command/);
   // on-Trigger der eigenen App und der fremd beobachtenden App; die nicht deklarierte bleibt still
   await until(async () => (await k.sim.coreRows('crm_log')).some((x) => x.id === 'lead:l1'), 4000, 'on-Trigger');
   await until(async () => (await k.sim.coreRows('sales_seen')).length === 1, 4000, 'fremder Trigger');

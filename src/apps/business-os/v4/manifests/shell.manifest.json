@@ -1,0 +1,229 @@
+{
+  "_capability_evidence": {
+    "agent.coding.cancel": [
+      "v4/source/agent-panel.js (ctox.coding.cancel, Abbrechen in der Agent-Seitenleiste)"
+    ],
+    "agent.coding.turn": [
+      "v4/source/agent-panel.js (ctox.coding.turn, Auftrag aus der Agent-Seitenleiste)"
+    ]
+  },
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_notes": [
+    "§10.2a Nr. 8: die Shell ist selbst app_id 'shell' mit eigenem Manifest; keine eigenen Collections.",
+    "Dateigrenze: ~/.local/state/ctox-sync-v4/docs/dateigrenzen.md Abschnitt „Shell v4“; v4/frame, v4/shell, v4/source, v4/sw.js (§16.15).",
+    "entry: v4/frame/index.js exportiert startShell(kernel, {restored}) / stopShell() (§16.15)."
+  ],
+  "_source_dir": "src/apps/business-os",
+  "_styles_basis": "leer: v4/frame/index.js (cssLinkFor) und v4/source/source-mode.js laden frame.css/source-mode.css selbst",
+  "_todo": [
+    "files: Pfade relativ zu src/apps/business-os/; lab/-Prüfstände, Tests und .md sind ausgenommen.",
+    "app.js/app.css/index.html und die übrigen shared-Dateien stehen laut Dateigrenze im Shell-Artefakt; Shell v4 ersetzt app.js (wird am Ende gelöscht) – Liste beim Rückbau kürzen.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "shell",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [
+    "agent.coding.cancel",
+    "agent.coding.turn"
+  ],
+  "collections": {},
+  "command_rights": {},
+  "created_at": null,
+  "entry": "v4/frame/index.js",
+  "exports": {},
+  "files": {
+    "app.css": "6afa07b9977acaaf0e147f1efbbc02958c361fa7a2b894e4a3c62c7bb2deb9db",
+    "app.js": "99849240661880a32fed1e87a4e079045007525cf0e433ac6e2dc1b3b5cd354b",
+    "index.html": "7ea6826310f17fea369ca0567f2eefb64ad35937806fe27b7386c50fd9cfd12e",
+    "mobile-host.css": "2e8c3f7b09d1c6477e6db03c98ead8b89093f6e521b84b5fc2b6048cfc74906e",
+    "mobile-host.js": "34728511baa0ba4d32fda7215acf67665d2aaefaf7e29133fb5d563c09e8ee07",
+    "shared/app-actions.js": "8981357ae03157b86d92a8b17562b19f8868bdd28b04f9c08e2a256925e3c496",
+    "shared/app-lifecycle.js": "687390b620095a462d7637b453fe95a17575288862a2237200fc687db14ad163",
+    "shared/async-timeout.js": "7c768b9a2ddbb48c36352dd32f21f3bc4e771db5b411f39d18d20bf8deccf083",
+    "shared/base.css": "fef308c51a888a0548e6679c08f502527e2bf27cb4b824d84569a9f98567e63b",
+    "shared/branding.js": "32cb78749fe335e8be733881f227a810377d61ac3ab002fbc0aa16fa260b1089",
+    "shared/business-chat.js": "0f4a2839a7da604c7745cd59cb937f41b41fc16eccb41a0f6d2cf751256a7372",
+    "shared/business-companions.js": "63c72e71da0dd0730271e748f0c446c994f1ef6cc9214cf43025512906c81ac2",
+    "shared/business-permissions.js": "c47c081d8ba4299bac9294c55f76dfc0d9da7ea4e5620a5f91dc4f4f816c4a52",
+    "shared/business-reporter.js": "9b67d5c478f444a01918e67bfa38451016f8dc17ee9af479b9be0b1cc26b37a7",
+    "shared/collection-freshness.js": "73ab1e2804504755b4459a896fa727544d38b3b5745511bddc3f4de4d886137c",
+    "shared/context-chat.js": "08df10e92358c8a11e8f07ff63a4376cdf7397de5d04989143ea62de9bbe1ba6",
+    "shared/context-menu.js": "1c14587ffe3075a6e26d106a2f608c6370a45c213e8da88b52e37bff32e873e9",
+    "shared/crew-motion.js": "6eb1e50141d4df80f78e7984d5ce2b66d6ce12728909ccb880044b40351a42ee",
+    "shared/crew-presence.js": "002a50cc6f467bd77559e4e285094184f18e9540ae2fbebbcfce2ea3ace6d802",
+    "shared/crew-renderer.js": "3aa11e4a63e08f5b93660cf999d30ffb32362cee2bddc022779d4794436e92cf",
+    "shared/dialogs.js": "6388f987b2669bf5481c157cb712cec9869b16c72f3708f1e44de0520a3fc47b",
+    "shared/documents.js": "deccef8e672619a0f30de31fd72eea77269651d8c83a34b341c37baa4a9edb7d",
+    "shared/event-bus.js": "f4110ec59aac53855f5e0d49352618de1d7dcc8c5cdd480a129d5698c7464a46",
+    "shared/file-integrity.js": "4e8c16efa1ff6eed9180ce1ea4bcec6503790f5661e6eb44cb4632b3db7a8d9c",
+    "shared/grok-shell-icon-selection.js": "1048af9d9328559e6d4b223a477244d5fd3ae21401d3ba5e96ce5dab6674ce85",
+    "shared/i18n.js": "12077d0f305ecd2197022f95a2b3a76f135c65e67c2f2a32f1b22cc5271bd3a6",
+    "shared/icons.js": "ca29af3b6eb546d169be97a81147c085278081ba0efdad6373946e13bb284d6e",
+    "shared/jour-fixe-narration.mjs": "b9d585153f9fb74b7bbaf41a4a85b1386acfd717d93593ba750a07ebfc7e2275",
+    "shared/jour-fixe-presentation.mjs": "a35854f5acfcba40239dce30f38c9a9020ad9b8378808ffe448c88c2033ef7c2",
+    "shared/jour-fixe-speech-contract.mjs": "3e3756d74fcc136a9589b6e67b0124b2ed6b613ecdb2d809b2fb5c3ad25160b7",
+    "shared/jour-fixe-speech.mjs": "16df603904da605f90e0719255dd2105c9eaa9254ede65c6954486f79c4cde80",
+    "shared/launcher-icon.js": "de266e50f4731130b91de92eb230e1ecb5db7b758fbb312041ccb5fbfe99047f",
+    "shared/maintenance-state.js": "b5aaa88b8e5335ceac6adf822731d6b25905d5b1edc1ce579726a796f3aa78a5",
+    "shared/model-access-health.js": "1f2943c123779ea6da6de906552323d837856c92f36b1f9fb66807c9f81bdc81",
+    "shared/notifications.js": "1622f6de262a3ecb0b6664e4788a13586bcc85d3f35652b9e56fbec5b03aced0",
+    "shared/office-workspace.css": "75145dd3d816522188c275ccd4af76e9e3b162707aa0405ea0b3e86f5efbf209",
+    "shared/operator-icon-selection.js": "d4fb0a7fe3ec1195581789a7f636ac334a64aed684576c2788e11b16239ab76e",
+    "shared/pane-grammar.js": "fe2481128c8279facdddfc18349f3e7dcd1f140312320c830534b2c87f716670",
+    "shared/permissions.js": "1d59e3e3c4e082d9e02c6b39ddc7a3e9c162a4c66958b82c5826f2ad65cc424d",
+    "shared/presentation.js": "2669385957bf00883edd5d20620ff16ee76dade66bfd8b9d5247c1758d4ebac9",
+    "shared/prompt-template.js": "d2d1d8e85e8056042da7f4670d3e9723565d8b229c5e055bd39ff79b558f4a3f",
+    "shared/react-settings.js": "7aa6db764a2bf1e74b608a75eda903b2e5da9d0a0b98a637bc6ac8e92455216b",
+    "shared/resizer.js": "a4835d924f921e5c121092bcb36940cefd4a6bd6cea9f00ce3262ec201704f04",
+    "shared/roles.js": "989c894b77d6b39ada867d45c685196328b0299d0c94992806c111e06d646c29",
+    "shared/sanitize-rich-html.js": "2a24550380875a701c7966d3fdeaf3b548b5fed1992f6c93e32e0445cf05e012",
+    "shared/shell-chat-composition.js": "0174774e9b9336114ed3704b7750cc9d25ec3243ef61701dec13eec4608619f2",
+    "shared/shell-generation.js": "8918b1db9f77efbb7e2394880c42b1f6e9b0719d36ff70a504665adc2f9ec2e2",
+    "shared/shell-performance-trace.js": "cd39c880d124ed00ad53edf728b6deb53014e730424d044bcc9a339560737196",
+    "shared/shell-permissions-ui.js": "f5b029309774721d1cb195a884e359220f2202cce292d5120e8263e8113ac4a5",
+    "shared/shell-topbar.css": "0c235b9154064d56e65fc343ee4d4f164560e9cf59e5aefec541a531196608ef",
+    "shared/speech-dictation.mjs": "9d6f97aa372c3f25a8d64a628c6478ecbb93f79b128bb95be78373449a239f20",
+    "shared/speech-settings-control.mjs": "f4c0cf4eab10dd25a7090fe8ad217319dd24dd6708dbfaeea266b3c020203196",
+    "shared/stable-dom.js": "9d866492d18e296b1f67838e39f67f7661e87dccbd8cd937c511fb1fee1c6083",
+    "shared/startup-deadlines.js": "6ee8d588d5027b53db8afaf1dab626069804cc0bcdcf9d8add7ba24d5a6f8e45",
+    "shared/sync-contract.js": "f9dab78876a4587965fa1b0560b4202f3c3fecd6ac2d612074171b425b0d0529",
+    "shared/taskbar-pins.js": "5289e4e3d7e3c5ff49062583ecac2ad008a98de486648187f874280e001fb3c2",
+    "shared/topbar-apps.js": "f0f46bcc337c8524a52d8ed089013210c34f54b13805205a4da054c13f545cef",
+    "shared/universal-importer.css": "bdf3c490633a69f5ce0237986b27bef20b08aaae7f2e3ed373c0a1d16fc0bd67",
+    "shared/universal-importer.js": "d2c787768e8f5d2a72034a04c9e85bb82f9c8c18626998a7ce46695377b66065",
+    "shared/window-close-gate.js": "cbdc0c8cc87bb84c6ded519197734976af57fd16c9c1f1501807775a850a6b27",
+    "shared/window-layout-resolver.js": "7715e936380415e1f84088271637382cad6cc331d9e9941d95669010b713818c",
+    "shared/window-manager.js": "4884bef339fb4518c916ab52ad21a46d4f1b6b5551f0d1a87e12ed32f3c9eb4a",
+    "shared/window-switcher.js": "dba57a56b3491faa92c33abb2dab2374b6bdb9c9333878fd2eee1f54a307684b",
+    "shared/workjet-calendar-contract.generated.mjs": "303e6319a7f19a6299702cb77fc241fd602b828daed5c2190d1dd09192705040",
+    "shared/workjet-calendar-native.mjs": "43f59ad8f5b124eef2a552b3871d80a85e39d537cd0c45da2278d3137ee042ed",
+    "shared/workjet-grok-native.mjs": "00f654191ef7821af407084ed106239c957fbc72b29f6bc8198a7c8c23760001",
+    "shared/workjet-jour-fixe-contract.generated.mjs": "9c2dc66907be2a2ea236ca43ad9d80e681b7e93adad1b5895a44581e6048e949",
+    "shared/workjet-presentation-contract.generated.mjs": "5c82b6c8dcebb97c1a096721a8704c55451bf1ca9790806f1320908e24e2b703",
+    "shared/workjet-project-execution-policy-contract.generated.mjs": "fcf47bec3df1e62c874efc2331dff4f6c905232eaef5abfcce8572f2b2d7667a",
+    "shared/workjet-project-kpis-contract.generated.mjs": "0347bc33bfbd8ef4cea3095517d1bd3bdd714eb4dc90084582d9cf10109ee8a3",
+    "shared/workjet-provider-native.mjs": "a9feed5d90b0a65c2ad163e96af5fe26f6da8659b2634588ddbf271b9161ab66",
+    "shared/workjet-supervisor-execution-contract.generated.mjs": "8e88f10513a352da7c96379d153c63628ec17892a377ed188a98cb524bdf0f6e",
+    "shared/workjet-supervisor-luma-contract.generated.mjs": "bc5031a847bf8394d71bea254ae7858560a7fc51a0e909e7564f437f12f8eff8",
+    "shared/workjet-supervisor-route-computation-contract.generated.mjs": "f48fff51152d1682dfe0e1506875236bf2355a7d6556a6e7f60ebb21c96bfeb9",
+    "shared/workjet-supervisor-route-display-contract.generated.mjs": "83a21ab60e587be65789ef633a0cbe6a15cc7eed2bc87f394df66b57ba6ff5e1",
+    "shared/workjet-supervisor-route-native.mjs": "0d1097daaf5f14d8f98ba881b869b11f5981ed9ce13bf3d0807d0c12f78cbf5b",
+    "shared/workjet-theme.js": "b95ebcc0d6d94e80834abfcdb467f9c09ae36f9cee9dc378e66bcf11cb70c995",
+    "shared/workspace-session.js": "ac00f69b26d8af516bdd6290549cdcbf56682aa828a6ca18c8094432c428b875",
+    "v4/frame/crew-bar.js": "b2e57821f2067a4b7dda38e0b128522ef5cbdf9a9a8e67cc52bb5152297d66e1",
+    "v4/frame/desktop.js": "be621803003d967b05050a8442ffc72345fc028dc6cb29816f013e9a031064ce",
+    "v4/frame/frame.css": "3e2cb79f65a597be66b4b9eed5138a878c98e699ce5c1f1928b465f361c136d6",
+    "v4/frame/glossary.js": "496a962b5a5744ffe5c50d275cd0e31d0d4228cfd4d0a6d43f5276288190410e",
+    "v4/frame/index.js": "a8fcee4ad80e7abadf7330fab4a4a747e73b8d09319355c19686c3bf3c3d149b",
+    "v4/frame/launcher.js": "e4c141ed28922d3c03d3872633adf09a34e80de9f9e927399641e2066b790cde",
+    "v4/frame/pane-heads.js": "5049171627830e5b42a61d4140b0de81f8b79bf67e6296bcee1a373cc92125c1",
+    "v4/frame/pane-narrow.js": "85cd2ec7dfc185424ec9dd098f5ccb3d2d7973b01e0cc22a92b1f063da04272d",
+    "v4/frame/shell-v2-desktop.css": "c9181cf9e0dc9b253ba854cee25e6488ad613a08154c61485da7311fabe81897",
+    "v4/frame/taskbar.js": "79f2b6d809b2d26af891116d60e20aa7cf3bc358401fc398816a7a429cd9bcbe",
+    "v4/frame/theme/theme.css": "571d4a54c7970fca64af48832ccbd2174e920f42aed047b4e8dd61f812e6fa11",
+    "v4/frame/topbar.js": "bf46186ac11a6367ada6d2b9d8ba0fb5b54692d83c95da0988557dcb86733aec",
+    "v4/frame/window-sheet.js": "a0c508dff3ab4441343ea062744644447424790de099195528820935072bbeaf",
+    "v4/shell/app-host.js": "441e564d6ae7678a5dcf5768742163cda4c6cb541eb79ac4b2f6c7b4b476c012",
+    "v4/shell/column-resizers.js": "ccd8e1b9615381987ccc8f710ae8faf01c924f3d7c74a76b3a029469f71c554e",
+    "v4/shell/kernel-adapter.js": "d52b5123bacdc2e08db0970f8a4d84cf29006eed2fda01af5a7b603212160eb2",
+    "v4/shell/report.js": "2809f32401811004129ad7742c61d72da1e8f25792a5a87b0b94a650460971ff",
+    "v4/shell/status-zone.js": "91337341f92baed0887bb194f58c2446a77007024fa859892c3e7ab46575ee76",
+    "v4/shell/sync-state.js": "a3a49dc99d5eabf5b7a798f07a7311e7519fd3fc67fff45ccb60746e4a9d0e42",
+    "v4/shell/workjet/actions/calendar-connect.js": "c89f7ad9daf3bc46683a11d40c24d040891dd0bce17f3cad9488e5c613ace5b0",
+    "v4/shell/workjet/actions/computer.js": "86d4132ee29413651b63da76afb76da91b3e244b3715f419a75b0fb52f65d7d6",
+    "v4/shell/workjet/actions/device.js": "4fcb8bd1fec8f1fd958eaa2ad5819449cc4082a7fa39af3da1ac9b72a60cbe01",
+    "v4/shell/workjet/actions/instance.js": "5be82cd9783cb985d07cd59b04d8c294d632576d30c43a775c1da996aaefba99",
+    "v4/shell/workjet/actions/meeting.js": "0fddd346a883f3e3f71ce03fbebaa50224b56f74c1b420919b02e03c8398c1c5",
+    "v4/shell/workjet/actions/project.js": "7a55b6a0f4dd4c9e422f412607fc331f8acae7206901119342f6b30e96042a6d",
+    "v4/shell/workjet/actions/session.js": "6d95c9a33b3ace0d2685eba786a83b967961d7d4de561e2b1c9369cb8d7d9fe2",
+    "v4/shell/workjet/actions/supervisor.js": "0f16e0fd76f9b1ec968bcbe0d4c599bac531de3a0a19e84954b02e44759874ae",
+    "v4/shell/workjet/host-bridge.js": "ff9a327ce175f55bc3e417762f0b2334c27725eb55e34289ef7c78f0e661ea78",
+    "v4/shell/workjet/index.js": "02d0af37d40575c907e6d20b19daade552f1b813721dab5fde95732be32a1b04",
+    "v4/shell/workjet/v2-compat.js": "74195f1a8cf90ae3aa58abf9f8bab2630cc50660f8378c9f7a99f4ec199c8f4b",
+    "v4/shell/workjet/v2-helpers.js": "43b72c23ade702bdc9b8694a72c5ccaa35dab2cd638e4989f16b1528093d0d7c",
+    "v4/source/agent-panel.js": "a6388919204c53d43cb74dc0d0b70a47c4fdbdba43bdd575e2b8459288338db6",
+    "v4/source/chrome-toggle.js": "66e0217b9aa266dc0c0da18e8c630d071ff10d25827646dead163c9e507bef57",
+    "v4/source/coding-port.js": "fc18a60f48cafd19605886b2d001ac22aeb41910503b324a1d79fcf0ed083253",
+    "v4/source/editor.js": "11d7a645d74bdfd80216c3bb125e086bbfb7513dfface9856daebea880a258b1",
+    "v4/source/reports-tab.js": "b94228ff23c3ac665be676f86271636f59878e7d87ee269f47c0431ff142adbd",
+    "v4/source/schema-diff.js": "2631f21cbf0924d7010e33e98da6b143811c0085eb3dd8ae540c5185b0fe31ec",
+    "v4/source/source-mode.css": "7179e9c7dc68d9938f773a7c5b061aa8e40fddfd327aed7d44ed25551ccc9131",
+    "v4/source/source-mode.js": "eb5cb4f47c32eec1711d6d9c2a4cceb865b2db2217757406f8bc699046b5b88f",
+    "v4/source/text-diff.js": "78773df3c7acc2dd08ddc1018156f2ef88ec8e11e36771b0859f87fc07837d2c",
+    "v4/source/upload.js": "42ed570e10b90516461c06791d470d61ad1c02fed905fc5a3fba99de17924105",
+    "v4/sw.js": "4263986afea2f1dfd885b04dee4ff675f1cdf2395ece4fca7f3efc597a8171c3"
+  },
+  "foreign_collections": {
+    "business_module_reports": {
+      "_evidence": {
+        "sources": [
+          "v4/shell/report.js REPORT_COLLECTIONS.reports (FR6b Meldeschleife, api.put)"
+        ]
+      },
+      "ops": [
+        "read",
+        "write"
+      ],
+      "owner_app": "ctox"
+    },
+    "business_users": {
+      "_evidence": {
+        "sources": [
+          "v4/source/reports-tab.js USERS_COLLECTION (Melder-Name, Rückfall „Teammitglied“)"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    },
+    "ctox_bug_reports": {
+      "_evidence": {
+        "sources": [
+          "v4/shell/report.js REPORT_COLLECTIONS.bugs (FR6b Meldeschleife, api.put)"
+        ]
+      },
+      "ops": [
+        "read",
+        "write"
+      ],
+      "owner_app": "ctox"
+    },
+    "shell_preferences": {
+      "_evidence": {
+        "sources": [
+          "§16.19 Nr. 3 (Pins, Launcher-Reihenfolge über api.put)"
+        ]
+      },
+      "ops": [
+        "read",
+        "write"
+      ],
+      "owner_app": "ctox-platform"
+    }
+  },
+  "handlers": {},
+  "layout": {},
+  "legacy": [],
+  "libs": {
+    "ctox-office": "1",
+    "monaco": "0"
+  },
+  "migrations": {},
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "628732d2ecb0a8b9977ea86d028416a9c1eea19dc3689e06a8fdc5c12eb3d226",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "shared_exports": [
+    "shared/prompt-template.js"
+  ],
+  "styles": [],
+  "title": "Shell v4",
+  "triggers": [],
+  "version": null
+}

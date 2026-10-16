@@ -1,0 +1,12 @@
+{
+  "_basis": {
+    "foreign_collections": "modules/spreadsheets/V4-PORT.md OFFEN 2"
+  },
+  "_format": "ctox-shell-v4-app-declaration-1",
+  "_note": "Deklaration für gen-manifest.mjs (Strang MAN): nur Angaben, die sich nicht aus dem Code ableiten lassen. _basis = Fundstelle je Feld.",
+  "foreign_collections": {
+    "desktop_files": [
+      "read"
+    ]
+  }
+}

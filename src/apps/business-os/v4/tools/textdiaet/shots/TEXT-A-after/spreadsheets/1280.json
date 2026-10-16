@@ -1,0 +1,129 @@
+{
+ "app": "spreadsheets",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [
+    "put spreadsheet_runbooks/spreadsheet.summarize local=ok result=accepted {\"id\":\"spreadsheet.summarize\",\"document_type\":\"spreadsheet\",\"title\":\"Tabelle zusammenfassen\",\"description\":\"Fasse das au",
+    "put spreadsheet_runbooks/spreadsheet.audit-formulas local=ok result=accepted {\"id\":\"spreadsheet.audit-formulas\",\"document_type\":\"spreadsheet\",\"title\":\"Formeln auditieren\",\"description\":\"Finde sämtl",
+    "put spreadsheet_runbooks/spreadsheet.risk-review local=ok result=accepted {\"id\":\"spreadsheet.risk-review\",\"document_type\":\"spreadsheet\",\"title\":\"Finanzielle Risikoanalyse\",\"description\":\"Identif"
+   ],
+   "title": "Tabellen",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 748
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [
+    "console: Access to script at 'ctox:lib/ctox-office@1/ctox-office-spreadsheet.mjs' from origin 'http://127.0.0.1:53540' has been blocked by CORS policy: Cross origin requests are only supported for protocol schemes: chrome, chrome",
+    "console: Failed to load resource: net::ERR_FAILED",
+    "console: [spreadsheets] editor open failed TypeError: Failed to fetch dynamically imported module: ctox:lib/ctox-office@1/ctox-office-spreadsheet.mjs"
+   ],
+   "zoneText": "1 Editor konnte nicht geladen werden: Failed to fetch dynamically imported module: ctox:lib/ctox-office@1/ctox-office-spreadsheet.mjs",
+   "cands": [
+    "button:Leere Tabelle erstellen",
+    "button:Tabelle importieren",
+    "button:Ausgewählte Tabelle exportiere",
+    "button:Als Karten anzeigen",
+    "button:Filter",
+    "button:Protokoll_Kickoff.docx",
+    "button:Tabelle verwalten",
+    "button:Preisliste_Q4.xlsx",
+    "button:Lageplan_Halle4.png",
+    "button:Vertrag_Rahmen_signiert.pdf",
+    "button:Notizen_Workshop.md",
+    "button:Angebot_Wartung_2026.pdf",
+    "button:Breite der Dateiliste ändern"
+   ],
+   "shot": "spreadsheets/1280-01-open.png"
+  },
+  {
+   "step": "button Leere Tabelle erstellen",
+   "changed": true,
+   "ops": [
+    "put spreadsheet_versions/sheet_72c15949-1b65-4c70-8f4c-86bf5549f778_v1 local=ok result=accepted {\"id\":\"sheet_72c15949-1b65-4c70-8f4c-86bf5549f778_v1\",\"spreadsheet_id\":\"sheet_72c15949-1b65-4c70-8f4c-86bf5549f778\",\"version\":1,\"source_kind",
+    "put spreadsheets/sheet_72c15949-1b65-4c70-8f4c-86bf5549f778 local=ok result=accepted {\"id\":\"sheet_72c15949-1b65-4c70-8f4c-86bf5549f778\",\"title\":\"Neue Tabelle\",\"filename\":\"neue-tabelle.csv\",\"mime_type\":\"text/csv\",\"status\":\"Dra"
+   ],
+   "zone": [
+    "clear spreadsheets.format.unsupported",
+    "clear spreadsheets.version.missing",
+    "clear spreadsheets.create",
+    "{\"level\":\"error\",\"code\":\"spreadsheets.editor\",\"text\":\"Editor konnte nicht geladen werden: Failed to fetch dynamically imported module: ctox:lib/ctox-office@1/ctox-office-spreadsheet.mjs\"}"
+   ],
+   "dialogs": [],
+   "errors": [
+    "console: [spreadsheets] editor open failed TypeError: Failed to fetch dynamically imported module: ctox:lib/ctox-office@1/ctox-office-spreadsheet.mjs"
+   ],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "spreadsheets/1280-02-button_Leere_Tabelle_erstellen.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 392,
+   "shot": "spreadsheets/1280-03-suche_ohne_Treffer.png",
+   "textAfter": 33
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "spreadsheets/1280-04-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "spreadsheet_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "spreadsheet_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "spreadsheet_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "spreadsheet_versions",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "spreadsheets",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "spreadsheets",
+  "Tabellen"
+ ]
+}

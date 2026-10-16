@@ -1,0 +1,67 @@
+{
+  "_app_id": "mail",
+  "_format": "ctox-v4-collections-a9",
+  "_base_release": "main@4794af03d",
+  "_generator": "src/apps/business-os/v4/schemas/build-schemas.mjs",
+  "_sources": {},
+  "_foreign_copies_not_taken": [
+    {
+      "name": "business_commands",
+      "owner": "ctox-platform"
+    },
+    {
+      "name": "business_module_catalog",
+      "owner": "ctox-platform"
+    },
+    {
+      "name": "business_users",
+      "owner": "ctox"
+    },
+    {
+      "name": "communication_accounts",
+      "owner": "conversations"
+    },
+    {
+      "name": "communication_messages",
+      "owner": "conversations"
+    },
+    {
+      "name": "communication_threads",
+      "owner": "conversations"
+    },
+    {
+      "name": "document_blob_chunks",
+      "owner": "documents"
+    },
+    {
+      "name": "document_versions",
+      "owner": "documents"
+    },
+    {
+      "name": "documents",
+      "owner": "documents"
+    },
+    {
+      "name": "outbound_approvals",
+      "owner": "outbound"
+    },
+    {
+      "name": "outbound_campaigns",
+      "owner": "outbound"
+    },
+    {
+      "name": "outbound_engagements",
+      "owner": "outbound"
+    },
+    {
+      "name": "outbound_messages",
+      "owner": "outbound"
+    },
+    {
+      "name": "outbound_pipeline_items",
+      "owner": "outbound"
+    }
+  ],
+  "collections": {},
+  "migrations": {}
+}

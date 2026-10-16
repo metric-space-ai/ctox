@@ -1,9 +1,5 @@
 {
-  "refresh": "Refresh",
   "search": "Search threads",
-  "noThreads": "No relevant threads.",
-  "syncingThreads": "Syncing threads.",
-  "noSelection": "No thread selected.",
   "commandFailed": "Action could not be completed.",
   "viewShowList": "Show as list",
   "viewShowCards": "Show as cards",
@@ -29,5 +25,14 @@
   "approvalCommand": "Command",
   "approvalTask": "Task",
   "approvalHeadingPrefix": "CTOX approval",
-  "presenceViewing": "is viewing this thread right now"
+  "statusRunning": "AI working",
+  "statusCompleted": "Completed",
+  "workFailed": "Failed",
+  "workRunning": "Running",
+  "workQueued": "Queued",
+  "workDone": "Completed",
+  "workBlocked": "Blocked",
+  "nameSupervisor": "Supervisor",
+  "nameCtoxWork": "CTOX work",
+  "detailId": "Identifier"
 }

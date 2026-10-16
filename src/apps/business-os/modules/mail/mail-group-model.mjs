@@ -14,7 +14,7 @@ export const MAIL_GROUP_TEMPLATES = Object.freeze({
     kind: 'outbound-sales',
     intakeMode: 'fixed',
     contentMode: 'word',
-    objective: 'Alle ausgewählten Kontakte bearbeiten, versenden und eingehende Antworten zuordnen.',
+    objective: 'Alle ausgewählten Kontakte bearbeiten, versenden und eingehende Antworten zuordnen.', // v4-allow: text (Auftragsvorgabe = Daten, kein Hilfetext)
   }),
   newsletter: Object.freeze({
     id: 'newsletter',
@@ -22,7 +22,7 @@ export const MAIL_GROUP_TEMPLATES = Object.freeze({
     kind: 'newsletter',
     intakeMode: 'fixed',
     contentMode: 'email_visual',
-    objective: 'Eine Ausgabe versenden, Zustellfehler prüfen und An- sowie Abmeldungen vollständig verbuchen.',
+    objective: 'Eine Ausgabe versenden, Zustellfehler prüfen und An- sowie Abmeldungen vollständig verbuchen.', // v4-allow: text (Auftragsvorgabe = Daten, kein Hilfetext)
   }),
   support: Object.freeze({
     id: 'support',
@@ -30,7 +30,7 @@ export const MAIL_GROUP_TEMPLATES = Object.freeze({
     kind: 'support',
     intakeMode: 'dynamic',
     contentMode: 'word',
-    objective: 'Alle Anfragen beantworten oder mit dokumentierter Übergabe an die zuständige App routen.',
+    objective: 'Alle Anfragen beantworten oder mit dokumentierter Übergabe an die zuständige App routen.', // v4-allow: text (Auftragsvorgabe = Daten, kein Hilfetext)
   }),
   routing: Object.freeze({
     id: 'routing',
@@ -38,7 +38,7 @@ export const MAIL_GROUP_TEMPLATES = Object.freeze({
     kind: 'routing',
     intakeMode: 'dynamic',
     contentMode: 'word',
-    objective: 'Alle enthaltenen E-Mails einer Ziel-App oder Zuständigkeit zuordnen und den Topf abschließen.',
+    objective: 'Alle enthaltenen E-Mails einer Ziel-App oder Zuständigkeit zuordnen und den Topf abschließen.', // v4-allow: text (Auftragsvorgabe = Daten, kein Hilfetext)
   }),
   free: Object.freeze({
     id: 'free',
@@ -46,7 +46,7 @@ export const MAIL_GROUP_TEMPLATES = Object.freeze({
     kind: 'free',
     intakeMode: 'fixed',
     contentMode: 'word',
-    objective: 'Die enthaltenen E-Mails als begrenzten Arbeitsauftrag vollständig abarbeiten.',
+    objective: 'Die enthaltenen E-Mails als begrenzten Arbeitsauftrag vollständig abarbeiten.', // v4-allow: text (Auftragsvorgabe = Daten, kein Hilfetext)
   }),
   single: Object.freeze({
     id: 'single',
@@ -54,7 +54,7 @@ export const MAIL_GROUP_TEMPLATES = Object.freeze({
     kind: 'single',
     intakeMode: 'fixed',
     contentMode: 'word',
-    objective: 'Diese einzelne E-Mail versenden oder bearbeiten und den Auftrag anschließend abschließen.',
+    objective: 'Diese einzelne E-Mail versenden oder bearbeiten und den Auftrag anschließend abschließen.', // v4-allow: text (Auftragsvorgabe = Daten, kein Hilfetext)
   }),
 });
 

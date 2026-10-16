@@ -10,7 +10,20 @@
     </div>
   </header>
   <div class="file-viewer-metadata" data-file-metadata data-shell-v2-header-row="2"></div>
-  <section class="file-viewer-content" data-file-content>
-    <p>Lade Datei...</p>
+  <section class="file-viewer-content" data-file-content></section>
+  <!-- Leerzustand ohne Datei (wie Vorschau/Fotos): ein Satz + Aktion; „Datei öffnen…“ zeigt die Auswahl aus `files`. -->
+  <section class="file-viewer-start" data-file-start hidden>
+    <div class="file-viewer-empty" data-file-empty>
+      <strong data-file-empty-text>Keine Datei geöffnet</strong>
+      <button class="ctox-button is-primary" type="button" data-file-open-picker>Datei öffnen…</button>
+    </div>
+    <div class="file-viewer-picker" data-file-picker hidden>
+      <div class="file-viewer-picker-head">
+        <strong data-file-picker-title>Datei öffnen</strong>
+        <button class="ctox-button" type="button" data-file-picker-cancel>Abbrechen</button>
+      </div>
+      <input class="ctox-input" type="search" data-file-picker-search placeholder="Suchen" aria-label="Suchen">
+      <div class="file-viewer-picker-list" role="listbox" data-file-picker-list></div>
+    </div>
   </section>
 </main>

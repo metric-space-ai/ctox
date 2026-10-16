@@ -1,15 +1,11 @@
-import { showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
-import { loadModuleMessages } from '../../shared/i18n.js';
-import { createCoalescedRefresh } from '../../office-engine/src/coalesced-refresh.mjs';
-import { autoWirePaneGrammar } from '../../shared/pane-grammar.js';
-import { createBusinessOsOfficeBridge } from '../../office-engine/src/business-os-bridge.mjs?v=20260908-office-source-upload-v1';
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
+import { contextChatModeMarkup, normalizeContextChatMode, sendContextChat } from 'ctox:shared/context-chat.js';
+import { createOfficeBridgeV4, putFile } from './office-bridge-v4.js';
 
 const CSV_MIME = 'text/csv';
 const TSV_MIME = 'text/tab-separated-values';
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-const CHUNK_SIZE = 256000;
 const SPREADSHEET_RENDER_DEBOUNCE_MS = 80;
-const SPREADSHEETS_PRIMARY_COLLECTION = 'spreadsheets';
 const SUPPORTED_IMPORT_EXTENSIONS = ['.csv', '.tsv', '.xlsx'];
 // Automation remains an explicit action, never a permanent workspace column.
 const USER_IMPORT_KIND = 'user_import';
@@ -40,73 +36,76 @@ const BLANK_GRID_COLUMNS = Array.from({ length: 10 }, (_, index) => ({
   width: '120px',
 }));
 
+// Runbook-Auswahl; die Anweisungstexte liegen im App-Paket (prompts/<id>.md, Strang SKL-B3), die Handler
+// spreadsheet.* füllen sie. prompt_template verweist nur noch auf das Template.
 const SYSTEMATIC_SPREADSHEET_RUNBOOKS = [
   {
     id: 'spreadsheet.summarize',
     document_type: 'spreadsheet',
     title: 'Tabelle zusammenfassen',
-    description: 'Fasse das ausgewählte Spreadsheet strukturiert zusammen, analysiere Gesamtsummen und identifiziere Trends.',
+    description: 'Fasse das ausgewählte Spreadsheet strukturiert zusammen, analysiere Gesamtsummen und identifiziere Trends.', // v4-allow: text – Runbook-Auftrag an den Agenten
     command_type: 'spreadsheet.summarize',
-    prompt_template: 'Fasse das ausgewählte Spreadsheet strukturiert zusammen. Analysiere Gesamtsummen, identifiziere Trends, beschreibe Ausreißer und erstelle eine managementtaugliche Zusammenfassung.'
+    prompt_template: 'prompts/spreadsheet-summarize.md'
   },
   {
     id: 'spreadsheet.audit-formulas',
     document_type: 'spreadsheet',
     title: 'Formeln auditieren',
-    description: 'Finde sämtliche Formeln in dieser Tabelle und prüfe sie auf Fehler, Zirkelbezüge oder logische Inkonsistenzen.',
+    description: 'Finde sämtliche Formeln in dieser Tabelle und prüfe sie auf Fehler, Zirkelbezüge oder logische Inkonsistenzen.', // v4-allow: text – Runbook-Auftrag an den Agenten
     command_type: 'spreadsheet.audit-formulas',
-    prompt_template: 'Scanne diese Tabelle nach allen Formeln. Analysiere sie auf syntaktische Fehler, logische Inkonsistenzen, unvollständige Summenbereiche, fehlende oder fehlerhafte Referenzen und liefere Korrekturempfehlungen.'
+    prompt_template: 'prompts/spreadsheet-audit-formulas.md'
   },
   {
     id: 'spreadsheet.risk-review',
     document_type: 'spreadsheet',
     title: 'Finanzielle Risikoanalyse',
-    description: 'Identifiziere finanzielle Risiken, unplausible Kennzahlen, starke Margenabweichungen und auffällige Transaktionen.',
+    description: 'Identifiziere finanzielle Risiken, unplausible Kennzahlen, starke Margenabweichungen und auffällige Transaktionen.', // v4-allow: text – Runbook-Auftrag an den Agenten
     command_type: 'spreadsheet.risk-review',
-    prompt_template: 'Führe ein finanzielles Review dieser Daten aus. Suche nach auffälligen Margensprüngen, ungewöhnlichen Datenmustern, Budgetüberschreitungen und potenziellen betriebswirtschaftlichen Risiken. Gib konkrete Handlungsempfehlungen.'
+    prompt_template: 'prompts/spreadsheet-risk-review.md'
   }
 ];
 
-function applyStaticLabels(host, t) {
-  const loadingText = host.querySelector('.module-loading-copy span');
-  if (loadingText) {
-    loadingText.textContent = t('workspaceLoading', 'Spreadsheets Workspace wird geladen.');
-  }
+const SNAPSHOT_VIEW_KEYS = Object.freeze(['selectedId', 'searchQuery', 'statusFilter', 'tagFilter', 'sortBy', 'listView', 'libraryOpen']);
+
+function langFrom(locale) {
+  return String(locale || '').toLowerCase().startsWith('en') ? 'en' : 'de';
 }
 
-export async function mount(ctx) {
-  await ensureStyles();
-  await ensureSpreadsheetRuntimeReady(ctx);
-  const messages = await loadModuleMessages(import.meta.url, ctx.locale || 'de', {});
-  const t = (key, fallback, ...args) => {
-    let val = key.split('.').reduce((acc, curr) => acc?.[curr], messages) ?? fallback ?? key;
-    if (args.length) {
-      args.forEach((arg, i) => {
-        val = String(val).replace(`{${i}}`, arg);
-      });
-    }
+// api.shell.t: 'spreadsheets.<key>' übersteuert, sonst eingebetteter Rückfall (app-api.d.ts OFFEN-B).
+function createTranslator(api) {
+  return (key, fallback, ...args) => {
+    const full = `spreadsheets.${key}`;
+    let translated = '';
+    try { translated = api.shell.t(full); } catch {}
+    let val = translated && translated !== full ? translated : (fallback ?? key);
+    args.forEach((arg, i) => { val = String(val).replace(`{${i}}`, arg); });
     return val;
   };
+}
 
-  const markupUrl = new URL('./index.html', import.meta.url);
-  markupUrl.search = new URL(import.meta.url).search;
-  const html = await fetch(markupUrl).then((res) => res.text());
-  ctx.host.innerHTML = html;
-  const shellLeftPane = ctx.left?.closest?.('[data-left-pane]') || null;
-  const shellLeftWasHidden = shellLeftPane?.hidden;
-  ctx.left?.replaceChildren?.();
-  if (shellLeftPane) shellLeftPane.hidden = true;
-  applyStaticLabels(ctx.host, t);
+// Abos und Zustand je Montage (PORTING §4 Falle 1).
+export async function mount(root, api, { restored } = {}) {
+  if (!root.dataset.app) root.dataset.app = api.app?.id || 'spreadsheets';
+  const t = createTranslator(api);
+  // CSS lädt die Shell aus dem Manifest; index.html liefert der Service Worker versioniert (§16.15).
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  root.innerHTML = html;
+  api.shell.setTitle(t('spreadsheetsTitle', 'Tabellen'));
 
   const state = {
-    ctx,
+    api,
+    root,
+    disposers: [],
+    officeBridge: createOfficeBridgeV4(api, 'spreadsheet'),
     ctoxSpreadsheetsModule: null,
     officeEngine: 'ctox_spreadsheets',
     spreadsheets: [],
-    runbooks: [],
+    rawSpreadsheets: [],
+    runbooks: mergeSpreadsheetRunbooks([]),
     selectedId: '',
     selectedVersion: null,
     versionLoad: null,
+    versionSubscription: null,
     disposed: false,
     editorHandle: null,
     spreadsheetContainer: null,
@@ -121,122 +120,116 @@ export async function mount(ctx) {
     filtersOpen: false,
     libraryOpen: false,
     listView: 'list',
-    localSubscriptionCleanup: null,
-    readinessCleanup: null,
-    spreadsheetsReadiness: null,
-    openFileToken: null,
     openFilePromise: Promise.resolve(),
     contextMenu: null,
     contextMenuCleanup: null,
-    rightPaneEl: stateRightPane(ctx),
     t,
-    lang: ctx.locale === 'en' ? 'en' : 'de',
+    lang: langFrom(api.shell.locale.get()),
   };
+  applyRestoredView(state, plainSnapshot(restored));
 
-  const shellRightWasHidden = state.rightPaneEl?.hidden;
-  applyRightPaneState(state);
-
-  // Wire event handlers and load libs
-  wireModule(state);
-  state.openFileToken = ctx.eventBus?.on?.('desktop-app:open-file', (payload = {}) => {
-    if (payload.appId !== 'spreadsheets') return;
-    enqueueSpreadsheetOpenFile(state, payload.args?.openFile);
-  }) || null;
-  state.localSubscriptionCleanup = wireLocalRealtime(state);
-  state.readinessCleanup = wireSpreadsheetsReadiness(state);
-  let disposed = false;
-  const unregisterCloseGuard = ctx.windowManager?.registerCloseGuard?.(ctx.host, async () => {
-    try {
-      const handle = state.editorHandle;
-      const selectedId = state.selectedId;
-      if (!await saveSpreadsheetBeforeLeaving(state)
-        || state.editorHandle !== handle || state.selectedId !== selectedId) {
-        throw new Error(state.t('spreadsheetSaveBeforeLeavingFailed', 'Die Tabelle konnte vor dem Wechsel nicht gespeichert werden.'));
-      }
-      return true;
-    } catch (error) {
-      state.ctx.notifications?.show?.({ type: 'error', message: String(error?.message || error) });
-      return false;
-    }
-  });
+  state.disposers.push(wireLocalRealtime(state));
+  state.disposers.push(api.shell.locale.subscribe((locale) => {
+    const lang = langFrom(locale);
+    if (lang === state.lang) return;
+    state.lang = lang;
+    renderLeft(state);
+  }));
+  state.disposers.push(api.shell.onRoute((event) => handleRoute(state, event?.params || {})));
   const onBeforeUnload = (event) => {
     const handle = state.editorHandle;
     if (handle?.kind !== 'ctox-spreadsheets'
       || !(state.dirty || state.saving || handle.saving || handle.saveTimer != null)) return;
-    // Unload can only warn; saving must finish through the close guard.
     event.preventDefault();
     event.returnValue = '';
   };
   window.addEventListener('beforeunload', onBeforeUnload);
+  ensureSeedRunbooks(state);
+  if (state.selectedId) await loadSelectedVersion(state).catch((error) => reportSpreadsheetError(state, 'spreadsheets.version.load', error));
   renderLeft(state);
   renderRight(state);
   renderCenter(state);
-  Promise.resolve()
-    .then(async () => {
-      await ensureSeedRunbooks(ctx).catch((error) => console.warn('[spreadsheets] ensureSeedRunbooks failed', error));
-      if (disposed) return;
-      await refreshRunbooks(state).catch((error) => console.warn('[spreadsheets] refreshRunbooks failed', error));
-      if (disposed) return;
-      await refreshSpreadsheets(state).catch((error) => console.warn('[spreadsheets] refreshSpreadsheets failed', error));
-      if (disposed) return;
-      if (ctx.args?.openFile) {
-        await enqueueSpreadsheetOpenFile(state, ctx.args.openFile);
-      }
-      if (disposed) return;
-      if (state.selectedId) {
-        await loadSelectedVersion(state).catch((error) => {
-          console.warn('[spreadsheets] initial selected version load failed', error);
-        });
-      }
-      if (disposed) return;
-      renderLeft(state);
-      renderRight(state);
-      renderCenter(state);
-    });
 
-  return () => {
-    disposed = true;
-    state.disposed = true;
-    window.removeEventListener('beforeunload', onBeforeUnload);
-    unregisterCloseGuard?.();
-    state.contextMenuCleanup?.();
-    if (state.openFileToken) ctx.eventBus?.off?.('desktop-app:open-file', state.openFileToken);
-    state.contextMenu?.remove();
-    state.contextMenu = null;
-    state.localSubscriptionCleanup?.();
-    state.readinessCleanup?.();
-    if (state.editorHandle?.kind === 'ctox-spreadsheets') {
-      state.editorHandle.destroy().catch((error) => {
-        console.error('[spreadsheets] editor cleanup failed', error);
-      });
-    }
-    state.editorHandle = null;
-    if (state.rightPaneEl) state.rightPaneEl.hidden = shellRightWasHidden;
-    if (shellLeftPane) shellLeftPane.hidden = shellLeftWasHidden;
+  return {
+    async unmount() {
+      state.disposed = true;
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      state.contextMenuCleanup?.();
+      state.contextMenu?.remove();
+      state.contextMenu = null;
+      state.versionSubscription?.off?.();
+      state.versionSubscription = null;
+      for (const dispose of state.disposers.splice(0)) {
+        try { dispose(); } catch (error) { console.warn('[spreadsheets] unsubscribe failed', error); }
+      }
+      state.officeBridge.dispose();
+      if (state.editorHandle?.kind === 'ctox-spreadsheets') {
+        await state.editorHandle.destroy().catch((error) => console.error('[spreadsheets] editor cleanup failed', error));
+      }
+      state.editorHandle = null;
+      root.replaceChildren();
+    },
+    snapshot: () => spreadsheetsSnapshot(state),
   };
 }
 
-// Right pane (runbook/AI planner) lives in the shell's [data-right-pane] slot.
-// The module only owns the visibility flag — toggling its `hidden` attribute
-// collapses the shell's 3-column workspace grid automatically.
-function stateRightPane(ctx) {
-  return ctx?.right?.closest?.('[data-right-pane]') || null;
+function plainSnapshot(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
 }
 
-function applyRightPaneState(state) {
-  if (!state.rightPaneEl) return;
-  state.rightPaneEl.hidden = true;
-  state.ctx.right?.replaceChildren();
+// Fensterzustand für den Live-Remount (PORTING §2): Auswahl, Suche, Filter, Ansicht, Listen-Scroll.
+function spreadsheetsSnapshot(state) {
+  const snap = { v: 1 };
+  for (const key of SNAPSHOT_VIEW_KEYS) snap[key] = state[key];
+  snap.listScrollTop = state.root?.querySelector('[data-spreadsheets-list]')?.scrollTop || 0;
+  return snap;
+}
+
+function applyRestoredView(state, restored) {
+  if (!restored || restored.v !== 1) return;
+  for (const key of SNAPSHOT_VIEW_KEYS) {
+    if (key in restored && typeof restored[key] === typeof state[key]) state[key] = restored[key];
+  }
+  if (Number.isFinite(restored.listScrollTop)) state.pendingListScrollTop = restored.listScrollTop;
+}
+
+// Deep-Link über api.shell.onRoute statt eventBus 'desktop-app:open-file': {record|spreadsheetId, file_ref|ref,
+// name, mime, sourceFileId, …}. Unbekannter Datensatz → Zustandszone (R13).
+function handleRoute(state, params = {}) {
+  if (state.disposed) return;
+  const fileRef = String(params.file_ref || params.ref || '').trim();
+  if (fileRef) enqueueSpreadsheetOpenFile(state, { ...params, ref: fileRef });
+  const recordId = String(params.record || params.spreadsheetId || '').trim();
+  if (!recordId) return;
+  const code = 'spreadsheets.route.unknown_record';
+  if (!state.spreadsheets.some((record) => record.id === recordId)) {
+    state.api.status.report({ level: 'warn', code, text: state.t('linkedSpreadsheetUnavailable', 'Verknüpfte Tabelle {0} ist hier nicht vorhanden.', recordId) });
+    return;
+  }
+  state.api.status.clear(code);
+  if (state.selectedId === recordId) return;
+  saveSpreadsheetBeforeLeaving(state).then((ok) => {
+    if (!ok || state.disposed) return;
+    state.selectedId = recordId;
+    state.selectedVersion = null;
+    return loadSelectedVersion(state).then(() => { renderLeft(state); renderCenter(state); });
+  }).catch((error) => reportSpreadsheetError(state, 'spreadsheets.route.open', error));
+}
+
+// Fehler und Hinweise nur in die Zustandszone (R11); stabile Codes je Fall.
+function reportSpreadsheetError(state, code, error, prefix = '') {
+  if (state.disposed) return;
+  const message = error?.message || String(error || '');
+  state.api.status.report({ level: 'error', code, text: `${prefix ? `${prefix} ` : ''}${message}` });
 }
 
 function enqueueSpreadsheetOpenFile(state, input) {
-  if (!input?.file) return state.openFilePromise;
+  if (!input?.file && !input?.ref) return state.openFilePromise;
   state.openFilePromise = state.openFilePromise
     .then(() => openSpreadsheetFile(state, input))
     .catch((error) => {
       console.error('[spreadsheets] opening file from Files failed', error);
-      state.ctx.notifications?.show?.({ type: 'error', message: String(error?.message || error) });
-      if (!state.editorHandle) renderSpreadsheetOpenError(state, error);
+      reportSpreadsheetError(state, 'spreadsheets.file.open', error, state.t('fileOpenFailed', 'Datei konnte nicht geöffnet werden:'));
       return null;
     });
   return state.openFilePromise;
@@ -247,7 +240,8 @@ async function openSpreadsheetFile(state, input) {
   const handle = state.editorHandle;
   if (!await saveSpreadsheetBeforeLeaving(state)) return;
   if (state.selectedId !== selectedId || state.editorHandle !== handle) return;
-  const file = input?.file;
+  const file = input?.file || await fileFromRef(state, input);
+  if (state.disposed) return;
   const validation = validateImportInput({ file });
   if (!validation.valid) throw new Error(state.t(validation.key, validation.message));
   const ingestion = await resolveSpreadsheetIngestion(state, input);
@@ -255,7 +249,6 @@ async function openSpreadsheetFile(state, input) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const sourceSha = await sha256Hex(bytes);
   assertSpreadsheetSnapshotBytes(ingestion, sourceSha);
-  await refreshSpreadsheets(state);
   const existing = spreadsheetBySourceSha(state.spreadsheets, sourceSha, ingestion);
   if (state.selectedId !== selectedId || state.editorHandle !== handle) return;
   if (!await saveSpreadsheetBeforeLeaving(state)) return;
@@ -292,77 +285,119 @@ function spreadsheetIngestionMatches(record, ingestion) {
       === JSON.stringify(ingestion.report_snapshot);
 }
 
-function renderSpreadsheetOpenError(state, error) {
-  const host = state.ctx.host.querySelector('[data-spreadsheets-editor]') || state.ctx.host;
-  host.innerHTML = `<div class="ctox-empty"><strong>Datei konnte nicht geöffnet werden</strong><span>${escapeHtml(error?.message || error)}</span></div>`;
+// Datei aus api.files öffnen: ref → Blob; Name/Typ aus dem files-Dokument.
+async function fileFromRef(state, input) {
+  const ref = String(input.ref || '').trim();
+  const meta = state.api.query('files', { selector: { ref }, limit: 1 }).get()[0] || null;
+  const blob = await state.api.files.get(ref);
+  const name = String(input.name || meta?.name || 'tabelle.xlsx');
+  return new File([blob], name, { type: String(input.mime || meta?.mime || blob.type || '') });
 }
 
-async function ensureSpreadsheetRuntimeReady(ctx) {
-  if (typeof ctx?.actions?.ensureRuntimeReady !== 'function') return false;
-  await ctx.actions.ensureRuntimeReady();
-  return true;
+// Lesevorschau (FIX9b): Raster aus model_json der Version (erste 200 Zeilen, 26 Spalten), nur lesen. Ohne Daten
+// (z. B. XLSX vor dem Office-Prepare) bleibt sie verborgen – kein Wartetext.
+const READ_PREVIEW_MAX_ROWS = 200;
+const READ_PREVIEW_MAX_COLS = 26;
+function spreadsheetReadPreviewHtml(version) {
+  const data = Array.isArray(version?.model_json?.data) ? version.model_json.data : [];
+  const rows = data.slice(0, READ_PREVIEW_MAX_ROWS).map((row) => (Array.isArray(row) ? row : [row]));
+  if (!rows.some((row) => row.some((cell) => String(cell ?? '').trim()))) return '';
+  const cols = Math.min(READ_PREVIEW_MAX_COLS, Math.max(1, ...rows.map((row) => row.length)));
+  const letters = Array.from({ length: cols }, (_, i) => String.fromCharCode(65 + i));
+  const head = `<thead><tr><th scope="col"></th>${letters.map((l) => `<th scope="col">${l}</th>`).join('')}</tr></thead>`;
+  const body = rows.map((row, r) => `<tr><th scope="row">${r + 1}</th>${letters.map((_, c) => {
+    const value = row[c] ?? '';
+    const numeric = value !== '' && Number.isFinite(Number(value));
+    return `<td${numeric ? ' class="is-num"' : ''}>${escapeHtml(value)}</td>`;
+  }).join('')}</tr>`).join('');
+  return `<table>${head}<tbody>${body}</tbody></table>`;
+}
+
+function renderSpreadsheetReadPreview(state, host, version) {
+  host?.querySelector?.('[data-spreadsheets-read-preview]')?.remove();
+  const html = spreadsheetReadPreviewHtml(version);
+  if (!html || typeof host?.prepend !== 'function') return null;
+  const preview = document.createElement('div');
+  preview.className = 'spreadsheets-read-preview';
+  preview.dataset.spreadsheetsReadPreview = '';
+  preview.setAttribute('role', 'region');
+  preview.setAttribute('aria-label', state.t('readPreview', 'Lesevorschau'));
+  preview.innerHTML = html;
+  host.prepend(preview);
+  return preview;
+}
+
+// Vorwärmen (FIX9b): das Office-Bibliotheksmodul lädt im Leerlauf, sobald Tabellen da sind; die
+// Bibliothek selbst bleibt unverändert.
+function scheduleOfficePrewarm(state) {
+  if (state.officePrewarmScheduled || state.ctoxSpreadsheetsModule || !state.spreadsheets?.length) return;
+  state.officePrewarmScheduled = true;
+  const run = () => {
+    if (state.disposed) return;
+    loadCtoxSpreadsheetsModule(state).catch(() => { state.officePrewarmScheduled = false; });
+  };
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 2000 });
+  else setTimeout(run, 200);
 }
 
 async function loadCtoxSpreadsheetsModule(state) {
   if (!state.ctoxSpreadsheetsModule) {
-    state.ctoxSpreadsheetsModule = await import('../../vendor/ctox-office/ctox-office-spreadsheet.mjs?v=20260904-office-shell-v2');
+    state.ctoxSpreadsheetsModule = await import('ctox:lib/ctox-office@1/ctox-office-spreadsheet.mjs');
   }
   return state.ctoxSpreadsheetsModule;
 }
 
-function wireModule(state) {
-  state.ctx.host.addEventListener('spreadsheets:refresh-left', () => renderLeft(state));
-}
-
+// Live-Abos statt ctx.db, Readiness und Demand-Loadern (R3/R4); 80 ms gebündeltes Rendern.
 function wireLocalRealtime(state) {
-  const collections = ['spreadsheets', 'spreadsheet_versions', 'spreadsheet_runbooks', 'spreadsheet_blob_chunks'];
-  const refresh = createCoalescedRefresh({
-    delayMs: SPREADSHEET_RENDER_DEBOUNCE_MS,
-    refresh: (changed, isActive) => refreshSpreadsheetsFromLocal(state, changed, isActive),
-    onError: (error) => console.warn('[spreadsheets] local realtime render failed', error),
-  });
-  const subscriptions = collections
-    .map((collectionName) => spreadsheetCollection(state.ctx, collectionName)?.$?.subscribe?.(() => refresh.notify(collectionName)) || null)
-    .filter(Boolean);
+  const api = state.api;
+  const changed = new Set();
+  let timer = null;
+  let disposed = false;
+  const flush = () => {
+    timer = null;
+    if (disposed || state.disposed) return;
+    const batch = new Set(changed);
+    changed.clear();
+    refreshSpreadsheetsFromLocal(state, batch, () => !disposed && !state.disposed)
+      .catch((error) => reportSpreadsheetError(state, 'spreadsheets.render', error));
+  };
+  state.notifyLocalChange = (name) => {
+    changed.add(name);
+    if (!timer) timer = setTimeout(flush, SPREADSHEET_RENDER_DEBOUNCE_MS);
+  };
+  const offs = [];
+  offs.push(api.query('spreadsheets', { sort: [{ updated_at_ms: 'desc' }] }).subscribe((rows) => {
+    state.rawSpreadsheets = Array.isArray(rows) ? rows : [];
+    refreshSpreadsheets(state);
+    state.notifyLocalChange('spreadsheets');
+  }));
+  offs.push(api.query('spreadsheet_runbooks', { sort: [{ title: 'asc' }] }).subscribe((rows) => {
+    state.runbooks = mergeSpreadsheetRunbooks(Array.isArray(rows) ? rows : []);
+    state.notifyLocalChange('spreadsheet_runbooks');
+  }));
   return () => {
-    refresh.dispose();
-    for (const sub of subscriptions) {
-      try { sub.unsubscribe?.(); } catch {}
+    disposed = true;
+    if (timer) clearTimeout(timer);
+    timer = null;
+    state.notifyLocalChange = () => {};
+    for (const off of offs.splice(0)) {
+      try { off(); } catch {}
     }
   };
 }
 
-function spreadsheetCollection(ctx, collectionName) {
-  return ctx?.db?.collection?.(collectionName) || null;
-}
-
-// Canonical shell readiness (ctx.sync) for the primary `spreadsheets`
-// collection: while the initial replication has not landed, the explorer
-// must show a sync state instead of "Keine Tabellen".
-function readSpreadsheetsReadiness(state) {
-  const read = state?.ctx?.sync?.collectionReadiness;
-  return typeof read === 'function'
-    ? read.call(state.ctx.sync, SPREADSHEETS_PRIMARY_COLLECTION)
-    : null;
-}
-
-function wireSpreadsheetsReadiness(state) {
-  const subscribe = state?.ctx?.sync?.subscribeCollectionReadiness;
-  if (typeof subscribe !== 'function') return () => {};
-  const unsubscribe = subscribe.call(state.ctx.sync, SPREADSHEETS_PRIMARY_COLLECTION, (snapshot) => {
-    state.spreadsheetsReadiness = snapshot;
-    renderLeft(state);
+// Ein Versionsabo je Auswahl: neue/geänderte Versionen erscheinen live (refreshSpreadsheetsFromLocal).
+function ensureVersionSubscription(state, spreadsheetId) {
+  if (state.disposed) return;
+  const id = String(spreadsheetId || '');
+  if (state.versionSubscription?.spreadsheetId === id) return;
+  state.versionSubscription?.off?.();
+  state.versionSubscription = null;
+  if (!id) return;
+  const off = state.api.query('spreadsheet_versions', { selector: { spreadsheet_id: id } }).subscribe(() => {
+    state.notifyLocalChange?.('spreadsheet_versions');
   });
-  return typeof unsubscribe === 'function' ? unsubscribe : () => {};
-}
-
-// Render hint only — never blocks mounting. True exactly when the unfiltered
-// source is empty AND the backing collection has not finished its initial
-// replication (never-synced / catching-up / offline-pending ⇒ ready === false).
-function shouldRenderSpreadsheetsSyncing(state) {
-  if ((state?.spreadsheets?.length || 0) > 0) return false;
-  const readiness = state?.spreadsheetsReadiness ?? readSpreadsheetsReadiness(state);
-  return readiness != null && readiness.ready === false;
+  state.versionSubscription = { spreadsheetId: id, off };
 }
 
 function spreadsheetDraftProtected(state) {
@@ -376,11 +411,7 @@ async function saveSpreadsheetBeforeLeaving(state) {
   const handle = state.editorHandle;
   const selectedId = state.selectedId;
   if (handle?.kind === 'ctox-spreadsheets' && (state.dirty || state.saving || handle.saving)) {
-    await withTimeout(
-      handle.save({ reason: 'final' }),
-      90000,
-      state.t('spreadsheetSaveBeforeLeavingFailed', 'Die Tabelle konnte vor dem Wechsel nicht gespeichert werden.'),
-    );
+    await handle.save({ reason: 'final' });
     if (state.editorHandle !== handle || state.selectedId !== selectedId) return false;
     if (state.dirty || state.saving || handle.saving) {
       throw new Error(state.t('spreadsheetChangesRemainUnsaved', 'Weitere Änderungen sind noch ungespeichert. Bitte nach dem Speichern erneut versuchen.'));
@@ -392,18 +423,7 @@ async function saveSpreadsheetBeforeLeaving(state) {
 async function refreshSpreadsheetsFromLocal(state, changed = null, isActive = () => true) {
   if (!isActive()) return;
   const all = changed === null;
-  try {
-    await Promise.all([
-      (all || changed.has('spreadsheet_runbooks'))
-        ? refreshRunbooks(state).catch((err) => console.warn('[spreadsheets] background refreshRunbooks failed', err)) : null,
-      (all || changed.has('spreadsheets'))
-        ? refreshSpreadsheets(state).catch((err) => console.warn('[spreadsheets] background refreshSpreadsheets failed', err)) : null,
-    ]);
-  } catch (error) {
-    console.warn('[spreadsheets] background refresh from local failed', error);
-  }
-  if (!isActive()) return;
-  if ((all || changed.has('spreadsheets') || changed.has('spreadsheet_versions') || changed.has('spreadsheet_blob_chunks'))
+  if ((all || changed.has('spreadsheets') || changed.has('spreadsheet_versions'))
     && state.selectedId && !spreadsheetDraftProtected(state)
     && state.selectedVersion?.id !== selectedRecord(state)?.current_version_id) {
     const load = currentSpreadsheetVersionLoad(state);
@@ -416,46 +436,25 @@ async function refreshSpreadsheetsFromLocal(state, changed = null, isActive = ()
   renderRight(state);
 }
 
-async function refreshSpreadsheets(state) {
-  const collection = spreadsheetCollection(state.ctx, 'spreadsheets');
+function refreshSpreadsheets(state) {
   const selectedBeforeRefresh = selectedRecord(state);
-  const rawSpreadsheets = collection
-    ? await collection.find({ sort: [{ updated_at_ms: 'desc' }] }).exec()
-    : [];
-  state.spreadsheets = rawSpreadsheets
-    .map((doc) => normalizeSpreadsheetRecord(typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
+  state.spreadsheets = (state.rawSpreadsheets || [])
+    .map((doc) => normalizeSpreadsheetRecord(doc))
     .filter(isActiveSpreadsheetRecord);
+  scheduleOfficePrewarm(state);
 
   if (state.selectedId && !state.spreadsheets.some((record) => record.id === state.selectedId)) {
-    const selectedDoc = collection
-      ? await collection.findOne({
-        selector: { id: state.selectedId },
-        requireRevision: spreadsheetRecordRevision(state.selectedId, selectedBeforeRefresh?.updated_at_ms),
-      }).exec().catch(() => null)
-      : null;
-    const selected = selectedDoc
-      ? normalizeSpreadsheetRecord(typeof selectedDoc.toJSON === 'function' ? selectedDoc.toJSON() : selectedDoc)
-      : selectedBeforeRefresh;
-    if (selected && isActiveSpreadsheetRecord(selected)) {
-      state.spreadsheets.unshift(selected);
+    // Die Live-Abfrage ist lokal vollständig: fehlt der Datensatz, ist er gelöscht oder nie angekommen.
+    // Offener Entwurf im Editor hält die Auswahl (wie vorher über requireRevision).
+    if (selectedBeforeRefresh && spreadsheetDraftProtected(state)) {
+      state.spreadsheets.unshift(selectedBeforeRefresh);
     } else {
       state.selectedId = state.spreadsheets[0]?.id || '';
       state.selectedVersion = null;
     }
   }
   if (!state.selectedId && state.spreadsheets[0]) state.selectedId = state.spreadsheets[0].id;
-}
-
-function spreadsheetRecordRevision(recordId, updatedAtMs = 0) {
-  return `spreadsheet:${String(recordId || '')}:${Number(updatedAtMs || 0) || 'current'}`;
-}
-
-async function refreshRunbooks(state) {
-  const collection = spreadsheetCollection(state.ctx, 'spreadsheet_runbooks');
-  const storedRunbooks = collection
-    ? (await collection.find({ sort: [{ title: 'asc' }] }).exec()).map((doc) => doc.toJSON())
-    : [];
-  state.runbooks = mergeSpreadsheetRunbooks(storedRunbooks);
+  ensureVersionSubscription(state, state.selectedId);
 }
 
 function mergeSpreadsheetRunbooks(stored = []) {
@@ -484,7 +483,6 @@ async function createNewSpreadsheet(state, input = {}) {
   const handle = state.editorHandle;
   if (!await saveSpreadsheetBeforeLeaving(state)) return;
   if (state.selectedId !== selectedId || state.editorHandle !== handle) return;
-  requireSpreadsheetPersistence(state.ctx);
   const title = sanitizeTitle(input.title || nextBlankSpreadsheetTitle(state));
   if (!title) throw new Error(state.t('validationTitleRequired', 'Titel fehlt.'));
   const filename = ensureExtension(slugFilename(title), '.csv');
@@ -505,27 +503,30 @@ async function createNewSpreadsheet(state, input = {}) {
   const csvText = rowsToCsv(modelJson.data);
   const bytes = new TextEncoder().encode(csvText);
 
-  await saveBlobChunks(state.ctx, {
+  const sourceSha = await sha256Hex(bytes);
+  await saveBlobChunks(state, {
     blobId,
     spreadsheetId: documentId,
     versionId,
     mimeType: CSV_MIME,
-    bytes
+    bytes,
+    name: filename,
   });
 
-  await spreadsheetCollection(state.ctx, 'spreadsheet_versions').insert({
+  await state.api.put('spreadsheet_versions', {
     id: versionId,
     spreadsheet_id: documentId,
     version: 1,
     source_kind: 'created_blank',
     blob_id: blobId,
+    source_sha256: sourceSha,
     model_json: modelJson,
     diagnostics: [],
     created_at_ms: now,
     updated_at_ms: now,
-  });
+  }).local;
 
-  await spreadsheetCollection(state.ctx, 'spreadsheets').insert({
+  await state.api.put('spreadsheets', {
     id: documentId,
     title,
     filename,
@@ -534,7 +535,7 @@ async function createNewSpreadsheet(state, input = {}) {
     spreadsheet_type: 'csv',
     owner_id: '',
     current_version_id: versionId,
-    source_sha256: await sha256Hex(bytes),
+    source_sha256: sourceSha,
     row_count: input.data ? modelJson.data.length : 0,
     col_count: input.data ? (modelJson.data[0]?.length || 0) : 0,
     diagnostics_count: 0,
@@ -545,14 +546,14 @@ async function createNewSpreadsheet(state, input = {}) {
     is_deleted: false,
     created_at_ms: now,
     updated_at_ms: now,
-  });
+  }).local;
 
   if (state.selectedId !== selectedId || state.editorHandle !== handle) return;
   if (!await saveSpreadsheetBeforeLeaving(state)) return;
   if (state.selectedId !== selectedId || state.editorHandle !== handle) return;
   state.selectedId = documentId;
   revealSelectedSpreadsheetInList(state);
-  await refreshSpreadsheets(state);
+  refreshSpreadsheets(state);
   await loadSelectedVersion(state);
   renderLeft(state);
   renderRight(state);
@@ -573,10 +574,10 @@ async function requestBlankSpreadsheet(state) {
   state.creatingBlankSpreadsheet = true;
   try {
     await createNewSpreadsheet(state);
-    state.ctx.notifications?.show?.({ type: 'success', message: state.t('blankSpreadsheetCreated', 'Leere Tabelle erstellt.') });
+    state.api.status.clear('spreadsheets.create');
   } catch (error) {
     console.error('[spreadsheets] blank spreadsheet creation failed', error);
-    state.ctx.notifications?.show?.({ type: 'error', message: `${state.t('spreadsheetCreateFailed', 'Tabelle konnte nicht erstellt werden:')} ${error?.message || error}` });
+    reportSpreadsheetError(state, 'spreadsheets.create', error, state.t('spreadsheetCreateFailed', 'Tabelle konnte nicht erstellt werden:'));
   } finally {
     state.creatingBlankSpreadsheet = false;
   }
@@ -587,7 +588,6 @@ async function importSpreadsheetFile(state, file, tags = [], ingestionInput = {}
   const handle = state.editorHandle;
   if (!await saveSpreadsheetBeforeLeaving(state)) return;
   if (state.selectedId !== selectedId || state.editorHandle !== handle) return;
-  requireSpreadsheetPersistence(state.ctx);
   const ingestion = normalizeSpreadsheetIngestion(ingestionInput.file ? ingestionInput : { ...ingestionInput, file });
   assertSpreadsheetIngestionAllowed(ingestion);
   const validation = validateImportInput({ file });
@@ -598,7 +598,8 @@ async function importSpreadsheetFile(state, file, tags = [], ingestionInput = {}
   const isTsv = file.name.toLowerCase().endsWith('.tsv') || file.type === TSV_MIME;
   const bytes = new Uint8Array(await file.arrayBuffer());
   const sourceSha = await sha256Hex(bytes);
-  assertSpreadsheetSnapshotBytes(ingestion, sourceSha);
+  // Snapshot-Digest prüft allein openSpreadsheetFile (vor Wiederverwendung UND Import); nur dieser Weg trägt
+  // open_purpose 'snapshot_report' hierher, der Upload-Weg nie.
   const fileText = isXlsx ? '' : new TextDecoder().decode(bytes);
 
   const documentId = `sheet_${crypto.randomUUID()}`;
@@ -637,15 +638,16 @@ async function importSpreadsheetFile(state, file, tags = [], ingestionInput = {}
   }
   modelJson = normalizeSpreadsheetModel(modelJson);
 
-  await saveBlobChunks(state.ctx, {
+  await saveBlobChunks(state, {
     blobId,
     spreadsheetId: documentId,
     versionId,
     mimeType: isXlsx ? XLSX_MIME : isTsv ? TSV_MIME : CSV_MIME,
-    bytes
+    bytes,
+    name: file.name,
   });
 
-  await spreadsheetCollection(state.ctx, 'spreadsheet_versions').insert({
+  await state.api.put('spreadsheet_versions', {
     id: versionId,
     spreadsheet_id: documentId,
     version: 1,
@@ -654,6 +656,7 @@ async function importSpreadsheetFile(state, file, tags = [], ingestionInput = {}
       : isXlsx ? 'imported_xlsx' : isTsv ? 'imported_tsv' : 'imported_csv',
     ingestion_kind: ingestion.kind,
     blob_id: blobId,
+    source_sha256: sourceSha,
     model_json: modelJson,
     diagnostics: [],
     linked_records: ingestion.linkedRecords,
@@ -662,9 +665,9 @@ async function importSpreadsheetFile(state, file, tags = [], ingestionInput = {}
     knowledge_lineage: ingestion.knowledgeLineage,
     created_at_ms: now,
     updated_at_ms: now,
-  });
+  }).local;
 
-  await spreadsheetCollection(state.ctx, 'spreadsheets').insert({
+  await state.api.put('spreadsheets', {
     id: documentId,
     title: titleFromFilename(file.name),
     filename: file.name,
@@ -689,14 +692,14 @@ async function importSpreadsheetFile(state, file, tags = [], ingestionInput = {}
     is_deleted: false,
     created_at_ms: now,
     updated_at_ms: now,
-  });
+  }).local;
 
   if (state.selectedId !== selectedId || state.editorHandle !== handle) return;
   if (!await saveSpreadsheetBeforeLeaving(state)) return;
   if (state.selectedId !== selectedId || state.editorHandle !== handle) return;
   state.selectedId = documentId;
   revealSelectedSpreadsheetInList(state);
-  await refreshSpreadsheets(state);
+  refreshSpreadsheets(state);
   await loadSelectedVersion(state);
   renderLeft(state);
   renderRight(state);
@@ -707,7 +710,7 @@ async function resolveSpreadsheetIngestion(state, input = {}) {
   const candidates = [input];
   const sourceFileId = String(input.sourceFileId || input.source_file_id || '').trim();
   if (sourceFileId) {
-    const sourceFile = await readSpreadsheetSourceRecord(state.ctx, 'desktop_files', sourceFileId);
+    const sourceFile = readSpreadsheetSourceRecord(state, 'desktop_files', sourceFileId);
     if (!sourceFile) {
       return {
         ...normalizeSpreadsheetIngestion({ candidates }),
@@ -720,18 +723,20 @@ async function resolveSpreadsheetIngestion(state, input = {}) {
     const linkedCollection = String(sourceFile.linked_collection || '').trim();
     const linkedRecordId = String(sourceFile.linked_record_id || '').trim();
     if (linkedCollection && linkedRecordId && linkedCollection !== 'desktop_files') {
-      const linkedRecord = await readSpreadsheetSourceRecord(state.ctx, linkedCollection, linkedRecordId);
+      const linkedRecord = readSpreadsheetSourceRecord(state, linkedCollection, linkedRecordId);
       if (linkedRecord) candidates.push(linkedRecord);
     }
   }
   return normalizeSpreadsheetIngestion({ candidates });
 }
 
-async function readSpreadsheetSourceRecord(ctx, collectionName, recordId) {
-  const collection = ctx?.db?.collection?.(collectionName);
-  if (!collection?.findOne) return null;
-  const document = await collection.findOne(recordId).exec();
-  return document?.toJSON?.() || document || null;
+// Herkunftsdatensatz einer geöffneten Datei (fremde Collection, nur lesen; V4-PORT.md OFFEN-2). Ohne Leserecht null.
+function readSpreadsheetSourceRecord(state, collectionName, recordId) {
+  try {
+    return state.api.get(collectionName, recordId).get() || null;
+  } catch {
+    return null;
+  }
 }
 
 function normalizeSpreadsheetIngestion(input = {}) {
@@ -998,89 +1003,8 @@ function parseCSVContent(text, delimiter = ',') {
   return lines;
 }
 
-async function withSpreadsheetVersionTimeout(promise, ms, message) {
-  let timer;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(Object.assign(new Error(message), {
-          code: 'spreadsheet_version_read_timeout',
-        })), ms);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function isTransientSpreadsheetVersionReadError(error) {
-  const code = String(error?.code || '').toLowerCase();
-  const message = String(error?.message || error || '').toLowerCase();
-  const diagnostic = `${code} ${message}`;
-  // Permission, schema and integrity failures must never become reconnects,
-  // even when a wrapped diagnostic also contains transport timeout wording.
-  if (/(permission|forbidden|unauthori[sz]ed|authentication|authorization|access.denied|schema|integrity|sha256|checksum|validation)/.test(diagnostic)) return false;
-  return code === 'spreadsheet_version_read_timeout'
-    || code === 'webrtc_peer_reopen_timeout'
-    || (/\bwebrtc\b/.test(diagnostic) && /\bpeer\b/.test(message)
-      && /(re.?open|open)/.test(message) && /(timeout|timed out|time out)/.test(message))
-    || message.includes('webrtc replication cancelled')
-    || message.includes('query_cancelled')
-    || message.includes('replication-cancel')
-    || message.includes('database connection is closing')
-    || (message.includes('idbdatabase') && message.includes('closing'));
-}
-
-async function resolveSpreadsheetVersionLocalFirst(readLocal, recover, { isCurrent = () => true } = {}) {
-  // At most two recoveries, including failed bridge bring-up. A successful
-  // recovered read returning null establishes absence; transport failure does not.
-  for (let round = 0; round <= 2; round += 1) {
-    if (!isCurrent()) return null;
-    if (round > 0) {
-      try {
-        await recover();
-      } catch (error) {
-        if (!isCurrent()) return null;
-        if (!isTransientSpreadsheetVersionReadError(error) || round === 2) throw error;
-        continue;
-      }
-      if (!isCurrent()) return null;
-    }
-    try {
-      const doc = await readLocal(round === 0 ? 4500 : 60000);
-      if (!isCurrent()) return null;
-      if (doc) return doc;
-      if (round > 0) return null;
-    } catch (error) {
-      if (!isCurrent()) return null;
-      if (!isTransientSpreadsheetVersionReadError(error) || round === 2) throw error;
-    }
-  }
-  return null;
-}
-
-async function awaitSpreadsheetVersionReplication(ctx, isCurrent = () => true) {
-  if (!isCurrent()) return;
-  if (typeof ctx?.sync?.startCollection !== 'function') return;
-  const message = ctx.t?.('spreadsheetVersionReplicationTimeout') || 'spreadsheet_version_replication_timeout';
-  let bridge = await withSpreadsheetVersionTimeout(
-    ctx.sync.startCollection('spreadsheet_versions', { forceDirect: true }),
-    60000,
-    message,
-  );
-  if (!isCurrent()) return;
-  if (bridge?.ready) {
-    const ready = typeof bridge.ready === 'function' ? bridge.ready() : bridge.ready;
-    bridge = (await withSpreadsheetVersionTimeout(ready, 60000, message)) || bridge;
-    if (!isCurrent()) return;
-  }
-  const state = bridge?.state || bridge;
-  if (typeof state?.waitForOpenPeerId === 'function') {
-    await withSpreadsheetVersionTimeout(state.waitForOpenPeerId(60000), 60000, message);
-  }
-}
-
+// Version aus dem lokalen Stand (api.get/query sind synchron und vollständig). Fehlt sie, kommt sie live über
+// das Versionsabo nach; kein Ersatzkopf, keine Replikationswartezeit (R4).
 async function loadSelectedVersion(state, isActive = () => true) {
   if (state.disposed || !isActive()) return null;
   if (spreadsheetDraftProtected(state)) return null;
@@ -1093,75 +1017,34 @@ async function loadSelectedVersion(state, isActive = () => true) {
     return null;
   }
   const handle = state.editorHandle;
-  const activity = handle?.activity;
   const selection = state.selectedId;
-  const selectedVersion = state.selectedVersion;
-  const selectedVersionId = selectedVersion?.id;
   const versionId = record.current_version_id;
   const load = { selection, versionId, status: 'loading', error: null };
   state.versionLoad = load;
-  const isCurrent = () => !state.disposed && isActive()
-    && state.versionLoad === load && state.selectedId === selection
-    && state.editorHandle === handle && handle?.activity === activity
-    && state.selectedVersion === selectedVersion && state.selectedVersion?.id === selectedVersionId
-    && selectedRecord(state)?.current_version_id === versionId
-    && !spreadsheetDraftProtected(state);
-  try {
-    const doc = await resolveSpreadsheetVersionLocalFirst(async (timeoutMs) => {
-      if (!isCurrent()) return null;
-      let doc = record.current_version_id
-        ? await withSpreadsheetVersionTimeout(
-          spreadsheetCollection(state.ctx, 'spreadsheet_versions').findOne(record.current_version_id).exec(),
-          timeoutMs,
-          `Version ${record.current_version_id} konnte nicht geladen werden.`,
-        )
-        : null;
-      if (!isCurrent()) return null;
-      if (!doc) {
-        const fallback = await withSpreadsheetVersionTimeout(
-          spreadsheetCollection(state.ctx, 'spreadsheet_versions').find({
-            selector: { spreadsheet_id: record.id },
-            sort: [{ updated_at_ms: 'desc' }],
-            limit: 1,
-          }).exec(),
-          timeoutMs,
-          `Keine Versionen für ${record.id} gefunden.`,
-        );
-        if (!isCurrent()) return null;
-        doc = fallback[0] || null;
-      }
-      return doc || null;
-    }, () => awaitSpreadsheetVersionReplication(state.ctx, isCurrent), { isCurrent });
-    if (!isCurrent()) return null;
-    if (!doc) {
-      load.status = 'missing';
-      if (handle?.recordId !== selection) {
-        state.selectedVersion = null;
-        state.dirty = false;
-        state.saving = false;
-      }
-      return null;
-    }
-    state.selectedVersion = doc.toJSON();
-    load.status = 'ready';
-    state.dirty = false;
-    state.saving = false;
-    return state.selectedVersion;
-  } catch (err) {
-    if (!isCurrent()) return null;
-    load.status = 'error';
-    load.error = err;
-    console.warn('[spreadsheets] loadSelectedVersion failed gracefully', err);
+  ensureVersionSubscription(state, record.id);
+  let doc = versionId ? state.api.get('spreadsheet_versions', versionId).get() : null;
+  if (!doc) {
+    doc = state.api.query('spreadsheet_versions', {
+      selector: { spreadsheet_id: record.id },
+      sort: [{ updated_at_ms: 'desc' }],
+      limit: 1,
+    }).get()[0] || null;
+  }
+  if (!doc) {
+    load.status = 'missing';
     if (handle?.recordId !== selection) {
       state.selectedVersion = null;
       state.dirty = false;
       state.saving = false;
     }
     return null;
-  } finally {
-    // Superseded reads must not leave a permanent loading state behind.
-    if (load.status === 'loading' && state.versionLoad === load) state.versionLoad = null;
   }
+  // Live-Zeilen sind eingefroren; der Editor arbeitet auf einer eigenen Kopie.
+  state.selectedVersion = structuredClone(doc);
+  load.status = 'ready';
+  state.dirty = false;
+  state.saving = false;
+  return state.selectedVersion;
 }
 
 /* --------------------------------------------------------------------------
@@ -1198,13 +1081,13 @@ function fillPaneHead(state, root) {
 }
 
 function paneHeadFragment(state, name) {
-  const template = state.ctx.host.querySelector(`template[data-spreadsheets-head="${name}"]`);
+  const template = state.root.querySelector(`template[data-spreadsheets-head="${name}"]`);
   if (!template) return document.createDocumentFragment();
   return fillPaneHead(state, template.content.cloneNode(true));
 }
 
 function renderLeft(state) {
-  const wrap = state.ctx.host.querySelector('[data-spreadsheets-explorer]');
+  const wrap = state.root.querySelector('[data-spreadsheets-explorer]');
   if (!wrap) return;
   const visible = visibleSpreadsheets(state);
   const selected = selectedRecord(state);
@@ -1233,47 +1116,21 @@ function renderLeft(state) {
   const list = wrap.querySelector('[data-spreadsheets-list]');
   wrap.dataset.officeView = state.listView || 'list';
   populateSpreadsheetList(state, list, visible);
-  autoWirePaneGrammar(state.ctx.host);
+  autoWirePaneGrammar(state.root);
   wrap.__ctoxPaneGrammar?.refreshDot();
-  wrap.__ctoxPaneGrammar?.setFooter(`${visible.length} ${state.lang === 'en' ? 'files' : 'Dateien'} · ${hasActiveListFilters(state) ? (state.lang === 'en' ? 'Filtered' : 'Gefiltert') : (state.lang === 'en' ? 'All' : 'Alle')}`);
+  // Textdiät Regel 5: Zähler nur, wenn ein Filter die Liste kürzt.
+  wrap.__ctoxPaneGrammar?.setFooter(hasActiveListFilters(state) ? `${visible.length} ${state.lang === 'en' ? 'filtered' : 'gefiltert'}` : '');
   applySpreadsheetSelection(state);
 }
 
 function populateSpreadsheetList(state, list, records = visibleSpreadsheets(state)) {
-  const signature = JSON.stringify([records, shouldRenderSpreadsheetsSyncing(state)]);
+  const signature = JSON.stringify([records]);
   if (list.dataset.officeSignature === signature) return;
   const scrollTop = list.scrollTop;
   list.dataset.officeSignature = signature;
   list.replaceChildren();
-  if (records.length === 0) {
-    const hasRecords = state.spreadsheets.length > 0;
-    // Data-driven empty (unfiltered source from the replicated `spreadsheets`
-    // collection is empty): show the sync state until the initial replication
-    // has landed. Filter-empties (hasRecords) keep the "Keine Treffer" copy.
-    if (!hasRecords && shouldRenderSpreadsheetsSyncing(state)) {
-      const syncing = document.createElement('div');
-      syncing.className = 'ctox-syncing';
-      syncing.setAttribute('role', 'status');
-      syncing.setAttribute('aria-live', 'polite');
-      syncing.innerHTML = `
-        <strong>${escapeHtml(state.t('syncingSpreadsheets', 'Tabellen werden synchronisiert.'))}</strong>
-        <span>${escapeHtml(state.t('syncingSpreadsheetsDetail', 'Die Tabellendaten werden gerade aus dem CTOX-Datenstrom geladen.'))}</span>
-      `;
-      list.append(syncing);
-      return;
-    }
-    const empty = document.createElement('div');
-    empty.className = 'ctox-empty';
-    empty.innerHTML = `
-      <strong>${escapeHtml(hasRecords ? state.t('noMatches', 'Keine Treffer') : state.t('noDocuments', 'Keine Tabellen'))}</strong>
-      <span>${escapeHtml(hasRecords ? state.t('adjustSearchFilter', 'Suche oder Filter anpassen.') : state.t('importPrompt', 'Eine leere Tabelle erstellen oder XLSX, CSV beziehungsweise TSV importieren.'))}</span>
-      ${hasRecords ? '' : `<div class="spreadsheets-empty-actions"><button class="ctox-button is-primary" type="button" data-spreadsheets-empty-new>${actionIcon(state, 'add')} ${escapeHtml(state.t('createBlankSpreadsheet', 'Leere Tabelle'))}</button><button class="ctox-button" type="button" data-spreadsheets-empty-import>${actionIcon(state, 'upload')} ${escapeHtml(state.t('importDocument', 'Tabelle importieren'))}</button></div>`}
-    `;
-    empty.querySelector('[data-spreadsheets-empty-new]')?.addEventListener('click', () => { void requestBlankSpreadsheet(state); });
-    empty.querySelector('[data-spreadsheets-empty-import]')?.addEventListener('click', () => openImportModal(state));
-    list.append(empty);
-    return;
-  }
+  // Leere oder weggefilterte Liste rendert nichts (R11); Anlegen/Import stehen im Kopf, Filter-Reset im Filterband.
+  if (records.length === 0) return;
 
   for (const record of records) {
     const card = document.createElement('article');
@@ -1299,18 +1156,20 @@ function populateSpreadsheetList(state, list, records = visibleSpreadsheets(stat
     manageBtn.type = 'button';
     manageBtn.className = 'ctox-pane-icon spreadsheets-card-manage';
     manageBtn.dataset.sheetId = record.id;
-    manageBtn.innerHTML = actionIcon(state, 'settings');
-    manageBtn.title = state.t('manageDocument', 'Tabelle verwalten');
-    manageBtn.setAttribute('aria-label', state.t('manageDocument', 'Tabelle verwalten'));
+    // FIX9b: „Weitere Aktionen“ (⋯) statt Zahnrad ohne erkennbaren Zweck.
+    manageBtn.innerHTML = actionIcon(state, 'more');
+    manageBtn.title = state.t('sheetActions', 'Weitere Aktionen');
+    manageBtn.setAttribute('aria-label', `${record.title || record.filename || ''} – ${state.t('sheetActions', 'Weitere Aktionen')}`.replace(/^ – /, ''));
 
     card.append(button, manageBtn);
     list.append(card);
   }
-  list.scrollTop = scrollTop;
+  list.scrollTop = Number.isFinite(state.pendingListScrollTop) ? state.pendingListScrollTop : scrollTop;
+  state.pendingListScrollTop = null;
 }
 
 function applySpreadsheetSelection(state) {
-  for (const card of state.ctx.host.querySelectorAll('.spreadsheets-card')) {
+  for (const card of state.root.querySelectorAll('.spreadsheets-card')) {
     const selected = card.dataset.contextRecordId === state.selectedId;
     card.setAttribute('aria-current', String(selected));
     card.querySelector('.spreadsheets-card-main')?.classList.toggle('is-selected', selected);
@@ -1319,10 +1178,10 @@ function applySpreadsheetSelection(state) {
 
 function setSpreadsheetLibraryOpen(state, open) {
   state.libraryOpen = open;
-  state.ctx.host.querySelector('[data-spreadsheets-module]')?.classList.toggle('is-library-open', open);
-  const backdrop = state.ctx.host.querySelector('[data-spreadsheets-library-backdrop]');
+  state.root.querySelector('[data-spreadsheets-module]')?.classList.toggle('is-library-open', open);
+  const backdrop = state.root.querySelector('[data-spreadsheets-library-backdrop]');
   if (backdrop) backdrop.hidden = !open;
-  state.ctx.host.querySelector('[data-spreadsheets-library-toggle]')?.setAttribute('aria-expanded', String(open));
+  state.root.querySelector('[data-spreadsheets-library-toggle]')?.setAttribute('aria-expanded', String(open));
 }
 
 function bindLeftControls(state, wrap) {
@@ -1350,7 +1209,7 @@ function bindLeftControls(state, wrap) {
     wrap.querySelector('[data-spreadsheets-list]').scrollTop = 0;
     renderLeft(state);
   });
-  state.ctx.host.querySelector('[data-spreadsheets-library-backdrop]')?.addEventListener('click', () => setSpreadsheetLibraryOpen(state, false));
+  state.root.querySelector('[data-spreadsheets-library-backdrop]')?.addEventListener('click', () => setSpreadsheetLibraryOpen(state, false));
 
   wrap.addEventListener('click', (e) => {
     const mainBtn = e.target.closest('.spreadsheets-card-main');
@@ -1370,7 +1229,7 @@ function bindLeftControls(state, wrap) {
           await renderCenter(state);
           renderRight(state);
         })().catch((error) => {
-          state.ctx.notifications?.show?.({ type: 'error', message: String(error?.message || error) });
+          reportSpreadsheetError(state, 'spreadsheets.switch', error);
         });
       }
       return;
@@ -1519,9 +1378,9 @@ function currentSpreadsheetVersionLoad(state) {
 }
 
 async function renderCenter(state) {
-  if (state.disposed || !state.ctx.host.isConnected) return;
+  if (state.disposed || !state.root.isConnected) return;
   const record = selectedRecord(state);
-  const shell = state.ctx.host.querySelector('[data-spreadsheets-editor]');
+  const shell = state.root.querySelector('[data-spreadsheets-editor]');
   if (!shell) return;
   const handle = state.editorHandle;
   const load = currentSpreadsheetVersionLoad(state);
@@ -1545,19 +1404,14 @@ async function renderCenter(state) {
     const emptyHead = paneHeadFragment(state, 'editor');
     emptyHead.querySelector('[data-spreadsheets-editor-kicker]')?.remove();
     emptyHead.querySelector('[data-spreadsheets-editor-actions]')?.remove();
-    const empty = document.createElement('div');
-    empty.className = 'ctox-empty';
-    empty.innerHTML = `
-      <strong>${escapeHtml(hasFilters ? state.t('noMatches', 'Keine Treffer') : state.t('noDocumentSelected', 'Keine Tabelle ausgewählt.'))}</strong>
-      <span>${escapeHtml(hasFilters ? state.t('adjustSearchFilter', 'Suche oder Filter anpassen.') : state.t('noDocumentSelectedPrompt', 'Links eine Tabelle importieren oder auswählen.'))}</span>
-    `;
-    shell.replaceChildren(emptyHead, empty);
+    // Ohne Auswahl: nur der Kopf, kein Leer-/Hinweistext (R11).
+    void hasFilters;
+    shell.replaceChildren(emptyHead);
     bindSpreadsheetLibraryToggle(state, shell);
     return;
   }
 
   // Load editor UI frame
-  const saveLabel = state.saving ? state.t('saving', 'Speichert...') : (state.dirty ? state.t('unsavedChanges', 'Ungespeicherte Änderungen') : state.t('saved', 'Gespeichert'));
 
   const head = paneHeadFragment(state, 'editor');
   const kicker = head.querySelector('[data-spreadsheets-editor-kicker]');
@@ -1582,61 +1436,46 @@ async function renderCenter(state) {
     badge.hidden = true;
     badge.classList.toggle('is-dirty', state.dirty);
     badge.classList.toggle('is-saving', state.saving);
-    badge.querySelector('[data-spreadsheets-dirty-label]').textContent = saveLabel;
   }
 
   const editorCanvas = document.createElement('div');
   editorCanvas.className = 'spreadsheets-editor-canvas';
   editorCanvas.setAttribute('data-spreadsheets-canvas', '');
-  editorCanvas.innerHTML = `
-      <div class="ctox-empty">
-        <strong>${escapeHtml(state.t('loadingEditor', 'Editor wird geladen...'))}</strong>
-      </div>
-  `;
+  // Kein Lade-Kasten (R11): der Editor erscheint, sobald er montiert ist.
   shell.replaceChildren(head, editorCanvas);
   bindSpreadsheetLibraryToggle(state, shell);
 
   shell.querySelector('[data-spreadsheets-add-row]')?.remove();
   shell.querySelector('[data-spreadsheets-add-col]')?.remove();
   const canvas = shell.querySelector('[data-spreadsheets-canvas]');
+  // Fehler/fehlende Version → Zustandszone (R11), nie als Kasten im Inhalt. Die Version erscheint live.
   if (!isOfficeSpreadsheetRecord(record)) {
-    canvas.innerHTML = `<div class="ctox-empty spreadsheets-error"><strong>${escapeHtml(state.t('unsupportedSpreadsheetFormat', 'Nicht unterstütztes Tabellenformat.'))}</strong><span>${escapeHtml(state.t('supportedSpreadsheetFormats', 'Bitte XLSX, CSV oder TSV verwenden.'))}</span></div>`;
+    state.api.status.report({ level: 'warn', code: 'spreadsheets.format.unsupported', text: `${state.t('unsupportedSpreadsheetFormat', 'Nicht unterstütztes Tabellenformat.')} ${state.t('supportedSpreadsheetFormats', 'Bitte XLSX, CSV oder TSV verwenden.')}`, ref: record.id });
     return;
   }
-  if (load?.status === 'loading' || (!load && !state.selectedVersion)) return;
-  if (load?.status === 'error') {
-    canvas.innerHTML = `<div class="ctox-empty spreadsheets-error"><strong>${escapeHtml(state.t('editorLoadFailed', 'Editor konnte nicht geladen werden:'))}</strong><span>${escapeHtml(load.error?.message || load.error)}</span></div>`;
-    const retry = document.createElement('button');
-    retry.type = 'button';
-    retry.setAttribute('data-spreadsheets-retry-version', '');
-    retry.textContent = state.t('retry', 'Erneut versuchen');
-    retry.addEventListener('click', async () => {
-      if (currentSpreadsheetVersionLoad(state) !== load || spreadsheetDraftProtected(state)) return;
-      retry.disabled = true;
-      const pending = loadSelectedVersion(state);
-      const attempt = state.versionLoad;
-      await renderCenter(state);
-      await pending;
-      if (currentSpreadsheetVersionLoad(state) === attempt && attempt.status !== 'loading'
-        && !spreadsheetDraftProtected(state)) await renderCenter(state);
-    });
-    canvas.firstElementChild.append(retry);
-    return;
-  }
+  state.api.status.clear('spreadsheets.format.unsupported');
   if (load?.status === 'missing' || !state.selectedVersion) {
-    canvas.innerHTML = `<div class="ctox-empty spreadsheets-error"><strong>${escapeHtml(state.t('noSavedVersionFound', 'Zu dieser Tabelle wurde keine gespeicherte Version gefunden.'))}</strong></div>`;
+    let backlog = 0;
+    try { backlog = Number(state.api.metrics.get()?.backlog || 0); } catch {}
+    if (backlog === 0) {
+      state.api.status.report({ level: 'warn', code: 'spreadsheets.version.missing', text: `${state.t('noSavedVersionFound', 'Zu dieser Tabelle wurde keine gespeicherte Version gefunden.')} ${record.title || record.id}`, ref: record.id });
+    }
     return;
   }
+  state.api.status.clear('spreadsheets.version.missing');
+  // FIX9b: sofort lesbar – Lesevorschau aus der letzten Fassung, der Editor startet dahinter.
+  renderSpreadsheetReadPreview(state, canvas, state.selectedVersion);
   try {
     const mounted = await mountCtoxSpreadsheets(state, canvas, record, state.selectedVersion);
     if (badge && mounted && state.editorHandle === mounted
       && !state.disposed && canvas.isConnected && state.selectedId === record.id) {
       badge.hidden = false;
     }
+    state.api.status.clear('spreadsheets.editor');
   } catch (error) {
     if (canvas.isConnected && state.selectedId === record.id) {
       console.error('[spreadsheets] editor open failed', error);
-      canvas.innerHTML = `<div class="ctox-empty spreadsheets-error"><strong>${escapeHtml(state.t('editorLoadFailed', 'Editor konnte nicht geladen werden:'))}</strong><span>${escapeHtml(error?.message || error)}</span></div>`;
+      reportSpreadsheetError(state, 'spreadsheets.editor', error, state.t('editorLoadFailed', 'Editor konnte nicht geladen werden:'));
     }
   }
 }
@@ -1728,23 +1567,25 @@ async function mountCtoxSpreadsheets(state, host, record, version) {
     handle.saving = false;
     state.saving = false;
     markSpreadsheetAsDirty(state);
-    state.ctx.notifications?.show?.({
-      type: 'error', message, time: 0,
-      action: { label: state.t('close', 'Schließen'), callback: () => {} },
-    });
+    state.api.status.report({ level: 'error', code: 'spreadsheets.editor.save', text: message });
     // No automatic retry after errors (in particular version conflicts).
   }
   state.editorHandle = handle;
   try {
     const { createCtoxSpreadsheetsEditor } = await loadCtoxSpreadsheetsModule(state);
     if (!isCurrent()) { await handle.destroy(); return null; }
-    host.replaceChildren(mount);
-    const canWrite = state.ctx.permissions?.canWriteCollection?.('spreadsheets') !== false
-      && state.ctx.permissions?.canWriteCollection?.('spreadsheet_versions') !== false
-      && state.ctx.permissions?.canWriteCollection?.('spreadsheet_blob_chunks') !== false;
+    for (const child of [...(host.children || [])]) {
+      if (!child.matches?.('[data-spreadsheets-read-preview]')) child.remove();
+    }
+    const preview = host.querySelector?.('[data-spreadsheets-read-preview]');
+    // Hinter der Lesevorschau startet der Editor unsichtbar (mit Layout, damit das iframe initialisiert).
+    if (preview && !preview.hidden) mount.classList?.add('is-warming');
+    host.append(mount);
+    // 4.0 spiegelt keine Collection-Schreibrechte; der Core entscheidet (V4-PORT.md OFFEN-7).
+    const canWrite = true;
     const editor = await createCtoxSpreadsheetsEditor({
       host: mount,
-      bridge: createBusinessOsOfficeBridge(state.ctx, 'spreadsheet'),
+      bridge: state.officeBridge,
       locale: state.lang,
       theme: document.documentElement.dataset.theme || 'system',
       permissions: { read: true, write: canWrite, export: true, comment: canWrite, review: false },
@@ -1791,6 +1632,8 @@ async function mountCtoxSpreadsheets(state, host, record, version) {
     listeners.push(editor.on('error', onError));
     await editor.open({ recordId: record.id, versionId: version.id });
     if (!isCurrent()) { await handle.destroy(); return null; }
+    host.querySelector?.('[data-spreadsheets-read-preview]')?.remove();
+    mount.classList?.remove('is-warming');
     state.spreadsheetContainer = mount;
     return handle;
   } catch (error) {
@@ -1822,34 +1665,25 @@ function rowsToCsv(rows) {
 function markSpreadsheetAsDirty(state) {
   state.dirty = true;
 
-  const badge = state.ctx.host.querySelector('[data-spreadsheets-dirty-indicator]');
-  if (badge) {
-    badge.className = `ctox-badge spreadsheets-dirty-badge is-dirty${state.saving ? ' is-saving' : ''}`;
-    badge.querySelector('span').textContent = state.saving
-      ? state.t('saving', 'Speichert...')
-      : state.t('unsavedChanges', 'Ungespeicherte Änderungen');
-  }
+  // Nur der Punkt zeigt den Zustand (Klassen), kein Zustandstext im Inhalt (R11).
+  const badge = state.root.querySelector('[data-spreadsheets-dirty-indicator]');
+  if (badge) badge.className = `ctox-badge spreadsheets-dirty-badge is-dirty${state.saving ? ' is-saving' : ''}`;
 
 }
 
 function markSpreadsheetAsSaved(state) {
   state.dirty = false;
   state.saving = false;
-  const badge = state.ctx.host.querySelector('[data-spreadsheets-dirty-indicator]');
-  if (badge) {
-    badge.className = 'ctox-badge spreadsheets-dirty-badge';
-    badge.querySelector('span').textContent = state.t('saved', 'Gespeichert');
-  }
+  const badge = state.root.querySelector('[data-spreadsheets-dirty-indicator]');
+  if (badge) badge.className = 'ctox-badge spreadsheets-dirty-badge';
 }
 
-function renderRight(state) {
-  applyRightPaneState(state);
-}
+// 4.0 hat nur den Inhaltsbereich (R2): keine rechte Shell-Spalte mehr, nichts zu tun.
+function renderRight() {}
 
-async function dispatchSpreadsheetRunbook(state, input) {
+function dispatchSpreadsheetRunbook(state, input) {
   const runbook = state.runbooks.find(r => r.id === input.runbookId);
-  return state.ctx.commandBus.dispatch({
-    module: 'spreadsheets',
+  return sendSpreadsheetsCommand(state, {
     type: runbook?.command_type || input.runbookId || 'spreadsheet.summarize',
     record_id: input.record.id,
     payload: {
@@ -1857,7 +1691,6 @@ async function dispatchSpreadsheetRunbook(state, input) {
       version_id: input.versionId || input.record.current_version_id,
       prompt: input.prompt || '',
       runbook_id: runbook?.id || input.runbookId,
-      prompt_template: runbook?.prompt_template || '',
       source_action: input.sourceAction || 'spreadsheet_runbook'
     },
     client_context: {
@@ -1867,6 +1700,37 @@ async function dispatchSpreadsheetRunbook(state, input) {
       action: input.sourceAction || 'spreadsheet_runbook'
     }
   });
+}
+
+// api.command: nie warten (R5); failed/lokal ungültig → spreadsheets.command.<type>, done → clear; Abo bis unmount.
+function sendSpreadsheetsCommand(state, { type, module = 'spreadsheets', record_id: recordId = '', payload = {}, client_context: clientContext = {} }) {
+  const api = state.api;
+  const code = `spreadsheets.command.${type}`;
+  let handle;
+  try {
+    handle = api.command(type, { ...payload, record_id: recordId, module, client_context: clientContext }, { record_id: recordId });
+  } catch (error) {
+    reportSpreadsheetError(state, code, error, `${type}:`);
+    return null;
+  }
+  let off = null;
+  let finished = false;
+  const stop = () => { finished = true; off?.(); off = null; };
+  off = handle.status.subscribe((value) => {
+    if (value?.status === 'failed') {
+      api.status.report({ level: 'error', code, text: `${type}: ${value.error || 'failed'}`, ref: handle.id });
+      stop();
+    } else if (value?.status === 'done') {
+      api.status.clear(code);
+      stop();
+    }
+  });
+  if (finished) off?.();
+  handle.local.catch((error) => {
+    api.status.report({ level: 'error', code, text: `${type}: ${error?.code || 'local'} ${error?.message || error}`, ref: handle.id });
+  });
+  state.disposers.push(stop);
+  return handle;
 }
 
 function readNewSpreadsheetInput(form) {
@@ -1883,11 +1747,12 @@ function validateNewSpreadsheetInput(input = {}) {
   return { valid: true, message: '' };
 }
 
+// Rundgang RUND2: keine Fehlerzeile im Formular (Owner-Regel: Zustand nur in der Zustandszone). Ein leeres
+// Pflichtfeld sperrt nur den Absendeknopf; eine falsche Datei meldet die Zone (spreadsheets.import.file).
 function updateNewSpreadsheetSubmitState(state, form) {
   if (!form) return false;
   const validation = validateNewSpreadsheetInput(readNewSpreadsheetInput(form));
-  const message = validation.valid ? '' : state.t(validation.key, validation.message);
-  setFormValidationState(form, validation.valid, message);
+  setFormValidationState(form, validation.valid, '');
   return validation.valid;
 }
 
@@ -1912,8 +1777,12 @@ function validateImportInput(input = {}) {
 function updateImportSubmitState(state, form) {
   if (!form) return false;
   const validation = validateImportInput(readImportInput(form));
-  const message = validation.valid ? '' : state.t(validation.key, validation.message);
-  setFormValidationState(form, validation.valid, message);
+  setFormValidationState(form, validation.valid, '');
+  if (validation.key === 'validationUnsupportedFile') {
+    state.api?.status?.report({ level: 'warn', code: 'spreadsheets.import.file', text: state.t(validation.key, validation.message) });
+  } else {
+    state.api?.status?.clear('spreadsheets.import.file');
+  }
   return validation.valid;
 }
 
@@ -1950,6 +1819,21 @@ function focusFirstDrawerControl(wrapper) {
   }
 }
 
+// Drawer im App-Fenster (OFFEN-D: 4.0 hat keine Drawer-API; nichts außerhalb von root).
+function openDrawer(state, body) {
+  closeDrawers(state);
+  const drawer = document.createElement('aside');
+  drawer.className = 'spreadsheets-app-drawer';
+  drawer.dataset.spreadsheetsAppDrawer = 'left';
+  drawer.append(body);
+  (state.root.querySelector('[data-spreadsheets-module]') || state.root).append(drawer);
+}
+
+function closeDrawers(state) {
+  state.root?.querySelectorAll('[data-spreadsheets-app-drawer]').forEach((node) => node.remove());
+  state.api?.status?.clear('spreadsheets.import.file');
+}
+
 function openNewSpreadsheetDrawer(state) {
   const wrapper = document.createElement('div');
   wrapper.className = 'spreadsheets-drawer-form';
@@ -1974,7 +1858,7 @@ function openNewSpreadsheetDrawer(state) {
   `;
 
   wrapper.querySelector('[data-drawer-cancel]').addEventListener('click', () => {
-    state.ctx.closeDrawers();
+    closeDrawers(state);
   });
 
   const form = wrapper.querySelector('[data-spreadsheets-new-form]');
@@ -1989,18 +1873,17 @@ function openNewSpreadsheetDrawer(state) {
       if (submit) {
         submit.disabled = true;
         submit.setAttribute('aria-disabled', 'true');
-        submit.textContent = state.t('creatingDraft', 'Entwurf wird erstellt...');
       }
-      state.ctx.closeDrawers();
+      closeDrawers(state);
       await createNewSpreadsheet(state, input);
-      state.ctx.notifications?.show?.({ type: 'success', message: state.t('draftCreated', 'Tabellenentwurf erstellt.') });
+      state.api.status.clear('spreadsheets.create');
     } catch (err) {
       console.error(err);
-      state.ctx.notifications?.show?.({ type: 'error', message: `Fehler beim Erstellen: ${err.message}` });
+      reportSpreadsheetError(state, 'spreadsheets.create', err, 'Fehler beim Erstellen:');
     }
   });
 
-  state.ctx.openLeftDrawer(wrapper);
+  openDrawer(state, wrapper);
   focusFirstDrawerControl(wrapper);
 }
 
@@ -2026,7 +1909,7 @@ function openImportModal(state) {
   `;
 
   wrapper.querySelector('[data-drawer-cancel]').addEventListener('click', () => {
-    state.ctx.closeDrawers();
+    closeDrawers(state);
   });
 
   const form = wrapper.querySelector('form');
@@ -2043,17 +1926,17 @@ function openImportModal(state) {
     const tagsInput = wrapper.querySelector('[data-import-tags]');
     const tags = tagsInput.value.split(',').map(t => t.trim()).filter(Boolean);
 
-    state.ctx.closeDrawers();
+    closeDrawers(state);
     try {
       await importSpreadsheetFile(state, file, tags);
-      state.ctx.notifications?.show?.({ type: 'success', message: `Datei ${file.name} erfolgreich importiert.` });
+      state.api.status.clear('spreadsheets.import');
     } catch (err) {
       console.error(err);
-      state.ctx.notifications?.show?.({ type: 'error', message: `Fehler beim Importieren: ${err.message}` });
+      reportSpreadsheetError(state, 'spreadsheets.import', err, 'Fehler beim Importieren:');
     }
   });
 
-  state.ctx.openLeftDrawer(wrapper);
+  openDrawer(state, wrapper);
   focusFirstDrawerControl(wrapper);
 }
 
@@ -2080,30 +1963,30 @@ function openExportModal(state) {
   `;
 
   wrapper.querySelector('[data-drawer-cancel]').addEventListener('click', () => {
-    state.ctx.closeDrawers();
+    closeDrawers(state);
   });
 
   wrapper.querySelector('form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const format = wrapper.querySelector('[data-export-format]').value;
-    state.ctx.closeDrawers();
+    closeDrawers(state);
 
     try {
       if (!state.editorHandle) throw new Error('Editor nicht initialisiert.');
       if (format !== 'xlsx' || state.editorHandle.kind !== 'ctox-spreadsheets') {
-        throw new Error('CTOX Spreadsheets ist nicht bereit.');
+        throw new Error('CTOX Spreadsheets-Editor ist nicht geöffnet.');
       }
       const bytes = await state.editorHandle.export();
       const downloadName = ensureExtension(slugFilename(record.title || 'export'), '.xlsx');
-      downloadBlob(bytes, XLSX_MIME, downloadName, state.ctx.host);
-      state.ctx.notifications?.show?.({ type: 'success', message: `Export abgeschlossen: ${downloadName}` });
+      downloadBlob(bytes, XLSX_MIME, downloadName, state.root);
+      state.api.status.clear('spreadsheets.export');
     } catch (err) {
       console.error(err);
-      state.ctx.notifications?.show?.({ type: 'error', message: `Fehler beim Exportieren: ${err.message}` });
+      reportSpreadsheetError(state, 'spreadsheets.export', err, 'Fehler beim Exportieren:');
     }
   });
 
-  state.ctx.openLeftDrawer(wrapper);
+  openDrawer(state, wrapper);
 }
 
 function downloadBlob(content, mime, downloadName, host) {
@@ -2119,9 +2002,8 @@ function downloadBlob(content, mime, downloadName, host) {
 }
 
 async function openManageDrawer(state, id) {
-  const doc = await spreadsheetCollection(state.ctx, 'spreadsheets').findOne(id).exec();
-  if (!doc) return;
-  const data = doc.toJSON();
+  const data = state.api.get('spreadsheets', id).get();
+  if (!data) return;
 
   const wrapper = document.createElement('div');
   wrapper.className = 'spreadsheets-drawer-form';
@@ -2159,37 +2041,40 @@ async function openManageDrawer(state, id) {
     const tagsVal = wrapper.querySelector('[data-field="tags"]').value.split(',').map(t => t.trim()).filter(Boolean);
 
     try {
-      await doc.incrementalPatch({
+      await state.api.patch('spreadsheets', id, {
         title: titleVal,
         status: statusVal,
         tags: tagsVal,
         updated_at_ms: Date.now()
-      });
-      state.ctx.closeDrawers();
-      state.ctx.notifications?.show?.({ type: 'success', message: 'Änderungen erfolgreich gespeichert.' });
-      await refreshSpreadsheets(state);
+      }).local;
+      closeDrawers(state);
+      state.api.status.clear('spreadsheets.manage.save');
+      refreshSpreadsheets(state);
       renderLeft(state);
       if (state.selectedId === id) {
         renderCenter(state);
       }
     } catch (err) {
       console.error(err);
-      state.ctx.notifications?.show?.({ type: 'error', message: `Fehler beim Speichern: ${err.message}` });
+      reportSpreadsheetError(state, 'spreadsheets.manage.save', err, 'Fehler beim Speichern:');
     }
   });
 
   wrapper.querySelector('[data-action="delete"]').addEventListener('click', async () => {
-    const confirmed = await showBusinessConfirm(
-      state.ctx,
-      state.t('deleteConfirmTitle', 'Tabelle löschen'),
-      state.t('deleteConfirmMessage', `Tabelle "${data.title}" wirklich unwiderruflich löschen?`, data.title)
-    );
+    // Bestätigung im App-Fenster (R7); destruktiv → default:false.
+    const confirmed = await state.api.shell.dialog({
+      kind: 'confirm',
+      title: state.t('deleteConfirmTitle', 'Tabelle löschen'),
+      text: state.t('deleteConfirmMessage', `Tabelle "${data.title}" wirklich unwiderruflich löschen?`, data.title),
+      confirm_label: state.t('delete', 'Tabelle löschen'),
+      default: false,
+    });
     if (!confirmed) return;
 
     try {
-      await doc.incrementalPatch({ is_deleted: true, updated_at_ms: Date.now() });
-      state.ctx.closeDrawers();
-      state.ctx.notifications?.show?.({ type: 'success', message: 'Tabelle erfolgreich gelöscht.' });
+      await state.api.patch('spreadsheets', id, { is_deleted: true, updated_at_ms: Date.now() }).local;
+      closeDrawers(state);
+      state.api.status.clear('spreadsheets.manage.delete');
 
       if (state.selectedId === id) {
         state.selectedId = '';
@@ -2199,21 +2084,21 @@ async function openManageDrawer(state, id) {
         state.editorHandle = null;
       }
 
-      await refreshSpreadsheets(state);
+      refreshSpreadsheets(state);
       renderLeft(state);
       renderCenter(state);
     } catch (err) {
       console.error(err);
-      state.ctx.notifications?.show?.({ type: 'error', message: `Fehler beim Löschen: ${err.message}` });
+      reportSpreadsheetError(state, 'spreadsheets.manage.delete', err, 'Fehler beim Löschen:');
     }
   });
 
-  state.ctx.openLeftDrawer(wrapper);
+  openDrawer(state, wrapper);
 }
 
 function initSpreadsheetsContextMenu(state) {
   state.contextMenu?.remove();
-  const moduleHost = state.ctx?.host;
+  const moduleHost = state.root;
   if (!moduleHost) return () => {};
   const menu = document.createElement('div');
   menu.className = 'ctox-context-menu spreadsheets-context-menu';
@@ -2222,7 +2107,6 @@ function initSpreadsheetsContextMenu(state) {
   state.contextMenu = menu;
 
   const handleContextMenu = (event) => {
-    if (state.ctx.module?.id !== 'spreadsheets') return;
     const context = spreadsheetCommandContextFromElement(state, event.target);
     event.preventDefault();
     event.stopPropagation();
@@ -2251,8 +2135,11 @@ function hideSpreadsheetsContextMenu(state) {
 }
 
 function canModifySpreadsheetsApp(state) {
-  if (typeof state.ctx.canModifyModule === 'function' && state.ctx.canModifyModule()) return true;
-  const user = state.ctx.session?.user || {};
+  // Nur Spiegel (R9); die Entscheidung trifft der Core.
+  let permissions = [];
+  try { permissions = state.api.actor.permissions.get() || []; } catch {}
+  if (permissions.includes('apps.source.edit')) return true;
+  const user = { role: state.api.actor.role };
   const role = String(user.role || (user.is_admin ? 'admin' : 'user')).trim().toLowerCase().replace(/^business_os_/, '');
   return ['admin', 'chef'].includes(role);
 }
@@ -2260,7 +2147,7 @@ function canModifySpreadsheetsApp(state) {
 function spreadsheetCommandContextFromElement(state, target) {
   const element = target?.nodeType === Node.ELEMENT_NODE ? target : target?.parentElement;
   const record = selectedRecord(state);
-  const column = state.ctx.left?.contains?.(element) ? 'spreadsheets' : 'editor';
+  const column = state.root.querySelector('[data-spreadsheets-explorer]')?.contains?.(element) ? 'spreadsheets' : 'editor';
 
   return {
     module: 'spreadsheets',
@@ -2286,9 +2173,7 @@ function renderSpreadsheetsContextMenu(state, context, x, y) {
         <button type="button" data-spreadsheets-context-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
       </header>
       <div class="ctox-context-mode" role="radiogroup" aria-label="${escapeHtml(state.t('chatActionLabel', 'CTOX Aufgabe'))}">
-        <label><input type="radio" name="contextMode" value="data" checked /> ${escapeHtml(state.t('chatWorkDataLabel', 'Mit Daten arbeiten'))}</label>
-        <label><input type="radio" name="contextMode" value="ask" /> ${escapeHtml(state.t('chatAnswerLabel', 'Frage beantworten'))}</label>
-        ${canModifyApp ? `<label><input type="radio" name="contextMode" value="app" /> ${escapeHtml(state.t('chatModifyAppLabel', 'App modifizieren'))}</label>` : ''}
+        ${contextChatModeMarkup({ canModifyApp, escape: escapeHtml, labels: { data: state.t('chatWorkDataLabel', 'Mit Daten arbeiten'), ask: state.t('chatAnswerLabel', 'Frage beantworten'), app: state.t('chatModifyAppLabel', 'App modifizieren') } })}
       </div>
       <textarea data-spreadsheets-context-message placeholder="${escapeHtml(state.t('chatPlaceholder', 'Was soll CTOX hier tun oder prüfen?'))}"></textarea>
       <footer>
@@ -2326,104 +2211,43 @@ async function dispatchSpreadsheetsContextChat(state, context, message, mode = '
     return;
   }
 
-  const safeMode = mode === 'app' && canModifySpreadsheetsApp(state) ? 'app' : (mode === 'ask' ? 'ask' : 'data');
+  const canModifyApp = canModifySpreadsheetsApp(state);
+  const safeMode = normalizeContextChatMode(mode, { canModifyApp });
   const record = selectedRecord(state);
-  if (!document.querySelector('[data-ctox-chat-root]')) {
-    if (status) status.textContent = state.t('chatNotReady', 'Chat ist noch nicht bereit.');
-    return;
-  }
-  const openBusinessChat = state.ctx?.openBusinessChat || state.ctx?.businessChat?.open;
-  if (typeof openBusinessChat !== 'function') {
-    if (status) status.textContent = state.t('chatNotReady', 'Chat ist noch nicht bereit.');
-    return;
-  }
-  if (status) status.textContent = state.t('chatOpening', 'Öffne Chat...');
   const titlePrefix = safeMode === 'app'
     ? 'Spreadsheets App modifizieren'
     : safeMode === 'ask'
       ? state.t('chatAnswerLabel', 'Frage beantworten')
       : 'Spreadsheet bearbeiten';
   const title = `${titlePrefix} · ${context.label || 'Spreadsheets'}`;
-  const instruction = safeMode === 'app'
-    ? `Modifiziere die Spreadsheets-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, Tabellendaten selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
-    : safeMode === 'ask'
-      ? `Beantworte die folgende Frage ausschließlich lesend. Nutze nur vorhandene Daten und Kontext; führe keine Änderungen an Daten, Records, Dateien oder der App aus. Antworte knapp und direkt.\n\n${trimmed}`
-      : trimmed;
-
-  openBusinessChat({
+  // Kontext-Auftrag an die Chat-App ctox über den Baustein (Strang SKL-D, Kern §16.40 commands_out): Anweisungstext,
+  // Skill und Rückweg liegen bei den Handlern ctox.chat.task / ctox.app.modify.request; der Sprung öffnet den Chat.
+  sendContextChat(state.api, {
+    source_app: 'spreadsheets',
+    record_ref: record?.id || context.record_id || '',
+    selection: context.selected_text || '',
     text: trimmed,
-    draft: trimmed,
-    module: 'spreadsheets',
-    source_module: 'spreadsheets',
-    source_title: 'Spreadsheets',
-    action: 'context-chat',
-    reuseActive: false,
-    command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
-    record_id: safeMode === 'app' ? 'spreadsheets' : (record?.id || 'spreadsheets'),
-    title,
-    command_title: title,
-    instruction,
     mode: safeMode,
-    target: safeMode === 'app' ? 'app' : (safeMode === 'ask' ? 'read' : 'data'),
-    payload: {
-      title,
-      instruction,
-      prompt: trimmed,
-      user_message: trimmed,
-      mode: safeMode,
-      target: safeMode === 'app' ? 'app' : (safeMode === 'ask' ? 'read' : 'data'),
-      selected_spreadsheet: record,
-      context,
-      thread_key: 'business-os/spreadsheets',
-    },
-    client_context: {
-      action: 'context-chat',
-      mode: safeMode,
-      column: context.column,
-      record_type: context.record_type,
-      spreadsheet_id: record?.id || '',
-      filename: record?.filename || '',
-    },
-  });
+    canModifyApp,
+    title,
+    thread_key: 'business-os/spreadsheets',
+    context,
+  }, { send: (type, payload, opts) => sendSpreadsheetsCommand(state, { type, record_id: opts.record_id, payload, client_context: { action: 'context-chat', mode: safeMode } }) });
   hideSpreadsheetsContextMenu(state);
 }
 
-async function ensureSeedRunbooks(ctx) {
-  const collection = spreadsheetCollection(ctx, 'spreadsheet_runbooks');
-  if (!collection) return;
-  const existing = await collection.find().exec();
+// Seed-Runbooks lokal anlegen (api.put; Core bestätigt über die Outbox).
+function ensureSeedRunbooks(state) {
+  const existingIds = new Set(state.api.query('spreadsheet_runbooks', {}).get().map((doc) => doc.id));
   const now = Date.now();
-  const existingIds = new Set(existing.map((doc) => doc.toJSON().id));
-
   for (const runbook of SYSTEMATIC_SPREADSHEET_RUNBOOKS) {
     if (existingIds.has(runbook.id)) continue;
-    await collection.insert({
+    state.api.put('spreadsheet_runbooks', {
       ...runbook,
       created_at_ms: now,
       updated_at_ms: now,
-    });
+    }).local.catch((error) => reportSpreadsheetError(state, 'spreadsheets.runbooks.seed', error));
   }
-}
-
-function requireSpreadsheetPersistence(ctx) {
-  if (!spreadsheetCollection(ctx, 'spreadsheets')
-    || !spreadsheetCollection(ctx, 'spreadsheet_versions')
-    || !spreadsheetCollection(ctx, 'spreadsheet_blob_chunks')) {
-    throw new Error('CTOX spreadsheet persistence layer is unavailable. Spreadsheet data must be persisted via RxDB collections.');
-  }
-}
-
-// Helpers
-async function ensureStyles() {
-  if (document.querySelector('link[data-spreadsheets-style]')) return;
-
-  const linkModule = document.createElement('link');
-  linkModule.rel = 'stylesheet';
-  const stylesUrl = new URL('./index.css', import.meta.url);
-  stylesUrl.search = new URL(import.meta.url).search;
-  linkModule.href = stylesUrl.href;
-  linkModule.dataset.spreadsheetsStyle = 'true';
-  document.head.append(linkModule);
 }
 
 async function sha256Hex(bytes) {
@@ -2431,46 +2255,9 @@ async function sha256Hex(bytes) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-function uint8ToBase64(bytes) {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  }
-  return btoa(binary);
-}
-
-function base64ToUint8(base64) {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-function saveBlobChunks(ctx, input) {
-  return createBusinessOsOfficeBridge(ctx, 'spreadsheet').stageSourceBlob({
-    recordId: input.spreadsheetId,
-    versionId: input.versionId,
-    blobId: input.blobId,
-    mimeType: input.mimeType,
-    bytes: input.bytes,
-  });
-}
-
-async function writeCollectionDocuments(collection, docs) {
-  if (!docs.length) return;
-  if (typeof collection.bulkUpsert === 'function') {
-    await collection.bulkUpsert(docs);
-    return;
-  }
-  if (typeof collection.bulkInsert === 'function') {
-    await collection.bulkInsert(docs);
-    return;
-  }
-  for (const doc of docs) {
-    await collection.insert(doc);
-  }
+// Datei-Bytes über api.files (id = blob_id, ref = sha256); keine Chunk-Collection.
+function saveBlobChunks(state, input) {
+  return putFile(state.api, input.blobId, input.bytes, input.mimeType, input.name);
 }
 
 function sanitizeTitle(val) {
@@ -2509,25 +2296,16 @@ function escapeHtml(val) {
     .replace(/"/g, '&quot;');
 }
 
-async function withTimeout(promise, ms, message) {
-  let timeoutId;
-  const timeoutPromise = new Promise((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error(message)), ms);
-  });
-  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
-}
 
 export const __spreadsheetsTestHooks = {
+  spreadsheetReadPreviewHtml,
   wireLocalRealtime,
   refreshSpreadsheetsFromLocal,
-  withSpreadsheetVersionTimeout,
-  isTransientSpreadsheetVersionReadError,
-  resolveSpreadsheetVersionLocalFirst,
-  awaitSpreadsheetVersionReplication,
   loadSelectedVersion,
+  spreadsheetsSnapshot,
+  applyRestoredView,
   currentSpreadsheetVersionLoad,
   renderCenter,
-  ensureSpreadsheetRuntimeReady,
   openSpreadsheetFile,
   hasActiveListFilters,
   isActiveSpreadsheetRecord,
@@ -2542,7 +2320,6 @@ export const __spreadsheetsTestHooks = {
   validateImportInput,
   validateNewSpreadsheetInput,
   visibleSpreadsheets,
-  shouldRenderSpreadsheetsSyncing,
   saveBlobChunks,
   escapeCsvCell,
   rowsToCsv,
@@ -2555,9 +2332,8 @@ const SPREADSHEETS_LOCAL_ICON_PATHS = Object.freeze({
   addColumn: 'M6 4v16M12 4v10M18 4v6M15 16h6M18 13v6',
 });
 
-// Standard action glyphs (shared/icons.js actionIconPaths) — used only when
-// the module runs without ctx.getActionIcon; the normal path is the shell
-// helper handed in through mount(ctx).
+// Standard action glyphs (shared/icons.js actionIconPaths). 4.0 hat keine Icon-API (OFFEN-D): die App zeichnet
+// ihre Glyphen selbst.
 const SPREADSHEETS_FALLBACK_ACTION_ICON_PATHS = Object.freeze({
   add: 'M12 5v14M5 12h14',
   filter: 'M4 6h16M7 12h10M10 18h4',
@@ -2565,6 +2341,7 @@ const SPREADSHEETS_FALLBACK_ACTION_ICON_PATHS = Object.freeze({
   export: 'M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7',
   settings: 'M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7ZM12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6',
   play: 'M8 5.5v13l10-6.5-10-6.5Z',
+  folder: 'M4 6h5l2 2h9v11H4V6Z',
   more: 'M6 12h.01M12 12h.01M18 12h.01',
 });
 
@@ -2576,7 +2353,5 @@ function actionIcon(state, name, size = 16, strokeWidth = 1.8) {
   if (SPREADSHEETS_LOCAL_ICON_PATHS[name]) {
     return strokeIconSvg(name, SPREADSHEETS_LOCAL_ICON_PATHS[name], size, strokeWidth);
   }
-  const fromCtx = state?.ctx?.getActionIcon?.(name, size, strokeWidth);
-  if (typeof fromCtx === 'string' && fromCtx) return fromCtx;
   return strokeIconSvg(name, SPREADSHEETS_FALLBACK_ACTION_ICON_PATHS[name] || SPREADSHEETS_FALLBACK_ACTION_ICON_PATHS.more, size, strokeWidth);
 }

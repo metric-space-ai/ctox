@@ -1,11 +1,11 @@
-@import url('../../shared/office-workspace.css?v=20260904-office-shell-v2');
+@import url('ctox:shared/office-workspace.css');
 /* Documents module — themed entirely from the shell design tokens
    (app.css :root / :root[data-theme="dark"] + shared/base.css derived tokens).
    No module palette, no shell-token redefinition (module conformance guard);
    light/dark follow the shell theme switch automatically. The only dark-scoped
    rules left are genuinely dark-only specials (shadow strength and accent
    lighten/darken mixes). */
-.documents-module {
+[data-app="documents"] :where(.documents-module) {
   --shell-col-left: 320px;
   --documents-library-width: var(--shell-col-left);
   --documents-actions-width: 340px;
@@ -20,11 +20,11 @@
   overflow: hidden;
 }
 
-.documents-module.is-actions-open {
+[data-app="documents"] :where(.documents-module).is-actions-open {
   grid-template-columns: minmax(220px, var(--documents-library-width)) 8px minmax(480px, 1fr) 8px minmax(280px, var(--documents-actions-width));
 }
 
-.documents-library-pane {
+[data-app="documents"] :where(.documents-library-pane) {
   grid-column: 1;
   grid-row: 1;
   min-width: 0;
@@ -33,13 +33,13 @@
   background: var(--surface);
 }
 
-.documents-library-pane > [data-documents-explorer-slot] {
+[data-app="documents"] :where(.documents-library-pane) > [data-documents-explorer-slot] {
   height: 100%;
   min-height: 0;
 }
 
-.documents-library-resizer,
-.documents-actions-resizer {
+[data-app="documents"] :where(.documents-library-resizer),
+[data-app="documents"] :where(.documents-actions-resizer) {
   grid-row: 1;
   position: relative;
   z-index: 4;
@@ -54,16 +54,16 @@
   touch-action: none;
 }
 
-.documents-library-resizer {
+[data-app="documents"] :where(.documents-library-resizer) {
   grid-column: 2;
 }
 
-.documents-actions-resizer {
+[data-app="documents"] :where(.documents-actions-resizer) {
   grid-column: 4;
 }
 
-.documents-library-resizer::before,
-.documents-actions-resizer::before {
+[data-app="documents"] :where(.documents-library-resizer)::before,
+[data-app="documents"] :where(.documents-actions-resizer)::before {
   content: "";
   position: absolute;
   inset-block: 0;
@@ -75,23 +75,23 @@
   transition: background-color 0.16s ease, opacity 0.16s ease;
 }
 
-.documents-library-resizer:hover::before,
-.documents-library-resizer:focus-visible::before,
-.documents-library-resizer.is-dragging::before,
-.documents-actions-resizer:hover::before,
-.documents-actions-resizer:focus-visible::before,
-.documents-actions-resizer.is-dragging::before {
+[data-app="documents"] :where(.documents-library-resizer):hover::before,
+[data-app="documents"] :where(.documents-library-resizer):focus-visible::before,
+[data-app="documents"] :where(.documents-library-resizer).is-dragging::before,
+[data-app="documents"] :where(.documents-actions-resizer):hover::before,
+[data-app="documents"] :where(.documents-actions-resizer):focus-visible::before,
+[data-app="documents"] :where(.documents-actions-resizer).is-dragging::before {
   background: var(--accent);
   opacity: 1;
 }
 
-.documents-library-resizer:focus-visible,
-.documents-actions-resizer:focus-visible {
+[data-app="documents"] :where(.documents-library-resizer):focus-visible,
+[data-app="documents"] :where(.documents-actions-resizer):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
 
-.documents-workbench {
+[data-app="documents"] :where(.documents-workbench) {
   grid-column: 3;
   grid-row: 1;
   display: flex;
@@ -108,7 +108,7 @@
   container-name: documents-workbench;
 }
 
-.documents-editor-shell {
+[data-app="documents"] :where(.documents-editor-shell) {
   flex: 1 1 auto;
   height: 100%;
   min-height: 0;
@@ -119,7 +119,7 @@
    the second head of the top row, so it is exactly as tall as the library head
    next to it — two shell header rows. The separator is an inset shadow, not a
    border, so the 2 x 37px measurement stays exact in both heads. */
-.documents-document-strip {
+[data-app="documents"] :where(.documents-document-strip) {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -140,11 +140,11 @@
    head of the top row and keeps that corner free; once the drawer is open its
    own head carries the clearance. Derived from the token, never hard coded —
    Knowledge gets away with 70px only because it shrinks the control to 64px. */
-.documents-module:not(.is-actions-open) .documents-document-strip {
-  padding-right: calc(var(--shell-v2-header-row-size, 37px) * 2);
+[data-app="documents"] :where(.documents-module):not(.is-actions-open) .documents-document-strip {
+  padding-right: var(--shell-v2-control-inset, calc(var(--shell-v2-header-row-size, 37px) * 2));
 }
 
-.documents-strip-leading {
+[data-app="documents"] :where(.documents-strip-leading) {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -153,36 +153,36 @@
   overflow: hidden;
 }
 
-.documents-library-toggle {
+[data-app="documents"] :where(.documents-library-toggle) {
   display: none;
 }
 
-.documents-current-document {
+[data-app="documents"] :where(.documents-current-document) {
   display: flex;
   align-items: baseline;
   gap: 8px;
   min-width: 0;
 }
 
-.documents-current-document strong,
-.documents-current-document span {
+[data-app="documents"] :where(.documents-current-document) strong,
+[data-app="documents"] :where(.documents-current-document) span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.documents-current-document strong {
+[data-app="documents"] :where(.documents-current-document) strong {
   color: var(--text);
   font-size: 13px;
   font-weight: 650;
 }
 
-.documents-current-document span {
+[data-app="documents"] :where(.documents-current-document) span {
   color: var(--muted);
   font-size: 11px;
 }
 
-.documents-series-label {
+[data-app="documents"] :where(.documents-series-label) {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -191,13 +191,13 @@
   font-size: 12px;
 }
 
-.documents-series-label svg,
-.documents-card-bundle svg {
+[data-app="documents"] :where(.documents-series-label) svg,
+[data-app="documents"] :where(.documents-card-bundle) svg {
   width: 14px;
   height: 14px;
 }
 
-.documents-recipient-navigator {
+[data-app="documents"] :where(.documents-recipient-navigator) {
   display: grid;
   grid-template-columns: 28px auto minmax(150px, 300px) 28px;
   align-items: center;
@@ -207,18 +207,18 @@
   overflow: hidden;
 }
 
-.documents-recipient-position {
+[data-app="documents"] :where(.documents-recipient-position) {
   color: var(--muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.documents-recipient-search {
+[data-app="documents"] :where(.documents-recipient-search) {
   min-width: 0;
 }
 
-.documents-recipient-search input {
+[data-app="documents"] :where(.documents-recipient-search) input {
   width: 100%;
   min-width: 0;
   height: 28px;
@@ -231,50 +231,50 @@
   padding: 0 8px;
 }
 
-.documents-recipient-search input:focus {
+[data-app="documents"] :where(.documents-recipient-search) input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
   outline: none;
 }
 
-.documents-actions-toggle {
+[data-app="documents"] :where(.documents-actions-toggle) {
   flex: 0 0 auto;
   min-height: 28px;
 }
 
 @container documents-workbench (max-width: 560px) {
-  .documents-document-strip {
+  [data-app="documents"] :where(.documents-document-strip) {
     gap: 4px;
     padding-inline: 5px;
   }
 
-  .documents-series-label strong,
-  .documents-actions-toggle span {
+  [data-app="documents"] :where(.documents-series-label) strong,
+  [data-app="documents"] :where(.documents-actions-toggle) span {
     display: none;
   }
 
-  .documents-recipient-navigator {
+  [data-app="documents"] :where(.documents-recipient-navigator) {
     grid-template-columns: 28px auto minmax(0, 1fr) 28px;
   }
 
-  .documents-actions-toggle {
+  [data-app="documents"] :where(.documents-actions-toggle) {
     width: 30px;
     padding: 0;
   }
 }
 
 @container documents-workbench (max-width: 360px) {
-  .documents-series-label,
-  .documents-recipient-position {
+  [data-app="documents"] :where(.documents-series-label),
+  [data-app="documents"] :where(.documents-recipient-position) {
     display: none;
   }
 
-  .documents-recipient-navigator {
+  [data-app="documents"] :where(.documents-recipient-navigator) {
     grid-template-columns: 28px minmax(0, 1fr) 28px;
   }
 }
 
-.documents-actions-drawer {
+[data-app="documents"] :where(.documents-actions-drawer) {
   grid-column: 5;
   grid-row: 1;
   position: relative;
@@ -289,13 +289,13 @@
   box-shadow: none;
 }
 
-.documents-actions-drawer[hidden],
-.documents-actions-resizer[hidden],
-.documents-drawer-backdrop[hidden] {
+[data-app="documents"] :where(.documents-actions-drawer)[hidden],
+[data-app="documents"] :where(.documents-actions-resizer)[hidden],
+[data-app="documents"] :where(.documents-drawer-backdrop)[hidden] {
   display: none;
 }
 
-.documents-drawer-backdrop {
+[data-app="documents"] :where(.documents-drawer-backdrop) {
   display: none;
   position: absolute;
   z-index: 11;
@@ -312,11 +312,11 @@
    (shared/base.css §9) — grid, centering, padding, colour, type scale and the
    38ch measure come from there. Only the genuinely module-specific extras stay
    here: the error tone and the stacked action block below. */
-.documents-error strong {
+[data-app="documents"] :where(.documents-error) strong {
   color: var(--danger, var(--text));
 }
 
-.documents-empty-actions {
+[data-app="documents"] :where(.documents-empty-actions) {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 8px;
@@ -325,15 +325,15 @@
   margin-top: 8px;
 }
 
-.documents-empty-actions .ctox-button {
+[data-app="documents"] :where(.documents-empty-actions) .ctox-button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: normal;
   line-height: 1.2;
 }
 
-.documents-explorer,
-.documents-runbooks {
+[data-app="documents"] :where(.documents-explorer),
+[data-app="documents"] :where(.documents-runbooks) {
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -342,19 +342,19 @@
   box-sizing: border-box;
 }
 
-.documents-explorer {
+[data-app="documents"] :where(.documents-explorer) {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--surface-radius);
 }
 
-.documents-runbooks {
+[data-app="documents"] :where(.documents-runbooks) {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--surface-radius);
 }
 
-.documents-runbook-header {
+[data-app="documents"] :where(.documents-runbook-header) {
   flex: 0 0 auto;
 }
 
@@ -367,8 +367,8 @@
    <header> — title row, filter row, filter tray, active-filter chips — so the
    icon zone is covered by header padding and nothing else.
    Reference: modules/tickets, modules/knowledge. */
-.documents-explorer > .ctox-pane-header,
-.documents-runbooks > .ctox-pane-header {
+[data-app="documents"] :where(.documents-explorer) > .ctox-pane-header,
+[data-app="documents"] :where(.documents-runbooks) > .ctox-pane-header {
   box-sizing: border-box;
   flex: 0 0 auto;
   min-height: calc(var(--shell-v2-header-row-size, 37px) * 2);
@@ -380,21 +380,21 @@
   box-shadow: inset 0 -1px 0 var(--hairline, var(--line));
 }
 
-.documents-explorer > .ctox-pane-header {
+[data-app="documents"] :where(.documents-explorer) > .ctox-pane-header {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
   padding-right: 8px;
 }
 
-.documents-runbooks > .ctox-pane-header {
+[data-app="documents"] :where(.documents-runbooks) > .ctox-pane-header {
   height: var(--shell-v2-header-row-size, 37px);
   min-height: var(--shell-v2-header-row-size, 37px);
-  padding-right: calc(var(--shell-v2-header-row-size, 37px) * 2);
+  padding-right: var(--shell-v2-control-inset, calc(var(--shell-v2-header-row-size, 37px) * 2));
 }
 
 /* Each of the two visible head rows is exactly one shell header row high, so
    the head measures 2 x 37px and matches the centre head of the top row. */
-.documents-explorer > .ctox-pane-header > [data-shell-v2-header-row="1"],
-.documents-explorer > .ctox-pane-header > [data-shell-v2-header-row="2"] {
+[data-app="documents"] :where(.documents-explorer) > .ctox-pane-header > [data-shell-v2-header-row="1"],
+[data-app="documents"] :where(.documents-explorer) > .ctox-pane-header > [data-shell-v2-header-row="2"] {
   box-sizing: border-box;
   height: var(--shell-v2-header-row-size, 37px);
   min-height: var(--shell-v2-header-row-size, 37px);
@@ -403,7 +403,7 @@
 
 /* Kicker and title share the single 37px row instead of stacking, and the
    header-kit's optical offsets are dropped so the row measures exactly. */
-.documents-explorer .ctox-pane-titles {
+[data-app="documents"] :where(.documents-explorer) .ctox-pane-titles {
   flex-direction: row;
   align-items: baseline;
   gap: 8px;
@@ -411,48 +411,48 @@
   padding-top: 0;
 }
 
-.documents-explorer .ctox-pane-title {
+[data-app="documents"] :where(.documents-explorer) .ctox-pane-title {
   margin-top: 0;
   line-height: 1.1;
 }
 
 /* The head's own rows must not add margins on top of the row height. */
-.documents-explorer > .ctox-pane-header > .ctox-pane-tools {
+[data-app="documents"] :where(.documents-explorer) > .ctox-pane-header > .ctox-pane-tools {
   margin-top: 0;
 }
 
-.documents-explorer .ctox-pane-search {
+[data-app="documents"] :where(.documents-explorer) .ctox-pane-search {
   min-height: 26px;
 }
 
-.documents-active-filters[hidden] {
+[data-app="documents"] :where(.documents-active-filters)[hidden] {
   display: none;
 }
 
 /* Filter tray and active-filter chips are the head's optional rows: they only
    take space while they are open, so the closed head stays at 2 x 37px. */
-.documents-explorer > .ctox-pane-header > .documents-filter-panel,
-.documents-explorer > .ctox-pane-header > .documents-active-filters {
+[data-app="documents"] :where(.documents-explorer) > .ctox-pane-header > .documents-filter-panel,
+[data-app="documents"] :where(.documents-explorer) > .ctox-pane-header > .documents-active-filters {
   margin-bottom: 6px;
 }
 
 /* Extras on top of .ctox-badge: capped width + uppercase document-type text. */
-.documents-runbook-state {
+[data-app="documents"] :where(.documents-runbook-state) {
   max-width: 112px;
   overflow: hidden;
   text-overflow: ellipsis;
   text-transform: uppercase;
 }
 
-.documents-explorer .ctox-pane-titles,
-.documents-runbooks .ctox-pane-titles {
+[data-app="documents"] :where(.documents-explorer) .ctox-pane-titles,
+[data-app="documents"] :where(.documents-runbooks) .ctox-pane-titles {
   min-width: 0;
 }
 
-.documents-explorer .ctox-pane-kicker,
-.documents-explorer .ctox-pane-title,
-.documents-runbooks .ctox-pane-kicker,
-.documents-runbooks .ctox-pane-title {
+[data-app="documents"] :where(.documents-explorer) .ctox-pane-kicker,
+[data-app="documents"] :where(.documents-explorer) .ctox-pane-title,
+[data-app="documents"] :where(.documents-runbooks) .ctox-pane-kicker,
+[data-app="documents"] :where(.documents-runbooks) .ctox-pane-title {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -460,7 +460,7 @@
 
 /* Row 2 of the head: search + tray toggle. The head owns the icon-zone inset,
    so this row carries none of its own. */
-.documents-filter-bar {
+[data-app="documents"] :where(.documents-filter-bar) {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -472,20 +472,20 @@
   margin-top: 0;
 }
 
-.documents-filter-bar > .ctox-pane-search {
+[data-app="documents"] :where(.documents-filter-bar) > .ctox-pane-search {
   flex: 1 1 auto;
   width: auto;
   min-width: 0;
 }
 
-.documents-filter-control {
+[data-app="documents"] :where(.documents-filter-control) {
   width: 100%;
   min-width: 0;
   max-width: 100%;
   box-sizing: border-box;
 }
 
-.documents-filter-control {
+[data-app="documents"] :where(.documents-filter-control) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -493,12 +493,12 @@
 
 /* Tray toggle: an icon control on the shared .ctox-pane-icon step with the
    active-filter count as a badge (reference: modules/knowledge). */
-.documents-filter-toggle {
+[data-app="documents"] :where(.documents-filter-toggle) {
   position: relative;
   flex: 0 0 auto;
 }
 
-.documents-filter-toggle .documents-filter-count {
+[data-app="documents"] :where(.documents-filter-toggle) .documents-filter-count {
   display: inline-grid;
   place-items: center;
   position: absolute;
@@ -514,11 +514,11 @@
   font-variant-numeric: tabular-nums;
 }
 
-.documents-filter-toggle .documents-filter-count[hidden] {
+[data-app="documents"] :where(.documents-filter-toggle) .documents-filter-count[hidden] {
   display: none;
 }
 
-.documents-filter-panel {
+[data-app="documents"] :where(.documents-filter-panel) {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 5px;
@@ -528,16 +528,16 @@
   background: var(--surface-2);
 }
 
-.documents-filter-panel[hidden] {
+[data-app="documents"] :where(.documents-filter-panel)[hidden] {
   display: none;
 }
 
-.documents-filter-reset {
+[data-app="documents"] :where(.documents-filter-reset) {
   justify-content: center;
   min-height: 28px;
 }
 
-.documents-active-filters {
+[data-app="documents"] :where(.documents-active-filters) {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -545,7 +545,7 @@
   overflow: hidden;
 }
 
-.documents-active-filters span {
+[data-app="documents"] :where(.documents-active-filters) span {
   display: block;
   min-width: 0;
   max-width: 110px;
@@ -561,7 +561,7 @@
   white-space: nowrap;
 }
 
-.documents-active-filters button {
+[data-app="documents"] :where(.documents-active-filters) button {
   display: grid;
   place-items: center;
   flex: 0 0 auto;
@@ -574,8 +574,8 @@
   cursor: pointer;
 }
 
-.documents-active-filters button:hover,
-.documents-active-filters button:focus-visible {
+[data-app="documents"] :where(.documents-active-filters) button:hover,
+[data-app="documents"] :where(.documents-active-filters) button:focus-visible {
   background: var(--surface-2);
   color: var(--text);
   outline: 2px solid var(--accent);
@@ -586,26 +586,26 @@
      Bibliothek 300 + Fuge + 480 = 788 > Fenster), damit rutschte der letzte
      Kopf unter die 74px-Fenstersteuerung (h3_ctrlClear im Geometrie-Labor).
      Live uebernimmt dort ohnehin die is-compact-Overlay-Logik des Moduls. */
-  .documents-module:not(.is-compact) .documents-workbench {
+  [data-app="documents"] :where(.documents-module):not(.is-compact) .documents-workbench {
     min-width: 0;
   }
 
-  .documents-filter-bar {
+  [data-app="documents"] :where(.documents-filter-bar) {
     gap: 4px;
   }
 
-  .documents-empty-actions {
+  [data-app="documents"] :where(.documents-empty-actions) {
     width: min(100%, 190px);
   }
 
-  .documents-empty-actions .ctox-button {
+  [data-app="documents"] :where(.documents-empty-actions) .ctox-button {
     min-height: 34px;
     padding-inline: 8px;
   }
 }
 
-.documents-runbook-form select,
-.documents-runbook-form textarea {
+[data-app="documents"] :where(.documents-runbook-form) select,
+[data-app="documents"] :where(.documents-runbook-form) textarea {
   width: 100%;
   min-width: 0;
   border: 1px solid var(--line);
@@ -616,7 +616,7 @@
   box-shadow: none;
 }
 
-.documents-list {
+[data-app="documents"] :where(.documents-list) {
   display: grid;
   flex: 1 1 auto;
   gap: 3px;
@@ -627,7 +627,7 @@
   overflow: auto;
 }
 
-.documents-card {
+[data-app="documents"] :where(.documents-card) {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 30px;
   gap: 4px;
@@ -638,12 +638,12 @@
   color: inherit;
 }
 
-.documents-card[aria-current="true"] {
+[data-app="documents"] :where(.documents-card)[aria-current="true"] {
   background: var(--surface-2);
   border-color: var(--line);
 }
 
-.documents-card-main {
+[data-app="documents"] :where(.documents-card-main) {
   width: 100%;
   min-width: 0;
   border: 0;
@@ -654,7 +654,7 @@
   text-align: left;
 }
 
-.documents-card-manage {
+[data-app="documents"] :where(.documents-card-manage) {
   display: grid;
   width: 28px;
   height: 28px;
@@ -667,21 +667,21 @@
   cursor: pointer;
 }
 
-.documents-card-manage:hover,
-.documents-card-manage:focus-visible {
+[data-app="documents"] :where(.documents-card-manage):hover,
+[data-app="documents"] :where(.documents-card-manage):focus-visible {
   color: var(--accent);
   border-color: var(--accent);
   outline: none;
 }
 
-.documents-card-manage svg {
+[data-app="documents"] :where(.documents-card-manage) svg {
   width: 15px;
   height: 15px;
 }
 
-.documents-card-main strong,
-.documents-card-main span,
-.documents-card-main small {
+[data-app="documents"] :where(.documents-card-main) strong,
+[data-app="documents"] :where(.documents-card-main) span,
+[data-app="documents"] :where(.documents-card-main) small {
   display: block;
   min-width: 0;
   max-width: 100%;
@@ -689,30 +689,30 @@
   text-overflow: ellipsis;
 }
 
-.documents-card-main strong {
-  display: -webkit-box;
-  line-clamp: 2;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+/* Kartentitel vollständig, umgebrochen statt nach zwei Zeilen gekappt (Geometrie G4). Der
+   Bibliotheks-Selektor aus shared/office-workspace.css (nowrap + Ellipse) wird hier überstimmt. */
+[data-app="documents"] :where(.documents-card-main) strong,
+[data-app="documents"] .ctox-office-library .documents-card-main strong {
+  overflow: visible;
   white-space: normal;
   overflow-wrap: anywhere;
 }
 
-.documents-card-main .documents-card-filename,
-.documents-card-main .documents-card-description,
-.documents-card-main .documents-card-bundle {
+[data-app="documents"] :where(.documents-card-main) .documents-card-filename,
+[data-app="documents"] :where(.documents-card-main) .documents-card-description,
+[data-app="documents"] :where(.documents-card-main) .documents-card-bundle {
   color: var(--muted);
   font-size: 12px;
   white-space: normal;
   overflow-wrap: anywhere;
 }
 
-.documents-card-main .documents-card-filename,
-.documents-card-main .documents-card-bundle {
+[data-app="documents"] :where(.documents-card-main) .documents-card-filename,
+[data-app="documents"] :where(.documents-card-main) .documents-card-bundle {
   margin-top: 2px;
 }
 
-.documents-card-main .documents-card-bundle {
+[data-app="documents"] :where(.documents-card-main) .documents-card-bundle {
   display: flex;
   align-items: center;
   gap: 5px;
@@ -720,7 +720,7 @@
   font-weight: 600;
 }
 
-.documents-card-main .documents-card-description {
+[data-app="documents"] :where(.documents-card-main) .documents-card-description {
   display: -webkit-box;
   margin-top: 4px;
   line-clamp: 2;
@@ -729,7 +729,7 @@
   color: color-mix(in srgb, var(--text) 72%, var(--muted));
 }
 
-.documents-card-main small {
+[data-app="documents"] :where(.documents-card-main) small {
   display: block;
   margin-top: 4px;
   color: var(--accent);
@@ -737,14 +737,14 @@
   font-weight: 700;
 }
 
-.documents-card-tags {
+[data-app="documents"] :where(.documents-card-tags) {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
   margin-top: 6px;
 }
 
-.documents-card-tags span {
+[data-app="documents"] :where(.documents-card-tags) span {
   display: inline-flex;
   min-width: 0;
   max-width: 100%;
@@ -756,7 +756,7 @@
   font-weight: 700;
 }
 
-.documents-context-menu {
+[data-app="documents"] :where(.documents-context-menu) {
   /* Mounted inside the module root, never on document.body: nothing this app
      draws may escape its own window. Positioned against that root, so it is
      capped against the module box and needs no width media query
@@ -776,7 +776,7 @@
   padding: 6px;
 }
 
-.documents-context-chat {
+[data-app="documents"] :where(.documents-context-chat) {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 10px;
@@ -784,8 +784,8 @@
   padding: 12px;
 }
 
-.documents-context-chat header,
-.documents-context-chat footer {
+[data-app="documents"] :where(.documents-context-chat) header,
+[data-app="documents"] :where(.documents-context-chat) footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -793,12 +793,12 @@
   min-width: 0;
 }
 
-.documents-context-chat header div {
+[data-app="documents"] :where(.documents-context-chat) header div {
   min-width: 0;
 }
 
-.documents-context-chat strong,
-.documents-context-chat span {
+[data-app="documents"] :where(.documents-context-chat) strong,
+[data-app="documents"] :where(.documents-context-chat) span {
   display: block;
   min-width: 0;
   overflow: hidden;
@@ -806,26 +806,26 @@
   white-space: nowrap;
 }
 
-.documents-context-chat strong {
+[data-app="documents"] :where(.documents-context-chat) strong {
   color: var(--text);
   font-size: 12.5px;
   font-weight: 820;
 }
 
-.documents-context-chat span {
+[data-app="documents"] :where(.documents-context-chat) span {
   color: var(--muted);
   font-size: 11px;
   font-weight: 700;
 }
 
-.documents-context-mode {
+[data-app="documents"] :where(.documents-context-mode) {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
   min-width: 0;
 }
 
-.documents-context-mode label {
+[data-app="documents"] :where(.documents-context-mode) label {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -842,12 +842,12 @@
   white-space: nowrap;
 }
 
-.documents-context-mode input {
+[data-app="documents"] :where(.documents-context-mode) input {
   margin: 0;
   accent-color: var(--accent);
 }
 
-.documents-context-chat textarea {
+[data-app="documents"] :where(.documents-context-chat) textarea {
   width: 100%;
   min-width: 0;
   min-height: 92px;
@@ -862,13 +862,13 @@
   resize: vertical;
 }
 
-.documents-context-chat textarea:focus {
+[data-app="documents"] :where(.documents-context-chat) textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
   outline: none;
 }
 
-.documents-context-chat button {
+[data-app="documents"] :where(.documents-context-chat) button {
   flex: 0 0 auto;
   min-height: 30px;
   overflow: hidden;
@@ -885,32 +885,32 @@
   white-space: nowrap;
 }
 
-.documents-context-chat button:hover,
-.documents-context-chat button:focus-visible {
+[data-app="documents"] :where(.documents-context-chat) button:hover,
+[data-app="documents"] :where(.documents-context-chat) button:focus-visible {
   border-color: var(--accent);
   color: var(--accent);
   outline: none;
 }
 
-.documents-context-chat button[type="submit"] {
+[data-app="documents"] :where(.documents-context-chat) button[type="submit"] {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, var(--surface));
   color: var(--accent);
 }
 
-.documents-context-chat [data-open-ctox-task] {
+[data-app="documents"] :where(.documents-context-chat) [data-open-ctox-task] {
   display: inline-flex;
   align-items: center;
   margin-left: 6px;
 }
 
-.documents-context-chat [data-documents-context-close] {
+[data-app="documents"] :where(.documents-context-chat) [data-documents-context-close] {
   width: 30px;
   padding: 0;
   font-size: 18px;
 }
 
-.documents-context-chat footer > span {
+[data-app="documents"] :where(.documents-context-chat) footer > span {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -918,12 +918,12 @@
   white-space: normal;
 }
 
-.documents-context-chat code {
+[data-app="documents"] :where(.documents-context-chat) code {
   color: var(--accent);
   font: 11.5px/1.2 var(--font-mono);
 }
 
-.documents-workflow {
+[data-app="documents"] :where(.documents-workflow) {
   display: grid;
   gap: 10px;
   padding: 10px 12px 12px;
@@ -931,24 +931,24 @@
   background: var(--surface-2);
 }
 
-.documents-workflow-head {
+[data-app="documents"] :where(.documents-workflow-head) {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.documents-workflow-head strong {
+[data-app="documents"] :where(.documents-workflow-head) strong {
   font-size: 13px;
   color: var(--text);
 }
 
-.documents-workflow-field {
+[data-app="documents"] :where(.documents-workflow-field) {
   display: grid;
   gap: 4px;
 }
 
-.documents-workflow-field span {
+[data-app="documents"] :where(.documents-workflow-field) span {
   font-size: 11px;
   font-weight: 800;
   color: var(--muted);
@@ -956,9 +956,9 @@
   letter-spacing: 0.04em;
 }
 
-.documents-workflow input,
-.documents-workflow select,
-.documents-workflow textarea {
+[data-app="documents"] :where(.documents-workflow) input,
+[data-app="documents"] :where(.documents-workflow) select,
+[data-app="documents"] :where(.documents-workflow) textarea {
   width: 100%;
   min-width: 0;
   border: 1px solid var(--line);
@@ -968,26 +968,26 @@
   font: inherit;
 }
 
-.documents-workflow input,
-.documents-workflow select {
+[data-app="documents"] :where(.documents-workflow) input,
+[data-app="documents"] :where(.documents-workflow) select {
   min-height: 32px;
   padding: 0 9px;
 }
 
-.documents-workflow textarea {
+[data-app="documents"] :where(.documents-workflow) textarea {
   min-height: 82px;
   padding: 8px 9px;
   resize: vertical;
 }
 
-.documents-workflow-actions {
+[data-app="documents"] :where(.documents-workflow-actions) {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
 }
 
-.documents-workflow-actions button,
-.documents-knowledge-link {
+[data-app="documents"] :where(.documents-workflow-actions) button,
+[data-app="documents"] :where(.documents-knowledge-link) {
   min-height: 34px;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -998,39 +998,39 @@
   cursor: pointer;
 }
 
-.documents-workflow-actions button[type="submit"] {
+[data-app="documents"] :where(.documents-workflow-actions) button[type="submit"] {
   border-color: var(--accent);
   color: var(--accent);
 }
 
-.documents-knowledge-link {
+[data-app="documents"] :where(.documents-knowledge-link) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
 }
 
-.documents-knowledge-link svg {
+[data-app="documents"] :where(.documents-knowledge-link) svg {
   width: 14px;
   height: 14px;
 }
 
-.documents-action-drawer {
+[data-app="documents"] :where(.documents-action-drawer) {
   display: grid;
   gap: 12px;
 }
 
-.documents-drawer-form {
+[data-app="documents"] :where(.documents-drawer-form) {
   display: grid;
   gap: 12px;
 }
 
-.documents-drawer-form label {
+[data-app="documents"] :where(.documents-drawer-form) label {
   display: grid;
   gap: 5px;
 }
 
-.documents-drawer-form label > span {
+[data-app="documents"] :where(.documents-drawer-form) label > span {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
@@ -1038,9 +1038,9 @@
   letter-spacing: 0.04em;
 }
 
-.documents-drawer-form input,
-.documents-drawer-form select,
-.documents-drawer-form textarea {
+[data-app="documents"] :where(.documents-drawer-form) input,
+[data-app="documents"] :where(.documents-drawer-form) select,
+[data-app="documents"] :where(.documents-drawer-form) textarea {
   width: 100%;
   min-width: 0;
   border: 1px solid var(--line);
@@ -1050,25 +1050,25 @@
   font: inherit;
 }
 
-.documents-drawer-form input,
-.documents-drawer-form select {
+[data-app="documents"] :where(.documents-drawer-form) input,
+[data-app="documents"] :where(.documents-drawer-form) select {
   min-height: 36px;
   padding: 0 10px;
 }
 
-.documents-drawer-form textarea {
+[data-app="documents"] :where(.documents-drawer-form) textarea {
   min-height: 118px;
   padding: 10px;
   resize: vertical;
 }
 
-.documents-drawer-actions {
+[data-app="documents"] :where(.documents-drawer-actions) {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
 
-.documents-form-status {
+[data-app="documents"] :where(.documents-form-status) {
   min-height: 18px;
   margin: -2px 0 0;
   color: var(--danger);
@@ -1076,15 +1076,15 @@
   font-weight: 720;
 }
 
-.documents-form-status[hidden] {
+[data-app="documents"] :where(.documents-form-status)[hidden] {
   display: none;
 }
 
-.documents-drawer-actions-three {
+[data-app="documents"] :where(.documents-drawer-actions-three) {
   grid-template-columns: 1fr 1fr 1fr;
 }
 
-.documents-drawer-actions button {
+[data-app="documents"] :where(.documents-drawer-actions) button {
   min-height: 36px;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -1094,41 +1094,41 @@
   font-weight: 760;
 }
 
-.documents-drawer-actions button[type="submit"] {
+[data-app="documents"] :where(.documents-drawer-actions) button[type="submit"] {
   border-color: var(--accent);
   color: var(--accent);
 }
 
-.documents-drawer-actions .documents-danger-button {
+[data-app="documents"] :where(.documents-drawer-actions) .documents-danger-button {
   border-color: color-mix(in srgb, var(--danger) 70%, var(--line));
   color: var(--danger);
 }
 
-.documents-drawer-actions .documents-danger-button:hover,
-.documents-drawer-actions .documents-danger-button:focus-visible {
+[data-app="documents"] :where(.documents-drawer-actions) .documents-danger-button:hover,
+[data-app="documents"] :where(.documents-drawer-actions) .documents-danger-button:focus-visible {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   outline: none;
 }
 
-.documents-runbook-form {
+[data-app="documents"] :where(.documents-runbook-form) {
   display: grid;
   gap: 8px;
   padding: 12px;
 }
 
-.documents-runbook-field {
+[data-app="documents"] :where(.documents-runbook-field) {
   display: grid;
   gap: 5px;
 }
 
-.documents-runbook-field > span {
+[data-app="documents"] :where(.documents-runbook-field) > span {
   color: var(--muted);
   font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
 }
 
-.documents-knowledge-status {
+[data-app="documents"] :where(.documents-knowledge-status) {
   display: grid;
   gap: 3px;
   padding: 9px 10px;
@@ -1139,22 +1139,22 @@
   line-height: 1.35;
 }
 
-.documents-knowledge-status strong {
+[data-app="documents"] :where(.documents-knowledge-status) strong {
   color: var(--text);
 }
 
-.documents-knowledge-status.is-stale {
+[data-app="documents"] :where(.documents-knowledge-status).is-stale {
   border-left-color: var(--warning, #b7791f);
   background: color-mix(in srgb, var(--warning, #b7791f) 9%, transparent);
 }
 
-.documents-runbook-form textarea {
+[data-app="documents"] :where(.documents-runbook-form) textarea {
   min-height: 174px;
   padding: 10px;
   resize: vertical;
 }
 
-.documents-runbook-form button {
+[data-app="documents"] :where(.documents-runbook-form) button {
   min-height: 36px;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -1165,15 +1165,15 @@
   cursor: pointer;
 }
 
-.documents-runbook-form button:disabled,
-.documents-drawer-actions button:disabled,
-.documents-workflow-actions button:disabled,
-.documents-knowledge-link:disabled {
+[data-app="documents"] :where(.documents-runbook-form) button:disabled,
+[data-app="documents"] :where(.documents-drawer-actions) button:disabled,
+[data-app="documents"] :where(.documents-workflow-actions) button:disabled,
+[data-app="documents"] :where(.documents-knowledge-link):disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.documents-markdown-editor {
+[data-app="documents"] :where(.documents-markdown-editor) {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 10px;
@@ -1184,13 +1184,13 @@
   box-sizing: border-box;
 }
 
-.documents-markdown-toolbar {
+[data-app="documents"] :where(.documents-markdown-toolbar) {
   display: flex;
   justify-content: flex-end;
   min-height: 32px;
 }
 
-.documents-markdown-toggle {
+[data-app="documents"] :where(.documents-markdown-toggle) {
   min-height: 32px;
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -1203,15 +1203,15 @@
   cursor: pointer;
 }
 
-.documents-markdown-toggle:hover,
-.documents-markdown-toggle:focus-visible {
+[data-app="documents"] :where(.documents-markdown-toggle):hover,
+[data-app="documents"] :where(.documents-markdown-toggle):focus-visible {
   border-color: var(--accent);
   color: var(--accent);
   outline: none;
 }
 
-.documents-markdown-preview,
-.documents-markdown-textarea {
+[data-app="documents"] :where(.documents-markdown-preview),
+[data-app="documents"] :where(.documents-markdown-textarea) {
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -1226,67 +1226,67 @@
   outline: none;
 }
 
-.documents-markdown-preview {
+[data-app="documents"] :where(.documents-markdown-preview) {
   overflow: auto;
   white-space: normal;
   font: 15px/1.65 var(--font-sans);
 }
 
-.documents-markdown-preview h1,
-.documents-markdown-preview h2,
-.documents-markdown-preview h3,
-.documents-markdown-preview h4 {
+[data-app="documents"] :where(.documents-markdown-preview) h1,
+[data-app="documents"] :where(.documents-markdown-preview) h2,
+[data-app="documents"] :where(.documents-markdown-preview) h3,
+[data-app="documents"] :where(.documents-markdown-preview) h4 {
   margin: 0 0 14px;
   color: var(--text);
   line-height: 1.18;
   letter-spacing: 0;
 }
 
-.documents-markdown-preview h1 {
+[data-app="documents"] :where(.documents-markdown-preview) h1 {
   font-size: 26px;
 }
 
-.documents-markdown-preview h2 {
+[data-app="documents"] :where(.documents-markdown-preview) h2 {
   margin-top: 24px;
   font-size: 20px;
 }
 
-.documents-markdown-preview h3 {
+[data-app="documents"] :where(.documents-markdown-preview) h3 {
   margin-top: 18px;
   font-size: 17px;
 }
 
-.documents-markdown-preview p,
-.documents-markdown-preview ul {
+[data-app="documents"] :where(.documents-markdown-preview) p,
+[data-app="documents"] :where(.documents-markdown-preview) ul {
   max-width: 860px;
   margin: 0 0 14px;
 }
 
-.documents-markdown-preview ul {
+[data-app="documents"] :where(.documents-markdown-preview) ul {
   padding-left: 22px;
 }
 
-.documents-markdown-preview li {
+[data-app="documents"] :where(.documents-markdown-preview) li {
   margin: 4px 0;
 }
 
-.documents-markdown-preview code {
+[data-app="documents"] :where(.documents-markdown-preview) code {
   border-radius: 5px;
   background: var(--surface-2);
   padding: 1px 4px;
   font: 0.92em/1.3 var(--font-mono);
 }
 
-.documents-markdown-empty {
+[data-app="documents"] :where(.documents-markdown-empty) {
   color: var(--muted);
 }
 
-.documents-markdown-textarea:focus {
+[data-app="documents"] :where(.documents-markdown-textarea):focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
-.documents-superdoc-frame {
+[data-app="documents"] :where(.documents-superdoc-frame) {
   position: relative;
   display: flex;
   flex-direction: column;
@@ -1296,86 +1296,17 @@
   background: var(--surface-2);
 }
 
-.documents-superdoc-controls {
-  position: absolute;
-  top: 4px;
-  right: 8px;
-  z-index: 6;
-  pointer-events: none;
-}
-
-.documents-superdoc-toolbar-toggle {
-  pointer-events: auto;
-  min-height: 26px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0 8px;
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
-  color: var(--text);
-  font: 700 11px/1 var(--font-sans);
-  cursor: pointer;
-  box-shadow: 0 4px 12px rgba(20, 28, 36, 0.12);
-}
-
-.documents-superdoc-toolbar-toggle:hover,
-.documents-superdoc-toolbar-toggle:focus-visible {
-  border-color: var(--accent);
-  color: var(--accent);
-  outline: none;
-}
-
-.documents-superdoc-toolbar {
-  flex: 0 0 auto;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
-  overflow: hidden;
-  padding-right: 158px;
-}
-
-.documents-superdoc-frame[data-toolbar-visible="false"] .documents-superdoc-toolbar,
-.documents-superdoc-frame[data-toolbar-visible="false"] .documents-superdoc-ruler {
-  display: none;
-}
-
-.documents-superdoc-toolbar .superdoc-toolbar {
-  display: flex !important;
-  flex-wrap: nowrap !important;
-  align-content: flex-start;
-  align-items: center;
-  gap: 2px 6px;
-  height: auto !important;
-  max-height: 40px;
-  min-height: 40px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  box-sizing: border-box;
-  padding: 4px 0 !important;
-  border: 0 !important;
-  background: var(--surface) !important;
-  color: var(--text) !important;
-}
-
-.documents-superdoc-toolbar .button-group {
-  display: flex !important;
-  flex: 0 0 auto !important;
-  flex-wrap: nowrap !important;
-  max-width: 100%;
-  min-width: 0 !important;
-  height: auto !important;
-  align-items: center;
-}
-
 /* Shell-v2 frame: the shared window owns app identity and window controls.
    The library explorer is a real grammar pane so search/filter state remains
    shell-wired even though it is rendered after the static host markup. */
-.shell-window[data-shell-contract="v2"] .documents-module {
+[data-app="documents"] .documents-module {
   background: var(--bg);
 }
-.shell-window[data-shell-contract="v2"] .documents-library-pane,
-.shell-window[data-shell-contract="v2"] .documents-workbench {
+[data-app="documents"] .documents-library-pane,
+[data-app="documents"] .documents-workbench {
   background: var(--surface);
 }
-.shell-window[data-shell-contract="v2"] .documents-explorer {
+[data-app="documents"] .documents-explorer {
   height: 100%;
   min-height: 0;
   border: 0;
@@ -1386,142 +1317,28 @@
 /* The v2 head geometry (2 x 37px, icon-zone inset on the head itself) is
    already the module default further up. Use the live Shell theme surfaces,
    not the legacy dark-only shell-v2 palette. */
-.shell-window[data-shell-contract="v2"] .documents-explorer > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .documents-runbooks > .ctox-pane-header {
+[data-app="documents"] .documents-explorer > .ctox-pane-header,
+[data-app="documents"] .documents-runbooks > .ctox-pane-header {
   background: var(--surface);
 }
-.shell-window[data-shell-contract="v2"] .documents-explorer .ctox-pane-kicker { display: none; }
-.shell-window[data-shell-contract="v2"] .documents-explorer .ctox-pane-title { margin-top: 0; line-height: 1.1; }
-.shell-window[data-shell-contract="v2"] .documents-explorer .ctox-pane-icon {
+[data-app="documents"] .documents-explorer .ctox-pane-kicker { display: none; }
+[data-app="documents"] .documents-explorer .ctox-pane-title { margin-top: 0; line-height: 1.1; }
+[data-app="documents"] .documents-explorer .ctox-pane-icon {
   width: min(30px, var(--shell-v2-header-row-size, 37px));
   height: min(30px, var(--shell-v2-header-row-size, 37px));
 }
 /* Tall enough for all six controls plus the reset action, so the tray does not
    hide its own way out; it still scrolls in a short window. */
-.shell-window[data-shell-contract="v2"] .documents-explorer .documents-filter-panel {
+[data-app="documents"] .documents-explorer .documents-filter-panel {
   max-height: min(320px, 50vh);
   overflow: auto;
 }
-.shell-window[data-shell-contract="v2"] .documents-superdoc-toolbar .superdoc-toolbar,
-.shell-window[data-shell-contract="v2"] .documents-superdoc-toolbar .button-group {
-  flex-wrap: nowrap !important;
-}
-.shell-window[data-shell-contract="v2"] .documents-context-menu {
+
+[data-app="documents"] .documents-context-menu {
   position: absolute;
   z-index: 90;
   width: min(560px, calc(100% - 16px));
   max-width: calc(100% - 16px);
-}
-
-.documents-superdoc-toolbar .toolbar-item-ctn,
-.documents-superdoc-toolbar .toolbar-item,
-.documents-superdoc-toolbar .toolbar-button,
-.documents-superdoc-toolbar .toolbar-dropdown-trigger,
-.documents-superdoc-toolbar .sd-tooltip-trigger {
-  color: var(--text) !important;
-}
-
-.documents-superdoc-toolbar .toolbar-button,
-.documents-superdoc-toolbar .toolbar-dropdown {
-  background: transparent !important;
-  border-color: transparent !important;
-}
-
-.documents-superdoc-toolbar .toolbar-button:not(.disabled):hover,
-.documents-superdoc-toolbar .toolbar-item:focus-visible .toolbar-button {
-  background: color-mix(in srgb, var(--surface-2) 78%, var(--accent) 8%) !important;
-  border-color: var(--line) !important;
-}
-
-.documents-superdoc-toolbar .toolbar-button.active,
-.documents-superdoc-toolbar .toolbar-button.is-active,
-.documents-superdoc-toolbar .toolbar-button[aria-pressed="true"] {
-  background: color-mix(in srgb, var(--accent) 16%, var(--surface-2)) !important;
-  border-color: color-mix(in srgb, var(--accent) 46%, var(--line)) !important;
-}
-
-.documents-superdoc-toolbar .toolbar-button.disabled,
-.documents-superdoc-toolbar .disabled .toolbar-button,
-.documents-superdoc-toolbar .disabled {
-  color: var(--muted) !important;
-  opacity: 0.45;
-}
-
-.documents-superdoc-toolbar svg,
-.documents-superdoc-toolbar path {
-  fill: currentColor !important;
-}
-
-.documents-superdoc-toolbar .button-text-input {
-  border-color: var(--line) !important;
-  background: var(--surface) !important;
-  color: var(--text) !important;
-}
-
-.documents-superdoc-toolbar .separator-inner {
-  background: var(--line) !important;
-}
-
-.documents-superdoc-ruler {
-  flex: 0 0 auto;
-  min-height: 27px;
-  display: flex;
-  justify-content: center;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--muted);
-  overflow: hidden;
-}
-
-.documents-superdoc-ruler .ruler,
-.documents-superdoc-ruler * {
-  color: inherit;
-}
-
-.documents-superdoc-ruler:not(:has(.ruler)) {
-  display: none;
-}
-
-.documents-superdoc-editor {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.documents-superdoc-mount {
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.documents-superdoc-mount .superdoc {
-  height: 100%;
-  min-height: 0;
-}
-
-.documents-superdoc-mount .superdoc__layers {
-  width: 100%;
-}
-
-.documents-superdoc-mount .super-editor-container.contained {
-  background: var(--surface-2);
-}
-
-/* Dark-only specials: a denser surface veil and a deeper shadow on the
-   floating toggle, and a slightly elevated text-input surface inside the
-   vendor toolbar. Everything else flips with the shell tokens. */
-:root[data-theme="dark"] .documents-superdoc-toolbar-toggle {
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.34);
-}
-
-:root[data-theme="dark"] .documents-superdoc-toolbar .button-text-input {
-  background: color-mix(in srgb, var(--surface) 84%, var(--surface-2)) !important;
-}
-
-.documents-superdoc-mount .presentation-editor__viewport {
-  margin-left: auto;
-  margin-right: auto;
 }
 
 /* ==========================================================================
@@ -1529,60 +1346,60 @@
    ========================================================================== */
 
 /* Cohesive scrollbars on scrollable panels */
-.documents-column-list,
-.documents-editor,
-.documents-workflow-scroll,
-.documents-drawer-scroll {
+[data-app="documents"] :where(.documents-column-list),
+[data-app="documents"] :where(.documents-editor),
+[data-app="documents"] :where(.documents-workflow-scroll),
+[data-app="documents"] :where(.documents-drawer-scroll) {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--line) 40%, transparent) transparent;
 }
 
-.documents-column-list::-webkit-scrollbar,
-.documents-editor::-webkit-scrollbar,
-.documents-workflow-scroll::-webkit-scrollbar,
-.documents-drawer-scroll::-webkit-scrollbar {
+[data-app="documents"] :where(.documents-column-list)::-webkit-scrollbar,
+[data-app="documents"] :where(.documents-editor)::-webkit-scrollbar,
+[data-app="documents"] :where(.documents-workflow-scroll)::-webkit-scrollbar,
+[data-app="documents"] :where(.documents-drawer-scroll)::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
-.documents-column-list::-webkit-scrollbar-thumb,
-.documents-editor::-webkit-scrollbar-thumb,
-.documents-workflow-scroll::-webkit-scrollbar-thumb,
-.documents-drawer-scroll::-webkit-scrollbar-thumb {
+[data-app="documents"] :where(.documents-column-list)::-webkit-scrollbar-thumb,
+[data-app="documents"] :where(.documents-editor)::-webkit-scrollbar-thumb,
+[data-app="documents"] :where(.documents-workflow-scroll)::-webkit-scrollbar-thumb,
+[data-app="documents"] :where(.documents-drawer-scroll)::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--line) 40%, transparent);
   border-radius: 99px;
 }
 
-.documents-column-list::-webkit-scrollbar-thumb:hover,
-.documents-editor::-webkit-scrollbar-thumb:hover,
-.documents-workflow-scroll::-webkit-scrollbar-thumb:hover,
-.documents-drawer-scroll::-webkit-scrollbar-thumb:hover {
+[data-app="documents"] :where(.documents-column-list)::-webkit-scrollbar-thumb:hover,
+[data-app="documents"] :where(.documents-editor)::-webkit-scrollbar-thumb:hover,
+[data-app="documents"] :where(.documents-workflow-scroll)::-webkit-scrollbar-thumb:hover,
+[data-app="documents"] :where(.documents-drawer-scroll)::-webkit-scrollbar-thumb:hover {
   background: color-mix(in srgb, var(--line) 75%, transparent);
 }
 
 /* Compact row feedback for repeated document selection. */
-.documents-card {
+[data-app="documents"] :where(.documents-card) {
   transition: background-color 0.16s ease, border-color 0.16s ease;
 }
 
-.documents-card:hover {
+[data-app="documents"] :where(.documents-card):hover {
   background: var(--surface-2);
   border-color: var(--line);
 }
 
-.documents-card[aria-current="true"] {
+[data-app="documents"] :where(.documents-card)[aria-current="true"] {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
 }
 
 /* Modern inputs, selects, and textareas */
-.documents-runbook-form select,
-.documents-runbook-form textarea,
-.documents-workflow textarea,
-.documents-drawer-form textarea,
-.documents-drawer-form select,
-.documents-context-chat textarea,
-.documents-markdown-textarea {
+[data-app="documents"] :where(.documents-runbook-form) select,
+[data-app="documents"] :where(.documents-runbook-form) textarea,
+[data-app="documents"] :where(.documents-workflow) textarea,
+[data-app="documents"] :where(.documents-drawer-form) textarea,
+[data-app="documents"] :where(.documents-drawer-form) select,
+[data-app="documents"] :where(.documents-context-chat) textarea,
+[data-app="documents"] :where(.documents-markdown-textarea) {
   border-radius: var(--control-radius) !important;
   border: 1px solid var(--line) !important;
   padding: 8px 12px !important;
@@ -1590,22 +1407,22 @@
   transition: border-color 0.16s ease, box-shadow 0.16s ease !important;
 }
 
-.documents-runbook-form select:focus,
-.documents-runbook-form textarea:focus,
-.documents-workflow textarea:focus,
-.documents-drawer-form textarea:focus,
-.documents-drawer-form select:focus,
-.documents-context-chat textarea:focus,
-.documents-markdown-textarea:focus {
+[data-app="documents"] :where(.documents-runbook-form) select:focus,
+[data-app="documents"] :where(.documents-runbook-form) textarea:focus,
+[data-app="documents"] :where(.documents-workflow) textarea:focus,
+[data-app="documents"] :where(.documents-drawer-form) textarea:focus,
+[data-app="documents"] :where(.documents-drawer-form) select:focus,
+[data-app="documents"] :where(.documents-context-chat) textarea:focus,
+[data-app="documents"] :where(.documents-markdown-textarea):focus {
   border-color: var(--accent) !important;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent) !important;
 }
 
 /* Modernized form and toolbar buttons */
-.documents-workflow-actions button,
-.documents-drawer-actions button,
-.documents-runbook-form button,
-.documents-knowledge-link {
+[data-app="documents"] :where(.documents-workflow-actions) button,
+[data-app="documents"] :where(.documents-drawer-actions) button,
+[data-app="documents"] :where(.documents-runbook-form) button,
+[data-app="documents"] :where(.documents-knowledge-link) {
   appearance: none;
   display: inline-flex;
   align-items: center;
@@ -1623,83 +1440,83 @@
   transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
 }
 
-.documents-workflow-actions button:hover,
-.documents-drawer-actions button:hover,
-.documents-runbook-form button:hover,
-.documents-knowledge-link:hover {
+[data-app="documents"] :where(.documents-workflow-actions) button:hover,
+[data-app="documents"] :where(.documents-drawer-actions) button:hover,
+[data-app="documents"] :where(.documents-runbook-form) button:hover,
+[data-app="documents"] :where(.documents-knowledge-link):hover {
   background: color-mix(in srgb, var(--surface-2) 90%, var(--accent-soft)) !important;
   border-color: color-mix(in srgb, var(--line) 80%, var(--accent)) !important;
 }
 
-.documents-workflow-actions button:disabled:hover,
-.documents-drawer-actions button:disabled:hover,
-.documents-runbook-form button:disabled:hover,
-.documents-knowledge-link:disabled:hover {
+[data-app="documents"] :where(.documents-workflow-actions) button:disabled:hover,
+[data-app="documents"] :where(.documents-drawer-actions) button:disabled:hover,
+[data-app="documents"] :where(.documents-runbook-form) button:disabled:hover,
+[data-app="documents"] :where(.documents-knowledge-link):disabled:hover {
   box-shadow: none;
 }
 
-.documents-workflow-actions button:active,
-.documents-drawer-actions button:active,
-.documents-runbook-form button:active,
-.documents-knowledge-link:active {
+[data-app="documents"] :where(.documents-workflow-actions) button:active,
+[data-app="documents"] :where(.documents-drawer-actions) button:active,
+[data-app="documents"] :where(.documents-runbook-form) button:active,
+[data-app="documents"] :where(.documents-knowledge-link):active {
   background: var(--surface-2) !important;
 }
 
-.documents-workflow-actions button[type="submit"],
-.documents-drawer-actions button[type="submit"] {
+[data-app="documents"] :where(.documents-workflow-actions) button[type="submit"],
+[data-app="documents"] :where(.documents-drawer-actions) button[type="submit"] {
   background: var(--accent) !important;
   color: var(--bg) !important;
   border-color: transparent !important;
 }
-.documents-workflow-actions button[type="submit"]:hover,
-.documents-drawer-actions button[type="submit"]:hover {
+[data-app="documents"] :where(.documents-workflow-actions) button[type="submit"]:hover,
+[data-app="documents"] :where(.documents-drawer-actions) button[type="submit"]:hover {
   background: color-mix(in srgb, var(--accent) 88%, #fff) !important;
 }
 /* Dark-only special: hover darkens the accent instead of lightening it. */
-:root[data-theme="dark"] .documents-workflow-actions button[type="submit"]:hover,
-:root[data-theme="dark"] .documents-drawer-actions button[type="submit"]:hover {
+[data-app="documents"]:is(:root[data-theme="dark"] *) :where(.documents-workflow-actions) button[type="submit"]:hover,
+[data-app="documents"]:is(:root[data-theme="dark"] *) :where(.documents-drawer-actions) button[type="submit"]:hover {
   background: color-mix(in srgb, var(--accent) 88%, #000) !important;
 }
 
-.documents-drawer-actions .documents-danger-button {
+[data-app="documents"] :where(.documents-drawer-actions) .documents-danger-button {
   background: var(--surface-2) !important;
   border-color: var(--danger) !important;
   color: var(--danger) !important;
 }
-.documents-drawer-actions .documents-danger-button:hover {
+[data-app="documents"] :where(.documents-drawer-actions) .documents-danger-button:hover {
   background: color-mix(in srgb, var(--danger) 12%, transparent) !important;
 }
 
 /* Elegant transition for sliding right-hand runbook workflow panel */
-.documents-workflow {
+[data-app="documents"] :where(.documents-workflow) {
   transition: transform var(--spring-duration) var(--spring-snappy), opacity var(--spring-duration) ease;
 }
 
-.documents-module.is-compact {
+[data-app="documents"] :where(.documents-module).is-compact {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.documents-module.is-compact.is-actions-open {
+[data-app="documents"] :where(.documents-module).is-compact.is-actions-open {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.documents-module.is-compact .documents-workbench {
+[data-app="documents"] :where(.documents-module).is-compact .documents-workbench {
   grid-column: 1;
   min-width: 0;
 }
 
-.documents-module.is-compact .documents-library-resizer {
+[data-app="documents"] :where(.documents-module).is-compact .documents-library-resizer {
   display: none;
 }
 
-.documents-module.is-compact .documents-actions-resizer {
+[data-app="documents"] :where(.documents-module).is-compact .documents-actions-resizer {
   position: absolute;
   z-index: 13;
   inset-block: 0;
   right: min(var(--documents-actions-width), calc(100% - 32px));
 }
 
-.documents-module.is-compact .documents-actions-drawer {
+[data-app="documents"] :where(.documents-module).is-compact .documents-actions-drawer {
   position: absolute;
   z-index: 12;
   inset-block: 0;
@@ -1709,22 +1526,22 @@
   box-shadow: var(--shadow);
 }
 
-.documents-module.is-compact .documents-drawer-backdrop:not([hidden]) {
+[data-app="documents"] :where(.documents-module).is-compact .documents-drawer-backdrop:not([hidden]) {
   display: block;
 }
 
-.documents-module.is-actions-overlay.is-actions-open:not(.is-compact) {
+[data-app="documents"] :where(.documents-module).is-actions-overlay.is-actions-open:not(.is-compact) {
   grid-template-columns: minmax(220px, var(--documents-library-width)) 8px minmax(480px, 1fr);
 }
 
-.documents-module.is-actions-overlay:not(.is-compact) .documents-actions-resizer {
+[data-app="documents"] :where(.documents-module).is-actions-overlay:not(.is-compact) .documents-actions-resizer {
   position: absolute;
   z-index: 13;
   inset-block: 0;
   right: min(var(--documents-actions-width), calc(100% - 32px));
 }
 
-.documents-module.is-actions-overlay:not(.is-compact) .documents-actions-drawer {
+[data-app="documents"] :where(.documents-module).is-actions-overlay:not(.is-compact) .documents-actions-drawer {
   position: absolute;
   z-index: 12;
   inset-block: 0;
@@ -1734,11 +1551,11 @@
   box-shadow: var(--shadow);
 }
 
-.documents-module.is-actions-overlay:not(.is-compact) .documents-drawer-backdrop:not([hidden]) {
+[data-app="documents"] :where(.documents-module).is-actions-overlay:not(.is-compact) .documents-drawer-backdrop:not([hidden]) {
   display: block;
 }
 
-.documents-module.is-compact .documents-library-pane {
+[data-app="documents"] :where(.documents-module).is-compact .documents-library-pane {
   display: none;
   position: absolute;
   z-index: 12;
@@ -1749,15 +1566,15 @@
   box-shadow: var(--shadow);
 }
 
-.documents-module.is-compact.is-library-open .documents-library-pane {
+[data-app="documents"] :where(.documents-module).is-compact.is-library-open .documents-library-pane {
   display: block;
 }
 
-.documents-module.is-compact .documents-library-toggle {
+[data-app="documents"] :where(.documents-module).is-compact .documents-library-toggle {
   display: grid;
 }
 
-.documents-module.is-narrow .documents-document-strip {
+[data-app="documents"] :where(.documents-module).is-narrow .documents-document-strip {
   gap: 4px;
   /* padding-right stays reserved for the 74px window control. */
   padding-left: 5px;
@@ -1767,51 +1584,51 @@
    the FIRST head of the top row and has to keep the 80px app-icon zone free
    itself — otherwise the shell icon paints straight over the document title.
    Placed after the .is-narrow rule above, which has the same specificity. */
-.documents-module.is-compact .documents-document-strip {
+[data-app="documents"] :where(.documents-module).is-compact .documents-document-strip {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
 }
 
 /* The shell's compact layout must already be correct before JS mounts. */
 @container business-app-window (max-width: 768px) {
-  .documents-module .documents-library-pane { display:none; }
-  .documents-module.is-library-open .documents-library-pane { display:block; }
-  .documents-module .documents-workbench { grid-column:1; grid-row:1; }
-  .documents-module .documents-library-resizer { display:none; }
-  .documents-module .documents-library-toggle { display:grid; }
-  .documents-module .documents-document-strip {
+  [data-app="documents"] :where(.documents-module) .documents-library-pane { display:none; }
+  [data-app="documents"] :where(.documents-module).is-library-open .documents-library-pane { display:block; }
+  [data-app="documents"] :where(.documents-module) .documents-workbench { grid-column:1; grid-row:1; }
+  [data-app="documents"] :where(.documents-module) .documents-library-resizer { display:none; }
+  [data-app="documents"] :where(.documents-module) .documents-library-toggle { display:grid; }
+  [data-app="documents"] :where(.documents-module) .documents-document-strip {
     padding-left:calc(var(--shell-v2-icon-size,80px) + 14px);
-    padding-right:calc(var(--shell-v2-header-row-size,37px) * 2);
+    padding-right:var(--shell-v2-control-inset, calc(var(--shell-v2-header-row-size,37px) * 2));
   }
 }
 
-.documents-module.is-narrow .documents-series-label strong,
-.documents-module.is-narrow .documents-actions-toggle span {
+[data-app="documents"] :where(.documents-module).is-narrow .documents-series-label strong,
+[data-app="documents"] :where(.documents-module).is-narrow .documents-actions-toggle span {
   display: none;
 }
 
-.documents-module.is-narrow .documents-recipient-navigator {
+[data-app="documents"] :where(.documents-module).is-narrow .documents-recipient-navigator {
   grid-template-columns: 28px auto minmax(92px, 1fr) 28px;
   flex: 1 1 auto;
 }
 
-.documents-module.is-narrow .documents-recipient-position {
+[data-app="documents"] :where(.documents-module).is-narrow .documents-recipient-position {
   font-size: 10px;
 }
 
-.documents-module.is-narrow .documents-actions-toggle {
+[data-app="documents"] :where(.documents-module).is-narrow .documents-actions-toggle {
   width: 30px;
   padding: 0;
 }
 
-.documents-module.is-phone .documents-series-label {
+[data-app="documents"] :where(.documents-module).is-phone .documents-series-label {
   display: none;
 }
 
-.documents-module.is-phone .documents-recipient-navigator {
+[data-app="documents"] :where(.documents-module).is-phone .documents-recipient-navigator {
   grid-template-columns: 28px minmax(0, 1fr) 28px;
 }
 
-.documents-module.is-phone .documents-recipient-position {
+[data-app="documents"] :where(.documents-module).is-phone .documents-recipient-position {
   display: none;
 }
 
@@ -1825,68 +1642,51 @@
    so its rules stay unscoped).
    ========================================================================== */
 @media (pointer: coarse) {
-  .documents-module button,
-  .documents-module input,
-  .documents-module select,
-  .documents-module textarea {
-    min-height: 44px;
-  }
-
-  /* SuperDoc 1.32.0 ships 32px toolbar controls. Keep this vendor override
-     scoped to the Documents-owned toolbar so touch targets reach 44px while
-     vendor/superdoc.css stays byte-identical. Recheck these class names when
-     the bundled SuperDoc version changes. */
-  .documents-superdoc-toolbar .superdoc-toolbar {
-    --sd-ui-toolbar-height: 44px;
-    max-height: 144px;
-  }
-
-  .documents-superdoc-toolbar .toolbar-item {
-    min-width: 44px;
-  }
-
-  .documents-superdoc-toolbar .toolbar-dropdown-option {
+  [data-app="documents"] :where(.documents-module) button,
+  [data-app="documents"] :where(.documents-module) input,
+  [data-app="documents"] :where(.documents-module) select,
+  [data-app="documents"] :where(.documents-module) textarea {
     min-height: 44px;
   }
 
   /* Checkboxes/radios (context-mode choices) keep their box size; their
      label row is the tap target. */
-  .documents-module input[type="checkbox"],
-  .documents-module input[type="radio"] {
+  [data-app="documents"] :where(.documents-module) input[type="checkbox"],
+  [data-app="documents"] :where(.documents-module) input[type="radio"] {
     min-height: 0;
   }
 
-  .documents-module .ctox-pane-icon,
-  .documents-module .documents-card-manage,
-  .documents-module .documents-active-filters button {
+  [data-app="documents"] :where(.documents-module) .ctox-pane-icon,
+  [data-app="documents"] :where(.documents-module) .documents-card-manage,
+  [data-app="documents"] :where(.documents-module) .documents-active-filters button {
     width: 44px;
     min-width: 44px;
   }
 
   /* The narrow/phone variants pin the actions toggle to 30px square. */
-  .documents-module .documents-actions-toggle,
-  .documents-module.is-narrow .documents-actions-toggle {
+  [data-app="documents"] :where(.documents-module) .documents-actions-toggle,
+  [data-app="documents"] :where(.documents-module).is-narrow .documents-actions-toggle {
     width: 44px;
     min-width: 44px;
   }
 
   /* Recipient stepper: the 28px grid tracks become 44px touch tracks. */
-  .documents-module .documents-recipient-navigator,
-  .documents-module.is-narrow .documents-recipient-navigator {
+  [data-app="documents"] :where(.documents-module) .documents-recipient-navigator,
+  [data-app="documents"] :where(.documents-module).is-narrow .documents-recipient-navigator {
     grid-template-columns: 44px auto minmax(0, 1fr) 44px;
   }
 
-  .documents-module.is-phone .documents-recipient-navigator {
+  [data-app="documents"] :where(.documents-module).is-phone .documents-recipient-navigator {
     grid-template-columns: 44px minmax(0, 1fr) 44px;
   }
 
-  .documents-module .documents-recipient-search input {
+  [data-app="documents"] :where(.documents-module) .documents-recipient-search input {
     height: 44px;
   }
 
   /* 44px drag hit area around the visible 8px drawer resizer grip (the only
      resizer reachable in the compact phone layout). */
-  .documents-module.is-compact .documents-actions-resizer::after {
+  [data-app="documents"] :where(.documents-module).is-compact .documents-actions-resizer::after {
     content: "";
     position: absolute;
     inset-block: 0;
@@ -1896,29 +1696,122 @@
   }
 
   /* Context chat lives in the body-mounted menu — size its controls too. */
-  .documents-context-menu button,
-  .documents-context-menu input,
-  .documents-context-menu textarea {
+  [data-app="documents"] :where(.documents-context-menu) button,
+  [data-app="documents"] :where(.documents-context-menu) input,
+  [data-app="documents"] :where(.documents-context-menu) textarea {
     min-height: 44px;
   }
 
-  .documents-context-menu input[type="checkbox"],
-  .documents-context-menu input[type="radio"] {
+  [data-app="documents"] :where(.documents-context-menu) input[type="checkbox"],
+  [data-app="documents"] :where(.documents-context-menu) input[type="radio"] {
     min-height: 0;
   }
 
-  .documents-context-menu .documents-context-mode label {
+  [data-app="documents"] :where(.documents-context-menu) .documents-context-mode label {
     min-height: 44px;
   }
 
-  .documents-context-menu .documents-context-chat [data-documents-context-close] {
+  [data-app="documents"] :where(.documents-context-menu) .documents-context-chat [data-documents-context-close] {
     width: 44px;
     min-width: 44px;
   }
 
   /* Was a 767px width media query; the tighter padding belongs to the touch
      ergonomics of this block, not to a screen width. */
-  .documents-context-chat {
+  [data-app="documents"] :where(.documents-context-chat) {
     padding: 10px;
   }
+}
+
+/* v4: Drawer im App-Fenster (4.0 hat keine Shell-Drawer, app-api.d.ts OFFEN-D). Liegt im documents-module-Raster
+   über der Bibliothek, nie außerhalb von root. */
+[data-app="documents"] :where(.documents-app-drawer) {
+  position: absolute;
+  z-index: 12;
+  inset: 0 auto 0 0;
+  width: min(380px, 100%);
+  box-sizing: border-box;
+  overflow: auto;
+  padding: 14px 16px;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+}
+
+[data-app="documents"] :where(.documents-app-drawer) .drawer-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+[data-app="documents"] :where(.documents-app-drawer) .drawer-header-row h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+[data-app="documents"] :where(.documents-app-drawer) .drawer-header-row p {
+  margin: 4px 0 0;
+  color: var(--muted, var(--text));
+  font-size: 12px;
+}
+
+/* FIX9b: Lesevorschau eines Word-Dokuments, solange der Office-Editor dahinter startet. */
+[data-app="documents"] :where(.documents-editor-shell) {
+  position: relative;
+}
+[data-app="documents"] :where(.documents-read-preview) {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: auto;
+  padding: 24px 16px;
+  background: var(--surface-2);
+  color: var(--text);
+}
+[data-app="documents"] :where(.documents-read-preview[hidden]) {
+  display: none;
+}
+[data-app="documents"] :where(.documents-read-preview-page) {
+  box-sizing: border-box;
+  max-width: 816px;
+  min-height: 100%;
+  margin: 0 auto;
+  padding: 48px 56px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+[data-app="documents"] :where(.documents-read-preview-page) > :first-child {
+  margin-top: 0;
+}
+[data-app="documents"] :where(.documents-ctox-documents-frame.is-warming) {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+@container documents-workbench (max-width: 620px) {
+  [data-app="documents"] :where(.documents-read-preview) {
+    padding: 8px;
+  }
+  [data-app="documents"] :where(.documents-read-preview-page) {
+    padding: 20px 16px;
+  }
+}
+
+/* FIX11 (G4, 420 px): neben Ordnerknopf und Knopfzone blieb vom Dokumenttitel „Angebot Wartungs…“ und vom Typ „Mar…“.
+   Schmal bricht der Titel an Wortgrenzen um, der kurze Typ („Markdown“, „Word“) folgt ungekuerzt dahinter bzw. in der
+   naechsten Zeile. */
+@container business-app-window (max-width: 768px) {
+  [data-app="documents"] .documents-current-document { flex-wrap: wrap; row-gap: 0; }
+  [data-app="documents"] .documents-current-document strong {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: normal;
+    line-height: 1.25;
+  }
+  [data-app="documents"] .documents-current-document span { overflow: visible; text-overflow: clip; }
 }

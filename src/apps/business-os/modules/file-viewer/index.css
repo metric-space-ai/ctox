@@ -1,4 +1,4 @@
-.file-viewer {
+[data-app="file-viewer"] .file-viewer {
   display: grid;
   grid-template-rows: 37px 37px minmax(0, 1fr);
   height: 100%;
@@ -10,25 +10,25 @@
   box-sizing: border-box;
   font: 12px/1.35 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
-.file-viewer-toolbar {
+[data-app="file-viewer"] .file-viewer-toolbar {
   display: flex;
   align-items: center;
   border-bottom: 1px solid var(--hairline, var(--line));
   background: color-mix(in srgb, var(--surface) 90%, var(--surface-2));
   padding: 0 10px 0 12px;
 }
-.file-viewer-toolbar .ctox-pane-title-row,
-.file-viewer-toolbar .ctox-pane-titles,
-.file-viewer-toolbar .ctox-pane-title {
+[data-app="file-viewer"] .file-viewer-toolbar .ctox-pane-title-row,
+[data-app="file-viewer"] .file-viewer-toolbar .ctox-pane-titles,
+[data-app="file-viewer"] .file-viewer-toolbar .ctox-pane-title {
   min-width: 0;
 }
-.file-viewer-toolbar .ctox-pane-title {
+[data-app="file-viewer"] .file-viewer-toolbar .ctox-pane-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.file-viewer-metadata {
+[data-app="file-viewer"] .file-viewer-metadata {
   display: flex;
   align-items: center;
   min-width: 0;
@@ -40,19 +40,14 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.file-viewer-content {
+[data-app="file-viewer"] .file-viewer-content {
   display: grid;
   min-height: 0;
   overflow: auto;
   background: color-mix(in srgb, var(--bg) 48%, var(--surface));
 }
-.file-viewer-content > p {
-  margin: 16px;
-  color: var(--muted);
-}
-.file-viewer-content > p.is-error { color: var(--danger); }
-.file-viewer-image,
-.file-viewer-media {
+[data-app="file-viewer"] .file-viewer-image,
+[data-app="file-viewer"] .file-viewer-media {
   align-self: center;
   justify-self: center;
   max-width: calc(100% - 28px);
@@ -61,18 +56,18 @@
   border: 1px solid var(--hairline, var(--line));
   background: var(--surface);
 }
-.file-viewer-frame {
+[data-app="file-viewer"] .file-viewer-frame {
   width: 100%;
   height: 100%;
   border: 0;
   background: var(--surface);
 }
-.file-viewer-audio {
+[data-app="file-viewer"] .file-viewer-audio {
   align-self: center;
   justify-self: center;
   width: min(520px, calc(100% - 28px));
 }
-.file-viewer-text {
+[data-app="file-viewer"] .file-viewer-text {
   margin: 0;
   padding: 14px;
   color: var(--text);
@@ -80,45 +75,95 @@
   overflow-wrap: anywhere;
   font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
-.file-viewer-unsupported {
-  align-self: center;
-  justify-self: center;
-  display: grid;
-  gap: 6px;
-  max-width: 420px;
-  color: var(--muted);
-  text-align: center;
-  padding: 20px;
-}
-.file-viewer-unsupported strong { color: var(--text); }
 
 @container business-app-window (max-width: 1024px) {
-  .file-viewer-toolbar {
+  [data-app="file-viewer"] .file-viewer-toolbar {
     gap: 8px;
   }
 }
 
 @container business-app-window (max-width: 768px) {
-  .file-viewer {
+  [data-app="file-viewer"] .file-viewer {
     grid-template-rows: 37px 37px minmax(0, 1fr);
   }
 }
 
 /* Shell-v2 reserves the top-left app icon and top-right window control. */
-.shell-window[data-shell-contract="v2"] .file-viewer {
+[data-app="file-viewer"] .file-viewer {
   grid-template-rows: var(--shell-v2-header-row-size, 37px) var(--shell-v2-header-row-size, 37px) minmax(0, 1fr);
 }
 
-.shell-window[data-shell-contract="v2"] .file-viewer-toolbar {
+[data-app="file-viewer"] .file-viewer-toolbar {
   height: var(--shell-v2-header-row-size, 37px);
   min-height: var(--shell-v2-header-row-size, 37px);
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
   padding-right: calc(var(--shell-v2-header-row-size, 37px) * 2);
 }
 
-.shell-window[data-shell-contract="v2"] .file-viewer-metadata {
+[data-app="file-viewer"] .file-viewer-metadata {
   height: var(--shell-v2-header-row-size, 37px);
   min-height: var(--shell-v2-header-row-size, 37px);
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
   padding-right: calc(var(--shell-v2-header-row-size, 37px) * 2);
 }
+
+/* FIX8: Leerzustand ohne Datei und Dateiauswahl – liegen in der Inhaltszeile über dem (dann leeren) Inhalt. */
+[data-app="file-viewer"] .file-viewer-start {
+  grid-row: 3;
+  grid-column: 1;
+  display: grid;
+  min-height: 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--bg) 48%, var(--surface));
+}
+[data-app="file-viewer"] .file-viewer-start[hidden],
+[data-app="file-viewer"] .file-viewer-empty[hidden],
+[data-app="file-viewer"] .file-viewer-picker[hidden] { display: none; }
+[data-app="file-viewer"] .file-viewer-empty {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+}
+[data-app="file-viewer"] .file-viewer-empty strong { color: var(--text); font-size: 14px; font-weight: 600; }
+[data-app="file-viewer"] .file-viewer-picker {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 8px;
+  align-self: start;
+  justify-self: center;
+  box-sizing: border-box;
+  width: min(560px, calc(100% - 24px));
+  max-height: calc(100% - 24px);
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+}
+[data-app="file-viewer"] .file-viewer-picker-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+[data-app="file-viewer"] .file-viewer-picker-list { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
+[data-app="file-viewer"] .file-viewer-picker-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+[data-app="file-viewer"] .file-viewer-picker-item:hover,
+[data-app="file-viewer"] .file-viewer-picker-item:focus-visible { background: var(--surface-2); outline: none; }
+[data-app="file-viewer"] .file-viewer-picker-item span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-app="file-viewer"] .file-viewer-picker-item small { flex: 0 1 auto; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

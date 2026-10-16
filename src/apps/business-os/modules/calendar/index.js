@@ -1,5 +1,5 @@
-import { loadModuleMessages } from '../../shared/i18n.js';
-import { renderHtmlIfChanged } from '../../shared/stable-dom.js';
+import { renderHtmlIfChanged } from 'ctox:shared/stable-dom.js';
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
 import { createCalendarView } from './calendar-view-adapter.js';
 
 const RENDER_DEBOUNCE_MS = 50;
@@ -47,6 +47,7 @@ const labels = {
     visible: 'Sichtbar',
     hidden: 'Ausgeblendet',
     eventsCount: 'Termine',
+    eventsCountOne: 'Termin',
     minutesShort: 'Min',
     internalActive: 'Intern aktiv',
     internalInactive: 'Intern inaktiv',
@@ -56,15 +57,62 @@ const labels = {
     active: 'Aktiv / Sichtbar',
     inactive: 'Inaktiv / Ausgeblendet',
     dataReady: 'Daten geladen',
-    noDatabase: 'Keine lokale Datenbank verbunden',
     importInvalid: 'Ungültige JSON-Datei.',
     importEmpty: 'Keine Kalenderdaten in der Datei.',
-    importUnavailable: 'Import ist gerade nicht möglich (keine Datenbank).',
     imported: '{count} Datensätze importiert',
     save: 'Speichern',
     delete: 'Löschen',
     cancel: 'Abbrechen',
-    syncingData: 'Daten werden synchronisiert.',
+    entries: 'Einträge',
+    bookingLinks: 'Buchungslinks',
+    externalSources: 'Externe Quellen',
+    title: 'Titel',
+    description: 'Beschreibung',
+    location: 'Ort',
+    startTime: 'Startzeit',
+    endTime: 'Endzeit',
+    allDay: 'Ganztägig',
+    recurrence: 'Wiederholung',
+    none: 'Keine',
+    daily: 'Täglich',
+    weekly: 'Wöchentlich',
+    monthly: 'Monatlich',
+    attendees: 'Teilnehmer',
+    newBookingPage: 'Neue Buchungsseite',
+    editBookingPage: 'Buchungsseite bearbeiten',
+    slug: 'Link-Kürzel (Slug)',
+    duration: 'Dauer (Minuten)',
+    bufferBefore: 'Puffer davor (Minuten)',
+    bufferAfter: 'Puffer danach (Minuten)',
+    minNotice: 'Mindestvorlauf (Minuten)',
+    maxAhead: 'Max. Tage im Voraus',
+    locationMode: 'Standort-Typ',
+    link: 'Online-Meeting Link',
+    phone: 'Telefonnummer',
+    physical: 'Physischer Ort',
+    status: 'Status',
+    previewLink: 'Vorschau Buchungsseite',
+    availabilityRules: 'Verfügbarkeiten',
+    monday: 'Montag',
+    tuesday: 'Dienstag',
+    wednesday: 'Mittwoch',
+    thursday: 'Donnerstag',
+    friday: 'Freitag',
+    saturday: 'Samstag',
+    sunday: 'Sonntag',
+    viewMonth: 'Monat',
+    viewWeek: 'Woche',
+    viewDay: 'Tag',
+    viewList: 'Liste',
+    presenceEditing: 'bearbeitet gerade',
+    eventKicker: 'Termin',
+    eventDetails: 'Termindetails',
+    detailTime: 'Zeit',
+    detailCalendar: 'Kalender',
+    detailLocation: 'Ort',
+    detailDescription: 'Beschreibung',
+    detailAllDay: 'Ganztägig',
+    edit: 'Bearbeiten',
   },
   en: {
     calendar: 'Calendar',
@@ -91,6 +139,7 @@ const labels = {
     visible: 'Visible',
     hidden: 'Hidden',
     eventsCount: 'events',
+    eventsCountOne: 'event',
     minutesShort: 'min',
     internalActive: 'Internally active',
     internalInactive: 'Internally inactive',
@@ -100,20 +149,75 @@ const labels = {
     active: 'Active / Visible',
     inactive: 'Inactive / Hidden',
     dataReady: 'Data loaded',
-    noDatabase: 'No local database connected',
     importInvalid: 'Invalid JSON file.',
     importEmpty: 'No calendar data in the file.',
-    importUnavailable: 'Import is unavailable right now (no database).',
     imported: '{count} records imported',
     save: 'Save',
     delete: 'Delete',
     cancel: 'Cancel',
-    syncingData: 'Syncing data.',
+    entries: 'entries',
+    bookingLinks: 'Booking Links',
+    externalSources: 'External Sources',
+    title: 'Title',
+    description: 'Description',
+    location: 'Location',
+    startTime: 'Start Time',
+    endTime: 'End Time',
+    allDay: 'All Day',
+    recurrence: 'Recurrence',
+    none: 'None',
+    daily: 'Daily',
+    weekly: 'Weekly',
+    monthly: 'Monthly',
+    attendees: 'Attendees',
+    newBookingPage: 'New Booking Page',
+    editBookingPage: 'Edit Booking Page',
+    slug: 'Slug',
+    duration: 'Duration (minutes)',
+    bufferBefore: 'Buffer Before (minutes)',
+    bufferAfter: 'Buffer After (minutes)',
+    minNotice: 'Minimum Notice (minutes)',
+    maxAhead: 'Max Days Ahead',
+    locationMode: 'Location Mode',
+    link: 'Online Meeting Link',
+    phone: 'Phone Number',
+    physical: 'Physical Location',
+    status: 'Status',
+    previewLink: 'Preview Booking Page',
+    availabilityRules: 'Availability Rules',
+    monday: 'Monday',
+    tuesday: 'Tuesday',
+    wednesday: 'Wednesday',
+    thursday: 'Thursday',
+    friday: 'Friday',
+    saturday: 'Saturday',
+    sunday: 'Sunday',
+    viewMonth: 'Month',
+    viewWeek: 'Week', // v4-allow: en
+    viewDay: 'Day',
+    viewList: 'List', // v4-allow: en
+    presenceEditing: 'is editing',
+    eventKicker: 'Event', // v4-allow: en
+    eventDetails: 'Event details',
+    detailTime: 'Time',
+    detailCalendar: 'Calendar',
+    detailLocation: 'Location', // v4-allow: en
+    detailDescription: 'Description', // v4-allow: en
+    detailAllDay: 'All day',
+    edit: 'Edit', // v4-allow: en
   },
 };
 
+// FIX8: Klick auf einen Termin öffnet die Details (nur lesen), Doppelklick das Bearbeiten (macOS-Kalender/Outlook).
+// Der Einfachklick wartet die Doppelklickzeit ab, damit das Seitenblatt den zweiten Klick nicht abfängt.
+const EVENT_DBLCLICK_MS = 260;
+
 const state = {
-  ctx: null,
+  api: null,
+  root: null,
+  disposers: [],
+  reloadTimer: null,
+  pendingEditing: null,
   lang: 'de',
   t: (key, fallback) => fallback ?? key,
 
@@ -144,41 +248,37 @@ const state = {
   editingItem: null,
 
   // Subscriptions & Cleanups
-  rxSubscriptions: [],
   activeFormSubscription: null,
   calendarViewInstance: null,
   renderTimer: null,
   domHandlers: null,
 
-  // Collection readiness (sync render-hint for data-driven empty states).
-  readiness: {},
-  readinessUnsubscribes: [],
-  leftEmptyDefaultHtml: null,
 };
 
 const els = {};
 
+// App-API 4.0 (V4-PORT.md): Daten nur über api.query/get/put/patch/remove. Der Adapter hält die bisherigen
+// Aufrufstellen lesbar (db.<collection>.rows/byId/add/change/drop); Schreiben wartet nur auf den lokalen Commit.
 function calendarCollection(name) {
-  const facade = state.ctx?.db;
-  return facade?.collection?.(name) || null;
+  const api = state.api;
+  if (!api) return null;
+  return Object.freeze({
+    rows: (query = {}) => api.query(name, query).get(),
+    byId: (id) => api.get(name, String(id)).get(),
+    add: (doc) => api.put(name, doc).local,
+    change: (id, patch) => api.patch(name, String(id), patch).local,
+    drop: (id) => api.remove(name, String(id)).local,
+  });
 }
 
 function calendarDb() {
-  const entries = CALENDAR_COLLECTIONS.map((name) => [name, calendarCollection(name)]);
-  if (entries.some(([, collection]) => !collection)) return null;
-  return Object.fromEntries(entries);
+  if (!state.api) return null;
+  return Object.fromEntries(CALENDAR_COLLECTIONS.map((name) => [name, calendarCollection(name)]));
 }
 
+// Rechte entscheidet der Core (§10.2a Nr. 3).
 function canWriteCalendarDefaults() {
-  const permissionCheck = state.ctx?.permissions?.canWriteCollection;
-  return typeof permissionCheck !== 'function'
-    || [
-      'calendar_sources',
-      'calendar_calendars',
-      'calendar_events',
-      'calendar_booking_pages',
-      'calendar_availability_rules',
-    ].every((collectionName) => permissionCheck(collectionName));
+  return Boolean(state.api);
 }
 
 function isBusinessOsPermissionDenied(error) {
@@ -186,140 +286,202 @@ function isBusinessOsPermissionDenied(error) {
     || error?.name === 'BusinessOsPermissionError';
 }
 
-function notify({ type = 'info', message }) {
-  const notifications = state.ctx?.notifications;
-  const title = state.t('calendar', labels[state.lang].calendar);
-  if (typeof notifications?.show === 'function') {
-    notifications.show({ type, title, message });
-  } else if (typeof notifications?.notify === 'function') {
-    notifications.notify({ title, body: message });
+// Benachrichtigungen gehen in die Zustandszone der Shell (App-API 4.0, Anf. 27).
+function notify({ type = 'info', message, code = 'calendar.notice' }) {
+  const level = type === 'error' ? 'error' : (type === 'warning' ? 'warn' : 'info');
+  state.api?.status.report({ level, code, text: String(message || '') });
+}
+
+function langFrom(locale) {
+  return String(locale || '').toLowerCase().startsWith('en') ? 'en' : 'de';
+}
+
+// api.shell.t übersteuert die eingebetteten Texte, solange der Schlüsselraum offen ist (app-api.d.ts OFFEN-B).
+function applyLocale(lang) {
+  state.lang = lang;
+  const api = state.api;
+  state.t = (key, fallback) => {
+    const scoped = `calendar.${key}`;
+    const value = api?.shell?.t?.(scoped);
+    if (typeof value === 'string' && value && value !== scoped) return value;
+    return labels[lang]?.[key] ?? fallback ?? labels.de[key] ?? key;
+  };
+}
+
+const SNAPSHOT_VIEW_KEYS = Object.freeze(['leftBand', 'search', 'listView', 'statusFilter', 'calendarView', 'activeView', 'selectedBookingPageId', 'userCollapsedContext']);
+
+// Snapshot für den Live-Remount (§10.2a Nr. 1): Ansicht, Auswahl und ein offenes Formular samt Eingaben.
+function calendarSnapshot() {
+  const snap = { v: 1 };
+  for (const key of SNAPSHOT_VIEW_KEYS) snap[key] = state[key];
+  snap.selectedCalendarIds = [...state.selectedCalendarIds];
+  snap.calendarDate = state.calendarViewInstance?.getDate?.()?.toISOString?.() || null;
+  if (state.editingType && els.drawer?.classList.contains('is-open')) {
+    const form = els.drawer.querySelector('form');
+    snap.editing = { type: state.editingType, id: state.editingItem?.id || null, fields: form ? formFields(form) : {} };
+  }
+  return snap;
+}
+
+function formFields(form) {
+  const fields = {};
+  for (const el of form.elements) {
+    if (!el.name || el.type === 'file' || el.type === 'button' || el.type === 'submit') continue;
+    if (el.type === 'checkbox' || el.type === 'radio') { if (el.checked) fields[el.name] = el.type === 'checkbox' ? true : el.value; continue; }
+    fields[el.name] = el.value;
+  }
+  return fields;
+}
+
+function applyRestoredView(restored) {
+  if (!restored || typeof restored !== 'object') return;
+  for (const key of SNAPSHOT_VIEW_KEYS) {
+    const value = restored[key];
+    if (value === undefined) continue;
+    if (key === 'selectedBookingPageId' ? (value === null || typeof value === 'string') : typeof value === typeof state[key]) state[key] = value;
+  }
+  if (Array.isArray(restored.selectedCalendarIds)) state.selectedCalendarIds = new Set(restored.selectedCalendarIds.map(String));
+}
+
+// Formular erst wieder öffnen, wenn der bearbeitete Datensatz in den Live-Daten steht (erste Emission kann leer sein).
+function restoreEditing() {
+  const editing = state.pendingEditing;
+  if (!editing) return;
+  const id = editing.id;
+  const open = { event: openEventForm, bookingPage: openBookingPageForm, calendar: openCalendarForm }[editing.type];
+  if (!open) { state.pendingEditing = null; return; }
+  if (id) {
+    const list = editing.type === 'event' ? state.events : editing.type === 'bookingPage' ? state.bookingPages : state.calendars;
+    if (!list.some((item) => item.id === id)) return;
+  }
+  state.pendingEditing = null;
+  open(id || null);
+  const form = els.drawer?.querySelector('form');
+  if (!form) return;
+  for (const [name, value] of Object.entries(editing.fields || {})) {
+    const fieldEls = [...form.elements].filter((el) => el.name === name);
+    for (const el of fieldEls) {
+      if (el.type === 'checkbox') el.checked = value === true;
+      else if (el.type === 'radio') el.checked = el.value === value;
+      else el.value = String(value);
+    }
   }
 }
 
-export async function mount(ctx) {
-  state.ctx = ctx;
-  state.lang = ctx.locale === 'en' ? 'en' : 'de';
+export async function mount(root, api, { restored } = {}) {
+  // Abos gehören dieser Montage (PORTING.md §4 Falle 1).
+  const disposers = [];
+  state.disposers = disposers;
+  state.api = api;
+  state.root = root;
+  if (!root.dataset.app) root.dataset.app = api.app?.id || 'calendar';
+  applyLocale(langFrom(api.shell.locale.get()));
+  state.selectedCalendarIds = new Set();
+  applyRestoredView(restored);
+  state.pendingEditing = restored && typeof restored.editing === 'object' ? restored.editing : null;
 
-  // Load locales
-  const messages = await loadModuleMessages(import.meta.url, ctx.locale, labels);
-  state.t = (key, fallback) => messages[key] ?? fallback ?? key;
-
-  // Ensure EventCalendar & RRule assets are loaded
+  // EventCalendar & RRule (Vendor-Skripte der Shell, kein Datenweg).
   await ensureAssetsLoaded();
 
-  // Load markup
-  ctx.host.innerHTML = await loadModuleMarkup();
-
-  // Clear default left/right content slots
-  ctx.left.replaceChildren();
-  ctx.right.replaceChildren();
-
-  applyStaticLabels(ctx.host, state.t);
-  bindElements(ctx.host);
+  root.innerHTML = await loadModuleMarkup();
+  applyStaticLabels(root, state.t);
+  bindElements(root);
   wireEvents();
+  // Pane-Grammatik verdrahtet die App selbst (PORTING.md R14), keine DOM-Heuristik der Shell.
+  autoWirePaneGrammar(root);
+  api.shell.setTitle(state.t('calendar', 'Kalender'));
   syncViewToggle();
-
-  // Column resizing is declarative: the shell (app.js setupModuleResizers)
-  // wires the `.ctox-column-resizer[data-resizer-var]` handles from index.html.
-  // The left column chrome (search / shard-list toggle / filter tray / reset /
-  // active-dot / view band) is SHELL-wired from the data-pg-* markup by
-  // app.js autoWirePaneGrammar; this module owns NO chrome wiring and only
-  // listens for the bubbling `ctox-pane-grammar-change` event to re-render.
-
-  // Initialize EventCalendar View Instance
   initCalendarView();
+  if (restored?.calendarDate) {
+    const date = new Date(restored.calendarDate);
+    if (!Number.isNaN(date.getTime())) state.calendarViewInstance?.setDate?.(date);
+  }
+  if (state.calendarView) setCalendarView(state.calendarView);
 
-  // Render the workbench before demand reads and optional first-run seed
-  // writes. A calendar window must be usable even while sync is catching up.
   renderAll();
+  // Live-Abos statt Ladefunktion/Readiness: subscribe ruft sofort mit dem lokalen Stand.
+  for (const name of CALENDAR_LIVE_COLLECTIONS) {
+    disposers.push(api.query(name, {}).subscribe(scheduleCalendarReload));
+  }
+  disposers.push(api.shell.locale.subscribe((locale) => {
+    const lang = langFrom(locale);
+    if (lang === state.lang) return;
+    applyLocale(lang);
+    applyStaticLabels(root, state.t);
+    scheduleRender();
+  }));
   let disposed = false;
   Promise.resolve()
     .then(async () => {
       await seedDefaultDataIfNeeded();
-      if (disposed || state.ctx !== ctx) return;
+      if (disposed || state.api !== api) return;
       await loadDataFromDb();
-      if (disposed || state.ctx !== ctx) return;
-      wireRealtimeSync();
     })
     .catch((error) => {
-      if (disposed || state.ctx !== ctx) return;
-      console.warn('[calendar] background initialization failed', error);
+      if (disposed || state.api !== api) return;
+      api.status.report({ level: 'error', code: 'calendar.init', text: `Kalender: ${error?.message || error}` });
       renderAll();
     });
 
-  // Presence (advisory UX): publish which event this user has open in the
-  // edit drawer, and surface a hint when someone else edits the same event.
-  state.presenceRemote = [];
-  state.presenceCleanup = null;
-  if (ctx.presence?.subscribe) {
-    state.presenceCleanup = ctx.presence.subscribe((entries) => {
-      state.presenceRemote = Array.isArray(entries) ? entries : [];
-      updateEventFormPresenceHint();
-    });
-  }
-
-  // Collection readiness is a render hint only: while the backing collections
-  // of the left column have not finished their initial replication, the
-  // data-driven empty state shows a syncing shell instead of "no entries".
-  state.readiness = {};
-  state.readinessUnsubscribes = [];
-  if (typeof ctx.sync?.subscribeCollectionReadiness === 'function') {
-    for (const name of ['calendar_calendars', 'calendar_booking_pages']) {
-      try {
-        const unsubscribe = ctx.sync.subscribeCollectionReadiness(name, (snapshot) => {
-          state.readiness[name] = snapshot;
-          scheduleRender();
-        });
-        state.readinessUnsubscribes.push(unsubscribe);
-      } catch (error) {
-        console.warn('[calendar] readiness subscription failed for', name, error);
+  return {
+    unmount() {
+      disposed = true;
+      if (state.renderTimer) clearTimeout(state.renderTimer);
+      state.renderTimer = null;
+      if (state.reloadTimer) clearTimeout(state.reloadTimer);
+      state.reloadTimer = null;
+      for (const dispose of disposers.splice(0)) {
+        try { dispose(); } catch (error) { console.warn('[calendar] unsubscribe failed', error); }
       }
-    }
-  }
-
-  return () => {
-    disposed = true;
-    state.readinessUnsubscribes.forEach(unsubscribe => unsubscribe());
-    state.readinessUnsubscribes = [];
-    state.presenceCleanup?.();
-    state.presenceCleanup = null;
-    try { state.ctx?.presence?.clear?.(); } catch {}
-    if (state.renderTimer) clearTimeout(state.renderTimer);
-    state.rxSubscriptions.forEach(sub => sub.unsubscribe());
-    state.rxSubscriptions = [];
-    if (state.activeFormSubscription) {
-      state.activeFormSubscription.unsubscribe();
       state.activeFormSubscription = null;
-    }
-    if (state.calendarViewInstance) {
-      state.calendarViewInstance.destroy();
-      state.calendarViewInstance = null;
-    }
-    unbindEvents();
+      if (state.root === root) {
+        if (state.calendarViewInstance) {
+          state.calendarViewInstance.destroy();
+          state.calendarViewInstance = null;
+        }
+        unbindEvents();
+      }
+      root.replaceChildren();
+      if (state.root === root) {
+        state.api = null;
+        state.root = null;
+      }
+    },
+    snapshot: calendarSnapshot,
   };
 }
 
+const CALENDAR_LIVE_COLLECTIONS = Object.freeze([
+  'calendar_calendars',
+  'calendar_events',
+  'calendar_booking_pages',
+  'calendar_booking_holds',
+  'calendar_bookings',
+]);
+
+function scheduleCalendarReload() {
+  if (state.reloadTimer) return;
+  state.reloadTimer = setTimeout(() => {
+    state.reloadTimer = null;
+    if (!state.api) return;
+    loadDataFromDb().then(() => restoreEditing()).catch((error) => console.warn('[calendar] reload failed', error));
+  }, RENDER_DEBOUNCE_MS);
+}
+
 async function ensureAssetsLoaded() {
-  // 1. Module stylesheet
-  const cssVersion = String(import.meta.url).split('?v=')[1] || '';
-  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
-  await loadStylesheetOnce({
-    selector: 'link[data-module-styles="calendar"]',
-    href: cssHref,
-    dataset: { moduleStyles: 'calendar' }
-  });
+  // 1. Modul-CSS lädt die Shell aus dem Manifest (Entwurf §5 Schritt 3).
 
   // 2. EventCalendar CSS
   await loadStylesheetOnce({
     selector: 'link[data-vendor-style="event-calendar"]',
-    href: new URL('../../vendor/event-calendar/event-calendar.min.css', import.meta.url).href,
+    href: new URL('./vendor/event-calendar/event-calendar.min.css', import.meta.url).href,
     dataset: { vendorStyle: 'event-calendar' }
   });
 
   // 3. EventCalendar JS (classic script — must NOT be type=module, otherwise it does not expose `window.EventCalendar`).
   await loadClassicScriptOnce({
     selector: 'script[data-vendor-script="event-calendar"]',
-    href: new URL('../../vendor/event-calendar/event-calendar.min.js', import.meta.url).href,
+    href: new URL('./vendor/event-calendar/event-calendar.min.js', import.meta.url).href,
     globalCheck: () => typeof window.EventCalendar !== 'undefined',
     dataset: { vendorScript: 'event-calendar' },
     label: 'EventCalendar'
@@ -328,7 +490,7 @@ async function ensureAssetsLoaded() {
   // 4. RRule JS
   await loadClassicScriptOnce({
     selector: 'script[data-vendor-script="rrule"]',
-    href: new URL('../../vendor/rrule/rrule.min.js', import.meta.url).href,
+    href: new URL('./vendor/rrule/rrule.min.js', import.meta.url).href,
     globalCheck: () => typeof window.RRule !== 'undefined' || !!(window.rrule && window.rrule.RRule),
     dataset: { vendorScript: 'rrule' },
     label: 'RRule'
@@ -403,9 +565,8 @@ function applyStaticLabels(root, t) {
 }
 
 async function loadModuleMarkup() {
-  const markupVersion = String(import.meta.url).split('?v=')[1] || '';
-  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
-  const html = await fetch(markupHref).then((res) => res.text());
+  // index.html liefert der Service Worker versioniert (§16.15) – kein Cache-Buster.
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
   return doc.body.innerHTML;
@@ -418,7 +579,6 @@ function bindElements(host) {
   els.leftList = host.querySelector('[data-calendar-left-list]');
   els.leftEmpty = host.querySelector('[data-calendar-left-empty]');
   els.viewToggle = host.querySelector('[data-calendar-view-toggle]');
-  state.leftEmptyDefaultHtml = els.leftEmpty?.innerHTML ?? null;
 
   // Center
   els.calendarDataStatus = host.querySelector('#calendarDataStatus');
@@ -492,7 +652,13 @@ function wireEvents() {
       if (!dbEvent) return;
       event.preventDefault();
       event.stopPropagation();
-      openEventForm(dbEvent.id);
+      clearTimeout(state.eventClickTimer);
+      state.eventClickTimer = null;
+      if (event.detail >= 2) { openEventForm(dbEvent.id); return; }
+      state.eventClickTimer = setTimeout(() => {
+        state.eventClickTimer = null;
+        openEventDetails(dbEvent.id);
+      }, EVENT_DBLCLICK_MS);
     },
     closeDrawer,
     keydown: (event) => {
@@ -527,6 +693,8 @@ function wireEvents() {
 
 function unbindEvents() {
   const handlers = state.domHandlers;
+  clearTimeout(state.eventClickTimer);
+  state.eventClickTimer = null;
   if (!handlers) return;
   els.btnNewEvent?.removeEventListener('click', handlers.newEvent);
   els.btnLeftNew?.removeEventListener('click', handlers.leftNew);
@@ -601,13 +769,13 @@ async function seedDefaultDataIfNeeded() {
   const db = calendarDb();
   if (!db) return;
 
-  const calendarsCount = await db.calendar_calendars.count().exec();
+  const calendarsCount = await db.calendar_calendars.rows().length;
   if (calendarsCount > 0) return; // already seeded
   if (!canWriteCalendarDefaults()) return;
 
   // 1. Seed Local Source
   const sourceId = 'source_local_' + generateUUID();
-  await db.calendar_sources.insert({
+  await db.calendar_sources.add({
     id: sourceId,
     kind: 'local',
     title: 'Lokale Kalender',
@@ -619,7 +787,7 @@ async function seedDefaultDataIfNeeded() {
 
   // 2. Seed default calendars
   const calPersonalId = 'cal_personal_' + generateUUID();
-  await db.calendar_calendars.insert({
+  await db.calendar_calendars.add({
     id: calPersonalId,
     source_id: sourceId,
     title: 'Persönlich',
@@ -632,7 +800,7 @@ async function seedDefaultDataIfNeeded() {
   });
 
   const calWorkId = 'cal_work_' + generateUUID();
-  await db.calendar_calendars.insert({
+  await db.calendar_calendars.add({
     id: calWorkId,
     source_id: sourceId,
     title: 'Arbeit',
@@ -649,7 +817,7 @@ async function seedDefaultDataIfNeeded() {
   const startOfTodayMs = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
 
   // Event 1: Daily Standup (work, recurring daily at 09:30)
-  await db.calendar_events.insert({
+  await db.calendar_events.add({
     id: 'evt_standup_' + generateUUID(),
     calendar_id: calWorkId,
     title: 'Tägliches Standup',
@@ -666,7 +834,7 @@ async function seedDefaultDataIfNeeded() {
   });
 
   // Event 2: Lunch with Michael (personal, tomorrow at 12:30)
-  await db.calendar_events.insert({
+  await db.calendar_events.add({
     id: 'evt_lunch_' + generateUUID(),
     calendar_id: calPersonalId,
     title: 'Mittagessen mit Michael',
@@ -683,7 +851,7 @@ async function seedDefaultDataIfNeeded() {
 
   // 4. Seed a premium default Booking Page
   const bookingPageId = 'bp_beratung_' + generateUUID();
-  await db.calendar_booking_pages.insert({
+  await db.calendar_booking_pages.add({
     id: bookingPageId,
     slug: 'beratungsgespraech',
     title: '30 Min. Erstgespräch',
@@ -703,7 +871,7 @@ async function seedDefaultDataIfNeeded() {
 
   // 5. Seed Availability Rules for the Booking Page (Mon-Fri, 9:00 - 17:00)
   for (let weekday = 1; weekday <= 5; weekday++) {
-    await db.calendar_availability_rules.insert({
+    await db.calendar_availability_rules.add({
       id: `rule_bp_${bookingPageId}_day_${weekday}`,
       booking_page_id: bookingPageId,
       weekday: weekday,
@@ -721,18 +889,18 @@ async function loadDataFromDb() {
 
   try {
     const [cals, evts, bps, hlds, bks] = await Promise.all([
-      db.calendar_calendars.find().exec(),
-      db.calendar_events.find().exec(),
-      db.calendar_booking_pages.find().exec(),
-      db.calendar_booking_holds.find().exec(),
-      db.calendar_bookings.find().exec()
+      db.calendar_calendars.rows(),
+      db.calendar_events.rows(),
+      db.calendar_booking_pages.rows(),
+      db.calendar_booking_holds.rows(),
+      db.calendar_bookings.rows()
     ]);
 
-    state.calendars = cals.map(d => d.toJSON());
-    state.events = evts.map(d => d.toJSON());
-    state.bookingPages = bps.map(d => d.toJSON());
-    state.holds = hlds.map(d => d.toJSON());
-    state.bookings = bks.map(d => d.toJSON());
+    state.calendars = [...cals];
+    state.events = [...evts];
+    state.bookingPages = [...bps];
+    state.holds = [...hlds];
+    state.bookings = [...bks];
 
     if (
       state.selectedBookingPageId &&
@@ -757,25 +925,6 @@ async function loadDataFromDb() {
   }
 }
 
-function wireRealtimeSync() {
-  const db = calendarDb();
-  if (!db) return;
-
-  const tables = [
-    db.calendar_calendars,
-    db.calendar_events,
-    db.calendar_booking_pages,
-    db.calendar_booking_holds,
-    db.calendar_bookings
-  ].filter(Boolean);
-
-  tables.forEach(col => {
-    const sub = col.$.subscribe(() => {
-      loadDataFromDb().catch(e => console.warn(e));
-    });
-    state.rxSubscriptions.push(sub);
-  });
-}
 
 function scheduleRender() {
   if (state.renderTimer) return;
@@ -802,13 +951,6 @@ function renderDataStatus() {
   const badge = els.calendarDataStatus;
   // The badge is reserved for real status changes (no DB / errors). Decorative
   // count summaries are kept out of the chrome so the calendar speaks for itself.
-  if (!calendarDb()) {
-    badge.hidden = false;
-    badge.textContent = state.t('noDatabase', labels[state.lang].noDatabase);
-    badge.classList.add('is-danger');
-    badge.classList.remove('is-info');
-    return;
-  }
   badge.hidden = true;
   badge.textContent = '';
   badge.classList.remove('is-danger', 'is-info');
@@ -853,20 +995,6 @@ function bookingPageMatchesFilters(bp) {
   return true;
 }
 
-// Data-driven empty-state decision for the left column: only when the
-// UNFILTERED source of the active band is empty does collection readiness
-// gate the empty copy. Filter/search empties (source non-empty, no match)
-// always keep the plain empty markup. Pure so it is unit-testable.
-function leftEmptyContent({ sourceEmpty, ready, syncingText }) {
-  if (sourceEmpty && ready === false) {
-    return {
-      syncing: true,
-      html: `<div class="ctox-syncing" role="status" aria-live="polite">${escapeHtml(syncingText)}</div>`,
-    };
-  }
-  return { syncing: false, html: null };
-}
-
 function renderLeftList() {
   if (!els.leftList) return;
 
@@ -880,29 +1008,16 @@ function renderLeftList() {
   const isPages = state.leftBand === 'pages';
   const rows = isPages ? pages : calendars;
   const scopeLabel = isPages ? state.t('bookingPages', 'Buchungsseiten') : state.t('calendars', 'Kalender');
-  writeLeftFooter(`${rows.length} ${state.t('entries', 'Einträge')} · ${scopeLabel}`);
+  // Kein Zähler-Fuß (Textdiät Regel 5): die Reiter tragen die Zähler.
+  void scopeLabel;
+  writeLeftFooter('');
 
   els.leftList.classList.toggle('is-list-view', state.listView === 'list');
 
   if (!rows.length) {
     renderHtmlIfChanged(els.leftList, '', { signature: `empty:${state.leftBand}` });
-    if (els.leftEmpty) {
-      const collectionName = isPages ? 'calendar_booking_pages' : 'calendar_calendars';
-      const readiness = state.readiness?.[collectionName]
-        ?? state.ctx?.sync?.collectionReadiness?.(collectionName)
-        ?? null;
-      const content = leftEmptyContent({
-        sourceEmpty: (isPages ? state.bookingPages : state.calendars).length === 0,
-        ready: readiness?.ready,
-        syncingText: state.t('syncingData', labels[state.lang].syncingData),
-      });
-      if (content.syncing) {
-        els.leftEmpty.innerHTML = content.html;
-      } else if (state.leftEmptyDefaultHtml != null) {
-        els.leftEmpty.innerHTML = state.leftEmptyDefaultHtml;
-      }
-      els.leftEmpty.hidden = false;
-    }
+    // Leere Liste rendert nichts (R11): kein Lade- oder Leertext.
+    if (els.leftEmpty) els.leftEmpty.hidden = true;
     return;
   }
   if (els.leftEmpty) els.leftEmpty.hidden = true;
@@ -943,11 +1058,10 @@ function calendarRowHtml(cal, eventCount = 0) {
   const checked = state.selectedCalendarIds.has(cal.id);
   const checkboxId = `calendar-toggle-${safeDomId(cal.id)}`;
   const fallback = labels[state.lang] || labels.de;
-  const visibility = checked
-    ? state.t('visible', fallback.visible)
-    : state.t('hidden', fallback.hidden);
   const timezone = cal.timezone || state.t('noTimezone', fallback.noTimezone);
-  const eventsLabel = `${eventCount} ${state.t('eventsCount', fallback.eventsCount)}`;
+  const eventsLabel = eventCount === 1
+    ? `1 ${state.t('eventsCountOne', fallback.eventsCountOne)}`
+    : `${eventCount} ${state.t('eventsCount', fallback.eventsCount)}`;
   return `
     <div class="ctox-list-item calendar-item" data-calendar-id="${escapeHtml(cal.id)}" data-context-record-id="${escapeHtml(cal.id)}" data-context-record-type="calendar_calendar" data-context-label="${escapeHtml(cal.title || cal.id)}">
       <div class="calendar-item-left">
@@ -955,7 +1069,7 @@ function calendarRowHtml(cal, eventCount = 0) {
         <span class="calendar-item-color-indicator" style="background-color: ${safeColor(cal.color)}"></span>
         <div class="calendar-row-text">
           <span class="calendar-item-title" id="${checkboxId}-label">${escapeHtml(cal.title)}</span>
-          <span class="calendar-row-meta">${escapeHtml(visibility)} · ${escapeHtml(timezone)} · ${escapeHtml(eventsLabel)}</span>
+          <span class="calendar-row-meta">${escapeHtml(timezone)} · ${escapeHtml(eventsLabel)}</span>
         </div>
       </div>
       <span class="calendar-row-brief">${escapeHtml(eventsLabel)}</span>
@@ -1085,9 +1199,7 @@ function renderContextPane() {
 
   if (els.bookingContext) {
     els.bookingContext.innerHTML = `
-      <div class="ctox-callout calendar-context-card" data-context-record-id="${escapeHtml(selectedPage.id)}" data-context-record-type="calendar_booking_page" data-context-label="${escapeHtml(selectedPage.title || selectedPage.id)}">
-        <span class="ctox-field-label">Ausgewählte Buchungsseite</span>
-        <strong>${escapeHtml(selectedPage.title)}</strong>
+      <div class="calendar-context-card" data-context-record-id="${escapeHtml(selectedPage.id)}" data-context-record-type="calendar_booking_page" data-context-label="${escapeHtml(selectedPage.title || selectedPage.id)}">
         <span>${Number(selectedPage.duration_minutes) || 0} Min · Nicht veröffentlicht</span>
       </div>
     `;
@@ -1272,31 +1384,30 @@ function importCalendarData() {
     try {
       parsed = JSON.parse(await file.text());
     } catch {
-      notify({ type: 'error', message: state.t('importInvalid', 'Ungültige JSON-Datei.') });
+      notify({ code: 'calendar.import.invalid', type: 'error', message: state.t('importInvalid', 'Ungültige JSON-Datei.') });
       return;
     }
     const { calendars, bookingPages, events } = parseCalendarImport(parsed);
     if (!calendars.length && !bookingPages.length && !events.length) {
-      notify({ type: 'warning', message: state.t('importEmpty', 'Keine Kalenderdaten in der Datei.') });
+      notify({ code: 'calendar.import.empty', type: 'warning', message: state.t('importEmpty', 'Keine Kalenderdaten in der Datei.') });
       return;
     }
     const db = calendarDb();
     if (!db) {
-      notify({ type: 'error', message: state.t('importUnavailable', 'Import ist gerade nicht möglich (keine Datenbank).') });
       return;
     }
     let count = 0;
     try {
-      for (const cal of calendars) { await db.calendar_calendars.upsert({ ...cal, updated_at_ms: Date.now() }); count++; }
-      for (const bp of bookingPages) { await db.calendar_booking_pages.upsert({ ...bp, updated_at_ms: Date.now() }); count++; }
-      for (const ev of events) { await db.calendar_events.upsert({ ...ev, updated_at_ms: Date.now() }); count++; }
+      for (const cal of calendars) { await db.calendar_calendars.add({ ...cal, updated_at_ms: Date.now() }); count++; }
+      for (const bp of bookingPages) { await db.calendar_booking_pages.add({ ...bp, updated_at_ms: Date.now() }); count++; }
+      for (const ev of events) { await db.calendar_events.add({ ...ev, updated_at_ms: Date.now() }); count++; }
     } catch (error) {
       console.error('[calendar] import failed:', error);
-      notify({ type: 'error', message: state.t('importUnavailable', 'Import ist gerade nicht möglich (keine Datenbank).') });
+      notify({ code: 'calendar.import.failed', type: 'error', message: `Import: ${error?.code || ''} ${error?.message || error}`.trim() });
       return;
     }
     await loadDataFromDb();
-    notify({ type: 'info', message: state.t('imported', '{count} Datensätze importiert').replace('{count}', String(count)) });
+    notify({ code: 'calendar.import.done', type: 'info', message: state.t('imported', '{count} Datensätze importiert').replace('{count}', String(count)) });
   });
   input.click();
 }
@@ -1314,14 +1425,14 @@ function initCalendarView() {
     calendars: state.calendars,
     view: CALENDAR_VIEW_MAP[state.calendarView] || 'dayGridMonth',
     onEventClick: ({ event, original }) => {
-      openEventForm(original.id);
+      openEventDetails(original.id);
     },
     onEventMove: async ({ id, start, end, allDay }) => {
       const db = calendarDb();
       if (!db) return;
-      const doc = await db.calendar_events.findOne(id).exec();
+      const doc = await db.calendar_events.byId(id);
       if (doc) {
-        await doc.patch({
+        await db.calendar_events.change(doc.id, {
           start_time: start.getTime(),
           end_time: end.getTime(),
           all_day: !!allDay,
@@ -1332,9 +1443,9 @@ function initCalendarView() {
     onEventResize: async ({ id, start, end }) => {
       const db = calendarDb();
       if (!db) return;
-      const doc = await db.calendar_events.findOne(id).exec();
+      const doc = await db.calendar_events.byId(id);
       if (doc) {
-        await doc.patch({
+        await db.calendar_events.change(doc.id, {
           start_time: start.getTime(),
           end_time: end.getTime(),
           updated_at_ms: Date.now()
@@ -1387,7 +1498,6 @@ function closeDrawer() {
   els.drawer?.setAttribute('aria-hidden', 'true');
   state.editingType = null;
   state.editingItem = null;
-  try { state.ctx?.presence?.set([]); } catch {}
   if (state.activeFormSubscription) {
     state.activeFormSubscription.unsubscribe();
     state.activeFormSubscription = null;
@@ -1404,7 +1514,7 @@ function updateEventFormPresenceHint() {
     hint?.remove();
     return;
   }
-  const ownActorId = state.ctx?.actor?.id || '';
+  const ownActorId = state.api?.actor?.id || '';
   const peers = (state.presenceRemote || []).filter((entry) => entry
     && entry.collection === 'calendar_events'
     && entry.recordId === state.editingItem.id
@@ -1416,6 +1526,7 @@ function updateEventFormPresenceHint() {
   }
   if (!hint) {
     hint = document.createElement('div');
+    // v4-allow: text – Anwesenheits-Badge (wer bearbeitet gerade), keine Hinweisbox
     hint.className = 'ctox-badge is-warning calendar-presence-hint';
     hint.setAttribute('data-calendar-presence-hint', '');
     els.drawerTitle?.insertAdjacentElement('afterend', hint);
@@ -1424,19 +1535,58 @@ function updateEventFormPresenceHint() {
   hint.textContent = `✎ ${names} ${state.t('presenceEditing', 'bearbeitet gerade')}`;
 }
 
+// 0. EVENT DETAILS (nur lesen; Bearbeiten erst per Knopf oder Doppelklick)
+
+function formatEventRange(ev) {
+  const locale = state.lang === 'en' ? 'en-GB' : 'de-DE';
+  const start = new Date(Number(ev.start_time));
+  const end = new Date(Number(ev.end_time));
+  if (!Number.isFinite(start.getTime())) return '';
+  const day = { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' };
+  const time = { hour: '2-digit', minute: '2-digit' };
+  if (ev.all_day) return `${start.toLocaleDateString(locale, day)} · ${state.t('detailAllDay', 'Ganztägig')}`;
+  const sameDay = Number.isFinite(end.getTime()) && end.toDateString() === start.toDateString();
+  const endText = !Number.isFinite(end.getTime()) ? ''
+    : sameDay ? end.toLocaleTimeString(locale, time)
+      : `${end.toLocaleDateString(locale, day)} ${end.toLocaleTimeString(locale, time)}`;
+  return `${start.toLocaleDateString(locale, day)} ${start.toLocaleTimeString(locale, time)}${endText ? ` – ${endText}` : ''}`;
+}
+
+function openEventDetails(eventId) {
+  const ev = state.events.find((e) => e.id === eventId);
+  if (!ev) return;
+  // Kein Bearbeitungszustand: das Seitenblatt schreibt nichts und kommt nicht in den Snapshot.
+  state.editingType = null;
+  state.editingItem = null;
+  const cal = state.calendars.find((c) => c.id === ev.calendar_id);
+  const rows = [
+    [state.t('detailTime', 'Zeit'), formatEventRange(ev)],
+    [state.t('detailCalendar', 'Kalender'), cal?.title || ''],
+    [state.t('detailLocation', 'Ort'), ev.location || ''],
+    [state.t('detailDescription', 'Beschreibung'), ev.description || ''],
+  ].filter(([, v]) => String(v || '').trim());
+  const html = `
+    <section class="calendar-event-details" data-calendar-event-details aria-label="${escapeHtml(state.t('eventDetails', 'Termindetails'))}">
+      <dl class="ctox-fields calendar-event-details-fields">
+        ${rows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('')}
+      </dl>
+      <div class="calendar-drawer-actions">
+        <div class="calendar-drawer-actions-right">
+          <button type="button" class="ctox-button is-primary" data-calendar-event-edit>${escapeHtml(state.t('edit', 'Bearbeiten'))}</button>
+        </div>
+      </div>
+    </section>`;
+  openDrawer(state.t('eventKicker', 'Termin'), ev.title || state.t('eventKicker', 'Termin'), html);
+  els.drawer.querySelector('[data-calendar-event-edit]')?.addEventListener('click', () => openEventForm(ev.id));
+}
+
 // 1. EVENT FORM
 
 function openEventForm(eventId = null, defaults = null) {
   state.editingType = 'event';
   const dbEvent = eventId ? state.events.find(e => e.id === eventId) : null;
   state.editingItem = dbEvent;
-  // Publish presence for a persisted event being edited (new events have no
-  // record id yet and publish nothing).
-  try {
-    state.ctx?.presence?.set(dbEvent
-      ? [{ collection: 'calendar_events', recordId: dbEvent.id, mode: 'editing' }]
-      : []);
-  } catch {}
+  // Präsenz (wer bearbeitet gerade) gibt es in App-API 4.0 nicht (V4-PORT.md OFFEN-2).
   const defaultCalendarId = dbEvent?.calendar_id
     || [...state.selectedCalendarIds].find(id => state.calendars.some(c => c.id === id))
     || state.calendars[0]?.id
@@ -1549,12 +1699,12 @@ function openEventForm(eventId = null, defaults = null) {
     };
 
     if (dbEvent) {
-      const doc = await db.calendar_events.findOne(dbEvent.id).exec();
+      const doc = await db.calendar_events.byId(dbEvent.id);
       if (doc) {
-        await doc.patch(fields);
+        await db.calendar_events.change(doc.id, fields);
       }
     } else {
-      await db.calendar_events.insert({
+      await db.calendar_events.add({
         id: 'evt_' + generateUUID(),
         ...fields,
         created_at_ms: Date.now()
@@ -1565,12 +1715,12 @@ function openEventForm(eventId = null, defaults = null) {
   });
 
   els.drawer.querySelector('#btnDeleteEvent')?.addEventListener('click', async () => {
-    if (!confirm('Diesen Termin wirklich löschen?')) return;
+    if (await confirmInApp('Termin löschen', 'Diesen Termin wirklich löschen?', 'Löschen') !== true) return;
     const db = calendarDb();
     if (!db || !dbEvent) return;
-    const doc = await db.calendar_events.findOne(dbEvent.id).exec();
+    const doc = await db.calendar_events.byId(dbEvent.id);
     if (doc) {
-      await doc.remove();
+      await db.calendar_events.drop(doc.id);
     }
     closeDrawer();
   });
@@ -1610,14 +1760,10 @@ function wireDrawerCalendarSelectLive(preferredCalendarId) {
     select.dispatchEvent(new Event('change', { bubbles: true }));
   };
 
-  // Initial fill from cache, then live subscribe.
-  db.calendar_calendars.find().exec()
-    .then(docs => renderOptions(docs.map(d => d.toJSON())))
-    .catch(err => console.warn('[calendar] initial calendar fetch failed', err));
-
-  state.activeFormSubscription = db.calendar_calendars.find().$.subscribe(docs => {
-    renderOptions(docs.map(d => d.toJSON()));
-  });
+  // Live-Abo (App-API 4.0): subscribe füllt sofort aus dem lokalen Stand und danach bei jeder Änderung.
+  const off = state.api.query('calendar_calendars', {}).subscribe((rows) => renderOptions(rows));
+  state.activeFormSubscription = { unsubscribe: off };
+  state.disposers.push(off);
 }
 
 // 2. BOOKING PAGE FORM
@@ -1738,13 +1884,13 @@ function openBookingPageForm(bpId = null) {
     };
 
     if (dbBp) {
-      const doc = await db.calendar_booking_pages.findOne(dbBp.id).exec();
+      const doc = await db.calendar_booking_pages.byId(dbBp.id);
       if (doc) {
-        await doc.patch(fields);
+        await db.calendar_booking_pages.change(doc.id, fields);
       }
     } else {
       const newBpId = 'bp_' + generateUUID();
-      await db.calendar_booking_pages.insert({
+      await db.calendar_booking_pages.add({
         id: newBpId,
         calendar_ids: [state.calendars[0]?.id || 'default'],
         host_user_ids: ['default_user'],
@@ -1754,7 +1900,7 @@ function openBookingPageForm(bpId = null) {
 
       // Also automatically seed availability rules for new booking pages
       for (let weekday = 1; weekday <= 5; weekday++) {
-        await db.calendar_availability_rules.insert({
+        await db.calendar_availability_rules.add({
           id: `rule_bp_${newBpId}_day_${weekday}`,
           booking_page_id: newBpId,
           weekday: weekday,
@@ -1770,12 +1916,12 @@ function openBookingPageForm(bpId = null) {
   });
 
   els.drawer.querySelector('#btnDeleteBp')?.addEventListener('click', async () => {
-    if (!confirm('Diese Buchungsseite wirklich löschen?')) return;
+    if (await confirmInApp('Buchungsseite löschen', 'Diese Buchungsseite wirklich löschen?', 'Löschen') !== true) return;
     const db = calendarDb();
     if (!db || !dbBp) return;
-    const doc = await db.calendar_booking_pages.findOne(dbBp.id).exec();
+    const doc = await db.calendar_booking_pages.byId(dbBp.id);
     if (doc) {
-      await doc.remove();
+      await db.calendar_booking_pages.drop(doc.id);
     }
     closeDrawer();
   });
@@ -1837,15 +1983,15 @@ function openCalendarForm(calId = null) {
     };
 
     if (dbCal) {
-      const doc = await db.calendar_calendars.findOne(dbCal.id).exec();
+      const doc = await db.calendar_calendars.byId(dbCal.id);
       if (doc) {
-        await doc.patch(fields);
+        await db.calendar_calendars.change(doc.id, fields);
       }
     } else {
-      const sources = await db.calendar_sources.find().exec();
+      const sources = await db.calendar_sources.rows();
       const localSourceId = sources[0]?.id || 'default_source';
 
-      await db.calendar_calendars.insert({
+      await db.calendar_calendars.add({
         id: 'cal_' + generateUUID(),
         source_id: localSourceId,
         visibility: true,
@@ -1860,20 +2006,20 @@ function openCalendarForm(calId = null) {
   });
 
   els.drawer.querySelector('#btnDeleteCal')?.addEventListener('click', async () => {
-    if (!confirm('Diesen Kalender wirklich löschen? Alle zugehörigen Termine gehen verloren.')) return;
+    if (await confirmInApp('Kalender löschen', 'Diesen Kalender wirklich löschen? Alle zugehörigen Termine gehen verloren.', 'Löschen') !== true) return;
     const db = calendarDb();
     if (!db || !dbCal) return;
 
     // Delete calendar events first
-    const events = await db.calendar_events.find({ selector: { calendar_id: dbCal.id } }).exec();
+    const events = await db.calendar_events.rows({ selector: { calendar_id: dbCal.id } });
     for (const evt of events) {
-      await evt.remove();
+      await db.calendar_events.drop(evt.id);
     }
 
     // Delete calendar itself
-    const doc = await db.calendar_calendars.findOne(dbCal.id).exec();
+    const doc = await db.calendar_calendars.byId(dbCal.id);
     if (doc) {
-      await doc.remove();
+      await db.calendar_calendars.drop(doc.id);
     }
     closeDrawer();
   });
@@ -1923,14 +2069,14 @@ function openBookingDetail(bkId) {
   openDrawer('Buchung', 'Buchungsdetails', html);
 
   els.drawer.querySelector('#btnCancelBooking')?.addEventListener('click', async () => {
-    if (!confirm('Diesen Termin wirklich stornieren?')) return;
+    if (await confirmInApp('Termin stornieren', 'Diesen Termin wirklich stornieren?', 'Stornieren') !== true) return;
     const db = calendarDb();
     if (!db) return;
 
     // Update booking status
-    const doc = await db.calendar_bookings.findOne(bk.id).exec();
+    const doc = await db.calendar_bookings.byId(bk.id);
     if (doc) {
-      await doc.patch({
+      await db.calendar_bookings.change(doc.id, {
         status: 'cancelled',
         updated_at_ms: Date.now()
       });
@@ -1938,9 +2084,9 @@ function openBookingDetail(bkId) {
 
     // Also delete associated calendar event if any exists
     if (bk.event_id) {
-      const evtDoc = await db.calendar_events.findOne(bk.event_id).exec();
+      const evtDoc = await db.calendar_events.byId(bk.event_id);
       if (evtDoc) {
-        await evtDoc.remove();
+        await db.calendar_events.drop(evtDoc.id);
       }
     }
 
@@ -1955,8 +2101,7 @@ function openBookingDetail(bkId) {
 // ----------------------------------------------------
 
 function actionIcon(name) {
-  const fromShell = state.ctx?.getActionIcon?.(name);
-  if (fromShell) return fromShell;
+  // 4.0 hat keine Icon-API (app-api.d.ts OFFEN-D): Glyphen bleiben app-lokal.
   const paths = {
     add: 'M12 5v14M5 12h14',
     edit: 'M4 17.5V20h2.5L18.8 7.7l-2.5-2.5L4 17.5ZM14.8 6.2l3 3',
@@ -1967,6 +2112,11 @@ function actionIcon(name) {
   };
   const path = paths[name] || paths.edit;
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${path}"></path></svg>`;
+}
+
+// Bestätigung im App-Fenster (api.shell.dialog, Form OFFEN-A); destruktiv → default:false.
+function confirmInApp(title, text, confirmLabel) {
+  return state.api.shell.dialog({ kind: 'confirm', title, text, confirm_label: confirmLabel, default: false });
 }
 
 function formToObject(form) {
@@ -2001,7 +2151,7 @@ function validateBookingPageFormValues(values) {
   const duration = Number.parseInt(values.duration_minutes, 10);
 
   if (!title) errors.title = 'Titel ist erforderlich.';
-  if (!slug) errors.slug = 'Slug ist erforderlich und darf nur Buchstaben, Zahlen und Bindestriche enthalten.';
+  if (!slug) errors.slug = 'Slug fehlt (nur Buchstaben, Zahlen, Bindestriche).';
   if (!Number.isFinite(duration) || duration < 5 || duration > 480) {
     errors.duration_minutes = 'Dauer muss zwischen 5 und 480 Minuten liegen.';
   }
@@ -2017,19 +2167,25 @@ function validateCalendarFormValues(values) {
 
 function installFormValidation(form, validate) {
   const submit = form.querySelector('[data-submit-action], [type="submit"]');
+  // Fehlertexte erst für Felder, die der Nutzer berührt hat (oder nach einem Absendeversuch): ein frisch geöffnetes,
+  // leeres Formular zeigt keinen roten Zustandstext (Rundgang RUND1: „Kalendertitel ist erforderlich.“ sofort beim
+  // Öffnen). Der Speichern-Knopf bleibt trotzdem gesperrt, solange etwas fehlt.
+  const touched = new Set();
+  let showAll = false;
   const update = ({ focusFirstInvalid = false } = {}) => {
+    if (focusFirstInvalid) showAll = true;
     const result = validate();
     const errorEntries = Object.entries(result.errors);
+    const visible = (name) => Boolean(result.errors[name]) && (showAll || touched.has(name));
 
     form.querySelectorAll('[data-error-for]').forEach(errorNode => {
       const field = errorNode.dataset.errorFor;
-      errorNode.textContent = result.errors[field] || '';
-      errorNode.hidden = !result.errors[field];
+      errorNode.textContent = visible(field) ? result.errors[field] : '';
+      errorNode.hidden = !visible(field);
     });
 
     form.querySelectorAll('input, select, textarea').forEach(field => {
-      const hasError = Boolean(result.errors[field.name]);
-      field.setAttribute('aria-invalid', hasError ? 'true' : 'false');
+      field.setAttribute('aria-invalid', visible(field.name) ? 'true' : 'false');
     });
 
     if (submit) {
@@ -2046,8 +2202,10 @@ function installFormValidation(form, validate) {
     return result;
   };
 
-  form.addEventListener('input', () => update());
-  form.addEventListener('change', () => update());
+  const touch = (event) => { if (event.target?.name) touched.add(event.target.name); update(); };
+  form.addEventListener('input', touch);
+  form.addEventListener('change', touch);
+  form.addEventListener('focusout', touch);
   update();
   return update;
 }
@@ -2079,7 +2237,7 @@ function hexColorToken(value) {
   return /^#[0-9a-f]{6}$/.test(raw) ? raw : '';
 }
 
-function paletteAccentColor(element = state.ctx?.host) {
+function paletteAccentColor(element = state.root) {
   const host = element;
   if (!host || typeof globalThis.getComputedStyle !== 'function') return NEUTRAL_ITEM_COLOR;
   try {
@@ -2149,7 +2307,6 @@ export const __calendarTestHooks = {
   computeViewBandCounts,
   buildCalendarExport,
   parseCalendarImport,
-  leftEmptyContent,
   paletteAccentColor,
   safeColor,
 };

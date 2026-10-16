@@ -4,7 +4,18 @@ import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-import { build } from 'esbuild';
+import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
+import { join as joinPath } from 'node:path';
+// Lader (OLDTEST): esbuild aus dem Klon, sonst ESBUILD_MODULE, sonst aus dem Haupt-Checkout
+// ~/Documents/ctox/src/apps/business-os/node_modules (wie PLAYWRIGHT_MODULE in den v4-api-Tests). Nicht installieren.
+const requireDev = createRequire(import.meta.url);
+function loadDev(name, envVar) {
+  try { return requireDev(name); } catch {
+    return requireDev(process.env[envVar] || joinPath(homedir(), 'Documents/ctox/src/apps/business-os/node_modules', name));
+  }
+}
+const { build } = loadDev('esbuild', 'ESBUILD_MODULE');
 import { calendarEventContext } from './calendar-view-adapter.js';
 
 globalThis.window = globalThis.window || {};
@@ -16,6 +27,13 @@ async function importBrowserBundle(relativePath) {
     format: 'esm',
     platform: 'browser',
     write: false,
+    // App-API 4.0: ctox:shared/x.js löst der Service Worker auf (§16.15); hier wie im SW auf den Shell-Pfad.
+    plugins: [{
+      name: 'ctox-shared',
+      setup(b) {
+        b.onResolve({ filter: /^ctox:shared\// }, (args) => ({ path: fileURLToPath(new URL(`../../shared/${args.path.slice('ctox:shared/'.length)}`, import.meta.url)) }));
+      },
+    }],
   });
 
   const [{ text: bundledSource }] = bundledModule.outputFiles;
@@ -239,27 +257,13 @@ test('export builds an honest snapshot and import round-trips the authoring reco
   assert.equal(hooks.parseCalendarImport([]).calendars.length, 0);
 });
 
-test('left empty state shows syncing shell only when source is empty and collection unready', () => {
-  // Unfiltered source empty + readiness not live ⇒ syncing shell.
-  const syncing = hooks.leftEmptyContent({
-    sourceEmpty: true,
-    ready: false,
-    syncingText: 'Daten werden synchronisiert.',
-  });
-  assert.equal(syncing.syncing, true);
-  assert.match(syncing.html, /class="ctox-syncing"/);
-  assert.match(syncing.html, /role="status"/);
-  assert.match(syncing.html, /aria-live="polite"/);
-  assert.match(syncing.html, /Daten werden synchronisiert\./);
-
-  // Unfiltered source empty + readiness live ⇒ plain empty (no syncing shell).
-  assert.equal(hooks.leftEmptyContent({ sourceEmpty: true, ready: true, syncingText: 'x' }).syncing, false);
-
-  // Filter empty (source has rows, no match) ⇒ never a syncing shell.
-  assert.equal(hooks.leftEmptyContent({ sourceEmpty: false, ready: false, syncingText: 'x' }).syncing, false);
-
-  // No readiness signal (no sync context) ⇒ plain empty.
-  assert.equal(hooks.leftEmptyContent({ sourceEmpty: true, ready: undefined, syncingText: 'x' }).syncing, false);
+test('v4: empty left column renders nothing – no syncing shell, no readiness (App-API 4.0)', async () => {
+  const js = await readFile(new URL('./index.js', import.meta.url), 'utf8');
+  const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
+  assert.equal(hooks.leftEmptyContent, undefined);
+  assert.doesNotMatch(js, /ctox-syncing|syncingData|collectionReadiness|subscribeCollectionReadiness/);
+  assert.doesNotMatch(html, /data-calendar-left-empty/);
+  assert.match(js, /disposers\.push\(api\.query\(name, \{\}\)\.subscribe\(scheduleCalendarReload\)\)/);
 });
 
 test('context pane auto-reveals only with a selection and no user collapse', () => {
@@ -305,12 +309,13 @@ test('calendar does not advertise an unavailable public booking route', async ()
   assert.match(js, /Nicht veröffentlicht/);
 });
 
-test('v2 inspector drawer is contained by the calendar app and icons have a fallback', async () => {
+test('v4 inspector drawer is contained by the calendar app and icons have a fallback', async () => {
   const [css, js] = await Promise.all([
     readFile(new URL('./index.css', import.meta.url), 'utf8'),
     readFile(new URL('./index.js', import.meta.url), 'utf8'),
   ]);
-  assert.match(css, /\.shell-window\[data-shell-contract="v2"\] \.calendar-app \{ position: relative;[\s\S]*overflow: hidden;/);
+  // v4: Shell-Vorfahr entfällt, die Regel liegt unter dem App-Scope (scope-css.mjs).
+  assert.match(css, /\[data-app="calendar"\] \.calendar-app \{ position: relative;[\s\S]*overflow: hidden;/);
   assert.match(js, /function actionIcon\(name\) \{[\s\S]*const paths = \{/);
   assert.doesNotMatch(js, /return state\.ctx\?\.getActionIcon\?\.\(name\) \|\| ''/);
 });

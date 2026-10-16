@@ -1,0 +1,562 @@
+{
+  "_capability_evidence": {
+    "agent.task.enqueue": [
+      "handlers/_lib/automation.js"
+    ],
+    "agent.task.get": [
+      "handlers/_lib/automation.js"
+    ],
+    "office.edit.apply": [
+      "handlers/_lib/office.js"
+    ],
+    "office.edit.prepare": [
+      "handlers/_lib/office.js"
+    ],
+    "office.render": [
+      "handlers/office.spreadsheet.export.js"
+    ]
+  },
+  "_commands_out_evidence": {
+    "ctox ctox.app.modify.request": [
+      "index.js:2225"
+    ],
+    "ctox ctox.chat.task": [
+      "index.js:2225"
+    ]
+  },
+  "_declaration": "modules/spreadsheets/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/spreadsheets/index.html",
+  "_rust_basis": "dediziert `rs:office_engine_spreadsheet_layout.rs` 1 050 + `rs:office_engine_spreadsheet_cells.rs` 932 = 1 982 Z.; geteilte Office-Engine `rs:office_engine.rs` 16 047 (370 Fundstellen „spreadsheet“), `rs:store_office_commands.rs` 1 571, `rs",
+  "_source_dir": "src/apps/business-os/modules/spreadsheets",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "spreadsheets",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [
+    "agent.task.enqueue",
+    "agent.task.get",
+    "office.edit.apply",
+    "office.edit.prepare",
+    "office.render"
+  ],
+  "collections": {
+    "spreadsheet_blob_chunks": {
+      "_class_proposal": "Chunk-Collection; §10.2a Nr. 4: Chunk-Collections entfallen, Inhalt über files/Spur 4 – Klasse blob bis zur Ablösung",
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/spreadsheets.collections.schema.json",
+      "byte_budget": null,
+      "class": "blob",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": false,
+        "primaryKey": "id",
+        "properties": {
+          "blob_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "data": {
+            "type": "string"
+          },
+          "encoding": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "idx": {
+            "type": "number"
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "spreadsheet_id": {
+            "type": "string"
+          },
+          "total": {
+            "type": "number"
+          },
+          "version_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "blob_id",
+          "spreadsheet_id",
+          "version_id",
+          "idx",
+          "total",
+          "mime_type",
+          "encoding",
+          "data",
+          "created_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "spreadsheet_runbooks": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/spreadsheets.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "title"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "command_type": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "description": {
+            "type": "string"
+          },
+          "document_type": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "prompt_template": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "document_type",
+          "title",
+          "command_type",
+          "prompt_template",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "spreadsheet_versions": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/spreadsheets.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "blob_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "diagnostics": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "model_json": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "source_kind": {
+            "type": "string"
+          },
+          "spreadsheet_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "version": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "spreadsheet_id",
+          "version",
+          "source_kind",
+          "blob_id",
+          "model_json",
+          "diagnostics",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "spreadsheets": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/spreadsheets.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "updated_at_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "col_count": {
+            "type": "number"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "current_version_id": {
+            "type": "string"
+          },
+          "diagnostics_count": {
+            "type": "number"
+          },
+          "display_cache": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "index_text": {
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "linked_records": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "row_count": {
+            "type": "number"
+          },
+          "source_sha256": {
+            "type": "string"
+          },
+          "spreadsheet_type": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "filename",
+          "mime_type",
+          "status",
+          "current_version_id",
+          "index_text",
+          "is_deleted",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    }
+  },
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [
+    {
+      "app": "ctox",
+      "type": "ctox.app.modify.request"
+    },
+    {
+      "app": "ctox",
+      "type": "ctox.chat.task"
+    }
+  ],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {
+    "spreadsheet_blob_chunks": [
+      "read"
+    ],
+    "spreadsheet_versions": [
+      "read"
+    ],
+    "spreadsheets": [
+      "read"
+    ]
+  },
+  "files": {
+    "SNAPSHOT-REPORT.md": "199d9cadda98c1014fea70765a7e90472da114d227491ac33e01c1588aa336d4",
+    "V4-HANDLERS.md": "5bc065253b4b4d5ef6f974313e406f3abaa5fabee13926ff481cff0c04d2508b",
+    "V4-PORT.md": "e760759f33a17d7af2adbd8027d87c94b894c027abb2f2c8c01a1d1a783af317",
+    "assets/icon.jpg": "3b775922374597478411b16a76d000b9b4e51ee5fc4486e2bb95922386422806",
+    "assets/icon@512.jpg": "49b5498289cf3dba1b0b91642c4d5293dd2a688cd88da649bcf70c7cdc2ccc5c",
+    "collections.schema.json": "c5bc6e59baf24e468894341baecdbc7cc46421e2fbc38127afc951fc001ed272",
+    "handlers/_lib/automation.js": "cce40fa20ac430f4e9a22b16c768a5c0aeceacc4e7c570dd5949a7ccb5a1de4d",
+    "handlers/_lib/office.js": "d5ef12dfa14698955539321a3f0547ba557aaf91ce6842390cb53e75e5a4903b",
+    "handlers/office.spreadsheet.commit.js": "92a28355378333babac6da6c270962cdce052b6cb5a07f9378c2580d1ef09f74",
+    "handlers/office.spreadsheet.export.js": "97b48d0034baa56a13255e791d79097970a03bb7d1e7b8d42f115ec1ecb70a5b",
+    "handlers/office.spreadsheet.prepare.js": "620a71c81c0f559a949c802c875c56906741527e36db90d86c0b90470efa7ebf",
+    "handlers/spreadsheet.audit-formulas.js": "2924cf6a1f9f68028fbc720d960af12438e9f3b28d3137b1c905b0114d6d19fa",
+    "handlers/spreadsheet.risk-review.js": "d4bdcf286d55c7d0181f78d533fcf9d93a676fa16a2c7baf9788fa7a46007a70",
+    "handlers/spreadsheet.runbook.complete.js": "019e6b0d8566343a7e8adceca943b47b5d4ff25f8d1f8aac0869f4349082ab44",
+    "handlers/spreadsheet.runbook.failed.js": "8a2192b956460316ea0ed3e9c4fc27c97d32f9eba093702353232b37c2f62ed7",
+    "handlers/spreadsheet.summarize.js": "c2230157bafaca68789d6df0c9555f1ab2cd6d9a1e398ca55368944a29ea2531",
+    "icon.svg": "d5b5698068703e2a2268052bf3c3e02387a8caa9a9ac9a35759209f5c1d07d50",
+    "index.css": "0fc23e70f160dfb8d03ef9746bba20743faee70f5641e3e4dbfcc883ee9350c0",
+    "index.html": "66b82c3b1467f1b8a941721c564e94b2f781597d8bb016328d14ac49858da594",
+    "index.js": "3f36eb09b67619ad28f7175e2599acc27b71d31cd91bffc66b77c9f64dae55aa",
+    "locales/de.json": "8e75baee02efa036b5dc2b93fbce19a766a866f7fa8bb4b61d3632594b728afc",
+    "locales/en.json": "bf081b1f4c1dc0a1125abb79d05c88a63385534de01fe7b3a796a86ee85f6e67",
+    "module.json": "e7afb5e104efb06f538eb6627ea92f0693570e5b5fa81b58cf31e26611b6b970",
+    "office-bridge-v4.js": "10908f9c9f2de68e27a150b0ea55d1d2c584dd3c7bc38f1525d9e3d038d51bc0",
+    "prompts/spreadsheet-audit-formulas.md": "a916c2e62da3dd498e8050a61d4fa31165df40bbda6bfaa645aa48c54cab4284",
+    "prompts/spreadsheet-risk-review.md": "09a7a9049f9a3141c7087727c1032eb003058aaf64f6e5700df3c06a6f2ea436",
+    "prompts/spreadsheet-runbook.md": "3d429f92e9e0407fef09b251c7e60cf1b3d00e67217866534f853e8c41738099",
+    "prompts/spreadsheet-summarize.md": "5d466fc1a3a1af851af6b0c835676b10e2c734557925115d990aea5e97de3075",
+    "v4-manifest.json": "bc6eddc18c941044a3713952181bbdf5425fbb9dc1c5127845b9b07f093ff688"
+  },
+  "foreign_collections": {
+    "business_commands": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "sources": [
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "desktop_files": {
+      "_evidence": {
+        "code_read": [
+          "index.js:713",
+          "index.js:725"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/spreadsheets/V4-PORT.md OFFEN 2",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "desktop"
+    },
+    "document_blob_chunks": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_lib/office.js:60"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "documents"
+    },
+    "document_versions": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_lib/office.js:59",
+          "office-bridge-v4.js:16"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "documents"
+    },
+    "documents": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_lib/office.js:57",
+          "handlers/_lib/office.js:58",
+          "office-bridge-v4.js:14"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "documents"
+    },
+    "files": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_lib/office.js:131",
+          "handlers/_lib/office.js:142",
+          "index.js:291"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    }
+  },
+  "handlers": {
+    "office.spreadsheet.commit": "handlers/office.spreadsheet.commit.js",
+    "office.spreadsheet.export": "handlers/office.spreadsheet.export.js",
+    "office.spreadsheet.prepare": "handlers/office.spreadsheet.prepare.js",
+    "spreadsheet.audit-formulas": "handlers/spreadsheet.audit-formulas.js",
+    "spreadsheet.risk-review": "handlers/spreadsheet.risk-review.js",
+    "spreadsheet.runbook.complete": "handlers/spreadsheet.runbook.complete.js",
+    "spreadsheet.runbook.failed": "handlers/spreadsheet.runbook.failed.js",
+    "spreadsheet.summarize": "handlers/spreadsheet.summarize.js"
+  },
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/spreadsheets.jpg (shared/operator-icon-selection.js, sha256 664b5a31fa43…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "category": "Analytics",
+    "drawers": {
+      "bottom": "diagnostics, export evidence, and selected spreadsheet context",
+      "left": "spreadsheet metadata and import settings"
+    },
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "icon_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-spreadsheets\"><defs><linearGradient id=\"grad-spreadsheets\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#10b981\" /><stop offset=\"100%\" stop-color=\"#059669\" /></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\" fill=\"url(#grad-spreadsheets)\" fill-opacity=\"0.12\" stroke=\"url(#grad-spreadsheets)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><line x1=\"9\" y1=\"3\" x2=\"9\" y2=\"21\" stroke=\"url(#grad-spreadsheets)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><line x1=\"3\" y1=\"9\" x2=\"21\" y2=\"9\" stroke=\"url(#grad-spreadsheets)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><line x1=\"3\" y1=\"15\" x2=\"21\" y2=\"15\" stroke=\"url(#grad-spreadsheets)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><path d=\"M5 17l3-3 4 2 4-4\" stroke=\"url(#grad-spreadsheets)\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><circle cx=\"16\" cy=\"12\" r=\"1.5\" fill=\"#ffffff\" stroke=\"url(#grad-spreadsheets)\" stroke-width=\"1\"></circle></svg>",
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 820,
+        "width": 1280
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#16a34a",
+        "category": "Finance",
+        "iconAssetId": "workjet.business-os.spreadsheets",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "document",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "Spreadsheets"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "prompts": [
+    {
+      "name": "spreadsheet-audit-formulas",
+      "path": "prompts/spreadsheet-audit-formulas.md"
+    },
+    {
+      "name": "spreadsheet-risk-review",
+      "path": "prompts/spreadsheet-risk-review.md"
+    },
+    {
+      "name": "spreadsheet-runbook",
+      "path": "prompts/spreadsheet-runbook.md"
+    },
+    {
+      "name": "spreadsheet-summarize",
+      "path": "prompts/spreadsheet-summarize.md"
+    }
+  ],
+  "provenance": {
+    "base_hash": "01643dd0c07e3156920193026dd99865cd5d6e3a7529658dfc4b4b3c857f7a5b",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "CTOX Spreadsheets",
+  "triggers": [],
+  "version": "1.0.1"
+}

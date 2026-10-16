@@ -1,8 +1,6 @@
 {
   "title": "Credentials",
-  "subtitle": "Generic credential and certificate vault: expiring, verified artifacts (certificates, licenses, work permits) for each subject with expiration warnings and an assignment gate.",
   "add": "Create",
-  "empty": "No entries yet.",
   "newAction": "New credential",
   "importAction": "Import",
   "exportAction": "Export",
@@ -10,7 +8,6 @@
   "bandValid": "Valid",
   "bandExpiring": "Expiring",
   "bandCritical": "Critical",
-  "syncing": "Syncing data.",
   "showAsList": "Show as list",
   "showAsCards": "Show as cards"
 }

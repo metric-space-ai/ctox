@@ -1,3 +1,6 @@
+/* v4: das App-root ist der Größencontainer (früher das Shell-Fenster außerhalb von root). */
+[data-app="consent"] { container: business-app-window / inline-size; }
+
 /* consent/index.css — module-specific layer on top of shared/base.css.
    The workspace frame, panes, canonical column grammar (filterbar, view
    toggle, filter tray, counted band, .ctox-well, .ctox-pane-footer), list,
@@ -8,14 +11,14 @@
 
 /* Shell V2 compact pane headers: title/kicker share one baseline and the
    consent filter strip never wraps into a second titlebar row. */
-.shell-window[data-shell-contract="v2"] .consent-module { padding: 0; background: var(--shell-v2-surface, var(--bg)); }
-.shell-window[data-shell-contract="v2"] .consent-module .ctox-pane { border: 0; border-radius: 0; background: var(--shell-v2-surface, var(--surface)); box-shadow: none; }
-.shell-window[data-shell-contract="v2"] .consent-module .ctox-pane-header { box-sizing: border-box; min-height: var(--shell-v2-header-row-size, 37px); padding: 0 8px; background: var(--shell-v2-surface-alt, var(--surface-2)); border-bottom: 1px solid var(--shell-v2-line, var(--line)); display: grid; grid-template-rows: var(--shell-v2-header-row-size, 37px) auto; align-content: start; }
-.shell-window[data-shell-contract="v2"] .consent-module .ctox-pane-title-row { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); }
-.shell-window[data-shell-contract="v2"] .consent-module .ctox-pane-titles { flex-direction: row; align-items: baseline; gap: 8px; padding-top: 0; overflow: hidden; }
-.shell-window[data-shell-contract="v2"] .consent-module .ctox-pane-kicker { flex: 0 0 auto; line-height: 1; }
-.shell-window[data-shell-contract="v2"] .consent-module .ctox-pane-title { margin-top: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.1; }
-.shell-window[data-shell-contract="v2"] .consent-module .ctox-filterbar { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); box-sizing: border-box; padding: 0; flex-wrap: nowrap; overflow-x: auto; }
+[data-app="consent"] .consent-module { padding: 0; background: var(--bg); }
+[data-app="consent"] .consent-module .ctox-pane { border: 0; border-radius: 0; background: var(--surface); box-shadow: none; }
+[data-app="consent"] .consent-module .ctox-pane-header { box-sizing: border-box; min-height: var(--shell-v2-header-row-size, 37px); padding: 0 8px; background: var(--surface-2); border-bottom: 1px solid var(--shell-v2-line, var(--line)); display: grid; grid-template-rows: var(--shell-v2-header-row-size, 37px) auto; align-content: start; }
+[data-app="consent"] .consent-module .ctox-pane-title-row { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); }
+[data-app="consent"] .consent-module .ctox-pane-titles { flex-direction: row; align-items: baseline; gap: 8px; padding-top: 0; overflow: hidden; }
+[data-app="consent"] .consent-module .ctox-pane-kicker { flex: 0 0 auto; line-height: 1; }
+[data-app="consent"] .consent-module .ctox-pane-title { margin-top: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.1; }
+[data-app="consent"] .consent-module .ctox-filterbar { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); box-sizing: border-box; padding: 0; flex-wrap: nowrap; overflow-x: auto; }
 
 /* Default track width for the shell-owned resizer (it writes inline
    --ctox-left-width onto the frame while dragging). 340px statt 320px:
@@ -24,7 +27,7 @@
    Pixel, also rein aus Spurbreite. Der Kopf haelt links die 80px-Icon-Zone
    frei (Vertrag §3), diese 94px sind nicht verhandelbar; die fehlende Breite
    muss deshalb aus der Spur selbst kommen. */
-.consent-module { --ctox-left-width: 340px; }
+[data-app="consent"] .consent-module { --ctox-left-width: 340px; }
 
 /* Explicit column pins so the center pane never slides onto the resizer track
    when the kit hides resizers on narrow windows. Linke Spur (Shell-v2-Zeilen):
@@ -32,15 +35,15 @@
    Footer. Die Zeilen sind explizit zugewiesen, weil die Filterablage
    [hidden] (display:none) ist und die automatische Platzierung sonst alle
    nachfolgenden Kinder eine Spur nach oben zoege. */
-.consent-rail { grid-column: 1; grid-template-rows: auto auto auto auto minmax(0, 1fr) auto; }
-.consent-rail > .ctox-pane-header { grid-row: 1; }
-.consent-rail > .ctox-filterbar { grid-row: 2; }
-.consent-rail > .ctox-filter-tray { grid-row: 3; }
-.consent-rail > .ctox-view-switch { grid-row: 4; }
-.consent-rail > .ctox-pane-body { grid-row: 5; }
-.consent-rail > .ctox-pane-footer { grid-row: 6; }
-.consent-module > [data-resizer="left"] { grid-column: 2; }
-.consent-main { grid-column: 3; grid-template-rows: auto minmax(0, 1fr); }
+[data-app="consent"] .consent-rail { grid-column: 1; grid-template-rows: auto auto auto auto minmax(0, 1fr) auto; }
+[data-app="consent"] .consent-rail > .ctox-pane-header { grid-row: 1; }
+[data-app="consent"] .consent-rail > .ctox-filterbar { grid-row: 2; }
+[data-app="consent"] .consent-rail > .ctox-filter-tray { grid-row: 3; }
+[data-app="consent"] .consent-rail > .ctox-view-switch { grid-row: 4; }
+[data-app="consent"] .consent-rail > .ctox-pane-body { grid-row: 5; }
+[data-app="consent"] .consent-rail > .ctox-pane-footer { grid-row: 6; }
+[data-app="consent"] .consent-module > [data-resizer="left"] { grid-column: 2; }
+[data-app="consent"] .consent-main { grid-column: 3; grid-template-rows: auto minmax(0, 1fr); }
 
 /* custom: Shell-v2-Kopfgeometrie. Die Shell legt drei Zonen UEBER den
    App-Inhalt (`.shell-window-content` bekommt `inset: 0` und wird NICHT
@@ -50,15 +53,15 @@
    linke Kopf haelt die Icon-Spalte frei, der rechte die Fenstersteuerung.
    Die zweite Zeile liegt noch in der Icon-Zone (2 x 37px = 74px = 80px - 6px
    Rahmen) und wird deshalb gleich eingerueckt. */
-.shell-window[data-shell-contract="v2"] .consent-module .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .consent-module .ctox-filterbar {
+[data-app="consent"] .consent-module .ctox-pane-header,
+[data-app="consent"] .consent-module .ctox-filterbar {
   box-sizing: border-box;
   min-height: var(--shell-v2-header-row-size, 37px);
   height: var(--shell-v2-header-row-size, 37px);
   padding-block: 0;
 }
 
-.shell-window[data-shell-contract="v2"] .consent-module .ctox-pane-title-row {
+[data-app="consent"] .consent-module .ctox-pane-title-row {
   height: 100%;
   min-width: 0;
 }
@@ -66,7 +69,7 @@
 /* In 37px passt kein gestapelter Kicker + Titel: beide teilen sich eine
    Grundlinie (identisch zur Knowledge-Referenz). Der Titel traegt das
    Versionsmenue der Shell und darf deshalb nicht zerquetscht werden. */
-.shell-window[data-shell-contract="v2"] .consent-module .ctox-pane-titles {
+[data-app="consent"] .consent-module .ctox-pane-titles {
   flex-direction: row;
   align-items: baseline;
   gap: 8px;
@@ -75,7 +78,7 @@
   overflow: hidden;
 }
 
-.shell-window[data-shell-contract="v2"] .consent-module .ctox-pane-title {
+[data-app="consent"] .consent-module .ctox-pane-title {
   min-width: 0;
   margin-top: 0;
   line-height: 1.1;
@@ -94,36 +97,36 @@
    Die Schwelle haengt an der TITELZEILE, nicht am Fenster — die linke Spur
    ist bei 1180px und bei 1000px gleich breit, ein Fensterquery koennte den
    Fall gar nicht sehen. */
-.shell-window[data-shell-contract="v2"] .consent-module .ctox-pane-title-row {
+[data-app="consent"] .consent-module .ctox-pane-title-row {
   container-type: inline-size;
   container-name: consent-titlebar;
 }
 
-.shell-window[data-shell-contract="v2"] .consent-module .ctox-pane-kicker {
+[data-app="consent"] .consent-module .ctox-pane-kicker {
   flex: 0 0 auto;
   min-width: max-content;
 }
 
 @container consent-titlebar (max-width: 260px) {
-  .shell-window[data-shell-contract="v2"] .consent-module .ctox-pane-kicker {
+  [data-app="consent"] .consent-module .ctox-pane-kicker {
     display: none;
   }
 }
 
 /* Linke Spalte: Icon-Zone (80px) freihalten — Titelzeile UND Filterleiste. */
-.shell-window[data-shell-contract="v2"] .consent-module .consent-rail > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .consent-module .consent-rail > .ctox-filterbar {
+[data-app="consent"] .consent-module .consent-rail > .ctox-pane-header,
+[data-app="consent"] .consent-module .consent-rail > .ctox-filterbar {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
   padding-right: 14px;
 }
 
 /* Rechte Spalte: Fenstersteuerung (74x74) freihalten. */
-.shell-window[data-shell-contract="v2"] .consent-module .consent-main > .ctox-pane-header {
+[data-app="consent"] .consent-module .consent-main > .ctox-pane-header {
   padding-right: 70px;
 }
 
 /* Main workbench scroll rhythm. */
-.consent-workbench {
+[data-app="consent"] .consent-workbench {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -134,46 +137,46 @@
    hidden by default (is-rights-hidden on root), revealed on demand via the
    header toggle [data-toggle-rights] — threads' data-toggle idiom. All form
    hooks stay intact; only visibility changes. */
-.consent-module.is-rights-hidden [data-ats-subject-form] { display: none; }
-.consent-main [data-toggle-rights][aria-pressed="true"] { color: var(--accent); }
+[data-app="consent"] .consent-module.is-rights-hidden [data-ats-subject-form] { display: none; }
+[data-app="consent"] .consent-main [data-toggle-rights][aria-pressed="true"] { color: var(--accent); }
 
 /* Auto-reveal detail readout for the selected consent record. */
-.consent-detail { margin: 0; }
-.consent-detail-head {
+[data-app="consent"] .consent-detail { margin: 0; }
+[data-app="consent"] .consent-detail-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 8px;
 }
-.consent-detail-titles { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.consent-detail-actions { display: flex; align-items: center; gap: 4px; }
-.consent-detail-name {
+[data-app="consent"] .consent-detail-titles { display: flex; align-items: center; gap: 8px; min-width: 0; }
+[data-app="consent"] .consent-detail-actions { display: flex; align-items: center; gap: 4px; }
+[data-app="consent"] .consent-detail-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-strong);
 }
-.consent-detail .ats-tag { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); }
+[data-app="consent"] .consent-detail .ats-tag { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); }
 
 /* Shard / compact selector rows (both are the kit .ctox-list-item button).
    Die beiden Ansichten unterscheiden sich in der DICHTE, nicht nur im Detail
    (Betreiber-Direktive 31.08.):
      KARTE  drei Zeilen, grosszuegiges Padding, fetter Titel.
      LISTE  genau eine Zeile, enge Zeilenhoehe, ein Kurz-Meta rechts. */
-.consent-row { display: grid; gap: 3px; }
+[data-app="consent"] .consent-row { display: grid; gap: 3px; }
 
 /* --- Karten (Shards) ---------------------------------------------------- */
-.consent-row--cards {
+[data-app="consent"] .consent-row--cards {
   padding-top: 11px;
   padding-bottom: 11px;
   line-height: 1.45;
 }
-.consent-row--cards .consent-row-title { font-weight: 700; }
+[data-app="consent"] .consent-row--cards .consent-row-title { font-weight: 700; }
 
 /* --- Liste: exakt eine Zeile -------------------------------------------- */
-.consent-row--list {
+[data-app="consent"] .consent-row--list {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -182,56 +185,56 @@
   padding-bottom: 3px;
   line-height: 1.25;
 }
-.consent-row--list .consent-row-title { font-weight: 500; }
+[data-app="consent"] .consent-row--list .consent-row-title { font-weight: 500; }
 /* Ein einziges Kurz-Meta rechts; es darf nie umbrechen oder den Titel
    verdraengen. */
-.consent-row--list .consent-row-side {
+[data-app="consent"] .consent-row--list .consent-row-side {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   white-space: nowrap;
 }
-.consent-row--list .ctox-badge {
+[data-app="consent"] .consent-row--list .ctox-badge {
   padding-block: 0;
   font-size: 10px;
   line-height: 1.5;
 }
 
-.consent-row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.consent-row-title {
+[data-app="consent"] .consent-row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+[data-app="consent"] .consent-row-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
 }
-.consent-row-meta {
+[data-app="consent"] .consent-row-meta {
   color: var(--muted);
   font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.consent-row-meta--dates { color: color-mix(in srgb, var(--muted) 80%, transparent); }
+[data-app="consent"] .consent-row-meta--dates { color: var(--muted); /* DARK: volle --muted-Stärke (vorher 80 %, Kontrast 3,1) */ }
 
 /* Ein-Knopf-Umschalter: darf in der Filterleiste nie schrumpfen. */
-.consent-module .consent-view-toggle { flex: 0 0 auto; }
+[data-app="consent"] .consent-module .consent-view-toggle { flex: 0 0 auto; }
 
 /* The kit callout has no :empty collapse; the gate starts empty and is cleared
    between runs, so hide it until JS fills it. */
-.consent-main .ctox-callout:empty { display: none; }
+[data-app="consent"] .consent-main .ctox-callout:empty { display: none; }
 
 /* custom: kompakte Blocker-/Treffer-Liste im Ergebnis-Callout — das Kit hat
    keine Listen-in-Callout-Komponente. */
-.consent-main .ats-blockers { margin: 6px 0 0; padding-left: 18px; }
-.consent-main .ats-blockers li { font-size: 12px; margin: 2px 0; }
+[data-app="consent"] .consent-main .ats-blockers { margin: 6px 0 0; padding-left: 18px; }
+[data-app="consent"] .consent-main .ats-blockers li { font-size: 12px; margin: 2px 0; }
 
 /* Narrow windows: stack the two panes and drop the resizer. Grenze = die
    shell-eigene 2-auf-1-Marke (Vertrag §6: erlaubt sind ausschliesslich 1024px
    und 768px). Consent hat nur zwei Spalten, die 3-auf-2-Marke bei 1024px
    aendert an dieser App nichts und bleibt deshalb ungeschrieben. */
 @container business-app-window (max-width: 768px) {
-  .ctox-workspace.consent-module {
+  [data-app="consent"] .ctox-workspace.consent-module {
     grid-template-columns: minmax(0, 1fr);
     /* Fensterrelativ, nicht bildschirmrelativ (Vertrag §6): die Spur teilte
        sich frueher mit 40vh nach der BILDSCHIRMhoehe auf — in einem flachen
@@ -249,18 +252,31 @@
        Bringschuld der App (Vertrag §3), nicht Kosmetik. */
     padding: 12px;
   }
-  .consent-module > [data-resizer] { display: none !important; }
-  .consent-rail { grid-column: 1; grid-row: 1; }
-  .consent-main { grid-column: 1; grid-row: 2; }
+  [data-app="consent"] .consent-module > [data-resizer] { display: none !important; }
+  [data-app="consent"] .consent-rail { grid-column: 1; grid-row: 1; }
+  [data-app="consent"] .consent-main { grid-column: 1; grid-row: 2; }
 
   /* Einspaltig steht die LINKE Spur ganz oben: ihre beiden Kopfzeilen liegen
      jetzt zugleich unter dem Icon (links) UND unter der 74x74-Fenster-
      steuerung (rechts). Beide Zonen muessen deshalb hier freigehalten werden
      — im Breitmodus tut das die rechte Spalte. */
-  .shell-window[data-shell-contract="v2"] .consent-module .consent-rail > .ctox-pane-header,
-  .shell-window[data-shell-contract="v2"] .consent-module .consent-rail > .ctox-filterbar {
+  [data-app="consent"] .consent-module .consent-rail > .ctox-pane-header,
+  [data-app="consent"] .consent-module .consent-rail > .ctox-filterbar {
     padding-right: 70px;
   }
+
+  /* FIX11 (G4): zwischen Icon-Zone (links) und Knopfzone (rechts) blieben dem Titel bei 420 px nur ein Buchstabe
+     („E…“). Schmal darf die Titelzeile umbrechen: der Titel behaelt seine volle Breite, die Kopfknoepfe rutschen in
+     eine zweite Zeile darunter. Breit bleibt die 37px-Kopfzeile mit Kuerzungsprioritaet (Direktive 31.08.). */
+  [data-app="consent"] .consent-module .consent-rail > .ctox-pane-header { grid-template-rows: auto auto; height: auto; }
+  [data-app="consent"] .consent-module .consent-rail .ctox-pane-title-row {
+    height: auto;
+    flex-wrap: wrap;
+    row-gap: 4px;
+    padding-block: 6px;
+  }
+  [data-app="consent"] .consent-module .consent-rail .ctox-pane-titles { flex: 1 0 auto; max-width: 100%; }
+  [data-app="consent"] .consent-module .consent-rail .ctox-pane-title { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: normal; }
 }
 
 /* Touch targets on coarse pointers (phone/tablet): every interactive control
@@ -269,19 +285,19 @@
    stacking itself is handled by the @container business-app-window rule
    above (768px); compact-form action rows are kit-owned (base.css). */
 @media (pointer: coarse) {
-  .consent-module button,
-  .consent-module input,
-  .consent-module select,
-  .consent-module textarea {
+  [data-app="consent"] .consent-module button,
+  [data-app="consent"] .consent-module input,
+  [data-app="consent"] .consent-module select,
+  [data-app="consent"] .consent-module textarea {
     min-height: 44px;
   }
 
-  .consent-module .ctox-pane-icon {
+  [data-app="consent"] .consent-module .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
 
-  .consent-module .ctox-record-list .ctox-list-item {
+  [data-app="consent"] .consent-module .ctox-record-list .ctox-list-item {
     min-height: 44px;
   }
 }

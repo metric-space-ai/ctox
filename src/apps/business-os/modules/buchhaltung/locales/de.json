@@ -5,6 +5,5 @@
   "bookingStatusPosted": "Gebucht",
   "bookingImport": "Buchungen importieren",
   "bookingExport": "Buchungen exportieren",
-  "evidenceTitle": "OCR-Evidenz",
-  "syncingData": "Daten werden synchronisiert."
+  "evidenceTitle": "Evidenz"
 }

@@ -1,0 +1,351 @@
+{
+ "app": "reports",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Bugs & Features",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 748
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Gefilterte Liste als JSON expo",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Alle (6)",
+    "nav:Bugs (6)",
+    "nav:Features (0)",
+    "button:Projektplan Relaunch Kundenpor",
+    "button:Lieferantenbewertung 2026 Bugs",
+    "button:Onboarding neue Mitarbeitende ",
+    "button:Rahmenvertrag über Wartung und",
+    "button:Kundentermin Vorbereitung Bugs",
+    "button:Budgetplanung Vertrieb Süd Bug",
+    "button:Spaltenbreite anpassen",
+    "button:An Coding Agent übergeben",
+    "button:Aktionen einblenden"
+   ],
+   "shot": "reports/1280-01-open.png"
+  },
+  {
+   "step": "nav Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "reports/1280-02-nav_Alle_6_.png"
+  },
+  {
+   "step": "nav Bugs (6)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Features (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "reports/1280-03-nav_Features_0_.png"
+  },
+  {
+   "step": "zurück zu Reiter Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "reports/1280-04-zur_ck_zu_Reiter_Alle_6_.png"
+  },
+  {
+   "step": "button Gefilterte Liste als JSON exportieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Als Liste anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "reports/1280-05-button_Als_Liste_anzeigen.png"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "reports/1280-06-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "reports/1280-07-button_Filter.png"
+  },
+  {
+   "step": "button Projektplan Relaunch Kundenportal Bugs Offen high module-001",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Lieferantenbewertung 2026 Bugs Erledigt medium module-002 · ",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "reports/1280-08-button_Lieferantenbewertung_2026_Bugs_Er.png"
+  },
+  {
+   "step": "button Onboarding neue Mitarbeitende Bugs Erledigt low module-003 ·",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "reports/1280-09-button_Onboarding_neue_Mitarbeitende_Bug.png"
+  },
+  {
+   "step": "button Rahmenvertrag über Wartung und Instandhaltung der Produktion",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "reports/1280-10-button_Rahmenvertrag_ber_Wartung_und_Ins.png"
+  },
+  {
+   "step": "button Kundentermin Vorbereitung Bugs Erledigt medium module-002 · ",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "reports/1280-11-button_Kundentermin_Vorbereitung_Bugs_Er.png"
+  },
+  {
+   "step": "button Budgetplanung Vertrieb Süd Bugs Blockiert low module-003 · 0",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "reports/1280-12-button_Budgetplanung_Vertrieb_S_d_Bugs_B.png"
+  },
+  {
+   "step": "button Spaltenbreite anpassen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button An Coding Agent übergeben",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "reports/1280-13-button_An_Coding_Agent_bergeben.png"
+  },
+  {
+   "step": "formular 1 Felder → Zur Freigabe einreichen",
+   "changed": true,
+   "ops": [
+    "command threads.ctox_approval.request local=ok result=accepted {\"approval_request_id\":\"approval_cbbe428e-b669-4367-83d3-0abb60ef69e8\",\"title\":\"Coding-Delegation: Budgetplanung Vertrieb Süd\",\"prompt\":\"Bug"
+   ],
+   "zone": [
+    "clear reports.delegate.incomplete",
+    "clear reports.command.threads.ctox_approval.request"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "reports/1280-14-formular_1_Felder_Zur_Freigabe_einreiche.png"
+  },
+  {
+   "step": "button Aktionen einblenden",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "reports/1280-15-button_Aktionen_einblenden.png"
+  },
+  {
+   "step": "button Aktionen ausblenden",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "reports/1280-16-button_Aktionen_ausblenden.png"
+  },
+  {
+   "step": "auswahl Status filtern → open",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "reports/1280-17-auswahl_Status_filtern_open.png"
+  },
+  {
+   "step": "nav Alle (2)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Bugs (2)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "button Filter zurücksetzen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "reports/1280-18-button_Filter_zur_cksetzen.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 969,
+   "shot": "reports/1280-19-suche_ohne_Treffer.png",
+   "textAfter": 117
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "reports/1280-20-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "command",
+   "coll": "threads.ctox_approval.request",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "reports",
+  "Bugs & Features"
+ ]
+}

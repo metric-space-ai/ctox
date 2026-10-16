@@ -1,0 +1,405 @@
+{
+ "app": "support",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Support",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 812
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Queue importieren",
+    "button:Queue exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Offen (5)",
+    "nav:Meine (5)",
+    "nav:Nicht zugewiesen (0)",
+    "nav:SLA-Risiko (0)",
+    "row:Preisanpassung ab 01.01.2027 O",
+    "row:Einladung Quartalsgespräch Q4 ",
+    "row:Zugangsdaten Kundenportal – Rü",
+    "row:Bestellung 4500018832 Fehlgesc",
+    "row:Freigabe Projektplan Phase 2 A",
+    "button:Kontext öffnen",
+    "button:CTOX fragen"
+   ],
+   "shot": "support/420-01-open.png"
+  },
+  {
+   "step": "nav Offen (5)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "support/420-02-nav_Offen_5_.png"
+  },
+  {
+   "step": "nav Meine (5)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Nicht zugewiesen (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "support/420-03-nav_Nicht_zugewiesen_0_.png"
+  },
+  {
+   "step": "nav SLA-Risiko (0)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "zurück zu Reiter Offen (5)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "support/420-04-zur_ck_zu_Reiter_Offen_5_.png"
+  },
+  {
+   "step": "row Preisanpassung ab 01.01.2027 Offen Zuordnung: owner · Letzte",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "support/420-05-row_Preisanpassung_ab_01.01.2027_Offen_Z.png"
+  },
+  {
+   "step": "button Kontext schließen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-06-button_Kontext_schlie_en.png"
+  },
+  {
+   "step": "formular 1 Felder → Notiz hinzufügen",
+   "changed": true,
+   "ops": [
+    "command support.note.create local=ok result=accepted {\"conversation_id\":\"conversation-001\",\"body\":\"Rundgang Test\",\"visibility\":\"internal\",\"source\":\"business-os.support\",\"client_context\":{\"sourc"
+   ],
+   "zone": [
+    "clear support.command.support.note.create"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "support/420-07-formular_1_Felder_Notiz_hinzuf_gen.png"
+  },
+  {
+   "step": "row Einladung Quartalsgespräch Q4 Erledigt Zuordnung: owner · Le",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "support/420-08-row_Einladung_Quartalsgespr_ch_Q4_Erledi.png"
+  },
+  {
+   "step": "button Übernehmen",
+   "changed": true,
+   "ops": [
+    "command support.conversation.claim local=ok result=accepted {\"conversation_id\":\"conversation-002\",\"client_context\":{\"source\":\"business-os.support\",\"module\":\"support\",\"surface\":\"support.conversation.cl"
+   ],
+   "zone": [
+    "clear support.command.support.conversation.claim"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-09-button_bernehmen.png"
+  },
+  {
+   "step": "button Mir zuweisen",
+   "changed": true,
+   "ops": [
+    "command support.conversation.assign local=ok result=accepted {\"conversation_id\":\"conversation-002\",\"assignee_id\":\"owner\",\"client_context\":{\"source\":\"business-os.support\",\"module\":\"support\",\"surface\":\"s"
+   ],
+   "zone": [
+    "clear support.command.support.conversation.assign"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-10-button_Mir_zuweisen.png"
+  },
+  {
+   "step": "button 1 Std. zurückstellen",
+   "changed": true,
+   "ops": [
+    "command support.conversation.snooze local=ok result=accepted {\"conversation_id\":\"conversation-002\",\"snoozed_until_ms\":1792102780740,\"client_context\":{\"source\":\"business-os.support\",\"module\":\"support\",\""
+   ],
+   "zone": [
+    "clear support.command.support.conversation.snooze"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-11-button_1_Std._zur_ckstellen.png"
+  },
+  {
+   "step": "button Bis morgen",
+   "changed": true,
+   "ops": [
+    "command support.conversation.snooze local=ok result=accepted {\"conversation_id\":\"conversation-002\",\"snoozed_until_ms\":1792134000000,\"client_context\":{\"source\":\"business-os.support\",\"module\":\"support\",\""
+   ],
+   "zone": [
+    "clear support.command.support.conversation.snooze"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-12-button_Bis_morgen.png"
+  },
+  {
+   "step": "button Lösen",
+   "changed": true,
+   "ops": [
+    "command support.conversation.resolve local=ok result=accepted {\"conversation_id\":\"conversation-002\",\"client_context\":{\"source\":\"business-os.support\",\"module\":\"support\",\"surface\":\"support.conversation.re"
+   ],
+   "zone": [
+    "clear support.command.support.conversation.resolve"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-13-button_L_sen.png"
+  },
+  {
+   "step": "button Anwenden",
+   "changed": true,
+   "ops": [
+    "command support.agent.apply_suggestion local=ok result=accepted {\"conversation_id\":\"conversation-001\",\"suggestion_id\":\"agent-suggestion-001\",\"client_context\":{\"source\":\"business-os.support\",\"module\":\"supp"
+   ],
+   "zone": [
+    "clear support.command.support.agent.apply_suggestion"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-14-button_Anwenden.png"
+  },
+  {
+   "step": "button Ablehnen",
+   "changed": true,
+   "ops": [
+    "command support.agent.reject_suggestion local=ok result=accepted {\"conversation_id\":\"conversation-001\",\"suggestion_id\":\"agent-suggestion-001\",\"client_context\":{\"source\":\"business-os.support\",\"module\":\"supp"
+   ],
+   "zone": [
+    "clear support.command.support.agent.reject_suggestion"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-15-button_Ablehnen.png"
+  },
+  {
+   "step": "button Verknüpfter Kunde",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-16-button_Verkn_pfter_Kunde.png"
+  },
+  {
+   "step": "button Verknüpftes Ticket",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-17-button_Verkn_pftes_Ticket.png"
+  },
+  {
+   "step": "button Kommunikation",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-18-button_Kommunikation.png"
+  },
+  {
+   "step": "button CTOX Arbeit",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-19-button_CTOX_Arbeit.png"
+  },
+  {
+   "step": "auswahl Offen Wartend Gelöst → waiting",
+   "changed": true,
+   "ops": [
+    "command support.conversation.status local=ok result=accepted {\"conversation_id\":\"conversation-001\",\"status\":\"waiting\",\"client_context\":{\"source\":\"business-os.support\",\"module\":\"support\",\"surface\":\"supp"
+   ],
+   "zone": [
+    "clear support.command.support.conversation.status"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "support/420-20-auswahl_Offen_Wartend_Gel_st_waiting.png"
+  },
+  {
+   "step": "auswahl Niedrig Normal Hoch Dringend → normal",
+   "changed": true,
+   "ops": [
+    "command support.conversation.priority local=ok result=accepted {\"conversation_id\":\"conversation-001\",\"priority\":\"normal\",\"client_context\":{\"source\":\"business-os.support\",\"module\":\"support\",\"surface\":\"sup"
+   ],
+   "zone": [
+    "clear support.command.support.conversation.priority"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "support/420-21-auswahl_Niedrig_Normal_Hoch_Dringend_nor.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "command",
+   "coll": "support.note.create",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "support.conversation.claim",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "support.conversation.assign",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "support.conversation.snooze",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "support.conversation.snooze",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "support.conversation.resolve",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "support.agent.apply_suggestion",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "support.agent.reject_suggestion",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "support.conversation.status",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "support.conversation.priority",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "support",
+  "Support"
+ ]
+}

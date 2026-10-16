@@ -12,17 +12,16 @@
 
 /* Shell V2 compact pane headers: conversation filters and channel strips stay
    single-line with local overflow instead of wrapping the pane title. */
-.shell-window[data-shell-contract="v2"] .conv-module { position: relative; padding: 0; overflow: hidden; background: var(--shell-v2-surface, var(--bg)); }
-.shell-window[data-shell-contract="v2"] .conv-module .ctox-pane { border: 0; border-radius: 0; background: var(--shell-v2-surface, var(--surface)); box-shadow: none; }
-.shell-window[data-shell-contract="v2"] .conv-module > .ctox-context-menu { max-width: calc(100% - 16px); }
-.shell-window[data-shell-contract="v2"] .conv-module .ctox-pane-header { box-sizing: border-box; min-height: var(--shell-v2-header-row-size, 37px); padding: 0 8px; background: var(--shell-v2-surface-alt, var(--surface-2)); border-bottom: 1px solid var(--shell-v2-line, var(--line)); display: grid; grid-template-rows: var(--shell-v2-header-row-size, 37px) auto; align-content: start; }
-.shell-window[data-shell-contract="v2"] .conv-module .ctox-pane-title-row { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); }
-.shell-window[data-shell-contract="v2"] .conv-module .ctox-pane-titles { flex-direction: row; align-items: baseline; gap: 8px; padding-top: 0; overflow: hidden; }
-.shell-window[data-shell-contract="v2"] .conv-module .ctox-pane-kicker { flex: 0 0 auto; line-height: 1; }
-.shell-window[data-shell-contract="v2"] .conv-module .ctox-pane-title { margin-top: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.1; }
-.shell-window[data-shell-contract="v2"] .conv-module .ctox-filterbar { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); box-sizing: border-box; padding: 0; flex-wrap: nowrap; overflow-x: auto; }
-.shell-window[data-shell-contract="v2"] .conv-module .conv-channel-tabs { flex-wrap: nowrap; overflow-x: auto; }
-.conv-module {
+[data-app="conversations"] .conv-module { position: relative; padding: 0; overflow: hidden; background: var(--bg); }
+[data-app="conversations"] .conv-module .ctox-pane { border: 0; border-radius: 0; background: var(--surface); box-shadow: none; }
+[data-app="conversations"] .conv-module .ctox-pane-header { box-sizing: border-box; min-height: var(--shell-v2-header-row-size, 37px); padding: 0 8px; background: var(--surface-2); border-bottom: 1px solid var(--shell-v2-line, var(--line)); display: grid; grid-template-rows: minmax(var(--shell-v2-header-row-size, 37px), auto) auto; align-content: start; }
+[data-app="conversations"] .conv-module .ctox-pane-title-row { min-height: var(--shell-v2-header-row-size, 37px); }
+[data-app="conversations"] .conv-module .ctox-pane-titles { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 0 8px; padding-top: 0; }
+[data-app="conversations"] .conv-module .ctox-pane-kicker { flex: 0 0 auto; line-height: 1; }
+[data-app="conversations"] .conv-module .ctox-pane-title { margin-top: 0; line-height: 1.1; }
+[data-app="conversations"] .conv-module .ctox-filterbar { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); box-sizing: border-box; padding: 0; flex-wrap: nowrap; overflow-x: auto; }
+[data-app="conversations"] .conv-module .conv-channel-tabs { flex-wrap: wrap; }
+[data-app="conversations"] .conv-module {
   --ctox-left-width: var(--conversations-left-width, 320px);
   --ctox-right-width: var(--conversations-right-width, 320px);
   /* Explicit tracks: left(1) resizer(2) center(3) resizer(4) right(5). The
@@ -41,44 +40,44 @@
    max-content, 13 tabs) blew that column up to ~1090px inside a 320px pane and
    pushed the filterbar's view/filter controls out of the clipped pane at EVERY
    width. One explicit 0-floor column keeps every head inside its column. */
-.conv-pane {
+[data-app="conversations"] .conv-pane {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.conv-pane.conv-left { grid-column: 1; }
-.conv-module > [data-resizer="left"] { grid-column: 2; }
-.conv-pane.conv-center { grid-column: 3; }
-.conv-module > [data-resizer="right"] { grid-column: 4; }
-.conv-pane.conv-right { grid-column: 5; }
+[data-app="conversations"] .conv-pane.conv-left { grid-column: 1; }
+[data-app="conversations"] .conv-module > [data-resizer="left"] { grid-column: 2; }
+[data-app="conversations"] .conv-pane.conv-center { grid-column: 3; }
+[data-app="conversations"] .conv-module > [data-resizer="right"] { grid-column: 4; }
+[data-app="conversations"] .conv-pane.conv-right { grid-column: 5; }
 
 /* Column resizer styling handled by global [data-resizer] in app.css */
 
 /* Grammar column rows: header / channel band / recessed well / footer. The
    band track (row 2) collapses to 0 when the band is hidden ([hidden]); the
    well stays pinned to the 1fr track so it always fills the space. */
-.conv-pane.conv-left {
+[data-app="conversations"] .conv-pane.conv-left {
   grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
-.conv-pane.conv-left > .ctox-pane-header { grid-row: 1; }
-.conv-pane.conv-left > [data-conv-channel-band] { grid-row: 2; }
-.conv-left-body { grid-row: 3; }
-.conv-pane.conv-left > .ctox-pane-footer { grid-row: 4; }
+[data-app="conversations"] .conv-pane.conv-left > .ctox-pane-header { grid-row: 1; }
+[data-app="conversations"] .conv-pane.conv-left > [data-conv-channel-band] { grid-row: 2; }
+[data-app="conversations"] .conv-left-body { grid-row: 3; }
+[data-app="conversations"] .conv-pane.conv-left > .ctox-pane-footer { grid-row: 4; }
 
-.conv-pane.conv-center {
+[data-app="conversations"] .conv-pane.conv-center {
   grid-template-rows: auto auto minmax(0, 1fr);
 }
 
-.conv-pane.conv-right {
+[data-app="conversations"] .conv-pane.conv-right {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
-.conv-pane.conv-right > .ctox-pane-header { grid-row: 1; }
-.conv-right-body { grid-row: 2; }
+[data-app="conversations"] .conv-pane.conv-right > .ctox-pane-header { grid-row: 1; }
+[data-app="conversations"] .conv-right-body { grid-row: 2; }
 
 /* Left pane channel band + message meta use brand-colored channel dots. */
 /* custom: channel brand dots (deliberately hardcoded brand colors) */
-.conv-channel-dot {
+[data-app="conversations"] .conv-channel-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -86,50 +85,34 @@
   flex: 0 0 auto;
 }
 
-.conv-channel-dot[data-dot="whatsapp"] { background: #25d366; }
-.conv-channel-dot[data-dot="email"]    { background: #4a90e2; }
-.conv-channel-dot[data-dot="jami"]     { background: #b794f4; }
-.conv-channel-dot[data-dot="teams"]    { background: #5059c9; }
-.conv-channel-dot[data-dot="meeting"]  { background: #f6a050; }
-.conv-channel-dot[data-dot="slack"]    { background: #36c5f0; }
-.conv-channel-dot[data-dot="discord"]  { background: #5865f2; }
-.conv-channel-dot[data-dot="telegram"] { background: #2aabee; }
-.conv-channel-dot[data-dot="matrix"]   { background: #0dbd8b; }
-.conv-channel-dot[data-dot="mattermost"] { background: #0058cc; }
-.conv-channel-dot[data-dot="zulip"]    { background: #52c2af; }
-.conv-channel-dot[data-dot="google_chat"] { background: #34a853; }
-
-/* Account-sync status line inside the shell-wired filter tray. */
-.conv-filter-status {
-  min-height: 14px;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.25;
-}
-
-.conv-filter-status:empty {
-  min-height: 0;
-}
-
-.conv-filter-status[data-state="error"] {
-  color: var(--danger);
-}
+[data-app="conversations"] .conv-channel-dot[data-dot="whatsapp"] { background: #25d366; }
+[data-app="conversations"] .conv-channel-dot[data-dot="email"] { background: #4a90e2; }
+[data-app="conversations"] .conv-channel-dot[data-dot="jami"] { background: #b794f4; }
+[data-app="conversations"] .conv-channel-dot[data-dot="teams"] { background: #5059c9; }
+[data-app="conversations"] .conv-channel-dot[data-dot="meeting"] { background: #f6a050; }
+[data-app="conversations"] .conv-channel-dot[data-dot="slack"] { background: #36c5f0; }
+[data-app="conversations"] .conv-channel-dot[data-dot="discord"] { background: #5865f2; }
+[data-app="conversations"] .conv-channel-dot[data-dot="telegram"] { background: #2aabee; }
+[data-app="conversations"] .conv-channel-dot[data-dot="matrix"] { background: #0dbd8b; }
+[data-app="conversations"] .conv-channel-dot[data-dot="mattermost"] { background: #0058cc; }
+[data-app="conversations"] .conv-channel-dot[data-dot="zulip"] { background: #52c2af; }
+[data-app="conversations"] .conv-channel-dot[data-dot="google_chat"] { background: #34a853; }
 
 /* Channel band tabs carry a brand dot before their label. Thirteen channels
    never fit a 320px column, so the band scrolls sideways inside its own row
    instead of being clipped at the pane edge. */
-.conv-pane.conv-left [data-conv-channel-band] .ctox-pane-tab {
+[data-app="conversations"] .conv-pane.conv-left [data-conv-channel-band] .ctox-pane-tab {
   gap: 5px;
 }
 
-.conv-pane.conv-left > [data-conv-channel-band] {
+[data-app="conversations"] .conv-pane.conv-left > [data-conv-channel-band] {
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
 }
 
-.conv-pane.conv-left > [data-conv-channel-band]::-webkit-scrollbar {
+[data-app="conversations"] .conv-pane.conv-left > [data-conv-channel-band]::-webkit-scrollbar {
   display: none;
 }
 
@@ -137,7 +120,7 @@
    avatar + preview content grid inside each row. Selection styling
    (hover, .is-selected accent bar) comes from the kit. */
 /* custom: thread rows are list items with an avatar column + preview grid */
-.conv-thread-item {
+[data-app="conversations"] .conv-thread-item {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 8px;
@@ -148,18 +131,18 @@
   flex: 0 0 auto;
 }
 
-.conv-thread-item .ctox-avatar {
+[data-app="conversations"] .conv-thread-item .ctox-avatar {
   align-self: start;
 }
 
 /* custom: thread-row content (name/time/preview/direction/channel dots) */
-.conv-thread-body {
+[data-app="conversations"] .conv-thread-body {
   display: grid;
   gap: 2px;
   min-width: 0;
 }
 
-.conv-thread-top {
+[data-app="conversations"] .conv-thread-top {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -167,7 +150,7 @@
   min-width: 0;
 }
 
-.conv-thread-name {
+[data-app="conversations"] .conv-thread-name {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -177,14 +160,14 @@
   font-size: 13px;
 }
 
-.conv-thread-time {
+[data-app="conversations"] .conv-thread-time {
   color: var(--muted);
   font-size: 10px;
   font-weight: 700;
   white-space: nowrap;
 }
 
-.conv-thread-preview {
+[data-app="conversations"] .conv-thread-preview {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -193,34 +176,35 @@
   font-size: 12px;
 }
 
-.conv-thread-preview span:last-child {
+[data-app="conversations"] .conv-thread-preview span:last-child {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.conv-thread-dir {
+[data-app="conversations"] .conv-thread-dir {
   display: inline-grid;
   place-items: center;
   width: 14px;
   height: 14px;
   border-radius: var(--control-radius);
   background: color-mix(in srgb, var(--surface-2) 70%, transparent);
-  color: var(--muted);
+  /* DARK: etwas zum Text hin; --muted allein lag auf der gewählten Zeile bei 4,4. */
+  color: color-mix(in srgb, var(--text) 30%, var(--muted));
   font-size: 10px;
   font-weight: 800;
   flex: 0 0 auto;
 }
 
-.conv-thread-dir[data-direction="outbound"] {
+[data-app="conversations"] .conv-thread-dir[data-direction="outbound"] {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--accent);
 }
 
 /* Third line of a shard: channel dots + the facts the module already holds
    (message count, CTOX account). */
-.conv-thread-meta {
+[data-app="conversations"] .conv-thread-meta {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -233,62 +217,62 @@
 
 /* `display: flex` above out-specifies the UA's [hidden] rule, so the JS's
    `metaRow.hidden = true` (bucket with neither facts nor channels) needs this. */
-.conv-thread-meta[hidden] {
+[data-app="conversations"] .conv-thread-meta[hidden] {
   display: none;
 }
 
-.conv-thread-meta-fact {
+[data-app="conversations"] .conv-thread-meta-fact {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.conv-thread-channels {
+[data-app="conversations"] .conv-thread-channels {
   display: inline-flex;
   align-items: center;
   gap: 3px;
   flex: 0 0 auto;
 }
 
-.conv-thread-channels:empty {
+[data-app="conversations"] .conv-thread-channels:empty {
   display: none;
 }
 
-.conv-thread-channels .conv-channel-dot {
+[data-app="conversations"] .conv-thread-channels .conv-channel-dot {
   width: 6px;
   height: 6px;
 }
 
 /* ---- SHARDS: two to three lines, generous padding ---------------------- */
-.conv-thread-list:not(.is-list-view) .conv-thread-item {
+[data-app="conversations"] .conv-thread-list:not(.is-list-view) .conv-thread-item {
   padding: 12px 14px;
 }
 
 /* ---- LIST: exactly one dense line — title plus one short meta on the right.
    Same markup, no second render path: the preview and meta lines drop out. */
-.conv-thread-list.is-list-view .conv-thread-item {
+[data-app="conversations"] .conv-thread-list.is-list-view .conv-thread-item {
   grid-template-columns: minmax(0, 1fr);
   gap: 0;
   padding: 4px 14px;
 }
 
-.conv-thread-list.is-list-view .conv-thread-item .ctox-avatar,
-.conv-thread-list.is-list-view .conv-thread-preview,
-.conv-thread-list.is-list-view .conv-thread-meta {
+[data-app="conversations"] .conv-thread-list.is-list-view .conv-thread-item .ctox-avatar,
+[data-app="conversations"] .conv-thread-list.is-list-view .conv-thread-preview,
+[data-app="conversations"] .conv-thread-list.is-list-view .conv-thread-meta {
   display: none;
 }
 
-.conv-thread-list.is-list-view .conv-thread-body {
+[data-app="conversations"] .conv-thread-list.is-list-view .conv-thread-body {
   gap: 0;
 }
 
-.conv-thread-list.is-list-view .conv-thread-top {
+[data-app="conversations"] .conv-thread-list.is-list-view .conv-thread-top {
   gap: 6px;
   line-height: 1.35;
 }
 
-.conv-thread-list.is-list-view .conv-thread-name {
+[data-app="conversations"] .conv-thread-list.is-list-view .conv-thread-name {
   font-size: 12px;
   font-weight: 600;
 }
@@ -296,12 +280,12 @@
 /* One-button card/list switch (operator directive 31.08.2026): the button
    carries both glyphs and shows the one for the view it switches TO. It is an
    action, so it never takes the aria-pressed accent fill of a state control. */
-.conv-view-toggle .conv-view-icon[hidden] {
+[data-app="conversations"] .conv-view-toggle .conv-view-icon[hidden] {
   display: none;
 }
 
 /* custom: accent unread counter — an attention marker, not a status badge */
-.conv-thread-item .conv-unread-badge {
+[data-app="conversations"] .conv-thread-item .conv-unread-badge {
   flex: 0 0 auto;
   display: inline-grid;
   place-items: center;
@@ -318,29 +302,29 @@
 /* Center pane — detail timeline.
    custom: chat header = contact identity row inside the standard pane band
    (.ctox-pane-header/.ctox-pane-band supply padding and hairline). */
-.conv-center-header {
+[data-app="conversations"] .conv-center-header {
   /* Static title row on top (always present, shell V2 §7 h5); the contact
      identity row below is toggled by JS with a selection. */
   display: block;
 }
 
-.conv-center-header .conv-detail-identity {
+[data-app="conversations"] .conv-center-header .conv-detail-identity {
   margin-top: 6px;
 }
 
-.conv-detail-identity {
+[data-app="conversations"] .conv-detail-identity {
   display: flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
 }
 
-.conv-detail-title {
+[data-app="conversations"] .conv-detail-title {
   display: grid;
   min-width: 0;
 }
 
-.conv-detail-title strong {
+[data-app="conversations"] .conv-detail-title strong {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -349,7 +333,7 @@
   font-weight: 760;
 }
 
-.conv-detail-title span {
+[data-app="conversations"] .conv-detail-title span {
   color: var(--muted);
   font-size: 11px;
   overflow: hidden;
@@ -357,45 +341,42 @@
   white-space: nowrap;
 }
 
-/* custom: full-width horizontally scrollable tab band for kit .ctox-pane-tab
-   buttons (the kit's inline .ctox-pane-tabs group cannot scroll a long
-   channel list across the pane) */
-.conv-channel-tabs {
+/* custom: full-width tab band for kit .ctox-pane-tab buttons. VIS3: a long
+   channel list wraps into further rows instead of scrolling sideways behind a
+   hidden scrollbar (Geometrie-Labor G1). */
+[data-app="conversations"] .conv-channel-tabs {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   padding: 6px 12px;
   border-bottom: 1px solid var(--hairline, var(--line));
-  overflow-x: auto;
-  scrollbar-width: none;
 }
 
-.conv-channel-tabs::-webkit-scrollbar {
-  display: none;
-}
-
-.conv-channel-tabs .ctox-pane-tab {
+[data-app="conversations"] .conv-channel-tabs .ctox-pane-tab {
   gap: 6px;
   flex: 0 0 auto;
 }
 
-.conv-channel-tabs .conv-channel-dot {
+[data-app="conversations"] .conv-channel-tabs .conv-channel-dot {
   width: 7px;
   height: 7px;
 }
 
 /* custom: chat timeline with direction-aligned message bubbles — a genuine
    special view the kit does not express (bubble alignment, channel tints) */
-.conv-timeline {
+[data-app="conversations"] .conv-timeline {
   min-height: 0;
   overflow: auto;
   padding: 10px 12px 14px;
   display: grid;
+  /* Eine Spalte in Fensterbreite: die implizite auto-Spalte wuchs auf die breiteste Karte (seitlicher Scroll bei 420). */
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
   align-content: start;
 }
 
-.conv-day-divider {
+[data-app="conversations"] .conv-day-divider {
   display: grid;
   place-items: center;
   margin: 12px 0 4px;
@@ -406,8 +387,10 @@
   text-transform: uppercase;
 }
 
-.conv-message {
+[data-app="conversations"] .conv-message {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 5px;
   max-width: min(760px, 88%);
   padding: 8px 10px;
@@ -419,23 +402,23 @@
   position: relative;
 }
 
-.conv-message.is-highlighted {
+[data-app="conversations"] .conv-message.is-highlighted {
   border-color: color-mix(in srgb, var(--accent) 76%, var(--line));
   box-shadow: var(--focus-ring);
 }
 
-.conv-message[data-direction="outbound"] {
+[data-app="conversations"] .conv-message[data-direction="outbound"] {
   justify-self: end;
   border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
 }
 
-.conv-message[data-direction="inbound"] {
+[data-app="conversations"] .conv-message[data-direction="inbound"] {
   justify-self: start;
   background: var(--surface-2);
 }
 
-.conv-message-meta {
+[data-app="conversations"] .conv-message-meta {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -444,50 +427,50 @@
   font-weight: 700;
 }
 
-.conv-message-meta .conv-channel-dot {
+[data-app="conversations"] .conv-message-meta .conv-channel-dot {
   width: 7px;
   height: 7px;
 }
 
-.conv-message-channel {
+[data-app="conversations"] .conv-message-channel {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
-.conv-message-agent {
+[data-app="conversations"] .conv-message-agent {
   color: var(--accent);
   font-weight: 800;
 }
 
-.conv-message-time {
+[data-app="conversations"] .conv-message-time {
   margin-left: auto;
   color: var(--muted);
   font-weight: 600;
 }
 
-.conv-message-subject {
+[data-app="conversations"] .conv-message-subject {
   font-weight: 760;
   color: var(--text);
 }
 
-.conv-message-body {
+[data-app="conversations"] .conv-message-body {
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.conv-message-attachments {
+[data-app="conversations"] .conv-message-attachments {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
 
-.conv-message-recipients {
+[data-app="conversations"] .conv-message-recipients {
   color: var(--muted);
   font-size: 11px;
 }
 
-.conv-message-sender,
-.conv-message-folder {
+[data-app="conversations"] .conv-message-sender,
+[data-app="conversations"] .conv-message-folder {
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
@@ -496,19 +479,19 @@
 /* Message send state uses the kit .ctox-badge (variant set in JS via
    badgeVariantForMessageStatus) — a status display, not a button. */
 
-.conv-message[data-seen="0"][data-direction="inbound"] {
+[data-app="conversations"] .conv-message[data-seen="0"][data-direction="inbound"] {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
   background: color-mix(in srgb, var(--accent) 6%, var(--surface-2));
 }
 
 /* HTML/plain toggle is a kit small ghost button; only the alignment is local. */
-.conv-message-html-toggle {
+[data-app="conversations"] .conv-message-html-toggle {
   align-self: flex-start;
 }
 
 /* Deliberately white: the sandboxed iframe renders foreign email HTML, which
    assumes a light background regardless of the shell theme. */
-.conv-message-html-frame {
+[data-app="conversations"] .conv-message-html-frame {
   width: 100%;
   min-height: 120px;
   max-height: 480px;
@@ -518,8 +501,9 @@
   resize: vertical;
 }
 
-.conv-message-task {
+[data-app="conversations"] .conv-message-task {
   display: flex;
+  min-width: 0;
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
@@ -528,39 +512,51 @@
 /* Task/work chip is a kit .ctox-chip; only the inner kind/id/jump typography
    is module-specific. The route status is a kit .ctox-badge (variant set in
    JS via badgeVariantForRouteStatus). */
-.conv-message-task-chip:focus-visible {
+[data-app="conversations"] .conv-message-task-chip:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
 
-.conv-message-task-chip[data-kind="task"] .conv-message-task-chip-kind {
+[data-app="conversations"] .conv-message-task-chip[data-kind="task"] .conv-message-task-chip-kind {
   color: var(--accent);
 }
 
-.conv-message-task-chip[data-kind="work"] .conv-message-task-chip-kind {
-  color: color-mix(in srgb, var(--accent) 60%, #5059c9);
+[data-app="conversations"] .conv-message-task-chip[data-kind="work"] .conv-message-task-chip-kind {
+  color: color-mix(in srgb, var(--accent) 60%, var(--text));
 }
 
-.conv-message-task-chip-kind {
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-weight: 800;
+[data-app="conversations"] .conv-message-task-chip-kind {
+  font-weight: 700;
 }
 
-.conv-message-task-chip-id {
-  font-family: var(--font-mono);
-  font-weight: 600;
+/* Der Chip passt sich der Timeline-Breite an (schmal: Titel kürzt, kein seitlicher Scroll). */
+[data-app="conversations"] .conv-message-task-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-width: 0;
+}
+[data-app="conversations"] .conv-message-task-chip > :not(.conv-message-task-chip-title) {
+  flex: 0 0 auto;
+}
+
+[data-app="conversations"] .conv-message-task-chip-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text);
-  letter-spacing: 0;
 }
 
-.conv-message-task-chip-jump {
+[data-app="conversations"] .conv-message-task-chip-jump {
   color: var(--muted);
   font-size: 11px;
   margin-left: 2px;
 }
 
-.conv-message-details-summary {
+[data-app="conversations"] .conv-message-details-summary {
   list-style: none;
   cursor: pointer;
   color: var(--muted);
@@ -570,22 +566,22 @@
   letter-spacing: 0.04em;
 }
 
-.conv-message-details-summary::-webkit-details-marker {
+[data-app="conversations"] .conv-message-details-summary::-webkit-details-marker {
   display: none;
 }
 
-.conv-message-details-summary::before {
+[data-app="conversations"] .conv-message-details-summary::before {
   content: "▸";
   display: inline-block;
   margin-right: 4px;
   transition: transform 120ms ease;
 }
 
-details[open] > .conv-message-details-summary::before {
+[data-app="conversations"] details[open] > .conv-message-details-summary::before {
   transform: rotate(90deg);
 }
 
-.conv-message-details-body {
+[data-app="conversations"] .conv-message-details-body {
   display: grid;
   grid-template-columns: max-content 1fr;
   column-gap: 10px;
@@ -596,7 +592,7 @@ details[open] > .conv-message-details-summary::before {
   border-top: 1px solid var(--hairline, var(--line));
 }
 
-.conv-message-details-body dt {
+[data-app="conversations"] .conv-message-details-body dt {
   color: var(--muted);
   font-weight: 700;
   text-transform: uppercase;
@@ -604,14 +600,14 @@ details[open] > .conv-message-details-summary::before {
   white-space: nowrap;
 }
 
-.conv-message-details-body dd {
+[data-app="conversations"] .conv-message-details-body dd {
   margin: 0;
   min-width: 0;
   overflow-wrap: anywhere;
   font-family: var(--font-mono);
 }
 
-.conv-message-details-meta {
+[data-app="conversations"] .conv-message-details-meta {
   grid-column: 1 / -1;
   margin: 4px 0 0;
   padding: 6px;
@@ -626,32 +622,32 @@ details[open] > .conv-message-details-summary::before {
 }
 
 /* custom: channel-specific tints (brand colors, deliberately hardcoded) */
-.conv-message[data-channel="whatsapp"][data-direction="outbound"] {
+[data-app="conversations"] .conv-message[data-channel="whatsapp"][data-direction="outbound"] {
   background: color-mix(in srgb, #25d366 8%, var(--surface));
   border-color: color-mix(in srgb, #25d366 34%, var(--line));
 }
 
-.conv-message[data-channel="email"] {
+[data-app="conversations"] .conv-message[data-channel="email"] {
   border-color: color-mix(in srgb, #4a90e2 34%, var(--line));
 }
 
-.conv-message[data-channel="jami"][data-direction="outbound"] {
+[data-app="conversations"] .conv-message[data-channel="jami"][data-direction="outbound"] {
   background: color-mix(in srgb, #b794f4 8%, var(--surface));
   border-color: color-mix(in srgb, #b794f4 34%, var(--line));
 }
 
-.conv-message[data-channel="jami"] .conv-message-meta::after {
+[data-app="conversations"] .conv-message[data-channel="jami"] .conv-message-meta::after {
   content: "🔒";
   margin-left: 2px;
   font-size: 10px;
 }
 
-.conv-message[data-channel="teams"][data-direction="outbound"] {
+[data-app="conversations"] .conv-message[data-channel="teams"][data-direction="outbound"] {
   background: color-mix(in srgb, #5059c9 8%, var(--surface));
   border-color: color-mix(in srgb, #5059c9 34%, var(--line));
 }
 
-.conv-message[data-channel="meeting"][data-direction="outbound"] {
+[data-app="conversations"] .conv-message[data-channel="meeting"][data-direction="outbound"] {
   background: color-mix(in srgb, #f6a050 8%, var(--surface));
   border-color: color-mix(in srgb, #f6a050 34%, var(--line));
 }
@@ -661,43 +657,43 @@ details[open] > .conv-message-details-summary::before {
    content layout inside the body is local. The right pane auto-reveals on
    selection (data-conv-toggle-context / is-context-hidden); the kit's surface
    card supplies the grouping, no local frame needed around the rows below. */
-.conv-right-empty span {
-  overflow-wrap: anywhere;
-}
-
-.conv-right-detail {
+[data-app="conversations"] .conv-right-detail {
   display: grid;
+  /* Cards are overflow:hidden (kit), so auto rows would shrink them below their
+     content inside the bounded pane; max-content rows keep every card whole and
+     the detail scrolls instead. */
+  grid-auto-rows: max-content;
   gap: 8px;
   align-content: start;
   padding: 10px;
   overflow: auto;
 }
 
-.conv-card-body {
+[data-app="conversations"] .conv-card-body {
   display: grid;
   gap: 4px;
 }
 
 /* custom: outbound highlight — the one accent-tinted inspector card */
-.conv-outbound-card {
+[data-app="conversations"] .conv-outbound-card {
   border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
   background: color-mix(in srgb, var(--accent) 5%, var(--surface));
 }
 
-.conv-outbound-summary {
+[data-app="conversations"] .conv-outbound-summary {
   display: grid;
   gap: 4px;
   min-width: 0;
 }
 
-.conv-outbound-summary strong {
+[data-app="conversations"] .conv-outbound-summary strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
 }
 
-.conv-outbound-summary span {
+[data-app="conversations"] .conv-outbound-summary span {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.35;
@@ -706,17 +702,17 @@ details[open] > .conv-message-details-summary::before {
 /* custom: flat hairline rows inside inspector cards (channel / account /
    folder). The kit .ctox-card body already provides the surface; these
    rows only need a hairline separator. */
-.conv-outbound-facts {
+[data-app="conversations"] .conv-outbound-facts {
   margin: 2px 0;
 }
 
-.conv-outbound-actions {
+[data-app="conversations"] .conv-outbound-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
 
-.conv-outbound-reply-classifier {
+[data-app="conversations"] .conv-outbound-reply-classifier {
   display: grid;
   gap: 8px;
   padding: 8px 0 0;
@@ -724,13 +720,13 @@ details[open] > .conv-message-details-summary::before {
   margin-top: 4px;
 }
 
-.conv-outbound-reply-classifier label {
+[data-app="conversations"] .conv-outbound-reply-classifier label {
   display: grid;
   gap: 4px;
 }
 
-.conv-outbound-reply-classifier label span,
-.conv-outbound-reply-classifier small {
+[data-app="conversations"] .conv-outbound-reply-classifier label span,
+[data-app="conversations"] .conv-outbound-reply-classifier small {
   color: var(--muted);
   font-size: 10px;
   font-weight: 800;
@@ -738,7 +734,7 @@ details[open] > .conv-message-details-summary::before {
 }
 
 /* compact fact rows inside inspector cards (channel / account / folder) */
-.conv-channel-row {
+[data-app="conversations"] .conv-channel-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -747,24 +743,24 @@ details[open] > .conv-message-details-summary::before {
   border-bottom: 1px solid var(--hairline, var(--line));
 }
 
-.conv-channel-row:last-child {
+[data-app="conversations"] .conv-channel-row:last-child {
   border-bottom: 0;
 }
 
-.conv-channel-row-name {
+[data-app="conversations"] .conv-channel-row-name {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   font-weight: 700;
 }
 
-.conv-channel-row-count {
+[data-app="conversations"] .conv-channel-row-count {
   color: var(--muted);
   font-size: 11px;
   font-weight: 700;
 }
 
-.conv-account-row {
+[data-app="conversations"] .conv-account-row {
   display: grid;
   grid-template-columns: 12px 1fr;
   gap: 8px;
@@ -772,11 +768,11 @@ details[open] > .conv-message-details-summary::before {
   border-bottom: 1px solid var(--hairline, var(--line));
 }
 
-.conv-account-row:last-child {
+[data-app="conversations"] .conv-account-row:last-child {
   border-bottom: 0;
 }
 
-.conv-account-health {
+[data-app="conversations"] .conv-account-health {
   display: inline-block;
   width: 10px;
   height: 10px;
@@ -785,24 +781,24 @@ details[open] > .conv-message-details-summary::before {
   background: var(--muted);
 }
 
-.conv-account-health[data-state="ok"]   { background: var(--success); }
-.conv-account-health[data-state="warn"] { background: var(--warning); }
-.conv-account-health[data-state="bad"]  { background: var(--danger); }
+[data-app="conversations"] .conv-account-health[data-state="ok"] { background: var(--success); }
+[data-app="conversations"] .conv-account-health[data-state="warn"] { background: var(--warning); }
+[data-app="conversations"] .conv-account-health[data-state="bad"] { background: var(--danger); }
 
-.conv-account-meta {
+[data-app="conversations"] .conv-account-meta {
   display: grid;
   gap: 2px;
   min-width: 0;
 }
 
-.conv-account-meta strong {
+[data-app="conversations"] .conv-account-meta strong {
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.conv-account-meta-line {
+[data-app="conversations"] .conv-account-meta-line {
   color: var(--muted);
   font-size: 11px;
   display: flex;
@@ -810,11 +806,11 @@ details[open] > .conv-message-details-summary::before {
   gap: 6px;
 }
 
-.conv-account-meta-line span {
+[data-app="conversations"] .conv-account-meta-line span {
   white-space: nowrap;
 }
 
-.conv-folder-row {
+[data-app="conversations"] .conv-folder-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -824,18 +820,18 @@ details[open] > .conv-message-details-summary::before {
   font-size: 12px;
 }
 
-.conv-folder-row:last-child {
+[data-app="conversations"] .conv-folder-row:last-child {
   border-bottom: 0;
 }
 
-.conv-folder-row-count {
+[data-app="conversations"] .conv-folder-row-count {
   color: var(--muted);
   font-weight: 700;
 }
 
 /* "Load older" is a kit ghost button; only placement inside the timeline
    grid is local. */
-.conv-load-older {
+[data-app="conversations"] .conv-load-older {
   justify-self: center;
   margin-bottom: 16px;
 }
@@ -845,16 +841,16 @@ details[open] > .conv-message-details-summary::before {
    columns so the timeline gets the full width. The reveal toggle lives in the
    center detail header (data-conv-toggle-context) and only appears once a
    conversation is selected. */
-.conv-module.is-context-hidden {
+[data-app="conversations"] .conv-module.is-context-hidden {
   grid-template-columns: var(--conversations-left-width, 320px) 12px minmax(300px, 1fr);
 }
 
-.conv-module.is-context-hidden .conv-right,
-.conv-module.is-context-hidden > [data-resizer="right"] {
+[data-app="conversations"] .conv-module.is-context-hidden .conv-right,
+[data-app="conversations"] .conv-module.is-context-hidden > [data-resizer="right"] {
   display: none;
 }
 
-.conv-toggle-context[aria-pressed="true"] {
+[data-app="conversations"] .conv-toggle-context[aria-pressed="true"] {
   color: var(--accent);
   background: var(--accent-soft);
 }
@@ -864,7 +860,7 @@ details[open] > .conv-message-details-summary::before {
    becomes a band under list + timeline. Two columns, not a stack — the app
    invents no breakpoint of its own. */
 @container business-app-window (max-width: 1024px) {
-  .conv-module {
+  [data-app="conversations"] .conv-module {
     grid-template-columns: var(--conversations-left-width, 320px) 12px minmax(260px, 1fr);
     /* Fractions, not vh: inside a window the screen height means nothing
        (contract §6). The context band takes at most a third of the frame. */
@@ -874,17 +870,17 @@ details[open] > .conv-message-details-summary::before {
   /* With the context pane collapsed — this app's DEFAULT state — the second
      row must disappear with it. Leaving it declared is exactly the empty,
      reserved track the contract calls out in §6. */
-  .conv-module.is-context-hidden {
+  [data-app="conversations"] .conv-module.is-context-hidden {
     grid-template-columns: var(--conversations-left-width, 320px) 12px minmax(260px, 1fr);
     grid-template-rows: minmax(0, 1fr);
   }
 
-  .conv-pane.conv-right {
+  [data-app="conversations"] .conv-pane.conv-right {
     grid-column: 1 / -1;
     grid-row: 2;
   }
 
-  .conv-module > [data-resizer="right"] {
+  [data-app="conversations"] .conv-module > [data-resizer="right"] {
     display: none;
   }
 }
@@ -893,7 +889,7 @@ details[open] > .conv-message-details-summary::before {
    stays operable. Track counts follow the number of VISIBLE panes in both
    states, so the stack never reserves a track for a hidden pane. */
 @container business-app-window (max-width: 768px) {
-  .conv-module {
+  [data-app="conversations"] .conv-module {
     grid-template-columns: minmax(0, 1fr);
     /* Track minimums are the pane's own chrome plus a usable well: head (74) +
        channel band (37) + footer (25) already eat ~140px of the left column,
@@ -912,7 +908,7 @@ details[open] > .conv-message-details-summary::before {
     padding: 8px;
   }
 
-  .conv-module.is-context-hidden {
+  [data-app="conversations"] .conv-module.is-context-hidden {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(300px, 1fr) minmax(300px, 1.2fr);
   }
@@ -921,22 +917,22 @@ details[open] > .conv-message-details-summary::before {
      No `display: grid !important` here — that forced the context pane visible
      even while collapsed, which both reserved a dead track and made the
      context toggle a no-op in the stacked form. */
-  .conv-pane.conv-left,
-  .conv-pane.conv-center,
-  .conv-pane.conv-right {
+  [data-app="conversations"] .conv-pane.conv-left,
+  [data-app="conversations"] .conv-pane.conv-center,
+  [data-app="conversations"] .conv-pane.conv-right {
     grid-column: auto;
     grid-row: auto;
     min-height: 190px;
   }
-  .conv-module [data-resizer] {
+  [data-app="conversations"] .conv-module [data-resizer] {
     display: none !important;
   }
 
-  .conv-message {
+  [data-app="conversations"] .conv-message {
     max-width: 100%;
   }
 
-  .conv-thread-item {
+  [data-app="conversations"] .conv-thread-item {
     min-height: 44px;
   }
 }
@@ -945,29 +941,29 @@ details[open] > .conv-message-details-summary::before {
    reaches the 44px minimum, icon-only pane buttons in both dimensions, plus
    the horizontally scrolling channel tab band and the thread rows. */
 @media (pointer: coarse) {
-  .conv-module button,
-  .conv-module input,
-  .conv-module select,
-  .conv-module textarea {
+  [data-app="conversations"] .conv-module button,
+  [data-app="conversations"] .conv-module input,
+  [data-app="conversations"] .conv-module select,
+  [data-app="conversations"] .conv-module textarea {
     min-height: 44px;
   }
 
-  .conv-module .ctox-pane-icon {
+  [data-app="conversations"] .conv-module .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
 
-  .conv-module .ctox-pane-tab {
+  [data-app="conversations"] .conv-module .ctox-pane-tab {
     min-height: 44px;
   }
 
-  .conv-module .conv-thread-item {
+  [data-app="conversations"] .conv-module .conv-thread-item {
     min-height: 44px;
   }
 
   /* The details/summary disclosure inside messages is the only way to reach
      the technical metadata — full finger-height hit area. */
-  .conv-module .conv-message-details-summary {
+  [data-app="conversations"] .conv-module .conv-message-details-summary {
     min-height: 44px;
     display: flex;
     align-items: center;
@@ -986,52 +982,47 @@ details[open] > .conv-message-details-summary::before {
    high each — together exactly the icon's height — and starts them behind the
    icon. The detail head keeps the close button's block clear on the right.
    ========================================================================== */
-.shell-window[data-shell-contract="v2"] .conv-module .conv-left > .ctox-pane-header {
+[data-app="conversations"] .conv-module .conv-left > .ctox-pane-header {
   /* The icon indent lives on the HEADER itself (contract §7 h2 measures the
      first head's own padding-left), not on the inner rows. */
   padding: 0 0 0 calc(var(--shell-v2-icon-size, 80px) + 14px);
 }
 
-.shell-window[data-shell-contract="v2"] .conv-module .conv-left > .ctox-pane-header > .ctox-pane-title-row,
-.shell-window[data-shell-contract="v2"] .conv-module .conv-left > .ctox-pane-header > .ctox-filterbar {
+[data-app="conversations"] .conv-module .conv-left > .ctox-pane-header > .ctox-pane-title-row,
+[data-app="conversations"] .conv-module .conv-left > .ctox-pane-header > .ctox-filterbar {
   box-sizing: border-box;
   min-height: var(--shell-v2-header-row-size, 37px);
-  height: var(--shell-v2-header-row-size, 37px);
   align-items: center;
   padding-block: 0;
   padding-left: 0;
   padding-right: 14px;
 }
 
-/* Kicker + title must fit the 37px row without being crushed: the titles
-   column keeps `min-width: 0` (app.css) and clips instead of pushing the
-   action block, which stays `flex: 0 0 auto` and never claims `flex: 1`. */
-.shell-window[data-shell-contract="v2"] .conv-module .ctox-pane-titles {
+/* VIS3: Kicker und Titel kuerzen nicht per Ellipse (Rahmen-Kit). Die Titelspalte
+   bricht um: passt der Kicker ("Audit aus CTOX-Sicht") nicht neben den Titel,
+   rutscht der Titel in eine eigene Zeile und bricht dort an Wortgrenzen um;
+   die Titelzeile waechst ueber das 37px-Band hinaus mit. Die Aktionen bleiben
+   `flex: 0 0 auto` rechts daneben. */
+[data-app="conversations"] .conv-module .ctox-pane-titles {
   min-width: 0;
   padding-top: 0;
-  overflow: hidden;
 }
 
-.shell-window[data-shell-contract="v2"] .conv-module .ctox-pane-kicker,
-.shell-window[data-shell-contract="v2"] .conv-module .ctox-pane-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.shell-window[data-shell-contract="v2"] .conv-module .ctox-pane-title {
+[data-app="conversations"] .conv-module .ctox-pane-title {
   margin-top: 0;
 }
 
+[data-app="conversations"] .conv-module .ctox-pane-titles > .ctox-pane-kicker { flex: 0 1 auto; }
+[data-app="conversations"] .conv-module .ctox-pane-titles > .ctox-pane-title { flex: 0 1 auto; }
+
 /* The tray opens below both icon rows, so it uses the plain column inset —
    the negative margin undoes the header's icon indent for this row only. */
-.shell-window[data-shell-contract="v2"] .conv-module .conv-left > .ctox-pane-header > .ctox-filter-tray {
+[data-app="conversations"] .conv-module .conv-left > .ctox-pane-header > .ctox-filter-tray {
   margin-left: calc(-1 * (var(--shell-v2-icon-size, 80px) + 14px));
   padding: 8px 14px;
 }
 
-.shell-window[data-shell-contract="v2"] .conv-module .ctox-pane-search {
+[data-app="conversations"] .conv-module .ctox-pane-search {
   min-height: 30px;
   height: 30px;
   padding-block: 0;
@@ -1042,24 +1033,24 @@ details[open] > .conv-message-details-summary::before {
    the band hairline. 70px stay free on the right for the close button; the
    centre column is the right-most one whenever the context pane is collapsed,
    which is this app's default state (`is-context-hidden`). */
-.shell-window[data-shell-contract="v2"] .conv-module .conv-center > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .conv-module .conv-right > .ctox-pane-header {
+[data-app="conversations"] .conv-module .conv-center > .ctox-pane-header,
+[data-app="conversations"] .conv-module .conv-right > .ctox-pane-header {
   box-sizing: border-box;
   min-height: calc(var(--shell-v2-header-row-size, 37px) * 2 + 1px);
   height: calc(var(--shell-v2-header-row-size, 37px) * 2 + 1px);
-  padding: 0 70px 0 14px;
+  padding: 0 var(--shell-v2-control-inset, 70px) 0 14px;
   overflow: hidden;
 }
 
-.shell-window[data-shell-contract="v2"] .conv-module .conv-center > .ctox-pane-header > .ctox-pane-title-row,
-.shell-window[data-shell-contract="v2"] .conv-module .conv-right > .ctox-pane-header > .ctox-pane-title-row {
+[data-app="conversations"] .conv-module .conv-center > .ctox-pane-header > .ctox-pane-title-row,
+[data-app="conversations"] .conv-module .conv-right > .ctox-pane-header > .ctox-pane-title-row {
   box-sizing: border-box;
   min-height: var(--shell-v2-header-row-size, 37px);
   height: var(--shell-v2-header-row-size, 37px);
   align-items: center;
 }
 
-.shell-window[data-shell-contract="v2"] .conv-module .conv-center-header .conv-detail-identity {
+[data-app="conversations"] .conv-module .conv-center-header .conv-detail-identity {
   box-sizing: border-box;
   min-width: 0;
   height: var(--shell-v2-header-row-size, 37px);
@@ -1072,17 +1063,30 @@ details[open] > .conv-message-details-summary::before {
    free on its right (contract §7 h2 AND h3 on one element). The centre and
    context heads move out of the top row and give their 70px reserve back. */
 @container business-app-window (max-width: 768px) {
-  .shell-window[data-shell-contract="v2"] .conv-module .conv-left > .ctox-pane-header {
-    padding-right: 70px;
+  [data-app="conversations"] .conv-module .conv-left > .ctox-pane-header {
+    padding-right: var(--shell-v2-control-inset, 70px);
   }
 
   /* The tray opens below the control zone, so it reclaims both reserves. */
-  .shell-window[data-shell-contract="v2"] .conv-module .conv-left > .ctox-pane-header > .ctox-filter-tray {
-    margin-right: -70px;
+  [data-app="conversations"] .conv-module .conv-left > .ctox-pane-header > .ctox-filter-tray {
+    margin-right: calc(-1 * var(--shell-v2-control-inset, 70px));
   }
 
-  .shell-window[data-shell-contract="v2"] .conv-module .conv-center > .ctox-pane-header,
-  .shell-window[data-shell-contract="v2"] .conv-module .conv-right > .ctox-pane-header {
+  [data-app="conversations"] .conv-module .conv-center > .ctox-pane-header,
+  [data-app="conversations"] .conv-module .conv-right > .ctox-pane-header {
     padding-right: 14px;
   }
 }
+
+/* Textdiät Regel 8 (schmal) + FIX11 (G4): rechts hält der Kopf die Knopf-Zone frei; neben Import/Export reicht der
+   Platz für „Konversationen“ dann nicht. Statt den Titel zu kürzen, bricht die Titelzeile um: der Titel behält seine
+   volle Breite, die Kopfknöpfe rutschen in eine zweite Zeile darunter. */
+@container business-app-window (max-width: 768px) {
+  [data-app="conversations"] .conv-module .conv-left > .ctox-pane-header > .ctox-pane-title-row {
+    flex-wrap: wrap;
+    row-gap: 4px;
+    padding-block: 6px;
+  }
+  [data-app="conversations"] .conv-module .conv-left > .ctox-pane-header .ctox-pane-titles { flex: 1 0 auto; max-width: 100%; }
+}
+

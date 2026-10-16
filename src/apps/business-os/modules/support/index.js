@@ -1,6 +1,9 @@
-import { loadModuleMessages } from '../../shared/i18n.js';
-import { renderHtmlIfChanged } from '../../shared/stable-dom.js';
-import { SUPPORT_AGENT_SUGGESTION_KINDS, buildSupportAgentTaskCommand, buildSupportCommand } from './support-commands.mjs';
+// App-API 4.0 (Shell v4): mount(root, api, {restored}) -> {unmount, snapshot}.
+// Daten nur über api.query/api.get, Befehle über api.command (nie warten), Zustand nur über
+// api.status.report in die Zustandszone der Shell. Protokoll: V4-PORT.md.
+import { renderHtmlIfChanged } from 'ctox:shared/stable-dom.js';
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
+import { buildSupportAgentTaskCommand, buildSupportCommand } from './support-commands.mjs';
 import { filterSupportConversations, mergeSupportTimeline, supportQueueCounts } from './support-reducers.mjs';
 
 const SUPPORT_COLLECTIONS = [
@@ -46,16 +49,16 @@ const COLLECTIONS = [
 const STATUS_OPTIONS = ['open', 'waiting', 'resolved'];
 const PRIORITY_OPTIONS = ['low', 'normal', 'high', 'urgent'];
 
-const PRIMARY_COLLECTION = 'support_conversations';
-const SYNC_START_TIMEOUT_MS = 8000;
 const REFRESH_DEBOUNCE_MS = 80;
 
+// Eingebettete Texte = Rückfall (früher: Embedded-Labels, übersteuert von locales/<lang>.json über HTTP).
+// Jetzt gilt: api.shell.t('support.<key>') übersteuert, wenn es nicht den Schlüssel selbst liefert
+// (Schlüsselraum offen, app-api.d.ts OFFEN-B). Die Werte aus locales/*.json sind hier eingemischt.
 const labels = {
   de: {
     kicker: 'Support Desk',
-    queueTitle: 'Warteschlangen',
+    queueTitle: 'Warteschlangen', // v4-allow: label
     conversationKicker: 'Konversation',
-    emptyTitle: 'Keine Support-Konversation ausgewählt',
     contextKicker: 'Kontext',
     contextTitle: 'Kunde und Ticket',
     notePlaceholder: 'Interne Notiz',
@@ -68,23 +71,13 @@ const labels = {
     entries: 'Einträge',
     importInvalid: 'Ungültige JSON-Datei.',
     importEmpty: 'Keine Konversationen mit Thread-Bezug in der Datei.',
-    importDone: 'Konversationen aus Threads geöffnet.',
-    exportDone: 'Queue exportiert.',
     allOpen: 'Offen',
     mine: 'Meine',
     unassigned: 'Nicht zugewiesen',
     needsReply: 'Antwort nötig',
     slaRisk: 'SLA-Risiko',
     snoozed: 'Zurückgestellt',
-    agentDrafts: 'CTOX Entwürfe',
-    loadingTitle: 'Support wird synchronisiert',
-    loadingBody: 'Konversationen erscheinen, sobald die Support-Projektionen lokal verfügbar sind.',
-    emptyListTitle: 'Keine Support-Konversationen',
-    emptyListBody: 'Neue Support-Fälle entstehen aus Kommunikation, Tickets und Support-Connectoren.',
-    emptyTimelineTitle: 'Keine Konversation ausgewählt',
-    emptyTimelineBody: 'Wähle links eine Queue-Konversation.',
-    noTimelineTitle: 'Noch keine Timeline',
-    noTimelineBody: 'Nachrichten, interne Notizen und CTOX Vorschläge werden hier zusammengeführt.',
+    agentDrafts: 'CTOX',
     status: 'Status',
     priority: 'Priorität',
     assignee: 'Zuordnung',
@@ -93,35 +86,36 @@ const labels = {
     ticket: 'Ticket',
     inbox: 'Posteingang',
     updated: 'Aktualisiert',
+    lastActivity: 'Letzte Aktivität',
     noValue: 'nicht gesetzt',
     askCtox: 'CTOX fragen',
+    showAsList: 'Als Liste anzeigen',
+    showAsCards: 'Als Karten anzeigen',
     claim: 'Übernehmen',
     resolve: 'Lösen',
     reopen: 'Wieder öffnen',
     assignToMe: 'Mir zuweisen',
     createTicket: 'Ticket erstellen',
-    snoozeOneHour: '1h snoozen',
-    snoozeTomorrow: 'Morgen',
+    snoozeOneHour: '1 Std. zurückstellen',
+    snoozeTomorrow: 'Bis morgen',
     linkedThreads: 'Kommunikation',
-    noMessages: 'Keine Nachrichten geladen.',
     relatedTicket: 'Verknüpftes Ticket',
     relatedCustomer: 'Verknüpfter Kunde',
     ctoxWork: 'CTOX Arbeit',
     applySuggestion: 'Anwenden',
     rejectSuggestion: 'Ablehnen',
-    commandPending: 'Befehl wurde an CTOX übergeben.',
-    commandFailed: 'Befehl konnte nicht übergeben werden.',
     noteLabel: 'Interne Notiz',
     eventLabel: 'Ereignis',
     agentLabel: 'CTOX Vorschlag',
     chatLabel: 'CTOX Chat',
     messageLabel: 'Nachricht',
+    requestFrom: 'Anfrage von {0}',
+    requestUntitled: 'Anfrage',
   },
   en: {
     kicker: 'Support Desk',
     queueTitle: 'Queues',
     conversationKicker: 'Conversation',
-    emptyTitle: 'No support conversation selected',
     contextKicker: 'Context',
     contextTitle: 'Customer and ticket',
     notePlaceholder: 'Internal note',
@@ -134,23 +128,13 @@ const labels = {
     entries: 'entries',
     importInvalid: 'Invalid JSON file.',
     importEmpty: 'No thread-linked conversations in the file.',
-    importDone: 'Conversations opened from threads.',
-    exportDone: 'Queue exported.',
     allOpen: 'Open',
     mine: 'Mine',
     unassigned: 'Unassigned',
     needsReply: 'Needs reply',
     slaRisk: 'SLA risk',
     snoozed: 'Snoozed',
-    agentDrafts: 'CTOX drafts',
-    loadingTitle: 'Syncing support',
-    loadingBody: 'Conversations appear once support projections are available locally.',
-    emptyListTitle: 'No support conversations',
-    emptyListBody: 'New support cases are created from communication, tickets, and support connectors.',
-    emptyTimelineTitle: 'No conversation selected',
-    emptyTimelineBody: 'Pick a queue conversation on the left.',
-    noTimelineTitle: 'No timeline yet',
-    noTimelineBody: 'Messages, internal notes, and CTOX suggestions are merged here.',
+    agentDrafts: 'CTOX',
     status: 'Status',
     priority: 'Priority',
     assignee: 'Assignee',
@@ -159,8 +143,11 @@ const labels = {
     ticket: 'Ticket',
     inbox: 'Inbox',
     updated: 'Updated',
+    lastActivity: 'Last activity',
     noValue: 'not set',
     askCtox: 'Ask CTOX',
+    showAsList: 'Show as list',
+    showAsCards: 'Show as cards',
     claim: 'Claim',
     resolve: 'Resolve',
     reopen: 'Reopen',
@@ -169,136 +156,203 @@ const labels = {
     snoozeOneHour: 'Snooze 1h',
     snoozeTomorrow: 'Tomorrow',
     linkedThreads: 'Communication',
-    noMessages: 'No messages loaded.',
     relatedTicket: 'Linked ticket',
     relatedCustomer: 'Linked customer',
     ctoxWork: 'CTOX work',
     applySuggestion: 'Apply',
     rejectSuggestion: 'Reject',
-    commandPending: 'Command was handed to CTOX.',
-    commandFailed: 'Command could not be handed off.',
     noteLabel: 'Internal note',
     eventLabel: 'Event',
     agentLabel: 'CTOX suggestion',
     chatLabel: 'CTOX chat',
     messageLabel: 'Message',
+    requestFrom: 'Request from {0}',
+    requestUntitled: 'Request',
   },
 };
 
-// Canonical grammar axes (shell-wired): the counted band selects the queue
+// Canonical grammar axes (app-wired via autoWirePaneGrammar(root)): the counted band selects the queue
 // (ownership/urgency partition); the collapsed tray narrows it (status /
 // priority / focus); search + view-toggle apply last. All are reported on the
 // bubbling ctox-pane-grammar-change event.
 const BAND_QUEUES = ['open', 'mine', 'unassigned', 'slaRisk'];
 
-const state = {
-  ctx: null,
-  t: (key, fallback) => fallback || key,
-  lang: 'de',
-  queue: 'open',
-  viewMode: 'cards',
-  search: '',
-  filters: { status: 'open', priority: 'all', focus: 'all' },
-  selectedId: '',
-  // Third pane (customer context) is hidden by default and auto-revealed on an
-  // explicit selection: visible = hasSelection && !contextCollapsed.
-  contextCollapsed: true,
-  loading: false,
-  // Snapshot of the primary collection's replication readiness; a render hint
-  // only — it gates the data-driven empty state of the queue list.
-  conversationReadiness: null,
-  renderTimer: null,
-  cleanup: null,
-  conversationOverrides: new Map(),
-  localNotes: [],
-  data: Object.fromEntries(COLLECTIONS.map((name) => [name, []])),
-};
+// Ansichtszustand, der einen Live-Remount (snapshot/restored) überlebt.
+const SNAPSHOT_VERSION = 1;
 
-export async function mount(ctx) {
-  state.ctx = ctx;
-  // Support depends on its declared data set as one coherent workspace. Fail
-  // during mount when the actor cannot read a required collection so the
-  // shell can render its standard permission/delegation state. Deferring this
-  // into background initialization used to leave a deceptively empty app.
-  const deniedCollection = COLLECTIONS.find((name) => (
-    ctx.permissions?.canReadCollection?.(name) === false
-  ));
-  if (deniedCollection) {
-    ctx.db.collection(deniedCollection).find();
-  }
-  state.lang = ctx.locale === 'en' ? 'en' : 'de';
-  const messages = await loadModuleMessages(import.meta.url, state.lang, labels);
-  state.t = (key, fallback) => messages[key] ?? fallback ?? key;
-  state.loading = true;
-  state.conversationReadiness = null;
-  state.selectedId = '';
-  state.queue = 'open';
-  state.viewMode = 'cards';
-  state.search = '';
-  state.filters = { status: 'open', priority: 'all', focus: 'all' };
-  state.contextCollapsed = true;
-  state.conversationOverrides = new Map();
-  state.localNotes = [];
-  state.data = Object.fromEntries(COLLECTIONS.map((name) => [name, []]));
-  await ensureStyles();
-  const markupVersion = String(import.meta.url).split('?v=')[1] || '';
-  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
-  const html = await fetch(markupHref).then((res) => res.text());
-  ctx.host.innerHTML = html;
-  ctx.left?.replaceChildren?.();
-  ctx.right?.replaceChildren?.();
-  applyStaticLabels();
-  wireUi();
-  // Seed the module's mirror of the grammar state from the DOM defaults before
-  // the shell wires the pane and fires its first change event.
-  seedGrammarState();
-  // Collection readiness is a render hint only: while the primary conversation
-  // projection has not finished its initial replication, the data-driven empty
-  // state of the queue shows a syncing shell instead of "no conversations".
-  state.conversationReadiness = readConversationReadiness();
-  const stopReadiness = wireConversationReadiness();
-  render();
-  let disposed = false;
-  let collectionStartCleanup = null;
-  Promise.resolve()
-    .then(async () => {
-      collectionStartCleanup = await startCollections(() => !disposed && state.ctx === ctx);
-      if (disposed || state.ctx !== ctx) return;
-      await refreshSupport();
-      if (disposed || state.ctx !== ctx) return;
-      state.cleanup = wireRealtime();
-    })
-    .catch((error) => {
-      if (disposed || state.ctx !== ctx) return;
-      console.warn('[support] background initialization failed', error);
-      state.loading = false;
-      render();
-    });
-  return () => {
-    disposed = true;
-    stopReadiness();
-    collectionStartCleanup?.();
-    state.cleanup?.();
-    if (state.renderTimer) window.clearTimeout(state.renderTimer);
-    state.ctx = null;
+function initialState() {
+  return {
+    api: null,
+    root: null,
+    t: (key, fallback) => fallback || key,
+    lang: 'de',
+    queue: 'open',
+    viewMode: 'cards',
+    search: '',
+    filters: { status: 'open', priority: 'all', focus: 'all' },
+    selectedId: '',
+    // Restored selection waits until its record is in the live data (first emission may be empty).
+    pendingSelectedId: '',
+    pendingNoteDraft: '',
+    pendingListScrollTop: 0,
+    // Third pane (customer context) is hidden by default and auto-revealed on an
+    // explicit selection: visible = hasSelection && !contextCollapsed.
+    contextCollapsed: true,
+    renderTimer: null,
+    disposers: [],
+    conversationOverrides: new Map(),
+    localNotes: [],
+    // „CTOX fragen“: Fehlschläge/Abbrüche der Agentenaufträge (support_agent_requests) dieser Montage → Zone.
+    mountedAtMs: 0,
+    agentRequestsReported: new Set(),
+    data: Object.fromEntries(COLLECTIONS.map((name) => [name, []])),
   };
 }
 
-async function ensureStyles() {
-  const cssVersion = String(import.meta.url).split('?v=')[1] || '';
-  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
-  let link = document.querySelector('link[data-support-style]');
-  if (!link) {
-    link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.dataset.supportStyle = 'true';
-    document.head.append(link);
+const state = initialState();
+
+export async function mount(root, api, { restored } = {}) {
+  Object.assign(state, initialState());
+  state.mountedAtMs = Date.now();
+  // Abos gehören dieser Montage (lokal festgehalten): ein zweites mount() derselben Modulinstanz darf
+  // die Abmeldung der ersten nicht verlieren (PORTING.md §4 Falle 1).
+  const disposers = state.disposers;
+  state.api = api;
+  state.root = root;
+  if (!root.dataset.app) root.dataset.app = api.app?.id || 'support';
+  setLanguage(api.shell.locale.get());
+  // CSS lädt die Shell aus dem Manifest; index.html liefert der Service Worker versioniert (§16.15).
+  root.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  if (state.root !== root) return { unmount() { root.replaceChildren(); }, snapshot: () => undefined };
+  api.shell.setTitle('Support');
+  applyStaticLabels();
+  applyRestoredView(restored);
+  wireUi();
+  // Pane-Grammatik verdrahtet die App selbst (keine DOM-Heuristik der Shell, PORTING.md R14).
+  autoWirePaneGrammar(root);
+  // Seed the module's mirror of the grammar state from the DOM (defaults or restored values).
+  seedGrammarState();
+  render();
+  for (const name of COLLECTIONS) {
+    disposers.push(api.query(name, {}).subscribe((rows) => {
+      state.data[name] = (Array.isArray(rows) ? rows : []).filter((doc) => doc && !doc.is_deleted);
+      if (name === 'support_agent_requests') reportAgentRequests();
+      scheduleRefresh();
+    }));
   }
-  if (link.getAttribute('href') !== cssHref) link.href = cssHref;
+  disposers.push(api.shell.locale.subscribe((locale) => {
+    const before = state.lang;
+    setLanguage(locale);
+    if (state.lang === before) return;
+    applyStaticLabels();
+    applyViewToggle();
+    render();
+  }));
+  return {
+    unmount() {
+      if (state.renderTimer) window.clearTimeout(state.renderTimer);
+      state.renderTimer = null;
+      for (const dispose of disposers.splice(0)) {
+        try { dispose(); } catch (error) { console.warn('[support] unsubscribe failed', error); }
+      }
+      root.replaceChildren();
+      if (state.root === root) {
+        state.api = null;
+        state.root = null;
+      }
+    },
+    snapshot: supportSnapshotForRemount,
+  };
+}
+
+function setLanguage(locale) {
+  state.lang = String(locale || '').toLowerCase().startsWith('en') ? 'en' : 'de';
+  const fallback = labels[state.lang] || labels.de;
+  const api = state.api;
+  state.t = (key, text) => {
+    const scoped = `support.${key}`;
+    const value = typeof api?.shell?.t === 'function' ? api.shell.t(scoped) : scoped;
+    if (value && value !== scoped) return value;
+    return fallback[key] ?? text ?? key;
+  };
+}
+
+// snapshot(): nur structured-clone-fähige Werte, offene Eingaben immer mit (PORTING.md §2).
+function supportSnapshotForRemount() {
+  const root = rootEl();
+  return {
+    v: SNAPSHOT_VERSION,
+    selectedId: state.selectedId || state.pendingSelectedId || '',
+    queue: state.queue,
+    viewMode: state.viewMode,
+    search: root?.querySelector('[data-pg-search]')?.value || '',
+    filters: { ...state.filters },
+    contextCollapsed: state.contextCollapsed,
+    trayOpen: root?.querySelector('[data-pg-tray]') ? !root.querySelector('[data-pg-tray]').hidden : false,
+    noteDraft: root?.querySelector('[data-support-note]')?.value || '',
+    listScrollTop: root?.querySelector('.support-left .ctox-pane-body')?.scrollTop || 0,
+  };
+}
+
+// Ansicht sofort aus `restored` in das Markup schreiben (vor autoWirePaneGrammar, das den DOM-Stand liest);
+// Auswahl und Entwurf erst übernehmen, wenn der Datensatz in den Live-Daten steht.
+function applyRestoredView(restored) {
+  if (!restored || typeof restored !== 'object' || restored.v !== SNAPSHOT_VERSION) return;
+  const root = rootEl();
+  const pane = leftPane();
+  if (!root || !pane) return;
+  if (typeof restored.search === 'string') {
+    const search = pane.querySelector('[data-pg-search]');
+    if (search) search.value = restored.search;
+  }
+  if (restored.viewMode === 'list' || restored.viewMode === 'cards') pane.dataset.pgDefaultView = restored.viewMode;
+  if (BAND_QUEUES.includes(restored.queue)) {
+    pane.querySelectorAll('[data-pg-band]').forEach((tab) => {
+      const on = tab.dataset.pgBand === restored.queue;
+      tab.setAttribute('aria-selected', String(on));
+      tab.classList.toggle('is-active', on);
+    });
+  }
+  if (restored.filters && typeof restored.filters === 'object') {
+    for (const [name, value] of Object.entries(restored.filters)) {
+      const select = pane.querySelector(`[data-pg-filter][data-pg-name="${CSS.escape(name)}"]`);
+      if (select && typeof value === 'string' && [...select.options].some((option) => option.value === value)) select.value = value;
+    }
+  }
+  if (restored.trayOpen === true) {
+    const tray = pane.querySelector('[data-pg-tray]');
+    if (tray) tray.hidden = false;
+    pane.querySelector('[data-pg-tray-toggle]')?.setAttribute('aria-expanded', 'true');
+  }
+  if (typeof restored.contextCollapsed === 'boolean') state.contextCollapsed = restored.contextCollapsed;
+  if (typeof restored.selectedId === 'string') state.pendingSelectedId = restored.selectedId;
+  if (typeof restored.noteDraft === 'string') state.pendingNoteDraft = restored.noteDraft;
+  if (Number.isFinite(restored.listScrollTop)) state.pendingListScrollTop = restored.listScrollTop;
+  applyPendingRestore();
+}
+
+function applyPendingRestore() {
+  if (!state.pendingSelectedId) return;
+  const id = state.pendingSelectedId;
+  if (!(state.data.support_conversations || []).some((item) => item.id === id)) return;
+  state.pendingSelectedId = '';
+  state.selectedId = id;
+  const note = rootEl()?.querySelector('[data-support-note]');
+  if (note && state.pendingNoteDraft) note.value = state.pendingNoteDraft;
+  state.pendingNoteDraft = '';
+  const scrollTop = state.pendingListScrollTop;
+  state.pendingListScrollTop = 0;
+  if (scrollTop) {
+    window.requestAnimationFrame(() => {
+      const body = rootEl()?.querySelector('.support-left .ctox-pane-body');
+      if (body) body.scrollTop = scrollTop;
+    });
+  }
 }
 
 function applyStaticLabels() {
   const root = rootEl();
+  if (!root) return;
   root.querySelectorAll('[data-i18n]').forEach((node) => {
     const key = node.getAttribute('data-i18n') || '';
     node.textContent = state.t(key, node.textContent || key);
@@ -321,10 +375,10 @@ function applyStaticLabels() {
 function wireUi() {
   const root = rootEl();
   // Chrome (search / tray / reset / active-dot / counted band / footer) is
-  // SHELL-wired from the data-pg-* markup; the module only listens for the
+  // wired from the data-pg-* markup by autoWirePaneGrammar(root); the module only listens for the
   // resulting bubbling change event and re-renders. The one exception is the
   // view toggle: it is a single action button now, so the module owns its
-  // label/icon and flips [data-pg-default-view] — the attribute the shell's
+  // label/icon and flips [data-pg-default-view] — the attribute
   // wirePaneGrammar() reads when no [data-pg-view] pair exists.
   leftPane()?.addEventListener('ctox-pane-grammar-change', handleGrammarChange);
   root.querySelector('[data-support-view-toggle]')?.addEventListener('click', () => toggleViewMode());
@@ -345,7 +399,7 @@ function wireUi() {
     selectConversation(row.getAttribute('data-support-conversation-id') || '');
   });
   root.querySelector('[data-support-import]')?.addEventListener('click', () => {
-    handleImport().catch((error) => showToast(error?.message || String(error), true));
+    handleImport();
   });
   root.querySelector('[data-support-export]')?.addEventListener('click', () => {
     handleExport();
@@ -354,11 +408,11 @@ function wireUi() {
     button.addEventListener('click', () => toggleContext());
   });
   root.querySelector('[data-support-note-submit]')?.addEventListener('click', () => {
-    createNote().catch((error) => setStatus(error?.message || String(error), true));
+    createNote();
   });
   root.querySelector('[data-support-note]')?.addEventListener('input', () => renderComposerState());
   root.querySelector('[data-support-ask-ctox]')?.addEventListener('click', () => {
-    askCtox().catch((error) => setStatus(error?.message || String(error), true));
+    askCtox();
   });
   root.querySelector('[data-support-context]')?.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target : null;
@@ -367,109 +421,42 @@ function wireUi() {
       runSuggestionAction(
         suggestionAction.getAttribute('data-support-suggestion-action') || '',
         suggestionAction.getAttribute('data-support-suggestion-id') || '',
-      ).catch((error) => setStatus(error?.message || String(error), true));
+      );
       return;
     }
     const action = target?.closest('[data-support-action]');
     if (!action) return;
-    runConversationAction(action.getAttribute('data-support-action') || '')
-      .catch((error) => setStatus(error?.message || String(error), true));
+    runConversationAction(action.getAttribute('data-support-action') || '');
   });
   root.querySelector('[data-support-context]')?.addEventListener('change', (event) => {
     const target = event.target instanceof Element ? event.target : null;
     const control = target?.closest('[data-support-control]');
     if (!control) return;
-    runConversationControl(control.getAttribute('data-support-control') || '', control.value || '')
-      .catch((error) => setStatus(error?.message || String(error), true));
+    runConversationControl(control.getAttribute('data-support-control') || '', control.value || '');
   });
-}
-
-async function startCollections(isActive = () => true) {
-  const sync = state.ctx?.sync;
-  if (typeof sync?.startCollection !== 'function') return () => {};
-  const available = COLLECTIONS.filter((name) => collectionFor(name));
-  if (!available.length) return () => {};
-  const primary = available.includes(PRIMARY_COLLECTION) ? PRIMARY_COLLECTION : available[0];
-  await withTimeout(sync.startCollection(primary), SYNC_START_TIMEOUT_MS, null)
-    .catch((error) => console.warn('[support] primary sync start failed', error));
-  if (!isActive()) return () => {};
-  const timers = available
-    .filter((name) => name !== primary)
-    .map((name, index) => window.setTimeout(() => {
-        if (!isActive()) return;
-        Promise.resolve(sync.startCollection(name))
-          .catch((error) => console.warn(`[support] ${name} sync start failed`, error));
-      }, index * 80));
-  return () => timers.forEach((timer) => window.clearTimeout(timer));
-}
-
-function wireRealtime() {
-  const subscriptions = COLLECTIONS
-    .map((name) => collectionFor(name)?.$?.subscribe?.(() => scheduleRefresh()))
-    .filter(Boolean);
-  return () => subscriptions.forEach((subscription) => {
-    try { subscription.unsubscribe?.(); } catch {}
-  });
-}
-
-function readConversationReadiness() {
-  const read = state.ctx?.sync?.collectionReadiness;
-  return typeof read === 'function'
-    ? read.call(state.ctx.sync, PRIMARY_COLLECTION)
-    : null;
-}
-
-function wireConversationReadiness() {
-  const subscribe = state.ctx?.sync?.subscribeCollectionReadiness;
-  if (typeof subscribe !== 'function') return () => {};
-  const unsubscribe = subscribe.call(state.ctx.sync, PRIMARY_COLLECTION, (snapshot) => {
-    if (!state.ctx) return;
-    state.conversationReadiness = snapshot;
-    render();
-  });
-  return typeof unsubscribe === 'function' ? unsubscribe : () => {};
 }
 
 function scheduleRefresh() {
-  const mountContext = state.ctx;
-  if (!mountContext || state.renderTimer) return;
+  if (!state.api || state.renderTimer) return;
   state.renderTimer = window.setTimeout(() => {
     state.renderTimer = null;
-    if (state.ctx !== mountContext) return;
-    refreshSupport(mountContext).catch((error) => {
-      if (state.ctx === mountContext) console.warn('[support] refresh failed', error);
-    });
+    if (!state.api) return;
+    refreshSupport();
   }, REFRESH_DEBOUNCE_MS);
 }
 
-async function refreshSupport(mountContext = state.ctx) {
-  if (!mountContext || state.ctx !== mountContext) return;
-  const entries = await Promise.all(COLLECTIONS.map(async (name) => [name, await loadCollection(name)]));
-  if (state.ctx !== mountContext) return;
-  state.data = Object.fromEntries(entries);
+function refreshSupport() {
   pruneOptimisticState();
-  state.loading = false;
+  applyPendingRestore();
   const visible = visibleConversations();
-  if (!state.selectedId || !visible.some((item) => item.id === state.selectedId)) {
+  if (!state.pendingSelectedId && (!state.selectedId || !visible.some((item) => item.id === state.selectedId))) {
     state.selectedId = visible[0]?.id || '';
   }
   render();
 }
 
-async function loadCollection(name) {
-  const collection = collectionFor(name);
-  if (!collection?.find) return [];
-  const docs = await collection.find().exec();
-  return docs
-    .map((doc) => doc?.toJSON?.() || doc)
-    .filter((doc) => doc && !doc.is_deleted && !doc._deleted);
-}
-
-function collectionFor(name) {
-  return state.ctx?.db?.collection?.(name) || null;
-}
-
 function render() {
+  if (!rootEl()) return;
   renderConversationList();
   renderBandCountsAndFooter();
   renderTimeline();
@@ -479,52 +466,17 @@ function render() {
 }
 
 // Rebuild the conversation well. Called on data / grammar changes (intentional
-// resets — the shell's scroll guard clears its offsets on the grammar-change
+// resets — the scroll guard clears its offsets on the grammar-change
 // event); NOT called on selection, which is an in-place flip.
-// Data-driven empty decision for the queue list. The list itself is filtered
-// (band / tray / search), so collection readiness gates the empty copy ONLY
-// when the unfiltered source — the support_conversations projection — is
-// empty. Filter empties (source non-empty, no match) keep the plain empty
-// markup; rows always win. Pure so it is unit-testable.
-function resolveConversationListState({ loading = false, sourceCount = 0, readiness = null } = {}) {
-  if (loading && !Number(sourceCount)) return 'loading';
-  if (Number(sourceCount) > 0) return 'content';
-  return readiness?.ready === false ? 'syncing' : 'empty';
-}
-
+// v4: no loading/syncing/empty copy — an empty list renders nothing (PORTING.md R11).
 function renderConversationList() {
-  const container = rootEl().querySelector('[data-support-list]');
+  const container = rootEl()?.querySelector('[data-support-list]');
   if (!container) return;
   // The view lives on the ROWS now (two different shapes, not two paddings of
   // one shape), so the well itself carries no view class any more.
-  const listState = resolveConversationListState({
-    loading: state.loading,
-    sourceCount: state.data.support_conversations?.length || 0,
-    readiness: state.conversationReadiness,
-  });
-  if (listState === 'loading') {
-    renderHtmlIfChanged(
-      container,
-      renderEmptyState(state.t('loadingTitle', 'Support wird synchronisiert'), state.t('loadingBody', '')),
-      { signature: 'state:loading' },
-    );
-    return;
-  }
-  if (listState === 'syncing') {
-    renderHtmlIfChanged(
-      container,
-      renderSyncingState(state.t('loadingTitle', 'Support wird synchronisiert'), state.t('loadingBody', '')),
-      { signature: 'state:syncing' },
-    );
-    return;
-  }
   const rows = visibleConversations();
   if (!rows.length) {
-    renderHtmlIfChanged(
-      container,
-      renderEmptyState(state.t('emptyListTitle', 'Keine Support-Konversationen'), state.t('emptyListBody', '')),
-      { signature: 'state:empty' },
-    );
+    renderHtmlIfChanged(container, '', { signature: 'rows:none' });
     return;
   }
   // Selection is applied after the write; do not put selectedId into the signature
@@ -573,9 +525,8 @@ function renderConversationRow(item, viewMode = state.viewMode) {
   const agent = Number(item.agent_draft_count || 0) > 0 ? `<span class="ctox-badge is-info">${escapeHtml(state.t('agentDrafts', 'CTOX'))}</span>` : '';
   const primary = [
     displayStatus(item.status),
-    item.priority || 'normal',
-    item.inbox_id || state.t('inbox', 'Posteingang'),
-  ];
+    displayPriority(item.priority),
+  ].filter(Boolean);
   const secondary = [
     `${state.t('assignee', 'Zuordnung')}: ${item.assignee_id || state.t('unassigned', 'Nicht zugewiesen')}`,
     `${state.t('lastActivity', 'Letzte Aktivität')}: ${formatTime(item.last_activity_at_ms || item.updated_at_ms)}`,
@@ -595,7 +546,7 @@ function renderConversationRow(item, viewMode = state.viewMode) {
 // Selecting a conversation flips the selected class across the EXISTING rows —
 // never a list rebuild — so the operator's scroll position is preserved.
 function applyListSelection() {
-  rootEl().querySelector('[data-support-list]')?.querySelectorAll('[data-support-conversation-id]').forEach((rowEl) => {
+  rootEl()?.querySelector('[data-support-list]')?.querySelectorAll('[data-support-conversation-id]').forEach((rowEl) => {
     const on = (rowEl.getAttribute('data-support-conversation-id') || '') === String(state.selectedId || '');
     rowEl.classList.toggle('is-selected', on);
     rowEl.setAttribute('aria-selected', String(on));
@@ -635,7 +586,8 @@ function renderBandCountsAndFooter() {
     }
   }
   const visible = visibleConversations().length;
-  const footerText = `${visible} ${state.t('entries', 'Einträge')} · ${queueLabel(state.queue)}`;
+  // Textdiät R2: der Fuß wiederholte nur den Reiterzähler („5 Einträge · Offen“).
+  const footerText = '';
   if (pg && typeof pg.setFooter === 'function') {
     pg.setFooter(footerText);
   } else {
@@ -662,6 +614,7 @@ function computeContextVisible({ hasSelection, userCollapsed }) {
 
 function applyContextVisibility() {
   const root = rootEl();
+  if (!root) return;
   const hasSelection = Boolean(selectedConversation());
   const visible = computeContextVisible({ hasSelection, userCollapsed: state.contextCollapsed });
   root.classList.toggle('is-context-hidden', !visible);
@@ -771,18 +724,15 @@ function leftPane() {
 }
 
 function renderTimeline() {
-  const title = rootEl().querySelector('[data-support-title]');
-  const timeline = rootEl().querySelector('[data-support-timeline]');
+  const title = rootEl()?.querySelector('[data-support-title]');
+  const timeline = rootEl()?.querySelector('[data-support-timeline]');
   const item = selectedConversation();
-  if (title) title.textContent = item ? conversationLabel(item) : state.t('emptyTitle', 'Keine Support-Konversation ausgewählt');
+  if (title) title.textContent = item ? conversationLabel(item) : '';
   if (!timeline) return;
-  if (!item) {
-    timeline.innerHTML = renderEmptyState(state.t('emptyTimelineTitle', 'Keine Konversation ausgewählt'), state.t('emptyTimelineBody', ''));
-    return;
-  }
-  const rows = timelineRows(item);
+  // Without a selection or timeline rows the surface stays empty (no placeholder copy, R11).
+  const rows = item ? timelineRows(item) : [];
   if (!rows.length) {
-    timeline.innerHTML = renderEmptyState(state.t('noTimelineTitle', 'Noch keine Timeline'), state.t('noTimelineBody', ''));
+    timeline.replaceChildren();
     return;
   }
   timeline.innerHTML = rows.map(renderTimelineItem).join('');
@@ -814,14 +764,14 @@ function contextDetails(title, innerHtml) {
 }
 
 function renderContext() {
-  const context = rootEl().querySelector('[data-support-context]');
+  const context = rootEl()?.querySelector('[data-support-context]');
   if (!context) return;
   const item = selectedConversation();
   if (!item) {
     context.removeAttribute('data-context-record-id');
     context.removeAttribute('data-context-record-type');
     context.removeAttribute('data-context-label');
-    context.innerHTML = renderEmptyState(state.t('contextTitle', 'Kunde und Ticket'), state.t('emptyTimelineBody', ''));
+    context.replaceChildren();
     return;
   }
   context.setAttribute('data-context-record-id', item.id || '');
@@ -844,14 +794,13 @@ function renderContext() {
   // then render them as collapsed disclosures below the primary controls.
   const relatedCustomerHtml = relatedCustomer ? `
     <dl class="ctox-fields ctox-fields--stacked" data-context-record-id="${escapeAttr(relatedCustomer.id)}" data-context-record-type="${relatedCustomerType}" data-context-label="${escapeAttr(relatedCustomerLabel)}">
-      ${fact(state.t('customer', 'Kunde'), account?.name || account?.id || item.customer_account_id)}
-      ${fact('Kontakt', contact?.name || contact?.display_name || contact?.email || item.customer_contact_id)}
+      ${fact(state.t('customer', 'Kunde'), account?.name || readableRef(item.customer_account_id))}
+      ${fact('Kontakt', contactDisplayName(contact) || contact?.email || readableRef(item.customer_contact_id))}
       ${fact('E-Mail', contact?.email || account?.domain || '')}
     </dl>` : '';
   const relatedTicketHtml = ticket ? `
     <dl class="ctox-fields ctox-fields--stacked" data-context-record-id="${escapeAttr(ticket.id || item.ticket_case_id)}" data-context-record-type="ticket" data-context-label="${escapeAttr(ticket.title || ticket.summary || ticket.id || item.ticket_case_id)}">
-      ${fact('ID', ticket.id || item.ticket_case_id)}
-      ${fact('Titel', ticket.title || ticket.summary || ticket.id)}
+      ${fact('Titel', ticket.title || ticket.summary || readableRef(ticket.id))}
       ${fact(state.t('status', 'Status'), ticket.status || ticket.state || '')}
     </dl>` : '';
   const communicationHtml = (threadLinks.length || messages.length) ? `
@@ -861,11 +810,11 @@ function renderContext() {
         <span>${escapeHtml(link.thread_key || '')}</span>
       </p>
     `).join('')}
-    ${messages.length ? `<p class="support-status">${escapeHtml(localMessagesLoadedLabel(messages.length))}</p>` : ''}` : '';
+    ${messages.length ? `<p class="support-linked-row"><span>${escapeHtml(messageCountLabel(messages.length))}</span></p>` : ''}` : '';
   const ctoxWorkHtml = (commands.length || tasks.length) ? `
     ${commands.slice(0, 3).map((command) => `
-      <p class="support-linked-row" data-context-record-id="${escapeAttr(command.id || command.command_id || command.task_id)}" data-context-record-type="business_command" data-context-label="${escapeAttr(command.command_type || command.type || command.id || 'Command')}">
-        <strong>${escapeHtml(command.command_type || command.type || 'command')}</strong>
+      <p class="support-linked-row" data-context-record-id="${escapeAttr(command.id || command.command_id || command.task_id)}" data-context-record-type="business_command" data-context-label="${escapeAttr(command.type || command.command_type || command.id || 'Command')}">
+        <strong>${escapeHtml(command.type || command.command_type || 'command')}</strong>
         <span>${escapeHtml([command.status, command.task_status, command.task_id].filter(Boolean).join(' · '))}</span>
       </p>
     `).join('')}
@@ -896,9 +845,9 @@ function renderContext() {
           ${fact(state.t('status', 'Status'), displayStatus(item.status))}
           ${fact(state.t('priority', 'Priorität'), item.priority)}
           ${fact(state.t('assignee', 'Zuordnung'), item.assignee_id)}
-          ${fact(state.t('team', 'Team'), item.team_id)}
-          ${fact(state.t('customer', 'Kunde'), item.customer_account_id || item.customer_contact_id)}
-          ${fact(state.t('ticket', 'Ticket'), item.ticket_case_id)}
+          ${fact(state.t('team', 'Team'), readableRef(item.team_id))}
+          ${fact(state.t('customer', 'Kunde'), account?.name || contactDisplayName(contact) || readableRef(item.customer_account_id || item.customer_contact_id))}
+          ${fact(state.t('ticket', 'Ticket'), ticket?.title || ticket?.summary || readableRef(item.ticket_case_id))}
           ${fact(state.t('updated', 'Aktualisiert'), formatTime(item.updated_at_ms || item.last_activity_at_ms))}
         </dl>
       </div>
@@ -916,15 +865,15 @@ function renderContext() {
           <label>
             <span class="ctox-field-label">${escapeHtml(state.t('priority', 'Priorität'))}</span>
             <select class="ctox-select" data-support-control="priority">
-              ${optionList(PRIORITY_OPTIONS, normalizeControlValue(item.priority, 'normal'))}
+              ${optionList(PRIORITY_OPTIONS, normalizeControlValue(item.priority, 'normal'), displayPriority)}
             </select>
           </label>
         </div>
         <div class="support-context-actions is-grid">
           <button type="button" class="ctox-button" data-support-action="claim">${escapeHtml(state.t('claim', 'Übernehmen'))}</button>
           <button type="button" class="ctox-button" data-support-action="assign-me" ${actorId ? '' : 'disabled'}>${escapeHtml(state.t('assignToMe', 'Mir zuweisen'))}</button>
-          <button type="button" class="ctox-button" data-support-action="snooze-1h">${escapeHtml(state.t('snoozeOneHour', '1h snoozen'))}</button>
-          <button type="button" class="ctox-button" data-support-action="snooze-tomorrow">${escapeHtml(state.t('snoozeTomorrow', 'Morgen'))}</button>
+          <button type="button" class="ctox-button" data-support-action="snooze-1h">${escapeHtml(state.t('snoozeOneHour', '1 Std. zurückstellen'))}</button>
+          <button type="button" class="ctox-button" data-support-action="snooze-tomorrow">${escapeHtml(state.t('snoozeTomorrow', 'Bis morgen'))}</button>
           <button type="button" class="ctox-button" data-support-action="${isClosed(item) ? 'reopen' : 'resolve'}">${escapeHtml(isClosed(item) ? state.t('reopen', 'Wieder öffnen') : state.t('resolve', 'Lösen'))}</button>
           <button type="button" class="ctox-button" data-support-action="create-ticket" ${item.ticket_case_id ? 'disabled' : ''}>${escapeHtml(state.t('createTicket', 'Ticket erstellen'))}</button>
         </div>
@@ -938,12 +887,12 @@ function renderContext() {
     ${contextDetails(state.t('relatedTicket', 'Verknüpftes Ticket'), relatedTicketHtml)}
     ${contextDetails(state.t('linkedThreads', 'Kommunikation'), communicationHtml)}
     ${contextDetails(state.t('ctoxWork', 'CTOX Arbeit'), ctoxWorkHtml)}
-    <p class="support-status" data-support-status></p>
   `;
 }
 
 function renderComposerState() {
   const root = rootEl();
+  if (!root) return;
   const selected = Boolean(selectedConversation());
   const note = root.querySelector('[data-support-note]');
   const button = root.querySelector('[data-support-note-submit]');
@@ -952,9 +901,9 @@ function renderComposerState() {
   if (ask) ask.disabled = !selected;
 }
 
-async function createNote() {
+function createNote() {
   const item = selectedConversation();
-  const note = rootEl().querySelector('[data-support-note]');
+  const note = rootEl()?.querySelector('[data-support-note]');
   const body = String(note?.value || '').trim();
   if (!item || !body) return;
   const now = Date.now();
@@ -982,99 +931,93 @@ async function createNote() {
   rememberLocalNote(optimisticNote);
   note.value = '';
   render();
-  setStatus(state.t('commandPending', 'Befehl wurde an CTOX übergeben.'));
   renderComposerState();
-  try {
-    await dispatchSupportCommand(command);
-  } catch (error) {
-    forgetLocalNote(optimisticNote.id);
-    render();
-    throw error;
-  }
+  dispatchSupportCommand(command, {
+    onFailed: () => {
+      forgetLocalNote(optimisticNote.id);
+      render();
+    },
+  });
 }
 
-async function askCtox() {
+function askCtox() {
   const item = selectedConversationWithCurrentControls();
   if (!item) return;
-  const title = `Support: ${conversationLabel(item)}`;
-  const instruction = buildAgentInstruction(item);
-  const recordSnapshot = supportSnapshot(item);
-  const writebackContract = supportWritebackContract(item.id);
-  if (typeof state.ctx?.businessChat?.submitTask === 'function') {
-    await state.ctx.businessChat.submitTask({
-      module: 'support',
-      recordId: item.id,
-      title,
-      instruction,
-      prompt: instruction,
-      userMessage: 'Summarize this support conversation and propose the next action.',
-      requestKind: 'summary',
-      threadKey: `business-os/support/${item.id}`,
-      requiredSkills: ['business-os-support-workflow'],
-      recordSnapshot,
-      writebackContract,
-      surface: 'support.agent.summary',
-      open: true,
-    });
-  } else {
-    await dispatchSupportCommand(buildSupportAgentTaskCommand({
-      conversationId: item.id,
-      title,
-      instruction,
-      requestKind: 'summary',
-      recordSnapshot,
-    }));
-  }
-  setStatus(state.t('commandPending', 'Befehl wurde an CTOX übergeben.'));
+  // App-Befehl support.agent.task (Strang SKL-A1): der Handler füllt das Template prompts/agent-task.md und startet
+  // den Agenten mit dem App-Skill support/support-workflow; Vorschläge erscheinen live über
+  // support_agent_suggestions, Fehlschlag/Abbruch über reportAgentRequests in der Zone.
+  dispatchSupportCommand(buildSupportAgentTaskCommand({
+    conversationId: item.id,
+    title: `Support: ${conversationLabel(item)}`,
+    requestKind: 'summary',
+    status: item.status || 'open',
+    priority: item.priority || 'normal',
+    recordSnapshot: supportSnapshot(item),
+  }));
 }
 
-async function runConversationAction(action) {
+// Agentenaufträge, die während dieser Montage fehlschlagen oder abgebrochen werden, gehen in die Zustandszone
+// (live über die Collection, kein Polling); ein späterer Abschluss räumt den Eintrag.
+function reportAgentRequests() {
+  const api = state.api;
+  if (!api) return;
+  for (const request of state.data.support_agent_requests || []) {
+    const code = `support.agent.request.${request.id}`;
+    const status = String(request.status || '');
+    if ((status === 'failed' || status === 'cancelled') && Number(request.updated_at_ms || 0) >= state.mountedAtMs) {
+      if (state.agentRequestsReported.has(request.id)) continue;
+      state.agentRequestsReported.add(request.id);
+      const error = request.payload?.error || status;
+      api.status.report({ level: status === 'cancelled' ? 'warn' : 'error', code, text: `support.agent.task: ${error}`, ref: request.command_id || request.id });
+    } else if (status === 'completed' && state.agentRequestsReported.delete(request.id)) {
+      api.status.clear(code);
+    }
+  }
+}
+
+function runConversationAction(action) {
   const item = selectedConversation();
   if (!item) return;
   if (action === 'assign-me') {
     const assigneeId = currentUserId();
-    if (!assigneeId) throw new Error(state.t('commandFailed', 'Befehl konnte nicht übergeben werden.'));
+    if (!assigneeId) return;
     rememberConversationOverride(item.id, { assignee_id: assigneeId });
     render();
-    try {
-      await dispatchSupportCommand(buildSupportCommand({
-        commandType: 'support.conversation.assign',
-        recordId: item.id,
-        payload: { conversation_id: item.id, assignee_id: assigneeId },
-        surface: 'support.conversation.assign',
-      }));
-    } catch (error) {
-      forgetConversationOverrideFields(item.id, ['assignee_id']);
-      render();
-      throw error;
-    }
-    setStatus(state.t('commandPending', 'Befehl wurde an CTOX übergeben.'));
+    dispatchSupportCommand(buildSupportCommand({
+      commandType: 'support.conversation.assign',
+      recordId: item.id,
+      payload: { conversation_id: item.id, assignee_id: assigneeId },
+      surface: 'support.conversation.assign',
+    }), {
+      onFailed: () => {
+        forgetConversationOverrideFields(item.id, ['assignee_id']);
+        render();
+      },
+    });
     return;
   }
   if (action === 'snooze-1h' || action === 'snooze-tomorrow') {
     const snoozedUntilMs = action === 'snooze-1h' ? Date.now() + 60 * 60 * 1000 : nextMorningMs();
     rememberConversationOverride(item.id, { snoozed_until_ms: snoozedUntilMs });
     render();
-    try {
-      await dispatchSupportCommand(buildSupportCommand({
-        commandType: 'support.conversation.snooze',
-        recordId: item.id,
-        payload: {
-          conversation_id: item.id,
-          snoozed_until_ms: snoozedUntilMs,
-        },
-        surface: 'support.conversation.snooze',
-      }));
-    } catch (error) {
-      forgetConversationOverrideFields(item.id, ['snoozed_until_ms']);
-      render();
-      throw error;
-    }
-    setStatus(state.t('commandPending', 'Befehl wurde an CTOX übergeben.'));
+    dispatchSupportCommand(buildSupportCommand({
+      commandType: 'support.conversation.snooze',
+      recordId: item.id,
+      payload: {
+        conversation_id: item.id,
+        snoozed_until_ms: snoozedUntilMs,
+      },
+      surface: 'support.conversation.snooze',
+    }), {
+      onFailed: () => {
+        forgetConversationOverrideFields(item.id, ['snoozed_until_ms']);
+        render();
+      },
+    });
     return;
   }
   if (action === 'create-ticket') {
-    await dispatchSupportCommand(buildSupportCommand({
+    dispatchSupportCommand(buildSupportCommand({
       commandType: 'support.ticket.create_from_conversation',
       recordId: item.id,
       payload: {
@@ -1084,7 +1027,6 @@ async function runConversationAction(action) {
       },
       surface: 'support.ticket.create_from_conversation',
     }));
-    setStatus(state.t('commandPending', 'Befehl wurde an CTOX übergeben.'));
     return;
   }
   const type = action === 'claim'
@@ -1103,22 +1045,20 @@ async function runConversationAction(action) {
   }
   rememberConversationOverride(item.id, optimisticPatch);
   render();
-  try {
-    await dispatchSupportCommand(buildSupportCommand({
-      commandType: type,
-      recordId: item.id,
-      payload: { conversation_id: item.id },
-      surface: type,
-    }));
-  } catch (error) {
-    forgetConversationOverrideFields(item.id, Object.keys(optimisticPatch));
-    render();
-    throw error;
-  }
-  setStatus(state.t('commandPending', 'Befehl wurde an CTOX übergeben.'));
+  dispatchSupportCommand(buildSupportCommand({
+    commandType: type,
+    recordId: item.id,
+    payload: { conversation_id: item.id },
+    surface: type,
+  }), {
+    onFailed: () => {
+      forgetConversationOverrideFields(item.id, Object.keys(optimisticPatch));
+      render();
+    },
+  });
 }
 
-async function runConversationControl(control, value) {
+function runConversationControl(control, value) {
   const item = selectedConversation();
   if (!item) return;
   const normalized = String(value || '').trim();
@@ -1131,28 +1071,26 @@ async function runConversationControl(control, value) {
   const [type, payload] = config;
   rememberConversationOverride(item.id, payload);
   render();
-  try {
-    await dispatchSupportCommand(buildSupportCommand({
-      commandType: type,
-      recordId: item.id,
-      payload: { conversation_id: item.id, ...payload },
-      surface: type,
-    }));
-  } catch (error) {
-    forgetConversationOverrideFields(item.id, Object.keys(payload));
-    render();
-    throw error;
-  }
-  setStatus(state.t('commandPending', 'Befehl wurde an CTOX übergeben.'));
+  dispatchSupportCommand(buildSupportCommand({
+    commandType: type,
+    recordId: item.id,
+    payload: { conversation_id: item.id, ...payload },
+    surface: type,
+  }), {
+    onFailed: () => {
+      forgetConversationOverrideFields(item.id, Object.keys(payload));
+      render();
+    },
+  });
 }
 
-async function runSuggestionAction(action, suggestionId) {
+function runSuggestionAction(action, suggestionId) {
   const item = selectedConversation();
   if (!item || !suggestionId) return;
   const type = action === 'reject'
     ? 'support.agent.reject_suggestion'
     : 'support.agent.apply_suggestion';
-  await dispatchSupportCommand(buildSupportCommand({
+  dispatchSupportCommand(buildSupportCommand({
     commandType: type,
     recordId: item.id,
     payload: {
@@ -1161,14 +1099,53 @@ async function runSuggestionAction(action, suggestionId) {
     },
     surface: type,
   }));
-  setStatus(state.t('commandPending', 'Befehl wurde an CTOX übergeben.'));
 }
 
-async function dispatchSupportCommand(command) {
-  if (!state.ctx?.commandBus?.dispatch) {
-    throw new Error(state.t('commandFailed', 'Befehl konnte nicht übergeben werden.'));
+// Befehle: api.command legt das Befehlsdokument lokal an und liefert sofort; die UI wartet nie auf
+// Annahme. Der Befehl trägt genau die Handler-Payload (V4-HANDLERS.md) plus client_context (Herkunft),
+// record_id geht über opts (§16.19 Nr. 8). Fehlschläge → Zustandszone, Erfolg bleibt still.
+function dispatchSupportCommand(command, { onFailed } = {}) {
+  const api = state.api;
+  if (!api) return null;
+  const type = command.command_type;
+  const payload = { ...(command.payload || {}), client_context: command.client_context };
+  const opts = command.record_id ? { record_id: command.record_id } : undefined;
+  const code = `support.command.${type}`;
+  let handle;
+  try {
+    handle = api.command(type, payload, opts);
+  } catch (error) {
+    api.status.report({ level: 'error', code, text: `${type}: ${error?.code || 'local'} ${error?.message || error}` });
+    onFailed?.(error);
+    return null;
   }
-  return state.ctx.commandBus.dispatch(command);
+  followCommand(api, handle, type, code, onFailed);
+  return handle;
+}
+
+function followCommand(api, handle, type, code, onFailed) {
+  let off = null;
+  let finished = false;
+  const stop = () => { finished = true; off?.(); off = null; };
+  off = handle.status.subscribe((value) => {
+    if (finished) return;
+    if (value?.status === 'failed') {
+      api.status.report({ level: 'error', code, text: `${type}: ${value.error || 'failed'}`, ref: handle.id });
+      stop();
+      onFailed?.(value);
+    } else if (value?.status === 'done') {
+      api.status.clear(code);
+      stop();
+    }
+  });
+  if (finished) off?.();
+  handle.local.catch((error) => {
+    if (finished) return;
+    api.status.report({ level: 'error', code, text: `${type}: ${error?.code || 'local'} ${error?.message || error}`, ref: handle.id });
+    stop();
+    onFailed?.(error);
+  });
+  state.disposers.push(stop);
 }
 
 // Export the visible queue as an honest, small JSON snapshot of the projection
@@ -1189,6 +1166,7 @@ function buildSupportExport(conversations) {
   }));
 }
 
+// Download bleibt app-lokal im Fenster (Anker in root); Erfolg ist still, der Download selbst ist die Rückmeldung.
 function handleExport() {
   const rows = buildSupportExport(visibleConversations());
   let url = '';
@@ -1202,10 +1180,10 @@ function handleExport() {
     rootEl()?.appendChild(anchor);
     anchor.click();
     anchor.remove();
-    showToast(`${rows.length} · ${state.t('exportDone', 'Queue exportiert.')}`);
+    state.api?.status.clear('support.export.failed');
   } catch (error) {
     console.error('[support] export failed', error);
-    showToast(state.t('commandFailed', 'Befehl konnte nicht übergeben werden.'), true);
+    state.api?.status.report({ level: 'error', code: 'support.export.failed', text: `Export: ${error?.message || error}` });
   } finally {
     if (url) window.setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 4000);
   }
@@ -1214,7 +1192,8 @@ function handleExport() {
 // Import honestly re-opens conversations from their source threads: each entry
 // that carries a thread key is dispatched through the existing
 // support.conversation.open_from_thread command. No schema is invented and no
-// record is written directly.
+// record is written directly. OFFEN (V4-PORT.md OFFEN-1): the payload carries no
+// conversation_id, which the handler requires (V4-HANDLERS.md U1) — kept as is, not invented here.
 function parseSupportImport(parsed) {
   const items = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : []);
   return items
@@ -1226,50 +1205,47 @@ function parseSupportImport(parsed) {
     .filter((item) => item.thread_key);
 }
 
-async function handleImport() {
+function handleImport() {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = 'application/json,.json';
   input.addEventListener('change', async () => {
+    const api = state.api;
     const file = input.files && input.files[0];
-    if (!file) return;
-    let parsed;
-    try {
-      parsed = JSON.parse(await file.text());
-    } catch {
-      showToast(state.t('importInvalid', 'Ungültige JSON-Datei.'), true);
-      return;
-    }
-    const candidates = parseSupportImport(parsed);
-    if (!candidates.length) {
-      showToast(state.t('importEmpty', 'Keine Konversationen mit Thread-Bezug in der Datei.'), true);
-      return;
-    }
-    let count = 0;
-    for (const candidate of candidates) {
-      try {
-        await dispatchSupportCommand(buildSupportCommand({
-          commandType: 'support.conversation.open_from_thread',
-          payload: { thread_key: candidate.thread_key, inbox_id: candidate.inbox_id },
-          surface: 'support.conversation.open_from_thread',
-        }));
-        count += 1;
-      } catch (error) {
-        console.warn('[support] open_from_thread import failed', error);
-      }
-    }
-    showToast(`${count} · ${state.t('importDone', 'Konversationen aus Threads geöffnet.')}`, count === 0);
+    if (!file || !api) return;
+    importSupportText(await file.text());
   });
   input.click();
 }
 
-function showToast(message, isError = false) {
-  const show = state.ctx?.notifications?.show;
-  if (typeof show === 'function') {
-    show({ type: isError ? 'error' : 'success', title: state.t('kicker', 'Support Desk'), message: String(message || ''), time: 6000 });
-    return;
+function importSupportText(text) {
+  const api = state.api;
+  if (!api) return 0;
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    api.status.clear('support.import.empty');
+    api.status.report({ level: 'warn', code: 'support.import.invalid', text: state.t('importInvalid', 'Ungültige JSON-Datei.') });
+    return 0;
   }
-  setStatus(message, isError);
+  api.status.clear('support.import.invalid');
+  const candidates = parseSupportImport(parsed);
+  if (!candidates.length) {
+    api.status.report({ level: 'warn', code: 'support.import.empty', text: state.t('importEmpty', 'Keine Konversationen mit Thread-Bezug in der Datei.') });
+    return 0;
+  }
+  api.status.clear('support.import.empty');
+  let count = 0;
+  for (const candidate of candidates) {
+    const handle = dispatchSupportCommand(buildSupportCommand({
+      commandType: 'support.conversation.open_from_thread',
+      payload: { thread_key: candidate.thread_key, inbox_id: candidate.inbox_id },
+      surface: 'support.conversation.open_from_thread',
+    }));
+    if (handle) count += 1;
+  }
+  return count;
 }
 
 // Compose the three grammar axes: band (ownership/urgency queue) selects the
@@ -1309,6 +1285,7 @@ function selectedConversationWithCurrentControls() {
   const item = selectedConversation();
   if (!item) return null;
   const root = rootEl();
+  if (!root) return item;
   const status = String(root.querySelector('[data-support-control="status"]')?.value || '').trim();
   const priority = String(root.querySelector('[data-support-control="priority"]')?.value || '').trim();
   return {
@@ -1398,7 +1375,8 @@ function pruneOptimisticState() {
 }
 
 function currentUserId() {
-  return String(state.ctx?.session?.user?.id || state.ctx?.session?.userId || '').trim();
+  // Nur Spiegel (api.actor); entschieden wird im Core.
+  return String(state.api?.actor?.id || '').trim();
 }
 
 function timelineRows(item) {
@@ -1460,16 +1438,23 @@ function suggestionsFor(conversationId) {
     .sort((a, b) => Number(b.updated_at_ms || 0) - Number(a.updated_at_ms || 0));
 }
 
+// v4 command documents are {id, type, payload, status, app_id, actor_id, created_at, record_id?};
+// older projected rows (module/command_type/client_context) are still read.
 function businessCommandsFor(item) {
   return (state.data.business_commands || [])
     .filter((command) => {
-      const moduleId = command.module || command.client_context?.module || command.payload?.source_module;
-      const recordId = command.record_id || command.client_context?.record_id || command.payload?.record_id;
+      const moduleId = command.app_id || command.module || command.payload?.client_context?.module || command.client_context?.module || command.payload?.source_module;
+      const recordId = command.record_id || command.payload?.client_context?.record_id || command.client_context?.record_id || command.payload?.record_id || command.payload?.conversation_id;
       const threadKey = command.payload?.thread_key || command.client_context?.thread_key;
       return moduleId === 'support'
         && (recordId === item.id || threadKey === `business-os/support/${item.id}`);
     })
-    .sort((a, b) => Number(b.updated_at_ms || b.created_at_ms || 0) - Number(a.updated_at_ms || a.created_at_ms || 0));
+    .sort((a, b) => commandTime(b) - commandTime(a));
+}
+
+function commandTime(command) {
+  const parsed = Date.parse(String(command.created_at || ''));
+  return Number(command.updated_at_ms || command.created_at_ms || 0) || (Number.isFinite(parsed) ? parsed : 0);
 }
 
 function queueTasksFor(item, commands = businessCommandsFor(item)) {
@@ -1517,28 +1502,6 @@ function supportSnapshot(item) {
   };
 }
 
-function supportWritebackContract(conversationId) {
-  return {
-    command_type: 'support.agent.writeback',
-    collection: 'support_agent_suggestions',
-    record_id: conversationId,
-    source_collection: 'support_conversations',
-    allowed_suggestion_kinds: [...SUPPORT_AGENT_SUGGESTION_KINDS],
-    required_human_action: 'review',
-  };
-}
-
-function buildAgentInstruction(item) {
-  return [
-    'Analysiere diese CTOX Support-Konversation.',
-    'Liefere eine knappe Zusammenfassung, Risiko-/SLA-Einschaetzung, Antwortentwurf und naechste Aktion.',
-    'Nutze den writeback_contract aus dem Command und schreibe strukturierte Vorschlaege fuer support.agent.writeback zurueck.',
-    `Conversation: ${item.id}`,
-    `Status: ${item.status || 'open'}`,
-    `Priority: ${item.priority || 'normal'}`,
-  ].join('\n');
-}
-
 function timelineText(row) {
   const payload = row.payload || {};
   if (row.kind === 'note') return payload.body || '';
@@ -1554,19 +1517,83 @@ function timelineLabel(row) {
   if (row.kind === 'agent_suggestion') return state.t('agentLabel', 'CTOX Vorschlag');
   if (row.kind === 'message' && payload.chat_id) return state.t('chatLabel', 'CTOX Chat');
   if (row.kind === 'message') {
-    return [payload.direction, payload.channel].filter(Boolean).join(' · ') || state.t('messageLabel', 'Nachricht');
+    return [...new Set([wordLabel(MESSAGE_LABELS, payload.direction), wordLabel(MESSAGE_LABELS, payload.channel)].filter(Boolean))].join(' · ') || state.t('messageLabel', 'Nachricht');
   }
   return state.t('messageLabel', 'Nachricht');
 }
 
+// Konversationstitel wie Zendesk (Ticket-Betreff = Betreff der ersten Nachricht): Betreff der ersten Nachricht,
+// sonst der Anfang ihres Texts (max. 60 Zeichen), sonst „Anfrage von <Name>“. Nie Suchtext oder eine ID.
+const TITLE_MAX = 60;
+
 function conversationLabel(item) {
-  return item.search_text
-    || item.customer_account_id
-    || item.customer_contact_id
-    || item.ticket_case_id
-    || item.primary_thread_key
-    || item.id
-    || 'Support';
+  const first = firstMessageFor(item);
+  const subject = cleanLine(first?.subject);
+  if (subject) return clip(subject, TITLE_MAX);
+  const body = cleanLine(first?.body_text || first?.preview || stripTags(first?.body_html));
+  if (body) return clip(body, TITLE_MAX);
+  const name = requesterName(item, first);
+  return name ? state.t('requestFrom', 'Anfrage von {0}').replace('{0}', name) : state.t('requestUntitled', 'Anfrage');
+}
+
+// Erste Nachricht je Konversation über die Thread-Schlüssel; Index je Nachrichten-Array (eine Liste rendert
+// viele Zeilen, das Filtern aller Nachrichten je Zeile wäre O(Zeilen × Nachrichten)).
+let firstMessageIndex = { source: null, byThread: new Map() };
+function firstMessageFor(item) {
+  const messages = state.data.communication_messages || [];
+  if (firstMessageIndex.source !== messages) {
+    const byThread = new Map();
+    for (const message of messages) {
+      if (!message?.thread_key) continue;
+      const prev = byThread.get(message.thread_key);
+      if (!prev || timestampForMessage(message) < timestampForMessage(prev)) byThread.set(message.thread_key, message);
+    }
+    firstMessageIndex = { source: messages, byThread };
+  }
+  let first = null;
+  for (const key of threadKeysFor(item)) {
+    const candidate = firstMessageIndex.byThread.get(key);
+    if (candidate && (!first || timestampForMessage(candidate) < timestampForMessage(first))) first = candidate;
+  }
+  return first;
+}
+
+function requesterName(item, first) {
+  const contact = customerContactFor(item);
+  const contactName = contactDisplayName(contact);
+  if (contactName) return contactName;
+  const sender = cleanLine(first?.sender_display);
+  if (sender) return sender;
+  const account = customerAccountFor(item);
+  return cleanLine(account?.name || account?.display_name) || cleanLine(contact?.email || first?.sender_address);
+}
+
+function contactDisplayName(contact) {
+  return cleanLine([contact?.first_name, contact?.last_name].filter(Boolean).join(' ') || contact?.name || contact?.display_name);
+}
+
+// Textdiät Regel 4: technische Referenzen (team-001, uuid, Hex) nie anzeigen; lesbare Werte bleiben.
+function readableRef(value) {
+  const v = cleanLine(value);
+  if (!v) return '';
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) return '';
+  if (/^[a-z]+(?:[-_][a-z]+)*[-_:]{1,2}[0-9a-z_-]*\d[0-9a-z_-]*$/i.test(v) || /^[0-9a-f]{12,}$/i.test(v)) return '';
+  return v;
+}
+
+function cleanLine(value) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function stripTags(html) {
+  return String(html ?? '').replace(/<[^>]*>/g, ' ');
+}
+
+function clip(value, max) {
+  if (value.length <= max) return value;
+  const cut = value.slice(0, max - 1);
+  const space = cut.lastIndexOf(' ');
+  return (space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,.;:–-]+$/, '') + '…';
 }
 
 function isSlaRisk(item) {
@@ -1578,8 +1605,29 @@ function isClosed(item) {
   return ['resolved', 'closed', 'done'].includes(String(item.status || '').toLowerCase());
 }
 
+// Textdiät Regel 4: Status/Priorität/Kanal in deutschen Nutzerbegriffen (Zendesk DE); unbekannte Rohwerte bleiben
+// unsichtbar statt als „needs_review“/„all“ in der Liste zu stehen.
+const STATUS_LABELS = Object.freeze({
+  de: { new: 'Neu', open: 'Offen', waiting: 'Wartend', pending: 'Wartend', on_hold: 'Angehalten', resolved: 'Gelöst', solved: 'Gelöst', closed: 'Geschlossen', completed: 'Erledigt', done: 'Erledigt', failed: 'Fehlgeschlagen', cancelled: 'Abgebrochen', snoozed: 'Zurückgestellt' },
+  en: { new: 'New', open: 'Open', waiting: 'Waiting', pending: 'Pending', on_hold: 'On hold', resolved: 'Resolved', solved: 'Solved', closed: 'Closed', completed: 'Completed', done: 'Done', failed: 'Failed', cancelled: 'Cancelled', snoozed: 'Snoozed' }, // v4-allow: en; v4-allow: label (Ticketstatus, Fachbegriff)
+});
+const PRIORITY_LABELS = Object.freeze({
+  de: { low: 'Niedrig', normal: 'Normal', high: 'Hoch', urgent: 'Dringend' },
+  en: { low: 'Low', normal: 'Normal', high: 'High', urgent: 'Urgent' },
+});
+const MESSAGE_LABELS = Object.freeze({
+  de: { inbound: 'Eingehend', outbound: 'Ausgehend', email: 'E-Mail', mail: 'E-Mail', chat: 'Chat', phone: 'Telefon', sms: 'SMS', whatsapp: 'WhatsApp', web: 'Web' },
+  en: { inbound: 'Inbound', outbound: 'Outbound', email: 'Email', mail: 'Email', chat: 'Chat', phone: 'Phone', sms: 'SMS', whatsapp: 'WhatsApp', web: 'Web' },
+});
+function wordLabel(table, value) {
+  const key = String(value || '').trim().toLowerCase();
+  return (table[state.lang] || table.de)[key] || '';
+}
 function displayStatus(status) {
-  return String(status || 'open').replace(/_/g, ' ');
+  return wordLabel(STATUS_LABELS, status || 'open');
+}
+function displayPriority(priority) {
+  return wordLabel(PRIORITY_LABELS, priority || 'normal');
 }
 
 function fact(label, value) {
@@ -1598,33 +1646,8 @@ function normalizeControlValue(value, fallback) {
   return String(value || fallback || '').trim().toLowerCase();
 }
 
-function setStatus(message, isError = false) {
-  const status = rootEl().querySelector('[data-support-status]');
-  if (!status) return;
-  status.textContent = message || '';
-  status.classList.toggle('is-error', Boolean(isError));
-}
-
-function renderEmptyState(title, body) {
-  return `
-    <div class="ctox-empty">
-      <strong>${escapeHtml(title)}</strong>
-      <span>${escapeHtml(body)}</span>
-    </div>
-  `;
-}
-
-function renderSyncingState(title, body) {
-  return `
-    <div class="ctox-syncing" role="status" aria-live="polite">
-      <strong>${escapeHtml(title)}</strong>
-      <span>${escapeHtml(body)}</span>
-    </div>
-  `;
-}
-
 function rootEl() {
-  return state.ctx.host.querySelector('[data-support-root]');
+  return state.root?.querySelector('[data-support-root]') || null;
 }
 
 function formatTime(value) {
@@ -1651,22 +1674,10 @@ function nextMorningMs() {
   return next.getTime();
 }
 
-function localMessagesLoadedLabel(count) {
-  return state.lang === 'en'
-    ? `${count} local messages loaded`
-    : `${count} Nachrichten lokal geladen`;
-}
-
-function withTimeout(promise, timeoutMs, fallback) {
-  return Promise.race([
-    Promise.resolve(promise),
-    new Promise((resolve, reject) => {
-      window.setTimeout(() => {
-        if (fallback === null) resolve(null);
-        else reject(new Error(fallback || 'timeout'));
-      }, timeoutMs);
-    }),
-  ]);
+function messageCountLabel(count) {
+  const n = Number(count) || 0;
+  if (state.lang === 'en') return `${n} ${n === 1 ? 'message' : 'messages'}`;
+  return `${n} ${n === 1 ? 'Nachricht' : 'Nachrichten'}`;
 }
 
 function escapeHtml(value) {
@@ -1683,7 +1694,6 @@ function escapeAttr(value) {
 }
 
 export const __supportTestHooks = {
-  buildAgentInstruction,
   renderConversationRow,
   supportSnapshot,
   timelineRows,
@@ -1692,5 +1702,7 @@ export const __supportTestHooks = {
   computeContextVisible,
   buildSupportExport,
   parseSupportImport,
-  resolveConversationListState,
+  importSupportText,
+  businessCommandsFor,
+  conversationLabel,
 };

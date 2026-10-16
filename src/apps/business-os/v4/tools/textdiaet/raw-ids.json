@@ -1,0 +1,271 @@
+[
+ {
+  "id": "app-store",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "appsec-pentest",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "browser",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "buchhaltung",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "calendar",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "coding-agents",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "consent",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "conversations",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "creator",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "credentials",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "ctox",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "customers",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "cv-print-builder",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "desktop",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "documents",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "esign",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "explorer",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "file-viewer",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "importer",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "intake",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "interviews",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "invoices",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "iot",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "knowledge",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "kundenpipeline",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "mail",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "matching",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "nachweise",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "news",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "notes",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "outbound-lead-generation",
+  "ok": false,
+  "error": "keine Laborkonfiguration: ENOENT: no such file or directory, scandir '/Users/michaelwelsch/Documents/ctox-shell-v4/src/apps/business-os/modules/ou",
+  "hits": []
+ },
+ {
+  "id": "outbound",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "placements",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "reports",
+  "ok": true,
+  "hits": [
+   {
+    "kind": "slug-id",
+    "value": "module-001",
+    "context": "Kundenportal Bugs Offen Hoch module-001 · 14.10.26, 05:30 Projektplan"
+   },
+   {
+    "kind": "slug-id",
+    "value": "module-002",
+    "context": "ung 2026 Bugs Erledigt Mittel module-002 · 13.10.26, 03:30 Lieferanten"
+   },
+   {
+    "kind": "slug-id",
+    "value": "module-003",
+    "context": "eitende Bugs Erledigt Niedrig module-003 · 12.10.26, 01:30 Onboarding"
+   }
+  ]
+ },
+ {
+  "id": "research",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "shiftflow",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "spreadsheets",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "submissions",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "support",
+  "ok": true,
+  "hits": [
+   {
+    "kind": "slug-id",
+    "value": "team-001",
+    "context": "ITÄT all ZUORDNUNG owner TEAM team-001 KUNDE account-001 TICKET case"
+   },
+   {
+    "kind": "slug-id",
+    "value": "account-001",
+    "context": "UNG owner TEAM team-001 KUNDE account-001 TICKET case-001 AKTUALISIERT"
+   },
+   {
+    "kind": "slug-id",
+    "value": "case-001",
+    "context": "-001 KUNDE account-001 TICKET case-001 AKTUALISIERT 13. Okt., 20:30"
+   }
+  ]
+ },
+ {
+  "id": "threads",
+  "ok": true,
+  "hits": []
+ },
+ {
+  "id": "tickets",
+  "ok": true,
+  "hits": [
+   {
+    "kind": "slug-id",
+    "value": "item-001",
+    "context": "Geschlossen (0) Ticket Offen item-001 · ctox Ticket Offen item-002"
+   },
+   {
+    "kind": "slug-id",
+    "value": "item-002",
+    "context": "item-001 · ctox Ticket Offen item-002 · ctox Ticket Offen item-003"
+   },
+   {
+    "kind": "slug-id",
+    "value": "item-003",
+    "context": "item-002 · ctox Ticket Offen item-003 · ctox Ticket Offen item-004"
+   },
+   {
+    "kind": "slug-id",
+    "value": "item-004",
+    "context": "item-003 · ctox Ticket Offen item-004 · ctox Ticket Offen item-005"
+   },
+   {
+    "kind": "slug-id",
+    "value": "item-005",
+    "context": "item-004 · ctox Ticket Offen item-005 · ctox Ticket Offen item-006"
+   },
+   {
+    "kind": "slug-id",
+    "value": "item-006",
+    "context": "item-005 · ctox Ticket Offen item-006 · ctox Ticket Offen VERLAUF E"
+   }
+  ]
+ }
+]

@@ -6,8 +6,7 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-copy="kicker">VORSTELLUNGEN</span>
-          <h2 class="ctox-pane-title" data-copy="listTitle" data-subs-title>Kandidaten</h2>
+          <h2 class="ctox-pane-title" data-copy="listTitle" data-subs-title>Vorstellungen</h2>
         </div>
         <div class="ctox-pane-actions">
           <button type="button" class="ctox-pane-icon" data-action="new" aria-label="Neu" title="Neu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
@@ -56,7 +55,6 @@
     <div class="ctox-pane-body ctox-well">
       <div class="ctox-list" data-subs-list></div>
     </div>
-    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
   </aside>
 
   <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="260" data-resizer-max="520" aria-label="Spaltenbreite anpassen"></button>
@@ -67,7 +65,6 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-subs-wb-kicker data-copy="composerKicker">NEUE VORSTELLUNG</span>
           <h2 class="ctox-pane-title" data-subs-wb-title data-copy="composerTitle">Kandidat vorstellen</h2>
         </div>
         <div class="ctox-pane-actions">
@@ -78,10 +75,10 @@
     <div class="ctox-pane-scroll subs-workbench-scroll">
       <form class="ctox-compact-form" data-subs-form>
         <div class="ctox-compact-form__fields">
-          <label class="ctox-compact-field"><span data-copy="candidate">Kandidat-ID</span><input class="ctox-input" type="text" name="candidate_id" required data-subs-field="candidate_id" /></label>
-          <label class="ctox-compact-field"><span data-copy="client">Kunden-Account-ID</span><input class="ctox-input" type="text" name="client_account_id" required data-subs-field="client_account_id" /></label>
+          <label class="ctox-compact-field"><span data-copy="candidate">Kandidat</span><input class="ctox-input" type="text" name="candidate_id" required data-subs-field="candidate_id" /></label>
+          <label class="ctox-compact-field"><span data-copy="client">Kunde</span><input class="ctox-input" type="text" name="client_account_id" required data-subs-field="client_account_id" /></label>
         </div>
-        <div class="ctox-compact-form__actions"><button type="submit" class="ctox-button is-primary" data-copy="present">Vorstellen</button></div>
+        <div class="ctox-compact-form__actions"><button type="button" class="ctox-button" data-action="cancel-new" data-copy="cancelNew">Abbrechen</button><button type="submit" class="ctox-button is-primary" data-copy="present">Vorstellen</button></div>
         <details class="subs-more">
           <summary data-copy="more">Weitere Angaben</summary>
           <div class="ctox-compact-form__fields">
@@ -90,9 +87,7 @@
           </div>
         </details>
       </form>
-      <div class="ctox-callout" data-subs-gate></div>
       <div class="subs-detail" data-subs-detail></div>
     </div>
-    <footer class="ctox-pane-footer"><span data-subs-wb-footer></span></footer>
   </section>
 </main>

@@ -54,7 +54,6 @@
     <div class="ctox-pane-body ctox-well">
       <div class="ctox-list" data-esign-list></div>
     </div>
-    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
   </aside>
 
   <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="260" data-resizer-max="520" aria-label="Spaltenbreite anpassen"></button>
@@ -65,7 +64,6 @@
     <header class="ctox-pane-header ctox-pane-band" data-shell-v2-header-row="1">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-esign-wb-kicker data-copy="composerKicker">NEUE ANFRAGE</span>
           <h2 class="ctox-pane-title" data-esign-wb-title data-copy="composerTitle">Signatur anfordern</h2>
         </div>
         <div class="ctox-pane-actions">
@@ -76,15 +74,15 @@
     <div class="ctox-pane-scroll esign-workbench-scroll">
       <form class="ctox-compact-form" data-esign-form>
         <div class="ctox-compact-form__fields">
-          <label class="ctox-compact-field"><span data-copy="document">Dokument-ID</span><input class="ctox-input" type="text" name="document_id" required data-esign-field="document_id" /></label>
+          <!-- Dokument aus der Liste wählen (DocuSign/Adobe Sign: „Dokument hinzufügen“ aus der Ablage), nie eine ID tippen. -->
+          <div class="ctox-compact-field esign-picker" data-esign-doc-picker><span data-copy="document">Dokument</span><input type="hidden" name="document_id" data-esign-field="document_id" /><div class="esign-picked" data-esign-doc-picked hidden></div><input class="ctox-input" type="search" autocomplete="off" data-esign-doc-search data-copy-placeholder="documentSearch" placeholder="Dokument suchen" aria-label="Dokument suchen" /><div class="esign-options" role="listbox" data-esign-doc-options hidden></div></div>
           <label class="ctox-compact-field"><span data-copy="subjectKind">Vertragstyp</span><select class="ctox-select" name="subject_kind" data-esign-field="subject_kind"><option value="arbeitsvertrag" data-copy="employment">Arbeitsvertrag</option><option value="vermittlungsvertrag" data-copy="placement">Vermittlungsvertrag</option><option value="ueberlassungsvertrag" data-copy="staffing">Überlassungsvertrag</option></select></label>
-          <label class="ctox-compact-field"><span data-copy="signers">Unterzeichner</span><input class="ctox-input" type="text" name="signers" data-esign-field="signers" /></label>
+          <!-- Empfänger wie DocuSign: Personenauswahl, je Zeile Name, E-Mail, Rolle; Reihenfolge = Signierreihenfolge. -->
+          <div class="ctox-compact-field esign-picker esign-picker--wide" data-esign-signer-picker><span data-copy="signers">Unterzeichner</span><ol class="esign-recipients" data-esign-recipients></ol><input class="ctox-input" type="search" autocomplete="off" data-esign-person-search data-copy-placeholder="signerSearch" placeholder="Person hinzufügen" aria-label="Person hinzufügen" /><div class="esign-options" role="listbox" data-esign-person-options hidden></div></div>
         </div>
         <div class="ctox-compact-form__actions"><button class="ctox-button is-primary" type="submit" data-copy="create">Anlegen</button></div>
       </form>
-      <div class="ctox-callout" data-esign-gate></div>
       <div class="esign-detail" data-esign-detail></div>
     </div>
-    <footer class="ctox-pane-footer"><span data-esign-wb-footer></span></footer>
   </section>
 </main>

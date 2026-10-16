@@ -1,0 +1,1203 @@
+{
+  "_capability_evidence": {},
+  "_declaration": "modules/invoices/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/invoices/index.html",
+  "_rust_basis": "`rs:invoices.rs` 2 883 Z. (nur dieses Modul), Routing `rs:command_plane.rs:2269` (`starts_with(\"invoices.\")`).",
+  "_source_dir": "src/apps/business-os/modules/invoices",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "invoices",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [],
+  "collections": {
+    "accounting_credit_notes": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/invoices.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "invoice_id"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "corrective_invoice_number": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "credit_note_invoice_id": {
+            "type": "string"
+          },
+          "delta_gross_cents": {
+            "type": "number"
+          },
+          "delta_net_cents": {
+            "type": "number"
+          },
+          "delta_tax_cents": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "invoice_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "reason_text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "invoice_id",
+          "credit_note_invoice_id",
+          "created_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "accounting_dunning_letters": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/invoices.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "invoice_id",
+          "dunning_run_id"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "created_at_ms": {
+            "type": "number"
+          },
+          "dunning_run_id": {
+            "type": "string"
+          },
+          "fee_cents": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "interest_cents": {
+            "type": "number"
+          },
+          "invoice_id": {
+            "type": "string"
+          },
+          "letter_date_ms": {
+            "type": "number"
+          },
+          "level": {
+            "type": "number"
+          },
+          "pdf_attachment_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sent_at_ms": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "sent_via": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "total_cents": {
+            "type": "number"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "dunning_run_id",
+          "invoice_id",
+          "level",
+          "letter_date_ms",
+          "total_cents",
+          "status",
+          "created_at_ms"
+        ],
+        "type": "object",
+        "version": 1
+      }
+    },
+    "accounting_dunning_runs": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/invoices.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "created_at_ms": {
+            "type": "number"
+          },
+          "filter": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "invoices_total": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "letters_sent": {
+            "type": "number"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "run_by": {
+            "type": "string"
+          },
+          "run_date_ms": {
+            "type": "number"
+          },
+          "state": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "run_date_ms",
+          "invoices_total",
+          "state",
+          "created_at_ms"
+        ],
+        "type": "object",
+        "version": 1
+      }
+    },
+    "accounting_invoice_approvals": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/invoices.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "invoice_id"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "actor_user_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "decision": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "invoice_id": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "revision_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "invoice_id",
+          "decision",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "accounting_invoice_attachments": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/invoices.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "invoice_id"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "created_at_ms": {
+            "type": "number"
+          },
+          "desktop_file_id": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "invoice_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "invoice_id",
+          "kind",
+          "desktop_file_id",
+          "created_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "accounting_invoice_lines": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/invoices.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "invoice_id"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "account_code": {
+            "type": "string"
+          },
+          "article_number": {
+            "type": "string"
+          },
+          "cost_center_id": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "discount_percent": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "invoice_id": {
+            "type": "string"
+          },
+          "line_gross_cents": {
+            "type": "number"
+          },
+          "line_net_cents": {
+            "type": "number"
+          },
+          "line_tax_cents": {
+            "type": "number"
+          },
+          "position": {
+            "type": "number"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "number"
+          },
+          "service_period_end_ms": {
+            "type": "number"
+          },
+          "service_period_start_ms": {
+            "type": "number"
+          },
+          "tax_rate": {
+            "type": "number"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "unit_price_cents": {
+            "type": "number"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "invoice_id",
+          "position",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "accounting_invoices": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/invoices.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "party_id",
+          "state",
+          "invoice_date_ms",
+          "due_date_ms",
+          "invoice_number",
+          "updated_at_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "approval_id": {
+            "type": "string"
+          },
+          "approval_status": {
+            "type": "string"
+          },
+          "cancel_journal_entry_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "credit_note_for_id": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "draft_status": {
+            "type": "string"
+          },
+          "due_date_ms": {
+            "type": "number"
+          },
+          "dunning_level": {
+            "type": "number"
+          },
+          "eu_ic_supply": {
+            "type": "boolean"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "invoice_date_ms": {
+            "type": "number"
+          },
+          "invoice_number": {
+            "type": "string"
+          },
+          "invoice_type": {
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "last_dunning_run_id": {
+            "type": "string"
+          },
+          "linked_invoice_id": {
+            "type": "string"
+          },
+          "open_cents": {
+            "type": "number"
+          },
+          "paid_cents": {
+            "type": "number"
+          },
+          "party_id": {
+            "type": "string"
+          },
+          "party_snapshot": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "payment_terms_id": {
+            "type": "string"
+          },
+          "pdf_attachment_id": {
+            "type": "string"
+          },
+          "post_journal_entry_id": {
+            "type": "string"
+          },
+          "proposal_status": {
+            "type": "string"
+          },
+          "reverse_charge": {
+            "type": "boolean"
+          },
+          "search_text": {
+            "type": "string"
+          },
+          "service_period_end_ms": {
+            "type": "number"
+          },
+          "service_period_start_ms": {
+            "type": "number"
+          },
+          "skonto_days": {
+            "type": "number"
+          },
+          "skonto_percent": {
+            "type": "number"
+          },
+          "small_business": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string"
+          },
+          "state_changed_at_ms": {
+            "type": "number"
+          },
+          "state_changed_by_command_id": {
+            "type": "string"
+          },
+          "subtotal_cents": {
+            "type": "number"
+          },
+          "tax_breakdown": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "tax_cents": {
+            "type": "number"
+          },
+          "total_cents": {
+            "type": "number"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "xrechnung_xml": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "invoice_type",
+          "state",
+          "currency",
+          "search_text",
+          "is_deleted",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "accounting_payment_allocations": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/invoices.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "payment_id",
+          "invoice_id"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "allocated_at_ms": {
+            "type": "number"
+          },
+          "allocated_by_command_id": {
+            "type": "string"
+          },
+          "allocated_cents": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "invoice_id": {
+            "type": "string"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "payment_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "skonto_cents": {
+            "type": "number"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "payment_id",
+          "invoice_id",
+          "allocated_cents",
+          "allocated_at_ms"
+        ],
+        "type": "object",
+        "version": 1
+      }
+    },
+    "accounting_payment_terms": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/invoices.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "is_default": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "net_days": {
+            "type": "number"
+          },
+          "skonto_days": {
+            "type": "number"
+          },
+          "skonto_percent": {
+            "type": "number"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "net_days",
+          "is_default",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "accounting_payments": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/invoices.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "party_id",
+          "payment_date_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "amount_cents": {
+            "type": "number"
+          },
+          "bank_statement_line_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "party_id": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "payment_date_ms": {
+            "type": "number"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "payment_date_ms",
+          "amount_cents",
+          "currency",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "accounting_recurring_invoices": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/invoices.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "auto_send": {
+            "type": "boolean"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "end_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "interval": {
+            "type": "string"
+          },
+          "interval_count": {
+            "type": "number"
+          },
+          "last_run_at_ms": {
+            "type": "number"
+          },
+          "next_run_at_ms": {
+            "type": "number"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "start_at_ms": {
+            "type": "number"
+          },
+          "template_invoice_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "template_invoice_id",
+          "interval",
+          "interval_count",
+          "start_at_ms",
+          "auto_send",
+          "active",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    }
+  },
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {
+    "accounting_invoices": [
+      "read",
+      "write"
+    ]
+  },
+  "files": {
+    "README.md": "834c24338a54dbeafea39adcb3fb15c9d41ab89eaa43a0208a78ad9bb4982b6f",
+    "V4-HANDLERS.md": "f5fd86246db4c7d6067ee35de9a10f53ab60b59506c123f305db9d687bdccd9e",
+    "V4-PORT.md": "032cfb3c54d9c9060ba104dec1057f38f5bbf69bde18ceab142fc515b8c7069a",
+    "assets/icon.jpg": "404231732d718b4d6fff19d3f39e4ad26b15f2720d5683f8e88b7618d1c8720a",
+    "assets/icon@512.jpg": "0d11d581676f32c4af591a59af6ef10984e6b79aa3b304857444500689ef43c1",
+    "collections.schema.json": "90fa11bf64c010cc90003bbbb53c89a43ae59d6cc2359d2d12f8538cbb574089",
+    "commands/builders.js": "98e8619262a5b7746d19eb01411c54476459e3f7643207b3032e1a9da02734e2",
+    "core/invoice-numbering.js": "1a80186144af0347d4f6ecd7b71c3241e518e5ca300271545f8c79d24f5a3b0d",
+    "core/invoice-poster.js": "e93879cd3fd5bcd68280a6f4d43c3cd615769ef4fb4f4dc3d6c63e40951717b8",
+    "core/invoice-tax.js": "7084791819c21ead10b0ead7ca7164c67f97b4c9bd0d93645b38298263355093",
+    "core/invoice-types.js": "636c677a987dfab7f681e9f2dc7b41982152198887d43b9fa85191dc413a0c29",
+    "core/invoice-validate.js": "8322089ada967d2b168604a26aab2810582cac64750abca2ecafe1c45d810593",
+    "core/invoice-xrechnung.js": "ca80fa9afe7035c352fad2fa8180aefffbe3297e150a04b02b7a64786ce69c40",
+    "handlers/_lib/invoices.js": "5ffc2c3a7ac1ea7eb8fc9a4075eabcc2ae06aa27f17043b93d0bd41b420e86b8",
+    "handlers/invoices.dunning.letter.send.js": "18d4dd454e4bab0db70ba6a8a3e60dae41bf7dd2ec4f8b4ccc544bbfd18fd5e2",
+    "handlers/invoices.dunning.run.js": "f6312252b7ce92d2e369245fe8beadd5f37df309fad433daf25d21e1c6687b6a",
+    "handlers/invoices.import.from_outbound.js": "322a539b76261d76d44da9df70577221046165047636ee3398b0fd8803e13821",
+    "handlers/invoices.invoice.assign_payment_terms.js": "52db7ba28a6c5c02eb62ff9d54489bc8710455a18346112fe16f8d663c095165",
+    "handlers/invoices.invoice.cancel.js": "c395a035c51a65466079b0c38077f8a9b1fe28d7ef81ddba1aaa6d19c20b87c2",
+    "handlers/invoices.invoice.create.js": "07baa1df58f7a93d83be0d81d966f25a5211d951d25b46c621e4b40e1baef217",
+    "handlers/invoices.invoice.create_credit_note.js": "22b0b170caac3ecaadf8f25de2f2c57810f139150f21ca968206ee925f7d1425",
+    "handlers/invoices.invoice.delete.js": "82ddccf8158e96f7b072feb572528c8d98a3124719cf878d7d19b6c83653bfed",
+    "handlers/invoices.invoice.post.js": "13c1cd32cc13fec70542ff0e553e3e7150b8ef41a012c6d05b974fda8c68bb05",
+    "handlers/invoices.invoice.update.js": "93a8e9ee84be36f99c2b5fa6c9fd87674075ca8f8fef2569147a75b9b4473eaa",
+    "handlers/invoices.line.create.js": "1fca99d00392fcf08aba29e908d36036706aaeeec44caba2982a9f232e1d0839",
+    "handlers/invoices.line.delete.js": "52ee3970e124799ef3ad91d8339c6670b0c3a5f392d36ca30be2cd65df68e625",
+    "handlers/invoices.line.update.js": "48d33c3808860949cc4cbf5ca7b271d34c4b630209787371319b8012f7f865b3",
+    "handlers/invoices.payment.allocate.js": "f65d6707375e53945af59cd6b6bcbd5639effe5fcd50c6fb81f39f31fcd5dfc1",
+    "handlers/invoices.payment.match_suggestions.js": "937e3a01aa6dcd8800f1a2174b5ee66f2b8832cd3ed8b6c67d279a3870077025",
+    "handlers/invoices.payment.unallocate.js": "158cc1dc95750b7e2b31f9b4c2f194f11951eec0496ac75fcb7f23c31742df76",
+    "handlers/invoices.proposal.approve.js": "648d666fcbaa0d63e0a36e323985088d0c58483e8dec63944c75b1d1ebbbab79",
+    "handlers/invoices.proposal.create.js": "bbea88d97e2d08479478a428f3a18f89fe6c9a4278e50ce4c9af817aebe323f2",
+    "handlers/invoices.proposal.reject.js": "aa8aaafe0f762e7956933c4eb73200cab0887c2cabc2996213b8656c0e327b02",
+    "handlers/invoices.recurring.create.js": "55b5d7e5fe7f9a78cce7246587597636af518e7dfd17fbb508fca0bfe2009f4b",
+    "handlers/invoices.recurring.pause.js": "e72823d8220fe1c584522694a554f8e3f0220164144cec53c71fa6173b35515e",
+    "handlers/invoices.recurring.run.js": "e692144c114f97ca16b9ebd86a2764e0e6b4dbfde02d82e8de0360f74554a2ed",
+    "handlers/invoices.recurring.update.js": "0ec49d08e9889645bb6201899e2411bff1d0dec1b7fe10490ae0980fe08b18f9",
+    "icon.svg": "1a07d8a008532a808b0949a1bf9aaaf6535546d8e7c68d04a652f29d8f1a0dd7",
+    "index.css": "d9dad90821bfd695a2ea505ca490d60c8b8adb552b17ee4d52cc476509882269",
+    "index.html": "91fb18afa9778b57eb50abb05d4114ed8eb76524a7f05fa9bce8f67f0eb2e3ab",
+    "index.js": "972a78f4e380df7e9a09fffb63bfdd34ac053c2416c968453de11e61a0e8edfa",
+    "locales/de.json": "44dba6ed129d23b00ad8bd3098ae7931026ea9bb7fcb0c06c8eb10986c39fed1",
+    "locales/en.json": "1f817156bf737dcf543721fe79d815574310bf6c4b738c732cbda8c2ae7fdd63",
+    "module.json": "615d980a92d43320a188c1f36674d209861fc021d8b0225633028287d18360e2",
+    "v4-manifest.json": "f7d07cf0f214974c7eca3c6638bf68d02775fe9475ff630ab214c55f14af473b"
+  },
+  "foreign_collections": {
+    "accounting_accounts": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "sources": [
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "buchhaltung"
+    },
+    "accounting_bank_statement_lines": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "sources": [
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "buchhaltung"
+    },
+    "accounting_journal_entries": {
+      "_evidence": {
+        "code_read": [
+          "core/invoice-poster.js:7",
+          "handlers/_lib/invoices.js:12",
+          "index.js:134"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/invoices/V4-HANDLERS.md „Fremd-Collections“; modules/invoices/V4-PORT.md OFFEN 3 (customer_accounts)",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read",
+        "write"
+      ],
+      "owner_app": "buchhaltung"
+    },
+    "accounting_journal_entry_lines": {
+      "_evidence": {
+        "code_read": [
+          "core/invoice-poster.js:8",
+          "core/invoice-poster.js:11",
+          "handlers/_lib/invoices.js:13"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/invoices/V4-HANDLERS.md „Fremd-Collections“; modules/invoices/V4-PORT.md OFFEN 3 (customer_accounts)",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read",
+        "write"
+      ],
+      "owner_app": "buchhaltung"
+    },
+    "accounting_ledger_entries": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "sources": [
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "buchhaltung"
+    },
+    "accounting_number_series": {
+      "_evidence": {
+        "code_read": [
+          "core/invoice-numbering.js:7",
+          "handlers/_lib/invoices.js:14"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/invoices/V4-HANDLERS.md „Fremd-Collections“; modules/invoices/V4-PORT.md OFFEN 3 (customer_accounts)",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read",
+        "write"
+      ],
+      "owner_app": "buchhaltung"
+    },
+    "accounting_receipts": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "sources": [
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "buchhaltung"
+    },
+    "business_commands": {
+      "_evidence": {
+        "code_read": [
+          "commands/builders.js:2",
+          "core/invoice-poster.js:48",
+          "core/invoice-types.js:5"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "customer_accounts": {
+      "_evidence": {
+        "code_read": [
+          "index.js:136",
+          "index.js:372",
+          "index.js:401"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/invoices/V4-HANDLERS.md „Fremd-Collections“; modules/invoices/V4-PORT.md OFFEN 3 (customer_accounts)",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "customers"
+    },
+    "customer_activities": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "sources": [
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "customers"
+    },
+    "desktop_file_chunks": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "sources": [
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "desktop"
+    },
+    "desktop_files": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "sources": [
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "desktop"
+    },
+    "outbound_campaigns": {
+      "_evidence": {
+        "code_read": [
+          "handlers/invoices.import.from_outbound.js:10"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "outbound"
+    }
+  },
+  "handlers": {
+    "invoices.dunning.letter.send": "handlers/invoices.dunning.letter.send.js",
+    "invoices.dunning.run": "handlers/invoices.dunning.run.js",
+    "invoices.import.from_outbound": "handlers/invoices.import.from_outbound.js",
+    "invoices.invoice.assign_payment_terms": "handlers/invoices.invoice.assign_payment_terms.js",
+    "invoices.invoice.cancel": "handlers/invoices.invoice.cancel.js",
+    "invoices.invoice.create": "handlers/invoices.invoice.create.js",
+    "invoices.invoice.create_credit_note": "handlers/invoices.invoice.create_credit_note.js",
+    "invoices.invoice.delete": "handlers/invoices.invoice.delete.js",
+    "invoices.invoice.post": "handlers/invoices.invoice.post.js",
+    "invoices.invoice.update": "handlers/invoices.invoice.update.js",
+    "invoices.line.create": "handlers/invoices.line.create.js",
+    "invoices.line.delete": "handlers/invoices.line.delete.js",
+    "invoices.line.update": "handlers/invoices.line.update.js",
+    "invoices.payment.allocate": "handlers/invoices.payment.allocate.js",
+    "invoices.payment.match_suggestions": "handlers/invoices.payment.match_suggestions.js",
+    "invoices.payment.unallocate": "handlers/invoices.payment.unallocate.js",
+    "invoices.proposal.approve": "handlers/invoices.proposal.approve.js",
+    "invoices.proposal.create": "handlers/invoices.proposal.create.js",
+    "invoices.proposal.reject": "handlers/invoices.proposal.reject.js",
+    "invoices.recurring.create": "handlers/invoices.recurring.create.js",
+    "invoices.recurring.pause": "handlers/invoices.recurring.pause.js",
+    "invoices.recurring.run": "handlers/invoices.recurring.run.js",
+    "invoices.recurring.update": "handlers/invoices.recurring.update.js"
+  },
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/invoices.jpg (shared/operator-icon-selection.js, sha256 1a0828f86f17…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "_multi_instance_basis": "v4-manifest.json; modules/invoices/V4-PORT.md OFFEN 4; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "category": "Finance",
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-invoices\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\" /><stop offset=\"100%\" stop-color=\"#f97316\" /></linearGradient></defs><path d=\"M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z\" fill=\"url(#grad-invoices)\" fill-opacity=\"0.12\" stroke=\"url(#grad-invoices)\" stroke-width=\"2\" stroke-linejoin=\"round\" /><path d=\"M15 2v6h6\" stroke=\"url(#grad-invoices)\" stroke-width=\"2\" stroke-linejoin=\"round\" /><line x1=\"9\" y1=\"12\" x2=\"15\" y2=\"12\" stroke=\"url(#grad-invoices)\" stroke-width=\"1.8\" stroke-linecap=\"round\" /><line x1=\"9\" y1=\"15\" x2=\"15\" y2=\"15\" stroke=\"url(#grad-invoices)\" stroke-width=\"1.8\" stroke-linecap=\"round\" /><line x1=\"9\" y1=\"18\" x2=\"13\" y2=\"18\" stroke=\"url(#grad-invoices)\" stroke-width=\"1.8\" stroke-linecap=\"round\" /></svg>",
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 760,
+        "width": 1120
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#16a34a",
+        "category": "Finance",
+        "iconAssetId": "workjet.business-os.invoices",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "list-detail",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "Rechnungen"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {
+    "accounting_dunning_letters": {
+      "_reasons": [
+        "Typ von „pdf_attachment_id“: string → string|null",
+        "Typ von „sent_at_ms“: number → number|null",
+        "Typ von „sent_via“: string → string|null",
+        "Feld „updated_at_ms“ neu ohne Default"
+      ],
+      "_schema_version": {
+        "from": 0,
+        "to": 1
+      },
+      "_source": "v4/schemas/invoices.collections.schema.json migrations",
+      "from_ver": "main@4794af03d",
+      "migrate_fn": null,
+      "steps": []
+    },
+    "accounting_dunning_runs": {
+      "_file": "v4/schemas/migrations/invoices/accounting_dunning_runs.js",
+      "_reasons": [
+        "Typ von „invoices_total“: number → array",
+        "Feld „updated_at_ms“ neu ohne Default"
+      ],
+      "_schema_version": {
+        "from": 0,
+        "to": 1
+      },
+      "_source": "v4/schemas/invoices.collections.schema.json migrations",
+      "from_ver": "main@4794af03d",
+      "migrate_fn": "migrations/accounting_dunning_runs.js"
+    },
+    "accounting_payment_allocations": {
+      "_reasons": [
+        "Typ von „note“: string → string|null",
+        "Typ von „payment_id“: string → string|null",
+        "Feld „updated_at_ms“ neu ohne Default"
+      ],
+      "_schema_version": {
+        "from": 0,
+        "to": 1
+      },
+      "_source": "v4/schemas/invoices.collections.schema.json migrations",
+      "from_ver": "main@4794af03d",
+      "migrate_fn": null,
+      "steps": []
+    }
+  },
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "23066ac76b9bb96dabd9070bf7c9d33b29ea89792baeadd54a437ca68c3961d6",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "Rechnungen",
+  "triggers": [],
+  "version": "0.1.2"
+}

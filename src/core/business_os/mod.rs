@@ -14,6 +14,7 @@ pub(crate) mod build_remote;
 pub(crate) mod build_ssh;
 mod capability;
 mod command_plane;
+pub(crate) use command_plane::app_platform;
 mod contact_email_validation;
 mod control_command_types;
 mod crew_commands;

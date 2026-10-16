@@ -13,9 +13,11 @@ const { __fileViewerTestHooks: viewer } = await import(viewerUrl);
 
 describe('File Viewer module contract', () => {
   it('uses the Business OS module entry contract and a fragment-only view', () => {
-    assert.match(viewerSource, /export async function mount\(ctx\)/);
-    assert.match(viewerSource, /const container = ctx\.host/);
-    assert.match(viewerSource, /ctx\.setTitle\?\.\(name\)/);
+    // App-API 4.0: mount(root, api, {restored}) → {unmount, snapshot}; Titel über die Shell.
+    assert.match(viewerSource, /export async function mount\(root, api, \{ restored \} = \{\}\)/);
+    assert.match(viewerSource, /api\.shell\.setTitle\(/);
+    assert.match(viewerSource, /api\.files\.get\(/);
+    assert.doesNotMatch(viewerSource, /ctx\.|desktop_file_chunks|demandFileLoader|\?v=/);
     assert.doesNotMatch(viewerSource, /export const manifest/);
     assert.doesNotMatch(viewerSource, /desktop-apps\//);
     // The root stays a `ctox-workspace` main element carrying the module class;
@@ -57,62 +59,17 @@ describe('File Viewer helpers', () => {
     assert.equal(viewer.textPreviewRangeFor('text/plain', 128), null);
   });
 
-  it('passes file ranges to the demand loader without full-content hash validation', async () => {
-    const calls = [];
-    const ctx = {
-      sync: {
-        async startCollection(name) {
-          return {
-            state: {
-              async awaitInSync() { calls.push(`in-sync:${name}`); },
-              demandFileLoader: {
-                async fetchFile(fileId, options) {
-                  calls.push({ fileId, options });
-                  return [{ sequence: 0, bytesBase64: btoa('hello') }];
-                },
-              },
-            },
-          };
-        },
-      },
-    };
-
-    const blob = await viewer.readStoredFile(ctx, 'file-1', 'text/plain', {
-      contentHash: 'not-the-partial-hash',
-      contentHashScheme: 'sha256-bytes-v1',
-      range: { offset: 0, length: 5 },
-    });
-
-    assert.equal(await blob.text(), 'hello');
-    assert.deepEqual(calls.find((call) => typeof call === 'object'), {
-      fileId: 'file-1',
-      options: { range: { offset: 0, length: 5 } },
-    });
+  it('limits large text previews to the first 256 KiB of the file blob', async () => {
+    const blob = new Blob(['a'.repeat(300 * 1024)], { type: 'text/plain' });
+    const preview = viewer.previewBlobFor(blob, 'text/plain', blob.size);
+    assert.equal(preview.size, 256 * 1024);
+    assert.equal(viewer.previewBlobFor(blob, 'application/pdf', blob.size), blob);
   });
 
-  it('keeps full file reads available when no range is requested', async () => {
-    const calls = [];
-    const ctx = {
-      sync: {
-        async startCollection() {
-          return {
-            state: {
-              async awaitInSync() {},
-              demandFileLoader: {
-                async fetchFile(fileId, options) {
-                  calls.push({ fileId, options });
-                  return [{ sequence: 0, bytesBase64: btoa('full') }];
-                },
-              },
-            },
-          };
-        },
-      },
-    };
-
-    const blob = await viewer.readStoredFile(ctx, 'file-2', 'text/plain');
-
-    assert.equal(await blob.text(), 'full');
-    assert.deepEqual(calls[0], { fileId: 'file-2', options: undefined });
+  it('normalizes route parameters from explorer, desktop and older callers', () => {
+    assert.deepEqual(viewer.normalizeTarget({ fileId: 'f1', mimeType: 'image/png', sizeBytes: 3, contentState: 'lazy', path: '/CTOX/a.png' }), {
+      ref: '', fileId: 'f1', name: '', mime: 'image/png', size: 3, path: '/CTOX/a.png', contentState: 'lazy',
+    });
+    assert.equal(viewer.normalizeTarget({ ref: 'abc' }).mime, 'application/octet-stream');
   });
 });
