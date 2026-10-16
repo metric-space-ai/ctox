@@ -687,7 +687,18 @@ async fn dispatch_committed(
                     )
                 });
             }
-            json!({"status":"failed","error":{"status":"failed","code":error_code(&error.to_string()),"reason":"handler_failed"}})
+            let native_reason = error
+                .downcast_ref::<ctox_app_runtime::HandlerError>()
+                .map(|e| e.message.as_str())
+                .filter(|reason| {
+                    e25_core
+                        && reason.starts_with("native_")
+                        && reason.len() <= 128
+                        && reason
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                });
+            json!({"status":"failed","error":{"status":"failed","code":error_code(&error.to_string()),"reason":native_reason.unwrap_or("handler_failed")}})
         }
     };
     let id = text(&binding["command"], "id")?.to_owned();

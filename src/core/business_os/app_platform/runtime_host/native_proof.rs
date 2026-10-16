@@ -164,13 +164,28 @@ fn seed(tx: &rusqlite::Transaction<'_>) -> Result<(), StoreError> {
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_daemon_hotplug_roundtrip_and_change() -> Result<()> {
-    run_native_proof(false).await
+    run_native_proof(Proof::All).await
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_daemon_e42_app_handlers() -> Result<()> {
-    run_native_proof(true).await
+    run_native_proof(Proof::E42).await
 }
-async fn run_native_proof(e42_only: bool) -> Result<()> {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_daemon_e39_routing_contracts() -> Result<()> {
+    run_native_proof(Proof::E39).await
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_daemon_platform_route_stays_in_core() -> Result<()> {
+    run_native_proof(Proof::Platform).await
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Proof {
+    All,
+    E39,
+    Platform,
+    E42,
+}
+async fn run_native_proof(proof: Proof) -> Result<()> {
     let _scope = crate::service::store_startup::isolate_test_roots().await;
     anyhow::ensure!(
         std::env::var_os("CTOX_STATE_ROOT").is_none(),
@@ -272,13 +287,23 @@ async fn run_native_proof(e42_only: bool) -> Result<()> {
         anyhow::ensure!(delayed_pages.exhausted(), "native change source load was not exercised");
         let result=submit(database,"hot-write","hot-app","hot.echo",json!({"id":"one","n":7,"write":true})).await?;
         anyhow::ensure!(result["status"]=="done"&&result["result"]["n"]==7,"native handler roundtrip failed: {result}");
-        if e42_only {
+        if proof == Proof::Platform {
+            let result=submit(database,"e39-platform-only","hot-app","ctox.workjet.project.list",json!({})).await?;
+            anyhow::ensure!(feed::core_route_probe::observed("e39-platform-only"),"E39 platform route must invoke Core, never an app process: {result}");
+            anyhow::ensure!(result["app_id"]=="hot-app","E39 platform result sender changed: {result}");
+            return Ok(json!({"core_route_observed":true,"app_process_route":false,"core_result_status":result["status"]}));
+        }
+        if proof == Proof::E42 {
             e42_proof::prove(database, &cas).await?;
             return Ok(json!({"e42_only":true}));
         }
-        e25_binding::assert_native_workjet_route(database).await?;
+        if proof == Proof::All {
+            e25_binding::assert_native_workjet_route(database).await?;
+        }
         routing_proof::prove(database, &cas).await?;
-        e42_proof::prove(database, &cas).await?;
+        if proof == Proof::All {
+            e42_proof::prove(database, &cas).await?;
+        }
         let changed=terminal(database,"hot_events","change").await?;
         anyhow::ensure!(changed["n"].as_u64().is_some_and(|n|n>0),"committed change did not run real trigger");
         // E23.1: forged client fields confer no native provenance, including admin.
