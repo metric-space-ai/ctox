@@ -21,6 +21,7 @@
 // without admission/eviction (rtc-admission-removal-smoke), and the
 // SHELL_CRITICAL_COLLECTIONS pin (rtc-critical-pool-smoke).
 import { CtoxEventEmitter } from './event-target.mjs';
+import { HelloConnection, HelloRejected, decodeHelloFrame } from './hello.mjs';
 import { InboundRequestQueue } from './inbound-request-queue.mjs';
 import { buildProtocolPayload, CTOX_RXDB_PROTOCOL } from './schema.mjs';
 import {
@@ -200,6 +201,7 @@ export class CtoxWebRtcNativePeer {
     expectedNativePeerId = '',
     protocolPayload = null,
     requestHandlers = {},
+    v4Hello = null,
   } = {}) {
     if (!signalingUrl) {
       throw new Error('signalingUrl is required');
@@ -207,7 +209,15 @@ export class CtoxWebRtcNativePeer {
     if (!room) {
       throw new Error('room is required');
     }
+    if (v4Hello && (typeof v4Hello.createHello !== 'function'
+      || typeof v4Hello.verifyServerHello !== 'function'
+      || !Number.isInteger(v4Hello.handshakeTimeoutMs ?? 10000)
+      || (v4Hello.handshakeTimeoutMs ?? 10000) <= 0
+      || (v4Hello.handshakeTimeoutMs ?? 10000) > 60000)) {
+      throw new TypeError('V4 requires host signer, paired-server verifier and bounded deadline');
+    }
     this.options = {
+      v4Hello,
       signalingUrl,
       room,
       roomPassword,
@@ -405,7 +415,8 @@ export class CtoxWebRtcNativePeer {
 
   send(remotePeerId, payload) {
     const connection = this.connections.get(remotePeerId);
-    if (!connection?.channel || connection.channel.readyState !== 'open') {
+    if (!connection?.channel || connection.channel.readyState !== 'open'
+      || (this.options.v4Hello && !connection.v4Live)) {
       return false;
     }
     const text = JSON.stringify(payload);
@@ -788,6 +799,8 @@ export class CtoxWebRtcNativePeer {
 
   async requestAuxiliary(remotePeerId, label, method, params = [], timeoutMs = 15000) {
     const peerId = String(remotePeerId || '');
+    if (this.options.v4Hello && !this.connections.get(peerId)?.v4Live)
+      throw new HelloRejected('unexpected_message', 'live V4 connection');
     let channel = null;
     const deadline = Date.now() + Math.min(5_000, timeoutMs);
     while (!channel && Date.now() < deadline) {
@@ -1327,6 +1340,11 @@ export class CtoxWebRtcNativePeer {
     connection.channel = channel;
     connection.inboundFrameGeneration = Number(connection.inboundFrameGeneration || 0) + 1;
     connection.inboundFrameChain = Promise.resolve();
+    clearTimeout(connection.v4Timer);
+    connection.v4Session?.close();
+    connection.v4Session = null;
+    connection.v4FailureRecorded = false;
+    connection.v4Live = false;
     const isCurrentChannel = () => !this.closed
       && this.connections.get(connection.remotePeerId) === connection
       && connection.channel === channel;
@@ -1338,7 +1356,15 @@ export class CtoxWebRtcNativePeer {
       }
       this.forceInitiatorPeers.delete(connection.remotePeerId);
       this.recordConnectionEvent(connection, 'datachannel-open', { readyState: channel.readyState || 'open' });
-      this.events.emit('peer-open', { peerId: connection.remotePeerId });
+      if (this.options.v4Hello) {
+        connection.v4Live = false;
+        connection.v4Timer = setTimeout(() => this.failV4Hello(connection,
+          new HelloRejected('handshake_timeout', 'hello before deadline')),
+        this.options.v4Hello.handshakeTimeoutMs ?? 10000);
+        this.events.emit('peer-state', { peerId: connection.remotePeerId, state: 'authenticating' });
+      } else {
+        this.events.emit('peer-open', { peerId: connection.remotePeerId });
+      }
     };
     channel.onmessage = (event) => {
       let payload = event.data;
@@ -1362,6 +1388,61 @@ export class CtoxWebRtcNativePeer {
     };
   }
 
+
+  failV4Hello(connection, error) {
+    if (this.connections.get(connection.remotePeerId) !== connection || connection.v4FailureRecorded) return;
+    connection.v4FailureRecorded = true;
+    connection.v4Live = false;
+    clearTimeout(connection.v4Timer);
+    const failure = error instanceof HelloRejected ? error
+      : new HelloRejected('authentication_failed', 'current paired device authority');
+    connection.lastError = { code: 'hello_reject', reason: failure.reason,
+      required: failure.required, peerId: connection.remotePeerId };
+    this.recordConnectionEvent(connection, 'hello-reject', connection.lastError);
+    this.events.emit('peer-state', { ...connection.lastError, state: 'hello_reject' });
+    this.events.emit('error', connection.lastError);
+    this.removeConnection(connection.remotePeerId, 'hello-reject', null, { expectedConnection: connection });
+  }
+
+  async handleV4Control(connection, channel, payload) {
+    const generation = connection.inboundFrameGeneration;
+    const current = () => !this.closed && this.connections.get(connection.remotePeerId) === connection
+      && connection.channel === channel && connection.inboundFrameGeneration === generation;
+    if (!current()) return;
+    try {
+      const frame = decodeHelloFrame(JSON.stringify(payload));
+      if (frame.type === 'hello_reject') throw new HelloRejected(frame.reason, frame.required);
+      if (frame.type === 'hello' && !connection.v4Session) {
+        const options = this.options.v4Hello;
+        const verified = await options.verifyServerHello({ peerId: connection.remotePeerId, hello: frame });
+        if (!current()) return;
+        if (verified !== true) throw new HelloRejected('authentication_failed', 'paired server proof');
+        const hello = await options.createHello({ peerId: connection.remotePeerId,
+          challenge: frame.device_proof.nonce, serverHello: frame });
+        if (!current()) return;
+        if (hello?.device_proof?.nonce !== frame.device_proof.nonce)
+          throw new HelloRejected('device_proof_invalid', 'fresh connection challenge');
+        connection.v4Session = new HelloConnection(hello, snapshot => {
+          if (!current()) return;
+          this.events.emit('peer-state', { peerId: connection.remotePeerId, ...snapshot });
+          if (snapshot.rejection) this.failV4Hello(connection,
+            new HelloRejected(snapshot.rejection.reason, snapshot.rejection.required));
+        }, { handshakeTimeoutMs: options.handshakeTimeoutMs ?? 10000,
+          requiredCapabilities: options.requiredCapabilities || [] });
+        channel.send(JSON.stringify(connection.v4Session.connected()));
+      } else if (frame.type === 'hello_ok' && connection.v4Session && !connection.v4Live) {
+        connection.v4Session.receive(JSON.stringify(frame));
+        connection.v4Session.activate();
+        clearTimeout(connection.v4Timer);
+        connection.v4Live = true;
+        this.recordConnectionEvent(connection, 'hello-live', { protocol: 4 });
+        this.events.emit('peer-open', { peerId: connection.remotePeerId });
+      } else throw new HelloRejected('unexpected_message', 'hello before application traffic');
+    } catch (error) {
+      if (current()) this.failV4Hello(connection, error);
+    }
+  }
+
   enqueueInboundDataChannelFrame(connection, channel, payload) {
     if (
       this.closed
@@ -1379,6 +1460,10 @@ export class CtoxWebRtcNativePeer {
         || connection.channel !== channel
         || Number(connection.inboundFrameGeneration || 0) !== generation
       ) return;
+      if (this.options.v4Hello && (['hello', 'hello_ok', 'hello_reject'].includes(payload?.type) || !connection.v4Live)) {
+        await this.handleV4Control(connection, channel, payload);
+        return;
+      }
       await this.handleDataChannelFrame(connection.remotePeerId, payload);
     });
     connection.inboundFrameChain = current.catch((error) => {
@@ -1897,6 +1982,10 @@ export class CtoxWebRtcNativePeer {
   }
 
   async handleAuxiliaryChannelMessage(connection, label, raw) {
+    if (this.options.v4Hello && !connection.v4Live) {
+      this.failV4Hello(connection, new HelloRejected('unexpected_message', 'hello before auxiliary traffic'));
+      return;
+    }
     this.auxMessageStats.messagesReceived += 1;
     this.auxMessageStats.lastMessageAtMs = Date.now();
     let payload;
@@ -2005,6 +2094,8 @@ export class CtoxWebRtcNativePeer {
     connection.inboundFrameGeneration = Number(connection.inboundFrameGeneration || 0) + 1;
     connection.inboundFrameChain = null;
     if (connection.channel) connection.channel.onmessage = null;
+    clearTimeout(connection.v4Timer);
+    connection.v4Session?.close();
     if (connection.handshakeTimer) {
       clearTimeout(connection.handshakeTimer);
       connection.handshakeTimer = null;
