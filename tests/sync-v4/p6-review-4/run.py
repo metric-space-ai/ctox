@@ -126,6 +126,13 @@ for path in sorted((ROOT/'tests/sync-v4/k13').glob('*.mjs')):
 assert run('existing-oracles',['node','--test',ROOT/'tests/sync-v4/k13/oracles.test.mjs']).returncode==0
 
 if args.only in ('all','scenarios'):
+    boundary=OUT/'namespace-negative.json'
+    boundary.write_text(json.dumps(dict(uid=os.getuid(),gid=os.getgid(),
+        hostNamespaces={kind:os.readlink('/proc/self/ns/'+kind) for kind in ['user','net','mnt','pid']})))
+    negative=run('namespace-host-entry-rejected',['node',ROOT/'tests/sync-v4/k13/netns.mjs',boundary],10)
+    assert negative.returncode!=0 and 'Private mapped user/net/mount/PID namespaces required' in negative.stdout
+
+if args.only in ('all','scenarios'):
     p=run('train-daemon-build',['cargo','build','--locked','--bin','ctox','--jobs','2'],1800)
     if p.returncode==0:
         binary=TARGET/'debug/ctox'

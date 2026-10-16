@@ -7,6 +7,7 @@ train="${1:?immutable product train required}"
 deadline="${2:?absolute Unix deadline required}"
 tools="$CARGO_TARGET_DIR/p6-review5-tools"
 mkdir -p "$tools"
+if [ ! -x "$tools/root/usr/bin/turnserver" ]; then
 (
   cd "$tools"
   apt-get download coturn libhiredis0.14 libmysqlclient21 libpq5 libevent-core-2.1-7 libevent-extra-2.1-7 libevent-openssl-2.1-7 libevent-pthreads-2.1-7
@@ -14,6 +15,7 @@ mkdir -p "$tools"
   sha256sum ./*.deb > packages.sha256
   for package in ./*.deb; do dpkg-deb -f "$package" Package Version; done > packages.txt
 )
+fi
 turn="$tools/root/usr/bin/turnserver"
 lib="$tools/root/usr/lib/x86_64-linux-gnu"
 LD_LIBRARY_PATH="$lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ldd "$turn" > "$tools/ldd.txt"

@@ -25,10 +25,10 @@ export function installServiceEntry(Native) {
     const args=['service','--foreground','--root',this.config.root];
     const actual=hashFile(this.config.binary);
     if(actual!==this.config.binarySha256)throw Error('P6 service binary changed after verification');
-    const child=this.start('daemon',this.config.binary,args);
+    const child=this.start('daemon',this.config.binary,args);this.daemon=child;
     fs.writeFileSync(resolve(this.config.output,'p6-daemon-entry.json'),JSON.stringify({
       revision:this.config.revision,binarySha256:actual,root:this.config.root,
-      args,pid:child.pid,at:new Date().toISOString()
+      args,pid:child.pid,pidNamespace:fs.readlinkSync('/proc/self/ns/pid'),at:new Date().toISOString()
     },null,2),{mode:0o600});
   };
 }

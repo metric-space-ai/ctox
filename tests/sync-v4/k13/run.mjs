@@ -47,8 +47,8 @@ try {
 }
 let cancelled=false;
 async function namespace(config,log) {
-  const child=spawn('sudo',['-n','unshare','--net','--',process.execPath,
-    join(repository,'scripts/sync-v4/e2e-netns.mjs'),config],{stdio:['ignore',log,log],detached:true});
+  const child=spawn('unshare',['--user','--map-root-user','--net','--mount','--pid','--fork','--mount-proc','--',process.execPath,
+    join(here,'netns.mjs'),config],{stdio:['ignore',log,log],detached:true});
   const row={owner:summary.owner,pid:child.pid,pgid:child.pid,purpose:'isolated P6 scenario namespace',
     stop:'terminal or bounded namespace deadline',startedAt:new Date().toISOString()};
   const controller=join(dirname(config),'p6-controller.json');
@@ -77,7 +77,7 @@ if(build && !summary.scenarios.length) {
     if(cancelled){summary.scenarios.push({id,status:'not_run',pass:false,acceptanceComplete:false,reason:'Controller interrupted',daemonExecuted:false});save();continue;}
     const dir=join(output,id);fs.mkdirSync(dir,{mode:0o700});
     const config={owner:summary.owner,...build,output:dir,profile:'small',clients:1,rttMs:20,warmRttMs:20,lossPercent:0,
-      uid:process.getuid(),gid:process.getgid(),seedAfterStart:false,leadProfile:'eager',prime:false,
+      uid:process.getuid(),gid:process.getgid(),hostNamespaces:Object.fromEntries(['user','net','mnt','pid'].map(k=>[k,fs.readlinkSync('/proc/self/ns/'+k)])),seedAfterStart:false,leadProfile:'eager',prime:false,
       catalog:true,scenarioRoot:resolve(here,'..'),scenario:id,osBootstrap:flags.get('--os-bootstrap')??null,
       root:join(dir,'tenant-'+expected.slice(0,12)),port:19865,signalingPort:19866,turnPort:34789,
       runner:join(here,'service-runner.mjs'),sourceManifest,buildReceipt:resolve(flags.get('--build')),
