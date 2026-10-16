@@ -311,15 +311,28 @@ async fn installed_daemons_keep_identity_authority_and_exclusive_writers() -> an
         out.join("installed-restart.log"),
     )
     .await?;
+    // Listener-ready deliberately precedes discovery/quorum-ready. Observe
+    // the restarted node through the real read barrier, with a bounded deadline.
+    let restarted = std::time::Instant::now();
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            match nodes[0].membership().await {
+                Ok(()) => return Ok::<_, anyhow::Error>(()),
+                Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+            }
+        }
+    })
+    .await??;
     for node in &nodes {
         node.membership().await?;
     }
+    let restart_quorum_ms = restarted.elapsed().as_millis();
     for node in &mut nodes {
         node.stop().await?;
     }
     tokio::fs::write(out.join("installed-proof.json"),serde_json::to_vec_pretty(&serde_json::json!({
         "normal_cli_processes":true,"separate_namespace":true,"copied_populated_profiles":true,"inspection":rows,
-        "native_quorum_after_60s":true,"restart_same_pinned_key":true,"graceful_shutdown":true,
+        "native_quorum_after_60s":true,"restart_same_pinned_key":true,"restart_quorum_ms":restart_quorum_ms,"graceful_shutdown":true,
         "scope":"K15 owner/process boundary; no browser K13/K21/K22 or ALL-app claim"
     }))?).await?;
     Ok(())
