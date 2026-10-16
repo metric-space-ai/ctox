@@ -3526,7 +3526,7 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
                 return respond_status(request, 503, "requested shell release failed verification")
             }
         },
-        None if rel == "index.html" => {
+        None if rel == "index.html" || rel == "v4/boot/index.html" => {
             super::shell_update::verified_release_for_root(root, app_root)?
         }
         None => None,

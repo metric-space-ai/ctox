@@ -96,12 +96,58 @@ def query(database):
         return dict(app=active, versions=versions, archive=archive, data=counts)
 
 
+def runtime_configuration(root):
+    """Hash live configuration through SQLite, never the live DB file.
+
+    Only the owned synthetic profile is eligible. No secret-store or protected
+    desktop file is opened; values remain in memory and only digests leave.
+    """
+    root = root.resolve()
+    marker = json.loads((root/'.sync-v4-e2e.json').read_text())
+    if marker.get('owner') != OWNER or marker.get('synthetic') is not True:
+        raise ValueError('Only the owned synthetic runtime configuration')
+    database = (root/'runtime/ctox-runtime.sqlite3').resolve(strict=True)
+    if root not in database.parents:
+        raise ValueError('Runtime configuration outside private profile')
+    result = {}
+    with sqlite3.connect(database.as_uri()+'?mode=ro', uri=True, timeout=3) as db:
+        db.execute('PRAGMA query_only=ON')
+        db.execute('BEGIN')
+        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if 'runtime_env_kv' not in tables:
+            raise ValueError('Actual runtime configuration binding unavailable')
+        for table in ('runtime_env_kv', 'runtime_state_store', 'ctox_sync_host'):
+            if table not in tables:
+                result[table] = dict(present=False)
+                continue
+            columns = [r[1] for r in db.execute('PRAGMA table_info('+quote(table)+')')]
+            rows = []
+            for row in db.execute('SELECT * FROM '+quote(table)):
+                cells = [dict(blobSha256=hashlib.sha256(c).hexdigest()) if isinstance(c, bytes) else c for c in row]
+                rows.append(json.dumps(cells, ensure_ascii=False, separators=(',',':')).encode())
+            value = hashlib.sha256(json.dumps(columns,separators=(',',':')).encode()+b'\0')
+            for row in sorted(rows):
+                value.update(len(row).to_bytes(8,'big'));value.update(row)
+            result[table] = dict(present=True, rows=len(rows), sha256=value.hexdigest())
+    return dict(method='sqlite-ro-query_only', database=str(database), tables=result)
+
+
 def fingerprint(root, pid, configs):
     proc = Path('/proc')/str(pid)
     before = (proc/'stat').read_text().rsplit(')', 1)[1].split()[19]
     binary = (proc/'exe').resolve(strict=True)
     if root not in binary.parents:
         raise ValueError('Running executable is not installed in the private profile')
+    # Bind the observer to the daemon's actual state root. Never fingerprint a
+    # convenient shadow DB while the process is using another runtime tree.
+    roots = {}
+    for field in (proc/'environ').read_bytes().split(b'\0'):
+        key, _, value = field.partition(b'=')
+        if key in (b'CTOX_ROOT', b'CTOX_STATE_ROOT', b'CTOX_INSTALL_ROOT'):
+            roots[key.decode()] = value.decode()
+    state = roots.get('CTOX_STATE_ROOT')
+    if not state or Path(state).resolve() != (root/'runtime').resolve():
+        raise ValueError('Daemon runtime configuration binding is not established')
     files = {}
     for file in configs:
         file = file.resolve(strict=True)
@@ -110,8 +156,8 @@ def fingerprint(root, pid, configs):
         files[str(file)] = digest(file)
     if not files:
         raise ValueError('Explicit profile configuration inventory required')
-    result = dict(binarySha256=digest(proc/'exe'), configs=files, pid=pid, startTicks=before,
-                  bootId=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
+    result = dict(binarySha256=digest(proc/'exe'), configs=files, runtimeConfiguration=runtime_configuration(root),
+                  pid=pid, startTicks=before, roots=roots, bootId=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
     if (proc/'stat').read_text().rsplit(')', 1)[1].split()[19] != before:
         raise ValueError('PID reused')
     return result
