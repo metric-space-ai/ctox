@@ -10,6 +10,7 @@ import {
   buildAdapterCommand,
   buildAuthCommand,
   buildGenerateCommand,
+  issueWindow,
   buildScheduleCommand,
   categoryCounts,
   compactCount,
@@ -825,7 +826,8 @@ async function generateIssue() {
     created_at_ms: now,
     updated_at_ms: now,
   };
-  const command = buildGenerateCommand(topic, state.sources, issue, previous);
+  const freshness = issueWindow(topic, state.issues, state.posts, now);
+  const command = buildGenerateCommand(topic, state.sources, issue, previous, freshness);
   issue.command_id = command.command_id;
   try {
     await issuesHandle.insert(issue);

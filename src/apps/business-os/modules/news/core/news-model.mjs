@@ -440,7 +440,46 @@ export function topicSnapshot(topic) {
   };
 }
 
-export function buildIssueInstruction(topic, sources, previousIssue, commandId = '') {
+const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
+
+// Same canonical link form as the native writeback (store_news_commands.rs).
+export function normalizeStoryUrl(url) {
+  let rest = String(url || '').trim().split('#')[0];
+  rest = rest.includes('://') ? rest.split('://').slice(1).join('://') : rest;
+  const slash = rest.indexOf('/');
+  let host = (slash >= 0 ? rest.slice(0, slash) : rest).toLowerCase();
+  if (host.startsWith('www.')) host = host.slice(4);
+  const path = (slash >= 0 ? rest.slice(slash + 1) : '').replace(/\/+$/, '');
+  return path ? `${host}/${path}` : host;
+}
+
+// Since the previous issue (never further back than a week), otherwise the
+// last 24 hours for daily topics and 7 days for the rest; plus the links
+// earlier issues of the topic already carried.
+export function issueWindow(topic, issues, posts, now = Date.now()) {
+  const ready = issues.filter((issue) => issue.topic_id === topic.id && issue.status === 'ready'
+    && issue.payload?.kind !== 'weekly_digest' && Number(issue.generated_at_ms) > 0);
+  const previous = ready.reduce((best, issue) => (!best || issue.generated_at_ms > best.generated_at_ms ? issue : best), null);
+  const fallback = topic.cadence === 'daily' ? DAY_MS : 7 * DAY_MS;
+  const startMs = previous && previous.generated_at_ms > now - 7 * DAY_MS
+    ? Math.min(previous.generated_at_ms, now)
+    : now - fallback;
+  const recent = new Set(ready.filter((issue) => issue.generated_at_ms > now - 30 * DAY_MS).map((issue) => issue.id));
+  const covered = [];
+  for (const post of posts) {
+    if (!recent.has(post.issue_id)) continue;
+    const urls = [post.link_card?.url, ...(post.sources || []).filter((source) => source.kind !== 'discussion').map((source) => source.url)];
+    for (const url of urls) {
+      if (!url) continue;
+      const key = normalizeStoryUrl(url);
+      if (!covered.includes(key)) covered.push(key);
+    }
+  }
+  return { startMs, previousIssueId: previous?.id || '', coveredUrls: covered.slice(0, 120) };
+}
+
+export function buildIssueInstruction(topic, sources, previousIssue, commandId = '', window = null) {
   const enabled = sources.filter((source) => source.enabled !== false);
   const signedIn = enabled.some((source) => authSourceFor(source));
   const lines = [
@@ -449,13 +488,14 @@ export function buildIssueInstruction(topic, sources, previousIssue, commandId =
     `Sprache: ${topic.language === 'en' ? 'Englisch' : 'Deutsch'}. Höchstens ${topic.max_posts} Beiträge, Kategorien: ${topic.categories.join(', ')}.`,
     `Quellen (${enabled.length}): ${enabled.map((source) => `${source.kind}:${source.label}`).join('; ') || 'keine konfiguriert, nutze die Websuche'}.`,
     signedIn && commandId ? `Angemeldete Quellen (X, Reddit) über das CTOX-Konto lesen; --task-id ${commandId}.` : '',
-    previousIssue ? `Vorherige Ausgabe ${previousIssue.issue_date}: wiederhole nur Meldungen mit neuer Entwicklung.` : '',
+    previousIssue ? `Vorherige Ausgabe ${previousIssue.issue_date}: wiederhole keine Meldung aus früheren Ausgaben (covered_urls).` : '',
+    window ? `Zeitfenster: nur Meldungen, deren Primärquelle nach ${new Date(window.startMs).toISOString().replace(/\.\d{3}Z$/, 'Z')} veröffentlicht wurde; ältere Beiträge verwirft die Übernahme.` : '',
     `Liefere das Ergebnis im Vertrag ${ISSUE_OUTPUT_CONTRACT}; jeder Beitrag braucht mindestens eine Quelle mit Link.`,
   ];
   return lines.filter(Boolean).join('\n');
 }
 
-export function buildGenerateCommand(topic, sources, issue, previousIssue) {
+export function buildGenerateCommand(topic, sources, issue, previousIssue, window = null) {
   const topicSources = sources.filter((source) => source.topic_id === topic.id);
   const commandId = newCommandId(NEWS_ISSUE_GENERATE);
   return commandEnvelope({
@@ -466,11 +506,16 @@ export function buildGenerateCommand(topic, sources, issue, previousIssue) {
     topic_id: topic.id,
     issue_id: issue.id,
     issue_date: issue.issue_date,
-    instruction: buildIssueInstruction(topic, topicSources, previousIssue, commandId),
+    instruction: buildIssueInstruction(topic, topicSources, previousIssue, commandId, window),
     required_skills: [NEWS_SKILL],
     thread_key: `business-os/news/${topic.id}`,
     output_contract: ISSUE_OUTPUT_CONTRACT,
-    previous_issue_id: previousIssue?.id || '',
+    previous_issue_id: window?.previousIssueId || previousIssue?.id || '',
+    ...(window ? {
+      window_start: new Date(window.startMs).toISOString(),
+      window_start_ms: window.startMs,
+      covered_urls: window.coveredUrls,
+    } : {}),
     record_snapshot: {
       topic: topicSnapshot(topic),
       sources: topicSources.filter((source) => source.enabled !== false).map(sourceSnapshot),
