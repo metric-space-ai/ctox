@@ -143,6 +143,16 @@ async fn guard_followup_origin_on_plain_thread_distinguishes_absence_from_store_
     })
     .join()
     .expect("typed SQL failure returned");
+    let work = root.path().to_owned();
+    let error = run_core_sync(move || crate::business_os::store::runtime_settings_for_rxdb(&work))
+        .await
+        .expect_err("runtime projection must not replace failed storage with defaults");
+    assert!(
+        error
+            .to_string()
+            .contains("runtime settings configuration read failed"),
+        "{error:#}"
+    );
     fixture.close().await?;
     Ok(())
 }
