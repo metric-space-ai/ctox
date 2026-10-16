@@ -352,7 +352,7 @@ async fn rights_matrix_read_write_replication_share_committed_authority() {
     };
     let assigned_module = BusinessOsScope::module("app", true);
     let other_module = BusinessOsScope::module("app", false);
-    let seed_cases = [
+    let mut seed_cases = vec![
         (
             "chef",
             BusinessOsPermission::WorkspaceManage,
@@ -480,6 +480,32 @@ async fn rights_matrix_read_write_replication_share_committed_authority() {
             false,
         ),
     ];
+    // Preserve the typed grants supplied by integration: machines require an
+    // administrator; source editing also permits an assigned founder.
+    for (permission, founder_assigned) in [
+        (BusinessOsPermission::MachinesManage, false),
+        (BusinessOsPermission::AppsSourceEdit, true),
+    ] {
+        for (role, allowed) in [
+            ("chef", true),
+            ("admin", true),
+            ("founder", founder_assigned),
+            ("user", false),
+        ] {
+            seed_cases.push((
+                role,
+                permission,
+                BusinessOsScope::module("app", true),
+                allowed,
+            ));
+        }
+    }
+    seed_cases.push((
+        "founder",
+        BusinessOsPermission::AppsSourceEdit,
+        BusinessOsScope::module("app", false),
+        false,
+    ));
     for (role, permission, scope, expected) in seed_cases {
         let actor = BusinessOsActor::new(Some("seed-actor".into()), role);
         assert_eq!(
