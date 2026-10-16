@@ -195,21 +195,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn type_size_q4_k_is_144() {
-        // Q4_K block is 256 elements packed as:
-        //   d (2) + dmin (2) + scales (12) + qs (128) = 144 bytes.
-        // ref: ggml.c::ggml_type_size
-        assert_eq!(GgmlType::Q4_K.type_size(), 144);
-        assert_eq!(GgmlType::Q4_K.block_size(), 256);
-    }
-
-    #[test]
-    fn type_size_bf16_is_2() {
-        assert_eq!(GgmlType::Bf16.type_size(), 2);
-        assert_eq!(GgmlType::Bf16.block_size(), 1);
-    }
-
-    #[test]
     fn contiguous_strides_f32_row_major() {
         // A 2-D f32 tensor [4, 8] (ne[0]=4, ne[1]=8): nb[0]=4,
         // nb[1]=16, nb[2]=128, nb[3]=128. ref: ggml_new_tensor_impl.

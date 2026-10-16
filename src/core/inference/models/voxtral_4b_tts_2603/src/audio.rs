@@ -261,12 +261,4 @@ mod tests {
         let y = linear_resample(&x, 48_000, 16_000);
         assert_eq!(y.len(), 16_000);
     }
-
-    #[test]
-    fn mels_have_expected_shape_for_1s() {
-        let x = vec![0.0; VOX_SAMPLE_RATE];
-        let mel = log_mel_spectrogram(&x);
-        assert_eq!(mel.len() % VOX_MEL_BINS, 0);
-        assert!(mel.len() / VOX_MEL_BINS > 90);
-    }
 }

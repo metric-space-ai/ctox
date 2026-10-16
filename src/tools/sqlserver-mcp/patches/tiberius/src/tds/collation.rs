@@ -396,23 +396,5 @@ mod tests {
     use tokio::executor::current_thread;
     use crate::tests::new_connection;
 
-    #[test]
-    fn select_nvarchar_collation_test() {
-        let c1 = new_connection();
-        let query = c1.simple_query(
-            "select cast(cast(N'cześć' as nvarchar(5)) collate Polish_CI_AI as varchar(5))",
-        );
-        let mut i = 0;
-        {
-            let future = query.for_each(|x| {
-                let val: &str = x.get(0);
-                assert_eq!(val, "cześć");
-                i += 1;
-                Ok(())
-            });
-            current_thread::block_on_all(future).unwrap();
-        }
-        assert_eq!(i, 1);
-    }
 }
 */

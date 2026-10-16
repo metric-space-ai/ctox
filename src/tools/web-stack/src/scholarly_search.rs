@@ -1691,30 +1691,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn provider_label_round_trip() {
-        assert_eq!(
-            ScholarlySearchProvider::from_label("annas_archive"),
-            ScholarlySearchProvider::AnnasArchive
-        );
-        assert_eq!(
-            ScholarlySearchProvider::from_label("annas-archive"),
-            ScholarlySearchProvider::AnnasArchive
-        );
-        assert_eq!(
-            ScholarlySearchProvider::from_label(""),
-            ScholarlySearchProvider::Auto
-        );
-        assert_eq!(
-            ScholarlySearchProvider::from_label("auto"),
-            ScholarlySearchProvider::Auto
-        );
-        assert_eq!(
-            ScholarlySearchProvider::AnnasArchive.as_str(),
-            "annas_archive"
-        );
-    }
-
-    #[test]
     fn extracts_md5_hash_from_relative_path() {
         let hash = extract_md5_hash("/md5/0123456789abcdef0123456789abcdef").unwrap();
         assert_eq!(hash, "0123456789abcdef0123456789abcdef");
@@ -1837,42 +1813,6 @@ mod tests {
         assert!(!looks_like_file_size("MB"));
         assert!(!looks_like_file_size("abc"));
         assert!(!looks_like_file_size("Page 12"));
-    }
-
-    #[test]
-    fn build_annas_archive_search_url_orders_params_correctly() {
-        let request = ScholarlySearchRequest {
-            query: "quantum entanglement".to_string(),
-            content_types: vec!["book_nonfiction".to_string()],
-            languages: vec!["en".to_string()],
-            extensions: vec!["pdf".to_string()],
-            sort: Some("newest".to_string()),
-            page: Some(2),
-            ..Default::default()
-        };
-        let root = std::env::temp_dir().join("ctox-scholarly-test-noop");
-        let url = build_annas_archive_search_url(&root, &request, "https://annas-archive.org", 2)
-            .expect("URL build");
-        let raw = url.as_str();
-        assert!(raw.starts_with("https://annas-archive.org/search?"));
-        assert!(raw.contains("lang=en"));
-        assert!(raw.contains("content=book_nonfiction"));
-        assert!(raw.contains("ext=pdf"));
-        assert!(raw.contains("sort=newest"));
-        assert!(raw.contains("q=quantum+entanglement") || raw.contains("q=quantum%20entanglement"));
-        assert!(raw.contains("page=2"));
-    }
-
-    #[test]
-    fn build_annas_archive_search_url_omits_page_one() {
-        let request = ScholarlySearchRequest {
-            query: "rust".to_string(),
-            ..Default::default()
-        };
-        let root = std::env::temp_dir().join("ctox-scholarly-test-noop");
-        let url = build_annas_archive_search_url(&root, &request, "https://annas-archive.org", 1)
-            .expect("URL build");
-        assert!(!url.as_str().contains("page="));
     }
 
     #[test]

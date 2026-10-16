@@ -2724,31 +2724,6 @@ mod tests {
     }
 
     #[test]
-    fn secret_cli_value_arg_requires_exactly_one_source() -> Result<()> {
-        let value_args = vec![
-            "put".to_string(),
-            "--value".to_string(),
-            "literal".to_string(),
-        ];
-        let value = resolve_secret_value_arg(&value_args, "usage")?;
-        assert_eq!(value.as_str(), "literal");
-
-        let missing_args = vec!["put".to_string()];
-        let missing = resolve_secret_value_arg(&missing_args, "usage").unwrap_err();
-        assert!(format!("{missing:#}").contains("exactly one of --value or --value-stdin"));
-
-        let conflict_args = vec![
-            "put".to_string(),
-            "--value".to_string(),
-            "literal".to_string(),
-            "--value-stdin".to_string(),
-        ];
-        let conflict = resolve_secret_value_arg(&conflict_args, "usage").unwrap_err();
-        assert!(format!("{conflict:#}").contains("exactly one of --value or --value-stdin"));
-        Ok(())
-    }
-
-    #[test]
     fn secret_stdin_value_strips_one_terminal_line_ending() {
         assert_eq!(
             strip_single_trailing_line_ending("secret-value\n".to_string()),

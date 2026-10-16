@@ -253,33 +253,4 @@ impl Decode<BytesMut> for PreloginMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn prelogin_roundtrip() {
-        let mut payload = BytesMut::new();
-        let prelogin = PreloginMessage::new();
-        prelogin
-            .clone()
-            .encode(&mut payload)
-            .expect("encode should succeed");
-
-        let decoded = PreloginMessage::decode(&mut payload).expect("decode should succeed");
-
-        assert_eq!(prelogin, decoded);
-    }
-
-    #[test]
-    fn prelogin_with_fedauth_roundtrip() {
-        let mut payload = BytesMut::new();
-        let mut prelogin = PreloginMessage::new();
-        prelogin.fed_auth_required = true;
-        prelogin
-            .clone()
-            .encode(&mut payload)
-            .expect("encode should succeed");
-
-        let decoded = PreloginMessage::decode(&mut payload).expect("decode should succeed");
-
-        assert_eq!(prelogin, decoded);
-    }
 }

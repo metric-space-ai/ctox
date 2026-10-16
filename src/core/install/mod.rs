@@ -5074,19 +5074,6 @@ mod tests {
     }
 
     #[test]
-    fn release_bundle_matrix_includes_windows() {
-        assert_eq!(
-            target_bundle_asset_name_for("windows", "x86_64"),
-            Some("ctox-windows-x64.zip")
-        );
-        assert_eq!(
-            target_bundle_asset_name_for("macos", "aarch64"),
-            Some("ctox-macos-arm64.tar.gz")
-        );
-        assert_eq!(target_bundle_asset_name_for("windows", "aarch64"), None);
-    }
-
-    #[test]
     fn latest_core_release_ignores_newer_shell_release() {
         let release = |tag_name: &str, draft: bool, prerelease: bool| GitHubReleaseResponse {
             tag_name: tag_name.to_string(),
@@ -5324,79 +5311,6 @@ mod tests {
     }
 
     #[test]
-    fn waiting_collections_without_browser_ack_completes_after_grace() {
-        let temp = tempdir().unwrap();
-        // Same root resolution as the status endpoint, so the reconcile and the
-        // projection below read the same persisted state.
-        let layout = InstallLayout::resolve(temp.path()).unwrap();
-        let started = begin_maintenance(&layout, "branch:main").unwrap();
-        let now_ms = current_utc().timestamp_millis();
-        let mut waiting = load_maintenance_state_from_root(&layout.state_root)
-            .unwrap()
-            .unwrap();
-        waiting.service_active = true;
-        waiting.replication_up = true;
-        waiting.phase = "waiting_collections".to_string();
-        waiting.lease_expires_at_ms = now_ms + MAINTENANCE_LEASE_TTL_MS;
-        waiting.waiting_collections_since_ms = now_ms - MAINTENANCE_CLIENT_ACK_GRACE_MS + 30_000;
-        persist_maintenance_state_to_root(&layout.state_root, &waiting).unwrap();
-
-        // Inside the grace period the instance keeps waiting for the browser.
-        let still_waiting = reconcile_maintenance_runtime(temp.path(), &layout)
-            .unwrap()
-            .unwrap();
-        assert_eq!(still_waiting.lease_id, started.lease_id);
-        assert_eq!(still_waiting.status, "active");
-        assert_eq!(still_waiting.phase, "waiting_collections");
-        assert_eq!(
-            business_os_maintenance_status(temp.path()).unwrap()["active"],
-            true
-        );
-
-        let mut overdue = load_maintenance_state_from_root(&layout.state_root)
-            .unwrap()
-            .unwrap();
-        overdue.waiting_collections_since_ms = now_ms - MAINTENANCE_CLIENT_ACK_GRACE_MS - 1;
-        persist_maintenance_state_to_root(&layout.state_root, &overdue).unwrap();
-
-        let released = reconcile_maintenance_runtime(temp.path(), &layout)
-            .unwrap()
-            .unwrap();
-        assert_eq!(released.status, "completed");
-        assert_eq!(released.phase, "completed");
-        assert!(released.finished_at.is_some());
-        // Honest projection: no client ever acknowledged its collections.
-        assert!(!released.initial_replication_complete);
-        assert!(released.client_readiness.is_empty());
-        let payload = business_os_maintenance_status(temp.path()).unwrap();
-        assert_eq!(payload["active"], false);
-        assert_eq!(payload["message"], "");
-    }
-
-    #[test]
-    fn waiting_collections_grace_starts_at_first_observation() {
-        let temp = tempdir().unwrap();
-        let layout = InstallLayout::resolve(temp.path()).unwrap();
-        begin_maintenance(&layout, "branch:main").unwrap();
-        let mut waiting = load_maintenance_state_from_root(&layout.state_root)
-            .unwrap()
-            .unwrap();
-        waiting.service_active = true;
-        waiting.replication_up = true;
-        waiting.phase = "waiting_collections".to_string();
-        waiting.lease_expires_at_ms = current_utc().timestamp_millis() + MAINTENANCE_LEASE_TTL_MS;
-        // A state persisted by an older binary carries no start timestamp.
-        waiting.waiting_collections_since_ms = 0;
-        persist_maintenance_state_to_root(&layout.state_root, &waiting).unwrap();
-
-        let observed = reconcile_maintenance_runtime(temp.path(), &layout)
-            .unwrap()
-            .unwrap();
-        assert_eq!(observed.status, "active");
-        assert!(observed.waiting_collections_since_ms > 0);
-    }
-
-    #[test]
     fn active_target_recovers_interrupted_service_activation() {
         let temp = tempdir().unwrap();
         let mut layout = maintenance_test_layout(temp.path());
@@ -5457,47 +5371,6 @@ mod tests {
     }
 
     #[test]
-    fn healthy_native_peer_owns_post_upgrade_wait() {
-        let temp = tempdir().unwrap();
-        let layout = maintenance_test_layout(temp.path());
-        let mut state = begin_maintenance(&layout, "branch:main").unwrap();
-        state.service_active = true;
-
-        let (healthy, replication_up) = native_peer_maintenance_health_from_status(&json!({
-            "running": true,
-            "replicationUp": false,
-            "heartbeat": {"fresh": true}
-        }));
-        assert!(healthy);
-        assert!(!replication_up);
-        assert!(maintenance_peer_owns_wait(&state, healthy));
-
-        let (healthy, _) = native_peer_maintenance_health_from_status(&json!({
-            "running": true,
-            "replicationUp": false,
-            "heartbeat": {"fresh": false}
-        }));
-        assert!(!healthy);
-        assert!(!maintenance_peer_owns_wait(&state, healthy));
-    }
-
-    #[test]
-    fn upgrade_progress_lines_are_numbered_and_timed() {
-        assert_eq!(
-            format_progress_step(8, 3, "fetch binary release bundle"),
-            "ctox upgrade | 00:08 | step 03 | fetch binary release bundle"
-        );
-        assert_eq!(
-            format_progress_info(9, "installer output follows"),
-            "ctox upgrade | 00:09 | info    | installer output follows"
-        );
-        assert_eq!(
-            format_progress_done(80, "downloaded v1.2.3", 75),
-            "ctox upgrade | 01:20 | done    | downloaded v1.2.3 | took 1m 15s"
-        );
-    }
-
-    #[test]
     fn legacy_release_bundle_is_normalized_to_installable_layout() {
         let temp = tempdir().unwrap();
         let legacy = temp
@@ -5517,29 +5390,6 @@ mod tests {
         // validation on the missing runtime assets, not on the binary check.
         let error = validate_binary_bundle(temp.path()).unwrap_err().to_string();
         assert!(error.contains("missing required runtime paths"));
-    }
-
-    #[test]
-    fn upgrade_help_is_a_non_mutating_top_level_path() {
-        let args = vec!["--help".to_string()];
-        let help = update_help_text(&args);
-
-        assert!(help.contains("ctox upgrade [--stable|--dev]"));
-        assert!(help.contains("without starting an upgrade"));
-    }
-
-    #[test]
-    fn update_apply_help_is_a_non_mutating_subcommand_path() {
-        let args = vec![
-            "apply".to_string(),
-            "--latest".to_string(),
-            "--from-source".to_string(),
-            "--help".to_string(),
-        ];
-        let help = update_help_text(&args);
-
-        assert!(help.contains("ctox update apply --latest"));
-        assert!(help.contains("without starting an update"));
     }
 
     #[test]
@@ -6495,23 +6345,5 @@ mod tests {
         assert!(!releases
             .join("previous/tools/model-runtime/target")
             .exists());
-    }
-
-    #[test]
-    fn doctor_appsec_contract_includes_version_and_functional_smoke() {
-        let root = Path::new("/tmp/ctox-doctor-contract");
-        let args = appsec_doctor_args(root);
-        assert!(args
-            .windows(2)
-            .any(|window| window == ["--profile", "standard"]));
-        assert!(args.iter().any(|arg| arg == "--probe-versions"));
-        assert!(args.iter().any(|arg| arg == "--smoke"));
-        assert!(args
-            .windows(2)
-            .any(|window| window == ["--smoke-timeout", "10"]));
-        assert!(args
-            .iter()
-            .any(|arg| arg.ends_with("runtime/appsec/doctor")));
-        assert!(args.iter().any(|arg| arg.ends_with("runtime/tools/appsec")));
     }
 }

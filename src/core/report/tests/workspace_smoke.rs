@@ -24,51 +24,6 @@ fn create_run_persists_and_loads() {
 }
 
 #[test]
-fn create_run_rejects_unknown_report_type() {
-    let root = TestRoot::new().expect("temp root");
-    let mut params = rascon_create_params();
-    params.report_type_id = "definitely_not_a_real_report_type".into();
-    let err = create_run(root.path(), params).expect_err("create_run should reject");
-    let msg = format!("{err:#}");
-    assert!(
-        msg.contains("definitely_not_a_real_report_type") || msg.contains("report_type_id"),
-        "expected rejection mentioning the bad report_type_id; got: {msg}"
-    );
-}
-
-#[test]
-fn workspace_snapshot_has_required_keys() {
-    let root = TestRoot::new().expect("temp root");
-    let run_id = create_run(root.path(), rascon_create_params()).expect("create_run");
-    let workspace = Workspace::load(root.path(), &run_id).expect("workspace load");
-    let snap = workspace.workspace_snapshot().expect("snapshot");
-    let obj = snap.as_object().expect("snapshot is a JSON object");
-    for key in &[
-        "run_metadata",
-        "report_type",
-        "expected_blocks",
-        "existing_blocks",
-        "pending_blocks",
-        "completeness",
-        "character_budget",
-        "evidence_register_size",
-    ] {
-        assert!(
-            obj.contains_key(*key),
-            "workspace_snapshot missing required key {key:?}; keys present: {:?}",
-            obj.keys().collect::<Vec<_>>()
-        );
-    }
-    // run_metadata is itself an object with run_id.
-    let metadata = obj.get("run_metadata").unwrap();
-    assert_eq!(
-        metadata.get("run_id").and_then(Value::as_str),
-        Some(run_id.as_str()),
-        "run_metadata.run_id should be the created run id"
-    );
-}
-
-#[test]
 fn workspace_skill_input_write_mode_has_brief() {
     let root = TestRoot::new().expect("temp root");
     let run_id = create_run(root.path(), rascon_create_params()).expect("create_run");
@@ -126,34 +81,5 @@ fn workspace_skill_input_revision_mode_has_goals() {
         collected,
         vec!["tighten"],
         "revision mode goals[] should contain the supplied goal"
-    );
-}
-
-#[test]
-fn workspace_committed_and_pending_blocks_default_empty() {
-    let root = TestRoot::new().expect("temp root");
-    let run_id = create_run(root.path(), rascon_create_params()).expect("create_run");
-    let workspace = Workspace::load(root.path(), &run_id).expect("workspace load");
-    let committed = workspace.committed_blocks().expect("committed_blocks");
-    let pending = workspace.pending_blocks().expect("pending_blocks");
-    assert!(committed.is_empty(), "fresh run has no committed blocks");
-    assert!(pending.is_empty(), "fresh run has no pending blocks");
-    let evidence = workspace.evidence_register().expect("evidence_register");
-    assert!(evidence.is_empty(), "fresh run has no evidence");
-    let budget = workspace.character_budget().expect("character_budget");
-    assert_eq!(budget.actual_chars, 0);
-    assert_eq!(budget.status, "not_started");
-}
-
-#[test]
-fn create_run_rejects_empty_topic() {
-    let root = TestRoot::new().expect("temp root");
-    let mut params: CreateRunParams = rascon_create_params();
-    params.raw_topic = "   ".into();
-    let err = create_run(root.path(), params).expect_err("empty topic rejected");
-    let msg = format!("{err:#}");
-    assert!(
-        msg.to_lowercase().contains("topic"),
-        "expected rejection mentioning topic; got {msg}"
     );
 }

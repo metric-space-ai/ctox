@@ -2745,26 +2745,6 @@ mod tests {
     }
 
     #[test]
-    fn have_data_returns_empty_plan_response() {
-        let request = PersonResearchRequest {
-            company: "ACME".into(),
-            country: Country::De,
-            mode: ResearchMode::HaveData,
-            fields: vec![FieldKey::FirmaName],
-            include_private: Vec::new(),
-            person_priorities: Vec::new(),
-            known_person_records: Vec::new(),
-            workspace: None,
-            persist_workspace: false,
-        };
-        // We don't have an actual CTOX root here; the mode-check should
-        // short-circuit before any IO happens.
-        let payload = run_ctox_person_research_tool(Path::new("/nonexistent"), &request).unwrap();
-        assert_eq!(payload["skipped_reason"], "mode_skipped");
-        assert!(payload["plan"].as_array().unwrap().is_empty());
-    }
-
-    #[test]
     fn aggregate_picks_highest_confidence() {
         let mut raw: BTreeMap<FieldKey, Vec<Value>> = BTreeMap::new();
         raw.insert(

@@ -55,8 +55,7 @@ struct Args {
 fn det_fill(v: &mut [f32], seed: f32) {
     let norm = (v.len() as f32).sqrt();
     for (i, s) in v.iter_mut().enumerate() {
-        *s = ((i as f32 * 0.013 + seed).sin() * 0.5
-            + (i as f32 * 0.007 + seed * 2.0).cos() * 0.25)
+        *s = ((i as f32 * 0.013 + seed).sin() * 0.5 + (i as f32 * 0.007 + seed * 2.0).cos() * 0.25)
             / norm;
     }
 }
@@ -81,9 +80,7 @@ fn main() -> Result<()> {
     unsafe { cuInit(0) };
     ensure_current_context(args.cuda_device).map_err(|e| anyhow!("ctx: {e}"))?;
     let kernels = porter().map_err(|e| anyhow!("porter(): {e}"))?;
-    println!(
-        "[block] hidden={h} heads={nh}/{nkv}×{hd} ffn={f} seq={s}"
-    );
+    println!("[block] hidden={h} heads={nh}/{nkv}×{hd} ffn={f} seq={s}");
 
     let n_x = (h * s) as usize;
 
@@ -123,14 +120,14 @@ fn main() -> Result<()> {
     let t_wu = gctx.new_tensor_f32([h, f, 1, 1], "Wup");
     let t_wd = gctx.new_tensor_f32([f, h, 1, 1], "Wdown");
     gctx.realize().map_err(|e| anyhow!(e))?;
-    gctx.upload_f32(t_x, &h_x).map_err(|e| anyhow!(e))?;
-    gctx.upload_f32(t_wq, &h_wq).map_err(|e| anyhow!(e))?;
-    gctx.upload_f32(t_wk, &h_wk).map_err(|e| anyhow!(e))?;
-    gctx.upload_f32(t_wv, &h_wv).map_err(|e| anyhow!(e))?;
-    gctx.upload_f32(t_wo, &h_wo).map_err(|e| anyhow!(e))?;
-    gctx.upload_f32(t_wg, &h_wg).map_err(|e| anyhow!(e))?;
-    gctx.upload_f32(t_wu, &h_wu).map_err(|e| anyhow!(e))?;
-    gctx.upload_f32(t_wd, &h_wd).map_err(|e| anyhow!(e))?;
+    unsafe { gctx.upload_f32(t_x, &h_x) }.map_err(|e| anyhow!(e))?;
+    unsafe { gctx.upload_f32(t_wq, &h_wq) }.map_err(|e| anyhow!(e))?;
+    unsafe { gctx.upload_f32(t_wk, &h_wk) }.map_err(|e| anyhow!(e))?;
+    unsafe { gctx.upload_f32(t_wv, &h_wv) }.map_err(|e| anyhow!(e))?;
+    unsafe { gctx.upload_f32(t_wo, &h_wo) }.map_err(|e| anyhow!(e))?;
+    unsafe { gctx.upload_f32(t_wg, &h_wg) }.map_err(|e| anyhow!(e))?;
+    unsafe { gctx.upload_f32(t_wu, &h_wu) }.map_err(|e| anyhow!(e))?;
+    unsafe { gctx.upload_f32(t_wd, &h_wd) }.map_err(|e| anyhow!(e))?;
 
     let stream = CUstream(std::ptr::null_mut());
     let exec = ExecCtx::new(kernels, stream);
@@ -138,8 +135,8 @@ fn main() -> Result<()> {
     let t_start = std::time::Instant::now();
 
     // Attention half
-    let rt_x = gctx.as_rust_tensor(t_x);
-    let rt_x1 = gctx.as_rust_tensor(t_x1);
+    let rt_x = unsafe { gctx.as_rust_tensor(t_x) };
+    let rt_x1 = unsafe { gctx.as_rust_tensor(t_x1) };
     rms_norm(&exec, &rt_x, &rt_x1, 1e-6).map_err(|e| anyhow!(e))?;
     unsafe { cuStreamSynchronize(stream) };
 
@@ -154,28 +151,20 @@ fn main() -> Result<()> {
             let qp = sys::ggml_cont(gc, sys::ggml_permute(gc, q3, 0, 2, 1, 3));
             let kp = sys::ggml_cont(gc, sys::ggml_permute(gc, k3, 0, 2, 1, 3));
             let vp = sys::ggml_cont(gc, sys::ggml_permute(gc, v3, 0, 2, 1, 3));
-            let fa = sys::ggml_flash_attn_ext(
-                gc,
-                qp,
-                kp,
-                vp,
-                std::ptr::null_mut(),
-                scale,
-                0.0,
-                0.0,
-            );
+            let fa =
+                sys::ggml_flash_attn_ext(gc, qp, kp, vp, std::ptr::null_mut(), scale, 0.0, 0.0);
             let flat = sys::ggml_cont_2d(gc, fa, q_dim, s);
             sys::ggml_mul_mat(gc, t_wo, flat)
         })
         .map_err(|e| anyhow!(e))?;
 
-    let rt_attn = gctx.as_rust_tensor(t_attn_proj);
-    let rt_x2 = gctx.as_rust_tensor(t_x2);
+    let rt_attn = unsafe { gctx.as_rust_tensor(t_attn_proj) };
+    let rt_x2 = unsafe { gctx.as_rust_tensor(t_x2) };
     add(&exec, &rt_x, &rt_attn, &rt_x2).map_err(|e| anyhow!(e))?;
     unsafe { cuStreamSynchronize(stream) };
 
     // FFN half
-    let rt_x3 = gctx.as_rust_tensor(t_x3);
+    let rt_x3 = unsafe { gctx.as_rust_tensor(t_x3) };
     rms_norm(&exec, &rt_x2, &rt_x3, 1e-6).map_err(|e| anyhow!(e))?;
     unsafe { cuStreamSynchronize(stream) };
 
@@ -186,11 +175,11 @@ fn main() -> Result<()> {
         .compute(|gc| unsafe { sys::ggml_mul_mat(gc, t_wu, t_x3) })
         .map_err(|e| anyhow!(e))?;
 
-    let rt_gate = gctx.as_rust_tensor(t_gate);
-    let rt_act = gctx.as_rust_tensor(t_act);
+    let rt_gate = unsafe { gctx.as_rust_tensor(t_gate) };
+    let rt_act = unsafe { gctx.as_rust_tensor(t_act) };
     silu(&exec, &rt_gate, &rt_act).map_err(|e| anyhow!(e))?;
-    let rt_up = gctx.as_rust_tensor(t_up);
-    let rt_gated = gctx.as_rust_tensor(t_gated);
+    let rt_up = unsafe { gctx.as_rust_tensor(t_up) };
+    let rt_gated = unsafe { gctx.as_rust_tensor(t_gated) };
     mul(&exec, &rt_act, &rt_up, &rt_gated).map_err(|e| anyhow!(e))?;
     unsafe { cuStreamSynchronize(stream) };
 
@@ -198,14 +187,14 @@ fn main() -> Result<()> {
         .compute(|gc| unsafe { sys::ggml_mul_mat(gc, t_wd, t_gated) })
         .map_err(|e| anyhow!(e))?;
 
-    let rt_down = gctx.as_rust_tensor(t_down);
-    let rt_out = gctx.as_rust_tensor(t_out);
+    let rt_down = unsafe { gctx.as_rust_tensor(t_down) };
+    let rt_out = unsafe { gctx.as_rust_tensor(t_out) };
     add(&exec, &rt_x2, &rt_down, &rt_out).map_err(|e| anyhow!(e))?;
     unsafe { cuStreamSynchronize(stream) };
 
     let hybrid_us = t_start.elapsed().as_micros();
     println!("[block] hybrid: {hybrid_us} µs");
-    let h_got = gctx.download_f32(t_out, n_x).map_err(|e| anyhow!(e))?;
+    let h_got = unsafe { gctx.download_f32(t_out, n_x) }.map_err(|e| anyhow!(e))?;
 
     // ═══ Reference — same full block, all ggml ═════════════════
     let mut gref = GgmlBackendCtx::new(backend).map_err(|e| anyhow!(e))?;
@@ -218,14 +207,14 @@ fn main() -> Result<()> {
     let r_wu = gref.new_tensor_f32([h, f, 1, 1], "r_Wu");
     let r_wd = gref.new_tensor_f32([f, h, 1, 1], "r_Wd");
     gref.realize().map_err(|e| anyhow!(e))?;
-    gref.upload_f32(r_x, &h_x).map_err(|e| anyhow!(e))?;
-    gref.upload_f32(r_wq, &h_wq).map_err(|e| anyhow!(e))?;
-    gref.upload_f32(r_wk, &h_wk).map_err(|e| anyhow!(e))?;
-    gref.upload_f32(r_wv, &h_wv).map_err(|e| anyhow!(e))?;
-    gref.upload_f32(r_wo, &h_wo).map_err(|e| anyhow!(e))?;
-    gref.upload_f32(r_wg, &h_wg).map_err(|e| anyhow!(e))?;
-    gref.upload_f32(r_wu, &h_wu).map_err(|e| anyhow!(e))?;
-    gref.upload_f32(r_wd, &h_wd).map_err(|e| anyhow!(e))?;
+    unsafe { gref.upload_f32(r_x, &h_x) }.map_err(|e| anyhow!(e))?;
+    unsafe { gref.upload_f32(r_wq, &h_wq) }.map_err(|e| anyhow!(e))?;
+    unsafe { gref.upload_f32(r_wk, &h_wk) }.map_err(|e| anyhow!(e))?;
+    unsafe { gref.upload_f32(r_wv, &h_wv) }.map_err(|e| anyhow!(e))?;
+    unsafe { gref.upload_f32(r_wo, &h_wo) }.map_err(|e| anyhow!(e))?;
+    unsafe { gref.upload_f32(r_wg, &h_wg) }.map_err(|e| anyhow!(e))?;
+    unsafe { gref.upload_f32(r_wu, &h_wu) }.map_err(|e| anyhow!(e))?;
+    unsafe { gref.upload_f32(r_wd, &h_wd) }.map_err(|e| anyhow!(e))?;
 
     let t_start = std::time::Instant::now();
     let r_out = gref
@@ -241,16 +230,8 @@ fn main() -> Result<()> {
             let qp = sys::ggml_cont(gc, sys::ggml_permute(gc, q3, 0, 2, 1, 3));
             let kp = sys::ggml_cont(gc, sys::ggml_permute(gc, k3, 0, 2, 1, 3));
             let vp = sys::ggml_cont(gc, sys::ggml_permute(gc, v3, 0, 2, 1, 3));
-            let fa = sys::ggml_flash_attn_ext(
-                gc,
-                qp,
-                kp,
-                vp,
-                std::ptr::null_mut(),
-                scale,
-                0.0,
-                0.0,
-            );
+            let fa =
+                sys::ggml_flash_attn_ext(gc, qp, kp, vp, std::ptr::null_mut(), scale, 0.0, 0.0);
             let flat = sys::ggml_cont_2d(gc, fa, q_dim, s);
             let proj = sys::ggml_mul_mat(gc, r_wo, flat);
             let x2 = sys::ggml_add(gc, r_x, proj);
@@ -265,7 +246,7 @@ fn main() -> Result<()> {
         })
         .map_err(|e| anyhow!(e))?;
     let ref_us = t_start.elapsed().as_micros();
-    let h_ref = gref.download_f32(r_out, n_x).map_err(|e| anyhow!(e))?;
+    let h_ref = unsafe { gref.download_f32(r_out, n_x) }.map_err(|e| anyhow!(e))?;
     println!("[block] ggml reference: {ref_us} µs");
 
     let mut max_abs = 0.0_f32;

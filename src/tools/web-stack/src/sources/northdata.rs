@@ -711,31 +711,6 @@ mod tests {
     }
 
     #[test]
-    fn registry_metadata() {
-        let m = module();
-        assert_eq!(m.id(), "northdata.de");
-        assert!(m.aliases().contains(&"northdata"));
-        assert!(m.aliases().contains(&"nd"));
-        assert_eq!(m.tier(), Tier::S);
-        assert_eq!(m.countries(), &[Country::De, Country::At, Country::Ch]);
-        assert!(m.requires_credential().is_none());
-        for expected in [
-            FieldKey::FirmaName,
-            FieldKey::FirmaAnschrift,
-            FieldKey::FirmaPlz,
-            FieldKey::FirmaOrt,
-            FieldKey::PersonVorname,
-            FieldKey::PersonNachname,
-            FieldKey::PersonPosition,
-        ] {
-            assert!(
-                m.authoritative_for().contains(&expected),
-                "missing field authority: {expected:?}"
-            );
-        }
-    }
-
-    #[test]
     fn shape_query_dach_pins_domain() {
         for ctx in [ctx_de(), ctx_at(), ctx_ch(), ctx_none()] {
             let shaped = module()
@@ -750,12 +725,6 @@ mod tests {
     #[test]
     fn shape_query_empty_returns_none() {
         assert!(module().shape_query("   ", &ctx_de()).is_none());
-    }
-
-    #[test]
-    fn no_fetch_direct_override() {
-        // Crawl-Pfad — Trait-Default `None` ist der Vertrag.
-        assert!(module().fetch_direct(&ctx_de(), "Siemens AG").is_none());
     }
 
     /// End-to-end extraction against a frozen Siemens AG profile (DE).

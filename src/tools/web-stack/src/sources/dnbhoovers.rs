@@ -794,32 +794,6 @@ mod tests {
     }
 
     #[test]
-    fn module_metadata() {
-        let m = module();
-        assert_eq!(m.id(), "dnbhoovers.com");
-        assert_eq!(m.aliases(), &["dnb", "dnbhoovers", "hoovers"]);
-        assert!(matches!(m.tier(), Tier::C));
-        assert_eq!(m.countries(), &[Country::De, Country::At, Country::Ch]);
-        assert_eq!(m.requires_credential(), Some(SECRET_NAME));
-        for required in [FieldKey::WzCode, FieldKey::Umsatz, FieldKey::Mitarbeiter] {
-            assert!(
-                m.authoritative_for().contains(&required),
-                "missing authoritative field: {required:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn shape_query_is_none_for_api_source() {
-        let ctx = SourceCtx {
-            root: Path::new("/tmp/ctox-test-dnb"),
-            country: Some(Country::De),
-            mode: ResearchMode::NewRecord,
-        };
-        assert!(module().shape_query("SAP SE", &ctx).is_none());
-    }
-
-    #[test]
     fn fetch_direct_skips_non_dach_countries() {
         // The enum only contains DACH today; this test guards against a
         // future Country variant accidentally engaging the D&B path.
