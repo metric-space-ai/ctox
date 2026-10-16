@@ -1,77 +1,24 @@
 //! E41 route boundary. Harness owns business_os::launch_context_v4::build.
-//! The exact #900 envelope is retained here until that module is published.
+//! Harness supplies the exact #900 envelope; this route never duplicates it.
 //! No synthesized user, scope, key, offer or signaling credentials are returned.
 use super::store_inputs::StoreInputs;
-use crate::business_os::store::BusinessOsSessionUser;
+use crate::business_os::store::BusinessOsUser;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ctox_store::StoreError;
 use rusqlite::OptionalExtension;
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-#[derive(Serialize)]
-pub(crate) struct V4LaunchContext {
-    pub v4: V4Context,
-}
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct V4Context {
-    pub instance_id: String,
-    pub user_id: String,
-    pub actor: LaunchActor,
-    pub signaling: LaunchSignaling,
-    pub hello: LaunchHello,
-    pub package_keys: Vec<PackageKey>,
-}
-#[derive(Serialize)]
-pub(crate) struct LaunchActor {
-    pub id: String,
-    pub role: String,
-}
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct LaunchSignaling {
-    pub urls: Vec<String>,
-    pub room: String,
-    pub peer_id: String,
-    pub native_peer_id: String,
-    pub token: String,
-    pub ice_servers: Vec<rxdb::plugins::replication_webrtc::RTCIceServer>,
-}
-#[derive(Serialize)]
-pub(crate) struct LaunchHello {
-    pub offer: HelloOffer,
-}
-#[derive(Serialize)]
-#[serde(tag = "type")]
-pub(crate) enum HelloOffer {
-    #[serde(rename = "hello")]
-    Hello(rxdb::plugins::replication_webrtc::index_mod::hello::Hello),
-}
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct PackageKey {
-    pub key_id: String,
-    pub alg: KeyAlgorithm,
-    pub public_key: String,
-}
-#[derive(Serialize)]
-pub(crate) enum KeyAlgorithm {
-    Ed25519,
-}
-
 async fn build(
     owners: &Arc<StoreInputs>,
-    _user: BusinessOsSessionUser,
-) -> Result<V4LaunchContext, StoreError> {
-    owners.instance_signer()?;
-    // E41-SPLIT: replace ONLY this call boundary with Harness's build(owners,
-    // user) after v4/launch-context-v4 is published. Do not duplicate minting.
-    Err(StoreError::Invalid("V4 launch builder unavailable".into()))
+    user: &BusinessOsUser,
+) -> Result<crate::business_os::launch_context_v4::V4LaunchContext, StoreError> {
+    crate::business_os::launch_context_v4::build(owners, user)
+        .await
+        .map_err(|_| StoreError::Invalid("V4 launch authority unavailable".into()))
 }
 
 /// Authentication is a read on the retained BOS owner. No raw opener, write,
@@ -79,7 +26,7 @@ async fn build(
 async fn authenticated_user(
     inputs: &StoreInputs,
     hash: String,
-) -> Result<Option<BusinessOsSessionUser>, StoreError> {
+) -> Result<Option<BusinessOsUser>, StoreError> {
     inputs.instance_signer()?;
     let bos = inputs.databases.get("bos").ok_or(StoreError::Closed)?;
     let now = SystemTime::now()
@@ -88,9 +35,9 @@ async fn authenticated_user(
         .as_millis();
     let now = i64::try_from(now).map_err(|_| StoreError::Invalid("clock unavailable".into()))?;
     let user = bos.readers.read(move |tx| {
-        tx.query_row("SELECT u.user_id,u.display_name,u.role FROM business_sessions s JOIN business_users u ON u.user_id=s.user_id WHERE s.token_hash=?1 AND s.revoked=0 AND s.expires_at_ms>?2 AND u.active=1 AND u.role IN ('chef','admin','founder','user')", rusqlite::params![hash,now], |r| {
+        tx.query_row("SELECT u.user_id,u.display_name,u.role,u.active,u.profile_json,u.created_at_ms,u.updated_at_ms FROM business_sessions s JOIN business_users u ON u.user_id=s.user_id WHERE s.token_hash=?1 AND s.revoked=0 AND s.expires_at_ms>?2 AND u.active=1 AND u.role IN ('chef','admin','founder','user')", rusqlite::params![hash,now], |r| {
             let role: String=r.get(2)?;
-            Ok(BusinessOsSessionUser {id:r.get(0)?,display_name:r.get(1)?,is_admin:matches!(role.as_str(),"chef"|"admin"),role})
+            Ok(BusinessOsUser {id:r.get(0)?,display_name:r.get(1)?,role,active:r.get(3)?,profile:serde_json::from_str(&r.get::<_,String>(4)?).map_err(|e|rusqlite::Error::FromSqlConversionFailure(4,rusqlite::types::Type::Text,Box::new(e)))?,created_at_ms:r.get(5)?,updated_at_ms:r.get(6)?})
         }).optional()
     }).await?;
     inputs.instance_signer()?;
@@ -128,14 +75,30 @@ pub(super) fn response(
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     let task = inputs.runtime.spawn(async move {
         let result = async {
-            let Some(user) = authenticated_user(&owners, hash).await? else {
+            let Some(user) = authenticated_user(&owners, hash.clone()).await? else {
                 return Ok((
                     401,
                     "application/json",
                     b"{\"error\":\"authentication_required\"}".to_vec(),
                 ));
             };
-            let context = build(&owners, user).await?;
+            let context = build(&owners, &user).await?;
+            // Recheck after builder awaits; no session/role snapshot is a grant.
+            let current = authenticated_user(&owners, hash).await?;
+            if current
+                .as_ref()
+                .is_none_or(|u| u.id != user.id || u.role != user.role)
+                || context.v4.user_id != user.id
+                || context.v4.actor.id != user.id
+                || context.v4.actor.role != user.role
+                || context.v4.instance_id != owners.instance_signer()?.instance_id()
+            {
+                return Ok((
+                    401,
+                    "application/json",
+                    b"{\"error\":\"authentication_required\"}".to_vec(),
+                ));
+            }
             owners.instance_signer()?;
             let body = serde_json::to_vec(&context)
                 .map_err(|_| StoreError::Invalid("launch encoding unavailable".into()))?;
