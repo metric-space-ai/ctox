@@ -19,11 +19,11 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | capabilities_distinct | 41 |
 | triggers_total | 10 |
 | command_rights_entries | 42 |
-| foreign_declarations | 294 |
+| foreign_declarations | 295 |
 | foreign_write_declarations | 32 |
 | foreign_code_only | 94 |
 | foreign_without_export | 0 |
-| platform_clamps | 1 |
+| platform_clamps | 0 |
 | exported_collections | 84 |
 | handler_conflicts | 0 |
 | handlers_platform_type | 282 |
@@ -42,7 +42,7 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | shell_files | 126 |
 | apps_with_styles | 41 |
 | write_guards | 1 |
-| todo_total | 182 |
+| todo_total | 181 |
 | declarations | 40 |
 | commands_out_total | 20 |
 | commands_in_total | 7 |
@@ -203,11 +203,10 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | Befehlstyp | Apps |
 |---|---|
 
-## 11. Plattformzugriffe auf exports beschränkt (1)
+## 11. Plattformzugriffe auf exports beschränkt (0)
 
 | App | Collection | gewünscht | gewährt | Grund |
 |---|---|---|---|---|
-| app-store | app_drafts | read | – | nicht in Plattform-exports |
 
 ## 12. foreign ohne passendes exports (0, Soll 0)
 

@@ -1630,17 +1630,7 @@
       "proposed_owner": "ctox-platform"
     }
   ],
-  "platform_clamps": [
-    {
-      "app": "app-store",
-      "collection": "app_drafts",
-      "granted": [],
-      "reason": "nicht in Plattform-exports",
-      "wanted": [
-        "read"
-      ]
-    }
-  ],
+  "platform_clamps": [],
   "prefix_mismatch": [
     {
       "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
