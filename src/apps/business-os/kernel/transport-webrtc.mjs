@@ -40,7 +40,7 @@ export class NativeWire {
  constructor(channels,{apply,onError,adapters={},state=new ReliableClientSession()}){
   this.state=state;this.generation=state.generation;
   Object.assign(this,{channels,apply,onError,adapters});this.codec='gzip';this.frameBytes=16384;this.id=0n;this.closed=false;
-  this.queues=Array.from({length:6},()=>[]);this.chains=Array(6).fill(Promise.resolve());this.prepares=Array(6).fill(Promise.resolve());this.pending=new Map();this.queued=Array(6).fill(0);this.incoming=0;this.reassembly=0;this.credits=Array(6).fill(0);this.cursor=3;this.listeners=[];
+  this.queues=Array.from({length:6},()=>[]);this.chains=Array(6).fill(Promise.resolve());this.prepares=Array(6).fill(Promise.resolve());this.pending=new Map();this.queued=Array(6).fill(0);this.incoming=Array(6).fill(0);this.reassembly=0;this.credits=Array(6).fill(0);this.cursor=3;this.listeners=[];
   for(const channel of new Set(Object.values(channels)))this.attach(channel);
  }
  attach(channel){channel.bufferedAmountLowThreshold=16384;for(const name of ['open','bufferedamountlow']){const fn=()=>this.wake();channel.addEventListener(name,fn);this.listeners.push([channel,name,fn]);}}
@@ -84,8 +84,12 @@ export class NativeWire {
  }
  wake(){if(this.closed||this.scheduled)return;this.scheduled=true;queueMicrotask(()=>{this.scheduled=false;try{for(;;){const lane=this.next();if(lane===null)return;const item=this.queues[lane][0],frame=item.frames[item.at],length=typeof frame==='string'?encoder.encode(frame).length:frame.byteLength;if(this.buffered()+length>65536)return;(this.channels[lane]??this.channels[0]).send(frame);if(++item.at===item.frames.length){this.queues[lane].shift();item.resolve();}}}catch(error){this.onError(error);}});}
  push(lane,bytes){
-  if(this.incoming+bytes.length>512*1024)return Promise.reject(new CtoxError('quota','Ingress queue exceeded'));this.incoming+=bytes.length;
-  const next=this.chains[lane].then(()=>this.consume(lane,bytes)).finally(()=>{this.incoming-=bytes.length;});this.chains[lane]=next.catch(this.onError);return next;
+  if(!Number.isInteger(lane)||lane<0||lane>5)return Promise.reject(new CtoxError('invalid','Invalid ingress lane'));
+  // Match the peer's reliable lane windows, plus bounded framing overhead.
+  // SCTP's 128 KiB association budget is separate from queued application work.
+  const budget=nativeLimits[lane]+37*Math.ceil(nativeLimits[lane]/(this.frameBytes-37));
+  if(this.incoming[lane]+bytes.length>budget)return Promise.reject(new CtoxError('quota','Ingress queue exceeded'));this.incoming[lane]+=bytes.length;
+  const next=this.chains[lane].then(()=>this.consume(lane,bytes)).finally(()=>{this.incoming[lane]-=bytes.length;});this.chains[lane]=next.catch(this.onError);return next;
  }
  async consume(lane,bytes){
   if(this.closed)throw new CtoxError('unavailable','Ingress closed');
