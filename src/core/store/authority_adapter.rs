@@ -1,9 +1,7 @@
 //! FULL-durability native owner factory. Connections never leave the actor.
+pub use crate::harness_adapter::BoundedOwner;
 use rusqlite::Connection;
 use std::{io, path::PathBuf};
-#[path = "harness_adapter.rs"]
-mod file_owner;
-pub use file_owner::BoundedOwner;
 
 pub fn open_full(
     path: PathBuf,
