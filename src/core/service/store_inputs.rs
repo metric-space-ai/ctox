@@ -20,7 +20,7 @@ static INPUTS: OnceLock<Mutex<HashMap<PathBuf, Weak<StoreInputs>>>> = OnceLock::
 /// The composition root lends one retained native session. These are live
 /// native capabilities, never reconstructed from a policy or key fixture.
 pub(crate) struct NativeSessionInputs {
-    pub instance_signer: Arc<dyn rxdb::plugins::replication_webrtc::v4_stream::InstanceSigner>,
+    pub instance_signer: Arc<dyn ctox_store::change_log::subscription::protocol::InstanceSigner>,
     pub execution_authority: Arc<dyn ctox_sync::authority::client::ExecutionAuthority>,
     pub(super) active: Arc<AtomicBool>,
 }
@@ -33,7 +33,7 @@ pub(crate) struct StoreInputs {
     pub databases: HashMap<String, Database>,
     native_session: OnceLock<NativeSessionInputs>,
     instance_signer:
-        OnceLock<Arc<dyn rxdb::plugins::replication_webrtc::v4_stream::InstanceSigner>>,
+        OnceLock<Arc<dyn ctox_store::change_log::subscription::protocol::InstanceSigner>>,
     closing: Arc<AtomicBool>,
     retired: AtomicBool,
     sync_reads: Arc<tokio::sync::Semaphore>,
@@ -135,7 +135,7 @@ impl StoreInputs {
     /// absence of a native authority never grants an execution capability.
     pub(crate) fn instance_signer(
         &self,
-    ) -> Result<Arc<dyn rxdb::plugins::replication_webrtc::v4_stream::InstanceSigner>, StoreError>
+    ) -> Result<Arc<dyn ctox_store::change_log::subscription::protocol::InstanceSigner>, StoreError>
     {
         self.check()?;
         self.instance_signer
@@ -146,7 +146,7 @@ impl StoreInputs {
 
     pub(super) fn publish_instance_signer(
         &self,
-        signer: Arc<dyn rxdb::plugins::replication_webrtc::v4_stream::InstanceSigner>,
+        signer: Arc<dyn ctox_store::change_log::subscription::protocol::InstanceSigner>,
     ) -> Result<(), StoreError> {
         self.check()?;
         self.instance_signer

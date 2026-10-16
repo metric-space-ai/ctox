@@ -1,6 +1,7 @@
 //! The foreground owns the one instance identity and the actual native host.
 //! No local fixture authority or replacement membership is created here.
 use super::store_inputs::{NativeSessionInputs, StoreInputs};
+use ctox_store::change_log::subscription::protocol::InstanceSigner;
 use ctox_store::{ReadJob, StoreError};
 use ctox_sync::{
     authority::auth::SigningIdentity,
@@ -8,7 +9,6 @@ use ctox_sync::{
     host_transport::HostTransport,
     native::{NativeAdmission, NativePeerRole, NativeSyncOptions},
 };
-use rxdb::plugins::replication_webrtc::v4_stream::InstanceSigner;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -154,7 +154,7 @@ impl NativeSessionOwner {
             admission: NativeAdmission {
                 peer: Arc::new(|_| true),
                 session: Arc::new(|payload, _| {
-                    use rxdb::plugins::replication_webrtc::WebRTCPeerSessionValidation as Decision;
+                    use rxdb::plugins::replication_webrtc::webrtc_types::WebRTCPeerSessionValidation as Decision;
                     let role = payload
                         .pointer("/peerSession/role")
                         .and_then(serde_json::Value::as_str);

@@ -85,7 +85,7 @@ struct NativeOwners {
     _runtime: crate::runtime_env::RuntimeStore,
     _secrets: crate::secrets::SecretStore,
     _instance_identity: Arc<ctox_sync::authority::auth::SigningIdentity>,
-    _instance_signer: Arc<dyn rxdb::plugins::replication_webrtc::v4_stream::InstanceSigner>,
+    _instance_signer: Arc<dyn ctox_store::change_log::subscription::protocol::InstanceSigner>,
     signer_active: Arc<AtomicBool>,
     #[cfg(unix)]
     session: Option<super::store_native::NativeSessionOwner>,
@@ -135,7 +135,7 @@ impl NativeOwners {
         .map_err(|_| StoreError::Panicked)?
         .map_err(|_| StoreError::Invalid("canonical instance ID unavailable".into()))?;
         let signer_active = Arc::new(AtomicBool::new(true));
-        let signer: Arc<dyn rxdb::plugins::replication_webrtc::v4_stream::InstanceSigner> =
+        let signer: Arc<dyn ctox_store::change_log::subscription::protocol::InstanceSigner> =
             Arc::new(super::store_native::InstanceSigning::new(
                 identity.clone(),
                 instance_id,
