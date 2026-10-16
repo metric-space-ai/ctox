@@ -858,7 +858,7 @@
     "handlers/invoices.recurring.run.js": "e692144c114f97ca16b9ebd86a2764e0e6b4dbfde02d82e8de0360f74554a2ed",
     "handlers/invoices.recurring.update.js": "0ec49d08e9889645bb6201899e2411bff1d0dec1b7fe10490ae0980fe08b18f9",
     "icon.svg": "1a07d8a008532a808b0949a1bf9aaaf6535546d8e7c68d04a652f29d8f1a0dd7",
-    "index.css": "d9dad90821bfd695a2ea505ca490d60c8b8adb552b17ee4d52cc476509882269",
+    "index.css": "59e6de573874decba6b8a55f7cdf9fb2d0c5dce4c363e392b03dea2ee325fc04",
     "index.html": "91fb18afa9778b57eb50abb05d4114ed8eb76524a7f05fa9bce8f67f0eb2e3ab",
     "index.js": "972a78f4e380df7e9a09fffb63bfdd34ac053c2416c968453de11e61a0e8edfa",
     "locales/de.json": "44dba6ed129d23b00ad8bd3098ae7931026ea9bb7fcb0c06c8eb10986c39fed1",
@@ -1166,7 +1166,7 @@
   },
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "23066ac76b9bb96dabd9070bf7c9d33b29ea89792baeadd54a437ca68c3961d6",
+    "base_hash": "986e500de56155841aeeb62a80869b12aa9d37b149bcb02c2391150a0e9b3272",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },
