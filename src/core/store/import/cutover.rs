@@ -31,6 +31,8 @@ impl Entity {
     }
 }
 /// Supplied by DevOps from its freeze receipt, not inferred from a basename.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FileChoice {
     pub database: String,
     pub live_file: PathBuf,
@@ -253,6 +255,20 @@ fn read_rows(
     let name = sql(crate::change_log::identifier(&table.name))?;
     let mut stmt = sql(input.tx.prepare(&format!("SELECT * FROM {name}")))?;
     let names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+    if names.iter().any(|n| {
+        [
+            "password",
+            "password_hash",
+            "dkim_private_key",
+            "access_token",
+            "refresh_token",
+            "secret_value",
+            "api_key",
+        ]
+        .contains(&n.as_str())
+    }) {
+        return Err(invalid("cutover_sensitive_columns_keep_source"));
+    }
     let mut cursor = sql(stmt.query([]))?;
     let mut rows = Vec::new();
     while let Some(row) = sql(cursor.next())? {
@@ -501,13 +517,26 @@ pub fn collect(
             add(&mut docs, doc)?;
             continue;
         }
+        // Historical RxDB versions are archived even when an identical Core mirror exists.
+        if row.kind == SourceKind::Rxdb && known.contains(row.collection.as_str()) {
+            let current = active.get(&row.collection).ok_or_else(|| {
+                invalid(format!(
+                    "cutover_active_metadata_missing:{}",
+                    row.collection
+                ))
+            })?;
+            if row.version != *current {
+                add(&mut docs, archive(row, imported_at)?)?;
+                continue;
+            } // E29-R4
+        }
         if row.kind != row.authority {
             // E29-R3
             let authority = authorities.get(&(row.collection.clone(), row.id.clone()));
             if authority.is_some_and(|body| *body == &row.body) {
-                audit
-                    .compared_equal
-                    .push(format!("{}:{}:{}", row.db, row.table, row.id));
+                audit.compared_equal.push(
+                    json!([row.db, row.table, row.collection, row.version, row.id]).to_string(),
+                );
             } else {
                 let doc = archive(row, imported_at)?;
                 audit.findings.push(Finding {
@@ -534,26 +563,12 @@ pub fn collect(
             add(&mut docs, archive(row, imported_at)?)?;
             continue;
         } // E29-R2
-        if row.authority == SourceKind::Rxdb {
-            let current = active.get(&row.collection).ok_or_else(|| {
-                invalid(format!(
-                    "cutover_active_metadata_missing:{}",
-                    row.collection
-                ))
-            })?;
-            if row.version != *current {
-                add(&mut docs, archive(row, imported_at)?)?;
-                continue;
-            } // E29-R4
-        }
         let mut body = row.body.clone();
         if let Some(spec) = plan.migrations.get(&row.collection) {
             body = evaluator.migrate(&row.collection, spec, body)?;
         }
-        let id = body["id"]
-            .as_str()
-            .ok_or_else(|| invalid("cutover_target_id"))?
-            .into();
+        let (id, body) = base_release::migrated_identity(&row.collection, &row.id, body)?;
+        let archive_complete = row.projection || body != row.body;
         add(
             &mut docs,
             Document {
@@ -563,7 +578,7 @@ pub fn collect(
                 revision: row.revision.clone(),
             },
         )?;
-        if row.projection {
+        if archive_complete {
             add(&mut docs, archive(row, imported_at)?)?;
         } // E29-R5
     }

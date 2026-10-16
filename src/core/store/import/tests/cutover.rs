@@ -406,6 +406,47 @@ fn rule4_metadata_selects_active_version_and_archives_the_higher_old_version() -
         "rule4",
         json!({"active_metadata":versions,"documents":result.snapshot.documents,"audit":result.audit}),
     )?;
+    let core = seed(
+        dir.path(),
+        "ctox.sqlite3",
+        json!({"id":"r","version":"historical-high"}),
+    )?;
+    let mut core_db = ro(&core)?;
+    let core_tx = core_db.transaction()?;
+    let mirrors = c::rxdb_tables(&tx, &std::collections::BTreeSet::from(["known".into()]))?;
+    let native = [spec("known", 0, c::Entity::Core, c::Mode::Rows)];
+    let result = c::collect(
+        &[
+            input(&tx, &f, c::SourceKind::Rxdb, &mirrors),
+            input(&core_tx, &core, c::SourceKind::Core, &native),
+        ],
+        &plan(),
+        &ReleaseMigration,
+        &budget(),
+        7,
+    )?;
+    assert!(result
+        .snapshot
+        .documents
+        .iter()
+        .any(|d| d.collection == c::ARCHIVE
+            && d.body["source_db"] == "business-os-rxdb.sqlite3"
+            && d.body["collection_version"] == 9));
+    assert_eq!(
+        result
+            .snapshot
+            .documents
+            .iter()
+            .find(|d| d.collection == "known")
+            .unwrap()
+            .body["version"],
+        "historical-high"
+    );
+    proof(
+        "rule4-core-mirror",
+        json!({"documents":result.snapshot.documents,"audit":result.audit}),
+    )?;
+    core_tx.rollback()?;
     tx.rollback()?;
     let db = Connection::open(&f.frozen_file)?;
     db.execute("INSERT INTO internal VALUES(?1,0)",[json!({"context":"collection","data":{"name":"known","version":9,"schema":{"version":9}}}).to_string()])?;
@@ -474,6 +515,57 @@ fn rule5_partial_projection_archives_all_columns_including_null_and_blob() -> Re
         "rule5",
         json!({"audit":result.audit,"documents":result.snapshot.documents}),
     )?;
+    let account = seed(
+        dir.path(),
+        "accounts.sqlite3",
+        json!({"account_key":"account-natural-key","title":"kept"}),
+    )?;
+    let a = Connection::open(&account.frozen_file)?;
+    a.execute("UPDATE internal SET data=?1",[json!({"context":"collection","data":{"name":"communication_accounts","version":1,"schema":{"version":1}}}).to_string()])?;
+    drop(a);
+    let mut a = ro(&account)?;
+    let at = a.transaction()?;
+    let tables = [spec(
+        "communication_accounts",
+        1,
+        c::Entity::App,
+        c::Mode::Rows,
+    )];
+    let mut release = plan();
+    release.collections.insert(
+        "conversations".into(),
+        vec![definition("communication_accounts", "v4-base")],
+    );
+    let result = c::collect(
+        &[input(&at, &account, c::SourceKind::Rxdb, &tables)],
+        &release,
+        &ReleaseMigration,
+        &budget(),
+        7,
+    )?;
+    let doc = result
+        .snapshot
+        .documents
+        .iter()
+        .find(|d| d.collection == "communication_accounts")
+        .unwrap();
+    assert_eq!(doc.id, "account-natural-key");
+    let full = &result
+        .snapshot
+        .documents
+        .iter()
+        .find(|d| d.collection == c::ARCHIVE)
+        .unwrap()
+        .body;
+    assert_eq!(full["record_id"], "r");
+    assert!(full["doc"]["data"]
+        .as_str()
+        .unwrap()
+        .contains("account-natural-key"));
+    proof(
+        "rule5-migration",
+        json!({"audit":result.audit,"documents":result.snapshot.documents}),
+    )?;
     Ok(())
 }
 #[test]
@@ -516,6 +608,9 @@ fn rule7_freeze_receipt_selects_the_source_file_never_path_heuristics() -> Resul
     let mut db = ro(&f)?;
     let tx = db.transaction()?;
     let tables = [spec("no-target", 0, c::Entity::Core, c::Mode::KeepCore)];
+    let mut extra = serde_json::to_value(&f).unwrap();
+    extra["auto_select_latest"] = true.into();
+    assert!(serde_json::from_value::<c::FileChoice>(extra).is_err());
     let mut wrong = input(&tx, &f, c::SourceKind::Core, &tables);
     wrong.copied_from = Path::new("/original/runtime/ctox.sqlite3");
     assert!(
