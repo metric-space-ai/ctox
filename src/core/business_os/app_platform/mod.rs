@@ -104,9 +104,14 @@ impl Platform {
         authenticated_user_id: String,
         capabilities: Vec<String>,
     ) -> Result<ctox_store::types::JobHandle<Vec<String>>, StoreError> {
-        self.writer.submit(WriteJob::new(JobOptions::default(), move |tx| {
-            platform_routes::filter_session_capabilities(tx, &authenticated_user_id, capabilities)
-        }))
+        self.writer
+            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+                platform_routes::filter_session_capabilities(
+                    tx,
+                    &authenticated_user_id,
+                    capabilities,
+                )
+            }))
     }
 
     /// The daemon composition root passes its already registered sync database.

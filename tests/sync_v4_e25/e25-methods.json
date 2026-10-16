@@ -1194,7 +1194,7 @@
       "component_source_sha256": "728051911bb01ebb58f7c370f15a340aa88700f01840b26f4b2fb4864bac84e7",
       "capability_filter": {
         "entry": "Platform::filter_session_capabilities",
-        "status": "build_unverified",
+        "status": "native_component_verified",
         "attachment": "src/core/rxdb/src/plugins/replication_webrtc/connection_lifecycle.rs:395",
         "gap": "hello owner must filter selected capabilities after current authenticated user lookup; no caller role"
       }
@@ -1204,9 +1204,9 @@
       "route": "instance.providers.models.check",
       "handler": "src/core/business_os/app_platform/provider_model_check.rs",
       "test": "native_model_check_is_permissioned_bound_and_not_reexecuted",
-      "verification": "Train-14 source composed; native owner check unverified after the Cargo harness cap",
+      "verification": "Native model owner permission, dedup and commit-fence invariant verified on integration f5f3fcb11, using the built native test executable",
       "productive": "not_run",
-      "gap": "Train-14 includes the real fenced native provider_model_check owner. Its Cargo step hit the 300 s harness cap, so native execution is not verified. Installed peer/provider measurement remains not_run."
+      "gap": "Native owner contract verified; productive peer/provider probe and installed acceptance remain not_run."
     }
   ]
 }

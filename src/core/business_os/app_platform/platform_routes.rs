@@ -77,7 +77,8 @@ fn allowed(tx: &Transaction<'_>, actor: &BusinessOsActor, kind: &str) -> bool {
     restart_admin
         && actor.id.as_deref().is_some_and(|id| !id.is_empty())
         && policy::sync_rights::read(tx).is_ok_and(|rights| {
-            policy::evaluate_with_rights(&rights, actor, right, &BusinessOsScope::workspace()).allowed
+            policy::evaluate_with_rights(&rights, actor, right, &BusinessOsScope::workspace())
+                .allowed
         })
 }
 
