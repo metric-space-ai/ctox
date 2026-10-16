@@ -521,3 +521,8 @@
 .news-digest .news-check { margin-top: 0; }
 .news-digest-hint { margin: 4px 0 8px; font-size: 12px; opacity: 0.72; }
 .news-undo { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: var(--ctox-surface-2, rgba(127, 127, 127, 0.12)); font-size: 13px; }
+
+/* Keine Zahlen hinter Tabs (UI-Regel, workjet#801). Die Knoten bleiben für den Pane-Grammar-Vertrag. */
+.ctox-pane-tab .view-count {
+  display: none;
+}

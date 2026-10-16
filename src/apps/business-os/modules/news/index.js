@@ -1,3 +1,4 @@
+import { applyPaneIconLabels } from '../../shared/pane-icon-labels.js';
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { renderHtmlIfChanged } from '../../shared/stable-dom.js';
 import {
@@ -74,6 +75,7 @@ const labels = {
     linkCopied: 'Link kopiert',
     editorial: 'CTOX Redaktion',
     topicsFooter: '{0} Themen',
+    topicsFooterOne: '1 Thema',
     postsFooter: '{0} Beiträge · {1}',
     newTopic: 'Neues Thema',
     titleRequired: 'Gib dem Thema einen Namen.',
@@ -162,6 +164,7 @@ const labels = {
     linkCopied: 'Link copied',
     editorial: 'CTOX Editorial',
     topicsFooter: '{0} topics',
+    topicsFooterOne: '1 topic',
     postsFooter: '{0} posts · {1}',
     newTopic: 'New topic',
     titleRequired: 'Give the topic a name.',
@@ -268,6 +271,7 @@ export async function mount(ctx) {
   ensureStyles();
   ctx.host.innerHTML = await loadModuleMarkup();
   bindElements(ctx.host);
+  applyPaneIconLabels(ctx.host, state.lang);
   wireEvents();
   await loadAll();
   subscribeAll();
@@ -561,7 +565,7 @@ function renderLeft() {
   els.leftPane?.__ctoxPaneGrammar?.setCounts?.(counts);
   setCountsFallback(els.leftPane, counts);
   const topics = topicsForBand(state.topics, state.leftGrammar);
-  setFooter(els.leftPane, t('topicsFooter', topics.length));
+  setFooter(els.leftPane, topics.length === 1 ? t('topicsFooterOne') : t('topicsFooter', topics.length));
   if (!state.topics.length) {
     renderHtmlIfChanged(els.topicList, `
       <div class="ctox-empty news-empty">
