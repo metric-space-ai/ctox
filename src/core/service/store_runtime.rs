@@ -90,16 +90,26 @@ impl Dispatcher for Inspect {
         }
         if request.kind == JobKind::Read && request.method == "sync.identity" {
             if !request.payload.is_empty() {
-                return Err(StoreError::Invalid("identity request accepts no payload".into()));
+                return Err(StoreError::Invalid(
+                    "identity request accepts no payload".into(),
+                ));
             }
-            let root = self.native_root.lock().unwrap_or_else(|p|p.into_inner())
-                .clone().ok_or(StoreError::Closed)?;
+            let root = self
+                .native_root
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+                .ok_or(StoreError::Closed)?;
             let (reply, receive) = tokio::sync::oneshot::channel();
             self.runtime.spawn(async move {
                 let result = crate::persistence::run_core_sync(move || {
                     let identity = crate::sync_host::signing_identity(&root)?;
-                    Ok(serde_json::to_vec(&serde_json::json!({"identity":identity.public_identity()}))?)
-                }).await.map_err(|_|StoreError::Invalid("native identity unavailable".into()));
+                    Ok(serde_json::to_vec(
+                        &serde_json::json!({"identity":identity.public_identity()}),
+                    )?)
+                })
+                .await
+                .map_err(|_| StoreError::Invalid("native identity unavailable".into()));
                 let _ = reply.send(result);
             });
             return Ok(JobHandle::from_receiver(receive));
@@ -353,7 +363,7 @@ impl DaemonStores {
             self.closing.clone(),
             databases.clone(),
         )?);
-        *self.native_root.lock().unwrap_or_else(|p|p.into_inner()) = Some(root.to_owned());
+        *self.native_root.lock().unwrap_or_else(|p| p.into_inner()) = Some(root.to_owned());
         Ok(())
     }
 
@@ -401,7 +411,10 @@ impl DaemonStores {
         // Retire lookup/admission first. Existing jobs are then drained by the
         // pools/writers; retain the daemon lock until all file owners stop.
         self.closing.store(true, Ordering::Release);
-        self.native_root.lock().unwrap_or_else(|p|p.into_inner()).take();
+        self.native_root
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
         self.inputs.take();
         self.native_stores.clear();
         let databases = self

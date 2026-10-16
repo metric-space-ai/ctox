@@ -143,22 +143,33 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
         let endpoint = crate::service::queue_store::endpoint(root);
         let active_endpoint = match &endpoint {
             ctox_store::ipc::StoreEndpoint::UnixSocket { path } => path.exists(),
-            ctox_store::ipc::StoreEndpoint::NamedPipe { directory, .. } => directory.join("store-daemon.lock").exists(),
+            ctox_store::ipc::StoreEndpoint::NamedPipe { directory, .. } => {
+                directory.join("store-daemon.lock").exists()
+            }
         };
         if active_endpoint {
-            let reply = ctox_store::ipc::request(endpoint.clone(),
-                ctox_store::ipc::Request { request_id: 1, kind: ctox_store::ipc::JobKind::Read,
-                    method: "sync.identity".into(), payload: Vec::new() },
-                ctox_store::JobOptions::default())?.blocking_wait();
+            let reply = ctox_store::ipc::request(
+                endpoint.clone(),
+                ctox_store::ipc::Request {
+                    request_id: 1,
+                    kind: ctox_store::ipc::JobKind::Read,
+                    method: "sync.identity".into(),
+                    payload: Vec::new(),
+                },
+                ctox_store::JobOptions::default(),
+            )?
+            .blocking_wait();
             match reply {
                 Ok(reply) => return print(serde_json::from_slice::<serde_json::Value>(&reply)?),
                 Err(error) => {
                     // A stale socket after an interrupted foreground process is
                     // not an owner. Prove exclusive custody before falling back;
                     // a live owner (including one returning an error) wins.
-                    let offline = ctox_store::ipc::MaintenanceOwner::acquire(&endpoint,
-                        ctox_store::DbId::new(crate::paths::core_db(root))?)
-                        .map_err(|_|anyhow::Error::new(error))?;
+                    let offline = ctox_store::ipc::MaintenanceOwner::acquire(
+                        &endpoint,
+                        ctox_store::DbId::new(crate::paths::core_db(root))?,
+                    )
+                    .map_err(|_| anyhow::Error::new(error))?;
                     drop(offline);
                 }
             }

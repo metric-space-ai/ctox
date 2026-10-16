@@ -1282,7 +1282,9 @@ fn serve_owned_mcp_channel(root: &Path, options: BusinessOsMcpServeOptions) -> a
     // Materialize the auth token at startup so it exists in the secret store for
     // the operator to retrieve, and warn loudly if bound beyond loopback.
     let work = root.to_owned();
-    if let Err(error) = crate::persistence::run_core_blocking_at(root, move || mcp_auth_token(&work)) {
+    if let Err(error) =
+        crate::persistence::run_core_blocking_at(root, move || mcp_auth_token(&work))
+    {
         eprintln!("[business-os-mcp] failed to provision inbound auth token: {error:#}");
     }
     println!("CTOX Business OS MCP listening on http://{}", options.addr);
@@ -1571,11 +1573,18 @@ pub fn handle_gateway_message(root: &Path, message: &str) -> String {
     let message_owned = message.to_owned();
     crate::persistence::run_core_blocking_at(root, move || {
         Ok(handle_admitted_gateway_message(&work, &message_owned))
-    }).unwrap_or_else(|error| {
+    })
+    .unwrap_or_else(|error| {
         eprintln!("[business-os-mcp] gateway owner admission failed: {error:#}");
-        let id = serde_json::from_str::<Value>(message).ok()
-            .and_then(|v|v.get("request_id").and_then(Value::as_str).map(str::to_owned)).unwrap_or_default();
-        gateway_json_rpc_error(id, None, 503, -32603,"native store owner unavailable").to_string()
+        let id = serde_json::from_str::<Value>(message)
+            .ok()
+            .and_then(|v| {
+                v.get("request_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .unwrap_or_default();
+        gateway_json_rpc_error(id, None, 503, -32603, "native store owner unavailable").to_string()
     })
 }
 
@@ -6148,7 +6157,8 @@ fn handle_mcp_http_request(
     let work = root.to_owned();
     crate::persistence::run_core_blocking_at(root, move || {
         handle_admitted_mcp_http_request(&work, listener, request)
-    }).context("MCP HTTP owner admission/request failed")
+    })
+    .context("MCP HTTP owner admission/request failed")
 }
 
 fn handle_admitted_mcp_http_request(
@@ -6482,7 +6492,10 @@ fn ensure_mcp_response_size(value: &Value) -> anyhow::Result<()> {
 }
 
 pub fn try_mcp_policy(root: &Path) -> anyhow::Result<BusinessOsMcpPolicy> {
-    if let Some(payload) = crate::persistence::load_json_payload::<BusinessOsMcpPolicyPayload>(root, MCP_POLICY_PAYLOAD_KEY)? {
+    if let Some(payload) = crate::persistence::load_json_payload::<BusinessOsMcpPolicyPayload>(
+        root,
+        MCP_POLICY_PAYLOAD_KEY,
+    )? {
         return Ok(normalize_mcp_policy(payload.policy));
     }
     let env_map = crate::inference::runtime_env::effective_operator_env_map(root)?;

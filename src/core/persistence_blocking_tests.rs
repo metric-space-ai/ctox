@@ -47,6 +47,21 @@ async fn guard_followup_blocking_entry_preserves_owner_and_context_boundaries() 
     })
     .join()
     .expect("ordinary-thread caller joins")?;
+    let work = root.path().to_owned();
+    ctox_app_runtime::daemon::BlockingExecutor::run(
+        &CoreCompatibilityExecutor,
+        Box::new(move || {
+            require_sync_owner_context()?;
+            store_text_value(&work, "app-runtime-callback", Some("same-owner"))
+        }),
+    )
+    .await?;
+    assert_eq!(
+        load_text_value_owned(root.path(), "app-runtime-callback")
+            .await?
+            .as_deref(),
+        Some("same-owner")
+    );
     let error = run_core_blocking::<()>(&runtime, || {
         panic!("async worker must not execute blocking body")
     })

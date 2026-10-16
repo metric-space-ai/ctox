@@ -406,10 +406,14 @@ pub(crate) fn run_core_blocking<T: Send + 'static>(
     // commands may drive async owner APIs themselves. Entering a Tokio worker
     // here would make their block_on/runtime shutdown panic. SQLite still runs
     // only on the handed-out writer/read pool, and these jobs share four slots.
-    std::thread::Builder::new().name("ctox-core-blocking".into()).spawn(move || {
-        let _admission = admission;
-        with_core_sync_context(operation)
-    })?.join().map_err(|_| CoreSyncError::WorkerClosed)?
+    std::thread::Builder::new()
+        .name("ctox-core-blocking".into())
+        .spawn(move || {
+            let _admission = admission;
+            with_core_sync_context(operation)
+        })?
+        .join()
+        .map_err(|_| CoreSyncError::WorkerClosed)?
 }
 
 /// Uses only the Core handle installed for this root. Missing/retired owners
@@ -439,10 +443,15 @@ pub(crate) fn with_cli_owners<T>(root: &Path, operation: impl FnOnce() -> Result
     if injected_core(root).is_ok() {
         return operation();
     }
-    anyhow::ensure!(tokio::runtime::Handle::try_current().is_err(),
-        "offline CLI ownership requires an ordinary OS thread");
+    anyhow::ensure!(
+        tokio::runtime::Handle::try_current().is_err(),
+        "offline CLI ownership requires an ordinary OS thread"
+    );
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2).max_blocking_threads(8).enable_all().build()?;
+        .worker_threads(2)
+        .max_blocking_threads(8)
+        .enable_all()
+        .build()?;
     let handle = runtime.handle().clone();
     let endpoint = crate::service::queue_store::endpoint(root);
     let mut stores = crate::service::store_runtime::DaemonStores::start(endpoint, handle)?;
@@ -474,6 +483,18 @@ pub(crate) fn with_cli_owners<T>(root: &Path, operation: impl FnOnce() -> Result
     // Never replace a command failure with a fabricated absent/success value.
     shutdown.context("offline CLI owner shutdown failed")?;
     result
+}
+
+/// App-runtime callbacks enter through the same bounded async Core entry as
+/// other native work. Its portable crate cannot mint this owner admission.
+pub(crate) struct CoreCompatibilityExecutor;
+impl ctox_app_runtime::daemon::BlockingExecutor for CoreCompatibilityExecutor {
+    fn run(
+        &self,
+        operation: ctox_app_runtime::daemon::BlockingOperation,
+    ) -> ctox_app_runtime::daemon::BlockingFuture {
+        Box::pin(run_core_sync(operation))
+    }
 }
 
 type InstalledCoreOwners =

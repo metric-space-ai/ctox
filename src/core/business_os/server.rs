@@ -205,22 +205,24 @@ fn serve_owned_business_os(root: &Path, options: BusinessOsServeOptions) -> anyh
                 let work = root.clone();
                 if let Err(err) = crate::persistence::run_core_blocking_at(&root, move || {
                     let root = work;
-                if let Err(err) = store::open_store(&root) {
-                    eprintln!("[business-os] store warm-up failed: {err:#}");
-                }
-                match super::rxdb_peer::ensure_native_peer(&root) {
-                    Ok(()) => {}
-                    Err(err) => {
-                        eprintln!("[business-os] native rxdb peer config failed: {err:#}")
+                    if let Err(err) = store::open_store(&root) {
+                        eprintln!("[business-os] store warm-up failed: {err:#}");
                     }
-                }
-                if let Err(err) = store::write_module_catalog_projection_to_rxdb(&root) {
-                    eprintln!(
-                        "[business-os] module catalog refresh failed at serve start: {err:#}"
-                    );
-                }
+                    match super::rxdb_peer::ensure_native_peer(&root) {
+                        Ok(()) => {}
+                        Err(err) => {
+                            eprintln!("[business-os] native rxdb peer config failed: {err:#}")
+                        }
+                    }
+                    if let Err(err) = store::write_module_catalog_projection_to_rxdb(&root) {
+                        eprintln!(
+                            "[business-os] module catalog refresh failed at serve start: {err:#}"
+                        );
+                    }
                     Ok(())
-                }) { eprintln!("[business-os] warm-up owner admission failed: {err:#}"); }
+                }) {
+                    eprintln!("[business-os] warm-up owner admission failed: {err:#}");
+                }
             })
             .expect("failed to start Business OS store warm-up thread");
     }
@@ -335,10 +337,15 @@ fn handle_request(root: &Path, app_root: &Path, request: Request) -> anyhow::Res
     let app = app_root.to_owned();
     crate::persistence::run_core_blocking_at(root, move || {
         handle_admitted_request(&work, &app, request)
-    }).context("Business OS HTTP owner admission/request failed")
+    })
+    .context("Business OS HTTP owner admission/request failed")
 }
 
-fn handle_admitted_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow::Result<()> {
+fn handle_admitted_request(
+    root: &Path,
+    app_root: &Path,
+    mut request: Request,
+) -> anyhow::Result<()> {
     let method = request.method().clone();
     let url = request.url().to_string();
     let path = url.split('?').next().unwrap_or("/");
@@ -2069,7 +2076,8 @@ fn persist_chatgpt_subscription_auth(
     let home_path = codex_home.to_owned();
     crate::persistence::run_core_blocking_at(root, move || {
         persist_admitted_chatgpt_subscription_auth(&work, &home_path, tokens)
-    }).context("subscription callback owner execution failed")
+    })
+    .context("subscription callback owner execution failed")
 }
 
 fn persist_admitted_chatgpt_subscription_auth(
@@ -4368,48 +4376,79 @@ fn mime_for(path: &PathBuf) -> &'static str {
 mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn guard_prod_foreground_http_bootstrap_and_restart_identity() -> anyhow::Result<()> {
-        use crate::service::store_startup::{Foreground, isolate_test_roots};
+        use crate::service::store_startup::{isolate_test_roots, Foreground};
         let _scope = isolate_test_roots().await;
-        anyhow::ensure!(std::env::var_os("CTOX_STATE_ROOT").is_none(), "isolated state required");
-        let fixture = tempfile::Builder::new().prefix("gprod-").tempdir_in("/tmp")?;
+        anyhow::ensure!(
+            std::env::var_os("CTOX_STATE_ROOT").is_none(),
+            "isolated state required"
+        );
+        let fixture = tempfile::Builder::new()
+            .prefix("gprod-")
+            .tempdir_in("/tmp")?;
         let root = fixture.path().to_owned();
         let app = root.join("business-os");
         fs::create_dir_all(&app)?;
-        fs::write(app.join("index.html"), "<!doctype html><html><head></head><body>foreground owner probe</body></html>")?;
-        let mut foreground = Foreground::start(root.clone(), tokio::runtime::Handle::current()).await?;
+        fs::write(
+            app.join("index.html"),
+            "<!doctype html><html><head></head><body>foreground owner probe</body></html>",
+        )?;
+        let mut foreground =
+            Foreground::start(root.clone(), tokio::runtime::Handle::current()).await?;
         let first_root = root.clone();
         let first = crate::persistence::run_core_sync(move || {
             Ok(crate::sync_host::signing_identity(&first_root)?.public_identity())
-        }).await?;
-        let server = Server::http("127.0.0.1:0").map_err(|e|anyhow::anyhow!("HTTP fixture bind: {e}"))?;
+        })
+        .await?;
+        let server =
+            Server::http("127.0.0.1:0").map_err(|e| anyhow::anyhow!("HTTP fixture bind: {e}"))?;
         let address = server.server_addr().to_ip().context("loopback address")?;
         let worker_root = root.clone();
         let worker = std::thread::spawn(move || -> anyhow::Result<()> {
             for _ in 0..20 {
-                let request = server.recv_timeout(std::time::Duration::from_secs(15))?.context("bounded HTTP request")?;
+                let request = server
+                    .recv_timeout(std::time::Duration::from_secs(15))?
+                    .context("bounded HTTP request")?;
                 handle_request(&worker_root, &app, request)?;
             }
             Ok(())
         });
         let observed = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<f64>> {
-            let client = reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(15)).build()?;
+            use std::io::{Read, Write};
             let mut latencies = Vec::new();
             for _ in 0..20 {
                 let started = std::time::Instant::now();
-                let response = client.get(format!("http://{address}/")).send()?;
-                let status = response.status();
-                let body = response.text()?;
-                anyhow::ensure!(status.as_u16()==200, "GET / returned {status}: {body}");
-                anyhow::ensure!(body.contains("foreground owner probe"), "bootstrap document missing");
-                latencies.push(started.elapsed().as_secs_f64()*1000.0);
+                let mut stream = std::net::TcpStream::connect(address)?;
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(15)))?;
+                stream.set_write_timeout(Some(std::time::Duration::from_secs(15)))?;
+                stream
+                    .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")?;
+                let mut response = String::new();
+                stream.read_to_string(&mut response)?;
+                let (headers, body) = response
+                    .split_once("\r\n\r\n")
+                    .context("HTTP response framing")?;
+                let status = headers
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1));
+                anyhow::ensure!(status == Some("200"), "GET / returned {status:?}: {body}");
+                anyhow::ensure!(
+                    body.contains("foreground owner probe"),
+                    "bootstrap document missing"
+                );
+                latencies.push(started.elapsed().as_secs_f64() * 1000.0);
             }
             Ok(latencies)
-        }).await?;
+        })
+        .await?;
         let served = worker.join().expect("bounded HTTP worker joined");
-        let mut latencies = observed?;
         served?;
+        let mut latencies = observed?;
         latencies.sort_by(f64::total_cmp);
-        eprintln!("GUARD_PROD_HTTP_RECEIPT {}",serde_json::json!({"requests":20,"status":200,"p99_ms":latencies[19]}));
+        eprintln!(
+            "GUARD_PROD_HTTP_RECEIPT {}",
+            serde_json::json!({"requests":20,"status":200,"p99_ms":latencies[19]})
+        );
         foreground.shutdown().await?;
         let offline_root = root.clone();
         let offline = std::thread::spawn(move || {
@@ -4417,13 +4456,17 @@ mod tests {
             crate::persistence::run_cli_owned(&offline_root, move || {
                 Ok(crate::sync_host::signing_identity(&work)?.public_identity())
             })
-        }).join().expect("offline identity joined")?;
+        })
+        .join()
+        .expect("offline identity joined")?;
         assert_eq!(first, offline, "offline CLI rotated public identity");
-        let mut restarted = Foreground::start(root.clone(), tokio::runtime::Handle::current()).await?;
+        let mut restarted =
+            Foreground::start(root.clone(), tokio::runtime::Handle::current()).await?;
         let work = root.clone();
         let after = crate::persistence::run_core_sync(move || {
             Ok(crate::sync_host::signing_identity(&work)?.public_identity())
-        }).await?;
+        })
+        .await?;
         assert_eq!(first, after, "foreground restart rotated public identity");
         restarted.shutdown().await?;
         Ok(())
