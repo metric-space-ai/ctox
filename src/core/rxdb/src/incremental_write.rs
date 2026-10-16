@@ -166,6 +166,9 @@ impl IncrementalWriteQueue {
                         }
                     }
                 }
+                if items.iter().all(|item| item.sender.is_none()) {
+                    continue;
+                }
                 // ref: rxdb/src/incremental-write.ts:121-131
                 let pre_write_result = (self.pre_write)(new_data.clone(), old_data.clone()).await;
                 let new_data = match pre_write_result {
