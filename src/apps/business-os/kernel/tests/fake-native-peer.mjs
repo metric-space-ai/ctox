@@ -1,4 +1,4 @@
-import {decodeHelloFrame,negotiateHello} from '../../rxdb/src/hello.mjs';
+import {decodeHelloFrame,negotiateHello} from '../vendor/hello.mjs';
 import {sha256Hex} from '../values.mjs';
 export const offer=instance_id=>({type:'hello',protocol_ver:4,bootstrap_ver:1,app_api_ver:{min:'4.0',max:'4.0'},instance_id,capabilities:[],device_proof:{device_id:'test-device',public_key:'A'.repeat(43),nonce:'B'.repeat(43),signature:'C'.repeat(86)},scopes_wanted:[],transport:{codecs:['gzip'],max_frame_bytes:16384,fragmentation:true,reassembly:true}});
 export const scopeFor=collection=>({scope_hash:`scope:${collection}`,gen:Number(/@g(\d+)$/.exec(collection)?.[1]??1)});

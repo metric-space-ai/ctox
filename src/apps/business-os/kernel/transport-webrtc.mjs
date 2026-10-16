@@ -1,6 +1,6 @@
 import {KernelTransport,seqGreater} from './transport.mjs';
 import {CtoxError,uuidv7,sha256Hex} from './values.mjs';
-import {HelloConnection,decimalSeq} from '../rxdb/src/hello.mjs';
+import {HelloConnection,decimalSeq} from './vendor/hello.mjs';
 import {SendScheduler,LANES} from './scheduler.mjs';
 import {LaneIngress} from './ingress.mjs';
 const clock=()=>Date.now();
@@ -150,6 +150,8 @@ export class WebRTCKernelTransport extends KernelTransport {
    await this.ready;
   }catch(error){this.fail(error);throw error;}
  }
+ /** E43.2: capabilities granted by the Core in hello_ok; null until the authenticated hello completed. */
+ get capabilities(){return this.session?[...this.session.capabilities??[]]:null;}
  attachChannel(channel){
   channel.binaryType='arraybuffer';this.listen(channel,'open',()=>this.channelsChanged?.());
   this.listen(channel,'message',event=>{this.receive(event.data).catch(e=>this.fail(e));});
@@ -242,7 +244,7 @@ export class WebRTCKernelTransport extends KernelTransport {
   };
   take(await this.request('transfer_get',{ref,kind,offset:0,limit:size}),0);
   for(let offset=size;offset<total;){const batch=[];for(let n=0;n<4&&offset<total;n++,offset+=size){const at=offset;batch.push(this.request('transfer_get',{ref,kind,offset:at,limit:size}).then(reply=>({reply,offset:at})));}for(const item of await Promise.all(batch))take(item.reply,item.offset);}
-  const blob=new Blob(parts,{type:mime});if(await sha256Hex(blob)!==ref)throw new CtoxError('invalid','Transfer hash mismatch');return blob;
+  const blob=new Blob(parts,{type:mime});if(await sha256Hex(blob)!==ref)throw new CtoxError('invalid','Transfer hash mismatch',{reason:'hash_mismatch'});return blob;
  }
  async artifact(hash){return (await this.download(hash,'artifact')).text();}
  async blob(ref,range){

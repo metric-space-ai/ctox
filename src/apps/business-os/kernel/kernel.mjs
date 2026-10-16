@@ -84,6 +84,7 @@ async function importModuleText(text) {
 // Vom Kern berechnete bzw. geschützte Manifest-Felder: weder per setManifest änderbar noch vom Basis-Manifest geerbt.
 const MANIFEST_FIELDS_PROTECTED = new Set(['app_id', 'app_ver', 'files', 'generations', 'retires', 'provenance', 'author', 'created_at']);
 const MANIFEST_FIELDS_COMPUTED = new Set([...MANIFEST_FIELDS_PROTECTED, 'title', 'entry', 'handlers', 'capabilities_required', 'min_app_api', 'layout', 'styles', 'collections']);
+const HASH_MISMATCH = Symbol('hash_mismatch');
 export function createKernel(opts = {}) {
   const instanceId = opts.instanceId;
   const userId = opts.userId ?? opts.actor?.id;
@@ -1080,7 +1081,8 @@ export function createKernel(opts = {}) {
       // Jeder Zweig endet in setActivation; kein Warten ohne Ende (K-1c Punkt 0). Transport offline → Fehler nach oben.
       let content = null;
       for (let attempt = 0; attempt < 2 && content === null; attempt++) {
-        let got = await transport.artifact(hash).then(artifactContent).catch((error) => { if (error?.code === 'unavailable') throw error; return null; });
+        let got = await transport.artifact(hash).then(artifactContent).catch((error) => { if (error?.code === 'unavailable') throw error; return error?.reason === 'hash_mismatch' ? HASH_MISMATCH : null; });
+        if (got === HASH_MISMATCH) { simRecord.refetches++; continue; }
         if (got == null) { await setActivation(appId, { target_ver: ver, state: 'failed', error: `artifact_missing:${path}` }); return; }
         if (corruptNextFetch > 0) { corruptNextFetch--; got = typeof got === 'string' ? `${got}\n/* beschädigt */` : Uint8Array.from([...got, 0]); }
         if ((await sha256Hex(got)) === hash) content = got;
@@ -1090,6 +1092,8 @@ export function createKernel(opts = {}) {
       await db.tx(async (t) => { await assertGen(t); await t.put('artifacts', { hash, content, app_id: appId, app_ver: ver, path, stored_at: Date.now() }); });
     }
     await setActivation(appId, { target_ver: ver, state: 'fetched' });
+    // E43.2: a transport that grants capabilities in hello_ok reports null until then; never judge before the grant.
+    if ((manifest.capabilities_required ?? []).some((c) => !capabilities.has(c)) && transport.capabilities === null) { await waitUntil(() => transport.capabilities !== null || closed); if (closed) return; }
     const missing = (manifest.capabilities_required ?? []).filter((c) => !capabilities.has(c) && !(transport.capabilities ?? []).includes(c)); // Katalog-Primitive des Core (§16.29)
     if (missing.length || compareVer(manifest.min_app_api ?? '4.0', APP_API_VERSION) > 0) {
       await setActivation(appId, { target_ver: ver, state: 'failed', error: `needs_update:${missing.join(',') || `app_api ${manifest.min_app_api}`}` });
