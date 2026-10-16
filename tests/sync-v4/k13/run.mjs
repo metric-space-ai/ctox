@@ -33,7 +33,7 @@ const sourceManifest={head:execFileSync('git',['rev-parse','HEAD'],{cwd:reposito
   scope:'immutable dedicated harness source; includes owned P6 test overlay',
   files:[...new Set(files)].map(path=>({path,sha256:hash(join(repository,path))}))};
 const unchanged=()=>sourceManifest.files.every(row=>hash(join(repository,row.path))===row.sha256);
-const summary={revision:expected,owner:'01a101a1-d8e3',startedAt:new Date().toISOString(),
+const summary={revision:expected,owner:'01a14204-d613',startedAt:new Date().toISOString(),
   daemonEntry:'service --foreground',harnessSource:sourceManifest,scenarios:[],pass:false,terminal:false};
 const save=()=>fs.writeFileSync(join(output,'p6-result.json'),JSON.stringify(summary,null,2));
 save();
