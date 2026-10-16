@@ -6,7 +6,7 @@ use super::super::connection_handler_rs::send_under_publication;
 use super::super::webrtc_types::WebRTCPublicationGuard;
 use super::framing::{Framer, Reassembler, MAX_MESSAGE};
 use super::hello::{TransportSelection, WireSeq};
-use super::lanes::{Lane, ASSOCIATION_BUDGET, BULK_WEIGHTS, FRAME_BYTES, REALTIME_LABEL};
+use super::lanes::{Lane, ASSOCIATION_BUDGET, BULK_WEIGHTS, SCTP_FRAME_BYTES as FRAME_BYTES, REALTIME_LABEL};
 use crate::rx_error::{new_rx_error, RxError, RxResult};
 use crate::rxjs_compat::{RxStream, RxSubject};
 use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
@@ -199,7 +199,7 @@ fn channel_window(channel: usize) -> usize {
     if channel < 3 || channel == 6 {
         2 * FRAME_BYTES
     } else {
-        4 * FRAME_BYTES
+        DATA_BUDGET - 3 * FRAME_BYTES
     }
 }
 fn channel_low(channel: usize) -> usize {
@@ -212,12 +212,21 @@ fn channel_low(channel: usize) -> usize {
 #[derive(Default)]
 pub struct AssociationBudget {
     outstanding: [usize; 7],
+    rtt_ms: u64,
 }
 impl AssociationBudget {
+    fn observe_rtt(&mut self, rtt_ms: u64) { self.rtt_ms = rtt_ms; }
+    fn window(&self, channel: usize) -> usize {
+        if channel < 3 || channel == 6 { return channel_window(channel); }
+        // 5 MB/s BDP, conservative 20-ms startup floor; never borrow strict credit.
+        let bdp = (self.rtt_ms.max(20) as u128 * 5_000).min(usize::MAX as u128) as usize;
+        bdp.div_ceil(FRAME_BYTES).saturating_mul(FRAME_BYTES).min(channel_window(channel))
+    }
+
     pub fn reserve(&mut self, channel: usize, bytes: usize) -> bool {
         if channel >= 7
             || bytes > FRAME_BYTES
-            || self.outstanding[channel].saturating_add(bytes.max(1)) > channel_window(channel)
+            || self.outstanding[channel].saturating_add(bytes.max(1)) > self.window(channel)
             || self.buffered().saturating_add(bytes.max(1)) > self.ceiling(channel)
         {
             return false;
@@ -232,10 +241,11 @@ impl AssociationBudget {
             .sum();
         DATA_BUDGET - reserved
     }
-    pub fn ready(&self, channel: usize) -> bool {
+    pub fn ready(&self, channel: usize) -> bool { self.ready_bytes(channel, FRAME_BYTES) }
+    fn ready_bytes(&self, channel: usize, bytes: usize) -> bool {
         channel < 7
-            && self.outstanding[channel] + FRAME_BYTES <= channel_window(channel)
-            && self.buffered() + FRAME_BYTES <= self.ceiling(channel)
+            && self.outstanding[channel].saturating_add(bytes) <= self.window(channel)
+            && self.buffered().saturating_add(bytes) <= self.ceiling(channel)
     }
     pub fn drained(&mut self, channel: usize) {
         self.observe(channel, 0);
@@ -322,6 +332,7 @@ struct Counters {
     handed_to_sctp: [std::sync::atomic::AtomicU64; 2],
     failed: [std::sync::atomic::AtomicU64; 2],
     buffered_upper_bound_peak: std::sync::atomic::AtomicU64,
+    sctp_window: [std::sync::atomic::AtomicU64; 4],
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HandoffCounters {
@@ -329,6 +340,7 @@ pub struct HandoffCounters {
     pub handed_to_sctp: [u64; 2],
     pub failed: [u64; 2],
     pub buffered_upper_bound_peak: u64,
+    pub sctp_window: [u64; 4],
 }
 impl Counters {
     fn snapshot(&self) -> HandoffCounters {
@@ -338,6 +350,7 @@ impl Counters {
             handed_to_sctp: std::array::from_fn(|i| self.handed_to_sctp[i].load(Relaxed)),
             failed: std::array::from_fn(|i| self.failed[i].load(Relaxed)),
             buffered_upper_bound_peak: self.buffered_upper_bound_peak.load(Relaxed),
+            sctp_window: std::array::from_fn(|i| self.sctp_window[i].load(Relaxed)),
         }
     }
 }
@@ -365,7 +378,7 @@ fn failure(message: &str) -> RxError {
 // 128-KiB object/association contract. All reliable lanes and realtime share it.
 fn enforce_sctp_message_limit(bytes: usize) -> RxResult<()> {
     if bytes > FRAME_BYTES {
-        return Err(failure("V4 SCTP message exceeds 16 KiB"));
+        return Err(failure("V4 SCTP message exceeds path MTU DATA payload"));
     }
     Ok(())
 }
@@ -887,6 +900,13 @@ async fn run(
                 for channel in &channels { channel.set_buffered_amount_low_threshold(0).await.map_err(|e| failure(&e.to_string()))?; }
                 armed_low = [0; 7];
             }
+            if let Some((payload, rtt, cwnd, rwnd)) = channels[0].sctp_send_window().await.map_err(|e| failure(&e.to_string()))? {
+                if framer.frame_bytes() > payload { return Err(failure("V4 negotiated frame exceeds path MTU DATA payload")); }
+                budget.observe_rtt(rtt);
+                for (counter, value) in counters.sctp_window.iter().zip([payload as u64, rtt, cwnd as u64, rwnd as u64]) {
+                    counter.store(value, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
             // Read exact stream occupancy before admitting more data. Small
             // messages may never cross LOW, so no crossing event is guaranteed.
             for (index, channel) in channels.iter().enumerate() {
@@ -932,7 +952,8 @@ async fn run(
                     Err(_) => break,
                 }
             }
-            let ready = |lane: Lane| open[lane.index()] && initial_drain[lane.index()] && budget.ready(lane.index());
+            let needed: [usize; 6] = std::array::from_fn(|i| queue.queues[i].front().map_or(0, |entry| entry.bytes));
+            let ready = |lane: Lane| open[lane.index()] && initial_drain[lane.index()] && budget.ready_bytes(lane.index(), needed[lane.index()]);
             let selected = queue.pop_ready(|l| l.index() < 3 && ready(l)).map(|(lane, frame)| (lane.index(), frame))
                 .or_else(|| (open[6] && initial_drain[6] && budget.ready(6)).then(|| realtime.pop_front()).flatten().map(|frame| (6, frame)))
                 .or_else(|| queue.pop_ready(ready).map(|(lane, frame)| (lane.index(), frame)));
@@ -1140,33 +1161,23 @@ mod tests {
         assert_eq!(counts, [160, 30, 10]);
     }
     fn v4_scheduler_association_budget_covers_all_channels_and_waits_for_low() {
+        assert_eq!(FRAME_BYTES, webrtc::data_channel::sctp_data_payload_limit());
         let mut reserved = AssociationBudget::default();
-        assert!(reserved.reserve(Lane::Live.index(), FRAME_BYTES));
-        assert!(reserved.reserve(Lane::InitialSync.index(), FRAME_BYTES));
-        for _ in 0..2 {
-            assert!(reserved.reserve(Lane::Transfer.index(), FRAME_BYTES));
-        }
-        assert!(
-            !reserved.reserve(Lane::Transfer.index(), 1),
-            "bulk consumed strict-priority reserve"
-        );
+        assert!(reserved.window(5) >= 100_000, "20-ms BDP must cover 5 MB/s");
+        let startup = reserved.window(5);
+        reserved.observe_rtt(600);
+        assert!(reserved.window(5) >= startup);
+        while reserved.reserve(5, FRAME_BYTES) {}
         for lane in [Lane::Control, Lane::Commands, Lane::Interactive] {
-            assert!(
-                reserved.reserve(lane.index(), FRAME_BYTES),
-                "bulk blocked a strict-priority first frame"
-            );
+            assert!(reserved.reserve(lane.index(), FRAME_BYTES), "bulk consumed strict-lane credit");
         }
-        let mut budget = AssociationBudget::default();
-        for i in 0..7 {
-            assert!(budget.reserve(i, FRAME_BYTES));
-        }
-        assert_eq!(budget.buffered(), 112 * 1024);
-        assert!(!budget.reserve(0, 1));
-        assert!(!budget.reserve(7, 1));
-        budget.drained(0);
-        assert!(budget.reserve(0, FRAME_BYTES));
-        assert!(budget.buffered() <= ASSOCIATION_BUDGET);
+        assert!(reserved.buffered() <= ASSOCIATION_BUDGET);
+        assert!(!reserved.reserve(5, ASSOCIATION_BUDGET + 1));
+        assert!(!reserved.reserve(7, 1));
+        reserved.drained(5);
+        assert!(reserved.reserve(5, FRAME_BYTES));
     }
+
     fn v4_scheduler_blocked_lane_does_not_block_other_channels() {
         let mut q = SendQueue::default();
         q.push(Lane::Control, FRAME_BYTES, 0).unwrap();

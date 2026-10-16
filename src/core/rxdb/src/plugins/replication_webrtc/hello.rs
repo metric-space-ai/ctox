@@ -10,6 +10,10 @@ pub const MAX_HELLO_BYTES: usize = 16 * 1024;
 pub const MAX_FRAME_BYTES: u32 = 16 * 1024;
 pub const MIN_FRAME_BYTES: u32 = 1024;
 
+fn native_frame_limit() -> u32 {
+    webrtc::data_channel::sctp_data_payload_limit() as u32
+}
+
 /// Never passes a sequence through a JSON number (including above JS 2^53).
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct WireSeq(pub u64);
@@ -131,6 +135,13 @@ pub struct HelloOk {
     pub rights_ver: WireSeq,
 }
 impl Hello {
+    /// Apply the native DATA payload limit at the outbound connection seam,
+    /// preserving lossless serialization of received protocol documents.
+    pub fn with_native_transport_limit(mut self) -> Self {
+        self.transport.max_frame_bytes = self.transport.max_frame_bytes.min(native_frame_limit());
+        self
+    }
+
     /// Native initiator counterpart of the browser's hello_ok validation. The
     /// transport must already be bound to the paired Core's trusted identity.
     pub fn validate_response(
@@ -184,7 +195,7 @@ impl Hello {
         }
         let transport = &response.transport;
         if !self.transport.codecs.contains(&transport.codec)
-            || !(MIN_FRAME_BYTES..=MAX_FRAME_BYTES.min(self.transport.max_frame_bytes))
+            || !(MIN_FRAME_BYTES..=MAX_FRAME_BYTES.min(self.transport.max_frame_bytes).min(native_frame_limit()))
                 .contains(&transport.frame_bytes)
             || !self.transport.fragmentation
             || !self.transport.reassembly
@@ -420,7 +431,7 @@ impl HelloPolicy {
                 frame_bytes: local
                     .max_frame_bytes
                     .min(remote.max_frame_bytes)
-                    .min(MAX_FRAME_BYTES),
+                    .min(MAX_FRAME_BYTES).min(native_frame_limit()),
                 fragmentation: true,
                 reassembly: true,
             },

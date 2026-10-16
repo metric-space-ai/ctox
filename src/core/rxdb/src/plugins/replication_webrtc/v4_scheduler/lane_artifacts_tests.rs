@@ -84,14 +84,16 @@ fn lane4_packet_resume_and_budget_contract() {
         !budget.reserve(Lane::Transfer.index(), ASSOCIATION_BUDGET + 1),
         "budget overflow admitted"
     );
+    let physical = webrtc::data_channel::sctp_data_payload_limit();
     for lane in 0..7 {
-        assert!(budget.reserve(lane, FRAME_BYTES));
+        assert!(budget.reserve(lane, physical));
     }
+    while budget.reserve(Lane::Transfer.index(), physical) {}
     assert!(budget.buffered() <= ASSOCIATION_BUDGET);
-    assert!(!budget.reserve(Lane::Transfer.index(), FRAME_BYTES));
+    assert!(!budget.reserve(Lane::Transfer.index(), physical));
     budget.drained(Lane::Control.index());
     assert!(
-        budget.reserve(Lane::Control.index(), FRAME_BYTES),
+        budget.reserve(Lane::Control.index(), physical),
         "bulk blocked control credit"
     );
 }
@@ -199,7 +201,7 @@ async fn lane4_real_webrtc_50mb_control_latency_and_verified_arrival() {
     );
     let mut tasks = tokio::task::JoinSet::new();
     let result = tokio::time::timeout(Duration::from_secs(420), async {
-        let transport = TransportSelection { codec: Codec::Zstd, frame_bytes: FRAME_BYTES as u32, fragmentation: true, reassembly: true };
+        let transport = TransportSelection { codec: Codec::Zstd, frame_bytes: webrtc::data_channel::sctp_data_payload_limit() as u32, fragmentation: true, reassembly: true };
         let sa = ReliableSession::new("lane4-50mb".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
         let sb = ReliableSession::new("lane4-50mb".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
         let binding_a = SessionBinding::attach(sa.clone(), &sb.hello()).unwrap();
@@ -388,7 +390,7 @@ impl PairFixture {
         eprintln!("LANE4_RESUME stage=bootstrap-open");
         let transport = TransportSelection {
             codec: Codec::Zstd,
-            frame_bytes: FRAME_BYTES as u32,
+            frame_bytes: webrtc::data_channel::sctp_data_payload_limit() as u32,
             fragmentation: true,
             reassembly: true,
         };
@@ -1256,8 +1258,9 @@ async fn z3_p4_turn_loss_rtt() {
         command_latency.sort_by(f64::total_cmp);
         let command_p95=command_latency[(command_latency.len()*95/100).min(command_latency.len()-1)];
         let command_p99=command_latency[(command_latency.len()*99/100).min(command_latency.len()-1)];
+        let sctp_window = pair.source.handoff_counters().sctp_window;
         pair.close().await;
-        eprintln!("Z3_P4_TURN {}",serde_json::json!({"scenario":3,"relay_only":true,"candidates_a":candidates_a,"candidates_b":candidates_b,"shim":"UDP at TURN control legs","nominal_rtt_ms":rtt_ms,"drop_every":drop_every,"loss_placement":"source TURN leg, both directions","rto_proof":rto_proof,"injected_datagrams":injected,"datagrams":packets,"dropped_datagrams":drops,"probes":probes,"full_workload":probes==64,"sent":2*probes,"explicit_send_results":2*probes,"delivery_acknowledged":2*probes,"lost":if bulk_drained {Some(0u64)} else {None},"pending_bulk_at_deadline":bulk_sent-bulk_delivered,"fully_drained":bulk_drained&&delivery_acked,"duplicated":0,"control_p95_ms":p95,"control_p99_ms":p99,"command_p95_ms":command_p95,"command_p99_ms":command_p99,"command_metric":"request/reply roundtrip","command_roundtrip_ms":command_latency,"control_roundtrip_ms":latency,"bulk_enabled":bulk_enabled,"bulk_bytes":bulk_delivered*BULK_BYTES as u64,"bulk_admitted_bytes":bulk_sent*BULK_BYTES as u64,"bulk_seconds":bulk_seconds,"bulk_mb_s":bulk_delivered as f64*BULK_BYTES as f64/bulk_seconds/1_000_000.0}));
+        eprintln!("Z3_P4_TURN {}",serde_json::json!({"scenario":3,"relay_only":true,"candidates_a":candidates_a,"candidates_b":candidates_b,"shim":"UDP at TURN control legs","nominal_rtt_ms":rtt_ms,"drop_every":drop_every,"loss_placement":"source TURN leg, both directions","rto_proof":rto_proof,"injected_datagrams":injected,"datagrams":packets,"dropped_datagrams":drops,"probes":probes,"full_workload":probes==64,"sent":2*probes,"explicit_send_results":2*probes,"delivery_acknowledged":2*probes,"lost":if bulk_drained {Some(0u64)} else {None},"pending_bulk_at_deadline":bulk_sent-bulk_delivered,"fully_drained":bulk_drained&&delivery_acked,"duplicated":0,"control_p95_ms":p95,"control_p99_ms":p99,"command_p95_ms":command_p95,"command_p99_ms":command_p99,"command_metric":"request/reply roundtrip","command_roundtrip_ms":command_latency,"control_roundtrip_ms":latency,"sctp_window":sctp_window,"bulk_enabled":bulk_enabled,"bulk_bytes":bulk_delivered*BULK_BYTES as u64,"bulk_admitted_bytes":bulk_sent*BULK_BYTES as u64,"bulk_seconds":bulk_seconds,"bulk_mb_s":bulk_delivered as f64*BULK_BYTES as f64/bulk_seconds/1_000_000.0}));
         // Preserve failed measurements; keep the original bounded-drain gates red.
         assert!(bulk_drained,"bulk admission lost delivery within the bounded drain; see Z3_P4_TURN");
         assert!(delivery_acked,"TURN application delivery acknowledgements missing; see Z3_P4_TURN");

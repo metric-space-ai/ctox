@@ -4,7 +4,7 @@ import {fileURLToPath} from 'node:url';
 import http from 'node:http';
 import {createRequire} from 'node:module';
 const root=process.argv[2], config=JSON.parse(fs.readFileSync(join(root,'config.json')));
-const require=createRequire(join(config.modulesRoot,'playwright/package.json'));
+const require=createRequire(join(process.env.PLAYWRIGHT_MODULE_PATH||join(config.modulesRoot,'playwright'),'package.json'));
 const {chromium}=require('playwright');
 let browser,launchPromise,server;
 process.once('SIGTERM',()=>{void (launchPromise||Promise.resolve()).then(b=>b?.close()).catch(()=>{}).finally(()=>process.exit(143));});
@@ -14,7 +14,7 @@ try {
  // This fixture's unprivileged namespace has only lo. Chromium ignores it
  // unless explicitly admitted; this changes no SCTP extension negotiation.
  // ref: chromium/content/public/common/content_switches.cc (kAllowLoopbackInPeerConnection)
- launchPromise=chromium.launch({executablePath:config.chrome,headless:true,args:['--disable-gpu','--no-sandbox',...(config.fixtureLoopback?['--allow-loopback-in-peer-connection']:[])],timeout:15000});
+ launchPromise=chromium.launch({executablePath:process.env.PLAYWRIGHT_MODULE_PATH?undefined:config.chrome,headless:true,args:['--disable-gpu','--no-sandbox',...(config.fixtureLoopback?['--allow-loopback-in-peer-connection']:[])],timeout:15000});
  browser=await launchPromise;
  const page=await browser.newPage();
  if(config.m4){
@@ -96,6 +96,7 @@ async function runM4(page){
    if(lane===5){if(message.type!=='bulk'||message.ordinal!==m4received||message.payload!==payload)throw Error('M4 bulk corruption/gap/duplicate');m4received++;m4bytes+=new TextEncoder().encode(JSON.stringify(message)).length;dc.send('m4-bulk-delivered');}
    else {const key=lane+':'+message.ordinal,resolve=m4pending.get(key);if(!resolve)throw Error('M4 unexpected control reply');m4pending.delete(key);resolve();}
   }});
+  m4wire.configure({codec:'gzip',frame_bytes:1200});
  },config.payload);
  write('m4-browser-ready.json',{ready:true});
  const metrics=await page.evaluate(async()=>{

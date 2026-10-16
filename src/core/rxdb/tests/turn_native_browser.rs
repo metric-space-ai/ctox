@@ -300,7 +300,7 @@ async fn run_m4(
         pc,
         TransportSelection {
             codec: Codec::Gzip,
-            frame_bytes: 16384,
+            frame_bytes: webrtc::data_channel::sctp_data_payload_limit() as u32,
             fragmentation: true,
             reassembly: true,
         },
@@ -417,7 +417,7 @@ async fn run_m4(
     .await
     .is_ok();
     let handoff = scheduler.handoff_counters();
-    tokio::fs::write(root.join("m4-native-result.json"),serde_json::to_vec(&serde_json::json!({"fully_drained":fully_drained,"pending_delivery":[state.replay(generation,Lane::Control).unwrap().len(),state.replay(generation,Lane::Commands).unwrap().len(),state.replay(generation,Lane::Transfer).unwrap().len()],"bulk_sent":bulk_sent,"bulk_bytes":bulk_bytes,"buffer_peak":handoff.buffered_upper_bound_peak,"attempted":handoff.attempted,"handed_to_sctp":handoff.handed_to_sctp,"failed":handoff.failed})).unwrap()).await.unwrap();
+    tokio::fs::write(root.join("m4-native-result.json"),serde_json::to_vec(&serde_json::json!({"fully_drained":fully_drained,"pending_delivery":[state.replay(generation,Lane::Control).unwrap().len(),state.replay(generation,Lane::Commands).unwrap().len(),state.replay(generation,Lane::Transfer).unwrap().len()],"bulk_sent":bulk_sent,"bulk_bytes":bulk_bytes,"sctp_window":scheduler.handoff_counters().sctp_window,"buffer_peak":handoff.buffered_upper_bound_peak,"attempted":handoff.attempted,"handed_to_sctp":handoff.handed_to_sctp,"failed":handoff.failed})).unwrap()).await.unwrap();
     let result: serde_json::Value =
         serde_json::from_str(&wait_file(&root.join("browser-result.json")).await).unwrap();
     scheduler.close_now();
