@@ -38,6 +38,14 @@ try:
     grant.write_text(changed);code=run('mutation-app-authority',cmd);log=(out/'mutation-app-authority.log').read_text();grant.write_text(originals[grant])
     red=code==101 and 'unauthorized app received grant' in log;r['mutations'].append({'name':'app-authority','red':red,'expected':'unauthorized app received grant'});save()
     if not red:raise RuntimeError('app authority mutation')
+    pattern=r'self\s*\.peer_authority\s*\.validate\(tx, &state.user, &state.role, &state.device, &claims.app_id\)\?;'
+    # rustfmt expands this longer argument list: accept whitespace around each argument.
+    pattern=r'self\s*\.peer_authority\s*\.validate\(\s*tx,\s*&state.user,\s*&state.role,\s*&state.device,\s*&claims.app_id,?\s*\)\?;'
+    changed,n=re.subn(pattern,'let _ = &self.peer_authority;',originals[grant])
+    if n!=1:raise RuntimeError('live app authority mutation anchor')
+    grant.write_text(changed);code=run('mutation-live-app-authority',cmd);log=(out/'mutation-live-app-authority.log').read_text();grant.write_text(originals[grant])
+    red=code==101 and 'app assignment revoked but remained readable' in log;r['mutations'].append({'name':'live-app-authority','red':red,'expected':'app assignment revoked but remained readable'});save()
+    if not red:raise RuntimeError('live app authority mutation')
     if run('restored',cmd):raise RuntimeError('restored')
     # Fetch a pinned public source snapshot only during validation. No runtime dependency.
     kernel_head='3e4c183e0f9949a33e8c9d3e3a3a54068ae1ff75'

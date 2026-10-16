@@ -379,6 +379,14 @@ async fn p6_e55_route_forbidden_duplicate_and_kernel_key_pin() {
         std::fs::write(path, json!({"token":token,"wrong_token":wrong_token,"public":f.key.pin,"claims":c}).to_string()).unwrap();
     }
     assert!(f.read(&wrong_token,"alpha",1001).await.is_err(), "foreign signing key accepted");
+    f.store.writer().submit(WriteJob::new(Default::default(), |tx| {
+        tx.execute("UPDATE c_business_apps SET data=json_set(data,'$.assigned_user_ids',json('[]')) WHERE id='a'",[])?;
+        Ok(())
+    })).unwrap().await.unwrap();
+    assert!(f.read(token,"alpha",1002).await.is_err(), "app assignment revoked but remained readable");
+    let session = f.session.clone();
+    let revoked = f.store.writer().submit(WriteJob::new(Default::default(), move |tx| session.revocations_in_transaction(tx,1002).map_err(StoreError::Invalid))).unwrap().await.unwrap();
+    assert_eq!(revoked.iter().map(|v|v.app_id.as_str()).collect::<Vec<_>>(), vec!["a"]);
     assert_eq!(route.handle(json!({"type":"scope.grant.request","app_id":"a"}),1240).await.unwrap().unwrap()["type"], "forbidden");
     f.close().await;
 }
