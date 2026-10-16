@@ -1,0 +1,93 @@
+{
+ "app": "news",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "News",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Thema anlegen",
+    "button:Themen importieren",
+    "button:Themen exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Aktiv (6)",
+    "nav:Pausiert (0)",
+    "button:ON Onboarding neue Mitarbeiten",
+    "button:Gestern",
+    "button:RÜ Rahmenvertrag über Wartung ",
+    "button:KV Kundentermin Vorbereitung M",
+    "button:BV Budgetplanung Vertrieb Süd ",
+    "button:QQ Quartalsbericht Q3 2026 Man",
+    "button:AW Angebot Wartungsvertrag Hal"
+   ],
+   "shot": "news/420-01-open.png"
+  },
+  {
+   "step": "nav Aktiv (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "news/420-02-nav_Aktiv_6_.png"
+  },
+  {
+   "step": "nav Pausiert (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "news/420-03-nav_Pausiert_0_.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 29,
+   "shot": "news/420-04-suche_ohne_Treffer.png",
+   "textAfter": 29
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "news/420-05-suche_geleert.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "news",
+  "News"
+ ]
+}

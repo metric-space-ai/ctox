@@ -80,8 +80,8 @@ try {
   const layoutOptions = await page.locator('.shell-window [data-window-layout-menu] [data-window-layout-control]')
     .evaluateAll((nodes) => nodes.map((node) => node.dataset.windowLayoutControl));
   expect(
-    JSON.stringify(layoutOptions) === JSON.stringify(['free', 'maximize', 'minimize', 'left', 'right', 'top', 'bottom']),
-    `the layout menu must expose the seven requested actions: ${JSON.stringify(layoutOptions)}`,
+    JSON.stringify(layoutOptions) === JSON.stringify(['top-left', 'top', 'top-right', 'left', 'maximize', 'right', 'bottom-left', 'bottom', 'bottom-right', 'free', 'minimize']),
+    `the layout menu must be the spatial 3x3 grid plus free and minimize: ${JSON.stringify(layoutOptions)}`,
   );
   const layoutMenu = page.locator('.shell-window [data-window-layout-menu]');
   const glyphs = await layoutMenu.locator('[data-window-layout-control]').evaluateAll(nodes => nodes.map(node => {
@@ -95,7 +95,7 @@ try {
       frameStyle: style?.borderTopStyle, frameColor: style?.borderTopColor,
       detailContent: detail?.content, detailWidth: Number.parseFloat(detail?.width), detailHeight: Number.parseFloat(detail?.height) };
   }));
-  expect(glyphs.length === 7 && glyphs.every(glyph => glyph.correctVariant
+  expect(glyphs.length === 11 && glyphs.every(glyph => glyph.correctVariant
     && glyph.width > 0 && glyph.height > 0 && glyph.frameWidth > 0 && glyph.frameStyle !== 'none'
     && !['transparent', 'rgba(0, 0, 0, 0)'].includes(glyph.frameColor)
     && glyph.detailContent !== 'none' && glyph.detailWidth > 0 && glyph.detailHeight > 0),

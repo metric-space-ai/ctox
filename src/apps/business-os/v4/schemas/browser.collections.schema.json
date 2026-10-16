@@ -1,0 +1,513 @@
+{
+  "_app_id": "browser",
+  "_format": "ctox-v4-collections-a9",
+  "_base_release": "main@4794af03d",
+  "_generator": "src/apps/business-os/v4/schemas/build-schemas.mjs",
+  "_sources": {
+    "browser_frames": {
+      "source": "modules/browser/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "browser_input_events": {
+      "source": "modules/browser/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "browser_sessions": {
+      "source": "modules/browser/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "browser_tabs": {
+      "source": "modules/browser/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    }
+  },
+  "_foreign_copies_not_taken": [
+    {
+      "name": "outbound_lead_generation_adapters",
+      "owner": "outbound-lead-generation"
+    },
+    {
+      "name": "outbound_research_adapters",
+      "owner": "outbound"
+    }
+  ],
+  "collections": {
+    "browser_frames": {
+      "additionalProperties": true,
+      "indexes": [
+        "session_id",
+        "expires_at_ms",
+        [
+          "session_id",
+          "seq"
+        ],
+        [
+          "session_id",
+          "expires_at_ms"
+        ],
+        [
+          "tab_id",
+          "seq"
+        ],
+        [
+          "tenant_id",
+          "owner_user_id",
+          "seq"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "allowed_observer_user_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "base_frame_id": {
+          "type": "string"
+        },
+        "captured_at_ms": {
+          "type": "number"
+        },
+        "data": {
+          "type": "string"
+        },
+        "encoding": {
+          "type": "string"
+        },
+        "expires_at_ms": {
+          "type": "number"
+        },
+        "frame_hash": {
+          "type": "string"
+        },
+        "frame_kind": {
+          "type": "string"
+        },
+        "height": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 220,
+          "type": "string"
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "owner_user_id": {
+          "type": "string"
+        },
+        "quality": {
+          "type": "number"
+        },
+        "seq": {
+          "type": "number"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "number"
+        },
+        "tab_id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "viewport_h": {
+          "type": "number"
+        },
+        "viewport_w": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "session_id",
+        "tab_id",
+        "seq",
+        "mime_type",
+        "encoding",
+        "data",
+        "width",
+        "height",
+        "captured_at_ms",
+        "expires_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 1
+    },
+    "browser_input_events": {
+      "additionalProperties": true,
+      "indexes": [
+        "session_id",
+        [
+          "session_id",
+          "seq"
+        ],
+        [
+          "session_id",
+          "status",
+          "seq"
+        ],
+        [
+          "status",
+          "created_at_ms"
+        ],
+        [
+          "tenant_id",
+          "owner_user_id",
+          "status",
+          "seq"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "ack_at_ms": {
+          "type": "number"
+        },
+        "ack_status": {
+          "type": "string"
+        },
+        "button": {
+          "type": "string"
+        },
+        "buttons": {
+          "type": "number"
+        },
+        "client_seq": {
+          "type": "number"
+        },
+        "code": {
+          "type": "string"
+        },
+        "consumed_at_ms": {
+          "type": "number"
+        },
+        "controller_user_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "dx": {
+          "type": "number"
+        },
+        "dy": {
+          "type": "number"
+        },
+        "error": {
+          "type": "string"
+        },
+        "error_code": {
+          "type": "string"
+        },
+        "frame_seq": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 220,
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "lease_id": {
+          "type": "string"
+        },
+        "modifiers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "owner_user_id": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "seq": {
+          "type": "number"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "tab_id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "session_id",
+        "seq",
+        "type",
+        "status",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 1
+    },
+    "browser_sessions": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms",
+        [
+          "status",
+          "updated_at_ms"
+        ],
+        [
+          "tenant_id",
+          "owner_user_id",
+          "updated_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "active_frame_id": {
+          "type": "string"
+        },
+        "allowed_observer_user_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "controller_lease_expires_at_ms": {
+          "type": "number"
+        },
+        "controller_lease_id": {
+          "type": "string"
+        },
+        "controller_user_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "current_tab_id": {
+          "type": "string"
+        },
+        "current_url": {
+          "type": "string"
+        },
+        "device_scale_factor": {
+          "type": "number"
+        },
+        "error": {
+          "type": "string"
+        },
+        "frame_rate_target": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "last_frame_seq": {
+          "type": "number"
+        },
+        "last_input_seq": {
+          "type": "number"
+        },
+        "owner_user_id": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "pending_input_count": {
+          "type": "number"
+        },
+        "profile_mode": {
+          "type": "string"
+        },
+        "runtime_status": {
+          "type": "string"
+        },
+        "security_status": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "viewport_h": {
+          "type": "number"
+        },
+        "viewport_w": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 1
+    },
+    "browser_tabs": {
+      "additionalProperties": true,
+      "indexes": [
+        "session_id",
+        [
+          "session_id",
+          "updated_at_ms"
+        ],
+        [
+          "tenant_id",
+          "owner_user_id",
+          "updated_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "active": {
+          "type": "boolean"
+        },
+        "allowed_observer_user_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "can_go_back": {
+          "type": "boolean"
+        },
+        "can_go_forward": {
+          "type": "boolean"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "error": {
+          "type": "string"
+        },
+        "frame_seq": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "last_frame_at_ms": {
+          "type": "number"
+        },
+        "last_frame_id": {
+          "type": "string"
+        },
+        "loading": {
+          "type": "boolean"
+        },
+        "oauth_popup": {
+          "type": "boolean"
+        },
+        "opener_tab_id": {
+          "type": "string"
+        },
+        "owner_user_id": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "position": {
+          "type": "number"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "session_id",
+        "status",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 1
+    }
+  },
+  "migrations": {},
+  "migration_strategies": {
+    "browser_frames": {
+      "1": {
+        "operations": []
+      }
+    },
+    "browser_input_events": {
+      "1": {
+        "operations": []
+      }
+    },
+    "browser_sessions": {
+      "1": {
+        "operations": []
+      }
+    },
+    "browser_tabs": {
+      "1": {
+        "operations": []
+      }
+    }
+  }
+}

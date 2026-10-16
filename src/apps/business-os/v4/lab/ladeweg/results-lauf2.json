@@ -1,0 +1,1094 @@
+{
+  "chromium/sw": {
+    "started": "2026-10-15T10:48:59.348Z",
+    "scenarios": [
+      {
+        "id": "a Erstinstallation",
+        "pass": true,
+        "summary": "init (SW-Registrierung+Kontrolle bzw. Loader) 35.2 ms; IDB-Schreiben shell 5.7 ms + demo 0.7 ms; Montage (import+fetch+css+img) 28.4 ms (davon import 11.2 ms); 2. Fenster gleiche Version 2.8 ms; css/img/locale/greet/relativer Import ok=true",
+        "data": {
+          "init": {
+            "initMs": 35.19999999925494,
+            "controlled": true
+          },
+          "iShell": 5.700000001117587,
+          "iDemo": 0.6999999992549419,
+          "mount": {
+            "importMs": 11.199999999254942,
+            "totalMs": 28.40000000037253,
+            "probe": {
+              "version": "v1",
+              "title": "Demo v1",
+              "greet": "Hallo Welt (shell v1)",
+              "helper": "util-v1",
+              "cssColor": "rgb(200, 0, 0)",
+              "cssBg": "url(\"http://127.0.0.1:64173/~a/demo@v1/icon.svg\")",
+              "imgWidth": 16,
+              "note": "",
+              "moduleUrl": "http://127.0.0.1:64173/~a/demo@v1/index.js"
+            }
+          },
+          "keep": {
+            "importMs": 0,
+            "totalMs": 2.800000000745058,
+            "probe": {
+              "version": "v1",
+              "title": "Demo v1",
+              "greet": "Hallo Welt (shell v1)",
+              "helper": "util-v1",
+              "cssColor": "rgb(200, 0, 0)",
+              "cssBg": "url(\"http://127.0.0.1:64173/~a/demo@v1/icon.svg\")",
+              "imgWidth": 16,
+              "note": "",
+              "moduleUrl": "http://127.0.0.1:64173/~a/demo@v1/index.js"
+            }
+          }
+        }
+      },
+      {
+        "id": "b Aktivierung v2 (Live-Remount)",
+        "pass": true,
+        "summary": "erster Wechsel v1->v2 6.7 ms, Eingabe erhalten=true; frische Versionen (neue URLs, 20x): p50 5.7 ms / p95 7.4 ms / max 7.9 ms; warmer Wechsel v1<->v2 (Modul-Map, 20x): p50 1.2 / p95 1.5 ms; IDB-Installation je Version p50 0.5 ms; altes v1-Modul unberuehrt=true (mountCount 2, greet 'Hallo x (shell v1)'); CSS-Farbe des alten v1-Fensters neben v-neu: rgb(0, 0, 200)",
+        "data": {
+          "first": {
+            "ms": 6.700000001117587,
+            "importMs": 3.200000001117587,
+            "probe": {
+              "version": "v2",
+              "title": "Demo v2",
+              "greet": "Hallo Welt (shell v1)",
+              "helper": "util-v2",
+              "cssColor": "rgb(0, 0, 200)",
+              "cssBg": "url(\"http://127.0.0.1:64173/~a/demo@v2/icon.svg\")",
+              "imgWidth": 16,
+              "note": "halb ausgefuellt",
+              "moduleUrl": "http://127.0.0.1:64173/~a/demo@v2/index.js"
+            },
+            "oldModule": {
+              "version": "v1",
+              "mountCount": 2,
+              "greet": "Hallo x (shell v1)"
+            }
+          },
+          "fresh": [
+            6.699999999254942,
+            7.400000000372529,
+            5.099999999627471,
+            7,
+            6.200000001117587,
+            7.899999998509884,
+            6,
+            6.400000000372529,
+            6.800000000745058,
+            6.200000001117587,
+            5.700000001117587,
+            5.200000001117587,
+            4.299999998882413,
+            5.100000001490116,
+            4.600000001490116,
+            4,
+            5.599999999627471,
+            4.799999998882413,
+            5.800000000745058,
+            4.599999999627471
+          ],
+          "warm": [
+            1.400000000372529,
+            1.200000001117587,
+            1.400000000372529,
+            1.300000000745058,
+            1.1000000014901161,
+            1.1000000014901161,
+            1.300000000745058,
+            1.099999999627471,
+            1.099999999627471,
+            1.199999999254942,
+            1.199999999254942,
+            1.099999999627471,
+            1,
+            1.800000000745058,
+            1.5,
+            1.3999999985098839,
+            1.300000000745058,
+            1.400000000372529,
+            1.5,
+            1.199999999254942
+          ],
+          "freshInstall": [
+            0.7999999988824129,
+            0.900000000372529,
+            0.5,
+            0.40000000037252903,
+            0.6000000014901161,
+            0.8000000007450581,
+            1.599999999627471,
+            0.5,
+            0.5,
+            0.5,
+            1.700000001117587,
+            0.30000000074505806,
+            0.6999999992549419,
+            0.40000000037252903,
+            0.5,
+            0.8000000007450581,
+            0.5,
+            0.40000000037252903,
+            0.5,
+            0.40000000037252903
+          ],
+          "keepMod": {
+            "version": "v1",
+            "mountCount": 2,
+            "greet": "Hallo x (shell v1)"
+          },
+          "keepProbe": {
+            "version": "v1",
+            "title": "Demo v1",
+            "greet": "Hallo Welt (shell v1)",
+            "helper": "util-v1",
+            "cssColor": "rgb(0, 0, 200)",
+            "cssBg": "url(\"http://127.0.0.1:64173/~a/demo@v22/icon.svg\")",
+            "imgWidth": 16,
+            "note": "",
+            "moduleUrl": "http://127.0.0.1:64173/~a/demo@v1/index.js"
+          }
+        }
+      },
+      {
+        "id": "c Shell-Wechsel v1->v2",
+        "pass": true,
+        "summary": "neuer Mount gleiche App-Version (demo@v1, schon im Dokument geladen): (shell v1); neuer Mount neue App-Version: (shell v2); Vorschlag URL mit ~shell@v2: (shell v2); neues Dokument demo@v1: (shell v2); altes Fenster bleibt: (shell v1)",
+        "data": {
+          "sameVer": "(shell v1)",
+          "newVer": "(shell v2)",
+          "pinned": "(shell v2)",
+          "reloaded": "(shell v2)",
+          "keep": {
+            "version": "v1",
+            "mountCount": 13,
+            "greet": "Hallo x (shell v1)"
+          }
+        }
+      },
+      {
+        "id": "e Manipulierte Datei",
+        "pass": true,
+        "summary": "Montage abgelehnt=true (Failed to fetch dynamically imported module: http://127.0.0.1:64173/~a/demo@bad/index.js); Code ausgefuehrt=false; Status manipuliert=404, unbekannte Version=404, unbekannte Datei=404",
+        "data": {
+          "tm": {
+            "ok": false,
+            "error": "Failed to fetch dynamically imported module: http://127.0.0.1:64173/~a/demo@bad/index.js"
+          },
+          "pwned": false,
+          "stBad": 404,
+          "stUnknown": 404,
+          "stUnknownFile": 404
+        }
+      },
+      {
+        "id": "g Berechnete Pfade (Template-Literal, import.meta.url als Wert)",
+        "pass": true,
+        "summary": "new URL(`./locales/${lang}.json`, import.meta.url): dyn-ok; loadModuleMessages(import.meta.url): dyn-ok; Loader-Warnungen: 0",
+        "data": {
+          "r": {
+            "ok": true,
+            "importMs": 2.399999998509884,
+            "totalMs": 4.799999998882413,
+            "probe": {
+              "templateLiteral": "dyn-ok",
+              "metaUrlAsValue": "dyn-ok"
+            }
+          }
+        }
+      },
+      {
+        "id": "h Last (App 41 Module, Shell 30 shared-Module)",
+        "pass": true,
+        "summary": "App 1010 KB, Shell 1503 KB (IDB-Schreiben 7.4 ms); erster Mount (Shell+App kalt) 38.2 ms; weitere 5 frische App-Versionen (App kalt, Shell warm): p50 24 ms / max 29.1 ms",
+        "data": {
+          "times": [
+            38.19999999925494,
+            24.899999998509884,
+            23.90000000037253,
+            29.09999999962747,
+            24,
+            21.90000000037253
+          ],
+          "appKB": 1010,
+          "shellKB": 1503
+        }
+      },
+      {
+        "id": "f Zwei Tabs",
+        "pass": true,
+        "summary": "Tab 2 folgt Aktivierung (BroadcastChannel -> Remount), 10x: p50 6.3 ms / p95 7.9 ms; gleichzeitiges Montieren neue Version in beiden Tabs: 5.5 / 5.5 ms, beide ok=true",
+        "data": {
+          "lat": [
+            6.2998046875,
+            6.099853515625,
+            6.699951171875,
+            5.60009765625,
+            6.39990234375,
+            7.2998046875,
+            7.89990234375,
+            6.300048828125,
+            5.400146484375,
+            6.2998046875
+          ],
+          "both": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "x": 5.5,
+          "y": 5.5
+        }
+      },
+      {
+        "id": "d Server gestoppt",
+        "pass": true,
+        "summary": "Wechsel v1/v2/v1/v2: 1.7 / 1.3 / 1.4 / 1.1 ms; neue Version nach Stopp installiert+montiert: 5.8 ms; SW gestoppt+Neustart ohne Netz: ok 9.1 ms; Server-Treffer unter /~a/ waehrend des Laufs: 0",
+        "data": {
+          "toggles": [
+            1.7,
+            1.3,
+            1.4,
+            1.1
+          ],
+          "off": 5.800000000745058,
+          "swRestart": "ok 9.1 ms",
+          "artifactHits": 0,
+          "paths": []
+        }
+      }
+    ],
+    "browserVersion": "148.0.7778.96",
+    "artifactHitsTotal": 0
+  },
+  "chromium/blob": {
+    "started": "2026-10-15T10:49:02.187Z",
+    "scenarios": [
+      {
+        "id": "a Erstinstallation",
+        "pass": true,
+        "summary": "init (SW-Registrierung+Kontrolle bzw. Loader) 2.2 ms; IDB-Schreiben shell 0.9 ms + demo 0.6 ms; Montage (import+fetch+css+img) 8.2 ms (davon import 5.9 ms); 2. Fenster gleiche Version 0.8 ms; css/img/locale/greet/relativer Import ok=true",
+        "data": {
+          "init": {
+            "initMs": 2.199999999254942,
+            "controlled": false
+          },
+          "iShell": 0.900000000372529,
+          "iDemo": 0.599999999627471,
+          "mount": {
+            "importMs": 5.900000000372529,
+            "totalMs": 8.199999999254942,
+            "probe": {
+              "version": "v1",
+              "title": "Demo v1",
+              "greet": "Hallo Welt (shell v1)",
+              "helper": "util-v1",
+              "cssColor": "rgb(200, 0, 0)",
+              "cssBg": "url(\"blob:http://127.0.0.1:64188/a8f55b86-fdb3-4e30-88e0-2850bc643dd8\")",
+              "imgWidth": 16,
+              "note": "",
+              "moduleUrl": "blob:http://127.0.0.1:64188/b6ac195a-30a3-476f-9a05-df28bf0ab7c7"
+            }
+          },
+          "keep": {
+            "importMs": 0.09999999962747097,
+            "totalMs": 0.7999999988824129,
+            "probe": {
+              "version": "v1",
+              "title": "Demo v1",
+              "greet": "Hallo Welt (shell v1)",
+              "helper": "util-v1",
+              "cssColor": "rgb(200, 0, 0)",
+              "cssBg": "url(\"blob:http://127.0.0.1:64188/a8f55b86-fdb3-4e30-88e0-2850bc643dd8\")",
+              "imgWidth": 16,
+              "note": "",
+              "moduleUrl": "blob:http://127.0.0.1:64188/b6ac195a-30a3-476f-9a05-df28bf0ab7c7"
+            }
+          }
+        }
+      },
+      {
+        "id": "b Aktivierung v2 (Live-Remount)",
+        "pass": true,
+        "summary": "erster Wechsel v1->v2 4.4 ms, Eingabe erhalten=true; frische Versionen (neue URLs, 20x): p50 4.7 ms / p95 6.3 ms / max 6.7 ms; warmer Wechsel v1<->v2 (Modul-Map, 20x): p50 0.6 / p95 1 ms; IDB-Installation je Version p50 0.5 ms; altes v1-Modul unberuehrt=true (mountCount 2, greet 'Hallo x (shell v1)'); CSS-Farbe des alten v1-Fensters neben v-neu: rgb(0, 0, 200)",
+        "data": {
+          "first": {
+            "ms": 4.400000000372529,
+            "importMs": 2.900000000372529,
+            "probe": {
+              "version": "v2",
+              "title": "Demo v2",
+              "greet": "Hallo Welt (shell v1)",
+              "helper": "util-v2",
+              "cssColor": "rgb(0, 0, 200)",
+              "cssBg": "url(\"blob:http://127.0.0.1:64188/392613be-e380-443f-b653-4a4e3fcfa75f\")",
+              "imgWidth": 16,
+              "note": "halb ausgefuellt",
+              "moduleUrl": "blob:http://127.0.0.1:64188/7c7f5470-1094-420e-84f5-4dfbf60460c5"
+            },
+            "oldModule": {
+              "version": "v1",
+              "mountCount": 2,
+              "greet": "Hallo x (shell v1)"
+            }
+          },
+          "fresh": [
+            4.600000001490116,
+            5.199999999254942,
+            4.900000000372529,
+            4.5,
+            5.300000000745058,
+            4.900000000372529,
+            4.599999999627471,
+            4.900000000372529,
+            4.700000001117587,
+            4.400000000372529,
+            4.699999999254942,
+            4.599999999627471,
+            4.700000001117587,
+            4.599999999627471,
+            6.699999999254942,
+            6.299999998882413,
+            5,
+            4,
+            4.800000000745058,
+            4.200000001117587
+          ],
+          "warm": [
+            1.099999999627471,
+            0.8000000007450581,
+            0.599999999627471,
+            0.599999999627471,
+            0.7000000011175871,
+            0.599999999627471,
+            0.599999999627471,
+            0.599999999627471,
+            0.599999999627471,
+            0.5,
+            0.7000000011175871,
+            0.8000000007450581,
+            0.599999999627471,
+            1,
+            0.6000000014901161,
+            0.6000000014901161,
+            0.599999999627471,
+            0.8000000007450581,
+            0.599999999627471,
+            0.6000000014901161
+          ],
+          "freshInstall": [
+            0.5,
+            0.40000000037252903,
+            0.40000000037252903,
+            0.5,
+            0.40000000037252903,
+            0.599999999627471,
+            0.8999999985098839,
+            0.5,
+            0.5,
+            1,
+            0.6999999992549419,
+            0.5,
+            1,
+            0.5,
+            0.2000000011175871,
+            0.599999999627471,
+            0.5,
+            0.599999999627471,
+            0.8000000007450581,
+            0.5
+          ],
+          "keepMod": {
+            "version": "v1",
+            "mountCount": 2,
+            "greet": "Hallo x (shell v1)"
+          },
+          "keepProbe": {
+            "version": "v1",
+            "title": "Demo v1",
+            "greet": "Hallo Welt (shell v1)",
+            "helper": "util-v1",
+            "cssColor": "rgb(0, 0, 200)",
+            "cssBg": "url(\"blob:http://127.0.0.1:64188/44290b22-08d5-4da9-942d-04fe3ce577c9\")",
+            "imgWidth": 16,
+            "note": "",
+            "moduleUrl": "blob:http://127.0.0.1:64188/b6ac195a-30a3-476f-9a05-df28bf0ab7c7"
+          }
+        }
+      },
+      {
+        "id": "c Shell-Wechsel v1->v2",
+        "pass": true,
+        "summary": "neuer Mount gleiche App-Version (demo@v1, schon im Dokument geladen): (shell v2); neuer Mount neue App-Version: (shell v2); neues Dokument demo@v1: (shell v2); altes Fenster bleibt: (shell v1)",
+        "data": {
+          "sameVer": "(shell v2)",
+          "newVer": "(shell v2)",
+          "pinned": null,
+          "reloaded": "(shell v2)",
+          "keep": {
+            "version": "v1",
+            "mountCount": 12,
+            "greet": "Hallo x (shell v1)"
+          }
+        }
+      },
+      {
+        "id": "e Manipulierte Datei",
+        "pass": true,
+        "summary": "Montage abgelehnt=true (Hash falsch: demo@bad/util.js); Code ausgefuehrt=false; Status manipuliert=n/a, unbekannte Version=n/a, unbekannte Datei=n/a",
+        "data": {
+          "tm": {
+            "ok": false,
+            "error": "Hash falsch: demo@bad/util.js"
+          },
+          "pwned": false,
+          "stBad": "n/a",
+          "stUnknown": "n/a",
+          "stUnknownFile": "n/a"
+        }
+      },
+      {
+        "id": "g Berechnete Pfade (Template-Literal, import.meta.url als Wert)",
+        "pass": false,
+        "summary": "new URL(`./locales/${lang}.json`, import.meta.url): FEHLER:Failed to construct 'URL': Invalid URL; loadModuleMessages(import.meta.url): FEHLER:Failed to construct 'URL': Invalid URL; Loader-Warnungen: 25",
+        "data": {
+          "r": {
+            "ok": true,
+            "importMs": 3.300000000745058,
+            "totalMs": 3.5,
+            "probe": {
+              "templateLiteral": "FEHLER:Failed to construct 'URL': Invalid URL",
+              "metaUrlAsValue": "FEHLER:Failed to construct 'URL': Invalid URL"
+            }
+          }
+        }
+      },
+      {
+        "id": "h Last (App 41 Module, Shell 30 shared-Module)",
+        "pass": true,
+        "summary": "App 1010 KB, Shell 1503 KB (IDB-Schreiben 8.2 ms); erster Mount (Shell+App kalt) 41.6 ms; weitere 5 frische App-Versionen (App kalt, Shell warm): p50 23.7 ms / max 30.4 ms",
+        "data": {
+          "times": [
+            41.59999999962747,
+            24.5,
+            21.09999999962747,
+            30.40000000037253,
+            22.399999998509884,
+            23.700000001117587
+          ],
+          "appKB": 1010,
+          "shellKB": 1503
+        }
+      },
+      {
+        "id": "f Zwei Tabs",
+        "pass": true,
+        "summary": "Tab 2 folgt Aktivierung (BroadcastChannel -> Remount), 10x: p50 5.6 ms / p95 5.8 ms; gleichzeitiges Montieren neue Version in beiden Tabs: 5.1 / 4.9 ms, beide ok=true",
+        "data": {
+          "lat": [
+            5.599853515625,
+            5.300048828125,
+            5.300048828125,
+            5.599853515625,
+            5.7998046875,
+            5.10009765625,
+            5.699951171875,
+            5.60009765625,
+            5.199951171875,
+            5.599853515625
+          ],
+          "both": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "x": 5.099999999627471,
+          "y": 4.900000000372529
+        }
+      },
+      {
+        "id": "d Server gestoppt",
+        "pass": true,
+        "summary": "Wechsel v1/v2/v1/v2: 4.6 / 4.2 / 1.3 / 1 ms; neue Version nach Stopp installiert+montiert: 4.7 ms; SW gestoppt+Neustart ohne Netz: n/a; Server-Treffer unter /~a/ waehrend des Laufs: 0",
+        "data": {
+          "toggles": [
+            4.6,
+            4.2,
+            1.3,
+            1
+          ],
+          "off": 4.699999999254942,
+          "swRestart": "n/a",
+          "artifactHits": 0,
+          "paths": []
+        }
+      }
+    ],
+    "browserVersion": "148.0.7778.96",
+    "artifactHitsTotal": 0
+  },
+  "webkit/sw": {
+    "started": "2026-10-15T10:49:04.438Z",
+    "scenarios": [
+      {
+        "id": "a Erstinstallation",
+        "pass": true,
+        "summary": "init (SW-Registrierung+Kontrolle bzw. Loader) 38 ms; IDB-Schreiben shell 5 ms + demo 1 ms; Montage (import+fetch+css+img) 37 ms (davon import 11 ms); 2. Fenster gleiche Version 4 ms; css/img/locale/greet/relativer Import ok=true",
+        "data": {
+          "init": {
+            "initMs": 37.999999999999986,
+            "controlled": true
+          },
+          "iShell": 5,
+          "iDemo": 0.9999999999999858,
+          "mount": {
+            "importMs": 11,
+            "totalMs": 37,
+            "probe": {
+              "version": "v1",
+              "title": "Demo v1",
+              "greet": "Hallo Welt (shell v1)",
+              "helper": "util-v1",
+              "cssColor": "rgb(200, 0, 0)",
+              "cssBg": "url(\"http://127.0.0.1:64203/~a/demo@v1/icon.svg\")",
+              "imgWidth": 16,
+              "note": "",
+              "moduleUrl": "http://127.0.0.1:64203/~a/demo@v1/index.js"
+            }
+          },
+          "keep": {
+            "importMs": 0,
+            "totalMs": 4,
+            "probe": {
+              "version": "v1",
+              "title": "Demo v1",
+              "greet": "Hallo Welt (shell v1)",
+              "helper": "util-v1",
+              "cssColor": "rgb(200, 0, 0)",
+              "cssBg": "url(\"http://127.0.0.1:64203/~a/demo@v1/icon.svg\")",
+              "imgWidth": 16,
+              "note": "",
+              "moduleUrl": "http://127.0.0.1:64203/~a/demo@v1/index.js"
+            }
+          }
+        }
+      },
+      {
+        "id": "b Aktivierung v2 (Live-Remount)",
+        "pass": true,
+        "summary": "erster Wechsel v1->v2 8 ms, Eingabe erhalten=true; frische Versionen (neue URLs, 20x): p50 13 ms / p95 59 ms / max 66 ms; warmer Wechsel v1<->v2 (Modul-Map, 20x): p50 4 / p95 9 ms; IDB-Installation je Version p50 2 ms; altes v1-Modul unberuehrt=true (mountCount 2, greet 'Hallo x (shell v1)'); CSS-Farbe des alten v1-Fensters neben v-neu: rgb(0, 0, 200)",
+        "data": {
+          "first": {
+            "ms": 8,
+            "importMs": 3,
+            "probe": {
+              "version": "v2",
+              "title": "Demo v2",
+              "greet": "Hallo Welt (shell v1)",
+              "helper": "util-v2",
+              "cssColor": "rgb(0, 0, 200)",
+              "cssBg": "url(\"http://127.0.0.1:64203/~a/demo@v2/icon.svg\")",
+              "imgWidth": 16,
+              "note": "halb ausgefuellt",
+              "moduleUrl": "http://127.0.0.1:64203/~a/demo@v2/index.js"
+            },
+            "oldModule": {
+              "version": "v1",
+              "mountCount": 2,
+              "greet": "Hallo x (shell v1)"
+            }
+          },
+          "fresh": [
+            12,
+            15,
+            13,
+            13,
+            8.999999999999943,
+            57,
+            9,
+            66,
+            12,
+            13,
+            10,
+            12,
+            15,
+            11,
+            29.000000000000114,
+            59,
+            46,
+            38,
+            9,
+            17
+          ],
+          "warm": [
+            6.000000000000114,
+            7,
+            3.9999999999998863,
+            9,
+            12,
+            6,
+            4.999999999999886,
+            4.999999999999886,
+            3,
+            3,
+            4,
+            3,
+            8,
+            6,
+            4,
+            4,
+            2,
+            5,
+            4,
+            2
+          ],
+          "freshInstall": [
+            1,
+            2,
+            3,
+            1,
+            2,
+            1,
+            1,
+            2,
+            35,
+            1,
+            8,
+            0,
+            2,
+            3,
+            2,
+            18.999999999999886,
+            2,
+            4,
+            1,
+            0
+          ],
+          "keepMod": {
+            "version": "v1",
+            "mountCount": 2,
+            "greet": "Hallo x (shell v1)"
+          },
+          "keepProbe": {
+            "version": "v1",
+            "title": "Demo v1",
+            "greet": "Hallo Welt (shell v1)",
+            "helper": "util-v1",
+            "cssColor": "rgb(0, 0, 200)",
+            "cssBg": "url(\"http://127.0.0.1:64203/~a/demo@v22/icon.svg\")",
+            "imgWidth": 16,
+            "note": "",
+            "moduleUrl": "http://127.0.0.1:64203/~a/demo@v1/index.js"
+          }
+        }
+      },
+      {
+        "id": "c Shell-Wechsel v1->v2",
+        "pass": true,
+        "summary": "neuer Mount gleiche App-Version (demo@v1, schon im Dokument geladen): (shell v1); neuer Mount neue App-Version: (shell v2); Vorschlag URL mit ~shell@v2: (shell v2); neues Dokument demo@v1: (shell v2); altes Fenster bleibt: (shell v1)",
+        "data": {
+          "sameVer": "(shell v1)",
+          "newVer": "(shell v2)",
+          "pinned": "(shell v2)",
+          "reloaded": "(shell v2)",
+          "keep": {
+            "version": "v1",
+            "mountCount": 13,
+            "greet": "Hallo x (shell v1)"
+          }
+        }
+      },
+      {
+        "id": "e Manipulierte Datei",
+        "pass": true,
+        "summary": "Montage abgelehnt=true (Importing a module script failed.); Code ausgefuehrt=false; Status manipuliert=404, unbekannte Version=404, unbekannte Datei=404",
+        "data": {
+          "tm": {
+            "ok": false,
+            "error": "Importing a module script failed."
+          },
+          "pwned": false,
+          "stBad": 404,
+          "stUnknown": 404,
+          "stUnknownFile": 404
+        }
+      },
+      {
+        "id": "g Berechnete Pfade (Template-Literal, import.meta.url als Wert)",
+        "pass": true,
+        "summary": "new URL(`./locales/${lang}.json`, import.meta.url): dyn-ok; loadModuleMessages(import.meta.url): dyn-ok; Loader-Warnungen: 0",
+        "data": {
+          "r": {
+            "ok": true,
+            "importMs": 4,
+            "totalMs": 7,
+            "probe": {
+              "templateLiteral": "dyn-ok",
+              "metaUrlAsValue": "dyn-ok"
+            }
+          }
+        }
+      },
+      {
+        "id": "h Last (App 41 Module, Shell 30 shared-Module)",
+        "pass": true,
+        "summary": "App 1010 KB, Shell 1503 KB (IDB-Schreiben 5 ms); erster Mount (Shell+App kalt) 69 ms; weitere 5 frische App-Versionen (App kalt, Shell warm): p50 27 ms / max 49 ms",
+        "data": {
+          "times": [
+            69.00000000000045,
+            24.000000000000455,
+            49.000000000000455,
+            27,
+            26,
+            40
+          ],
+          "appKB": 1010,
+          "shellKB": 1503
+        }
+      },
+      {
+        "id": "f Zwei Tabs",
+        "pass": true,
+        "summary": "Tab 2 folgt Aktivierung (BroadcastChannel -> Remount), 10x: p50 13 ms / p95 27 ms; gleichzeitiges Montieren neue Version in beiden Tabs: 24 / 22 ms, beide ok=true",
+        "data": {
+          "lat": [
+            21,
+            13,
+            27,
+            22,
+            11,
+            11,
+            13,
+            10,
+            16,
+            25
+          ],
+          "both": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "x": 24,
+          "y": 21.999999999999943
+        }
+      },
+      {
+        "id": "d Server gestoppt",
+        "pass": true,
+        "summary": "Wechsel v1/v2/v1/v2: 5 / 4 / 4 / 3 ms; neue Version nach Stopp installiert+montiert: 48 ms; SW gestoppt+Neustart ohne Netz: n/a; Server-Treffer unter /~a/ waehrend des Laufs: 0",
+        "data": {
+          "toggles": [
+            5,
+            4,
+            4,
+            3
+          ],
+          "off": 48,
+          "swRestart": "n/a",
+          "artifactHits": 0,
+          "paths": []
+        }
+      }
+    ],
+    "browserVersion": "26.4",
+    "artifactHitsTotal": 0
+  },
+  "webkit/blob": {
+    "started": "2026-10-15T10:49:09.315Z",
+    "scenarios": [
+      {
+        "id": "a Erstinstallation",
+        "pass": true,
+        "summary": "init (SW-Registrierung+Kontrolle bzw. Loader) 2 ms; IDB-Schreiben shell 3 ms + demo 9 ms; Montage (import+fetch+css+img) 19 ms (davon import 9 ms); 2. Fenster gleiche Version 4 ms; css/img/locale/greet/relativer Import ok=true",
+        "data": {
+          "init": {
+            "initMs": 2.000000000000007,
+            "controlled": false
+          },
+          "iShell": 3,
+          "iDemo": 9,
+          "mount": {
+            "importMs": 9,
+            "totalMs": 19.000000000000014,
+            "probe": {
+              "version": "v1",
+              "title": "Demo v1",
+              "greet": "Hallo Welt (shell v1)",
+              "helper": "util-v1",
+              "cssColor": "rgb(200, 0, 0)",
+              "cssBg": "url(\"blob:http://127.0.0.1:64217/d838a382-feb5-4a1f-a487-657797b8d02a\")",
+              "imgWidth": 16,
+              "note": "",
+              "moduleUrl": "blob:http://127.0.0.1:64217/fffdf8d8-1a1f-4d23-a484-782734a197f8"
+            }
+          },
+          "keep": {
+            "importMs": 2,
+            "totalMs": 4,
+            "probe": {
+              "version": "v1",
+              "title": "Demo v1",
+              "greet": "Hallo Welt (shell v1)",
+              "helper": "util-v1",
+              "cssColor": "rgb(200, 0, 0)",
+              "cssBg": "url(\"blob:http://127.0.0.1:64217/d838a382-feb5-4a1f-a487-657797b8d02a\")",
+              "imgWidth": 16,
+              "note": "",
+              "moduleUrl": "blob:http://127.0.0.1:64217/fffdf8d8-1a1f-4d23-a484-782734a197f8"
+            }
+          }
+        }
+      },
+      {
+        "id": "b Aktivierung v2 (Live-Remount)",
+        "pass": true,
+        "summary": "erster Wechsel v1->v2 10 ms, Eingabe erhalten=true; frische Versionen (neue URLs, 20x): p50 7 ms / p95 33 ms / max 41 ms; warmer Wechsel v1<->v2 (Modul-Map, 20x): p50 3 / p95 6 ms; IDB-Installation je Version p50 1 ms; altes v1-Modul unberuehrt=true (mountCount 2, greet 'Hallo x (shell v1)'); CSS-Farbe des alten v1-Fensters neben v-neu: rgb(0, 0, 200)",
+        "data": {
+          "first": {
+            "ms": 10,
+            "importMs": 4,
+            "probe": {
+              "version": "v2",
+              "title": "Demo v2",
+              "greet": "Hallo Welt (shell v1)",
+              "helper": "util-v2",
+              "cssColor": "rgb(0, 0, 200)",
+              "cssBg": "url(\"blob:http://127.0.0.1:64217/49d6c656-930c-4b5c-b46d-0398bab7934a\")",
+              "imgWidth": 16,
+              "note": "halb ausgefuellt",
+              "moduleUrl": "blob:http://127.0.0.1:64217/e5d596dd-7dda-4335-84e7-3ae4607987b7"
+            },
+            "oldModule": {
+              "version": "v1",
+              "mountCount": 2,
+              "greet": "Hallo x (shell v1)"
+            }
+          },
+          "fresh": [
+            8,
+            7,
+            10,
+            6,
+            8,
+            7.000000000000028,
+            7,
+            10.000000000000057,
+            8,
+            11.000000000000057,
+            17,
+            33,
+            6.999999999999943,
+            41,
+            6,
+            4,
+            5.999999999999886,
+            5,
+            5,
+            14
+          ],
+          "warm": [
+            4,
+            3,
+            4,
+            5,
+            2,
+            2,
+            2,
+            4,
+            3,
+            3,
+            4,
+            2,
+            2.0000000000001137,
+            6,
+            4.999999999999886,
+            2,
+            7,
+            3,
+            2,
+            5
+          ],
+          "freshInstall": [
+            2,
+            1,
+            1,
+            1,
+            2,
+            2,
+            1,
+            1,
+            15,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            1,
+            0,
+            1,
+            1,
+            0
+          ],
+          "keepMod": {
+            "version": "v1",
+            "mountCount": 2,
+            "greet": "Hallo x (shell v1)"
+          },
+          "keepProbe": {
+            "version": "v1",
+            "title": "Demo v1",
+            "greet": "Hallo Welt (shell v1)",
+            "helper": "util-v1",
+            "cssColor": "rgb(0, 0, 200)",
+            "cssBg": "url(\"blob:http://127.0.0.1:64217/23f764c1-6024-4dc8-8a40-685574a1a575\")",
+            "imgWidth": 16,
+            "note": "",
+            "moduleUrl": "blob:http://127.0.0.1:64217/fffdf8d8-1a1f-4d23-a484-782734a197f8"
+          }
+        }
+      },
+      {
+        "id": "c Shell-Wechsel v1->v2",
+        "pass": true,
+        "summary": "neuer Mount gleiche App-Version (demo@v1, schon im Dokument geladen): (shell v2); neuer Mount neue App-Version: (shell v2); neues Dokument demo@v1: (shell v2); altes Fenster bleibt: (shell v1)",
+        "data": {
+          "sameVer": "(shell v2)",
+          "newVer": "(shell v2)",
+          "pinned": null,
+          "reloaded": "(shell v2)",
+          "keep": {
+            "version": "v1",
+            "mountCount": 12,
+            "greet": "Hallo x (shell v1)"
+          }
+        }
+      },
+      {
+        "id": "e Manipulierte Datei",
+        "pass": true,
+        "summary": "Montage abgelehnt=true (Hash falsch: demo@bad/util.js); Code ausgefuehrt=false; Status manipuliert=n/a, unbekannte Version=n/a, unbekannte Datei=n/a",
+        "data": {
+          "tm": {
+            "ok": false,
+            "error": "Hash falsch: demo@bad/util.js"
+          },
+          "pwned": false,
+          "stBad": "n/a",
+          "stUnknown": "n/a",
+          "stUnknownFile": "n/a"
+        }
+      },
+      {
+        "id": "g Berechnete Pfade (Template-Literal, import.meta.url als Wert)",
+        "pass": false,
+        "summary": "new URL(`./locales/${lang}.json`, import.meta.url): FEHLER:\"./locales/de.json\" cannot be parsed as a URL.; loadModuleMessages(import.meta.url): FEHLER:\"./locales/de.json\" cannot be parsed as a URL.; Loader-Warnungen: 25",
+        "data": {
+          "r": {
+            "ok": true,
+            "importMs": 4,
+            "totalMs": 4,
+            "probe": {
+              "templateLiteral": "FEHLER:\"./locales/de.json\" cannot be parsed as a URL.",
+              "metaUrlAsValue": "FEHLER:\"./locales/de.json\" cannot be parsed as a URL."
+            }
+          }
+        }
+      },
+      {
+        "id": "h Last (App 41 Module, Shell 30 shared-Module)",
+        "pass": true,
+        "summary": "App 1010 KB, Shell 1503 KB (IDB-Schreiben 4 ms); erster Mount (Shell+App kalt) 94 ms; weitere 5 frische App-Versionen (App kalt, Shell warm): p50 71 ms / max 177 ms",
+        "data": {
+          "times": [
+            94,
+            89,
+            177,
+            63,
+            46,
+            71
+          ],
+          "appKB": 1010,
+          "shellKB": 1503
+        }
+      },
+      {
+        "id": "f Zwei Tabs",
+        "pass": true,
+        "summary": "Tab 2 folgt Aktivierung (BroadcastChannel -> Remount), 10x: p50 6 ms / p95 14 ms; gleichzeitiges Montieren neue Version in beiden Tabs: 5 / 5 ms, beide ok=true",
+        "data": {
+          "lat": [
+            6,
+            7,
+            6,
+            6,
+            6,
+            5,
+            6,
+            6,
+            6,
+            14
+          ],
+          "both": [
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true,
+            true
+          ],
+          "x": 5,
+          "y": 5
+        }
+      },
+      {
+        "id": "d Server gestoppt",
+        "pass": true,
+        "summary": "Wechsel v1/v2/v1/v2: 7 / 4 / 2 / 2 ms; neue Version nach Stopp installiert+montiert: 4 ms; SW gestoppt+Neustart ohne Netz: n/a; Server-Treffer unter /~a/ waehrend des Laufs: 0",
+        "data": {
+          "toggles": [
+            7,
+            4,
+            2,
+            2
+          ],
+          "off": 4,
+          "swRestart": "n/a",
+          "artifactHits": 0,
+          "paths": []
+        }
+      }
+    ],
+    "browserVersion": "26.4",
+    "artifactHitsTotal": 0
+  }
+}

@@ -1,0 +1,424 @@
+{
+ "at": "2026-10-15T14:06:04.042Z",
+ "variant": "frame",
+ "stub": "/Users/michaelwelsch/.local/state/shell-v4/stub-pins/cff5ba5",
+ "widths": [
+  1280,
+  420
+ ],
+ "ported": [
+  "documents",
+  "knowledge",
+  "notes",
+  "placements"
+ ],
+ "skipped": [
+  {
+   "id": "conversations",
+   "reason": "kein mount(root, api) (kein mount-Export); Scan 102"
+  }
+ ],
+ "results": [
+  {
+   "app": "documents",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G1"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    560,
+    360
+   ],
+   "G1": [
+    "Fenster nach dem Öffnen wieder weg; Shell []; kernel.apps [{\"id\":\"documents\",\"state\":\"failed\",\"active_ver\":\"1.0.0\",\"error\":\"reported: CSS /~a/documents@1.0.0/index.css nicht ladbar\"}]; Zone [{\"app_id\":\"documents\",\"level\":\"error\",\"code\":\"app.activation_failed\",\"text\":\"Aktivierung documents@1.0.0 fehlgeschlagen: reported: CSS /~a/documents@1.0.0/index.css nicht ladbar\",\"ref\":\"1.0.0\",\"source\":\"kernel\",\"at\":1792073152519}]"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {},
+   "g6": null,
+   "errors": [
+    "console: Failed to load resource: net::ERR_UNKNOWN_URL_SCHEME"
+   ],
+   "pushErrors": [],
+   "shot": "documents/1280.png"
+  },
+  {
+   "app": "documents",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G1",
+    "G6"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    560,
+    360
+   ],
+   "G1": [
+    "Fenster nach dem Öffnen wieder weg; Shell []; kernel.apps [{\"id\":\"documents\",\"state\":\"failed\",\"active_ver\":\"1.0.0\",\"error\":\"reported: CSS /~a/documents@1.0.0/index.css nicht ladbar\"}]; Zone [{\"app_id\":\"documents\",\"level\":\"error\",\"code\":\"app.activation_failed\",\"text\":\"Aktivierung documents@1.0.0 fehlgeschlagen: reported: CSS /~a/documents@1.0.0/index.css nicht ladbar\",\"ref\":\"1.0.0\",\"source\":\"kernel\",\"at\":1792073153560}]"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [
+    "nicht messbar (Lauf fehlgeschlagen)"
+   ],
+   "notes": [],
+   "info": {},
+   "g6": null,
+   "errors": [
+    "console: Failed to load resource: net::ERR_UNKNOWN_URL_SCHEME"
+   ],
+   "pushErrors": [],
+   "shot": "documents/420.png"
+  },
+  {
+   "app": "knowledge",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "2 abgeschnittene Texte (2 in Listen): Liste strong „Rahmenvertrag über Wartung und Instandha“; Liste small.bundle-meta „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 194,
+    "visibleElements": 105,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 793,
+    "scrollTop": 0,
+    "title": "Knowledge",
+    "titleCalls": [
+     "Knowledge"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 2,
+    "appSheets": [
+     "/~a/knowledge@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--knowledge-accent×24",
+     "--knowledge-surface×22",
+     "--knowledge-line×17",
+     "--knowledge-muted×16",
+     "--knowledge-control-radius×15",
+     "--knowledge-text×10",
+     "--knowledge-bg×4",
+     "--knowledge-surface-muted×3"
+    ],
+    "undefinedTokenCount": 12
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "knowledge/1280.png"
+  },
+  {
+   "app": "knowledge",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "2 abgeschnittene Texte (2 in Listen): Liste strong „Rahmenvertrag über Wartung und Instandha“; Liste small.bundle-meta „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 194,
+    "visibleElements": 76,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 587,
+    "scrollTop": 0,
+    "title": "Knowledge",
+    "titleCalls": [
+     "Knowledge"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 2,
+    "appSheets": [
+     "/~a/knowledge@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--knowledge-accent×24",
+     "--knowledge-surface×22",
+     "--knowledge-line×17",
+     "--knowledge-muted×16",
+     "--knowledge-control-radius×15",
+     "--knowledge-text×10",
+     "--knowledge-bg×4",
+     "--knowledge-surface-muted×3"
+    ],
+    "undefinedTokenCount": 12
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "knowledge/420.png"
+  },
+  {
+   "app": "notes",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "3 abgeschnittene Texte (3 in Listen): Liste span.notes-card-snippet „Zusammenfassung der Ergebnisse aus dem W“; Liste div.notes-card-title „Rahmenvertrag über Wartung und Instandha“; Liste span.notes-card-snippet „Rückfrage zur Lieferzeit der Ersatzteile“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 375,
+    "visibleElements": 224,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1083,
+    "scrollTop": 0,
+    "title": "Notizen",
+    "titleCalls": [
+     "Notizen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 3,
+    "appSheets": [
+     "/~a/notes@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--nn-shadow×2",
+     "--nn-paper-shadow×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "notes/1280.png"
+  },
+  {
+   "app": "notes",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G1"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [
+    "2 innere Container scrollen horizontal: div.nn-note-meta-left 293>290; div.nn-floating-toolbar-wrapper 580>394"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 375,
+    "visibleElements": 106,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 190,
+    "scrollTop": 0,
+    "title": "Notizen",
+    "titleCalls": [
+     "Notizen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/notes@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--nn-shadow×2",
+     "--nn-paper-shadow×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "notes/420.png"
+  },
+  {
+   "app": "placements",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 122,
+    "visibleElements": 85,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 693,
+    "scrollTop": 0,
+    "title": "Vermittlungen",
+    "titleCalls": [
+     "Vermittlungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/placements@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "placements/1280.png"
+  },
+  {
+   "app": "placements",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 122,
+    "visibleElements": 84,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 693,
+    "scrollTop": 0,
+    "title": "Vermittlungen",
+    "titleCalls": [
+     "Vermittlungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/placements@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "placements/420.png"
+  }
+ ]
+}

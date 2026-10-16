@@ -1,0 +1,182 @@
+[
+ {
+  "width": 1280,
+  "scenario": "vorher",
+  "steps": [
+   {
+    "campaign": "Outbound Firmenqualifizierung",
+    "visible": [
+     "Importjob anlegen",
+     "Kampagnen-Runbook öffnen",
+     "Kampagne bearbeiten",
+     "Kampagne löschen"
+    ]
+   },
+   {
+    "campaign": "Angebot Wartungsvertrag Halle 4",
+    "visible": [
+     "Importjob anlegen",
+     "Kampagnen-Runbook öffnen",
+     "Kampagne bearbeiten",
+     "Kampagne löschen"
+    ]
+   },
+   {
+    "campaign": "Projektplan Relaunch Kundenportal",
+    "visible": [
+     "Importjob anlegen",
+     "Kampagnen-Runbook öffnen",
+     "Kampagne bearbeiten",
+     "Kampagne löschen"
+    ]
+   },
+   {
+    "campaign": "Lieferantenbewertung 2026",
+    "visible": [
+     "Importjob anlegen",
+     "Kampagnen-Runbook öffnen",
+     "Kampagne bearbeiten",
+     "Kampagne löschen"
+    ]
+   },
+   {
+    "campaign": "Onboarding neue Mitarbeitende",
+    "visible": [
+     "Importjob anlegen",
+     "Kampagnen-Runbook öffnen",
+     "Kampagne bearbeiten",
+     "Kampagne löschen"
+    ]
+   },
+   {
+    "campaign": "Rahmenvertrag über Wartung und Instandhaltung der Produktionsanlagen am Standort Augsburg",
+    "visible": [
+     "Importjob anlegen",
+     "Kampagnen-Runbook öffnen",
+     "Kampagne bearbeiten",
+     "Kampagne löschen"
+    ]
+   },
+   {
+    "campaign": "Kundentermin Vorbereitung",
+    "visible": [
+     "Importjob anlegen",
+     "Kampagnen-Runbook öffnen",
+     "Kampagne bearbeiten",
+     "Kampagne löschen"
+    ]
+   },
+   {
+    "company": "company-005",
+    "visible": [
+     "Qualifizieren",
+     "Ausschließen",
+     "Ausblenden",
+     "Nachrecherche",
+     "Validiert",
+     "Log"
+    ]
+   },
+   {
+    "company": "company-011",
+    "visible": [
+     "Ausblenden",
+     "Nachrecherche",
+     "Validiert",
+     "Log"
+    ]
+   }
+  ],
+  "errors": []
+ },
+ {
+  "width": 420,
+  "scenario": "vorher",
+  "steps": [
+   {
+    "campaign": "Outbound Firmenqualifizierung",
+    "visible": [
+     "Importjob anlegen",
+     "Kampagnen-Runbook öffnen",
+     "Kampagne bearbeiten",
+     "Kampagne löschen"
+    ]
+   },
+   {
+    "campaign": "Angebot Wartungsvertrag Halle 4",
+    "visible": [
+     "Importjob anlegen",
+     "Kampagnen-Runbook öffnen",
+     "Kampagne bearbeiten",
+     "Kampagne löschen"
+    ]
+   },
+   {
+    "campaign": "Projektplan Relaunch Kundenportal",
+    "visible": [
+     "Importjob anlegen",
+     "Kampagnen-Runbook öffnen",
+     "Kampagne bearbeiten",
+     "Kampagne löschen"
+    ]
+   },
+   {
+    "campaign": "Lieferantenbewertung 2026",
+    "visible": [
+     "Importjob anlegen",
+     "Kampagnen-Runbook öffnen",
+     "Kampagne bearbeiten",
+     "Kampagne löschen"
+    ]
+   },
+   {
+    "campaign": "Onboarding neue Mitarbeitende",
+    "visible": [
+     "Importjob anlegen",
+     "Kampagnen-Runbook öffnen",
+     "Kampagne bearbeiten",
+     "Kampagne löschen"
+    ]
+   },
+   {
+    "campaign": "Rahmenvertrag über Wartung und Instandhaltung der Produktionsanlagen am Standort Augsburg",
+    "visible": [
+     "Importjob anlegen",
+     "Kampagnen-Runbook öffnen",
+     "Kampagne bearbeiten",
+     "Kampagne löschen"
+    ]
+   },
+   {
+    "campaign": "Kundentermin Vorbereitung",
+    "visible": [
+     "Importjob anlegen",
+     "Kampagnen-Runbook öffnen",
+     "Kampagne bearbeiten",
+     "Kampagne löschen"
+    ]
+   },
+   {
+    "company": "company-005",
+    "visible": [
+     "Qualifizieren",
+     "Ausschließen",
+     "Ausblenden",
+     "Nachrecherche",
+     "Validiert",
+     "Log"
+    ]
+   },
+   {
+    "company": "company-011",
+    "visible": [
+     "Ausblenden",
+     "Nachrecherche",
+     "Validiert",
+     "Log"
+    ]
+   }
+  ],
+  "errors": []
+ }
+]

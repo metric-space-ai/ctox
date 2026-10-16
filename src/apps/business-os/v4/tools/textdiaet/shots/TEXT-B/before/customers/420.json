@@ -1,0 +1,116 @@
+{
+ "app": "customers",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Kunden",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Kunde anlegen",
+    "button:Ansicht speichern",
+    "button:Importieren",
+    "button:Exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Alle Kunden (6)",
+    "nav:Aktive Kunden (2)",
+    "nav:Renewal (1)",
+    "nav:Gefährdet (2)",
+    "row:Kunde auswählen: Hoffmann Medi",
+    "row:Kunde auswählen: Wagner Elektr",
+    "row:Kunde auswählen: Fischer Softw",
+    "row:Kunde auswählen: Krause Facili",
+    "row:Kunde auswählen: Richter Bau &",
+    "row:Kunde auswählen: Müller Maschi",
+    "button:Kunde bearbeiten",
+    "button:Archivieren",
+    "nav:Übersicht",
+    "nav:Kontakte",
+    "nav:Opportunities",
+    "nav:Aktivitäten",
+    "nav:Aufgaben",
+    "nav:Notizen",
+    "nav:Dateien",
+    "nav:Apps",
+    "nav:Übergabe",
+    "nav:Dubletten",
+    "button:Kontakt anlegen",
+    "button:Kontakt auswählen: Lukas Weber",
+    "button:Opportunity auswählen: Müller ",
+    "row:Kontakt auswählen: Lukas Weber",
+    "row:Opportunity auswählen: Müller "
+   ],
+   "shot": "customers/420-01-open.png"
+  },
+  {
+   "step": "nav Alle Kunden (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "customers/420-02-nav_Alle_Kunden_6_.png"
+  },
+  {
+   "step": "nav Aktive Kunden (2)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-pane-scroll 651>420"
+   ],
+   "open": true,
+   "kind": "nav",
+   "shot": "customers/420-03-nav_Aktive_Kunden_2_.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 733,
+   "shot": "customers/420-04-suche_ohne_Treffer.png",
+   "textAfter": 223
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-pane-scroll 651>420"
+   ],
+   "open": true,
+   "kind": "search",
+   "shot": "customers/420-05-suche_geleert.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "customers",
+  "Kunden"
+ ]
+}

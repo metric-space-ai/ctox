@@ -5,29 +5,353 @@
 //
 // Source of truth: src/core/mission/channels.rs (CREATE TABLE communication_*).
 //
-// Conversations also cross-links outbound records (campaign cards in the right
-// pane). Those collections are owned by the outbound module; we import its
-// schema definitions so this module can register them on clients where
-// outbound has never been opened — without the definitions drifting apart
-// (same pattern as modules/reports re-exporting the ctox schemas). The
-// conformance guard asserts parity for collections declared by more than one
-// module.
-
-import {
-  collections as outboundCollections,
-  migrationStrategies as outboundMigrationStrategies,
-} from '../outbound/schema.js';
-
-const OUTBOUND_LINKED_COLLECTIONS = [
-  'outbound_campaigns',
-  'outbound_pipeline_items',
-  'outbound_engagements',
-  'outbound_messages',
-  'outbound_approvals',
-];
+// LEGACY (Shell v3 only): v4 reads collections.schema.json (Port-Regel R17). This file stays only because
+// modules/ctox/schema.js (fremder Strang) still imports it and the v3 app.js registers module schemas from it;
+// it is deleted centrally together with the old app.js (V4-PORT.md, OFFEN). Since UC3b it no longer imports
+// ../outbound/schema.js (Isolationsregel R1): the five outbound definitions and the outbound_messages migration
+// are inlined verbatim (Stand 15.10.2026, gleich modules/outbound/schema.js und collections.schema.json).
 
 export const collections = {
-  ...Object.fromEntries(OUTBOUND_LINKED_COLLECTIONS.map((name) => [name, outboundCollections[name]])),
+  outbound_campaigns: {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "name": {
+        "type": "string"
+      },
+      "objective": {
+        "type": "string"
+      },
+      "market": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "owner_id": {
+        "type": "string"
+      },
+      "source_count": {
+        "type": "number"
+      },
+      "company_count": {
+        "type": "number"
+      },
+      "qualified_count": {
+        "type": "number"
+      },
+      "pipeline_count": {
+        "type": "number"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "status",
+      "payload",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  outbound_pipeline_items: {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "campaign_id": {
+        "type": "string"
+      },
+      "company_id": {
+        "type": "string"
+      },
+      "company_name": {
+        "type": "string"
+      },
+      "stage": {
+        "type": "string"
+      },
+      "contact_research_status": {
+        "type": "string"
+      },
+      "outreach_status": {
+        "type": "string"
+      },
+      "priority": {
+        "type": "string"
+      },
+      "contacts": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "campaign_id",
+      "company_id",
+      "company_name",
+      "stage",
+      "contact_research_status",
+      "outreach_status",
+      "payload",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  outbound_engagements: {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "campaign_id": {
+        "type": "string"
+      },
+      "company_id": {
+        "type": "string"
+      },
+      "pipeline_id": {
+        "type": "string"
+      },
+      "contact_id": {
+        "type": "string"
+      },
+      "sender_account_id": {
+        "type": "string"
+      },
+      "sequence_id": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "next_action_at_ms": {
+        "type": "number"
+      },
+      "paused_reason": {
+        "type": "string"
+      },
+      "closed_reason": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "campaign_id",
+      "status",
+      "payload",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  outbound_messages: {
+    "version": 1,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "engagement_id": {
+        "type": "string"
+      },
+      "campaign_id": {
+        "type": "string"
+      },
+      "channel": {
+        "type": "string"
+      },
+      "message_type": {
+        "type": "string"
+      },
+      "direction": {
+        "type": "string"
+      },
+      "sender_account_id": {
+        "type": "string"
+      },
+      "recipient_email": {
+        "type": "string"
+      },
+      "recipient_address_text": {
+        "type": "string"
+      },
+      "subject": {
+        "type": "string"
+      },
+      "body_text": {
+        "type": "string"
+      },
+      "body_html": {
+        "type": "string"
+      },
+      "document_id": {
+        "type": "string"
+      },
+      "document_version_id": {
+        "type": "string"
+      },
+      "document_pdf_url": {
+        "type": "string"
+      },
+      "physical_sent_at_ms": {
+        "type": "number"
+      },
+      "draft_status": {
+        "type": "string"
+      },
+      "approval_status": {
+        "type": "string"
+      },
+      "send_status": {
+        "type": "string"
+      },
+      "scheduled_send_at_ms": {
+        "type": "number"
+      },
+      "sent_at_ms": {
+        "type": "number"
+      },
+      "provider_message_id": {
+        "type": "string"
+      },
+      "communication_account_key": {
+        "type": "string"
+      },
+      "communication_message_key": {
+        "type": "string"
+      },
+      "thread_key": {
+        "type": "string"
+      },
+      "reply_to_message_id": {
+        "type": "string"
+      },
+      "revision_id": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "engagement_id",
+      "campaign_id",
+      "message_type",
+      "direction",
+      "draft_status",
+      "approval_status",
+      "send_status",
+      "payload",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  outbound_approvals: {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "message_id": {
+        "type": "string"
+      },
+      "engagement_id": {
+        "type": "string"
+      },
+      "revision_id": {
+        "type": "string"
+      },
+      "actor_user_id": {
+        "type": "string"
+      },
+      "decision": {
+        "type": "string"
+      },
+      "comment": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "message_id",
+      "engagement_id",
+      "decision",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
   // Canonical definition for communication_accounts — modules/desktop imports
   // it from here. Includes the tombstone/projection bookkeeping fields the
   // Rust channel projector writes (updated_at_ms, is_deleted, deleted_at_ms).
@@ -110,8 +434,16 @@ export const collections = {
   },
 };
 
-export const migrationStrategies = Object.fromEntries(
-  OUTBOUND_LINKED_COLLECTIONS
-    .filter((name) => outboundMigrationStrategies[name])
-    .map((name) => [name, outboundMigrationStrategies[name]]),
-);
+export const migrationStrategies = {
+  outbound_messages: {
+    1: (oldDoc) => ({
+      ...oldDoc,
+      channel: oldDoc.channel || oldDoc.payload?.channel || oldDoc.payload?.default_channel || 'email',
+      recipient_address_text: oldDoc.recipient_address_text || oldDoc.payload?.recipient_address_text || '',
+      document_id: oldDoc.document_id || '',
+      document_version_id: oldDoc.document_version_id || '',
+      document_pdf_url: oldDoc.document_pdf_url || '',
+      physical_sent_at_ms: oldDoc.physical_sent_at_ms || 0,
+    }),
+  },
+};

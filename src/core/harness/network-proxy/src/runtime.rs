@@ -362,6 +362,12 @@ impl NetworkProxyState {
         }
 
         let is_allowlisted = allow_set.is_match(host_str);
+        // Reject foreign DNS names before resolution: even a denied HTTP
+        // request must not transmit attacker-controlled data through DNS.
+        // Keep the existing literal-address/local-binding decisions below.
+        if !is_allowlisted && !is_loopback_host(&host) && host_str.parse::<IpAddr>().is_err() {
+            return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowed));
+        }
         if !allow_local_binding {
             // If the intent is "prevent access to local/internal networks", we must not rely solely
             // on string checks like `localhost` / `127.0.0.1`. Attackers can use DNS rebinding or

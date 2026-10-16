@@ -1,0 +1,259 @@
+{
+  "_capability_evidence": {},
+  "_declaration": "modules/app-store/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/app-store/index.html",
+  "_rust_basis": "app-spezifisch ~200 Z.: `store.rs` `load_marketplace_module_manifests` (`:4919`, 73), `uninstall_app_module` (`:6149`, 43); `mcp_channel.rs` `app_store_install_action_*` (`:8638–8719`, ~81); Befehlsrouting in `command_plane.rs` (14 Treffer)",
+  "_source_dir": "src/apps/business-os/modules/app-store",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "app_drafts: Plattform exportiert die Collection nicht – Zugriff (read) nicht deklariert.",
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "app-store",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [],
+  "collections": {},
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {},
+  "files": {
+    "V4-HANDLERS.md": "6c4e756d9cd6d00205091c0b6ecc603c54d613bdabc71e67b845334e6041ed4e",
+    "V4-PORT.md": "edd859adafa121001ebd8f007fce61be429000b36ab420c0d661102535d47f8e",
+    "assets/icon.jpg": "950bcb487a15dd7f3de5baf25eb1500d84a305c3a5270d51f809e7d917f680bb",
+    "assets/icon@512.jpg": "fe4d067afb1933cd7b5b0f0eec06d396f67ef41cf6c2db8513447c9b102a936b",
+    "assets/previews/app-store.png": "5c32af6da6f17c89d8cdd05a1c97b72b0abd3d20a978605bb9fe339c9cba7a5f",
+    "assets/previews/browser.png": "97a4cb2c628e0c7af39507f3598158bf0cb9e18a1d16c43920f282e2e263606e",
+    "assets/previews/buchhaltung.png": "bf35da6db2841c5f511a6146ed786a9a2a3f4b09512ca5f1637139de43720dc5",
+    "assets/previews/calendar.png": "a49a52d6d841b734e9b90507c5b3348a1f99d9e9a2736352465f56cec1a7750c",
+    "assets/previews/coding-agents.png": "9cc4086d908166c7658d591e7d7b00141eab23e3ddb19a7b98ebb5dda6852f3a",
+    "assets/previews/conversations.png": "b006ef42f6e317ae8adc802f398618e2bd04f9b2783374e07b7309bc359ffd32",
+    "assets/previews/creator.png": "9b0065f8bec4c3dce8ff73962b68f792d5c65b34073adb92241c3618b8b83a21",
+    "assets/previews/ctox.png": "c528e1948ca09ad92e4411998212be9fbadd97d5b3148c980a75b889643dac2e",
+    "assets/previews/customers.png": "9503cf15bc684c8851a488957dd7eeadb61abf419ae430b6983b5ef2350f70a9",
+    "assets/previews/documents.png": "4c0833dddd60d66a7456c7ead02b95e6b7cfd72263bd0891ecc6680134418b03",
+    "assets/previews/files.png": "a3367797441da4ca5bfc1f1cbf6b1be7e431988459ab420a686b78467f313846",
+    "assets/previews/knowledge.png": "6211f49bf468364baed99d9762d42294b6799e060dca3a4bc49d1332b0420bff",
+    "assets/previews/matching.png": "887a246a1bc62639287a31f9f5bcae2c547cfcd842b89c67e2032b5554084987",
+    "assets/previews/notes.png": "6e02724d9ef88ba3f12e6079f4a96cf69238dc584049b27ddf9c43a4ee1a60f1",
+    "assets/previews/outbound.png": "17a7761f0700641149e6c8afcc2b126e7a8d17322b51524aa4f034ca412d4722",
+    "assets/previews/reports.png": "803b83f925803f2988d0b07b95780a45a02ff6d1011171f200143506baca300d",
+    "assets/previews/research.png": "b75a3eaaf53108455cd4f4fa9218bef707e5c33aa17873e3687087ac961de5af",
+    "assets/previews/shiftflow.png": "c1fb14e9210a582228a1d9e02c9f10e755fbb1ddb14b825fcd4413b3a39ace0f",
+    "assets/previews/spreadsheets.png": "27e8753176206c81c024edc1ca1da18dd585355936f78c094909691433525ab0",
+    "assets/previews/tickets.png": "8e86f48b7a396722a0017ab46047b53cea895035075f4ae18ac4bd0a483a2dd2",
+    "collections.schema.json": "14cd8313fd7fa19fd2e80ce6a226e5f7b6b16824b034914daa5b9b4d18321d19",
+    "icon.svg": "da577c7cfa4604f7002cbb004a7be18eca5e00664914ba6b39e6247fe07b0e20",
+    "index.css": "ffed2279ecab03a13d79920e8119cfc69ee53c6bbc2219d56b4202e6ddbeff95",
+    "index.html": "5c6bc907f36efbc96fddf45597709c579539a9da80b784870b3848eab997de2e",
+    "index.js": "de325bf9a86bfd37244feca819f3fd492f78df1bc5f5e24981497728f0defa56",
+    "locales/de.json": "8ab9b7c32aeccc8a3f6b1ff7c480431ec62a67fdad27c2e713d52f8a4b70e108",
+    "locales/en.json": "bdda3f7c4dd8468ccd040eb0e023fdb5a015eb4ab317ea5f1c7f675e5efdc753",
+    "module.json": "3963ab1dcf0690144873916c901ee818788a621b3d4aeacaaa8c5679d7a87be9",
+    "v4-manifest.json": "7e788f6fea787bb81cd4e9484944ae6c97b6debbe6d38924e35bcf390efed1fc",
+    "vendor/store-shelf/box-art.mjs": "e3a842c0d2264aa147349429eb1d46e1be58f2405832602179fe7131f7c670ff",
+    "vendor/store-shelf/provenance.json": "ad1b9705156e73e5e600fbe23d5d5437963da8c4d1ab6edc29e53459f6dbb037",
+    "vendor/store-shelf/store-shelf.mjs": "3dcf923bea34525aebeb9be64a43f503405175f7acf934256617b4df3de4d3c5",
+    "vendor/three/RoundedBoxGeometry.js": "047158fdb27e8b64a42b03af68c69c32f667818a8f328ea2b85691e0bf974414",
+    "vendor/three/provenance.json": "594225efa7691c0863248ecc7aad74b4b2ef8c001eb3957cd39297e05d918872",
+    "vendor/three/three.core.min.js": "05b2609338c76cd65daf74f3ac515bc9a5045e1b3b33edc07d8c9bd55250fa90",
+    "vendor/three/three.module.min.js": "86bcee248b64f44bcfc23c331ae74619061957d59cab040171dcb6fb5900beb6"
+  },
+  "foreign_collections": {
+    "app_catalog": {
+      "_evidence": {
+        "code_read": [
+          "index.js:2",
+          "index.js:154",
+          "index.js:515"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "business_app_versions": {
+      "_evidence": {
+        "code_read": [
+          "index.js:2",
+          "index.js:152",
+          "index.js:514"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/app-store/V4-PORT.md OFFEN 8 (documents/notes/spreadsheets Fehltreffer; files braucht write über api.files.put)",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "business_apps": {
+      "_evidence": {
+        "code_read": [
+          "index.js:2",
+          "index.js:151",
+          "index.js:513"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/app-store/V4-PORT.md OFFEN 8 (documents/notes/spreadsheets Fehltreffer; files braucht write über api.files.put)",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "documents": {
+      "_evidence": {
+        "code_read": [
+          "index.js:73",
+          "vendor/store-shelf/box-art.mjs:244",
+          "vendor/store-shelf/box-art.mjs:576"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "documents"
+    },
+    "files": {
+      "_evidence": {
+        "code_read": [
+          "index.js:73",
+          "vendor/store-shelf/box-art.mjs:303"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/app-store/V4-PORT.md OFFEN 8 (documents/notes/spreadsheets Fehltreffer; files braucht write über api.files.put)",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read",
+        "write"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "notes": {
+      "_evidence": {
+        "code_read": [
+          "index.js:74",
+          "index.js:1891",
+          "vendor/store-shelf/box-art.mjs:270"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "notes"
+    },
+    "spreadsheets": {
+      "_evidence": {
+        "code_read": [
+          "index.js:74",
+          "vendor/store-shelf/box-art.mjs:256",
+          "vendor/store-shelf/box-art.mjs:576"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "spreadsheets"
+    }
+  },
+  "handlers": {},
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/app-store.jpg (shared/operator-icon-selection.js, sha256 b6e9bc5bfa8b…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "_multi_instance_basis": "v4-manifest.json",
+    "category": "Development",
+    "default_height": 760,
+    "default_width": 1120,
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "icon_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-app-store\"><defs><linearGradient id=\"grad-app-store\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#f59e0b\" /><stop offset=\"100%\" stop-color=\"#ec4899\" /></linearGradient></defs><path d=\"M21 8H3a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2z\" fill=\"url(#grad-app-store)\" fill-opacity=\"0.12\" stroke=\"url(#grad-app-store)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M16 8A4 4 0 0 0 8 8\" stroke=\"url(#grad-app-store)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><rect x=\"5\" y=\"12\" width=\"5\" height=\"5\" rx=\"1\" fill=\"url(#grad-app-store)\" fill-opacity=\"0.25\" stroke=\"url(#grad-app-store)\" stroke-width=\"1.2\"></rect><rect x=\"14\" y=\"12\" width=\"5\" height=\"5\" rx=\"1\" fill=\"url(#grad-app-store)\" fill-opacity=\"0.25\" stroke=\"url(#grad-app-store)\" stroke-width=\"1.2\"></rect></svg>",
+    "min_height": 480,
+    "min_width": 640,
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 760,
+        "width": 1120
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#db2777",
+        "category": "Development",
+        "iconAssetId": "workjet.business-os.app-store",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "feed",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "App Store"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "a545a7199a8780ccd740c449f56d932591d15d61ebfc580007eccb2deddf1b9a",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "App Store",
+  "triggers": [],
+  "version": "1.1.1"
+}

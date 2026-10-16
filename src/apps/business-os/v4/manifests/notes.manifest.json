@@ -1,0 +1,228 @@
+{
+  "_capability_evidence": {},
+  "_declaration": "modules/notes/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/notes/index.html",
+  "_rust_basis": "keine dedizierte Logik (Treffer auf „notes“ in `rs:store.rs`/`rs:rxdb_peer.rs` sind generische Feldnamen).",
+  "_source_dir": "src/apps/business-os/modules/notes",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "notes",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [],
+  "collections": {
+    "notes": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/notes.collections.schema.json",
+      "_schema_wrapper": {
+        "conflictStrategy": "field-merge"
+      },
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "folder": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_favorite": {
+            "type": "boolean"
+          },
+          "is_locked": {
+            "type": "boolean"
+          },
+          "is_trashed": {
+            "type": "boolean"
+          },
+          "lock_passcode": {
+            "type": "string"
+          },
+          "notebook": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 1
+      }
+    }
+  },
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {
+    "notes": [
+      "read"
+    ]
+  },
+  "files": {
+    "V4-PORT.md": "fc82d7ac9c657e2d8629a00c6e37d09576e2794335bf65793d35e260e6b2c00e",
+    "assets/icon.jpg": "c04f91d5240dd8a585e6ff32a96c8f2980351041c251ca0fc98467c96b55fbf3",
+    "assets/icon@512.jpg": "5f643fadaed6e3d300caabefb9053d573de0730fc4620a2bbd0e332256477f56",
+    "collections.schema.json": "43de52343389045405ef0eca9a7a2af6f072c9827058a43062ccc5d986382d04",
+    "icon.svg": "dee905e37ff16bda3640a5e7446601c95c7b51617de301b81d511f08806eb969",
+    "index.css": "734537531c5d6fe1eda0f4fbf547797443ad3645001b232df67dcd66ab7bed02",
+    "index.html": "14f546fe367c7c21f79818f40a8689b1728d279b6f6afec412c0101928ad8ec6",
+    "index.js": "d9bf78a70fd10a08f50d0358f1dc095f09931e3e7db1ea83d61fdfe5f08089de",
+    "locales/de.json": "42a97b02850ef4e1e0f751e3f4c5b821fd9fef7d5637c713415a3efa651d430e",
+    "locales/en.json": "0219be8af4ddbbb4aaa58e34fc5ce22a18f7bda273ed481c1434f0a3dd65e9a0",
+    "module.json": "2bedd071ca88b8d3eae22d183447fdf6e6f2b85bfcc43c844bee3584cde750f6",
+    "v4-manifest.json": "8d9043e859d3d58ed3312b2d56f9329fd53713c0b5435ff912afdc5fb09dcc37",
+    "vendor/lexical-src/index.js": "4806c356674e360620cae011679f48a533af6cb61ee315d2ace33284d30b7f91",
+    "vendor/lexical.mjs": "0f2fd4f9c62710af0b6d86f20eaaa219d84927566c87936896585efabebaa5fb"
+  },
+  "foreign_collections": {
+    "business_commands": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "sources": [
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    }
+  },
+  "handlers": {},
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/notes.jpg (shared/operator-icon-selection.js, sha256 aa1aafef932c…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "_multi_instance_basis": "v4-manifest.json; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "category": "Productivity",
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-notes\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-notes\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#eab308\" /><stop offset=\"100%\" stop-color=\"#d97706\" /></linearGradient></defs><path d=\"M16 2H4a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z\" fill=\"url(#grad-notes)\" fill-opacity=\"0.12\" stroke=\"url(#grad-notes)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M2 6h2M2 10h2M2 14h2M2 18h2\" stroke=\"url(#grad-notes)\" stroke-width=\"1.5\" stroke-linecap=\"round\"></path><path d=\"M18.5 2.5a2.121 2.121 0 0 1 3 3L11 16l-4 1 1-4 10.5-10.5z\" fill=\"url(#grad-notes)\" fill-opacity=\"0.3\" stroke=\"url(#grad-notes)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path></svg>",
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 760,
+        "width": 1120
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#d97706",
+        "category": "Knowledge",
+        "iconAssetId": "workjet.business-os.notes",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "document",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "Notizen"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {
+    "notes": {
+      "_source": "v4/schemas/notes.collections.schema.json migration_strategies",
+      "from_ver": 0,
+      "migrate_fn": null,
+      "steps": [
+        {
+          "operations": [
+            {
+              "default": "",
+              "field": "notebook",
+              "op": "set_from_first_truthy",
+              "paths": [
+                "notebook"
+              ]
+            },
+            {
+              "default": "",
+              "field": "tags",
+              "op": "set_from_first_truthy",
+              "paths": [
+                "tags"
+              ]
+            },
+            {
+              "field": "is_favorite",
+              "op": "set_boolean",
+              "path": "is_favorite"
+            },
+            {
+              "field": "is_trashed",
+              "op": "set_boolean",
+              "path": "is_trashed"
+            },
+            {
+              "field": "is_locked",
+              "op": "set_boolean",
+              "path": "is_locked"
+            },
+            {
+              "default": "",
+              "field": "lock_passcode",
+              "op": "set_from_first_truthy",
+              "paths": [
+                "lock_passcode"
+              ]
+            }
+          ],
+          "to_ver": 1
+        }
+      ]
+    }
+  },
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "eb67067332b2cf08e8c9f157d609cc66106edaf9412f828f8f78eacb7c08cc45",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "Notes",
+  "triggers": [],
+  "version": "1.0.2"
+}

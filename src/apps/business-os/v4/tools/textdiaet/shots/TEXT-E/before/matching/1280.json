@@ -1,0 +1,149 @@
+{
+ "app": "matching",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [
+    "put matching_results/matches_eeadcc67-8c52-4bdd-bfc6-0f6ad4223853 local=ok result=accepted {\"id\":\"matches_eeadcc67-8c52-4bdd-bfc6-0f6ad4223853\",\"kind\":\"match\",\"title\":\"match matches_eeadcc67-8c52-4bdd-bfc6-0f6ad",
+    "put matching_results/matches_8df0dcf3-e311-432a-83e1-de066454adc1 local=ok result=accepted {\"id\":\"matches_8df0dcf3-e311-432a-83e1-de066454adc1\",\"kind\":\"match\",\"title\":\"match matches_8df0dcf3-e311-432a-83e1-de066",
+    "put matching_results/matches_7e34a21a-900e-400b-8cd4-bc4433391d37 local=ok result=accepted {\"id\":\"matches_7e34a21a-900e-400b-8cd4-bc4433391d37\",\"kind\":\"match\",\"title\":\"match matches_7e34a21a-900e-400b-8cd4-bc443",
+    "put matching_results/matches_132c5851-2d39-43d6-9067-1236265fecef local=ok result=accepted {\"id\":\"matches_132c5851-2d39-43d6-9067-1236265fecef\",\"kind\":\"match\",\"title\":\"match matches_132c5851-2d39-43d6-9067-12362",
+    "put matching_results/matches_4f6b3b04-e1d8-41f8-8e82-cb729d623685 local=ok result=accepted {\"id\":\"matches_4f6b3b04-e1d8-41f8-8e82-cb729d623685\",\"kind\":\"match\",\"title\":\"match matches_4f6b3b04-e1d8-41f8-8e82-cb729",
+    "put matching_results/matches_3605b1e7-9325-4e9c-bf3d-55461f39e2af local=ok result=accepted {\"id\":\"matches_3605b1e7-9325-4e9c-bf3d-55461f39e2af\",\"kind\":\"match\",\"title\":\"match matches_3605b1e7-9325-4e9c-bf3d-55461"
+   ],
+   "title": "Matching",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 744
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Anforderung anlegen",
+    "button:Anforderungen importieren",
+    "button:Anforderungen exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Alle (6)",
+    "nav:Offen (6)",
+    "nav:Mit Matches (0)",
+    "row:Anforderung Matching-Anforderu",
+    "button:Anforderung löschen",
+    "button:Spaltenbreite links anpassen",
+    "button:Match-Filter",
+    "nav:Rangliste (0)",
+    "nav:Matrix (0)",
+    "button:Details schließen"
+   ],
+   "shot": "matching/1280-01-open.png"
+  },
+  {
+   "step": "nav Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "matching/1280-02-nav_Alle_6_.png"
+  },
+  {
+   "step": "nav Offen (6)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Mit Matches (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "matching/1280-03-nav_Mit_Matches_0_.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 117,
+   "shot": "matching/1280-04-suche_ohne_Treffer.png",
+   "textAfter": 117
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "matching/1280-05-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "matching_results",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "matching_results",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "matching_results",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "matching_results",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "matching_results",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "matching_results",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "matching",
+  "Matching"
+ ]
+}

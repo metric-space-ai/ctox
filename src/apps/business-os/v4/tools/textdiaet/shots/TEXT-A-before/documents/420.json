@@ -1,0 +1,162 @@
+{
+ "app": "documents",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [
+    "put document_runbooks/research.report.auto local=ok result=accepted {\"id\":\"research.report.auto\",\"document_type\":\"word_document\",\"title\":\"Deep Research Word-Bericht\",\"description\":\"CTOX wä",
+    "put document_runbooks/research.report.decision_brief local=ok result=accepted {\"id\":\"research.report.decision_brief\",\"document_type\":\"word_document\",\"title\":\"Entscheidungsvorlage\",\"description\":\"Kur",
+    "put document_runbooks/research.report.feasibility_study local=ok result=accepted {\"id\":\"research.report.feasibility_study\",\"document_type\":\"word_document\",\"title\":\"Machbarkeitsstudie\",\"description\":\"De",
+    "put document_runbooks/research.report.market_research local=ok result=accepted {\"id\":\"research.report.market_research\",\"document_type\":\"word_document\",\"title\":\"Marktanalyse\",\"description\":\"Marktgröße",
+    "put document_runbooks/research.report.project_description local=ok result=accepted {\"id\":\"research.report.project_description\",\"document_type\":\"word_document\",\"title\":\"Projektbeschreibung / Fördervorhabe",
+    "put document_runbooks/research.report.source_review local=ok result=accepted {\"id\":\"research.report.source_review\",\"document_type\":\"word_document\",\"title\":\"Quellenreview\",\"description\":\"Systematisc",
+    "put document_runbooks/research.report.literature_review local=ok result=accepted {\"id\":\"research.report.literature_review\",\"document_type\":\"word_document\",\"title\":\"Stand der Technik\",\"description\":\"Lit",
+    "put document_runbooks/research.report.technology_screening local=ok result=accepted {\"id\":\"research.report.technology_screening\",\"document_type\":\"word_document\",\"title\":\"Technologie-Screening\",\"descriptio",
+    "put document_runbooks/research.report.competitive_analysis local=ok result=accepted {\"id\":\"research.report.competitive_analysis\",\"document_type\":\"word_document\",\"title\":\"Wettbewerbsanalyse\",\"description\":",
+    "put document_runbooks/research.report.whitepaper local=ok result=accepted {\"id\":\"research.report.whitepaper\",\"document_type\":\"word_document\",\"title\":\"Whitepaper\",\"description\":\"These, Kontext, A",
+    "put document_runbooks/document.extract-requirements local=ok result=accepted {\"id\":\"document.extract-requirements\",\"document_type\":\"word_document\",\"title\":\"Requirements extrahieren\",\"command_type\":",
+    "put document_runbooks/document.review-risks local=ok result=accepted {\"id\":\"document.review-risks\",\"document_type\":\"word_document\",\"title\":\"Risiken prüfen\",\"command_type\":\"document.review-r",
+    "put document_runbooks/document.summarize local=ok result=accepted {\"id\":\"document.summarize\",\"document_type\":\"word_document\",\"title\":\"Zusammenfassen\",\"command_type\":\"document.summarize\","
+   ],
+   "title": "Dokumente",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Dokumentliste öffnen",
+    "button:Bearbeiten"
+   ],
+   "shot": "documents/420-01-open.png"
+  },
+  {
+   "step": "button Dokumentliste öffnen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/420-02-button_Dokumentliste_ffnen.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 464,
+   "shot": "documents/420-03-suche_ohne_Treffer.png",
+   "textAfter": 95
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "documents/420-04-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "documents",
+  "Dokumente"
+ ]
+}

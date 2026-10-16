@@ -29,6 +29,7 @@ export function buildQuickAppCreateCommand({ moduleId, title, actor, now = Date.
     record_id: id,
     payload: {
       title: `Create ${appTitle}`,
+      // v4-allow: text – Agenten-Anweisung, kein Oberflächentext
       instruction: `Create a ready-to-use Business OS starter app named "${appTitle}" in the canonical app shell. Use the record-workbench starter with left navigation, a primary work area, and an inspector. Keep the initial content minimal so the app can be changed from its desktop context menu.`,
       module_id: id,
       app_id: id,

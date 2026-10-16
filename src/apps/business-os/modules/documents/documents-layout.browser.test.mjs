@@ -3,7 +3,18 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 
-import { chromium } from 'playwright';
+import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
+import { join as joinPath } from 'node:path';
+// Lader (OLDTEST): playwright aus dem Klon, sonst PLAYWRIGHT_MODULE, sonst aus dem Haupt-Checkout
+// ~/Documents/ctox/src/apps/business-os/node_modules (wie die v4-api-Tests mit PLAYWRIGHT_MODULE). Nicht installieren.
+const requireDev = createRequire(import.meta.url);
+function loadDev(name, envVar) {
+  try { return requireDev(name); } catch {
+    return requireDev(process.env[envVar] || joinPath(homedir(), 'Documents/ctox/src/apps/business-os/node_modules', name));
+  }
+}
+const { chromium } = loadDev('playwright', 'PLAYWRIGHT_MODULE');
 
 const MODULE_HTML = new URL('./index.html', import.meta.url);
 const MODULE_CSS = new URL('./index.css', import.meta.url);
@@ -40,7 +51,8 @@ async function startFixtureServer() {
         <link rel="stylesheet" href="/index.css">
       </head>
       <body>
-        <div id="host">${moduleHtml}</div>
+        <!-- v4: die Shell setzt data-app am Fenster-Root; index.css ist darauf gescoped (scope-css). -->
+        <div id="host" data-app="documents">${moduleHtml}</div>
         <script type="module">
           import { CtoxResizer } from '/resizer.js';
           const root = document.querySelector('[data-resize-frame]');

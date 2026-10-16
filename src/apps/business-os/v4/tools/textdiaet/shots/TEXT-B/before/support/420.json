@@ -1,0 +1,93 @@
+{
+ "app": "support",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Support",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Queue importieren",
+    "button:Queue exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Offen (5)",
+    "nav:Meine (5)",
+    "nav:Nicht zugewiesen (0)",
+    "nav:SLA-Risiko (0)",
+    "row:Rechnung wurde an die Buchhalt",
+    "row:Bitte bis Freitag prüfen und f",
+    "row:Rückfrage zur Lieferzeit der E",
+    "row:Termin für die Abnahme vor Ort",
+    "row:Zusammenfassung der Ergebnisse",
+    "button:Kontext öffnen",
+    "button:CTOX fragen"
+   ],
+   "shot": "support/420-01-open.png"
+  },
+  {
+   "step": "nav Offen (5)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "support/420-02-nav_Offen_5_.png"
+  },
+  {
+   "step": "nav Meine (5)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 1268,
+   "shot": "support/420-03-suche_ohne_Treffer.png",
+   "textAfter": 119
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "support/420-04-suche_geleert.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "support",
+  "Support"
+ ]
+}

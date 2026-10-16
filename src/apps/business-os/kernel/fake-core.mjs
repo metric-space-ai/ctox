@@ -72,7 +72,7 @@ export class MemoryCoreTransport extends KernelTransport {
   /** user = {id, role, permissions}: der Core kennt den Nutzer (Rechte wirken); ohne user prüft der Core keine Rechte. */
   constructor({ namespace = 'test', latencyMs = 5, user = null, everyMs, agentDelayMs, deviceLabel, codingDelayMs } = {}) {
     super(); this.namespace = namespace; this.latencyMs = latencyMs;
-    this.core = coreFor(namespace); this.reject = []; this.migrate = []; this.handlers = new Map(); this.failures = new Map();
+    this.core = coreFor(namespace); this.reject = []; this.rejectUpload = []; this.migrate = []; this.handlers = new Map(); this.failures = new Map();
     if (everyMs !== undefined) this.core.everyMs = everyMs;
     if (agentDelayMs !== undefined) this.core.agentDelayMs = agentDelayMs;
     if (codingDelayMs !== undefined) this.core.codingDelayMs = codingDelayMs;
@@ -201,5 +201,5 @@ export class MemoryCoreTransport extends KernelTransport {
   async artifact(hash) { if(!this.core.artifacts.has(hash)) throw new CtoxError('not_found','Artifact missing'); return this.core.artifacts.get(hash); }
   putArtifact(hash, content) { this.core.artifacts.set(hash, content); }
   async blob(ref, range) { const blob=this.core.blobs.get(ref); if(!blob) throw new CtoxError('not_found','Blob missing'); return range === undefined ? blob : blob.slice(range.start, range.end, blob.type); }
-  async upload(ref,blob) { this.core.blobs.set(ref,blob); }
+  async upload(ref,blob) { const failure=this.rejectUpload.shift();if(failure){const e=new CtoxError(failure.code ?? 'forbidden',failure.reason ?? String(failure),{reason:failure.reason ?? String(failure)});e.core_rejection=true;throw e;}this.core.blobs.set(ref,blob); }
 }

@@ -1,3 +1,4 @@
+import { createCommandTimings } from './command-timings.mjs';
 import { PLATFORM_COLLECTIONS, PLATFORM_APP_ID } from './platform.mjs';
 import { artifactUrl, utf8Base64, bytesBase64 } from './artifact-url.mjs';
 import { takeoverV3Database } from './migrate-v3.mjs';
@@ -143,7 +144,7 @@ export function createKernel(opts = {}) {
   const inflightOps = new Set();
   const reservedOps = new Set();
   const skipBeforeCommit = new Set();
-  const uploadProgress = new Map(), uploadsDone = new Set();
+  const uploadProgress = new Map(), uploadsDone = new Set(), uploadResults = new Map();
   const activationListeners = new Set();
   let activationReports=Promise.resolve();
   const activationChains = new Map();
@@ -254,7 +255,11 @@ export function createKernel(opts = {}) {
       const appId = rec.collection === 'business_apps' ? rec.id : visible(r)?.app_id;
       if (appId) scheduleActivation(appId);
     }
-    if (rec.collection === 'business_commands') notify('commands');
+    if (rec.collection === 'business_commands') {
+      if (rec.pending && rec.lseq) commandTimings.mark(rec.id, 'queued');
+      if (!rec.pending && ['done','failed','cancelled','rejected'].includes(r.data?.status)) commandTimings.mark(rec.id, 'completed');
+      notify('commands');
+    }
     return true;
   }
   function setCheckpoint(cp) {
@@ -294,6 +299,14 @@ export function createKernel(opts = {}) {
   }
 
   // ---- Metriken ----
+  const commandTimings = createCommandTimings((value, broadcast, patch) => {
+    notify('metrics');
+    if (broadcast) post({type:'command_timing', value:patch});
+    try {
+      const observed = opts.diagnostics?.onCommandTiming?.(value);
+      if (observed != null) Promise.resolve(observed).catch(() => {});
+    } catch { /* diagnostics cannot affect writes */ }
+  });
   async function refreshOutboxStat() {
     if (!db || closed) return;
     const next = await db.outboxStat();
@@ -345,12 +358,14 @@ export function createKernel(opts = {}) {
   const metricsLive = makeLive(['metrics'], () => {
     const net = isLeader || !followerNet ? { link, backlog: (fakeCore?.backlog ?? 0) + extraBacklog, collections: collectionsView } : followerNet;
     return {
+      commands: commandTimings.snapshot(),
       backlog: net.backlog,
       collections: cloneValue(net.collections ?? {}),
       outbox: { count: outboxStat.count, oldest_ms: outboxStat.oldest_at ? Math.max(0, Date.now() - outboxStat.oldest_at) : 0 },
       link: { ...net.link }, ...(timing?{timing:{...timing}}:{}),
     };
   });
+  Object.defineProperty(metricsLive, 'commands', {get: () => { guardAlive(); return deepFreeze(commandTimings.snapshot()); }});
   let knownGen = 0;
   const leaderLive = makeLive(['leader'], () => ({ isLeader, leader_gen: isLeader ? myGen : knownGen, tab_id: tabId }));
 
@@ -395,6 +410,7 @@ export function createKernel(opts = {}) {
     const metas = await db.all('meta');
     for (const m of metas) {
       if(m.key.startsWith('upload_done:'))uploadsDone.add(m.ref);
+      if (m.key.startsWith('upload_result:')) uploadResults.set(m.op_id,m);
       if (m.key === 'checkpoint') setCheckpoint(m.value);
       if (m.key.startsWith('cursor:'))scopeCursors.set(m.collection,m.cursor_to);
       else if (m.key === 'local_seq') localSeqKnown = Math.max(localSeqKnown, m.value);
@@ -414,6 +430,7 @@ export function createKernel(opts = {}) {
     const known=localSeqKnown;let n=0;
     for(const record of snapshot.docs) if((record.lseq??0)>known && mirrorPut(record))n++;
     for(const meta of snapshot.metas){
+      if(meta.key.startsWith('upload_result:')){uploadResults.set(meta.op_id,meta);notify('uploads');}
       if(meta.key.startsWith('upload_done:')){uploadsDone.add(meta.ref);notify('uploads');}
       if(meta.key.startsWith('retired:') && (meta.record?.lseq??0)>known)mirrorPut(meta.record);
       if(meta.key==='checkpoint')setCheckpoint(meta.value);
@@ -460,7 +477,13 @@ export function createKernel(opts = {}) {
     sendLeaderHint();
     // Ein neuer Leiter hat alles gelesen, was der alte geschrieben hat (gemeinsame IDB).
     for (const r of await db.all('docs')) mirrorPut(r);
-    for (const m of await db.all('meta')) if (m.key.startsWith('activation:')) applyActivationLocal(m, false);
+    for (const m of await db.all('meta')) {
+      if (m.key.startsWith('activation:')) applyActivationLocal(m, false);
+      // Takeover first advances the document mirror. Hydrate receipts here as
+      // well; local_seq may already equal the checkpoint after that advance.
+      if (m.key.startsWith('upload_result:')) { uploadResults.set(m.op_id,m);notify('uploads'); }
+      if (m.key.startsWith('result:') && waiters.has(m.info.op_id)) handleWriteResult(m.info,m.result);
+    }
     await settleAwaitingPages();
     notify('leader');
     post({ type: 'leader', gen: myGen });
@@ -522,9 +545,11 @@ export function createKernel(opts = {}) {
         await refreshOutboxStat();
         break;
       }
+      case 'command_timing': commandTimings.merge(msg.value); break;
       case 'outbox': await refreshOutboxStat(); if (isLeader) schedulePump(); break;
       case 'priority': if(isLeader)transport.priority?.({app_id:msg.app_id,collections:msg.collections});break;
       case 'subscribe': if(isLeader && typeof msg.collection==='string')await subscribeCollection(msg.collection,'P1');break;
+      case 'upload_result': uploadResults.set(msg.outcome.op_id,msg.outcome);notify('uploads');break;
       case 'upload_done': uploadsDone.add(msg.ref);notify('uploads');break;
       case 'write_result': handleWriteResult(msg.info, msg.result); await refreshOutboxStat(); break;
       case 'net': followerNet = { link: msg.link, backlog: msg.backlog, collections: msg.collections ?? {} }; notify('metrics'); break;
@@ -597,7 +622,7 @@ export function createKernel(opts = {}) {
         gen: genOf(ns), ...writeVersion(app, collection), app_id: app.id, created_at: Date.now(), origin_tab: tabId,
       };
       if (options.expected_revision !== undefined) entry.expected_revision = options.expected_revision;
-      if (options.file_upload) entry.file_upload = true;
+      if (options.file_upload) { entry.file_upload = true; entry.file_upload_op = options.file_upload_op; }
       waiters.set(op_id, resolveResult);
       const base = cur?.base ?? emptyBase();
       if (!createOnly || !visible(cur)) mirrorPut({ collection: ns, id, data: st.data, deleted: st.deleted, rev: `op:${op_id}`, seq: base.seq, pending: true, base });
@@ -633,6 +658,7 @@ export function createKernel(opts = {}) {
         return r;
       });
       ownCommandQueued = !reused;
+      if (ns === 'business_commands' && rec.pending) commandTimings.mark(id, 'queued');
       mirrorPut(rec);
       post({ type: 'docs', keys: [[ns, id]], local_seq: rec.lseq });
       post({ type: 'outbox' });
@@ -691,6 +717,10 @@ export function createKernel(opts = {}) {
     return true;
   }
   function handleWriteResult(info, result) {
+    if (info.collection === 'business_commands') {
+      commandTimings.mark(info.id, 'acked');
+      if (result.status === 'rejected') commandTimings.mark(info.id, 'completed');
+    }
     const res = waiters.get(info.op_id);
     if (res) { waiters.delete(info.op_id); res(cloneValue(result)); }
     if (result.status === 'rejected' && result.reason !== 'cancelled') {
@@ -813,6 +843,26 @@ export function createKernel(opts = {}) {
     if(entry && message.client_seq!==undefined && message.client_seq!==entry.client_seq)throw new CtoxError('invalid','write_result client_seq mismatch');
     if(entry){await applyResult(entry,message);await refreshOutboxStat();schedulePump();}
   }
+  // Durable CAS outcomes are per upload operation, not just per content hash.
+  // This separates a new upload from an earlier accepted/rejected same-ref attempt.
+  async function storeUploadResult(t, entry, result) {
+    const outcome={key:`upload_result:${entry.op_id}`,op_id:entry.op_id,ref:entry.id,...result};
+    await t.put('meta',outcome);
+    let rec=null;
+    if (result.status === 'rejected' && entry.file_id) {
+      const row=await t.get('docs',['files',entry.file_id]);
+      if (row?.data?.ref === entry.id && row.data.owner_app === entry.app_id) {
+        rec={...row,data:{...row.data,state:'rejected'},deleted:false,local_file_rejection:true};
+        await putDoc(t,rec);
+      }
+    }
+    return {outcome,rec};
+  }
+  function publishUploadResult(value) {
+    uploadResults.set(value.outcome.op_id,value.outcome);notify('uploads');
+    if(value.rec){mirrorPut(value.rec);post({type:'docs',keys:[['files',value.rec.id]]});}
+    post({type:'upload_result',outcome:value.outcome});
+  }
   async function confirm(k,e) {
     let awaitingResult=false;
     try {
@@ -822,16 +872,25 @@ export function createKernel(opts = {}) {
       e = sent;
       if(e.op==='upload') {
         const blob=await db.get('blobs',e.id); await transport.upload(e.id,blob.blob);
-        await db.tx(async t=>{await assertGen(t);await t.del('outbox',e.op_id);await t.put('blobs',{...blob,pinned:false});await t.put('meta',{key:`upload_done:${e.id}`,ref:e.id});await bumpLocalSeq(t);});
+        const outcome=await db.tx(async t=>{await assertGen(t);await t.del('outbox',e.op_id);await t.put('blobs',{...blob,pinned:false});await t.put('meta',{key:`upload_done:${e.id}`,ref:e.id});const out=await storeUploadResult(t,e,{status:'accepted'});await bumpLocalSeq(t);return out;});
+        publishUploadResult(outcome);
         setUploadProgress(e.id,blob.size,blob.size,true); uploadsDone.add(e.id);notify('uploads');post({type:'upload_done',ref:e.id});
       } else {
         if(!subscriptions.has(e.collection))await subscribeCollection(e.collection);
+        if (e.collection === 'business_commands' && !e.pending_result) {
+          commandTimings.mark(e.id, 'sent');
+        }
         const result=e.pending_result??await transport.write(cloneValue(e));
         if(result)awaitingResult=!await applyResult(e,result);
         else awaitingResult=true;
       }
     } catch(err) {
       if(err instanceof StaleLeader)stepDown();
+      else if(e.op === 'upload' && err?.core_rejection) {
+        const out=await db.tx(async t=>{await assertGen(t);await t.del('outbox',e.op_id);const value=await storeUploadResult(t,e,{status:'rejected',code:err.code,reason:err.reason ?? err.message});await bumpLocalSeq(t);return value;});
+        publishUploadResult(out);
+        zoneReport(e.app_id,{level:'error',code:err.code,text:err.reason ?? err.message},'kernel');
+      }
       else if(err?.code==='unavailable'){link={...link,state:'offline'};netChanged();}
       else {
         // An invalid receipt/scope needs a new admitted page or reconnect,
@@ -850,7 +909,7 @@ export function createKernel(opts = {}) {
   async function settleWrite(t,e,base,res) {
     await t.del('outbox',e.op_id);
     const rec=recompute(e.collection,e.id,base,await t.outboxFor(e.collection,e.id));
-    if (e.file_upload && res.status === 'rejected' && !rec.pending) { rec.data={...e.body,state:'rejected'};rec.deleted=false;rec.local_file_rejection=true; }
+    if (e.file_upload && (res.status === 'rejected' || (await t.get('meta',`upload_result:${e.file_upload_op}`))?.status === 'rejected') && !rec.pending) { rec.data={...e.body,state:'rejected'};rec.deleted=false;rec.local_file_rejection=true; }
     await putDoc(t,rec);
     const info={op_id:e.op_id,app_id:e.app_id,collection:e.collection,id:e.id};
     delete res.type;delete res.client_seq;delete res.requires_page;
@@ -893,6 +952,7 @@ export function createKernel(opts = {}) {
       return settleWrite(t,e,base,res);
     });
     if(!out)return true;
+    if(e.collection === 'business_commands') commandTimings.mark(e.id, 'acked');
     if(out.replay) {
       // Explicit replay uses the SAME signed page path, without regressing any
       // durable checkpoint. A no-write command replay still needs its older row.
@@ -922,7 +982,11 @@ export function createKernel(opts = {}) {
   function genOf(ns) { const m = /@g(\d+)$/.exec(ns); return m ? Number(m[1]) : 1; }
   function resolveNs(app, collection) {
     if (SYSTEM_COLLECTIONS.has(collection) || collection.includes('@g')) return collection;
-    const g = versionDoc(app.id, app.ver)?.manifest?.generations?.[collection] ?? 1;
+    const manifest = versionDoc(app.id, app.ver)?.manifest;
+    const foreign = manifest?.foreign_collections?.[collection];
+    const owner = foreign?.owner_app ?? foreign?.app ?? foreign?.owner;
+    const ownerVer = owner && (visible(mirrorGet('business_apps',owner))?.active_ver ?? activations.get(owner)?.activated_ver);
+    const g = (owner ? versionDoc(owner,ownerVer)?.manifest : manifest)?.generations?.[collection] ?? 1;
     return nsName(collection, g);
   }
   function withDefaults(app,collection,data) {
@@ -1290,13 +1354,19 @@ export function createKernel(opts = {}) {
       if (!mine && docs.length) throw new CtoxError('forbidden', 'Datei gehört einer anderen App', { path: sel.id ? 'id' : 'ref' });
       return mine ?? null;
     }
+    // Grants come from Core-confirmed manifests, never optimistic metadata.
+    const readManifest = (id, ver) => {
+      const row = mirrorGet('business_app_versions',`${id}@${ver}`);
+      return !row?.revoked && !row?.base?.deleted ? row?.base?.data?.manifest : undefined;
+    };
     const currentManifest = owner => {
-      const ver = visible(mirrorGet('business_apps',owner))?.active_ver ?? activations.get(owner)?.activated_ver;
-      return versionDoc(owner,ver)?.manifest;
+      const row = mirrorGet('business_apps',owner);
+      const ver = !row?.revoked && !row?.base?.deleted ? row?.base?.data?.active_ver : undefined;
+      return readManifest(owner,ver);
     };
     const ownReferenceRows = new Set(['shell_preferences','app_drafts']);
     function readableNamespace(ns) {
-      const caller = versionDoc(appId,app.ver)?.manifest;
+      const caller = readManifest(appId,app.ver);
       const c = ns.replace(/@g[1-9][0-9]*$/,'');
       if (caller?.collections?.[c]) return ns === resolveNs(app,c);
       const f = caller?.foreign_collections?.[c];
@@ -1305,16 +1375,27 @@ export function createKernel(opts = {}) {
       return !!(f?.ops?.includes('read') && om?.collections?.[c] && om?.exports?.[c]?.includes('read') && ns === nsName(c,om.generations?.[c] ?? 1));
     }
     // §16.13: known owners and declared foreign reads require both grants.
-    // A collection without published ownership remains a local bootstrap name;
-    // the native scope authority still controls which rows can arrive.
+    // Published callers fail closed on undeclared names, even before the owner
+    // manifest arrives. Only manifest-less contract/bootstrap names are local.
     function assertReadableCollection(collection) {
       const c = collection.replace(/@g[1-9][0-9]*$/, '');
-      const callerManifest = versionDoc(appId, app.ver)?.manifest;
+      const callerManifest = readManifest(appId,app.ver);
       const foreign = callerManifest?.foreign_collections?.[c];
-      const owners = [...(mirror.get('business_apps')?.values() ?? [])]
-        .map(visible).filter(Boolean).filter(a => a.id !== appId && currentManifest(a.id)?.collections?.[c]);
-      if ((foreign || owners.length) && !readableNamespace(resolveNs(app, collection)))
+      const owners = [...(mirror.get('business_app_versions')?.values() ?? [])]
+        .filter(row => !row.revoked && !row.base?.deleted).map(row => row.base?.data).filter(Boolean).filter(v => v.app_id !== appId && v.manifest?.collections?.[c]);
+      if ((foreign || owners.length || (callerManifest && !callerManifest.collections?.[c])) && !readableNamespace(resolveNs(app, collection)))
         throw new CtoxError('forbidden', 'Foreign collection requires declaration and read export', {path:'collection'});
+    }
+    function readableLive(collection, tags, compute, empty) {
+      const live = makeLive([...tags,'c:business_apps','c:business_app_versions'], () => {
+        try { assertReadableCollection(collection); }
+        catch (error) { if (error.code === 'forbidden') return empty; throw error; }
+        return compute();
+      });
+      return {
+        get() { assertReadableCollection(collection); return live.get(); },
+        subscribe(cb) { assertReadableCollection(collection); return live.subscribe(cb); },
+      };
     }
     // E30: a CAS hash is not authority. Only canonical, still-readable rows
     // grant access; an optimistic reference cannot mint a read grant.
@@ -1329,7 +1410,7 @@ export function createKernel(opts = {}) {
         if (!base?.deleted && base?.data?.owner_app === appId && base.data.ref === d.ref) return d;
         // files.put proves local bytes in the blob transaction, durably across
         // reload. A plain optimistic files row cannot claim another app's CAS.
-        if ((row?.pending || row?.local_file_rejection) && !base?.data && (await db.get('meta',`file-owner:${JSON.stringify([appId,d.id])}`))?.ref === d.ref) return d;
+        if ((row?.pending || row?.local_file_rejection) && (await db.get('meta',`file-owner:${JSON.stringify([appId,d.id])}`))?.ref === d.ref) return d;
       }
       const canonicalRows = [];
       for (const [ns, rows] of mirror) {
@@ -1373,7 +1454,7 @@ export function createKernel(opts = {}) {
           const h = putBlob(new Blob([bytes], { type: mime }), { ...meta, id, mime, name: meta.name ?? 'datei' });
           const ref = await h.ref;
           await h.local;
-          return { id, ref, done: h.done };
+          return Object.defineProperty({id,ref},'done',{value:h.done});
         })();
       },
       /** CAP-3b: get({id|ref}) → {found, id, ref, name, size, mime, text? | bytes?}; Text nur für UTF-8 ≤ 512 KiB. String = Altform (Blob). */
@@ -1465,7 +1546,7 @@ export function createKernel(opts = {}) {
             if(isLeader)await assertGen(t);
             const existing = await t.get('blobs', ref);
             await t.put('blobs', { ref, blob, size: blob.size, type: blob.type, pinned: true, last_used: Date.now(), ...(existing ? {} : {}) });
-            await t.put('outbox', { op_id, collection: '__blobs', id: ref, op: 'upload', body: null, app_id: appId, app_ver: app.ver, created_at: Date.now(), origin_tab: tabId });
+            await t.put('outbox', { op_id, collection: '__blobs', id: ref, op: 'upload', body: null, file_id:id, app_id: appId, app_ver: app.ver, created_at: Date.now(), origin_tab: tabId });
             await t.put('meta',{key:`file-owner:${JSON.stringify([appId,id])}`,ref});
           });
           if(cancelledEarly){await db.tx(async t=>{await t.del('outbox',op_id);const b=await t.get('blobs',ref);if(b)await t.put('blobs',{...b,pinned:false});});return;}
@@ -1474,14 +1555,16 @@ export function createKernel(opts = {}) {
           metaHandle = localWrite(app, 'put', 'files', id, {
             id, name: String(meta.name ?? 'datei'), mime: String(meta.mime ?? (blob.type || 'application/octet-stream')),
             size: blob.size, ref, owner_app: appId,
-          }, false, {file_upload:true});
+          }, false, {file_upload:true,file_upload_op:uploadOp});
           await metaHandle.local;
         })();
         local.then(async () => {
           if (cancelledEarly || !metaHandle) { resolveResult({ status: 'rejected', reason: 'cancelled' }); return; }
           const r = await metaHandle.result;
-          if (r.status !== 'rejected') await waitUntil(() => uploadsDone.has(refValue) || closed);
-          resolveResult({ ...r, ref: refValue });
+          if (r.status !== 'rejected') await waitUntil(() => uploadResults.has(uploadOp) || closed);
+          const upload = uploadResults.get(uploadOp);
+          const final = r.status === 'rejected' ? r : upload?.status === 'accepted' ? r : {status:'rejected',code:upload?.code ?? 'unavailable',reason:upload?.reason ?? 'Upload not confirmed before close'};
+          resolveResult({ ...final, ref: refValue });
         }, (err) => resolveResult({ status: 'rejected', reason: err instanceof CtoxError ? err.code : 'local_error' }));
         local.catch(() => {});
         const done = result.then(r => {
@@ -1517,24 +1600,23 @@ export function createKernel(opts = {}) {
         const ns = resolveNs(app, collection);
         lastUsed.set(ns,Date.now());
         if(evicted.has(ns)){if(isLeader)track(subscribeCollection(ns,'P1'));else post({type:'subscribe',collection:ns});}
-        return makeLive([`c:${ns}`, 'actor'], () => {
-          assertReadableCollection(collection);
+        return readableLive(collection, [`c:${ns}`, 'actor'], () => {
           const m = mirror.get(ns);
           if (!m) return [];
           const docs = [];
           for (const r of m.values()) if (r.data != null && !r.deleted && ownRowOk(ns, r.id)) docs.push(withDefaults(app,collection,r.data));
           return runCompiledQuery(docs, cq);
-        });
+        }, []);
       },
       get(collection, id) {
         assertReadableCollection(collection);
         const ns = resolveNs(app, collection);
         lastUsed.set(ns,Date.now());
         if(evicted.has(ns)){if(isLeader)track(subscribeCollection(ns,'P1'));else post({type:'subscribe',collection:ns});}
-        return makeLive([`c:${ns}`, 'actor'], () => { assertReadableCollection(collection); return ownRowOk(ns,id) ? withDefaults(app,collection,visible(mirrorGet(ns,id))) : null; });
+        return readableLive(collection, [`c:${ns}`, 'actor'], () => ownRowOk(ns,id) ? withDefaults(app,collection,visible(mirrorGet(ns,id))) : null, null);
       },
       put(collection, doc) { return localWrite(app, 'put', collection, doc?.id, doc); },
-      patch(collection, id, patch, options = {}) { return localWrite(app, 'patch', collection, id, patch, false, options); },
+      patch(collection, id, patch, options = {}) { return localWrite(app, 'patch', collection, id, patch, false, {expected_revision:options.expected_revision}); },
       remove(collection, id) { return localWrite(app, 'delete', collection, id, null); },
       command(type, payload = {}, commandOptions={}) {
         if (typeof type !== 'string' || !type) throw new CtoxError('invalid', 'Befehlstyp fehlt', { path: 'type' });
@@ -2139,6 +2221,7 @@ export function createKernel(opts = {}) {
     },
     setBacklog(n) { extraBacklog = Math.max(0, Number(n) || 0); netChanged(); },
     rejectNext(reason) { fakeCore?.reject.push(reason); },
+    rejectNextUpload(reason) { fakeCore?.rejectUpload.push(reason); },
     migrateNext(o) { fakeCore?.migrate.push(o ?? {}); },
     failCommand(type, error) { fakeCore?.failures.set(type, error); },
     async publishAppVersion(appId, ver, o) {
@@ -2246,6 +2329,7 @@ export function createKernel(opts = {}) {
   // ---- Sim-Fassade (Test-Hooks) ----
   const sim = {
     rejectNext: (reason = 'simulated_rejection') => forward('rejectNext')(reason),
+    rejectNextUpload: (reason = {code:'forbidden',reason:'Upload denied'}) => forward('rejectNextUpload')(reason),
     migrateNext: (o = {}) => forward('migrateNext')({ dropFields: o.dropFields ?? [] }),
     failCommand: (type, error = 'simulated failure') => forward('failCommand')(type, error),
     onCommand(type, fn) { fakeCore?.handlers.set(type, fn); },

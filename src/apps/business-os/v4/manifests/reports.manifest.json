@@ -1,0 +1,217 @@
+{
+  "_capability_evidence": {},
+  "_declaration": "modules/reports/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/reports/index.html",
+  "_rust_basis": "keine dedizierte Datei; `ctox_bug_reports` u. a. `rs:store.rs:4039,25245`, Rollback `rs:module_lifecycle.rs`.",
+  "_source_dir": "src/apps/business-os/modules/reports",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "reports",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [],
+  "collections": {},
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {},
+  "files": {
+    "V4-PORT.md": "f0e9a26a19fc803504b4cfd8312ef0073cf92d522bcdb7a7254c78473450d6fe",
+    "assets/icon.jpg": "3a6c5eb0d7442518153338ab32fe4591d8c669f8a25f4d32fe362ace0e21ab1e",
+    "assets/icon@512.jpg": "b081b1ba7cd05f5efe70f59263b1f4737e66964d02d7a5a9654742382ed23f5d",
+    "collections.schema.json": "bfffe04b2440ff2bac29c26f7d70a2adb5dcb862a4cbe7c86e1912cfc147b5b1",
+    "core/funnel.js": "a56e0f883d1a2efd2d10361169e8c495055e2d16b35beea4815a3ee01240f6b8",
+    "icon.svg": "53d1242e9674cbedfe7e96292bdf2c5059a8a1cab4ec857fcd96f8e58d2adc5c",
+    "index.css": "4f51efecbab60f49664b16353ed9d1f5c51f3acab8953459ae492614546c4d83",
+    "index.html": "f99baea03e5bd28f56298ca50cbac2ec9867023dc3e76e30a2feb31243029c03",
+    "index.js": "229ce6c2d75793ad0ec216d1b0dc27247d55a60a9fa4f534e91cd304af661c4e",
+    "locales/de.json": "e01ae1854a8a1ddc89604a5538b7057d40e14953f57e3f483a353f3ef0e02910",
+    "locales/en.json": "2fcebeaa5064eeaeee2865915cb8b5178ddf508386ab539462189b8db0523c0f",
+    "module.json": "2036a1ff50ee80571513a4d4eb3813199aeeeec0b9792654d6cdcd5a6e309e60",
+    "v4-manifest.json": "b4760c18b5209d1b8bc158eba2f3d7e81ea0af01af686d1a6b184c6d23ee9a13"
+  },
+  "foreign_collections": {
+    "business_apps": {
+      "_evidence": {
+        "code_read": [
+          "index.js:18"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/reports/V4-PORT.md „Fremd-Collections (für den Manifest-Generator)“, OFFEN 1",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "business_commands": {
+      "_evidence": {
+        "code_read": [
+          "index.js:14",
+          "index.js:494"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/reports/V4-PORT.md „Fremd-Collections (für den Manifest-Generator)“, OFFEN 1",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "business_module_releases": {
+      "_evidence": {
+        "code_read": [
+          "index.js:13",
+          "index.js:493"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/reports/V4-PORT.md „Fremd-Collections (für den Manifest-Generator)“, OFFEN 1",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    },
+    "business_module_reports": {
+      "_evidence": {
+        "code_read": [
+          "index.js:11",
+          "index.js:491",
+          "index.js:873"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/reports/V4-PORT.md „Fremd-Collections (für den Manifest-Generator)“, OFFEN 1",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read",
+        "write"
+      ],
+      "owner_app": "ctox"
+    },
+    "ctox_bug_reports": {
+      "_evidence": {
+        "code_read": [
+          "index.js:12",
+          "index.js:492"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/reports/V4-PORT.md „Fremd-Collections (für den Manifest-Generator)“, OFFEN 1",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    },
+    "ctox_queue_tasks": {
+      "_evidence": {
+        "code_read": [
+          "index.js:15",
+          "index.js:495"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/reports/V4-PORT.md „Fremd-Collections (für den Manifest-Generator)“, OFFEN 1",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    }
+  },
+  "handlers": {},
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/reports.jpg (shared/operator-icon-selection.js, sha256 f83ec81f7954…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "_multi_instance_basis": "v4-manifest.json; modules/reports/V4-PORT.md OFFEN 3; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "category": "Governance",
+    "default_height": 760,
+    "default_width": 1120,
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-reports\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-reports\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#ef4444\" /><stop offset=\"100%\" stop-color=\"#f97316\" /></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\" fill=\"url(#grad-reports)\" fill-opacity=\"0.12\" stroke=\"url(#grad-reports)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><path d=\"M18 17V10M12 17V6M6 17v-4\" stroke=\"url(#grad-reports)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><circle cx=\"12\" cy=\"6\" r=\"2\" fill=\"#ffffff\" stroke=\"url(#grad-reports)\" stroke-width=\"1.2\"></circle></svg>",
+    "min_height": 480,
+    "min_width": 640,
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 760,
+        "width": 1120
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#ca8a04",
+        "category": "Governance",
+        "iconAssetId": "workjet.business-os.reports",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "list-detail",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "Bugs & Features"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "0d44680385baac4a1a4e5cdc99567cfaa9861d078fb74f04c8efce9c1d403d9e",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "Bugs & Features",
+  "triggers": [],
+  "version": "1.1.2"
+}

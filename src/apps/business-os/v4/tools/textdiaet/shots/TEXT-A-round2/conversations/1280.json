@@ -1,0 +1,93 @@
+{
+ "app": "conversations",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Konversationen",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 748
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Importieren",
+    "button:Exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "row:? 52 14.10. 3× Angebot Wartung",
+    "button:Linke Spaltenbreite anpassen",
+    "button:Kontext ausblenden",
+    "nav:Alle Kanäle 52",
+    "nav:Alle Kanäle 10",
+    "nav:E-Mail 36",
+    "nav:Brief 6",
+    "button:📎",
+    "button:Aufgabe: Lieferantenbewertung ",
+    "button:Arbeitsauftrag: Lieferantenbew",
+    "button:DETAILS",
+    "button:HTML anzeigen",
+    "button:Arbeitsauftrag: Projektplan Re",
+    "button:Aufgabe: Angebot Wartungsvertr",
+    "button:Arbeitsauftrag: Angebot Wartun",
+    "button:Arbeitsauftrag: Quartalsberich",
+    "button:Aufgabe: Budgetplanung Vertrie",
+    "button:Arbeitsauftrag: Budgetplanung ",
+    "button:Arbeitsauftrag: Kundentermin V",
+    "button:Rechte Spaltenbreite anpassen"
+   ],
+   "shot": "conversations/1280-01-open.png"
+  },
+  {
+   "step": "nav Alle Kanäle 52",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "conversations/1280-02-nav_Alle_Kan_le_52.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 2468,
+   "shot": "conversations/1280-03-suche_ohne_Treffer.png",
+   "textAfter": 27
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear conversations.data.communication_messages"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "conversations/1280-04-suche_geleert.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "conversations",
+  "Konversationen"
+ ]
+}

@@ -1,0 +1,341 @@
+{
+ "app": "placements",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Vermittlungen",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neu",
+    "button:Importieren",
+    "button:Exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Alle (6)",
+    "nav:Aktiv (5)",
+    "nav:Beendet (1)",
+    "button:bestätigt candidate-001 → clie",
+    "button:bestätigt candidate-002 → clie",
+    "button:bestätigt candidate-003 → clie",
+    "button:Frühausstieg candidate-002 → c",
+    "select:Festanstellung (Personalvermit",
+    "button:Anlegen",
+    "button:Weitere Angaben"
+   ],
+   "shot": "placements/420-01-open.png"
+  },
+  {
+   "step": "nav Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "placements/420-02-nav_Alle_6_.png"
+  },
+  {
+   "step": "nav Aktiv (5)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "placements/420-03-nav_Aktiv_5_.png"
+  },
+  {
+   "step": "nav Beendet (1)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "placements/420-04-nav_Beendet_1_.png"
+  },
+  {
+   "step": "zurück zu Reiter Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "placements/420-05-zur_ck_zu_Reiter_Alle_6_.png"
+  },
+  {
+   "step": "button Neu",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Importieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Exportieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Als Liste anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "placements/420-06-button_Als_Liste_anzeigen.png"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "placements/420-07-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "placements/420-08-button_Filter.png"
+  },
+  {
+   "step": "button bestätigt candidate-001 → client-account-001 Festanstellung ",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "placements/420-09-button_best_tigt_candidate-001_client-ac.png"
+  },
+  {
+   "step": "button bestätigt candidate-002 → client-account-002 Festanstellung ",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "placements/420-10-button_best_tigt_candidate-002_client-ac.png"
+  },
+  {
+   "step": "button bestätigt candidate-003 → client-account-003 Festanstellung ",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "placements/420-11-button_best_tigt_candidate-003_client-ac.png"
+  },
+  {
+   "step": "button Frühausstieg candidate-002 → client-account-002 Festanstellu",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "placements/420-12-button_Fr_hausstieg_candidate-002_client.png"
+  },
+  {
+   "step": "button Detail einklappen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "placements/420-13-button_Detail_einklappen.png"
+  },
+  {
+   "step": "button Anlegen",
+   "changed": 1,
+   "ops": [
+    "command ats.placement.create local=ok result=accepted {\"candidate_id\":\"candidate-002\",\"client_account_id\":\"client-account-002\",\"placement_type\":null,\"fee\":8,\"guarantee_days\":24}"
+   ],
+   "zone": [
+    "clear placements.form.candidate_required",
+    "clear placements.command.ats.placement.create",
+    "clear placements.create.blocked"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "placements/420-14-button_Anlegen.png"
+  },
+  {
+   "step": "button Weitere Angaben",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "placements/420-15-button_Weitere_Angaben.png"
+  },
+  {
+   "step": "formular 5 Felder → Anlegen",
+   "changed": 1,
+   "ops": [
+    "command ats.placement.create local=ok result=accepted {\"candidate_id\":\"Rundgang Test\",\"client_account_id\":\"Rundgang Test\",\"placement_type\":null,\"required_types\":[\"Rundgang Test\"],\"fee\":42,\"guara"
+   ],
+   "zone": [
+    "clear placements.form.candidate_required",
+    "clear placements.command.ats.placement.create",
+    "clear placements.create.blocked"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "placements/420-16-formular_5_Felder_Anlegen.png"
+  },
+  {
+   "step": "auswahl Vermittlungsart filtern → direct",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "placements/420-17-auswahl_Vermittlungsart_filtern_direct.png"
+  },
+  {
+   "step": "auswahl Festanstellung (Personalvermittlung) Arbeitnehmerüberlassung → arbeitnehmerueberlassung",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true
+  },
+  {
+   "step": "button Filter zurücksetzen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "placements/420-18-button_Filter_zur_cksetzen.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 1229,
+   "shot": "placements/420-19-suche_ohne_Treffer.png",
+   "textAfter": 441
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "placements/420-20-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "command",
+   "coll": "ats.placement.create",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "ats.placement.create",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "placements",
+  "Vermittlungen"
+ ]
+}

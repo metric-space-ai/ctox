@@ -332,3 +332,81 @@ fn native_publish_preserves_v4_intent_and_activates_current_policy() {
     let _ = projection;
     tx.commit().unwrap();
 }
+
+#[test]
+fn core_only_delivery_requires_native_provenance_and_current_revision() {
+    let mut f = Fixture::new();
+    let r = rights(&f.db).unwrap();
+    let mut manifest = serde_json::to_value(&r.manifests[0]).unwrap();
+    manifest["command_rights"] = json!({"r*":{"roles":["admin"]},"run":{"roles":[],"assigned_users":false},"restricted":{"roles":["user"]}});
+    let rules = serde_json::from_value(manifest).unwrap();
+    let tx = f.db.transaction().unwrap();
+    sync_rights::replace_with_manifests(&tx, 2, &r.rules, &[rules]).unwrap();
+    let a = actor(&tx, "owner").unwrap();
+    let mut client = document(&tx, "business_commands", "cmd").unwrap().unwrap();
+    client["origin"] = json!("core");
+    client["client_context"] = json!({"source":"supervisor","role":"admin"});
+    assert!(
+        origin::delivery_permit(&tx, &client, &a).is_err(),
+        "E23 client must not impersonate core, even with admin role"
+    );
+    enqueue_core_command(
+        &tx,
+        CoreCommandSource::Supervisor,
+        "core",
+        "app",
+        "run",
+        "owner",
+        json!({"n":23}),
+    )
+    .unwrap();
+    let core = document(&tx, "business_commands", "core").unwrap().unwrap();
+    assert!(
+        origin::delivery_permit(&tx, &core, &a).unwrap(),
+        "exact core-only rule must override allowed wildcard"
+    );
+    let mut altered = core.clone();
+    altered["payload"] = json!({"n":24});
+    assert!(
+        origin::delivery_permit(&tx, &altered, &a).is_err(),
+        "native receipt must bind payload"
+    );
+    enqueue_core_command(
+        &tx,
+        CoreCommandSource::CommandPlane,
+        "blocked",
+        "app",
+        "restricted",
+        "owner",
+        json!({}),
+    )
+    .unwrap();
+    let blocked = document(&tx, "business_commands", "blocked")
+        .unwrap()
+        .unwrap();
+    assert!(
+        origin::delivery_permit(&tx, &blocked, &a).is_err(),
+        "core origin must not bypass an ordinary role rule"
+    );
+    let mut running = core.clone();
+    running["status"] = json!("running");
+    store_command(&tx, &running).unwrap();
+    assert!(
+        origin::delivery_permit(&tx, &running, &a).unwrap(),
+        "native transition must retain provenance"
+    );
+    let table = collection(&tx, "business_commands").unwrap();
+    tx.execute(
+        &format!(
+            "UPDATE {} SET rev='client:rewrite' WHERE id='core'",
+            quote(&table.table)
+        ),
+        [],
+    )
+    .unwrap();
+    assert!(
+        origin::delivery_permit(&tx, &running, &a).is_err(),
+        "a peer rewrite with identical payload invalidates native provenance"
+    );
+    tx.commit().unwrap();
+}

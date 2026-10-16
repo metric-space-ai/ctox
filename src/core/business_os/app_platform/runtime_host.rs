@@ -3,6 +3,8 @@
 mod authority;
 mod codec;
 mod feed;
+mod origin;
+pub(crate) use origin::{enqueue_core_command, CoreCommandSource};
 #[cfg(all(test, unix, feature = "app-runtime-node"))]
 mod native_proof;
 #[cfg(test)]
@@ -76,6 +78,55 @@ fn wait<T: Send + 'static>(
         .recv_timeout(Duration::from_secs(15))
         .context("unavailable: owner operation requires reconciliation")?
         .map_err(Into::into)
+}
+// Observe callback wall/CPU intervals without changing admission, deadlines or errors.
+async fn observed_read<T: Send + 'static>(
+    pool: ctox_store::read_pool::ReadPool,
+    stage: &'static str,
+    job: ReadJob<T>,
+) -> Result<T, StoreError> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let started = std::time::Instant::now();
+    let cpu = Arc::new(AtomicU64::new(u64::MAX));
+    let callback_cpu = cpu.clone();
+    let entered = Arc::new(AtomicU64::new(u64::MAX));
+    let finished = Arc::new(AtomicU64::new(u64::MAX));
+    let enter = entered.clone();
+    let finish = finished.clone();
+    let result = pool
+        .read_job(ReadJob::new(job.options, move |db| {
+            enter.store(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+            let before_cpu = thread_cpu_us();
+            let result = (job.operation)(db);
+            if let (Some(before), Some(after)) = (before_cpu, thread_cpu_us()) {
+                callback_cpu.store(after.saturating_sub(before), Ordering::Relaxed);
+            }
+            finish.store(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+            result
+        }))
+        .await;
+    if let Err(error) = &result {
+        eprintln!("native app store read failed stage={stage} elapsed_us={} entered_us={} finished_us={} callback_cpu_us={} error={error:?}", started.elapsed().as_micros(), entered.load(Ordering::Relaxed), finished.load(Ordering::Relaxed), cpu.load(Ordering::Relaxed));
+    }
+    result
+}
+// CLOCK_THREAD_CPUTIME_ID excludes time when this blocking reader is descheduled.
+#[cfg(target_os = "linux")]
+fn thread_cpu_us() -> Option<u64> {
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: time is an initialized, writable timespec; the thread clock has no handle lifetime.
+    if unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) } == 0 {
+        Some((time.tv_sec as u64).saturating_mul(1_000_000) + time.tv_nsec as u64 / 1_000)
+    } else {
+        None
+    }
+}
+#[cfg(not(target_os = "linux"))]
+fn thread_cpu_us() -> Option<u64> {
+    None
 }
 #[derive(Clone)]
 struct Collection {
@@ -277,7 +328,9 @@ impl RuntimeOwners {
 
 pub(super) fn store_command(tx: &rusqlite::Transaction<'_>, doc: &Value) -> Result<(), StoreError> {
     let id = text(doc, "id").map_err(sql_error)?;
+    let provenance = origin::before_native_write(tx, doc)?;
     super::commands::put(tx, "business_commands", id, doc)?;
+    origin::after_native_write(tx, doc, provenance)?;
     let c = collection(tx, "business_commands")?;
     let (rev, seq): (String, u64) = tx.query_row(
         "SELECT rev,seq FROM _changes WHERE collection='business_commands' AND gen=?1 AND id=?2",

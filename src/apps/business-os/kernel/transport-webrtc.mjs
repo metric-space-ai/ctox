@@ -212,7 +212,7 @@ export class WebRTCKernelTransport extends KernelTransport {
    case 'transfer_data':case 'transfer_result': {
     const pending=this.pending.get(message.request_id);if(!pending)return;
     this.pending.delete(message.request_id);clearTimeout(pending.timer);
-    message.error?pending.reject(new CtoxError(message.error.code??'unavailable',message.error.message)):pending.resolve(message);return;
+    if(message.error){const e=new CtoxError(message.error.code??'unavailable',message.error.message??message.error.reason,{reason:message.error.reason??message.error.message});e.core_rejection=true;pending.reject(e);}else pending.resolve(message);return;
    }
    case 'actor':if(message.actor?.id!==this.identity.userId)throw new CtoxError('forbidden','Actor mismatch');this.events.actor?.(message.actor);return;
    case 'status':this.events.status?.(message.app_id,message.item);return;
@@ -268,7 +268,7 @@ export class WebRTCKernelTransport extends KernelTransport {
  }
  async upload(ref,blob){
   if(await sha256Hex(blob)!==ref)throw new CtoxError('invalid','Upload hash mismatch');
-  const accepted=result=>{if(result.status!=='accepted'||result.ref!==ref)throw new CtoxError('unavailable','Upload not accepted');};
+  const accepted=result=>{if(result.status==='rejected'){const e=new CtoxError(result.code??'unavailable',result.reason??'Upload rejected',{reason:result.reason??'Upload rejected'});e.core_rejection=true;throw e;}if(result.status!=='accepted'||result.ref!==ref)throw new CtoxError('unavailable','Upload not accepted');};
   let batch=[];
   for(let offset=0;offset<blob.size||offset===0;){
    const at=offset,data=new Uint8Array(await blob.slice(at,at+size).arrayBuffer());offset+=data.length;const final=offset===blob.size;

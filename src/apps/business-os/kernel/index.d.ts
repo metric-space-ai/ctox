@@ -111,7 +111,19 @@ export declare class CtoxError extends Error {
 
 export type StatusItem = { level: 'info' | 'warn' | 'error'; code: string; text: string; ref?: string };
 
+/** Unix epoch milliseconds, first observation of each stage; null = not observed.
+ * queued = local durable queue, sent = first transport dispatch, acked = validated
+ * Core receipt (including rejection), completed = canonical terminal state or rejection.
+ * Observational per-tab ring, creation order, at most 500; not durable or a completion authority.
+ */
+export type CommandTiming = Readonly<{command_id:string; queued:number; sent:number|null; acked:number|null; completed:number|null}>;
+/** Bridge adapter hook: forward timing snapshots here, never command payloads.
+ * Exceptions are isolated from the data path. Cross-tab updates can repeat; key by command_id.
+ */
+export interface CommandDiagnostics { onCommandTiming?(timing:CommandTiming):void | Promise<void>; }
+export interface CommandMetrics extends LiveDoc<Metrics> { readonly commands:ReadonlyArray<CommandTiming>; }
 export type Metrics = {
+  commands: ReadonlyArray<CommandTiming>;
   timing?: {push_latency_ms:number;clock_offset_ms:number;clock_uncertainty_ms:number;samples:number};
   backlog: number;
   outbox: { count: number; oldest_ms: number };
@@ -165,7 +177,7 @@ export interface Actor {
   permissions: LiveDoc<string[]>;
 }
 
-export type FileMeta = { id: string; name: string; mime: string; size: number; ref: string; owner_app: string };
+export type FileMeta = { id: string; name: string; mime: string; size: number; ref: string; owner_app: string; state?: 'rejected' };
 export interface FileUploadHandle extends WriteHandle<{ ref: string }> {
   /** sha256 des Inhalts (hex). */
   ref: Promise<string>;
@@ -210,6 +222,7 @@ export interface CtoxAppApi {
   get<T = any>(collection: string, id: string): LiveDoc<T | null>;
   // Schreiben – lokal sofort, Outbox
   put<T>(collection: string, doc: T & { id: string }): WriteHandle;
+  /** E35: Core writer transaction compares expected_revision; mismatch resolves result as rejected/code revision_conflict. */
   patch(collection: string, id: string, patch: object, options?: { expected_revision?: string }): WriteHandle;
   remove(collection: string, id: string): WriteHandle;
   // Befehle – Dokument mit gepushtem Status
@@ -227,7 +240,7 @@ export interface CtoxAppApi {
     clear(code: string): void;
   };
   // Messwerte (lesend, für die Zustandszone; Apps zeigen sie nicht selbst). Leser-Tabs: link = Zustand des Leiters.
-  metrics: LiveDoc<Metrics>;
+  metrics: CommandMetrics;
   shell: ShellApi;
   actor: Actor;
   files: FilesApi;
@@ -444,7 +457,7 @@ export interface ShellKernelApi {
   releaseApp(appId: string, opts: { base_app_ver: string; channel?: string }): CommandHandle;
   removeApp(appId: string, opts: { base_app_ver: string }): CommandHandle;
   source(appId: string): SourceApi;
-  metrics: LiveDoc<Metrics>;
+  metrics: CommandMetrics;
   leader: LiveDoc<{ isLeader: boolean; leader_gen: number; tab_id: string }>;
   identity: {
     readonly instance_id: string;
@@ -477,6 +490,7 @@ export declare function createShellKernel(kernel: StubKernel): ShellKernelApi;
 // ============================================================================================================
 
 export interface StubKernelOptions {
+  diagnostics?: CommandDiagnostics;
   instanceId?: string;
   userId?: string;
   /** Standard: `ctox-<instanceId>-<userId>` (§16.7). */
@@ -538,7 +552,9 @@ export interface PublishOptions {
 
 export interface StubSim {
   /** Nächster bestätigter Write wird abgelehnt. */
-  rejectNext(reason?: string): Promise<void>;
+  rejectNext(reason?: string | {code: CtoxErrorCode; reason: string}): Promise<void>;
+  /** Test Core: terminal CAS rejection, independent of the metadata write receipt. */
+  rejectNextUpload(reason?: {code: CtoxErrorCode; reason: string}): Promise<void>;
   /** Nächster bestätigter Write wird `migrated`; `dropFields` wandern ins Core-Archiv. */
   migrateNext(opts?: { dropFields?: string[] }): Promise<void>;
   /** Nächster Befehl dieses Typs endet `failed`. */

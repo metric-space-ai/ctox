@@ -1,0 +1,378 @@
+{
+  "_app_id": "conversations",
+  "_format": "ctox-v4-collections-a9",
+  "_base_release": "main@4794af03d",
+  "_generator": "src/apps/business-os/v4/schemas/build-schemas.mjs",
+  "_sources": {
+    "communication_accounts": {
+      "source": "modules/conversations/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "communication_messages": {
+      "source": "modules/conversations/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "communication_threads": {
+      "source": "modules/conversations/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    }
+  },
+  "_foreign_copies_not_taken": [
+    {
+      "name": "outbound_approvals",
+      "owner": "outbound"
+    },
+    {
+      "name": "outbound_campaigns",
+      "owner": "outbound"
+    },
+    {
+      "name": "outbound_engagements",
+      "owner": "outbound"
+    },
+    {
+      "name": "outbound_messages",
+      "owner": "outbound"
+    },
+    {
+      "name": "outbound_pipeline_items",
+      "owner": "outbound"
+    }
+  ],
+  "collections": {
+    "communication_accounts": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "account_key": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "address": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "last_inbound_ok_at": {
+          "type": "string"
+        },
+        "last_outbound_ok_at": {
+          "type": "string"
+        },
+        "profile_json": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "type": "string",
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "id",
+        "account_key",
+        "channel",
+        "address",
+        "provider",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object",
+      "version": 1,
+      "indexes": [
+        "account_key"
+      ]
+    },
+    "communication_messages": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "account_key": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "bcc_addresses_json": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "body_html": {
+          "type": "string"
+        },
+        "body_text": {
+          "type": "string"
+        },
+        "cc_addresses_json": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "channel": {
+          "type": "string"
+        },
+        "direction": {
+          "type": "string"
+        },
+        "external_created_at": {
+          "type": "string"
+        },
+        "folder_hint": {
+          "type": "string"
+        },
+        "has_attachments": {
+          "type": "number"
+        },
+        "message_key": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "metadata_json": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "preview": {
+          "type": "string"
+        },
+        "raw_payload_ref": {
+          "type": "string"
+        },
+        "recipient_addresses_json": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "remote_id": {
+          "type": "string"
+        },
+        "route_status": {
+          "type": "string"
+        },
+        "seen": {
+          "type": "number"
+        },
+        "sender_address": {
+          "type": "string"
+        },
+        "sender_display": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "thread_key": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "ticket_self_work_id": {
+          "type": "string"
+        },
+        "trust_level": {
+          "type": "string"
+        },
+        "work_id": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string",
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "id",
+        "message_key",
+        "channel",
+        "account_key",
+        "thread_key",
+        "direction",
+        "external_created_at",
+        "observed_at"
+      ],
+      "type": "object",
+      "version": 1,
+      "indexes": [
+        "message_key"
+      ]
+    },
+    "communication_threads": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "account_key": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "channel": {
+          "type": "string"
+        },
+        "last_message_at": {
+          "type": "string"
+        },
+        "last_message_key": {
+          "type": "string"
+        },
+        "message_count": {
+          "type": "number"
+        },
+        "metadata_json": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "participant_keys_json": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "thread_key": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "unread_count": {
+          "type": "number"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string",
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "id",
+        "thread_key",
+        "channel",
+        "account_key",
+        "last_message_at",
+        "updated_at"
+      ],
+      "type": "object",
+      "version": 1,
+      "indexes": [
+        "thread_key"
+      ]
+    }
+  },
+  "migrations": {
+    "communication_accounts": {
+      "from_ver": "main@4794af03d",
+      "migrate_fn": "migrations/communication_accounts.js",
+      "_file": "v4/schemas/migrations/conversations/communication_accounts.js",
+      "_schema_version": {
+        "from": 0,
+        "to": 1
+      },
+      "_reasons": [
+        "Feld „id“ neu als Pflichtfeld",
+        "Schema-Eigenschaft „primaryKey“ geändert",
+        "Indizes geändert"
+      ]
+    },
+    "communication_messages": {
+      "from_ver": "main@4794af03d",
+      "migrate_fn": "migrations/communication_messages.js",
+      "_file": "v4/schemas/migrations/conversations/communication_messages.js",
+      "_schema_version": {
+        "from": 0,
+        "to": 1
+      },
+      "_reasons": [
+        "Feld „id“ neu als Pflichtfeld",
+        "Schema-Eigenschaft „primaryKey“ geändert",
+        "Indizes geändert"
+      ]
+    },
+    "communication_threads": {
+      "from_ver": "main@4794af03d",
+      "migrate_fn": "migrations/communication_threads.js",
+      "_file": "v4/schemas/migrations/conversations/communication_threads.js",
+      "_schema_version": {
+        "from": 0,
+        "to": 1
+      },
+      "_reasons": [
+        "Feld „id“ neu als Pflichtfeld",
+        "Schema-Eigenschaft „primaryKey“ geändert",
+        "Indizes geändert"
+      ]
+    }
+  },
+  "migration_strategies": {
+    "communication_accounts": {
+      "1": {
+        "operations": [
+          {
+            "default": "",
+            "field": "id",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "id",
+              "account_key"
+            ]
+          }
+        ]
+      }
+    },
+    "communication_messages": {
+      "1": {
+        "operations": [
+          {
+            "default": "",
+            "field": "id",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "id",
+              "message_key"
+            ]
+          }
+        ]
+      }
+    },
+    "communication_threads": {
+      "1": {
+        "operations": [
+          {
+            "default": "",
+            "field": "id",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "id",
+              "thread_key"
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

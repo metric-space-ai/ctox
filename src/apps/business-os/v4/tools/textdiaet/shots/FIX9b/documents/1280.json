@@ -1,0 +1,705 @@
+{
+ "app": "documents",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [
+    "put document_runbooks/research.report.auto local=ok result=accepted {\"id\":\"research.report.auto\",\"document_type\":\"word_document\",\"title\":\"Deep Research Word-Bericht\",\"description\":\"CTOX wä",
+    "put document_runbooks/research.report.decision_brief local=ok result=accepted {\"id\":\"research.report.decision_brief\",\"document_type\":\"word_document\",\"title\":\"Entscheidungsvorlage\",\"description\":\"Kur",
+    "put document_runbooks/research.report.feasibility_study local=ok result=accepted {\"id\":\"research.report.feasibility_study\",\"document_type\":\"word_document\",\"title\":\"Machbarkeitsstudie\",\"description\":\"De",
+    "put document_runbooks/research.report.market_research local=ok result=accepted {\"id\":\"research.report.market_research\",\"document_type\":\"word_document\",\"title\":\"Marktanalyse\",\"description\":\"Marktgröße",
+    "put document_runbooks/research.report.project_description local=ok result=accepted {\"id\":\"research.report.project_description\",\"document_type\":\"word_document\",\"title\":\"Projektbeschreibung / Fördervorhabe",
+    "put document_runbooks/research.report.source_review local=ok result=accepted {\"id\":\"research.report.source_review\",\"document_type\":\"word_document\",\"title\":\"Quellenreview\",\"description\":\"Quellen- un",
+    "put document_runbooks/research.report.literature_review local=ok result=accepted {\"id\":\"research.report.literature_review\",\"document_type\":\"word_document\",\"title\":\"Stand der Technik\",\"description\":\"Lit",
+    "put document_runbooks/research.report.technology_screening local=ok result=accepted {\"id\":\"research.report.technology_screening\",\"document_type\":\"word_document\",\"title\":\"Technologie-Screening\",\"descriptio",
+    "put document_runbooks/research.report.competitive_analysis local=ok result=accepted {\"id\":\"research.report.competitive_analysis\",\"document_type\":\"word_document\",\"title\":\"Wettbewerbsanalyse\",\"description\":",
+    "put document_runbooks/research.report.whitepaper local=ok result=accepted {\"id\":\"research.report.whitepaper\",\"document_type\":\"word_document\",\"title\":\"Whitepaper\",\"description\":\"These, Kontext, A",
+    "put document_runbooks/document.extract-requirements local=ok result=accepted {\"id\":\"document.extract-requirements\",\"document_type\":\"word_document\",\"title\":\"Requirements extrahieren\",\"command_type\":",
+    "put document_runbooks/document.review-risks local=ok result=accepted {\"id\":\"document.review-risks\",\"document_type\":\"word_document\",\"title\":\"Risiken prüfen\",\"command_type\":\"document.review-r",
+    "put document_runbooks/document.summarize local=ok result=accepted {\"id\":\"document.summarize\",\"document_type\":\"word_document\",\"title\":\"Zusammenfassen\",\"command_type\":\"document.summarize\","
+   ],
+   "title": "Dokumente",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 744
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Leeres Word-Dokument erstellen",
+    "button:Dokument importieren",
+    "button:Ausgewähltes Dokument exportie",
+    "button:Als Karten anzeigen",
+    "button:Filter",
+    "button:Protokoll_Kickoff.md",
+    "button:Angebot Wartungsvertrag Halle ",
+    "button:Preisliste_Q4.md",
+    "button:Projektplan Relaunch Kundenpor",
+    "button:Lageplan_Halle4.md",
+    "button:Lieferantenbewertung 2026 – We",
+    "button:Vertrag_Rahmen_signiert.md",
+    "button:Onboarding neue Mitarbeitende ",
+    "button:Notizen_Workshop.md",
+    "button:Rahmenvertrag über Wartung und",
+    "button:Angebot_Wartung_2026.md",
+    "button:Kundentermin Vorbereitung – We",
+    "button:Breite der Dokumentliste änder",
+    "button:Bearbeiten"
+   ],
+   "shot": "documents/1280-01-open.png"
+  },
+  {
+   "step": "button Leeres Word-Dokument erstellen",
+   "changed": true,
+   "ops": [
+    "put document_versions/doc_0fe2861e-06a3-42fd-87db-4650c5077858_v1 local=ok result=accepted {\"id\":\"doc_0fe2861e-06a3-42fd-87db-4650c5077858_v1\",\"document_id\":\"doc_0fe2861e-06a3-42fd-87db-4650c5077858\",\"version\":1,\"source_kind\":\"crea",
+    "put documents/doc_0fe2861e-06a3-42fd-87db-4650c5077858 local=ok result=accepted {\"id\":\"doc_0fe2861e-06a3-42fd-87db-4650c5077858\",\"title\":\"Neues Dokument\",\"filename\":\"neues-dokument.docx\",\"description\":\"\",\"mime_type\":\"app"
+   ],
+   "zone": [
+    "clear documents.version.missing",
+    "clear documents.document.create",
+    "clear documents.editor",
+    "{\"level\":\"error\",\"code\":\"documents.editor\",\"text\":\"DOCX editor konnte nicht geladen werden: Failed to fetch dynamically imported module: ctox:lib/ctox-office@1/ctox-office-document.mjs\"}"
+   ],
+   "dialogs": [],
+   "errors": [
+    "console: Access to script at 'ctox:lib/ctox-office@1/ctox-office-document.mjs' from origin 'http://127.0.0.1:52493' has been blocked by CORS policy: Cross origin requests are only supported for protocol schemes: chrome, chrome-un",
+    "console: Failed to load resource: net::ERR_FAILED",
+    "console: [documents] CTOX Documents mount failed TypeError: Failed to fetch dynamically imported module: ctox:lib/ctox-office@1/ctox-office-document.mjs"
+   ],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-02-button_Leeres_Word-Dokument_erstellen.png"
+  },
+  {
+   "step": "button Dokument importieren",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-03-button_Dokument_importieren.png"
+  },
+  {
+   "step": "formular 1 Felder → Leeres Word-Dokument erstellen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit"
+  },
+  {
+   "step": "Overlay geschlossen (Escape/Schließen) vor Ausgewähltes Dokument exportieren"
+  },
+  {
+   "step": "button Ausgewähltes Dokument exportieren",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-04-button_Ausgew_hltes_Dokument_exportieren.png"
+  },
+  {
+   "step": "Overlay geschlossen (Escape/Schließen) vor Als Karten anzeigen"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-05-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Zur Listenansicht wechseln",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-06-button_Zur_Listenansicht_wechseln.png"
+  },
+  {
+   "step": "button Zur Kachelansicht wechseln",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-07-button_Zur_Kachelansicht_wechseln.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-08-button_Filter.png"
+  },
+  {
+   "step": "button neues-dokument.docx",
+   "changed": 2,
+   "ops": [],
+   "zone": [
+    "clear documents.editor",
+    "{\"level\":\"error\",\"code\":\"documents.editor\",\"text\":\"DOCX editor konnte nicht geladen werden: Failed to fetch dynamically imported module: ctox:lib/ctox-office@1/ctox-office-document.mjs\"}"
+   ],
+   "dialogs": [],
+   "errors": [
+    "console: [documents] CTOX Documents mount failed TypeError: Failed to fetch dynamically imported module: ctox:lib/ctox-office@1/ctox-office-document.mjs"
+   ],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-09-button_neues-dokument.docx.png"
+  },
+  {
+   "step": "button Neues Dokument – Weitere Aktionen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-10-button_Neues_Dokument_Weitere_Aktionen.png"
+  },
+  {
+   "step": "formular 2 Felder → Speichern",
+   "changed": true,
+   "ops": [
+    "patch documents/doc_0fe2861e-06a3-42fd-87db-4650c5077858 local=ok result=accepted {\"title\":\"Neues Dokument\",\"status\":\"Draft\",\"description\":\"Rundgang Test\",\"tags\":[\"Rundgang Test\"],\"updated_at_ms\":1792109063330}"
+   ],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "documents/1280-11-formular_2_Felder_Speichern.png"
+  },
+  {
+   "step": "button Protokoll_Kickoff.md",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear documents.draft.pending",
+    "clear documents.version.missing",
+    "clear documents.editor"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-12-button_Protokoll_Kickoff.md.png"
+  },
+  {
+   "step": "button Angebot Wartungsvertrag Halle 4 – Weitere Aktionen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-13-button_Angebot_Wartungsvertrag_Halle_4_W.png"
+  },
+  {
+   "step": "formular 2 Felder → Speichern",
+   "changed": true,
+   "ops": [
+    "patch documents/document-001 local=ok result=accepted {\"title\":\"Angebot Wartungsvertrag Halle 4\",\"status\":\"Imported\",\"description\":\"Rundgang Test\",\"tags\":[\"Rundgang Test\"],\"updated_at_ms\":179210"
+   ],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "documents/1280-14-formular_2_Felder_Speichern.png"
+  },
+  {
+   "step": "button Preisliste_Q4.md",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear documents.draft.pending",
+    "clear documents.version.missing",
+    "clear documents.editor"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-15-button_Preisliste_Q4.md.png"
+  },
+  {
+   "step": "button Projektplan Relaunch Kundenportal – Weitere Aktionen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-16-button_Projektplan_Relaunch_Kundenportal.png"
+  },
+  {
+   "step": "formular 2 Felder → Speichern",
+   "changed": true,
+   "ops": [
+    "patch documents/document-002 local=ok result=accepted {\"title\":\"Projektplan Relaunch Kundenportal\",\"status\":\"Imported\",\"description\":\"Rundgang Test\",\"tags\":[\"Rundgang Test\"],\"updated_at_ms\":1792"
+   ],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "documents/1280-17-formular_2_Felder_Speichern.png"
+  },
+  {
+   "step": "button Lageplan_Halle4.md",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear documents.draft.pending",
+    "clear documents.version.missing",
+    "clear documents.editor"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-18-button_Lageplan_Halle4.md.png"
+  },
+  {
+   "step": "button Lieferantenbewertung 2026 – Weitere Aktionen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-19-button_Lieferantenbewertung_2026_Weitere.png"
+  },
+  {
+   "step": "formular 2 Felder → Speichern",
+   "changed": true,
+   "ops": [
+    "patch documents/document-003 local=ok result=accepted {\"title\":\"Lieferantenbewertung 2026\",\"status\":\"Imported\",\"description\":\"Rundgang Test\",\"tags\":[\"Rundgang Test\"],\"updated_at_ms\":179210906812"
+   ],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "documents/1280-20-formular_2_Felder_Speichern.png"
+  },
+  {
+   "step": "button Vertrag_Rahmen_signiert.md",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear documents.draft.pending",
+    "clear documents.version.missing",
+    "clear documents.editor"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-21-button_Vertrag_Rahmen_signiert.md.png"
+  },
+  {
+   "step": "button Onboarding neue Mitarbeitende – Weitere Aktionen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-22-button_Onboarding_neue_Mitarbeitende_Wei.png"
+  },
+  {
+   "step": "formular 2 Felder → Speichern",
+   "changed": true,
+   "ops": [
+    "patch documents/document-004 local=ok result=accepted {\"title\":\"Onboarding neue Mitarbeitende\",\"status\":\"Imported\",\"description\":\"Rundgang Test\",\"tags\":[\"Rundgang Test\"],\"updated_at_ms\":17921090"
+   ],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "documents/1280-23-formular_2_Felder_Speichern.png"
+  },
+  {
+   "step": "button Notizen_Workshop.md",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear documents.draft.pending",
+    "clear documents.version.missing",
+    "clear documents.editor"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-24-button_Notizen_Workshop.md.png"
+  },
+  {
+   "step": "button Rahmenvertrag über Wartung und Instandhaltung der Produktion",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-25-button_Rahmenvertrag_ber_Wartung_und_Ins.png"
+  },
+  {
+   "step": "formular 2 Felder → Speichern",
+   "changed": true,
+   "ops": [
+    "patch documents/document-005 local=ok result=accepted {\"title\":\"Rahmenvertrag über Wartung und Instandhaltung der Produktionsanlagen am Standort Augsburg\",\"status\":\"Imported\",\"description\":\"Rund"
+   ],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "documents/1280-26-formular_2_Felder_Speichern.png"
+  },
+  {
+   "step": "button Angebot_Wartung_2026.md",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear documents.draft.pending",
+    "clear documents.version.missing",
+    "clear documents.editor"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-27-button_Angebot_Wartung_2026.md.png"
+  },
+  {
+   "step": "button Kundentermin Vorbereitung – Weitere Aktionen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-28-button_Kundentermin_Vorbereitung_Weitere.png"
+  },
+  {
+   "step": "formular 2 Felder → Speichern",
+   "changed": true,
+   "ops": [
+    "patch documents/document-006 local=ok result=accepted {\"title\":\"Kundentermin Vorbereitung\",\"status\":\"Imported\",\"description\":\"Rundgang Test\",\"tags\":[\"Rundgang Test\"],\"updated_at_ms\":179210907287"
+   ],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "documents/1280-29-formular_2_Felder_Speichern.png"
+  },
+  {
+   "step": "button Breite der Dokumentliste ändern",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Bearbeiten",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-30-button_Bearbeiten.png"
+  },
+  {
+   "step": "button Vorschau",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "documents/1280-31-button_Vorschau.png"
+  },
+  {
+   "step": "auswahl Dokumente sortieren → updated_asc",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "documents/1280-32-auswahl_Dokumente_sortieren_updated_asc.png"
+  },
+  {
+   "step": "auswahl Dokumenttyp filtern → markdown_document",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "documents/1280-33-auswahl_Dokumenttyp_filtern_markdown_doc.png"
+  },
+  {
+   "step": "auswahl Dokumentstatus filtern → Draft",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "documents/1280-34-auswahl_Dokumentstatus_filtern_Draft.png"
+  },
+  {
+   "step": "auswahl Ersteller-App filtern → manual",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 281,
+   "textAfter": 281
+  },
+  {
+   "step": "suche geleert",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "document_versions",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "documents",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "patch",
+   "coll": "documents",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "patch",
+   "coll": "documents",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "patch",
+   "coll": "documents",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "patch",
+   "coll": "documents",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "patch",
+   "coll": "documents",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "patch",
+   "coll": "documents",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "patch",
+   "coll": "documents",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "documents",
+  "Dokumente"
+ ]
+}

@@ -1,0 +1,202 @@
+/* GENERIERT von v4/frame/theme/build-theme.mjs – nicht von Hand ändern.
+   Theme-Tokens der Shell-Schnittstelle: nur Variablen, die Apps nachweislich nutzen (40 App-Stylesheets modules/<id>/index.css +
+   shared/base.css, transitiv). Hell am :root, dunkel an :root[data-theme="dark"] (wie app.css). 30 hell, 24 dunkel. */
+:root {
+  color-scheme: light;
+  --accent: var(--ctox-host-accent, #1b4ed8);
+  --accent-foreground: var(--ctox-host-accent-foreground, #ffffff);
+  --accent-soft: var(--ctox-host-accent-soft, #e0e6f7);
+  --bg: var(--ctox-host-bg, #fcfcfc);
+  --control-radius: 4px;
+  --danger: oklch(0.56 0.13 28);
+  --ease-standard: cubic-bezier(0.16, 1, 0.3, 1);
+  --elev-edge: rgb(15 23 42 / 0.14);
+  --elev-float-2: #f5f6f8;
+  --elev-float-shadow: 0 0 0 1px rgb(15 23 42 / 0.05), 0 20px 50px oklch(0.22 0.015 235 / 0.2), 0 4px 12px oklch(0.22 0.015 235 / 0.12);
+  --elev-outline: rgb(255 255 255 / 0.9);
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --hairline: var(--ctox-host-hairline, #e4e4e7);
+  --kit-radius: 6px;
+  --line: var(--ctox-host-line, #e4e4e7);
+  --motion-base: 160ms;
+  --motion-fast: 120ms;
+  --motion-slow: 200ms;
+  --muted: var(--ctox-host-muted, #71717b);
+  --panel-radius: 6px;
+  --panel-shadow: 0 1px 2px oklch(0.22 0.015 235 / 0.08);
+  --shadow: 0 8px 24px oklch(0.22 0.015 235 / 0.12);
+  --shadow-lg: 0 8px 24px oklch(0.22 0.015 235 / 0.18);
+  --shadow-sm: 0 1px 2px oklch(0.22 0.015 235 / 0.08);
+  --surface: var(--ctox-host-surface, #ffffff);
+  --surface-2: var(--ctox-host-surface-2, #fcfcfc);
+  --surface-3: var(--ctox-host-surface-3, #ffffff);
+  --text: var(--ctox-host-text, #52525b);
+  --text-strong: var(--ctox-host-text-strong, #27272a);
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --accent: var(--ctox-host-accent, #346bf1);
+  --accent-foreground: var(--ctox-host-accent-foreground, #ffffff);
+  --accent-soft: var(--ctox-host-accent-soft, #16264f);
+  --bg: var(--ctox-host-bg, #0a0a0a);
+  --control-radius: 4px;
+  --danger: #e06b60;
+  --elev-edge: rgb(255 255 255 / 0.15);
+  --elev-float-2: #252a32;
+  --elev-float-shadow: 0 0 0 1px var(--elev-outline), 0 24px 60px rgb(0 0 0 / 0.62), 0 6px 18px rgb(0 0 0 / 0.5);
+  --elev-outline: rgb(0 0 0 / 0.85);
+  --hairline: var(--ctox-host-hairline, #191919);
+  --kit-radius: 6px;
+  --line: var(--ctox-host-line, #191919);
+  --muted: var(--ctox-host-muted, #818181);
+  --panel-radius: 6px;
+  --panel-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.42);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --surface: var(--ctox-host-surface, #111111);
+  --surface-2: var(--ctox-host-surface-2, #141414);
+  --surface-3: var(--ctox-host-surface-3, #191919);
+  --text: var(--ctox-host-text, #d4d4d8);
+  --text-strong: var(--ctox-host-text-strong, #f5f5f5);
+}
+
+/* Kit-Regeln der Pane-Grammatik aus app.css (16 Regeln; Ellipse durch Umbruch ersetzt, G4; Klassen und nutzende Apps:
+   ctox-pane-header: 34 (app-store, appsec-pentest, browser, buchhaltung, calendar, consent, …)
+   ctox-pane-title-row: 37 (app-store, appsec-pentest, browser, buchhaltung, calendar, consent, …)
+   ctox-pane-titles: 38 (app-store, appsec-pentest, browser, buchhaltung, calendar, consent, …)
+   ctox-pane-kicker: 30 (app-store, appsec-pentest, browser, buchhaltung, calendar, consent, …)
+   ctox-pane-title: 38 (app-store, appsec-pentest, browser, buchhaltung, calendar, consent, …)
+   os-scrollbar: 3 (calendar, shiftflow, tickets)
+   drawer-body: 4 (ctox, documents, knowledge, shiftflow)
+   drawer-header-row: 4 (ctox, documents, knowledge, shiftflow)) */
+.ctox-pane-header {
+  display: block;
+  min-width: 0;
+}
+
+.ctox-pane-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ctox-pane-titles {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  padding-top: 2px;
+}
+
+.ctox-pane-kicker {
+  display: block;
+  margin: 0;
+  padding: 0;
+  color: var(--accent, var(--muted));
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  overflow-wrap: break-word;
+}
+
+.ctox-pane-title {
+  display: block;
+  margin: 2px 0 0;
+  color: var(--text-strong, var(--text));
+  font-size: var(--fs-title);
+  font-weight: 700;
+  line-height: var(--lh-tight);
+  overflow-wrap: break-word;
+}
+
+.drawer-body {
+  padding: var(--space-4);
+}
+
+.drawer-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.drawer-header-row h2 {
+  margin-bottom: var(--space-1);
+}
+
+.os-scrollbar,
+.os-scrollbar * {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--line) 40%, transparent) transparent;
+}
+
+.os-scrollbar::-webkit-scrollbar,
+.os-scrollbar *::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.os-scrollbar::-webkit-scrollbar-track,
+.os-scrollbar *::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.os-scrollbar::-webkit-scrollbar-thumb,
+.os-scrollbar *::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--line) 40%, transparent);
+  border-radius: 99px;
+  transition: background-color var(--motion-fast) var(--ease-standard);
+}
+
+.os-scrollbar::-webkit-scrollbar-thumb:hover,
+.os-scrollbar *::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--line) 75%, transparent);
+}
+
+.ctox-pane-titles > .ctox-pane-kicker {
+  flex: 0 0 auto;
+}
+
+.ctox-pane-titles > .ctox-pane-title {
+  flex: 0 1 auto;
+}
+
+.ctox-pane-header[data-v4-pane-row] {
+  box-sizing: border-box;
+  min-height: var(--v4-pane-head-h) !important;
+}
+
+:root :is(.ctox-button, .ctox-icon-button, .ctox-run-control):disabled,
+:root :is(.ctox-button, .ctox-icon-button, .ctox-run-control):disabled:hover {
+  opacity: 1;
+  background: var(--kit-fill);
+  border-color: var(--line);
+  color: var(--muted);
+  cursor: not-allowed;
+  transition: none;
+}
+
+:root .ctox-button--ghost:disabled,
+:root .ctox-button--ghost:disabled:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
+:root:not([data-theme="dark"]):not([data-workspace-branding="custom"]) :where(.shell-window-content, .v4-app-root) {
+  --muted: var(--ctox-host-muted, #64646d);
+  --danger: #a4453c;
+}
+
+:root[data-theme="dark"]:not([data-workspace-branding="custom"]) :where(.shell-window-content, .v4-app-root) {
+  --muted: var(--ctox-host-muted, #959595);
+  --accent: var(--ctox-host-accent, #6690f5);
+  --accent-foreground: var(--ctox-host-accent-foreground, var(--surface));
+}

@@ -1,0 +1,816 @@
+{
+ "app": "buchhaltung",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [
+    "put accounting_accounts/SKR03_0410 local=ok result=accepted {\"id\":\"SKR03_0410\",\"code\":\"0410\",\"name\":\"Geschäftsausstattung (Büromöbel, IT)\",\"root_type\":\"asset\",\"account_type\":\"fixed",
+    "put accounting_accounts/SKR03_0400 local=ok result=accepted {\"id\":\"SKR03_0400\",\"code\":\"0400\",\"name\":\"Sachanlagen\",\"root_type\":\"asset\",\"account_type\":\"group\",\"parent_id\":\"SKR03_0100",
+    "put accounting_accounts/SKR03_0100 local=ok result=accepted {\"id\":\"SKR03_0100\",\"code\":\"0100\",\"name\":\"Anlagevermögen\",\"root_type\":\"asset\",\"account_type\":\"group\",\"parent_id\":\"SKR03_A",
+    "put accounting_accounts/SKR03_1000 local=ok result=accepted {\"id\":\"SKR03_1000\",\"code\":\"1000\",\"name\":\"Kasse\",\"root_type\":\"asset\",\"account_type\":\"cash\",\"parent_id\":\"SKR03_1200\",\"is_g",
+    "put accounting_accounts/SKR03_1200 local=ok result=accepted {\"id\":\"SKR03_1200\",\"code\":\"1200\",\"name\":\"Bank (Girokonto)\",\"root_type\":\"asset\",\"account_type\":\"bank\",\"parent_id\":\"SKR03_",
+    "put accounting_accounts/SKR03_1400 local=ok result=accepted {\"id\":\"SKR03_1400\",\"code\":\"1400\",\"name\":\"Forderungen aus Lieferungen und Leistungen (Debitoren)\",\"root_type\":\"asset\",\"ac",
+    "put accounting_accounts/SKR03_1571 local=ok result=accepted {\"id\":\"SKR03_1571\",\"code\":\"1571\",\"name\":\"Abziehbare Vorsteuer 7%\",\"root_type\":\"asset\",\"account_type\":\"tax\",\"parent_id\":\"",
+    "put accounting_accounts/SKR03_1576 local=ok result=accepted {\"id\":\"SKR03_1576\",\"code\":\"1576\",\"name\":\"Abziehbare Vorsteuer 19%\",\"root_type\":\"asset\",\"account_type\":\"tax\",\"parent_id\":",
+    "put accounting_accounts/SKR03_1570 local=ok result=accepted {\"id\":\"SKR03_1570\",\"code\":\"1570\",\"name\":\"Vorsteuerkonten\",\"root_type\":\"asset\",\"account_type\":\"group\",\"parent_id\":\"SKR03_",
+    "put accounting_accounts/SKR03_1100 local=ok result=accepted {\"id\":\"SKR03_1100\",\"code\":\"1100\",\"name\":\"Umlaufvermögen\",\"root_type\":\"asset\",\"account_type\":\"group\",\"parent_id\":\"SKR03_A",
+    "put accounting_accounts/SKR03_0800 local=ok result=accepted {\"id\":\"SKR03_0800\",\"code\":\"0800\",\"name\":\"Gezeichnetes Kapital / Eigenkapital\",\"root_type\":\"liability\",\"account_type\":\"eq",
+    "put accounting_accounts/SKR03_0800_G local=ok result=accepted {\"id\":\"SKR03_0800_G\",\"code\":\"0800_G\",\"name\":\"Eigenkapital\",\"root_type\":\"liability\",\"account_type\":\"group\",\"parent_id\":\"S",
+    "put accounting_accounts/SKR03_0950 local=ok result=accepted {\"id\":\"SKR03_0950\",\"code\":\"0950\",\"name\":\"Rückstellungen für Pensionen\",\"root_type\":\"liability\",\"account_type\":\"provision",
+    "put accounting_accounts/SKR03_0900 local=ok result=accepted {\"id\":\"SKR03_0900\",\"code\":\"0900\",\"name\":\"Rückstellungen\",\"root_type\":\"liability\",\"account_type\":\"group\",\"parent_id\":\"SKR",
+    "put accounting_accounts/SKR03_1600 local=ok result=accepted {\"id\":\"SKR03_1600\",\"code\":\"1600\",\"name\":\"Verbindlichkeiten aus Lieferungen und Leistungen (Kreditoren)\",\"root_type\":\"lia",
+    "put accounting_accounts/SKR03_1771 local=ok result=accepted {\"id\":\"SKR03_1771\",\"code\":\"1771\",\"name\":\"Umsatzsteuer 7%\",\"root_type\":\"liability\",\"account_type\":\"tax\",\"parent_id\":\"SKR0",
+    "put accounting_accounts/SKR03_1776 local=ok result=accepted {\"id\":\"SKR03_1776\",\"code\":\"1776\",\"name\":\"Umsatzsteuer 19%\",\"root_type\":\"liability\",\"account_type\":\"tax\",\"parent_id\":\"SKR",
+    "put accounting_accounts/SKR03_1780 local=ok result=accepted {\"id\":\"SKR03_1780\",\"code\":\"1780\",\"name\":\"Umsatzsteuer-Vorauszahlungen\",\"root_type\":\"liability\",\"account_type\":\"tax\",\"par",
+    "put accounting_accounts/SKR03_1770 local=ok result=accepted {\"id\":\"SKR03_1770\",\"code\":\"1770\",\"name\":\"Umsatzsteuerkonten\",\"root_type\":\"liability\",\"account_type\":\"group\",\"parent_id\":",
+    "put accounting_accounts/SKR03_1700 local=ok result=accepted {\"id\":\"SKR03_1700\",\"code\":\"1700\",\"name\":\"Verbindlichkeiten\",\"root_type\":\"liability\",\"account_type\":\"group\",\"parent_id\":\"",
+    "put accounting_accounts/SKR03_8100 local=ok result=accepted {\"id\":\"SKR03_8100\",\"code\":\"8100\",\"name\":\"Steuerfreie Umsätze\",\"root_type\":\"revenue\",\"account_type\":\"revenue\",\"parent_id\"",
+    "put accounting_accounts/SKR03_8300 local=ok result=accepted {\"id\":\"SKR03_8300\",\"code\":\"8300\",\"name\":\"Erlöse 7% USt\",\"root_type\":\"revenue\",\"account_type\":\"revenue\",\"parent_id\":\"SKR0",
+    "put accounting_accounts/SKR03_8400 local=ok result=accepted {\"id\":\"SKR03_8400\",\"code\":\"8400\",\"name\":\"Erlöse 19% USt\",\"root_type\":\"revenue\",\"account_type\":\"revenue\",\"parent_id\":\"SKR",
+    "put accounting_accounts/SKR03_8000 local=ok result=accepted {\"id\":\"SKR03_8000\",\"code\":\"8000\",\"name\":\"Umsatzerlöse\",\"root_type\":\"revenue\",\"account_type\":\"group\",\"parent_id\":\"SKR03_R",
+    "put accounting_accounts/SKR03_3400 local=ok result=accepted {\"id\":\"SKR03_3400\",\"code\":\"3400\",\"name\":\"Wareneinkauf 19% Vorsteuer\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"par",
+    "put accounting_accounts/SKR03_3000 local=ok result=accepted {\"id\":\"SKR03_3000\",\"code\":\"3000\",\"name\":\"Wareneingang / Materialaufwand\",\"root_type\":\"expense\",\"account_type\":\"group\",\"p",
+    "put accounting_accounts/SKR03_4210 local=ok result=accepted {\"id\":\"SKR03_4210\",\"code\":\"4210\",\"name\":\"Miete (Büroräume)\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"",
+    "put accounting_accounts/SKR03_4600 local=ok result=accepted {\"id\":\"SKR03_4600\",\"code\":\"4600\",\"name\":\"Werbekosten\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_",
+    "put accounting_accounts/SKR03_4830 local=ok result=accepted {\"id\":\"SKR03_4830\",\"code\":\"4830\",\"name\":\"Abschreibungen auf Sachanlagen (AfA)\",\"root_type\":\"expense\",\"account_type\":\"exp",
+    "put accounting_accounts/SKR03_4930 local=ok result=accepted {\"id\":\"SKR03_4930\",\"code\":\"4930\",\"name\":\"Bürobedarf / IT-Kosten / Software\",\"root_type\":\"expense\",\"account_type\":\"expens",
+    "put accounting_accounts/SKR03_4000 local=ok result=accepted {\"id\":\"SKR03_4000\",\"code\":\"4000\",\"name\":\"Betriebliche Aufwendungen\",\"root_type\":\"expense\",\"account_type\":\"group\",\"parent",
+    "put accounting_accounts/SKR03_1890 local=ok result=accepted {\"id\":\"SKR03_1890\",\"code\":\"1890\",\"name\":\"Privateinlage\",\"root_type\":\"equity\",\"account_type\":\"regular\",\"parent_id\":\"SKR03",
+    "put accounting_accounts/SKR03_1370 local=ok result=accepted {\"id\":\"SKR03_1370\",\"code\":\"1370\",\"name\":\"Gesellschafter-Verrechnungskonto\",\"root_type\":\"liability\",\"account_type\":\"payab",
+    "put accounting_accounts/SKR03_4650 local=ok result=accepted {\"id\":\"SKR03_4650\",\"code\":\"4650\",\"name\":\"Bewirtungskosten abzugsfähig\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"p",
+    "put accounting_accounts/SKR03_4654 local=ok result=accepted {\"id\":\"SKR03_4654\",\"code\":\"4654\",\"name\":\"Bewirtungskosten nicht abzugsfähig\",\"root_type\":\"expense\",\"account_type\":\"expen",
+    "put accounting_accounts/SKR03_4630 local=ok result=accepted {\"id\":\"SKR03_4630\",\"code\":\"4630\",\"name\":\"Geschenke abzugsfähig\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_i",
+    "put accounting_accounts/SKR03_4635 local=ok result=accepted {\"id\":\"SKR03_4635\",\"code\":\"4635\",\"name\":\"Geschenke nicht abzugsfähig\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"pa",
+    "put accounting_accounts/SKR03_4660 local=ok result=accepted {\"id\":\"SKR03_4660\",\"code\":\"4660\",\"name\":\"Reisekosten Arbeitnehmer\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"paren",
+    "put accounting_accounts/SKR03_4673 local=ok result=accepted {\"id\":\"SKR03_4673\",\"code\":\"4673\",\"name\":\"Reisekosten Arbeitnehmer (Fahrtkosten)\",\"root_type\":\"expense\",\"account_type\":\"e",
+    "put accounting_accounts/SKR03_1800 local=ok result=accepted {\"id\":\"SKR03_1800\",\"code\":\"1800\",\"name\":\"Privatentnahme\",\"root_type\":\"equity\",\"account_type\":\"regular\",\"parent_id\":\"SKR0",
+    "put accounting_accounts/SKR03_1880 local=ok result=accepted {\"id\":\"SKR03_1880\",\"code\":\"1880\",\"name\":\"Unentgeltliche Wertabgaben (Telefon Privatanteil)\",\"root_type\":\"revenue\",\"accou",
+    "put accounting_accounts/SKR03_8921 local=ok result=accepted {\"id\":\"SKR03_8921\",\"code\":\"8921\",\"name\":\"Verwendung von Gegenständen (Kfz-Privatanteil)\",\"root_type\":\"revenue\",\"account_"
+   ],
+   "title": "Buchhaltung",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 744
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neue Buchung",
+    "button:Buchungen importieren",
+    "button:Buchungen exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Alle (12)",
+    "nav:Offen (4)",
+    "nav:Gebucht (8)",
+    "button:Angebot_Wartung_2026.pdf Beleg",
+    "button:Protokoll_Kickoff.docx Beleg ·",
+    "button:2026-01040 Buchung · Gebucht ·",
+    "button:Preisliste_Q4.xlsx Beleg · Off",
+    "button:2026-01041 Buchung · Gebucht ·",
+    "button:Lageplan_Halle4.png Beleg · Of",
+    "button:2026-01042 Buchung · Gebucht ·",
+    "button:Vertrag_Rahmen_signiert.pdf Be",
+    "button:2026-01043 Buchung · Gebucht ·",
+    "button:2026-01044 Buchung · Gebucht ·",
+    "button:Notizen_Workshop.md Beleg · Ge",
+    "button:2026-01045 Buchung · Gebucht ·",
+    "button:Linke Spaltenbreite anpassen",
+    "select:Arbeitsbereich",
+    "select:Kontenrahmen",
+    "button:Kontenrahmen neu initialisiere",
+    "row:0100 📂 Anlagevermögen Gruppe ",
+    "row:0400 📂 Sachanlagen Gruppe — 0",
+    "row:0410 📄 Geschäftsausstattung (",
+    "row:0800 📄 Gezeichnetes Kapital /",
+    "row:0800_G 📂 Eigenkapital Gruppe ",
+    "row:0900 📂 Rückstellungen Gruppe ",
+    "row:0950 📄 Rückstellungen für Pen",
+    "row:1000 📄 Kasse Kasse — 0,00 € 0",
+    "row:1100 📂 Umlaufvermögen Gruppe ",
+    "row:1200 📄 Bank (Girokonto) Bank ",
+    "row:1370 📄 Gesellschafter-Verrech",
+    "row:1400 📄 Forderungen aus Liefer",
+    "row:1570 📂 Vorsteuerkonten Gruppe",
+    "row:1571 📄 Abziehbare Vorsteuer 7",
+    "row:1576 📄 Abziehbare Vorsteuer 1",
+    "row:1600 📄 Verbindlichkeiten aus ",
+    "row:1700 📂 Verbindlichkeiten Grup",
+    "row:1770 📂 Umsatzsteuerkonten Gru",
+    "row:1771 📄 Umsatzsteuer 7% Steuer",
+    "row:1776 📄 Umsatzsteuer 19% Steue",
+    "row:1780 📄 Umsatzsteuer-Vorauszah",
+    "row:1800 📄 Privatentnahme Standar",
+    "row:1880 📄 Unentgeltliche Wertabg",
+    "row:1890 📄 Privateinlage Standard",
+    "row:3000 📂 Wareneingang / Materia",
+    "row:3400 📄 Wareneinkauf 19% Vorst",
+    "row:4000 📂 Betriebliche Aufwendun",
+    "row:4210 📄 Miete (Büroräume) Aufw",
+    "row:4600 📄 Werbekosten Aufwand 19",
+    "row:4630 📄 Geschenke abzugsfähig ",
+    "row:4635 📄 Geschenke nicht abzugs",
+    "row:4650 📄 Bewirtungskosten abzug",
+    "row:4654 📄 Bewirtungskosten nicht",
+    "row:4660 📄 Reisekosten Arbeitnehm",
+    "row:4673 📄 Reisekosten Arbeitnehm",
+    "row:4830 📄 Abschreibungen auf Sac",
+    "row:4930 📄 Bürobedarf / IT-Kosten",
+    "row:8000 📂 Umsatzerlöse Gruppe — ",
+    "row:8100 📄 Steuerfreie Umsätze Er",
+    "row:8300 📄 Erlöse 7% USt Erlöse 7",
+    "row:8400 📄 Erlöse 19% USt Erlöse ",
+    "row:8921 📄 Verwendung von Gegenst"
+   ],
+   "shot": "buchhaltung/1280-01-open.png"
+  },
+  {
+   "step": "nav Alle (12)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "buchhaltung/1280-02-nav_Alle_12_.png"
+  },
+  {
+   "step": "nav Offen (4)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "buchhaltung/1280-03-nav_Offen_4_.png"
+  },
+  {
+   "step": "nav Gebucht (8)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "buchhaltung/1280-04-nav_Gebucht_8_.png"
+  },
+  {
+   "step": "zurück zu Reiter Alle (12)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "buchhaltung/1280-05-zur_ck_zu_Reiter_Alle_12_.png"
+  },
+  {
+   "step": "row 0100 📂 Anlagevermögen Gruppe — 0,00 € 0,00 €",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "buchhaltung/1280-06-row_0100_Anlageverm_gen_Gruppe_0_00_0_00.png"
+  },
+  {
+   "step": "row 0400 📂 Sachanlagen Gruppe — 0,00 € 0,00 €",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "buchhaltung/1280-07-row_0400_Sachanlagen_Gruppe_0_00_0_00_.png"
+  },
+  {
+   "step": "button Neue Buchung",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "buchhaltung/1280-08-button_Neue_Buchung.png"
+  },
+  {
+   "step": "formular 2 Felder → 💾 Als Entwurf buchen",
+   "changed": true,
+   "ops": [
+    "put accounting_journal_entries/manual-pmbkehl local=ok result=accepted {\"id\":\"manual-pmbkehl\",\"posting_date\":\"2026-05-22\",\"type\":\"journal\",\"number\":\"\",\"narration\":\"Rundgang Test\",\"updated_at_ms\":1792129579299}",
+    "put accounting_journal_entry_lines/manual-pmbkehl-l1 local=ok result=accepted {\"id\":\"manual-pmbkehl-l1\",\"journal_entry_id\":\"manual-pmbkehl\",\"account_id\":\"SKR03_0410\",\"debit\":4200,\"credit\":0,\"line_no\":1,\"updated_at_ms\":",
+    "put accounting_journal_entry_lines/manual-pmbkehl-l2 local=ok result=accepted {\"id\":\"manual-pmbkehl-l2\",\"journal_entry_id\":\"manual-pmbkehl\",\"account_id\":\"SKR03_1000\",\"debit\":0,\"credit\":4200,\"line_no\":2,\"updated_at_ms\":"
+   ],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "buchhaltung/1280-09-formular_2_Felder_Als_Entwurf_buchen.png"
+  },
+  {
+   "step": "nav Alle (13)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Offen (5)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "buchhaltung/1280-10-nav_Offen_5_.png"
+  },
+  {
+   "step": "button Buchungen importieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Buchungen exportieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Als Liste anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "buchhaltung/1280-11-button_Als_Liste_anzeigen.png"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "buchhaltung/1280-12-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "buchhaltung/1280-13-button_Filter.png"
+  },
+  {
+   "step": "button Angebot_Wartung_2026.pdf Beleg · Offen · 14.10.2026 Müller M",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "buchhaltung/1280-14-button_Angebot_Wartung_2026.pdf_Beleg_Of.png"
+  },
+  {
+   "step": "nav Dokument & Extraktion",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "buchhaltung/1280-15-nav_Dokument_Extraktion.png"
+  },
+  {
+   "step": "nav Mehr ▾",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "buchhaltung/1280-16-nav_Mehr_.png"
+  },
+  {
+   "step": "button Preisliste_Q4.xlsx Beleg · Offen · 12.10.2026 Becker & Söhne",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "buchhaltung/1280-17-button_Preisliste_Q4.xlsx_Beleg_Offen_12.png"
+  },
+  {
+   "step": "button Lageplan_Halle4.png Beleg · Offen · 11.10.2026 Hoffmann Medi",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "buchhaltung/1280-18-button_Lageplan_Halle4.png_Beleg_Offen_1.png"
+  },
+  {
+   "step": "button Vertrag_Rahmen_signiert.pdf Beleg · Offen · 10.10.2026 Wagne",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "buchhaltung/1280-19-button_Vertrag_Rahmen_signiert.pdf_Beleg.png"
+  },
+  {
+   "step": "button Buchungsentwurf Buchung · Offen · 22.05.2026 Rundgang Test 4",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "buchhaltung/1280-20-button_Buchungsentwurf_Buchung_Offen_22..png"
+  },
+  {
+   "step": "button Linke Spaltenbreite anpassen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button OCR-Evidenz ausblenden",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "buchhaltung/1280-21-button_OCR-Evidenz_ausblenden.png"
+  },
+  {
+   "step": "button OCR-Evidenz einblenden",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "buchhaltung/1280-22-button_OCR-Evidenz_einblenden.png"
+  },
+  {
+   "step": "button Neue manuelle Buchung",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "buchhaltung/1280-23-button_Neue_manuelle_Buchung.png"
+  },
+  {
+   "step": "formular 2 Felder → 💾 Als Entwurf buchen",
+   "changed": true,
+   "ops": [
+    "put accounting_journal_entries/manual-x47llu2 local=ok result=accepted {\"id\":\"manual-x47llu2\",\"posting_date\":\"2026-05-22\",\"type\":\"journal\",\"number\":\"\",\"narration\":\"Rundgang Test\",\"updated_at_ms\":1792129589148}",
+    "put accounting_journal_entry_lines/manual-x47llu2-l1 local=ok result=accepted {\"id\":\"manual-x47llu2-l1\",\"journal_entry_id\":\"manual-x47llu2\",\"account_id\":\"SKR03_0410\",\"debit\":4200,\"credit\":0,\"line_no\":1,\"updated_at_ms\":",
+    "put accounting_journal_entry_lines/manual-x47llu2-l2 local=ok result=accepted {\"id\":\"manual-x47llu2-l2\",\"journal_entry_id\":\"manual-x47llu2\",\"account_id\":\"SKR03_1000\",\"debit\":0,\"credit\":4200,\"line_no\":2,\"updated_at_ms\":"
+   ],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "buchhaltung/1280-24-formular_2_Felder_Als_Entwurf_buchen.png"
+  },
+  {
+   "step": "nav Alle (14)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "buchhaltung/1280-25-nav_Alle_14_.png"
+  },
+  {
+   "step": "nav Offen (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "buchhaltung/1280-26-nav_Offen_6_.png"
+  },
+  {
+   "step": "button Rechte Spaltenbreite anpassen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 1528,
+   "shot": "buchhaltung/1280-27-suche_ohne_Treffer.png",
+   "textAfter": 1062
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "buchhaltung/1280-28-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_accounts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_journal_entries",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_journal_entry_lines",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_journal_entry_lines",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_journal_entries",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_journal_entry_lines",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "accounting_journal_entry_lines",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "buchhaltung",
+  "Buchhaltung"
+ ]
+}

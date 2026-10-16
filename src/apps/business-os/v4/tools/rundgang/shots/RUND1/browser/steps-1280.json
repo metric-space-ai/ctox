@@ -1,0 +1,978 @@
+{
+ "app": "browser",
+ "width": 1280,
+ "steps": [
+  {
+   "label": "Launcher",
+   "role": "launcher",
+   "shot": "1280-00.jpg",
+   "effect": "",
+   "log": [],
+   "errors": [
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0/assets/icon/outbound-lead-generation.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0/assets/icon/outbound-lead-generation.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)"
+   ],
+   "dialogs": null,
+   "navigations": null,
+   "openedFiles": null,
+   "probs": []
+  },
+  {
+   "label": "geöffnet",
+   "role": "open",
+   "shot": "1280-01.jpg",
+   "effect": "",
+   "log": [],
+   "errors": [],
+   "title": "Browser",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Suche „Lieferantenbewertung“ in Sitzung suchen...",
+   "role": "search",
+   "shot": "1280-02.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Browser",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Suche geleert",
+   "role": "search",
+   "shot": "1280-03.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Browser",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Neue Sitzung",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-04.jpg",
+   "effect": "Inhalt geändert",
+   "log": [
+    {
+     "kind": "command",
+     "type": "browser.session.start",
+     "payload": "{\"session_id\":\"browser_session_owner_1792085802884\",\"tab_id\":\"browser_tab_1792085802884\",\"viewport_w\":1280,\"viewport_h\":720,\"url\":\"https://www.krause.de\",\"profile_mode\":\"persistent\",\"lease_id\":\"f4525f6d-077f-4e81-9ec9-8b49753891d2\",\"record_…",
+     "status": "done"
+    }
+   ],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Sitzungen importieren",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-05.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "filechooser",
+     "spec": "Dateiauswahl geöffnet (eine Datei)"
+    }
+   ],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Sitzungen exportieren",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-06.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "download",
+     "spec": "browser-sessions.json"
+    }
+   ],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Als Liste anzeigen",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-07.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Als Karten anzeigen",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-08.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Filter",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-09.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Profil filtern → Option 1",
+   "role": "select",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-10.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Filter zurücksetzen",
+   "role": "button",
+   "skipped": "destruktiv – nicht geklickt"
+  },
+  {
+   "label": "Alle (6)",
+   "role": "tab",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-11.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Aktiv (1)",
+   "role": "tab",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-12.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Beendet (5)",
+   "role": "tab",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-13.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Scraping",
+   "role": "tab",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-14.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Scraping 12",
+   "role": "tab",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-15.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Spaltenbreite anpassen",
+   "role": "separator",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-16.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Sitzungsliste ein-/ausblenden",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-17.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Präzise Eingabe",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-18.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Erweiterte Aktionen",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-19.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "on",
+   "role": "input:checkbox",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-20.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Desktop 1280×720 Mobil 390×844 → Option 1",
+   "role": "select",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-21.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Ansicht",
+   "role": "tab",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-22.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Skript",
+   "role": "tab",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-23.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Adresse löschen",
+   "role": "button",
+   "skipped": "destruktiv – nicht geklickt"
+  },
+  {
+   "label": "Adresse öffnen",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-24.jpg",
+   "effect": "DOM geändert",
+   "log": [
+    {
+     "kind": "command",
+     "type": "browser.session.start",
+     "payload": "{\"session_id\":\"browser_session_owner_1792085814189\",\"tab_id\":\"browser_tab_1792085814189\",\"viewport_w\":390,\"viewport_h\":844,\"url\":\"https://www.krause.de\",\"profile_mode\":\"private\",\"lease_id\":\"f5e3b7e9-3f32-4f8a-bcb1-e2e54c8e0106\",\"record_id\":…",
+     "status": "done"
+    }
+   ],
+   "errors": [],
+   "title": "Browser",
+   "zone": [
+    "shell:command:01a140a3-3f85-7000-8617-fe2435c5427a Befehl „browser.session.start“ erledigt",
+    "shell:command:01a140a3-6bae-7000-b7f1-7827232a2fe0 Befehl „browser.session.start“ erledigt"
+   ],
+   "zoneVisible": true,
+   "zoneText": "Befehl „browser.session.start“ erledigt",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  }
+ ],
+ "flags": [
+  {
+   "step": 4,
+   "label": "Neue Sitzung",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-04.jpg"
+  },
+  {
+   "step": 5,
+   "label": "Sitzungen importieren",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-05.jpg"
+  },
+  {
+   "step": 6,
+   "label": "Sitzungen exportieren",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-06.jpg"
+  },
+  {
+   "step": 7,
+   "label": "Als Liste anzeigen",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-07.jpg"
+  },
+  {
+   "step": 8,
+   "label": "Als Karten anzeigen",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-08.jpg"
+  },
+  {
+   "step": 9,
+   "label": "Filter",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-09.jpg"
+  },
+  {
+   "step": 10,
+   "label": "Profil filtern → Option 1",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-10.jpg"
+  },
+  {
+   "step": 12,
+   "label": "Alle (6)",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-11.jpg"
+  },
+  {
+   "step": 13,
+   "label": "Aktiv (1)",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-12.jpg"
+  },
+  {
+   "step": 14,
+   "label": "Beendet (5)",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-13.jpg"
+  },
+  {
+   "step": 15,
+   "label": "Scraping",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-14.jpg"
+  },
+  {
+   "step": 16,
+   "label": "Scraping 12",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-15.jpg"
+  },
+  {
+   "step": 17,
+   "label": "Spaltenbreite anpassen",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-16.jpg"
+  },
+  {
+   "step": 18,
+   "label": "Sitzungsliste ein-/ausblenden",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-17.jpg"
+  },
+  {
+   "step": 19,
+   "label": "Präzise Eingabe",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-18.jpg"
+  },
+  {
+   "step": 20,
+   "label": "Erweiterte Aktionen",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-19.jpg"
+  },
+  {
+   "step": 21,
+   "label": "on",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-20.jpg"
+  },
+  {
+   "step": 22,
+   "label": "Desktop 1280×720 Mobil 390×844 → Option 1",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-21.jpg"
+  },
+  {
+   "step": 23,
+   "label": "Ansicht",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-22.jpg"
+  },
+  {
+   "step": 24,
+   "label": "Skript",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-23.jpg"
+  },
+  {
+   "step": 26,
+   "label": "Adresse öffnen",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-24.jpg"
+  }
+ ]
+}

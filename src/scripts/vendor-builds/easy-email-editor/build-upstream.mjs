@@ -18,7 +18,7 @@ const REPOSITORY = 'https://github.com/zalify/easy-email-editor.git';
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const vendorDir = path.resolve(
   scriptDir,
-  '../../../apps/business-os/vendor/easy-email-editor',
+  '../../../apps/business-os/modules/mail/vendor/easy-email-editor',
 );
 const bundleDir = path.join(vendorDir, 'bundle');
 const suppliedUpstream = process.argv[2] ? path.resolve(process.argv[2]) : null;

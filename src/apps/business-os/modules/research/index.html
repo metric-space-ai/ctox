@@ -12,7 +12,6 @@
         </div>
         <!-- Genau eine gefuellte Primaeraktion je Kopf: links das Anlegen. -->
         <div class="ctox-pane-actions">
-          <button type="button" class="ctox-pane-icon" data-action="refresh" aria-label="Daten neu laden" title="Daten neu laden"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4"/></svg></button>
           <button type="button" class="ctox-pane-icon is-primary" data-action="new-task" aria-label="Research anlegen" title="Research anlegen"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
         </div>
       </div>
@@ -23,18 +22,14 @@
           <strong>Aufgaben</strong>
           <span>0 aktiv</span>
         </div>
-        <div class="research-task-list">
-          <div class="research-empty">Noch keine Research-Tasks. Lass CTOX über die Chatleiste eine neue Research-Aufgabe anlegen oder importiere eine Knowledge Base.</div>
-        </div>
+        <div class="research-task-list"></div>
       </section>
       <section class="research-section">
         <div class="research-section-head">
           <strong>Ranking</strong>
           <span>Portfolio priority</span>
         </div>
-        <div class="research-ranking-list">
-          <div class="research-empty">Noch keine bewerteten Quellen. Sobald CTOX einen Research-Lauf gestartet hat, erscheinen hier die Top-Quellen mit Score und Grade.</div>
-        </div>
+        <div class="research-ranking-list"></div>
       </section>
     </div>
   </section>
@@ -46,20 +41,12 @@
           <span class="ctox-pane-kicker">Web Research</span>
           <h2 class="ctox-pane-title">Semantic Graph &amp; Evidence Workbench</h2>
         </div>
-        <!-- Ohne ausgewaehlte Aufgabe ist der Mittelkopf ein Warte-/Leerkopf:
-             seine dominante Aktion ist das Nachladen der Daten, nicht das
-             Anlegen (das gehoert der Aufgabenliste links und stuende sonst
-             zweimal gefuellt in derselben 37px-Zeile). -->
+        <!-- Ohne ausgewaehlte Aufgabe: einzige Aktion des Mittelkopfs ist das Anlegen (v4: kein Nachladen). -->
         <div class="ctox-pane-actions">
-          <button type="button" class="ctox-pane-icon is-primary" data-action="refresh" aria-label="Daten neu laden" title="Daten neu laden"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4"/></svg></button>
-          <button type="button" class="ctox-pane-icon" data-action="new-task" aria-label="Research anlegen" title="Research anlegen"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+          <button type="button" class="ctox-pane-icon is-primary" data-action="new-task" aria-label="Research anlegen" title="Research anlegen"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
         </div>
       </div>
     </header>
-    <div class="ctox-empty">
-      <strong>Keine Research-Aufgabe ausgewählt</strong>
-      <span>Hier erscheint der interaktive 3D/2D Knowledge-Graph mit Quellen, Begriffen und Belegen sowie die Evidence-Workbench, sobald eine Research-Aufgabe ausgewählt oder über CTOX angelegt wurde.</span>
-    </div>
   </section>
   <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--research-right-width" data-resizer-min="240" data-resizer-max="460" aria-label="Rechte Spaltenbreite anpassen"></button>
   <section class="ctox-pane research-pane research-right" aria-label="Research context">
@@ -77,15 +64,6 @@
       </div>
     </header>
     <div class="research-right-scroll">
-      <section class="research-context-block">
-        <span class="ctox-pane-kicker">Knowledge Base</span>
-        <strong class="research-context-empty">Keine Domain ausgewählt</strong>
-        <p>Wähle links eine Research-Aufgabe oder lass CTOX über die Chatleiste eine neue Aufgabe auf Basis einer Knowledge Base anlegen. Hier erscheinen dann Domain-Kontext, Scoring-Modell und der Status des CTOX-Research-Laufs.</p>
-      </section>
-      <section class="research-context-block">
-        <span class="ctox-pane-kicker">CTOX Handoff</span>
-        <p>Sobald ein Research-Lauf läuft, kannst du den Stand hier verfolgen und in den CTOX-Workspace springen, um den Lauf zu inspizieren oder fortzusetzen.</p>
-      </section>
     </div>
   </section>
 </main>

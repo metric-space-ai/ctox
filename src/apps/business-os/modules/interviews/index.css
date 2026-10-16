@@ -6,31 +6,43 @@
    collapse of the workbench, and the interviews-specific shard/list rows,
    meeting-action cluster, scorecard strip and gate result rows live here. */
 
+/* --- Shell v4: Fenster-Icon und Fenstersteuerung liegen in einer eigenen
+       Chrome-Zeile UEBER dem App-root (v4/frame/frame.css .shell-window-content
+       grid-row 2), nicht mehr ueber dem Inhalt. Die v2-Freihaltezonen entfallen:
+       Icon-Zone 0 (die calc()-Einzuege unten fallen auf ihr normales Polster),
+       die 70px-Steuerungszone rechts ist entfernt. Der v4-Rahmen setzt keinen
+       Container je Fenster (nur `container: v4f` am Desktop), deshalb traegt das
+       App-root den Fenster-Container fuer base.css und die 768px-Regel unten. --- */
+[data-app="interviews"] {
+  --shell-v2-icon-size: 0px;
+  container: business-app-window / inline-size;
+}
+
 /* --- Two-pane workspace: explicit grid-track pins (left · resizer · main) so
        the center never slides onto the resizer track. --- */
-.ats-interviews {
+[data-app="interviews"] .ats-interviews {
   grid-template-columns: var(--ctox-left-width, 340px) 12px minmax(360px, 1fr);
 }
-.ats-interviews .ats-list-pane { grid-column: 1; }
-.ats-interviews .ats-resizer { grid-column: 2; }
-.ats-interviews .ats-workbench-pane { grid-column: 3; }
+[data-app="interviews"] .ats-interviews .ats-list-pane { grid-column: 1; }
+[data-app="interviews"] .ats-interviews .ats-resizer { grid-column: 2; }
+[data-app="interviews"] .ats-interviews .ats-workbench-pane { grid-column: 3; }
 
 /* The list pane carries the full grammar: header · band · well · footer. */
-.ats-interviews .ats-list-pane {
+[data-app="interviews"] .ats-interviews .ats-list-pane {
   grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
 /* Auto-reveal: the workbench is hidden by default and revealed on selection or
    Neu; when hidden the list expands to the full width (outbound idiom). */
-.ats-interviews.is-workbench-hidden {
+[data-app="interviews"] .ats-interviews.is-workbench-hidden {
   grid-template-columns: minmax(0, 1fr);
 }
-.ats-interviews.is-workbench-hidden .ats-resizer,
-.ats-interviews.is-workbench-hidden .ats-workbench-pane {
+[data-app="interviews"] .ats-interviews.is-workbench-hidden .ats-resizer,
+[data-app="interviews"] .ats-interviews.is-workbench-hidden .ats-workbench-pane {
   display: none;
 }
 
-.ats-interviews .ats-workbench-scroll {
+[data-app="interviews"] .ats-interviews .ats-workbench-scroll {
   padding: 12px 14px 16px;
   display: flex;
   flex-direction: column;
@@ -39,7 +51,7 @@
 
 /* The kit only re-asserts [hidden] inside .ctox-workspace; these sit in one, so
    the global rule already applies. The file input never takes layout space. */
-.ats-interviews .ats-import-input { display: none; }
+[data-app="interviews"] .ats-interviews .ats-import-input { display: none; }
 
 /* --- custom: Shell-v2-Kopfgeometrie. Die Shell legt drei Zonen UEBER den
        App-Inhalt (`.shell-window-content` bekommt `inset: 0` und wird NICHT
@@ -48,12 +60,12 @@
        Hier traegt der linke Kopf zwei Zeilen (Titelzeile + Filterzeile) im
        selben <header>; beide sind exakt eine Header-Zeile hoch, zusammen
        2 x 37px = 74px = 80px - 6px Rahmen, also genau die Icon-Zone. --- */
-.shell-window[data-shell-contract="v2"] .ats-interviews .ctox-pane-header {
+[data-app="interviews"] .ats-interviews .ctox-pane-header {
   padding-block: 0;
 }
 
-.shell-window[data-shell-contract="v2"] .ats-interviews .ctox-pane-title-row,
-.shell-window[data-shell-contract="v2"] .ats-interviews .ctox-filterbar {
+[data-app="interviews"] .ats-interviews .ctox-pane-title-row,
+[data-app="interviews"] .ats-interviews .ctox-filterbar {
   box-sizing: border-box;
   min-height: var(--shell-v2-header-row-size, 37px);
   height: var(--shell-v2-header-row-size, 37px);
@@ -63,20 +75,20 @@
 
 /* Die Filterzeile sitzt im selben Kopf und erbt dessen Einrueckung; ihr
    eigenes Innenpolster wuerde sie gegen die Titelzeile versetzen. */
-.shell-window[data-shell-contract="v2"] .ats-interviews .ctox-filterbar {
+[data-app="interviews"] .ats-interviews .ctox-filterbar {
   padding-inline: 0;
 }
 
 /* Kicker + Titel bleiben gestapelt: 14px Kicker + 17px Titel passen in die
    37px-Zeile, und der Titel behaelt die volle Spaltenbreite. Der Aktionsblock
    bleibt `flex: 0 0 auto` aus der Basis und nimmt dem Titel keine Breite. */
-.shell-window[data-shell-contract="v2"] .ats-interviews .ctox-pane-titles {
+[data-app="interviews"] .ats-interviews .ctox-pane-titles {
   min-width: 0;
   padding-top: 0;
   overflow: hidden;
 }
 
-.shell-window[data-shell-contract="v2"] .ats-interviews .ctox-pane-title {
+[data-app="interviews"] .ats-interviews .ctox-pane-title {
   min-width: 0;
   margin-top: 0;
   line-height: 1.15;
@@ -87,26 +99,19 @@
 
 /* Linke Spalte: Icon-Zone (80px) freihalten. Die Einrueckung sitzt am Kopf,
    damit Titelzeile und Filterzeile dieselbe Kante teilen. */
-.shell-window[data-shell-contract="v2"] .ats-interviews .ats-list-pane > .ctox-pane-header {
+[data-app="interviews"] .ats-interviews .ats-list-pane > .ctox-pane-header {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
   padding-right: 14px;
 }
 
-/* Rechte Spalte: Fenstersteuerung (74x74) freihalten. Ist der Workbench
-   eingeklappt — der Startzustand dieser App —, ist der linke Kopf selbst der
-   oberste rechte Kopf und haelt die Zone frei. */
-.shell-window[data-shell-contract="v2"] .ats-interviews .ats-workbench-pane > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .ats-interviews.is-workbench-hidden .ats-list-pane > .ctox-pane-header {
-  padding-right: 70px;
-}
 
 /* --- Ein-Knopf-Umschalter: EIN Bedienelement, kein Zustandspaar. Es traegt
        kein aria-pressed (sonst faerbte die Kit-Regel
        `.ctox-pane-icon[aria-pressed="true"]` es dauerhaft als aktiv ein) —
        sichtbar ist immer das Icon der Ansicht, in die er wechselt. --- */
-.ats-interviews .ats-view-toggle .ats-view-icon { display: none; }
-.ats-interviews .ats-view-toggle[data-ats-view-toggle="cards"] .ats-view-icon--list,
-.ats-interviews .ats-view-toggle[data-ats-view-toggle="list"] .ats-view-icon--cards {
+[data-app="interviews"] .ats-interviews .ats-view-toggle .ats-view-icon { display: none; }
+[data-app="interviews"] .ats-interviews .ats-view-toggle[data-ats-view-toggle="cards"] .ats-view-icon--list,
+[data-app="interviews"] .ats-interviews .ats-view-toggle[data-ats-view-toggle="list"] .ats-view-icon--cards {
   display: block;
 }
 
@@ -115,7 +120,7 @@
        views are different SHAPES, not one shape at two paddings:
        KARTEN = fetter Titel + Statusbadge, darunter zwei Meta-Zeilen;
        LISTE  = genau eine dichte Zeile, Titel links, ein Kurz-Meta rechts. --- */
-.ats-interviews .ats-shard {
+[data-app="interviews"] .ats-interviews .ats-shard {
   display: block;
   width: 100%;
   text-align: left;
@@ -127,22 +132,22 @@
   padding: 10px 14px;
   cursor: pointer;
 }
-.ats-interviews .ats-shard:hover { background: var(--kit-hover); }
-.ats-interviews .ats-shard.is-selected {
+[data-app="interviews"] .ats-interviews .ats-shard:hover { background: var(--kit-hover); }
+[data-app="interviews"] .ats-interviews .ats-shard.is-selected {
   background: var(--accent-soft);
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
 /* KARTEN: drei Zeilen, grosszuegiges Polster. */
-.ats-interviews [data-ats-view="cards"] .ats-shard { padding: 12px 14px; }
-.ats-interviews .ats-shard-head {
+[data-app="interviews"] .ats-interviews [data-ats-view="cards"] .ats-shard { padding: 12px 14px; }
+[data-app="interviews"] .ats-interviews .ats-shard-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
 }
-.ats-interviews .ats-shard-head .ats-shard-title {
+[data-app="interviews"] .ats-interviews .ats-shard-head .ats-shard-title {
   min-width: 0;
   color: var(--text-strong);
   font-size: 14px;
@@ -151,8 +156,8 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ats-interviews .ats-shard-head .ctox-badge { flex: 0 0 auto; }
-.ats-interviews .ats-shard-meta {
+[data-app="interviews"] .ats-interviews .ats-shard-head .ctox-badge { flex: 0 0 auto; }
+[data-app="interviews"] .ats-interviews .ats-shard-meta {
   display: block;
   margin-top: 3px;
   font-size: 12px;
@@ -164,15 +169,15 @@
 }
 
 /* LISTE: eine Zeile, feste Zeilenhoehe, maximale Dichte. */
-.ats-interviews [data-ats-view="list"] .ats-shard { padding: 0 14px; }
-.ats-interviews .ats-shard-line {
+[data-app="interviews"] .ats-interviews [data-ats-view="list"] .ats-shard { padding: 0 14px; }
+[data-app="interviews"] .ats-interviews .ats-shard-line {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
   height: 28px;
 }
-.ats-interviews .ats-shard-line .ats-shard-title {
+[data-app="interviews"] .ats-interviews .ats-shard-line .ats-shard-title {
   flex: 1 1 auto;
   min-width: 0;
   font-size: 13px;
@@ -181,7 +186,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ats-interviews .ats-shard-trail {
+[data-app="interviews"] .ats-interviews .ats-shard-trail {
   flex: 0 0 auto;
   color: var(--muted);
   font-size: 11px;
@@ -191,7 +196,7 @@
 
 /* Statuspunkt der Listenzeile: dieselben semantischen Farben wie das Badge,
    das Statuswort liegt unsichtbar daneben — Farbe ist nie der einzige Kanal. */
-.ats-interviews .ats-shard-dot {
+[data-app="interviews"] .ats-interviews .ats-shard-dot {
   position: relative;
   flex: 0 0 auto;
   width: 6px;
@@ -199,13 +204,13 @@
   border-radius: 999px;
   background: var(--muted);
 }
-.ats-interviews .ats-shard-dot[data-status="completed"] { background: var(--success); }
-.ats-interviews .ats-shard-dot[data-status="no_show"] { background: var(--danger); }
-.ats-interviews .ats-shard-dot[data-status="proposed"],
-.ats-interviews .ats-shard-dot[data-status="rescheduled"] { background: var(--warning); }
-.ats-interviews .ats-shard-dot[data-status="confirmed"] { background: var(--accent); }
+[data-app="interviews"] .ats-interviews .ats-shard-dot[data-status="completed"] { background: var(--success); }
+[data-app="interviews"] .ats-interviews .ats-shard-dot[data-status="no_show"] { background: var(--danger); }
+[data-app="interviews"] .ats-interviews .ats-shard-dot[data-status="proposed"],
+[data-app="interviews"] .ats-interviews .ats-shard-dot[data-status="rescheduled"] { background: var(--warning); }
+[data-app="interviews"] .ats-interviews .ats-shard-dot[data-status="confirmed"] { background: var(--accent); }
 
-.ats-interviews .ats-sr {
+[data-app="interviews"] .ats-interviews .ats-sr {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -215,25 +220,18 @@
 }
 
 /* --- Workbench detail bits --- */
-/* Detail line inside the gate callout (created/updated record summary). */
-.ats-interviews .ats-result-row {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
 /* Meeting state-transition actions for the selected record — collected icons,
    never text buttons in the content flow are avoided by keeping them compact. */
-.ats-interviews .ats-meeting-actions {
+[data-app="interviews"] .ats-interviews .ats-meeting-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
-.ats-interviews .ats-meeting-actions[hidden] { display: none; }
+[data-app="interviews"] .ats-interviews .ats-meeting-actions[hidden] { display: none; }
 
 /* Related scorecards strip (read-only, filtered to the selected candidate). */
-.ats-interviews .ats-scorecards[hidden] { display: none; }
-.ats-interviews .ats-scorecards-head {
+[data-app="interviews"] .ats-interviews .ats-scorecards[hidden] { display: none; }
+[data-app="interviews"] .ats-interviews .ats-scorecards-head {
   margin: 0 0 6px;
   color: var(--muted);
   font-size: 11px;
@@ -241,7 +239,7 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
-.ats-interviews .ats-scorecard-row {
+[data-app="interviews"] .ats-interviews .ats-scorecard-row {
   display: grid;
   grid-template-columns: 1fr auto;
   align-items: center;
@@ -252,18 +250,18 @@
   margin-bottom: 6px;
   background: var(--surface);
 }
-.ats-interviews .ats-scorecard-main {
+[data-app="interviews"] .ats-interviews .ats-scorecard-main {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
 }
-.ats-interviews .ats-scorecard-meta {
+[data-app="interviews"] .ats-interviews .ats-scorecard-meta {
   margin-top: 3px;
   font-size: 12px;
   color: var(--muted);
 }
-.ats-interviews .ats-score {
+[data-app="interviews"] .ats-interviews .ats-score {
   min-width: 36px;
   text-align: right;
   font-size: 18px;
@@ -276,7 +274,7 @@
        vertikal, der Resizer entfaellt. Bei verstecktem Workbench (Auto-Reveal)
        bleibt es eine einzelne volle Zeile — kein leerer zweiter Track. --- */
 @container business-app-window (max-width: 768px) {
-  .ats-interviews {
+  [data-app="interviews"] .ats-interviews {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(200px, 40vh) minmax(320px, 1fr);
     height: auto;
@@ -285,88 +283,77 @@
     gap: 8px;
   }
 
-  .ats-interviews > [data-resizer] {
+  [data-app="interviews"] .ats-interviews > [data-resizer] {
     display: none !important;
   }
 
-  .ats-interviews .ats-list-pane,
-  .ats-interviews .ats-workbench-pane {
+  [data-app="interviews"] .ats-interviews .ats-list-pane,
+  [data-app="interviews"] .ats-interviews .ats-workbench-pane {
     grid-column: 1;
     min-width: 0;
   }
 
-  .ats-interviews.is-workbench-hidden {
+  [data-app="interviews"] .ats-interviews.is-workbench-hidden {
     grid-template-rows: minmax(0, 1fr);
   }
 
-  /* Gestapelt steht der Listenkopf oben rechts: Fenstersteuerung freihalten.
-     Der Workbench-Kopf sitzt jetzt UNTER der Liste, nicht mehr neben ihr — er
-     liegt nirgends unter der 74x74-Steuerung und gibt die reservierten 70px
-     an seinen Titel zurueck. */
-  .shell-window[data-shell-contract="v2"] .ats-interviews .ats-list-pane > .ctox-pane-header {
-    padding-right: 70px;
-  }
-
-  .shell-window[data-shell-contract="v2"] .ats-interviews .ats-workbench-pane > .ctox-pane-header {
-    padding-right: 14px;
-  }
 }
 
 /* --- Touch-Bedienung auf groben Zeigern: jedes interaktive Control erreicht
        das 44px-Minimum, Icon-Buttons in beiden Dimensionen, Shard- und
        Kompakt-Zeilen bekommen fingerhohe Tap-Flaechen. --- */
 @media (pointer: coarse) {
-  .ats-interviews button,
-  .ats-interviews input,
-  .ats-interviews select,
-  .ats-interviews textarea {
+  [data-app="interviews"] .ats-interviews button,
+  [data-app="interviews"] .ats-interviews input,
+  [data-app="interviews"] .ats-interviews select,
+  [data-app="interviews"] .ats-interviews textarea {
     min-height: 44px;
   }
 
-  .ats-interviews .ctox-pane-icon {
+  [data-app="interviews"] .ats-interviews .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
 
-  .ats-interviews .ctox-pane-tab,
-  .ats-interviews .ctox-sort-dir {
+  [data-app="interviews"] .ats-interviews .ctox-pane-tab,
+  [data-app="interviews"] .ats-interviews .ctox-sort-dir {
     min-height: 44px;
   }
 
-  .ats-interviews .ctox-sort-dir {
+  [data-app="interviews"] .ats-interviews .ctox-sort-dir {
     width: 44px;
     min-width: 44px;
   }
 
-  .ats-interviews .ats-shard,
-  .ats-interviews .ats-scorecard-row {
+  [data-app="interviews"] .ats-interviews .ats-shard,
+  [data-app="interviews"] .ats-interviews .ats-scorecard-row {
     min-height: 44px;
   }
 }
 
 /* Shared shell-v2 frame. The shell owns window title/close/maximize chrome;
    this module only owns pane semantics and keeps its toolbar on one line. */
-.shell-window[data-shell-contract="v2"] .ats-interviews {
+[data-app="interviews"] .ats-interviews {
   padding: 0;
-  background: var(--shell-v2-surface, var(--bg));
+  background: var(--bg);
 }
-.shell-window[data-shell-contract="v2"] .ats-interviews .ctox-pane {
+[data-app="interviews"] .ats-interviews .ctox-pane {
   border: 0;
   border-radius: 0;
-  background: var(--shell-v2-surface-alt, var(--surface));
+  background: var(--surface);
   box-shadow: none;
 }
-.shell-window[data-shell-contract="v2"] .ats-list-pane > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .ats-workbench-pane > .ctox-pane-header { padding: 0; background: var(--shell-v2-surface-alt, var(--surface)); }
-.shell-window[data-shell-contract="v2"] .ats-list-pane > .ctox-pane-header > [data-shell-v2-header-row="1"] {
+[data-app="interviews"] .ats-list-pane > .ctox-pane-header,
+[data-app="interviews"] .ats-workbench-pane > .ctox-pane-header { padding: 0; background: var(--surface); }
+[data-app="interviews"] .ats-list-pane > .ctox-pane-header > [data-shell-v2-header-row="1"] {
   height: var(--shell-v2-header-row-size, 37px);
   padding: 0 8px 0 calc(var(--shell-v2-icon-size, 80px) + 8px);
 }
-.shell-window[data-shell-contract="v2"] .ats-workbench-pane > .ctox-pane-header > [data-shell-v2-header-row="1"] {
+[data-app="interviews"] .ats-workbench-pane > .ctox-pane-header > [data-shell-v2-header-row="1"] {
   height: var(--shell-v2-header-row-size, 37px);
-  padding: 0 62px 0 8px;
+  padding: 0 8px;
 }
-.shell-window[data-shell-contract="v2"] .ats-interviews [data-shell-v2-header-row="2"] {
+[data-app="interviews"] .ats-interviews [data-shell-v2-header-row="2"] {
   box-sizing: border-box;
   min-height: var(--shell-v2-header-row-size, 37px);
   height: var(--shell-v2-header-row-size, 37px);
@@ -375,10 +362,12 @@
   overflow-y: hidden;
   white-space: nowrap;
 }
-.shell-window[data-shell-contract="v2"] .ats-list-pane .ctox-pane-kicker { display: none; }
-.shell-window[data-shell-contract="v2"] .ats-interviews .ctox-pane-title-row { height: 100%; }
-.shell-window[data-shell-contract="v2"] .ats-interviews .ctox-pane-title { margin-top: 0; line-height: 1.1; }
-.shell-window[data-shell-contract="v2"] .ats-interviews .ctox-pane-icon {
+[data-app="interviews"] .ats-list-pane .ctox-pane-kicker { display: none; }
+/* v4: keine `height: 100%` an der Titelzeile – mit offener Filterablage waechst
+   der Kopf, und die Titelzeile zog dann ueber die ganze Kopfhoehe (gemessen
+   im v4-Test: Ablage und Suche lagen unter dem Band). Die Zeile bleibt 37px. */
+[data-app="interviews"] .ats-interviews .ctox-pane-title { margin-top: 0; line-height: 1.1; }
+[data-app="interviews"] .ats-interviews .ctox-pane-icon {
   width: min(26px, var(--shell-v2-header-row-size, 37px));
   height: min(26px, var(--shell-v2-header-row-size, 37px));
 }

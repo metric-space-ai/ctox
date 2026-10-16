@@ -1,0 +1,9 @@
+{
+  "app_id": "fremd",
+  "title": "Fremde App",
+  "entry": "index.js",
+  "min_app_api": "4.0",
+  "capabilities_required": [],
+  "handlers": {},
+  "layout": { "icon_asset": "icon.svg", "category": "arbeit" }
+}
