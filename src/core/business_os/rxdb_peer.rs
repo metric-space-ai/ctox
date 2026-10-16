@@ -16,6 +16,10 @@
 // Origin: CTOX
 // License: Apache-2.0
 
+#[path = "rxdb_peer_native_command_routes.rs"]
+mod native_command_routes;
+pub(crate) use native_command_routes::register_v4_native_command_handlers;
+
 #[path = "../store/peer_schema_adapter.rs"]
 pub(crate) mod peer_schema_adapter;
 use super::app_runtime;
@@ -3100,47 +3104,7 @@ async fn run_native_peer(
                 // `RxWebRTCReplicationPool::new_multi`.
                 register_demand_file_sources(pool, &database, &root);
                 super::rxdb_peer_knowledge_rows::register_knowledge_row_source(pool, &root);
-                let browser_live_root = root.clone();
-                let browser_live_database = Arc::clone(&database);
-                pool.register_auxiliary_request_handler(
-                    BROWSER_LIVE_WEBRTC_METHOD,
-                    Arc::new(move |_peer_identity, capability_token, params| {
-                        let root = browser_live_root.clone();
-                        let database = Arc::clone(&browser_live_database);
-                        Box::pin(async move {
-                            handle_browser_live_webrtc_request(
-                                &root,
-                                &database,
-                                &capability_token,
-                                params,
-                            )
-                            .await
-                        })
-                    }),
-                )?;
-                let outbound_lookup_root = root.clone();
-                pool.register_auxiliary_request_handler(
-                    OUTBOUND_SELLIFY_LOOKUP_WEBRTC_METHOD,
-                    Arc::new(move |_peer_identity, capability_token, params| {
-                        let root = outbound_lookup_root.clone();
-                        Box::pin(async move {
-                            if !store::capability_allows_collection_permission(
-                                &root,
-                                &capability_token,
-                                "outbound_lead_generation_leads",
-                                crate::business_os::policy::BusinessOsPermission::DataRead,
-                            ) {
-                                return Err(
-                                    "outbound Sellify lookup capability may not read managed tenant leads"
-                                        .to_string(),
-                                );
-                            }
-                            let payload = params.first().cloned().unwrap_or(Value::Null);
-                            outbound_sellify_lookup(&root, &payload)
-                                .map_err(|error| error.to_string())
-                        })
-                    }),
-                )?;
+                register_v4_native_command_handlers(pool, &database, &root)?;
                 let field_review_root = root.clone();
                 pool.register_auxiliary_request_handler(
                     super::outbound_field_review::NATIVE_FIELD_REVIEW_VIEW_METHOD,
@@ -3159,29 +3123,7 @@ async fn run_native_peer(
                         })
                     }),
                 )?;
-                let workjet_device_root = root.clone();
                 super::rxdb_peer_transfer_publication::register(pool, &root)?;
-                super::rxdb_peer_jour_fixe_speech::register(pool, &root)?;
-                super::rxdb_peer_dictation::register(pool, &root)?;
-                super::rxdb_peer_grok::register(pool, &root)?;
-                let calendar_read_root = root.clone();
-                pool.register_auxiliary_request_handler(
-                    super::mcp_channel::WORKJET_CALENDAR_READ_METHOD,
-                    Arc::new(move |_peer_identity, capability_token, params| {
-                        let root = calendar_read_root.clone();
-                        Box::pin(async move {
-                            tokio::task::spawn_blocking(move || {
-                                super::mcp_channel::read_workjet_calendar_webrtc(
-                                    &root,
-                                    &capability_token,
-                                    params,
-                                )
-                            })
-                            .await
-                            .map_err(|_| "CALENDAR_READ_UNAVAILABLE".to_string())?
-                        })
-                    }),
-                )?;
                 let business_data_root = root.clone();
 
                 let business_data_database = Arc::clone(&database);
@@ -3228,19 +3170,8 @@ async fn run_native_peer(
                         })
                     }),
                 )?;
-                pool.register_auxiliary_request_handler(
-                    WORKJET_DEVICE_WEBRTC_METHOD,
-                    Arc::new(move |_peer_identity, capability_token, params| {
-                        let root = workjet_device_root.clone();
-                        Box::pin(async move {
-                            handle_workjet_device_webrtc_request(&root, &capability_token, params)
-                                .await
-                        })
-                    }),
-                )?;
                 super::mcp_channel::NativeSupervisorSourceHost::register(&pool, &root)?;
                 let consumer_root = root.clone();
-                super::rxdb_peer_speech_settings::register(&pool, &root)?;
                 let consumer_transport = pool.connection_handler.clone();
                 pool.register_guarded_auxiliary_request_handler(
                     super::consumer_authority::CONSUMER_AUTHORITY_METHOD,
@@ -9163,6 +9094,9 @@ fn resolve_business_os_installed_app_root_for_native_peer(root: &Path) -> PathBu
     root.join("business-os")
 }
 
+#[path = "schema_v4_migrations.rs"]
+mod schema_v4_migrations;
+
 fn native_declarative_migration_operations(spec: &Value) -> anyhow::Result<Vec<Value>> {
     let operations = if let Some(array) = spec.as_array() {
         array.clone()
@@ -9193,6 +9127,7 @@ fn native_declarative_migration_operations(spec: &Value) -> anyhow::Result<Vec<V
                     "set_boolean migration needs field"
                 );
             }
+            "v4_function" => schema_v4_migrations::validate(operation)?,
             other => anyhow::bail!("unsupported declarative migration operation {other}"),
         }
     }
@@ -9243,6 +9178,12 @@ fn apply_native_declarative_migration_operations(
                             .is_some_and(native_declarative_value_is_truthy),
                     ),
                 );
+            }
+            "v4_function" => {
+                migrated = schema_v4_migrations::apply(&Value::Object(migrated), operation)?
+                    .as_object()
+                    .context("native v4 migration output object")?
+                    .clone();
             }
             other => anyhow::bail!("unsupported declarative migration operation {other}"),
         }
@@ -9361,44 +9302,26 @@ fn native_rxdb_version_migration_entries(
     root: &Path,
 ) -> anyhow::Result<Vec<RuntimeModuleCollectionEntry>> {
     let mut entries = runtime_module_collection_entries_for_root(root);
-    entries.retain(|entry| {
-        !matches!(
-            entry.name.as_str(),
-            "business_commands"
-                | "ctox_queue_tasks"
-                | "ctox_runs"
-                | "workjet_computers"
-                | "workjet_projects"
-        )
-    });
-    // Packaged cockpit schema upgrades use the same copy/verify transaction as installed modules.
-    // Only these explicitly versioned collections are opted in; no blanket schema rewrite.
-    let packaged: Value = serde_json::from_str(include_str!(
-        "../../apps/business-os/modules/ctox/collections.schema.json"
-    ))?;
-    for name in [
-        "business_commands",
-        "ctox_queue_tasks",
-        "ctox_runs",
-        "workjet_computers",
-        "workjet_projects",
-    ] {
-        let schema = schema_from_json(
-            business_os_schema_contract()
-                .get(name)
-                .context("missing packaged cockpit schema")?
-                .clone(),
-        );
-        let strategies = packaged
-            .pointer(&format!("/migration_strategies/{name}"))
-            .and_then(Value::as_object)
-            .context("missing packaged cockpit migration strategies")?;
+    entries.retain(|entry| !business_os_schema_contract().contains_key(&entry.name));
+    let strategies: BTreeMap<String, BTreeMap<i64, Value>> =
+        serde_json::from_str(include_str!("business_os_schema_migrations.json"))?;
+    for (name, raw) in business_os_schema_contract() {
+        let schema = schema_from_json(raw.clone());
+        if schema.version == 0 {
+            continue;
+        }
         let migration_strategies = strategies
-            .iter()
-            .map(|(version, spec)| Ok((version.parse::<i64>()?, spec.clone())))
-            .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+            .get(name)
+            .with_context(|| format!("missing canonical native migration strategies for {name}"))?
+            .clone();
+        native_rxdb_version_migration_steps(
+            name,
+            0,
+            schema.version.into(),
+            Some(&migration_strategies),
+        )?;
         entries.push(RuntimeModuleCollectionEntry {
-            name: name.to_string(),
+            name: name.clone(),
             schema,
             sync_profile: RuntimeModuleSyncProfile::Eager,
             migration_strategies,
@@ -9558,8 +9481,19 @@ fn copy_and_verify_native_rxdb_version_table(
                     )
                 })?;
         }
+        let source_id: String = row.get(0)?;
+        if operation_steps
+            .iter()
+            .flatten()
+            .any(|op| op["op"] == "v4_function")
+        {
+            anyhow::ensure!(
+                migrated["id"].as_str() == Some(source_id.as_str()),
+                "native v4 migration changes row identity for {collection}; source retained"
+            );
+        }
         let migration_row = NativeMigrationRow {
-            id: row.get(0)?,
+            id: source_id,
             revision: row.get(1)?,
             deleted: row.get(2)?,
             last_write_time: row.get(3)?,
@@ -12399,7 +12333,7 @@ pub(in crate::business_os) mod tests {
     ) -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
         let packaged: Value = serde_json::from_str(include_str!(
-            "../../apps/business-os/modules/ctox/collections.schema.json"
+            "../../apps/business-os/v4/schemas/ctox.collections.schema.json"
         ))?;
         let entries = native_rxdb_version_migration_entries(root.path())?;
         for (name, schema) in packaged["collections"].as_object().unwrap() {
@@ -14231,6 +14165,8 @@ pub(in crate::business_os) mod tests {
             Some("kept")
         );
     }
+
+    include!("schema_v4_migration_tests.rs");
 
     #[tokio::test]
     async fn native_all_schema_hashes_match_browser_contract_fixture() {

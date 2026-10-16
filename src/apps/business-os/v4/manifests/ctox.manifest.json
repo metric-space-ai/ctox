@@ -3791,10 +3791,6 @@
   "commands_in": [
     {
       "from": "*",
-      "type": "business_os.chat.task"
-    },
-    {
-      "from": "*",
       "type": "ctox.app.modify.request"
     },
     {
@@ -3873,7 +3869,6 @@
     "handlers/_lib/jour-fixe.js": "7bb9ed44420cda69409a3b3245d3eb8ab48b0ca6715ff4ec2d9335e8b6bffd84",
     "handlers/_lib/learning.js": "a8a67343cb070f7e786f93636fd2d69f29d9b5849d15d0945d60bd8c49868ab9",
     "handlers/_lib/tasks.js": "d89891eb18085705d8e5423082e70cb48c5e2d8a92d2d9d98284722e44699bec",
-    "handlers/business_os.chat.task.js": "4fdf814638b473ee7b646023afbef6f28fc518af398d001b222999be3a5aaae1",
     "handlers/ctox.app.modify.request.js": "5a38beceb1f88317d0a7a031487ea1d5bdd8a7c853b37fdead18f65382aebd03",
     "handlers/ctox.chat.task.complete.js": "5d65a2791b0ddb6c2e35208e39168ab1c4cddbf68bb6934af7872a625b0b378b",
     "handlers/ctox.chat.task.failed.js": "9dce4f4d3ab52a0994b8b61686df7e38254a82817e30a8aa7842fcd54606df8b",
@@ -3906,7 +3901,7 @@
     "prompts/chat-ask.md": "ad9b7ce9c87b66fbd23d29276b64ff6e3566d7dd73f27c6d0646e6a7edeabcbc",
     "prompts/chat-data.md": "401fe54de442034408ae1e4cafad1a342468dcbcc64ccca9c7a995d5385a38e3",
     "schema.js": "6978d657693d2a00412dacd7bca3f0b2f1c0a65236c07a82f6388530d7c9ff72",
-    "v4-manifest.json": "6de572c65101276b8e02d7d5c2d7ac72cd62b38dbc82a8b3b09afd60e347f2de"
+    "v4-manifest.json": "97c11d2cf6c3f630db0e7bb9cbb4d6edd3a9b99cf1fa6875fa56cb05d37ba45c"
   },
   "foreign_collections": {
     "business_commands": {
@@ -3980,7 +3975,6 @@
     }
   },
   "handlers": {
-    "business_os.chat.task": "handlers/business_os.chat.task.js",
     "ctox.app.modify.request": "handlers/ctox.app.modify.request.js",
     "ctox.chat.task": "handlers/ctox.chat.task.js",
     "ctox.chat.task.complete": "handlers/ctox.chat.task.complete.js",
@@ -4233,7 +4227,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "812c9813233a234bc168784059c89cdb78b2d9124588c9e310f15172004c38d8",
+    "base_hash": "859860ab9c63b17b946debf0a0ac9dc69928ca998959d3922c772d4e37125bba",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

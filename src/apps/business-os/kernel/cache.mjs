@@ -16,7 +16,7 @@ export async function evictCollection(db,collection,assertGeneration){
   if((await t.all('outbox')).some(e=>e.collection===collection))throw new CtoxError('quota','Collection has pending writes and cannot be evicted');
   let seq=(await t.get('meta','local_seq'))?.value??0;const records=[];
   for(const row of await t.all('docs'))if(row.collection===collection){
-   if(row.legacy_unconfirmed)throw new CtoxError('quota','Unconfirmed V3 input cannot be evicted');
+   if(row.legacy_unconfirmed || row.local_file_rejection)throw new CtoxError('quota','Unconfirmed or rejected input cannot be evicted');
    const record=empty(row,++seq);await t.put('docs',record);records.push(record);
   }
   await invalidate(t,new Set([collection]));await t.put('meta',{key:'local_seq',value:seq});return records;
@@ -35,7 +35,8 @@ export async function reclaimCache(db,assertGeneration,lastUsed=new Map(),protec
   await assertGeneration(t);
   const outbox=await t.all('outbox'),docs=await t.all('docs'),blobs=await t.all('blobs');
   const pinned=new Set(outbox.map(e=>e.collection));
-  for(const row of docs)if(row.legacy_unconfirmed)pinned.add(row.collection);
+  for(const row of docs)if(row.legacy_unconfirmed || row.local_file_rejection)pinned.add(row.collection);
+  const rejectedRefs=new Set(docs.filter(row=>row.local_file_rejection).map(row=>row.data?.ref));
   const groups=new Map();let usage=0;
   for(const row of docs){
    const size=bytes(row);usage+=size;
@@ -46,7 +47,7 @@ export async function reclaimCache(db,assertGeneration,lastUsed=new Map(),protec
   const candidates=[...groups.values()].filter(g=>g.size && !pinned.has(g.collection) && !protectedCollections.has(g.collection));
   for(const blob of blobs){
    const size=blob.size??blob.blob?.size??0;usage+=size;
-   if(!blob.pinned && !outbox.some(e=>e.op==='upload' && e.id===blob.ref))candidates.push({blob:blob.ref,at:blob.last_used??0,size});
+   if(!blob.pinned && !rejectedRefs.has(blob.ref) && !outbox.some(e=>e.op==='upload' && e.id===blob.ref))candidates.push({blob:blob.ref,at:blob.last_used??0,size});
   }
   candidates.sort((a,b)=>a.at-b.at);
   let seq=(await t.get('meta','local_seq'))?.value??0;

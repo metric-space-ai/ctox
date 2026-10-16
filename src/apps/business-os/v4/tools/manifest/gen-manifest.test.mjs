@@ -138,7 +138,8 @@ test('Fremdzugriffs-Wünsche aus V4-HANDLERS/V4-PORT stehen im Manifest', () => 
   }
   // reports/file-viewer: exklusive Liste laut V4-PORT.md
   assert.ok(!first.manifests.reports.foreign_collections.workjet_projects);
-  assert.deepEqual(Object.keys(first.manifests['file-viewer'].foreign_collections).sort(), ['business_commands', 'files']);
+  // E30 (16.10.2026): files.get(ref) einer Explorer-/Desktop-Datei ist nur über eine lesbare desktop_files-Zeile berechtigt.
+  assert.deepEqual(Object.keys(first.manifests['file-viewer'].foreign_collections).sort(), ['business_commands', 'desktop_files', 'files']);
 });
 
 test('handlers = vorhandene handlers/*.js ohne _-Präfix, jede Datei in files', () => {
@@ -1165,8 +1166,8 @@ test('ROUTE: Typ mit Handlern in mehreren Apps → commands_out_ambiguous (rot)'
   }
 });
 
-test('ROUTE: Shell trägt commands_out {ctox, business_os.chat.task} und {ctox, ctox.chat.task}; ctox nimmt sie von * an', () => {
-  const expected = [{ app: 'ctox', type: 'business_os.chat.task' }, { app: 'ctox', type: 'ctox.chat.task' }];
+test('ROUTE/E46: Shell trägt commands_out {ctox, ctox.chat.task}; business_os.chat.task ist Plattformroute ohne ctox-Handler', () => {
+  const expected = [{ app: 'ctox', type: 'ctox.chat.task' }];
   assert.deepEqual(SHELL_COMMANDS_OUT.map((c) => ({ app: c.app, type: c.type })), expected);
   const sh = first.manifests[SHELL_APP_ID];
   assert.deepEqual(sh.commands_out, expected);
@@ -1177,6 +1178,10 @@ test('ROUTE: Shell trägt commands_out {ctox, business_os.chat.task} und {ctox, 
     assert.ok(ctox.commands_in.some((x) => x.type === c.type && x.from === '*'), `ctox nimmt ${c.type} von * an`);
   }
   assert.ok(!first.drift.commands_unmatched.some((d) => d.from === SHELL_APP_ID));
+  // E46: der Chatbefehl geht nativ an den Kern-Chatpfad; toter ctox-Port-Handler und commands_in-Eintrag sind entfernt.
+  assert.ok(!('business_os.chat.task' in ctox.handlers), 'kein ctox-Handler business_os.chat.task');
+  assert.ok(!ctox.commands_in.some((x) => x.type === 'business_os.chat.task'), 'kein commands_in business_os.chat.task');
+  assert.ok(isPlatformRoute('business_os.chat.task', loadPlatformRoutes(DEFAULT_REPO)));
 });
 
 test('ROUTE heutiger Baum: mail → outbound beidseitig deklariert (FIX9a), abgeleitete commands_in nie *', () => {
@@ -1235,4 +1240,19 @@ test('E42: Inventurklassen und Chat-Befehle sind Plattformrouten; commandType mi
   // PENDING: nur noch die E25-Registry-Typen und die fünf gemessen fehlenden browser.*-Literale
   assert.ok(Object.keys(PLATFORM_ROUTES_PENDING).every((t) => /^ctox\.workjet\.[a-z_.]+\.v1$|^ctox\.plan\.step\.retry$|^browser\./.test(t)));
   assert.ok(!('outbound-lead-generation.import' in PLATFORM_ROUTES_PENDING), 'OLG-Import ist Fehlalarm (dispatch:false)');
+});
+
+test('ROUTE: Hülle mit lokalem Alias (const type = command.type || command.command_type) wird als Umschlag erkannt', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gen-manifest-alias-'));
+  try {
+    fs.writeFileSync(path.join(root, 'a.js'), [
+      'function send(command) { const type = command.type || command.command_type; return state.api.command(type, command.payload); }',
+      "send({ type: 'alias.type.one', payload: {} });",
+      "send({ command_type: 'alias.type.two' });",
+      '',
+    ].join('\n'));
+    assert.deepEqual(scanUiCommandTypes(root, ['a.js']).map((h) => h.type).sort(), ['alias.type.one', 'alias.type.two']);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -1,4 +1,6 @@
 use super::*;
+#[path = "command_routes_writer_tests.rs"]
+mod e25_writer;
 #[path = "../business_os/command_projection_reads.rs"]
 mod native_projection_reads;
 
@@ -350,6 +352,13 @@ async fn command_release_change_retires_a_live_fence_and_old_metadata_requires_c
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn command_kernel_p5_wire_replays_the_native_canonical_document() {
+    kernel_component(false).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn e25_kernel_command_to_native_completion() {
+    kernel_component(true).await;
+}
+async fn kernel_component(e25: bool) {
     use crate::change_log::subscription::{protocol::ClientMessage, Subscription, SubscriptionKey};
     use std::io::{BufRead, BufReader, Write as IoWrite};
     use std::process::Stdio;
@@ -415,11 +424,17 @@ async fn command_kernel_p5_wire_replays_the_native_canonical_document() {
     }
     let mut child = OwnedChild(
         Command::new("node")
-            .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("command_e2e.mjs"))
+            .arg(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(if e25 {
+                    "command_routes_e2e.mjs"
+                } else {
+                    "command_e2e.mjs"
+                }),
+            )
             .env("KERNEL_URL", format!("file://{}", kernel.display()))
             .env(
                 "COMMAND_CONFIG",
-                json!({"schema":schema,"epoch":epoch,"manifest":plan.manifests.iter()
+                json!({"e25":e25,"e25_method":if e25 { std::env::var("E25_METHOD").ok() } else { None },"schema":schema,"epoch":epoch,"manifest":plan.manifests.iter()
                     .find(|m|m["app_id"]=="ctox-platform").unwrap()})
                 .to_string(),
             )
@@ -435,6 +450,7 @@ async fn command_kernel_p5_wire_replays_the_native_canonical_document() {
     let mut executor_seq = 0;
     let mut first = None;
     let mut measured = None;
+    let mut reply_closed = false;
     let mut projection_us = Vec::new();
     loop {
         line.clear();
@@ -443,7 +459,19 @@ async fn command_kernel_p5_wire_replays_the_native_canonical_document() {
         }
         let request: Value = serde_json::from_str(&line).expect("component stdout is JSON");
         if request["type"] == "measured" {
+            // Preserve raw measurements even when a latency assertion makes
+            // the child exit nonzero before the final enriched result is built.
+            if e25 {
+                println!("E25_KERNEL_COMPONENT_RAW {}", request);
+            }
             measured = Some(request);
+            continue;
+        }
+        if reply_closed {
+            assert!(
+                matches!(request["type"].as_str(), Some("subscribe" | "drain")),
+                "effect request after child pipe closure"
+            );
             continue;
         }
         let now = std::time::SystemTime::now()
@@ -462,6 +490,15 @@ async fn command_kernel_p5_wire_replays_the_native_canonical_document() {
                 assert_eq!(write.write.app_ver, "platform-7");
                 let mut doc = write.write.body.clone().unwrap();
                 let id = write.write.id.clone();
+                let completion_lane = if e25 {
+                    Some(
+                        routes::resolve(doc["type"].as_str().unwrap())
+                            .expect("E25 route must resolve instead of unknown_command")
+                            .lane,
+                    )
+                } else {
+                    None
+                };
                 let result = ingress.submit("alice".into(), write, now).await.unwrap();
                 assert_eq!(result.results.len(), 1);
                 let receipt = result.results[0].clone();
@@ -474,7 +511,29 @@ async fn command_kernel_p5_wire_replays_the_native_canonical_document() {
                     executor_seq += 1;
                     doc["status"] = json!("done");
                     doc["executor_fence"] = json!(lease.fence);
-                    doc["result"] = json!({"value":doc["payload"]["value"]});
+                    if e25 {
+                        let native = routes::NativeCommand {
+                            command_id: id.clone(),
+                            kind: doc["type"].as_str().unwrap().into(),
+                            payload: doc["payload"].clone(),
+                            app_id: doc["app_id"].as_str().unwrap().into(),
+                            actor_id: doc["actor_id"].as_str().unwrap().into(),
+                        };
+                        let value = doc["payload"]["fixture_result"].clone();
+                        let complete = writer
+                            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+                                routes::completion(tx, &native, value, None)
+                                    .map_err(|e| crate::StoreError::Invalid(e.reason))
+                            }))
+                            .unwrap()
+                            .await
+                            .expect("E25 route must resolve instead of unknown_command");
+                        assert_eq!(complete.command_id, id);
+                        doc["status"] = json!(complete.status);
+                        doc["result"] = complete.result.unwrap();
+                    } else {
+                        doc["result"] = json!({"value":doc["payload"]["value"]});
+                    }
                     let terminal = OrderedWrite {
                         client_seq: Seq(executor_seq),
                         write: Write {
@@ -483,6 +542,7 @@ async fn command_kernel_p5_wire_replays_the_native_canonical_document() {
                             collection: "business_commands".into(),
                             id: id.clone(),
                             base_rev: receipt.result.rev.clone(),
+                            expected_revision: None,
                             base_seq: receipt.result.seq,
                             gen: 1,
                             schema_ver: 3,
@@ -491,10 +551,21 @@ async fn command_kernel_p5_wire_replays_the_native_canonical_document() {
                             body: Some(doc.clone()),
                         },
                     };
-                    let done = ingress
-                        .submit("executor-a".into(), terminal, now)
-                        .await
-                        .unwrap();
+                    let done = if e25 {
+                        writer
+                            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+                                submit_in_transaction(tx, "executor-a", &terminal, now, &Policy)
+                                    .map_err(Into::into)
+                            }))
+                            .unwrap()
+                            .await
+                            .unwrap()
+                    } else {
+                        ingress
+                            .submit("executor-a".into(), terminal, now)
+                            .await
+                            .unwrap()
+                    };
                     assert_eq!(done.results[0].result.status, WriteStatus::Accepted);
                     if first.is_none() {
                         writer
@@ -526,7 +597,7 @@ async fn command_kernel_p5_wire_replays_the_native_canonical_document() {
                     .next_page(100, Arc::new(Policy), &signer, || now)
                     .await
                     .unwrap();
-                json!({"receipt":CoreMessage::WriteResult(receipt),"page":page})
+                json!({"receipt":CoreMessage::WriteResult(receipt),"page":page,"completion_lane":completion_lane})
             }
             "subscribe" => {
                 let ClientMessage::Subscribe(sub) =
@@ -550,15 +621,31 @@ async fn command_kernel_p5_wire_replays_the_native_canonical_document() {
                 .unwrap()
             }
             "first_command" => first.clone().unwrap(),
+            "drain" => Value::Null,
             _ => panic!("unknown component request"),
         };
-        writeln!(
+        if let Err(error) = writeln!(
             input,
             "{}",
             json!({"request":request["request"],"value":value})
         )
-        .unwrap();
-        input.flush().unwrap();
+        .and_then(|_| input.flush())
+        {
+            // The child may have completed every assertion and closed its
+            // transport while an already-issued read-only replay RPC was in
+            // flight. Drain stdout, then REQUIRE both its measurement and exit0.
+            // A late write or any other I/O/child failure remains a hard error.
+            if error.kind() == std::io::ErrorKind::BrokenPipe
+                && matches!(request["type"].as_str(), Some("subscribe" | "drain"))
+            {
+                reply_closed = true;
+            } else {
+                panic!(
+                    "Kernel component child closed input: {error}; exit={:?}",
+                    child.0.try_wait()
+                );
+            }
+        }
     }
     drop(input);
     assert!(
@@ -566,12 +653,21 @@ async fn command_kernel_p5_wire_replays_the_native_canonical_document() {
         "real Kernel/native command harness failed"
     );
     let mut measured = measured.expect("missing actual runtime measurement");
+    measured["read_reply_closed_during_teardown"] = json!(reply_closed);
     projection_us.sort_by(|a, b| a.total_cmp(b));
     measured["projection_read_p50_us"] = json!(projection_us[projection_us.len().div_ceil(2) - 1]);
     measured["projection_read_p99_us"] =
         json!(projection_us[(projection_us.len() * 99).div_ceil(100) - 1]);
     measured["projection_samples_us"] = json!(projection_us);
-    println!("P9_M8_COMPONENT {}", measured);
+    println!(
+        "{} {}",
+        if e25 {
+            "E25_KERNEL_COMPONENT"
+        } else {
+            "P9_M8_COMPONENT"
+        },
+        measured
+    );
     assert!(measured["verified_pages"].as_u64().unwrap() > 0);
     assert!(measured["canonical_replays"].as_u64().unwrap() > 0);
     readers.shutdown().await.unwrap();

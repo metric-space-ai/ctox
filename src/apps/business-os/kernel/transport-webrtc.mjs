@@ -214,7 +214,7 @@ export class WebRTCKernelTransport extends KernelTransport {
    case 'transfer_data':case 'transfer_result': {
     const pending=this.pending.get(message.request_id);if(!pending)return;
     this.pending.delete(message.request_id);clearTimeout(pending.timer);
-    message.error?pending.reject(new CtoxError(message.error.code??'unavailable',message.error.message)):pending.resolve(message);return;
+    if(message.error){const e=new CtoxError(message.error.code??'unavailable',message.error.message??message.error.reason,{reason:message.error.reason??message.error.message});e.core_rejection=true;pending.reject(e);}else pending.resolve(message);return;
    }
    case 'actor':if(message.actor?.id!==this.identity.userId)throw new CtoxError('forbidden','Actor mismatch');this.events.actor?.(message.actor);return;
    case 'status':this.events.status?.(message.app_id,message.item);return;
@@ -225,7 +225,7 @@ export class WebRTCKernelTransport extends KernelTransport {
  async subscribe(scope){await this.ready;const sub={...scope,epoch:this.session.epoch};decimalSeq(sub.checkpoint_seq??'0');this.scopes.set(scope.collection,sub);if(this.options.wireFormat==='k2-fixture')await this.scheduler.send('control',{type:'subscribe',...sub,checkpoint:sub.checkpoint_seq==='0'?null:{instance_id:this.identity.instanceId,participant:sub.participant??this.identity.userId,collection:sub.collection,scope_hash:sub.scope_hash,gen:sub.gen,epoch:String(this.session.epoch),seq:sub.checkpoint_seq}});
   else await this.scheduler.send('control',{type:'subscribe',collection:sub.collection,scope_hash:sub.scope_hash,gen:sub.gen,priority:sub.priority??'P2',checkpoint:sub.checkpoint_seq==='0'?null:{instance_id:this.identity.instanceId,participant:this.options.participant??this.identity.userId,collection:sub.collection,scope_hash:sub.scope_hash,gen:sub.gen,epoch:String(this.session.epoch),seq:sub.checkpoint_seq}});
 }
- async write(entry){await this.ready;decimalSeq(entry.base_seq);if(this.options.wireFormat!=='k2-fixture'&&(typeof entry.client_seq!=='string'||decimalSeq(entry.client_seq)==='0'))throw new CtoxError('invalid','Positive durable client_seq required');if(!entry.op_id)throw new CtoxError('invalid','op_id missing');try{const wire=this.options.wireFormat==='k2-fixture'?{type:'write',...entry}:{type:'write',op_id:entry.op_id,client_seq:decimalSeq(entry.client_seq),prev_op_id:entry.prev_op_id??null,collection:entry.collection,id:entry.id,base_rev:entry.base_rev??null,base_seq:entry.base_seq==='0'&&entry.base_rev==null?null:entry.base_seq??null,gen:entry.gen,schema_ver:entry.schema_ver,app_ver:entry.app_ver,op:entry.op==='remove'?'delete':entry.op,body:entry.body??null};await this.scheduler.send('commands',wire);
+ async write(entry){await this.ready;decimalSeq(entry.base_seq);if(this.options.wireFormat!=='k2-fixture'&&(typeof entry.client_seq!=='string'||decimalSeq(entry.client_seq)==='0'))throw new CtoxError('invalid','Positive durable client_seq required');if(!entry.op_id)throw new CtoxError('invalid','op_id missing');try{const wire=this.options.wireFormat==='k2-fixture'?{type:'write',...entry}:{type:'write',op_id:entry.op_id,client_seq:decimalSeq(entry.client_seq),prev_op_id:entry.prev_op_id??null,collection:entry.collection,id:entry.id,base_rev:entry.base_rev??null,base_seq:entry.base_seq==='0'&&entry.base_rev==null?null:entry.base_seq??null,gen:entry.gen,schema_ver:entry.schema_ver,app_ver:entry.app_ver,op:entry.op==='remove'?'delete':entry.op,body:entry.body??null,...(entry.expected_revision === undefined ? {} : {expected_revision:entry.expected_revision})};await this.scheduler.send('commands',wire);
 }catch(error){this.fail(error);throw error;}}
  async appActivation(report){await this.ready;await this.scheduler.send('commands',{type:'app_activation',...report,at_seq:decimalSeq(report.at_seq)});}
  priority(hint){this.ready.then(()=>Promise.all(hint.collections.map(collection=>this.scheduler.send('control',{type:'priority',collection,priority:'P1'})))).catch(e=>this.events?.status?.('kernel',{level:'warn',code:'transport.priority',text:e.message}));}
@@ -270,7 +270,7 @@ export class WebRTCKernelTransport extends KernelTransport {
  }
  async upload(ref,blob){
   if(await sha256Hex(blob)!==ref)throw new CtoxError('invalid','Upload hash mismatch');
-  const accepted=result=>{if(result.status!=='accepted'||result.ref!==ref)throw new CtoxError('unavailable','Upload not accepted');};
+  const accepted=result=>{if(result.status==='rejected'){const e=new CtoxError(result.code??'unavailable',result.reason??'Upload rejected',{reason:result.reason??'Upload rejected'});e.core_rejection=true;throw e;}if(result.status!=='accepted'||result.ref!==ref)throw new CtoxError('unavailable','Upload not accepted');};
   let batch=[];
   for(let offset=0;offset<blob.size||offset===0;){
    const at=offset,data=new Uint8Array(await blob.slice(at,at+size).arrayBuffer());offset+=data.length;const final=offset===blob.size;
@@ -294,4 +294,4 @@ export class WebRTCKernelTransport extends KernelTransport {
   if(this.options.ownsConnection!==false){this.endpoint?.close?.();this.endpoint?.peer?.close();for(const channel of new Set(Object.values(this.channels??{})))channel.close?.();}
  }
 }
-export function createReliableChannels(peer){const channels={};for(const [name,lane]of Object.entries(LANES))if(lane<6)channels[lane]=peer.createDataChannel(`ctox-v4-${name}`,{ordered:true});return channels;}
+export function createReliableChannels(peer){const channels={};for(const [name,lane]of Object.entries(LANES))if(lane<6)channels[lane]=peer.createDataChannel(`ctox-v4-${name==='initial'?'initial-sync':name}`,{ordered:true});return channels;}

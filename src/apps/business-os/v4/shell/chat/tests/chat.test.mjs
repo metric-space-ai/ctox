@@ -125,6 +125,9 @@ try {
     return { found: !!row, typed: !!row?.messages?.some((m) => m.text === typed), owner: row?.owner_user_id ?? null };
   }, [SEED, TYPED]);
   check('(b) Verlauf in business_chats gespeichert (api.put)', stored.found && stored.typed, JSON.stringify(stored));
+  // CHATFIX: ein langer Status nach dem Senden weitet die Fensterspalte nicht (V2-Fehler, in v4 behoben).
+  const col = await P.evaluate(() => { const w = document.querySelector('.ctox-chat-window'); return { win: Math.round(w.getBoundingClientRect().width), col: Math.round(parseFloat(getComputedStyle(w).gridTemplateColumns)), status: w.querySelector('.ctox-chat-inspection > summary')?.textContent?.trim()?.length ?? 0 }; });
+  check('(b) langer Status weitet die Fensterspalte nicht (Nachrichten nicht abgeschnitten)', col.status > 40 && col.col <= col.win, JSON.stringify(col));
   await P.screenshot({ path: shot('1280-open-sent') });
 
   // ---------- (a) 420 ----------

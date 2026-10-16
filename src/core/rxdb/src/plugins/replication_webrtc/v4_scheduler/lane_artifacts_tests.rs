@@ -581,7 +581,10 @@ async fn lane4_real_webrtc_drop_after_persistence_replays_then_resumes_prefix() 
 async fn lane4_library_file_is_pinned_lazy_and_resumable() {
     use super::manifest::{FileManifest, LibraryFileRequest};
     let _ = rustls::crypto::ring::default_provider().install_default();
-    tokio::time::timeout(Duration::from_secs(10), async {
+    // This is an integrity/resume contract, not a ten-second latency target.
+    // Real ICE/SCTP work shares the suite's CPU. Keep a deadlock watchdog large
+    // enough for suite contention; pinning, offset, hash and ACK assertions stay.
+    tokio::time::timeout(Duration::from_secs(300), async {
         for route in ["/~a/lib:monaco@0/editor.js", "/~a/lib:monaco@00.1/editor.js", "/~a/lib:monaco@0.01/editor.js", "/~a/lib:monaco@0.9/%2e%2e/editor.js"] {
             assert!(LibraryFileRequest::parse(route).is_err());
         }
@@ -752,4 +755,9 @@ async fn lane4_dynamic_browser_channel_opens_after_handshake_within_one_second()
     drop(browser);
     reader.join().unwrap();
     result.expect("browser fixture timed out");
+}
+
+mod e25_range_tests {
+    use super::*;
+    include!("../v4_session_tests.rs");
 }

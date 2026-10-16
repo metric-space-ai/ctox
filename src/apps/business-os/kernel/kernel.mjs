@@ -1,3 +1,4 @@
+import {commandTarget} from './command-routing.mjs';
 import { createCommandTimings } from './command-timings.mjs';
 import { PLATFORM_COLLECTIONS, PLATFORM_APP_ID } from './platform.mjs';
 import { artifactUrl, utf8Base64, bytesBase64 } from './artifact-url.mjs';
@@ -145,7 +146,7 @@ export function createKernel(opts = {}) {
   const inflightOps = new Set();
   const reservedOps = new Set();
   const skipBeforeCommit = new Set();
-  const uploadProgress = new Map(), uploadsDone = new Set();
+  const uploadProgress = new Map(), uploadsDone = new Set(), uploadResults = new Map();
   const activationListeners = new Set();
   let activationReports=Promise.resolve();
   const activationChains = new Map();
@@ -411,6 +412,7 @@ export function createKernel(opts = {}) {
     const metas = await db.all('meta');
     for (const m of metas) {
       if(m.key.startsWith('upload_done:'))uploadsDone.add(m.ref);
+      if (m.key.startsWith('upload_result:')) uploadResults.set(m.op_id,m);
       if (m.key === 'checkpoint') setCheckpoint(m.value);
       if (m.key.startsWith('cursor:'))scopeCursors.set(m.collection,m.cursor_to);
       else if (m.key === 'local_seq') localSeqKnown = Math.max(localSeqKnown, m.value);
@@ -430,6 +432,7 @@ export function createKernel(opts = {}) {
     const known=localSeqKnown;let n=0;
     for(const record of snapshot.docs) if((record.lseq??0)>known && mirrorPut(record))n++;
     for(const meta of snapshot.metas){
+      if(meta.key.startsWith('upload_result:')){uploadResults.set(meta.op_id,meta);notify('uploads');}
       if(meta.key.startsWith('upload_done:')){uploadsDone.add(meta.ref);notify('uploads');}
       if(meta.key.startsWith('retired:') && (meta.record?.lseq??0)>known)mirrorPut(meta.record);
       if(meta.key==='checkpoint')setCheckpoint(meta.value);
@@ -476,7 +479,13 @@ export function createKernel(opts = {}) {
     sendLeaderHint();
     // Ein neuer Leiter hat alles gelesen, was der alte geschrieben hat (gemeinsame IDB).
     for (const r of await db.all('docs')) mirrorPut(r);
-    for (const m of await db.all('meta')) if (m.key.startsWith('activation:')) applyActivationLocal(m, false);
+    for (const m of await db.all('meta')) {
+      if (m.key.startsWith('activation:')) applyActivationLocal(m, false);
+      // Takeover first advances the document mirror. Hydrate receipts here as
+      // well; local_seq may already equal the checkpoint after that advance.
+      if (m.key.startsWith('upload_result:')) { uploadResults.set(m.op_id,m);notify('uploads'); }
+      if (m.key.startsWith('result:') && waiters.has(m.info.op_id)) handleWriteResult(m.info,m.result);
+    }
     await settleAwaitingPages();
     notify('leader');
     post({ type: 'leader', gen: myGen });
@@ -542,6 +551,7 @@ export function createKernel(opts = {}) {
       case 'outbox': await refreshOutboxStat(); if (isLeader) schedulePump(); break;
       case 'priority': if(isLeader)transport.priority?.({app_id:msg.app_id,collections:msg.collections});break;
       case 'subscribe': if(isLeader && typeof msg.collection==='string')await subscribeCollection(msg.collection,'P1');break;
+      case 'upload_result': uploadResults.set(msg.outcome.op_id,msg.outcome);notify('uploads');break;
       case 'upload_done': uploadsDone.add(msg.ref);notify('uploads');break;
       case 'write_result': handleWriteResult(msg.info, msg.result); await refreshOutboxStat(); break;
       case 'net': followerNet = { link: msg.link, backlog: msg.backlog, collections: msg.collections ?? {} }; notify('metrics'); break;
@@ -583,7 +593,7 @@ export function createKernel(opts = {}) {
     local.catch(() => {});
     return { op_id, local, result, cancel: cancelFn };
   }
-  function localWrite(app, op, collection, id, body, createOnly = false) {
+  function localWrite(app, op, collection, id, body, createOnly = false, options = {}) {
     const op_id = uuidv7();
     let resolveResult;
     const result = new Promise((r) => { resolveResult = r; });
@@ -593,6 +603,7 @@ export function createKernel(opts = {}) {
     // Synchroner Teil: prüfen und optimistisch in den Spiegel (lokal sofort sichtbar, Flag pending).
     const prepare = () => {
       guardAlive();
+      if (options.expected_revision !== undefined && (typeof options.expected_revision !== 'string' || !options.expected_revision)) throw new CtoxError('invalid','expected_revision must be a nonempty revision',{path:'expected_revision'});
       if (typeof collection !== 'string' || !collection) throw new CtoxError('invalid', 'collection fehlt', { path: 'collection' });
       if(collection==='shell_preferences' && id!==userId)throw new CtoxError('forbidden','Only own shell preferences are writable',{path:'id'});
       if (typeof id !== 'string' || !id) throw new CtoxError('invalid', 'id (string) fehlt', { path: 'id' });
@@ -612,6 +623,8 @@ export function createKernel(opts = {}) {
         collection: ns, id, op, body: clean, base_rev: cur?.rev ?? null, base_seq: decimalSeq(cur?.base?.seq ?? '0'),
         gen: genOf(ns), ...writeVersion(app, collection), app_id: app.id, created_at: Date.now(), origin_tab: tabId,
       };
+      if (options.expected_revision !== undefined) entry.expected_revision = options.expected_revision;
+      if (options.file_upload) { entry.file_upload = true; entry.file_upload_op = options.file_upload_op; }
       waiters.set(op_id, resolveResult);
       const base = cur?.base ?? emptyBase();
       if (!createOnly || !visible(cur)) mirrorPut({ collection: ns, id, data: st.data, deleted: st.deleted, rev: `op:${op_id}`, seq: base.seq, pending: true, base });
@@ -646,8 +659,8 @@ export function createKernel(opts = {}) {
         await putDoc(t, r);
         return r;
       });
-      ownCommandQueued = !reused; // E26: a reused create-only command is not this handle's queue entry
-      if (ns === 'business_commands' && rec.pending) commandTimings.mark(id, 'queued'); // E14 command timings
+      ownCommandQueued = !reused;
+      if (ns === 'business_commands' && rec.pending) commandTimings.mark(id, 'queued');
       mirrorPut(rec);
       post({ type: 'docs', keys: [[ns, id]], local_seq: rec.lseq });
       post({ type: 'outbox' });
@@ -832,6 +845,26 @@ export function createKernel(opts = {}) {
     if(entry && message.client_seq!==undefined && message.client_seq!==entry.client_seq)throw new CtoxError('invalid','write_result client_seq mismatch');
     if(entry){await applyResult(entry,message);await refreshOutboxStat();schedulePump();}
   }
+  // Durable CAS outcomes are per upload operation, not just per content hash.
+  // This separates a new upload from an earlier accepted/rejected same-ref attempt.
+  async function storeUploadResult(t, entry, result) {
+    const outcome={key:`upload_result:${entry.op_id}`,op_id:entry.op_id,ref:entry.id,...result};
+    await t.put('meta',outcome);
+    let rec=null;
+    if (result.status === 'rejected' && entry.file_id) {
+      const row=await t.get('docs',['files',entry.file_id]);
+      if (row?.data?.ref === entry.id && row.data.owner_app === entry.app_id) {
+        rec={...row,data:{...row.data,state:'rejected'},deleted:false,local_file_rejection:true};
+        await putDoc(t,rec);
+      }
+    }
+    return {outcome,rec};
+  }
+  function publishUploadResult(value) {
+    uploadResults.set(value.outcome.op_id,value.outcome);notify('uploads');
+    if(value.rec){mirrorPut(value.rec);post({type:'docs',keys:[['files',value.rec.id]]});}
+    post({type:'upload_result',outcome:value.outcome});
+  }
   async function confirm(k,e) {
     let awaitingResult=false;
     try {
@@ -841,7 +874,8 @@ export function createKernel(opts = {}) {
       e = sent;
       if(e.op==='upload') {
         const blob=await db.get('blobs',e.id); await transport.upload(e.id,blob.blob);
-        await db.tx(async t=>{await assertGen(t);await t.del('outbox',e.op_id);await t.put('blobs',{...blob,pinned:false});await t.put('meta',{key:`upload_done:${e.id}`,ref:e.id});await bumpLocalSeq(t);});
+        const outcome=await db.tx(async t=>{await assertGen(t);await t.del('outbox',e.op_id);await t.put('blobs',{...blob,pinned:false});await t.put('meta',{key:`upload_done:${e.id}`,ref:e.id});const out=await storeUploadResult(t,e,{status:'accepted'});await bumpLocalSeq(t);return out;});
+        publishUploadResult(outcome);
         setUploadProgress(e.id,blob.size,blob.size,true); uploadsDone.add(e.id);notify('uploads');post({type:'upload_done',ref:e.id});
       } else {
         if(!subscriptions.has(e.collection))await subscribeCollection(e.collection);
@@ -854,6 +888,11 @@ export function createKernel(opts = {}) {
       }
     } catch(err) {
       if(err instanceof StaleLeader)stepDown();
+      else if(e.op === 'upload' && err?.core_rejection) {
+        const out=await db.tx(async t=>{await assertGen(t);await t.del('outbox',e.op_id);const value=await storeUploadResult(t,e,{status:'rejected',code:err.code,reason:err.reason ?? err.message});await bumpLocalSeq(t);return value;});
+        publishUploadResult(out);
+        zoneReport(e.app_id,{level:'error',code:err.code,text:err.reason ?? err.message},'kernel');
+      }
       else if(err?.code==='unavailable'){link={...link,state:'offline'};netChanged();}
       else {
         // An invalid receipt/scope needs a new admitted page or reconnect,
@@ -871,7 +910,9 @@ export function createKernel(opts = {}) {
   }
   async function settleWrite(t,e,base,res) {
     await t.del('outbox',e.op_id);
-    const rec=recompute(e.collection,e.id,base,await t.outboxFor(e.collection,e.id));await putDoc(t,rec);
+    const rec=recompute(e.collection,e.id,base,await t.outboxFor(e.collection,e.id));
+    if (e.file_upload && (res.status === 'rejected' || (await t.get('meta',`upload_result:${e.file_upload_op}`))?.status === 'rejected') && !rec.pending) { rec.data={...e.body,state:'rejected'};rec.deleted=false;rec.local_file_rejection=true; }
+    await putDoc(t,rec);
     const info={op_id:e.op_id,app_id:e.app_id,collection:e.collection,id:e.id};
     delete res.type;delete res.client_seq;delete res.requires_page;
     await t.put('meta',{key:`result:${e.op_id}`,info,result:res});
@@ -943,7 +984,11 @@ export function createKernel(opts = {}) {
   function genOf(ns) { const m = /@g(\d+)$/.exec(ns); return m ? Number(m[1]) : 1; }
   function resolveNs(app, collection) {
     if (SYSTEM_COLLECTIONS.has(collection) || collection.includes('@g')) return collection;
-    const g = versionDoc(app.id, app.ver)?.manifest?.generations?.[collection] ?? 1;
+    const manifest = versionDoc(app.id, app.ver)?.manifest;
+    const foreign = manifest?.foreign_collections?.[collection];
+    const owner = foreign?.owner_app ?? foreign?.app ?? foreign?.owner;
+    const ownerVer = owner && (visible(mirrorGet('business_apps',owner))?.active_ver ?? activations.get(owner)?.activated_ver);
+    const g = (owner ? versionDoc(owner,ownerVer)?.manifest : manifest)?.generations?.[collection] ?? 1;
     return nsName(collection, g);
   }
   function withDefaults(app,collection,data) {
@@ -1276,8 +1321,14 @@ export function createKernel(opts = {}) {
     const shell = Object.freeze({
       setTitle(title) { win.title = String(title); notify(winTag); },
       registerHeader(el){if(el!==null && (typeof HTMLElement==='function'?!(el instanceof HTMLElement):!el||typeof el!=='object'||typeof el.tagName!=='string'))throw new CtoxError('invalid','Header must be an HTMLElement or null');win.header=el;notify(winTag);},
-      navigate(target, params = {}) {
+      canNavigate(target, params = {}) {
         const known = target === 'shell' || !!visible(mirrorGet('business_apps', target));
+        if(!known)return false;
+        if(params.command_type!==undefined)return (readManifest(appId,app.ver)?.commands_out??[]).some(x=>x.app===target&&x.type===params.command_type);
+        return true;
+      },
+      navigate(target, params = {}) {
+        const known = shell.canNavigate(target,params);
         if (!known) {
           zoneReport(appId, { level: 'error', code: 'shell.navigate.unknown_target', text: `Navigationsziel unbekannt: ${target}`, ref: String(target) }, 'kernel');
           return false;
@@ -1314,6 +1365,49 @@ export function createKernel(opts = {}) {
       if (!mine && docs.length) throw new CtoxError('forbidden', 'Datei gehört einer anderen App', { path: sel.id ? 'id' : 'ref' });
       return mine ?? null;
     }
+    // Grants come from Core-confirmed manifests, never optimistic metadata.
+    const readManifest = (id, ver) => {
+      const row = mirrorGet('business_app_versions',`${id}@${ver}`);
+      return !row?.revoked && !row?.base?.deleted ? row?.base?.data?.manifest : undefined;
+    };
+    const currentManifest = owner => {
+      const row = mirrorGet('business_apps',owner);
+      const ver = !row?.revoked && !row?.base?.deleted ? row?.base?.data?.active_ver : undefined;
+      return readManifest(owner,ver);
+    };
+    const ownReferenceRows = new Set(['shell_preferences','app_drafts']);
+    function readableNamespace(ns) {
+      const caller = readManifest(appId,app.ver);
+      const c = ns.replace(/@g[1-9][0-9]*$/,'');
+      if (caller?.collections?.[c]) return ns === resolveNs(app,c);
+      const f = caller?.foreign_collections?.[c];
+      const owner = f?.owner_app ?? f?.app ?? f?.owner;
+      const om = owner && currentManifest(owner);
+      return !!(f?.ops?.includes('read') && om?.collections?.[c] && om?.exports?.[c]?.includes('read') && ns === nsName(c,om.generations?.[c] ?? 1));
+    }
+    // §16.13: known owners and declared foreign reads require both grants.
+    // Published callers fail closed on undeclared names, even before the owner
+    // manifest arrives. Only manifest-less contract/bootstrap names are local.
+    function assertReadableCollection(collection) {
+      const c = collection.replace(/@g[1-9][0-9]*$/, '');
+      const callerManifest = readManifest(appId,app.ver);
+      const foreign = callerManifest?.foreign_collections?.[c];
+      const owners = [...(mirror.get('business_app_versions')?.values() ?? [])]
+        .filter(row => !row.revoked && !row.base?.deleted).map(row => row.base?.data).filter(Boolean).filter(v => v.app_id !== appId && v.manifest?.collections?.[c]);
+      if ((foreign || owners.length || (callerManifest && !callerManifest.collections?.[c])) && !readableNamespace(resolveNs(app, collection)))
+        throw new CtoxError('forbidden', 'Foreign collection requires declaration and read export', {path:'collection'});
+    }
+    function readableLive(collection, tags, compute, empty) {
+      const live = makeLive([...tags,'c:business_apps','c:business_app_versions'], () => {
+        try { assertReadableCollection(collection); }
+        catch (error) { if (error.code === 'forbidden') return empty; throw error; }
+        return compute();
+      });
+      return {
+        get() { assertReadableCollection(collection); return live.get(); },
+        subscribe(cb) { assertReadableCollection(collection); return live.subscribe(cb); },
+      };
+    }
     // E30: a CAS hash is not authority. Only canonical, still-readable rows
     // grant access; an optimistic reference cannot mint a read grant.
     async function readableFile(sel) {
@@ -1327,21 +1421,7 @@ export function createKernel(opts = {}) {
         if (!base?.deleted && base?.data?.owner_app === appId && base.data.ref === d.ref) return d;
         // files.put proves local bytes in the blob transaction, durably across
         // reload. A plain optimistic files row cannot claim another app's CAS.
-        if (row?.pending && !base?.data && (await db.get('meta',`file-owner:${JSON.stringify([appId,d.id])}`))?.ref === d.ref) return d;
-      }
-      const currentManifest = owner => {
-        const ver = visible(mirrorGet('business_apps',owner))?.active_ver ?? activations.get(owner)?.activated_ver;
-        return versionDoc(owner,ver)?.manifest;
-      };
-      const caller = versionDoc(appId,app.ver)?.manifest;
-      const ownReferenceRows = new Set(['shell_preferences','app_drafts']);
-      function readableNamespace(ns) {
-        const c = ns.replace(/@g[1-9][0-9]*$/,'');
-        if (caller?.collections?.[c]) return ns === resolveNs(app,c);
-        const f = caller?.foreign_collections?.[c];
-        const owner = f?.owner_app ?? f?.app ?? f?.owner;
-        const om = owner && currentManifest(owner);
-        return !!(f?.ops?.includes('read') && om?.collections?.[c] && om?.exports?.[c]?.includes('read') && ns === nsName(c,om.generations?.[c] ?? 1));
+        if ((row?.pending || row?.local_file_rejection) && (await db.get('meta',`file-owner:${JSON.stringify([appId,d.id])}`))?.ref === d.ref) return d;
       }
       const canonicalRows = [];
       for (const [ns, rows] of mirror) {
@@ -1359,7 +1439,7 @@ export function createKernel(opts = {}) {
         const ref = [desktop.ref,desktop.content_ref,docs[0]?.ref].find(v => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v));
         if (typeof ref !== 'string' || !/^[a-f0-9]{64}$/.test(ref)) throw new CtoxError('unavailable','Desktop file has no CAS reference',{path:'id'});
         const meta = fileDocs().find(d => d.ref === ref);
-        return {...meta,id:desktop.id,ref,name:desktop.name ?? meta?.name,mime:desktop.mime ?? desktop.mime_type ?? meta?.mime,size:desktop.size ?? desktop.size_bytes ?? meta?.size};
+        return {...meta,id:desktop.id,ref,name:desktop.name ?? meta?.name,mime:desktop.mime ?? desktop.mime_type ?? meta?.mime,size:undefined, verify_size:true};
       }
       const ref = docs[0]?.ref ?? sel.ref;
       const containsRef = value => value !== null && typeof value === 'object' && (value.ref === ref || value.blob_ref === ref || Object.values(value).some(containsRef));
@@ -1385,7 +1465,7 @@ export function createKernel(opts = {}) {
           const h = putBlob(new Blob([bytes], { type: mime }), { ...meta, id, mime, name: meta.name ?? 'datei' });
           const ref = await h.ref;
           await h.local;
-          return { id, ref };
+          return Object.defineProperty({id,ref},'done',{value:h.done});
         })();
       },
       /** CAP-3b: get({id|ref}) → {found, id, ref, name, size, mime, text? | bytes?}; Text nur für UTF-8 ≤ 512 KiB. String = Altform (Blob). */
@@ -1393,7 +1473,11 @@ export function createKernel(opts = {}) {
         if (typeof sel === 'string') return getBlob((await readableFile({ref:sel})).ref);
         guardAlive();
         let d = await readableFile(sel);
-        if (sel.range !== undefined && !Number.isSafeInteger(d.size)) d = {...d,size:(await getBlob(d.ref)).size};
+        if (sel.range !== undefined && (d.verify_size || !Number.isSafeInteger(d.size))) {
+          const blob = await getBlob(d.ref);
+          if (await sha256Hex(blob) !== d.ref) throw new CtoxError('invalid','File content hash mismatch');
+          d = {...d,size:blob.size};
+        }
         if (!d) return { found: false, ref: sel.ref ?? null, ...(sel.id ? { id: sel.id } : {}) };
         if (sel.range !== undefined) {
           const {start, end} = sel.range ?? {};
@@ -1473,7 +1557,7 @@ export function createKernel(opts = {}) {
             if(isLeader)await assertGen(t);
             const existing = await t.get('blobs', ref);
             await t.put('blobs', { ref, blob, size: blob.size, type: blob.type, pinned: true, last_used: Date.now(), ...(existing ? {} : {}) });
-            await t.put('outbox', { op_id, collection: '__blobs', id: ref, op: 'upload', body: null, app_id: appId, app_ver: app.ver, created_at: Date.now(), origin_tab: tabId });
+            await t.put('outbox', { op_id, collection: '__blobs', id: ref, op: 'upload', body: null, file_id:id, app_id: appId, app_ver: app.ver, created_at: Date.now(), origin_tab: tabId });
             await t.put('meta',{key:`file-owner:${JSON.stringify([appId,id])}`,ref});
           });
           if(cancelledEarly){await db.tx(async t=>{await t.del('outbox',op_id);const b=await t.get('blobs',ref);if(b)await t.put('blobs',{...b,pinned:false});});return;}
@@ -1482,18 +1566,25 @@ export function createKernel(opts = {}) {
           metaHandle = localWrite(app, 'put', 'files', id, {
             id, name: String(meta.name ?? 'datei'), mime: String(meta.mime ?? (blob.type || 'application/octet-stream')),
             size: blob.size, ref, owner_app: appId,
-          });
+          }, false, {file_upload:true,file_upload_op:uploadOp});
           await metaHandle.local;
         })();
         local.then(async () => {
           if (cancelledEarly || !metaHandle) { resolveResult({ status: 'rejected', reason: 'cancelled' }); return; }
           const r = await metaHandle.result;
-          if (r.status !== 'rejected') await waitUntil(() => uploadsDone.has(refValue) || closed);
-          resolveResult({ ...r, ref: refValue });
+          if (r.status !== 'rejected') await waitUntil(() => uploadResults.has(uploadOp) || closed);
+          const upload = uploadResults.get(uploadOp);
+          const final = r.status === 'rejected' ? r : upload?.status === 'accepted' ? r : {status:'rejected',code:upload?.code ?? 'unavailable',reason:upload?.reason ?? 'Upload not confirmed before close'};
+          resolveResult({ ...final, ref: refValue });
         }, (err) => resolveResult({ status: 'rejected', reason: err instanceof CtoxError ? err.code : 'local_error' }));
         local.catch(() => {});
+        const done = result.then(r => {
+          if (r.status === 'rejected') throw new CtoxError(r.code ?? r.reason ?? 'unavailable', r.reason ?? 'File rejected', {reason:r.reason});
+          return r;
+        });
+        done.catch(() => {}); // consumers may attach after the local acknowledgement
         return {
-          local, result, ref: refP,
+          local, result, ref: refP, done,
           upload: Object.freeze({ progress }),
           cancel() {
             if (!metaHandle) { cancelledEarly = true; return true; }
@@ -1515,29 +1606,32 @@ export function createKernel(opts = {}) {
       version: APP_API_VERSION,
       app,
       query(collection, q = {}) {
+        assertReadableCollection(collection);
         const cq = compileQuery(q);
         const ns = resolveNs(app, collection);
         lastUsed.set(ns,Date.now());
         if(evicted.has(ns)){if(isLeader)track(subscribeCollection(ns,'P1'));else post({type:'subscribe',collection:ns});}
-        return makeLive([`c:${ns}`, 'actor'], () => {
+        return readableLive(collection, [`c:${ns}`, 'actor'], () => {
           const m = mirror.get(ns);
           if (!m) return [];
           const docs = [];
           for (const r of m.values()) if (r.data != null && !r.deleted && ownRowOk(ns, r.id)) docs.push(withDefaults(app,collection,r.data));
           return runCompiledQuery(docs, cq);
-        });
+        }, []);
       },
       get(collection, id) {
+        assertReadableCollection(collection);
         const ns = resolveNs(app, collection);
         lastUsed.set(ns,Date.now());
         if(evicted.has(ns)){if(isLeader)track(subscribeCollection(ns,'P1'));else post({type:'subscribe',collection:ns});}
-        return makeLive([`c:${ns}`, 'actor'], () => (ownRowOk(ns, id) ? withDefaults(app,collection,visible(mirrorGet(ns,id))) : null));
+        return readableLive(collection, [`c:${ns}`, 'actor'], () => ownRowOk(ns,id) ? withDefaults(app,collection,visible(mirrorGet(ns,id))) : null, null);
       },
       put(collection, doc) { return localWrite(app, 'put', collection, doc?.id, doc); },
-      patch(collection, id, patch) { return localWrite(app, 'patch', collection, id, patch); },
+      patch(collection, id, patch, options = {}) { return localWrite(app, 'patch', collection, id, patch, false, {expected_revision:options.expected_revision}); },
       remove(collection, id) { return localWrite(app, 'delete', collection, id, null); },
       command(type, payload = {}, commandOptions={}) {
         if (typeof type !== 'string' || !type) throw new CtoxError('invalid', 'Befehlstyp fehlt', { path: 'type' });
+        const route=commandTarget({type,app_id:appId,...(commandOptions.target_app===undefined?{}:{target_app:commandOptions.target_app})},readManifest(appId,app.ver));
         const key = commandOptions.idempotency_key;
         if (key !== undefined && (typeof key !== 'string' || key.length > 128)) throw new CtoxError('invalid', 'idempotency_key must be a string of at most 128 characters', { path: 'idempotency_key' });
         // UUIDv8: first 128 SHA-256 bits, RFC variant/version bits normalized.
@@ -1549,6 +1643,7 @@ export function createKernel(opts = {}) {
           ...(typeof commandOptions.on_complete === 'string' ? { on_complete: commandOptions.on_complete } : {}),
           ...(typeof commandOptions.on_failed === 'string' ? { on_failed: commandOptions.on_failed } : {}),
           type, payload, status: 'queued', app_id: appId, actor_id: actor.id, created_at: new Date().toISOString(),
+          ...(commandOptions.target_app!==undefined ? {target_app:commandOptions.target_app} : !route.error && !route.platform && route.target!==appId ? {target_app:route.target} : {}),
         }, key !== undefined);
         const status = makeLive(['c:business_commands', 'commands'], () => {
           const d = visible(mirrorGet('business_commands', id));
@@ -2139,6 +2234,7 @@ export function createKernel(opts = {}) {
     },
     setBacklog(n) { extraBacklog = Math.max(0, Number(n) || 0); netChanged(); },
     rejectNext(reason) { fakeCore?.reject.push(reason); },
+    rejectNextUpload(reason) { fakeCore?.rejectUpload.push(reason); },
     migrateNext(o) { fakeCore?.migrate.push(o ?? {}); },
     failCommand(type, error) { fakeCore?.failures.set(type, error); },
     async publishAppVersion(appId, ver, o) {
@@ -2246,6 +2342,7 @@ export function createKernel(opts = {}) {
   // ---- Sim-Fassade (Test-Hooks) ----
   const sim = {
     rejectNext: (reason = 'simulated_rejection') => forward('rejectNext')(reason),
+    rejectNextUpload: (reason = {code:'forbidden',reason:'Upload denied'}) => forward('rejectNextUpload')(reason),
     migrateNext: (o = {}) => forward('migrateNext')({ dropFields: o.dropFields ?? [] }),
     failCommand: (type, error = 'simulated failure') => forward('failCommand')(type, error),
     onCommand(type, fn) { fakeCore?.handlers.set(type, fn); },

@@ -53,9 +53,9 @@ impl CodexSubscriptionAuth {
     pub async fn load(&self) -> Result<CodexStoredCredentials, CodexSubscriptionAuthError> {
         let store = Arc::clone(&self.store);
         let handles = self.handles.clone();
-        tokio::task::spawn_blocking(move || store.load_credentials(&handles))
+        store
+            .load_credentials_async(handles)
             .await
-            .map_err(|_| CodexSubscriptionAuthError::Task)?
             .map_err(CodexSubscriptionAuthError::Store)
     }
 
@@ -70,11 +70,10 @@ impl CodexSubscriptionAuth {
         tokio::spawn(async move {
             let load_store = Arc::clone(&store);
             let load_handles = handles.clone();
-            let current =
-                tokio::task::spawn_blocking(move || load_store.load_credentials(&load_handles))
-                    .await
-                    .map_err(|_| CodexSubscriptionAuthError::Task)?
-                    .map_err(CodexSubscriptionAuthError::Store)?;
+            let current = load_store
+                .load_credentials_async(load_handles)
+                .await
+                .map_err(CodexSubscriptionAuthError::Store)?;
             let refreshed_at = clock.now();
             let token = coordinator
                 .refresh(transport.as_ref(), clock.as_ref(), current, max_attempts)
@@ -88,12 +87,10 @@ impl CodexSubscriptionAuth {
             let persist_store = Arc::clone(&store);
             let persist_handles = handles.clone();
             let persist_credentials = credentials.clone();
-            tokio::task::spawn_blocking(move || {
-                persist_store.store_credentials(&persist_handles, &persist_credentials)
-            })
-            .await
-            .map_err(|_| CodexSubscriptionAuthError::Task)?
-            .map_err(CodexSubscriptionAuthError::Store)?;
+            persist_store
+                .store_credentials_async(persist_handles, persist_credentials)
+                .await
+                .map_err(CodexSubscriptionAuthError::Store)?;
 
             Ok(CodexRefreshOutcome {
                 credentials,

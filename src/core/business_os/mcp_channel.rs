@@ -50,6 +50,10 @@ pub(crate) mod native_startup;
 mod project_crew_request;
 #[path = "mcp_remote_worker.rs"]
 mod remote_worker;
+#[path = "mcp_workjet_calendar_connect.rs"]
+mod workjet_calendar_connect;
+pub(super) use workjet_calendar_connect::connect_webrtc as connect_workjet_calendar_webrtc;
+pub(super) use workjet_calendar_connect::METHOD as WORKJET_CALENDAR_CONNECT_METHOD;
 #[path = "mcp_workjet_calendar.rs"]
 mod workjet_calendar;
 pub(super) use workjet_calendar::read_webrtc as read_workjet_calendar_webrtc;
