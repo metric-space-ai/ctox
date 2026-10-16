@@ -92,11 +92,15 @@ async fn launch_context_v4_real_owners_shape_signature_freshness_and_rights() ->
     // A plain OS callback has no admitted Core TLS. Prepared bootstrap reads
     // still succeed: moving computation back here trips the real Core guard.
     let prepared_root = fg.inputs.root.clone();
-    let prepared = std::thread::spawn(move ||
+    let prepared = std::thread::spawn(move || {
         super::super::browser_bootstrap::prepared(&prepared_root, "memory-only-contract")
-    ).join().expect("bootstrap callback panicked")?;
+    })
+    .join()
+    .expect("bootstrap callback panicked")?;
     assert!(prepared.config.signaling_room_password.is_empty());
-    assert!(prepared.catalog["business_app_versions"].as_array().is_some_and(|v| !v.is_empty()));
+    assert!(prepared.catalog["business_app_versions"]
+        .as_array()
+        .is_some_and(|v| !v.is_empty()));
     let first = build(&fg.inputs, &user)
         .await
         .context("first launch build")?;
@@ -272,84 +276,181 @@ async fn launch_context_v4_real_owners_shape_signature_freshness_and_rights() ->
     Ok(())
 }
 
-
 /// Real retained foreground owners, production HTTP workers and packaged V4 assets.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prepared_v4_http_cold_latency_and_next_request_rights() -> Result<()> {
     let _scope = isolate_test_roots().await;
     let (root, mut fg, _user) = fixture().await?;
     #[cfg(unix)]
-    std::os::unix::fs::symlink(std::env::current_dir()?.join("src/apps/business-os"), root.path().join("business-os"))?;
-    let hash=URL_SAFE_NO_PAD.encode(Sha256::digest(b"synthetic-bootstrap-cookie"));
-    let bos=fg.inputs.databases.get("bos").unwrap();
+    std::os::unix::fs::symlink(
+        std::env::current_dir()?.join("src/apps/business-os"),
+        root.path().join("business-os"),
+    )?;
+    let hash = URL_SAFE_NO_PAD.encode(Sha256::digest(b"synthetic-bootstrap-cookie"));
+    let bos = fg.inputs.databases.get("bos").unwrap();
     bos.writer.submit(WriteJob::new(Default::default(),move|tx| {
         tx.execute_batch("CREATE TABLE IF NOT EXISTS business_users(user_id TEXT PRIMARY KEY,display_name TEXT NOT NULL,role TEXT NOT NULL,active INTEGER NOT NULL,capability_epoch INTEGER NOT NULL,created_at_ms INTEGER NOT NULL,updated_at_ms INTEGER NOT NULL,profile_json TEXT NOT NULL); CREATE TABLE IF NOT EXISTS business_sessions(token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL,role TEXT NOT NULL,display_name TEXT NOT NULL,created_at_ms INTEGER NOT NULL,expires_at_ms INTEGER NOT NULL,revoked INTEGER NOT NULL,last_seen_ms INTEGER NOT NULL);")?;
         tx.execute("INSERT OR REPLACE INTO business_users VALUES('alice','Alice','founder',1,0,0,0,'{}')",[])?;
         tx.execute("INSERT OR REPLACE INTO business_sessions VALUES(?1,'alice','founder','Alice',0,9223372036854775807,0,0)",[hash])?;
         Ok(())
     }))?.await?;
-    async fn get(addr:std::net::SocketAddr,path:&str)->Result<(u16,usize,Option<Value>,f64)> {
-        let url=format!("http://{addr}{path}"); let json=path.ends_with("launch-context");
-        let started=std::time::Instant::now();
-        let (status,bytes,body)=tokio::task::spawn_blocking(move||->Result<_>{
-            let response=ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(5)).build()
-                .get(&url).set("Cookie","ctox_business_os_auth=synthetic-bootstrap-cookie").call()?;
-            let status=response.status(); let mut body=Vec::new();
-            std::io::Read::read_to_end(&mut response.into_reader(),&mut body)?;
-            let value=if json {serde_json::from_slice::<Value>(&body).ok()} else {None};
-            Ok((status,body.len(),value))
-        }).await??;
-        Ok((status,bytes,body,started.elapsed().as_secs_f64()*1000.0))
+    async fn get(
+        addr: std::net::SocketAddr,
+        path: &str,
+    ) -> Result<(u16, usize, Option<Value>, f64)> {
+        let url = format!("http://{addr}{path}");
+        let json = path.ends_with("launch-context");
+        let started = std::time::Instant::now();
+        let (status, bytes, body) = tokio::task::spawn_blocking(move || -> Result<_> {
+            let result = ureq::AgentBuilder::new()
+                .timeout(std::time::Duration::from_secs(20))
+                .build()
+                .get(&url)
+                .set("Cookie", "ctox_business_os_auth=synthetic-bootstrap-cookie")
+                .call();
+            let response = match result {
+                Ok(response) => response,
+                Err(ureq::Error::Status(_, response)) => response,
+                Err(error) => return Err(error.into()),
+            };
+            let status = response.status();
+            let mut body = Vec::new();
+            std::io::Read::read_to_end(&mut response.into_reader(), &mut body)?;
+            let value = if json {
+                serde_json::from_slice::<Value>(&body).ok()
+            } else {
+                None
+            };
+            Ok((status, body.len(), value))
+        })
+        .await??;
+        Ok((
+            status,
+            bytes,
+            body,
+            started.elapsed().as_secs_f64() * 1000.0,
+        ))
     }
-    async fn listen(root:&std::path::Path)->Result<std::net::SocketAddr> {
-        let handle=ctox_store::ipc::request(crate::service::queue_store::endpoint(root),ctox_store::ipc::Request {
-            request_id:91,kind:ctox_store::ipc::JobKind::Read,method:"http.listen".into(),
-            payload:serde_json::to_vec(&json!({"addr":"127.0.0.1:0"}))?,
-        },Default::default())?;
-        let response:Value=serde_json::from_slice(&handle.await?)?;
-        Ok(response["addr"].as_str().context("missing bound address")?.parse()?)
+    async fn listen(root: &std::path::Path) -> Result<std::net::SocketAddr> {
+        let handle = ctox_store::ipc::request(
+            crate::service::queue_store::endpoint(root),
+            ctox_store::ipc::Request {
+                request_id: 91,
+                kind: ctox_store::ipc::JobKind::Read,
+                method: "http.listen".into(),
+                payload: serde_json::to_vec(&json!({"addr":"127.0.0.1:0"}))?,
+            },
+            Default::default(),
+        )?;
+        let response: Value = serde_json::from_slice(&handle.await?)?;
+        Ok(response["addr"]
+            .as_str()
+            .context("missing bound address")?
+            .parse()?)
     }
-    let mut rows=Vec::new();
+    let mut rows = Vec::new();
+    let mut all_http_ok = true;
+    let mut rights_proved = false;
     for cycle in 0..2 {
-        let addr=listen(root.path()).await?;
-        for route in ["/","/sw.js","/kernel/boot.mjs","/api/business-os/launch-context"] {
+        let addr = listen(root.path()).await?;
+        for route in [
+            "/",
+            "/sw.js",
+            "/kernel/boot.mjs",
+            "/api/business-os/launch-context",
+        ] {
             for request in 0..20 {
-                let (status,bytes,body,ms)=get(addr,route).await?;
+                let (status, bytes, body, ms) = get(addr, route).await?;
                 rows.push(json!({"cycle":cycle,"request":request,"route":route,"status":status,"bytes":bytes,"milliseconds":ms}));
-                if let Some(path)=std::env::var_os("CTOX_BOOTSTRAP_PERF_PROOF") {
-                    std::fs::write(path,serde_json::to_vec_pretty(&json!({"scope":"real foreground HTTP component; partial until terminal proof","cold_first_included":true,"requests":rows}))?)?;
+                if let Some(path) = std::env::var_os("CTOX_BOOTSTRAP_PERF_PROOF") {
+                    std::fs::write(
+                        path,
+                        serde_json::to_vec_pretty(
+                            &json!({"scope":"real foreground HTTP component; partial until terminal proof","cold_first_included":true,"requests":rows}),
+                        )?,
+                    )?;
                 }
-                assert_eq!(status,200,"V4 route failed");
-                if let Some(body)=body {assert_eq!(body["v4"]["userId"],"alice");}
+                all_http_ok &= status == 200;
+                if status == 200 {
+                    if let Some(body) = body {
+                        assert_eq!(body["v4"]["userId"], "alice");
+                    }
+                }
             }
-            let max=rows.iter().filter(|r|r["route"]==route).map(|r|r["milliseconds"].as_f64().unwrap()).fold(0.0,f64::max);
-            assert!(max<50.0,"V4 cold-including p99 >= 50 ms for {route}: {max}");
+            // Collect every phase/route even when signaling is still pending.
+            // Acceptance remains the same strict threshold after the receipt.
         }
-        if cycle==0 {
-            fg.inputs.sync.writer.submit(WriteJob::new(Default::default(),|tx| {
-                let rights=sync_rights::read(tx)?;
-                let rules=rights.rules.into_iter().filter(|r|!(r.role=="founder" && r.collection=="policy:apps.source.edit")).collect::<Vec<_>>();
-                sync_rights::replace(tx,rights.rights_ver,&rules)?;Ok(())
-            }))?.await?;
+        if cycle == 0 {
+            fg.inputs
+                .sync
+                .writer
+                .submit(WriteJob::new(Default::default(), |tx| {
+                    let rights = sync_rights::read(tx)?;
+                    let rules = rights
+                        .rules
+                        .into_iter()
+                        .filter(|r| {
+                            !(r.role == "founder" && r.collection == "policy:apps.source.edit")
+                        })
+                        .collect::<Vec<_>>();
+                    sync_rights::replace(tx, rights.rights_ver, &rules)?;
+                    Ok(())
+                }))?
+                .await?;
             // Deliberately no cache-settle call after revocation.
-            let (_,_,body,_)=get(addr,"/api/business-os/launch-context").await?;
-            let body=body.context("missing launch")?;
-            let caps=body["v4"]["hello"]["offer"]["capabilities"].as_array().context("missing caps")?;
-            assert!(!caps.iter().any(|v|v.as_str().is_some_and(|v|v.starts_with("agent.coding."))),"next HTTP request retained revoked rights");
+            let (status, _, body, _) = get(addr, "/api/business-os/launch-context").await?;
+            if status == 200 {
+                let body = body.context("missing launch")?;
+                let caps = body["v4"]["hello"]["offer"]["capabilities"]
+                    .as_array()
+                    .context("missing caps")?;
+                assert!(
+                    !caps
+                        .iter()
+                        .any(|v| v.as_str().is_some_and(|v| v.starts_with("agent.coding."))),
+                    "next HTTP request retained revoked rights"
+                );
+                rights_proved = true;
+            }
             fg.shutdown().await?;
-            fg=Foreground::start(root.path().into(),tokio::runtime::Handle::current()).await?;
+            fg = Foreground::start(root.path().into(), tokio::runtime::Handle::current()).await?;
         }
     }
     fg.shutdown().await?;
-    let mut maxima=serde_json::Map::new();
-    for route in ["/","/sw.js","/kernel/boot.mjs","/api/business-os/launch-context"] {
-        let max=rows.iter().filter(|r|r["route"]==route).map(|r|r["milliseconds"].as_f64().unwrap()).fold(0.0,f64::max);
-        maxima.insert(route.into(),json!(max));
+    let mut maxima = serde_json::Map::new();
+    for route in [
+        "/",
+        "/sw.js",
+        "/kernel/boot.mjs",
+        "/api/business-os/launch-context",
+    ] {
+        let max = rows
+            .iter()
+            .filter(|r| r["route"] == route)
+            .map(|r| r["milliseconds"].as_f64().unwrap())
+            .fold(0.0, f64::max);
+        maxima.insert(route.into(), json!(max));
     }
-    if let Some(path)=std::env::var_os("CTOX_BOOTSTRAP_PERF_PROOF") {
-        std::fs::write(path,serde_json::to_vec_pretty(&json!({"scope":"real foreground/HTTP component with isolated synthetic rights; release profile","cold_first_included":true,"two_owner_starts":true,"rights_next_http_request":true,"requests":rows,"p99_ms":maxima}))?)?;
+    if let Some(path) = std::env::var_os("CTOX_BOOTSTRAP_PERF_PROOF") {
+        std::fs::write(
+            path,
+            serde_json::to_vec_pretty(
+                &json!({"scope":"real foreground/HTTP component with isolated synthetic rights; release profile","cold_first_included":true,"two_owner_starts":true,"rights_next_http_request":rights_proved,"all_http_200":all_http_ok,"requests":rows,"p99_ms":maxima}),
+            )?,
+        )?;
     }
-    assert!(maxima.values().all(|v|v.as_f64().unwrap()<50.0),"V4 cold-including p99 >= 50 ms: {maxima}");
+    assert!(
+        maxima["/"].as_f64().unwrap() < 50.0,
+        "V4 cold-including p99 >= 50 ms: {maxima:?}"
+    );
+    assert!(
+        maxima.values().all(|v| v.as_f64().unwrap() < 50.0),
+        "V4 cold-including p99 >= 50 ms: {maxima:?}"
+    );
+    assert!(
+        all_http_ok && rights_proved,
+        "launch readiness or current HTTP rights not proven"
+    );
     Ok(())
 }
 
