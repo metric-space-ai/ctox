@@ -16,7 +16,9 @@ impl EngineFactory for FixtureFactory {
                 .core
                 .writer
                 .submit(WriteJob::new(Default::default(), |tx| {
-                    tx.execute_batch("CREATE TABLE shutdown_probe(id INTEGER PRIMARY KEY)")?;
+                    tx.execute_batch(
+                        "CREATE TABLE IF NOT EXISTS shutdown_probe(id INTEGER PRIMARY KEY)",
+                    )?;
                     Ok(())
                 }))?
                 .await?;
@@ -30,7 +32,7 @@ impl RunningEngine for FixtureEngine {
         Box::pin(async move {
             writer
                 .submit(WriteJob::new(Default::default(), |tx| {
-                    tx.execute("INSERT INTO shutdown_probe VALUES(1)", [])?;
+                    tx.execute("INSERT OR REPLACE INTO shutdown_probe VALUES(1)", [])?;
                     Ok(())
                 }))?
                 .await
@@ -39,11 +41,12 @@ impl RunningEngine for FixtureEngine {
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn foreground_owns_real_files_and_drains_engine_before_store() -> anyhow::Result<()> {
+    let _scope = isolate_test_roots().await;
     anyhow::ensure!(
         std::env::var_os("CTOX_STATE_ROOT").is_none(),
         "fixture refuses configured state root"
     );
-    let fixture = tempfile::tempdir()?;
+    let fixture = tempfile::Builder::new().prefix("c4f-").tempdir_in("/tmp")?;
     let root = fixture.path();
     bind_engine(Arc::new(FixtureFactory))?;
     let mut foreground = Foreground::start(root.to_owned(), Handle::current()).await?;
@@ -65,7 +68,13 @@ async fn foreground_owns_real_files_and_drains_engine_before_store() -> anyhow::
                 .as_deref(),
             Some("owned")
         );
-        assert!(crate::secrets::list_secret_records(&native_root, None)?.is_empty());
+        let records = crate::secrets::list_secret_records(&native_root, None)?;
+        let (scope, name) = crate::sync_host::SIGNING_IDENTITY_SECRET_KEY;
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            (records[0].scope.as_str(), records[0].secret_name.as_str()),
+            (scope, name)
+        );
         Ok(())
     })
     .await?;
@@ -152,7 +161,21 @@ async fn foreground_owns_real_files_and_drains_engine_before_store() -> anyhow::
         tokio::time::timeout_at(deadline, commits.changed()).await??;
     }
     assert!(sync.readers.read(|tx|tx.query_row("SELECT EXISTS(SELECT 1 FROM c_ctox_queue_tasks WHERE id='foreground-ack' AND deleted=0)",[],|r|r.get::<_,bool>(0))).await?);
+    let first_signer = foreground.inputs.instance_signer()?;
+    let first_public = first_signer.key_id().to_owned();
+    let canonical_instance_id =
+        tokio::fs::read_to_string(root.join("runtime/business-os-instance-id")).await?;
+    assert_eq!(
+        first_signer.instance_id(),
+        canonical_instance_id.trim(),
+        "packet signer changed canonical instance ID"
+    );
+    assert!(
+        foreground.inputs.native_session().is_err(),
+        "unenrolled daemon minted authority"
+    );
     foreground.shutdown().await?;
+    assert!(first_signer.sign(b"after shutdown").is_err());
     assert!(super::super::store_inputs::store_inputs(root).is_err());
     assert!(matches!(
         core.writer
@@ -175,6 +198,27 @@ async fn foreground_owns_real_files_and_drains_engine_before_store() -> anyhow::
         .await?;
     assert_eq!(count, 1);
     reopened.shutdown().await?;
+    // The real foreground loads its same encrypted identity on every start.
+    let mut second = Foreground::start(root.to_owned(), Handle::current()).await?;
+    let second_signer = second.inputs.instance_signer()?;
+    assert_eq!(
+        second_signer.key_id(),
+        first_public,
+        "instance identity changed after restart"
+    );
+    assert_eq!(second_signer.instance_id(), first_signer.instance_id());
+    let message = b"canonical instance restart proof";
+    let signature = second_signer.sign(message).map_err(anyhow::Error::msg)?;
+    let hex = second_signer.key_id().strip_prefix("ed25519:").unwrap();
+    let public: Vec<u8> = hex
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|part| u8::from_str_radix(std::str::from_utf8(part).unwrap(), 16).unwrap())
+        .collect();
+    ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public)
+        .verify(message, &signature)
+        .map_err(|_| anyhow::anyhow!("persisted instance signature invalid"))?;
+    second.shutdown().await?;
     if let Some(destination) = std::env::var_os("CTOX_CUTOVER_FIXTURE_EXPORT") {
         let root = root.to_owned();
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
@@ -197,6 +241,17 @@ async fn foreground_owns_real_files_and_drains_engine_before_store() -> anyhow::
                 );
                 std::fs::copy(&source, destination.join(source.file_name().unwrap()))?;
             }
+            // Only this isolated synthetic fixture's protected key accompanies
+            // its encrypted fixture DBs. Never export a configured real root.
+            let key = crate::paths::runtime_dir(&root).join(crate::secrets::SECRET_MASTER_KEY_FILE);
+            std::fs::copy(
+                key,
+                destination.join(crate::secrets::SECRET_MASTER_KEY_FILE),
+            )?;
+            std::fs::copy(
+                root.join("runtime/business-os-instance-id"),
+                destination.join("business-os-instance-id"),
+            )?;
             Ok(())
         })
         .await??;
@@ -204,7 +259,7 @@ async fn foreground_owns_real_files_and_drains_engine_before_store() -> anyhow::
 
     // Normal boot must not replay obsolete Core configuration into the canonical
     // Runtime/Secrets owners. Migration is an explicit, separately owned step.
-    let legacy_scratch = tempfile::tempdir()?;
+    let legacy_scratch = tempfile::Builder::new().prefix("c4l-").tempdir_in("/tmp")?;
     let injected = std::env::var_os("CTOX_CUTOVER_LEGACY_PROFILE");
     let legacy_profile = if let Some(path) = &injected {
         let path = std::fs::canonicalize(path)?;

@@ -6,6 +6,7 @@ use super::{
     store_runtime::DaemonStores,
 };
 use ctox_store::{DbId, StoreError};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     future::Future,
     path::PathBuf,
@@ -30,6 +31,29 @@ struct Factories {
     factories: Vec<Arc<dyn EngineFactory>>,
 }
 static FACTORIES: OnceLock<Mutex<Factories>> = OnceLock::new();
+#[cfg(all(test, unix))]
+static TEST_ROOTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+#[cfg(all(test, unix))]
+pub(super) struct ForegroundTestScope {
+    _lock: tokio::sync::MutexGuard<'static, ()>,
+}
+#[cfg(all(test, unix))]
+pub(super) async fn isolate_test_roots() -> ForegroundTestScope {
+    ForegroundTestScope {
+        _lock: TEST_ROOTS.lock().await,
+    }
+}
+#[cfg(all(test, unix))]
+impl Drop for ForegroundTestScope {
+    fn drop(&mut self) {
+        // The production factory registry is process-wide. Contract fixtures
+        // isolate and restore it rather than depending on test-filter ordering.
+        *FACTORIES
+            .get_or_init(Mutex::default)
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Factories::default();
+    }
+}
 /// Called once by native registration code, before run_foreground. Hot-plugged
 /// apps use the already bound app engine; they do not register native engines.
 pub(crate) fn bind_engine(factory: Arc<dyn EngineFactory>) -> Result<(), StoreError> {
@@ -60,9 +84,14 @@ struct NativeOwners {
     _lcm: crate::lcm::owner_adapter::OwnerAdapter,
     _runtime: crate::runtime_env::RuntimeStore,
     _secrets: crate::secrets::SecretStore,
+    _instance_identity: Arc<ctox_sync::authority::auth::SigningIdentity>,
+    _instance_signer: Arc<dyn ctox_store::change_log::subscription::protocol::InstanceSigner>,
+    signer_active: Arc<AtomicBool>,
+    #[cfg(unix)]
+    session: Option<super::store_native::NativeSessionOwner>,
 }
 impl NativeOwners {
-    async fn attach(inputs: &StoreInputs) -> Result<Self, StoreError> {
+    async fn attach(inputs: &Arc<StoreInputs>) -> Result<Self, StoreError> {
         let failure = |_| StoreError::Invalid("native owner attachment failed".into());
         let core = crate::persistence::install_core_owner(
             &inputs.root,
@@ -94,12 +123,61 @@ impl NativeOwners {
         // Legacy imports are explicit maintenance operations, not normal boot:
         // replaying legacy Runtime credentials can overwrite the current issuer.
         // Retain the canonical files here without copying old Core settings.
-        Ok(Self {
+        let identity = secrets
+            .instance_signing_identity()
+            .await
+            .map_err(|_| StoreError::Invalid("instance signing identity unavailable".into()))?;
+        let instance_root = inputs.root.clone();
+        let instance_id = tokio::task::spawn_blocking(move || {
+            crate::business_os::store::stable_instance_id(&instance_root)
+        })
+        .await
+        .map_err(|_| StoreError::Panicked)?
+        .map_err(|_| StoreError::Invalid("canonical instance ID unavailable".into()))?;
+        let signer_active = Arc::new(AtomicBool::new(true));
+        let signer: Arc<dyn ctox_store::change_log::subscription::protocol::InstanceSigner> =
+            Arc::new(super::store_native::InstanceSigning::new(
+                identity.clone(),
+                instance_id,
+                signer_active.clone(),
+            ));
+        let mut native = Self {
             _core: core,
             _lcm: lcm,
             _runtime: runtime,
             _secrets: secrets,
-        })
+            _instance_identity: identity.clone(),
+            _instance_signer: signer.clone(),
+            signer_active: signer_active.clone(),
+            #[cfg(unix)]
+            session: None,
+        };
+        inputs.publish_instance_signer(signer.clone())?;
+        #[cfg(unix)]
+        {
+            native.session = super::store_native::NativeSessionOwner::start(
+                inputs.clone(),
+                &native._secrets,
+                identity,
+                signer,
+                signer_active,
+            )
+            .await?;
+        }
+        Ok(native)
+    }
+    async fn shutdown(&mut self) -> Result<(), StoreError> {
+        self.signer_active.store(false, Ordering::Release);
+        #[cfg(unix)]
+        if let Some(session) = self.session.as_mut() {
+            session.shutdown().await?;
+        }
+        Ok(())
+    }
+}
+impl Drop for NativeOwners {
+    fn drop(&mut self) {
+        self.signer_active.store(false, Ordering::Release);
     }
 }
 
@@ -204,6 +282,9 @@ impl Foreground {
             engine.shutdown().await?;
             self.engines.pop();
         }
+        if let Some(native) = self.native_owners.as_mut() {
+            native.shutdown().await?;
+        }
         self.native_owners.take();
         self.stores.shutdown().await?;
         FACTORIES
@@ -212,6 +293,17 @@ impl Foreground {
             .unwrap_or_else(|p| p.into_inner())
             .starting = false;
         Ok(())
+    }
+    async fn wait_native_stopped(&mut self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        if let Some(session) = self
+            .native_owners
+            .as_mut()
+            .and_then(|native| native.session.as_mut())
+        {
+            return session.wait_stopped().await;
+        }
+        std::future::pending().await
     }
 }
 
@@ -247,10 +339,16 @@ pub(crate) async fn run(root: PathBuf) -> anyhow::Result<()> {
         owner.engines.len()
     );
     #[cfg(unix)]
-    let signal_result =
-        tokio::select! { result=tokio::signal::ctrl_c()=>result, _=terminate.recv()=>Ok(()) };
+    let signal_result = tokio::select! {
+        result=tokio::signal::ctrl_c()=>result,
+        _=terminate.recv()=>Ok(()),
+        result=owner.wait_native_stopped()=>result,
+    };
     #[cfg(not(unix))]
-    let signal_result = tokio::signal::ctrl_c().await;
+    let signal_result = tokio::select! {
+        result=tokio::signal::ctrl_c()=>result,
+        result=owner.wait_native_stopped()=>result,
+    };
     // Retire the PID while the daemon lease is still held; a successor cannot
     // publish its own PID between our identity check and unlink.
     let pid_result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {

@@ -1332,6 +1332,56 @@ pub(crate) struct EncryptedIssuerRow {
 }
 
 impl SecretStore {
+    /// One persisted identity shared by instance packets and the native host.
+    /// Only an absent row permits creation; corrupt/unreadable records fail
+    /// closed. The unique encrypted reference arbitrates concurrent creators.
+    pub(crate) async fn instance_signing_identity(
+        &self,
+    ) -> Result<std::sync::Arc<ctox_sync::authority::auth::SigningIdentity>> {
+        let retained = self.clone();
+        persistence::run_core_sync(move || {
+            let _retained = &retained;
+            let root = &retained.root;
+            let (scope, name) = crate::sync_host::SIGNING_IDENTITY_SECRET_KEY;
+            if let Some(encoded) = read_secret_value_optional(root, scope, name)? {
+                let encoded = Zeroizing::new(encoded);
+                return Ok(std::sync::Arc::new(
+                    crate::sync_host::signing_identity_from_record(encoded.as_bytes())?,
+                ));
+            }
+            use ctox_sync::authority::auth::SigningIdentity;
+            let bytes = Zeroizing::new(SigningIdentity::generate_pkcs8()?);
+            let identity = std::sync::Arc::new(SigningIdentity::from_pkcs8(&bytes)?);
+            let public = identity.public_identity();
+            let encoded_key = Zeroizing::new(BASE64_STANDARD.encode(bytes.as_slice()));
+            #[derive(Serialize)]
+            struct Record<'a> {
+                identity: &'a str,
+                pkcs8: &'a str,
+            }
+            let record = Zeroizing::new(serde_json::to_string(&Record {
+                identity: &public,
+                pkcs8: encoded_key.as_str(),
+            })?);
+            if create_secret_record_if_absent(
+                root,
+                scope,
+                name,
+                record.as_str(),
+                serde_json::json!({"source":"instance-native-owner","version":1}),
+            )? {
+                return Ok(identity);
+            }
+            // Another admitted creator won: borrow its stored identity, never
+            // return a candidate which was not committed to the SecretStore.
+            let encoded = Zeroizing::new(read_secret_value(root, scope, name)?);
+            Ok(std::sync::Arc::new(
+                crate::sync_host::signing_identity_from_record(encoded.as_bytes())?,
+            ))
+        })
+        .await
+    }
+
     pub(crate) async fn attach(
         root: &Path,
         writer: ctox_store::writer::WriterHandle,
