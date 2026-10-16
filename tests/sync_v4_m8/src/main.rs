@@ -4,10 +4,9 @@ mod network;
 use async_trait::async_trait;
 use futures::StreamExt;
 use rxdb::plugins::replication_webrtc::index_mod::{
-    framing::{Framer, Reassembler},
     hello::{Codec, TransportSelection, WireSeq},
     lanes::{Lane, FRAME_BYTES, REALTIME_LABEL},
-    scheduler::NativeSendScheduler,
+    scheduler::{m8_bridge, Incoming, NativeSendScheduler},
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -21,7 +20,7 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot};
 use webrtc::{
-    data_channel::{DataChannel, DataChannelEvent},
+    data_channel::DataChannel,
     peer_connection::{
         PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler, RTCIceCandidateInit,
         RTCPeerConnectionIceEvent,
@@ -39,13 +38,10 @@ fn transport() -> TransportSelection {
         reassembly: true,
     }
 }
-type Message = (Lane, WireSeq, Vec<u8>);
 struct Events {
     candidates: mpsc::UnboundedSender<RTCIceCandidateInit>,
-    incoming: [mpsc::Sender<Message>; 6],
+    channels: Option<mpsc::UnboundedSender<Arc<dyn DataChannel>>>,
     opened: Arc<AtomicU64>,
-    tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
-    errors: Arc<Mutex<Vec<String>>>,
 }
 #[async_trait]
 impl PeerConnectionEventHandler for Events {
@@ -55,48 +51,17 @@ impl PeerConnectionEventHandler for Events {
         }
     }
     async fn on_data_channel(&self, ch: Arc<dyn DataChannel>) {
-        let incoming = self.incoming.clone();
-        let opened = self.opened.clone();
-        let errors = self.errors.clone();
-        let task = tokio::spawn(async move {
-            let label = ch.label().await.unwrap();
-            if label == REALTIME_LABEL {
-                // No traffic on the unreliable media channel in M8.
-                while ch.poll().await.is_some() {}
-                return;
-            }
-            let Some(lane_index) = Lane::ALL.iter().position(|l| l.label() == label) else {
-                errors
-                    .lock()
-                    .unwrap()
-                    .push(format!("unexpected channel {label}"));
-                return;
-            };
-            let tx = incoming[lane_index].clone();
-            let mut frames = Reassembler::new(Framer::new(transport()).unwrap());
-            let mut counted = false;
-            while let Some(event) = ch.poll().await {
-                if matches!(&event, DataChannelEvent::OnOpen) && !counted {
-                    opened.fetch_add(1, Ordering::SeqCst);
-                    counted = true;
-                }
-                if let DataChannelEvent::OnMessage(message) = event {
-                    match frames.accept(&message.data) {
-                        Ok(Some(packet)) => {
-                            if tx.send(packet).await.is_err() {
-                                break;
-                            }
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            errors.lock().unwrap().push(format!("frame: {e}"));
-                            break;
-                        }
-                    }
-                }
-            }
-        });
-        self.tasks.lock().unwrap().push(task);
+        // The pinned native driver invokes this only for an actual OnOpen.
+        // Do not poll its local callback handle: the scheduler owns the real one.
+        let label = ch.label().await.unwrap();
+        if Lane::ALL.iter().any(|lane| lane.label() == label) {
+            self.opened.fetch_add(1, Ordering::SeqCst);
+        } else {
+            assert_eq!(label, REALTIME_LABEL);
+        }
+        if let Some(channels) = &self.channels {
+            assert!(channels.send(ch).is_ok(), "native accept receiver closed");
+        }
     }
 }
 #[derive(Default)]
@@ -179,13 +144,25 @@ fn verify_page(value: &Value) -> u64 {
 async fn application(
     index: usize,
     e: Arc<Endpoint>,
-    mut rx: mpsc::Receiver<Message>,
+    mut rx: mpsc::Receiver<Incoming>,
     driver: Arc<tokio::sync::Mutex<commands::Driver>>,
     live_tx: [mpsc::Sender<Value>; 2],
 ) {
-    while let Some((lane, id, bytes)) = rx.recv().await {
+    while let Some(message) = rx.recv().await {
+        let Incoming::Reliable {
+            lane,
+            id,
+            bytes,
+            delivery,
+        } = message
+        else {
+            panic!("unexpected native input: {message:?}");
+        };
         if lane == Lane::Transfer {
             e.stats.lock().unwrap().bulk.accept(id.0, &bytes);
+            if let Some(delivery) = delivery {
+                delivery.acknowledge().unwrap();
+            }
             continue;
         }
         let mut value: Value = serde_json::from_slice(&bytes).unwrap();
@@ -261,6 +238,9 @@ async fn application(
                 stats.live_ms.push(latency);
             }
             other => panic!("unknown component input {other}"),
+        }
+        if let Some(delivery) = delivery {
+            delivery.acknowledge().unwrap();
         }
     }
 }
@@ -349,6 +329,12 @@ async fn profile(rtt: u64, out: &std::path::Path, seconds: u64, use_shim: bool) 
         seed: AtomicU64::new(0x9e3779b97f4a7c15 + rtt),
         active: impaired.clone(),
     });
+    // tc mode uses the same default runtime as the proven lane4 setup.
+    let peer_runtime: Arc<dyn webrtc::runtime::Runtime> = if use_shim {
+        runtime
+    } else {
+        webrtc::runtime::default_runtime().unwrap()
+    };
     let tasks = Arc::new(Mutex::new(Vec::new()));
     let errors = Arc::new(Mutex::new(Vec::new()));
     let collecting = Arc::new(AtomicBool::new(true));
@@ -358,32 +344,21 @@ async fn profile(rtt: u64, out: &std::path::Path, seconds: u64, use_shim: bool) 
     let mut candidates = Vec::new();
     let mut opens = Vec::new();
     for index in 0..4 {
-        let mut lane_receivers = Vec::new();
-        let tx = std::array::from_fn(|_| {
-            let (tx, rx) = mpsc::channel(16);
-            lane_receivers.push(rx);
-            tx
-        });
+        let (channels_tx, channels_rx) = mpsc::unbounded_channel();
         let (ct, cr) = mpsc::unbounded_channel();
         let opened = Arc::new(AtomicU64::new(0));
-        let mut settings = webrtc::peer_connection::SettingEngine::default();
-        settings
-            .set_answering_dtls_role(if index % 2 == 0 {
-                rtc::peer_connection::transport::RTCDtlsRole::Server
-            } else {
-                rtc::peer_connection::transport::RTCDtlsRole::Client
-            })
-            .unwrap();
+
         let pc: Arc<dyn PeerConnection> = Arc::new(
             PeerConnectionBuilder::new()
-                .with_setting_engine(settings)
-                .with_runtime(runtime.clone())
+                .with_runtime(peer_runtime.clone())
                 .with_handler(Arc::new(Events {
                     candidates: ct,
-                    incoming: tx,
+                    channels: if index % 2 == 1 {
+                        Some(channels_tx)
+                    } else {
+                        None
+                    },
                     opened: opened.clone(),
-                    tasks: tasks.clone(),
-                    errors: errors.clone(),
                 }))
                 .with_udp_addrs(vec!["127.0.0.1:0"])
                 .build()
@@ -391,9 +366,15 @@ async fn profile(rtt: u64, out: &std::path::Path, seconds: u64, use_shim: bool) 
                 .unwrap(),
         );
         let sender = OnceLock::new();
-        if index%2==0 {
+        if index % 2 == 0 {
             let native = NativeSendScheduler::create(&pc, transport()).await.unwrap();
-            observe_sender(&native,index,errors.clone(),tasks.clone(),collecting.clone());
+            observe_sender(
+                &native,
+                index,
+                errors.clone(),
+                tasks.clone(),
+                collecting.clone(),
+            );
             sender.set(native).ok().unwrap();
         }
         ends.push(Arc::new(Endpoint {
@@ -403,7 +384,7 @@ async fn profile(rtt: u64, out: &std::path::Path, seconds: u64, use_shim: bool) 
             stats: Mutex::new(Observed::default()),
         }));
         pcs.push(pc);
-        receivers.push(lane_receivers);
+        receivers.push(Some(channels_rx));
         candidates.push(Some(cr));
         opens.push(opened);
     }
@@ -427,17 +408,14 @@ async fn profile(rtt: u64, out: &std::path::Path, seconds: u64, use_shim: bool) 
         tx
     });
     let mut forwarding = tokio::task::JoinSet::new();
+    eprintln!("M8_SETUP strategy=lane4-accepted-channels-v1 rtt={rtt}");
     let setup = tokio::time::timeout(Duration::from_secs(30), async {
         for a in [0, 2] {
             let b = a + 1;
             let offer = pcs[a].create_offer(None).await.unwrap();
             pcs[a].set_local_description(offer.clone()).await.unwrap();
             pcs[b].set_remote_description(offer).await.unwrap();
-            // The answerer's effective DTLS role is now resolved, but SCTP has
-            // not started: create its channels before committing the answer.
-            let native=NativeSendScheduler::create(&pcs[b],transport()).await.unwrap();
-            observe_sender(&native,b,errors.clone(),tasks.clone(),collecting.clone());
-            ends[b].sender.set(native).ok().unwrap();
+
             let answer = pcs[b].create_answer(None).await.unwrap();
             pcs[b].set_local_description(answer.clone()).await.unwrap();
             pcs[a].set_remote_description(answer).await.unwrap();
@@ -450,9 +428,48 @@ async fn profile(rtt: u64, out: &std::path::Path, seconds: u64, use_shim: bool) 
                     }
                 });
             }
+            // Same accepted-channel setup as lane4_real_webrtc_50mb_control_latency_and_verified_arrival.
+            let mut accepted = vec![None; 7];
+            let channels = receivers[b].as_mut().unwrap();
+            for _ in 0..7 {
+                let channel = channels.recv().await.unwrap();
+                let label = channel.label().await.unwrap();
+                eprintln!("M8_ACCEPTED endpoint={b} label={label}");
+                let slot = Lane::ALL
+                    .iter()
+                    .position(|lane| lane.label() == label)
+                    .unwrap_or_else(|| {
+                        assert_eq!(label, REALTIME_LABEL);
+                        6
+                    });
+                assert!(
+                    accepted[slot].replace(channel).is_none(),
+                    "duplicate native channel"
+                );
+            }
+            let native = m8_bridge::accept(
+                accepted.into_iter().map(Option::unwrap).collect(),
+                transport(),
+            )
+            .await
+            .unwrap();
+            observe_sender(
+                &native,
+                b,
+                errors.clone(),
+                tasks.clone(),
+                collecting.clone(),
+            );
+            ends[b].sender.set(native).ok().unwrap();
         }
-        for (i, lanes) in receivers.into_iter().enumerate() {
-            for rx in lanes {
+        for (i, endpoint) in ends.iter().enumerate() {
+            for lane in Lane::ALL {
+                let rx = endpoint
+                    .sender
+                    .get()
+                    .unwrap()
+                    .take_incoming(Some(lane))
+                    .unwrap();
                 jobs.spawn(application(
                     i,
                     ends[i].clone(),
@@ -462,11 +479,20 @@ async fn profile(rtt: u64, out: &std::path::Path, seconds: u64, use_shim: bool) 
                 ));
             }
         }
+        eprintln!("M8_SETUP schedulers_attached rtt={rtt}");
         while opens.iter().any(|n| n.load(Ordering::SeqCst) != 6) {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await;
+    eprintln!(
+        "M8_SETUP ready={} opens={:?}",
+        setup.is_ok(),
+        opens
+            .iter()
+            .map(|n| n.load(Ordering::SeqCst))
+            .collect::<Vec<_>>()
+    );
     let stop = Arc::new(AtomicBool::new(false));
     let mut load = tokio::task::JoinSet::new();
     let mut probes = tokio::task::JoinSet::new();
@@ -580,9 +606,19 @@ async fn profile(rtt: u64, out: &std::path::Path, seconds: u64, use_shim: bool) 
 }
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
-    let source_hash = Sha256::digest(concat!(include_str!("main.rs"), include_str!("commands.rs"), include_str!("network.rs")).as_bytes());
+    let source_hash = Sha256::digest(
+        concat!(
+            include_str!("main.rs"),
+            include_str!("commands.rs"),
+            include_str!("network.rs"),
+            include_str!("scheduler_bridge.rs")
+        )
+        .as_bytes(),
+    );
     println!("M8_NATIVE_SOURCE_SHA256 {source_hash:x}");
-    if std::env::args().any(|a| a == "--source-marker") { return; }
+    if std::env::args().any(|a| a == "--source-marker") {
+        return;
+    }
     START.set(Instant::now()).unwrap();
     let _ = rustls::crypto::ring::default_provider().install_default();
     let args: Vec<_> = std::env::args().collect();

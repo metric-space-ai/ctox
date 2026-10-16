@@ -263,7 +263,7 @@ impl Driver {
             .unwrap()
             .unwrap()
             .unwrap();
-        assert_eq!(check.status, "done");
+        assert_eq!(check.status, "completed");
         self.projection_reads += 1;
         let mut deliveries = Vec::new();
         for (target, subscription) in self.live.iter_mut().enumerate() {

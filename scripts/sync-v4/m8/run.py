@@ -21,6 +21,7 @@ def main():
     args=a.parse_args();out=args.out.resolve()
     out.mkdir(parents=True,exist_ok=False)
     source=REPO;component=args.component_ref
+    if component=='HEAD': component=subprocess.check_output(['git','-C',str(REPO),'rev-parse','HEAD'],text=True).strip()
     if component!='HEAD':
         # Build input only, not a runtime GitHub dependency. Never modify the caller clone.
         cache=out/'component.git'
@@ -43,12 +44,21 @@ def main():
         shutil.copytree(REPO/'tests/sync_v4_m8',source/'tests/sync_v4_m8')
     else:
         component=subprocess.check_output(['git','-C',str(REPO),'rev-parse','HEAD'],text=True).strip()
+    # Test-only access seam, exactly as the in-module lane4 test has. Preserve
+    # pristine source and hash the sole appended declaration for auditability.
+    scheduler=source/'src/core/rxdb/src/plugins/replication_webrtc/scheduler.rs'
+    pristine=scheduler.read_bytes()
+    bridge=source/'tests/sync_v4_m8/src/scheduler_bridge.rs'
+    declaration='\n#[path = '+json.dumps(str(bridge))+']\npub mod m8_bridge;\n'
+    assert source!=REPO, 'never attach test seams to the caller clone'
+    scheduler.write_bytes(pristine+declaration.encode())
+    composition={'pristine_scheduler_sha256':hashlib.sha256(pristine).hexdigest(),'appended_declaration':declaration,'compiled_scheduler_sha256':hashlib.sha256(scheduler.read_bytes()).hexdigest(),'bridge_sha256':hashlib.sha256(bridge.read_bytes()).hexdigest()}
     manifest=source/'tests/sync_v4_m8/Cargo.toml'
     harness_paths=[REPO/'scripts/sync-v4/m8-native.sh']
     harness_paths += [p for directory in (REPO/'tests/sync_v4_m8',HERE.parent) for p in directory.rglob('*') if p.is_file() and p.suffix in ('.rs','.toml','.py','.md','.sh','.lock')]
     inputs={str(p.relative_to(REPO)):hashlib.sha256(p.read_bytes()).hexdigest() for p in harness_paths}
     provenance={'profile':'component profile, pre-cutover','component_source':component,'harness_source':subprocess.check_output(['git','-C',str(REPO),'rev-parse','HEAD'],text=True).strip(),
-        'harness_files':inputs,'host':os.uname().nodename,'started':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        'harness_files':inputs,'test_composition':composition,'host':os.uname().nodename,'started':datetime.datetime.now(datetime.timezone.utc).isoformat(),
         'command_fixture':'OrderedWriter, store fence, projections, commit-driven signed Subscription; fixture authority/executor, no AppRuntimeIngress',
         'clock':'one native process monotonic Instant; no cross-host synchronization claim'}
     (out/'provenance.json').write_text(json.dumps(provenance,indent=2))
@@ -61,12 +71,12 @@ def main():
     provenance['turn']={'status':'TURN not measured','binary_present':bool(turn),'reason':'no local coturn executable' if not turn else 'current component source lacks verified native relay selection; no direct path relabeled TURN'}
     (out/'provenance.json').write_text(json.dumps(provenance,indent=2))
     # The canonical mirror can preserve old mtimes: force the actual compiled copy.
-    rust_sources=[manifest.parent/'src'/name for name in ('main.rs','commands.rs','network.rs')]
+    rust_sources=[manifest.parent/'src'/name for name in ('main.rs','commands.rs','network.rs','scheduler_bridge.rs')]
     for path in rust_sources: os.utime(path,None)
     expected_marker='M8_NATIVE_SOURCE_SHA256 '+hashlib.sha256(b''.join(p.read_bytes() for p in rust_sources)).hexdigest()
     provenance['expected_source_marker']=expected_marker
     provenance['forced_rebuild_sources']=[str(p) for p in rust_sources]
-    build=execute(['cargo','build','--manifest-path',str(manifest),'--jobs','2'],out/'build.log',1800)
+    build=execute(['cargo','build','--locked','--manifest-path',str(manifest),'--jobs','2'],out/'build.log',1800)
     if build:
         print((out/'build.log').read_text()[-18000:])
         sys.path.insert(0,str(HERE.parent));import evaluate

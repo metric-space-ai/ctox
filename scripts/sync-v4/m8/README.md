@@ -4,7 +4,7 @@ Run only through the canonical Linux lane:
 
 ```sh
 ~/.codex/bin/gpu-build-run.sh --owner 01a0e259-5815 \
-  --task v4-m8-harness --target-key v4-v4-m8-harness --host auto --jobs 2 \
+  --task v4-m8-harness --target-key v4-v4-m8-harness --host gpu3 --jobs 2 \
   --src "$PWD" -- bash -lc 'ctox-prep.sh && bash scripts/sync-v4/m8-native.sh --out "$CARGO_TARGET_DIR/m8-<unique-run>"'
 ```
 
@@ -15,8 +15,24 @@ it never checks out or edits production files in the caller's clone. GitHub is a
 build-input source only. After P9/CUTOVER integration, omit that option to compile
 the caller's current source. A reused output directory is refused.
 
+The runner always materializes a disposable component source copy. It appends
+only a module declaration attaching the new test-only scheduler_bridge.rs to
+that copy: this exposes the same private accepted-channel constructor used by
+the in-module lane4 test. The pristine/compiled scheduler hashes, declaration
+and adapter hash are retained. No production algorithm or tracked production
+file changes. No production acceptance claim can be made with this test seam.
+
+Before cargo it touches the actual copied Rust sources, forcing recompilation
+even after a mirror preserves old mtimes. The native --source-marker prints a
+SHA-256 compiled from those source bytes; the runner verifies it against the
+inputs before starting any profile and retains source-marker.txt. A mismatched
+binary is rejected instead of measured.
+
 The native process has one Core and two clients, two independent associations,
-production V4 schedulers/framing and real native DTLS/SCTP data channels. Each
+production V4 schedulers/framing and real native DTLS/SCTP data channels.
+Its channel setup follows the green lane4 native test: only the offering endpoint
+creates channels; the answerer accepts that same set. Both sides consume the
+scheduler-owned incoming lanes (no competing raw DataChannel poll task). Each
 direction sends and hashes at least 50 MiB of incompressible artifact data on the
 production Transfer lane (its enum index is 5 because Interactive is a separate
 priority lane; architecture logical lane 4). Bulk continues throughout command
