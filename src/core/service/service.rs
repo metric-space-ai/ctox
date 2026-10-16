@@ -16183,6 +16183,73 @@ fn failed_worker_route_status(
     }
 }
 
+/// Opening of the lead-research rework prompt. `apply_review_feedback_to_queue`
+/// recognises a lead-research rework by this exact prefix, so both sides use
+/// the same `lead_research_rework_applies` decision.
+const LEAD_RESEARCH_REWORK_OPENING: &str = "The external CTOX Review Gate checked your last result and found that it is not complete yet. Do not research this lead again and do not restart the research; do not create a subtask, queue task, or self-rework item.";
+
+/// Plan of a lead-research rework attempt. It supersedes the inherited
+/// research plan: a rework attempt may neither research again nor mark the
+/// unfinished research steps completed, so an inherited 4/6 research plan
+/// turned approved reworks into terminal "plan is incomplete" failures
+/// (customer tenant, 16.10.2026: ~12 of ~400 research tasks).
+const LEAD_RESEARCH_REWORK_PLAN_STEPS: [&str; 3] = [
+    "Read stored lead",
+    "Correct review findings via execute_writeback",
+    "Re-read stored lead and write report",
+];
+
+/// Lead research is stored; rework only fixes the findings. A missing
+/// writeback has nothing stored yet and keeps its own path.
+fn lead_research_rework_applies(job: &QueuedPrompt, failed_gates: &[String]) -> bool {
+    review::is_lead_research_task(job.suggested_skill.as_deref(), &job.prompt)
+        && !failed_gates
+            .iter()
+            .any(|gate| gate == "business_command_writeback_missing")
+}
+
+/// Record the lead-research rework plan as a new revision for the shared
+/// worker-attempt work key. The inherited research plan stays as evidence in
+/// its older revision. The new revision carries the reviewed attempt's
+/// identity until the next attempt's forced first update_plan re-sends these
+/// labels, which updates the revision in place under its own attempt id.
+fn supersede_inherited_research_plan_for_rework(root: &Path, job: &QueuedPrompt) -> Result<bool> {
+    let db_path = crate::paths::core_db(root);
+    let work_key = worker_attempt_work_key(job);
+    if lcm::run_task_execution_progress(&db_path, &work_key)?.is_none() {
+        return Ok(false);
+    }
+    let conn = Connection::open(&db_path)?;
+    let (task_id, command_id, attempt_id): (String, String, String) = conn.query_row(
+        "SELECT task_id, command_id, attempt_id FROM task_execution_plan_revisions
+         WHERE work_key = ?1 ORDER BY revision DESC LIMIT 1",
+        [&work_key],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    let steps = LEAD_RESEARCH_REWORK_PLAN_STEPS
+        .iter()
+        .enumerate()
+        .map(|(index, label)| lcm::TaskExecutionPlanStepInput {
+            label: (*label).to_string(),
+            status: if index == 0 { "in_progress" } else { "pending" }.to_string(),
+        })
+        .collect::<Vec<_>>();
+    lcm::run_record_task_execution_plan(
+        &db_path,
+        lcm::TaskExecutionPlanUpdate {
+            work_key: &work_key,
+            task_id: &task_id,
+            command_id: &command_id,
+            attempt_id: &attempt_id,
+            explanation: Some(
+                "Review rework: correct the review findings on the stored lead; the research plan is superseded.",
+            ),
+            steps: &steps,
+        },
+    )?;
+    Ok(true)
+}
+
 fn build_review_feedback_retry_prompt(
     job: &QueuedPrompt,
     outcome: &review::ReviewOutcome,
@@ -16219,21 +16286,19 @@ fn build_review_feedback_retry_prompt(
     // attempts each and four exhausted the review budget (customer tenant,
     // 15.10.2026). The research is stored; rework only fixes the findings.
     // A missing writeback has nothing stored yet and keeps its own path.
-    let lead_research_rework =
-        review::is_lead_research_task(job.suggested_skill.as_deref(), &job.prompt)
-            && !outcome
-                .failed_gates
-                .iter()
-                .any(|gate| gate == "business_command_writeback_missing");
-    let (opening, closing) = if lead_research_rework {
+    let (opening, closing) = if lead_research_rework_applies(job, &outcome.failed_gates) {
+        let [read_step, correct_step, report_step] = LEAD_RESEARCH_REWORK_PLAN_STEPS;
         (
-            "The external CTOX Review Gate checked your last result and found that it is not complete yet. Do not research this lead again and do not restart the research; do not create a subtask, queue task, or self-rework item.",
-            "Now fix only the review findings above: read the stored lead with the MCP tool business_os.get_record, correct exactly the items named in the findings through business_os.execute_writeback, and leave every other field and contact as stored. Then read the lead again with business_os.get_record and write the closing report strictly from that re-read stored record; claim no value, status or count it does not show.",
+            LEAD_RESEARCH_REWORK_OPENING,
+            format!(
+                "Now fix only the review findings above: read the stored lead with the MCP tool business_os.get_record, correct exactly the items named in the findings through business_os.execute_writeback, and leave every other field and contact as stored. Then read the lead again with business_os.get_record and write the closing report strictly from that re-read stored record; claim no value, status or count it does not show.\n\n\
+Your execution plan for this rework has exactly three steps with these labels: 1. \"{read_step}\" 2. \"{correct_step}\" 3. \"{report_step}\". Mark each step completed with update_plan; the previous research plan is superseded and must not be republished."
+            ),
         )
     } else {
         (
             "The external CTOX Review Gate checked your last result and found that it is not complete yet. Continue the same task now; do not create a subtask, queue task, or self-rework item.",
-            "Now continue the task. Produce the corrected artifact or perform the required CTOX command yourself. Do not describe completion unless the durable artifact exists.",
+            "Now continue the task. Produce the corrected artifact or perform the required CTOX command yourself. Do not describe completion unless the durable artifact exists.".to_string(),
         )
     };
     format!(
@@ -25318,6 +25383,17 @@ fn apply_review_feedback_to_queue(
             channels::update_queue_task(root, request)?;
         }
         updated += 1;
+    }
+    // Only the review-gate rework prompt built by
+    // `build_review_feedback_retry_prompt` starts with this opening; app
+    // validation and outcome-witness feedback keep the inherited plan.
+    if updated > 0
+        && review::is_lead_research_task(job.suggested_skill.as_deref(), &job.prompt)
+        && feedback_prompt
+            .trim_start()
+            .starts_with(LEAD_RESEARCH_REWORK_OPENING)
+    {
+        supersede_inherited_research_plan_for_rework(root, job)?;
     }
     Ok(updated)
 }
@@ -37867,6 +37943,133 @@ Business OS command:
         Ok(())
     }
 
+    fn record_research_plan(
+        root: &Path,
+        job: &QueuedPrompt,
+        attempt_id: &str,
+        steps: &[(&str, &str)],
+    ) -> anyhow::Result<()> {
+        let steps = steps
+            .iter()
+            .map(|(label, status)| lcm::TaskExecutionPlanStepInput {
+                label: (*label).into(),
+                status: (*status).into(),
+            })
+            .collect::<Vec<_>>();
+        lcm::run_record_task_execution_plan(
+            &crate::paths::core_db(root),
+            lcm::TaskExecutionPlanUpdate {
+                work_key: &worker_attempt_work_key(job),
+                task_id: &job.leased_message_keys[0],
+                command_id: "fixture-command",
+                attempt_id,
+                explanation: None,
+                steps: &steps,
+            },
+        )?;
+        Ok(())
+    }
+
+    fn plan_revisions(root: &Path, job: &QueuedPrompt) -> anyhow::Result<Vec<(i64, i64, i64)>> {
+        let conn = rusqlite::Connection::open(crate::paths::core_db(root))?;
+        let mut statement = conn.prepare(
+            "SELECT revision, completed_steps, total_steps FROM task_execution_plan_revisions
+             WHERE work_key = ?1 ORDER BY revision",
+        )?;
+        let rows = statement
+            .query_map([worker_attempt_work_key(job)], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    #[test]
+    fn lead_research_rework_supersedes_inherited_research_plan() -> anyhow::Result<()> {
+        const RESEARCH_PLAN: [(&str, &str); 6] = [
+            ("Read lead", "completed"),
+            ("Research company", "completed"),
+            ("Research contacts", "completed"),
+            ("Write back result", "completed"),
+            ("Verify remaining fields", "in_progress"),
+            ("Write report", "pending"),
+        ];
+        let approved = CompletionReviewDisposition::Approved {
+            review_audit_key: "review-approved".into(),
+        };
+        let mut failed = review::ReviewOutcome::skipped("report contradicts stored lead");
+        failed.required = true;
+        failed.verdict = review::ReviewVerdict::Fail;
+        failed.failed_gates = vec!["Report names an e-mail that is not stored.".to_string()];
+
+        // Lead research rework: new 3-step revision, old revision kept.
+        let (root, mut job, attempt_id) = incomplete_plan_queue_fixture("rework-plan-supersedes")?;
+        job.suggested_skill = Some("outbound-lead-generation-research".into());
+        record_research_plan(&root, &job, &attempt_id, &RESEARCH_PLAN)?;
+        let inherited = plan_revisions(&root, &job)?;
+        let (old_revision, old_completed, old_total) = *inherited.last().unwrap();
+        assert_eq!((old_completed, old_total), (4, 6));
+        let feedback = build_review_feedback_retry_prompt(&job, &failed, "Fertig.");
+        assert_eq!(
+            apply_review_feedback_to_leased_queue(&root, &job, &feedback, &failed.summary)?,
+            1
+        );
+        let revisions = plan_revisions(&root, &job)?;
+        assert!(revisions.contains(&(old_revision, 4, 6)), "{revisions:?}");
+        assert_eq!(*revisions.last().unwrap(), (old_revision + 1, 0, 3));
+        let progress = lcm::run_task_execution_progress(
+            &crate::paths::core_db(&root),
+            &worker_attempt_work_key(&job),
+        )?
+        .unwrap();
+        let labels = progress["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|step| step["label"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(labels, LEAD_RESEARCH_REWORK_PLAN_STEPS);
+        let incomplete = accepted_queue_plan_failure(&root, &job, &approved)?.unwrap();
+        assert_eq!(
+            (incomplete.revision, incomplete.completed, incomplete.total),
+            (old_revision + 1, 0, 3)
+        );
+        // The next attempt re-sends the same labels completed: same revision,
+        // and the approved result is no longer a terminal plan failure.
+        let completed = LEAD_RESEARCH_REWORK_PLAN_STEPS.map(|label| (label, "completed"));
+        record_research_plan(&root, &job, "attempt-rework-2", &completed)?;
+        assert_eq!(
+            *plan_revisions(&root, &job)?.last().unwrap(),
+            (old_revision + 1, 3, 3)
+        );
+        assert!(accepted_queue_plan_failure(&root, &job, &approved)?.is_none());
+
+        // Not lead research: the inherited plan stays and the guard fires.
+        let (root, job, attempt_id) = incomplete_plan_queue_fixture("rework-plan-generic")?;
+        record_research_plan(&root, &job, &attempt_id, &RESEARCH_PLAN)?;
+        let before = plan_revisions(&root, &job)?;
+        let feedback = build_review_feedback_retry_prompt(&job, &failed, "Done.");
+        apply_review_feedback_to_leased_queue(&root, &job, &feedback, &failed.summary)?;
+        assert_eq!(plan_revisions(&root, &job)?, before);
+        let incomplete = accepted_queue_plan_failure(&root, &job, &approved)?.unwrap();
+        assert_eq!((incomplete.completed, incomplete.total), (4, 6));
+
+        // Missing writeback: nothing is stored yet, the research plan stays.
+        let (root, mut job, attempt_id) =
+            incomplete_plan_queue_fixture("rework-plan-writeback-missing")?;
+        job.suggested_skill = Some("outbound-lead-generation-research".into());
+        record_research_plan(&root, &job, &attempt_id, &RESEARCH_PLAN)?;
+        let before = plan_revisions(&root, &job)?;
+        let outcome =
+            missing_writeback_review_outcome("Business command writeback failed: no successful x");
+        let feedback = build_review_feedback_retry_prompt(&job, &outcome, "Fertig.");
+        apply_review_feedback_to_leased_queue(&root, &job, &feedback, &outcome.summary)?;
+        assert_eq!(plan_revisions(&root, &job)?, before);
+        let incomplete = accepted_queue_plan_failure(&root, &job, &approved)?.unwrap();
+        assert_eq!((incomplete.completed, incomplete.total), (4, 6));
+        Ok(())
+    }
+
     #[test]
     fn incomplete_plan_preflight_preserves_rework_and_store_failures() -> anyhow::Result<()> {
         let (root, job, _) = incomplete_plan_queue_fixture("plan-stop-store")?;
@@ -40541,6 +40744,14 @@ Business OS command:
             assert!(prompt.contains("strictly from that re-read stored record"));
             assert!(!prompt.contains("Continue the same task now"));
             assert!(prompt.contains("Report names an e-mail that is not stored."));
+            assert!(prompt.starts_with(LEAD_RESEARCH_REWORK_OPENING));
+            assert!(prompt.contains("Mark each step completed with update_plan"));
+            for label in LEAD_RESEARCH_REWORK_PLAN_STEPS {
+                assert!(prompt.contains(&format!("\"{label}\"")), "{label}");
+            }
+            assert!(prompt.ends_with(
+                "the previous research plan is superseded and must not be republished."
+            ));
         }
 
         let generic = build_review_feedback_retry_prompt(
@@ -40569,6 +40780,7 @@ Business OS command:
         );
         assert!(missing_writeback.contains("Continue the same task now"));
         assert!(!missing_writeback.contains("Do not research this lead again"));
+        assert!(!missing_writeback.contains(LEAD_RESEARCH_REWORK_PLAN_STEPS[0]));
     }
 
     #[test]
