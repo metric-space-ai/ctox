@@ -1,3 +1,5 @@
+#[path = "store_browser_process_fixture.rs"]
+mod process_fixture;
 use super::*;
 use crate::business_os::launch_context_v4::{build, tests::fixture};
 use crate::service::store_startup::isolate_test_roots;

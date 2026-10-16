@@ -19,10 +19,18 @@ impl WriteAuthority for NoEffects {
     fn authorize(
         &self,
         _: &rusqlite::Transaction<'_>,
-        _: &str,
-        _: &Write,
+        participant: &str,
+        request: &Write,
     ) -> rusqlite::Result<WritePermission> {
-        Ok(WritePermission::Reject("forbidden".into()))
+        // P8 now authorizes before buffering too. Admit only this fixture's
+        // inbox entry; final document validation still forbids every effect.
+        Ok(
+            if participant == "device" && request.collection == "notes" && request.id == "gap" {
+                WritePermission::Permit
+            } else {
+                WritePermission::Reject("forbidden".into())
+            },
+        )
     }
     fn validate_document(
         &self,
