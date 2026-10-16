@@ -1,40 +1,24 @@
-import { Buffer } from 'node:buffer';
-import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
+import { registerHooks } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { build } from 'esbuild';
-
-const bundledModule = await build({
-  entryPoints: [fileURLToPath(new URL('../index.js', import.meta.url))],
-  bundle: true,
-  format: 'esm',
-  platform: 'browser',
-  write: false,
-});
-
-const [{ text: bundledSource }] = bundledModule.outputFiles;
-const { __ticketTestHooks, resolveTicketListState } = await import(
-  `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
-);
-
-const statusEl = {
-  hidden: true,
-  textContent: '',
-  dataset: {},
-};
-
-const ctx = {
-  host: {
-    querySelector(selector) {
-      if (selector === '[data-ticket-command-status]') return statusEl;
-      throw new Error(`unexpected selector ${selector}`);
-    },
+// App-API 4.0: 'ctox:shared/x.js' resolves onto the shell's shared/ (as the Service Worker rewrites it);
+// no esbuild bundle needed any more.
+const SHARED = fileURLToPath(new URL('../../../shared/', import.meta.url));
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.startsWith('ctox:shared/')) {
+      return nextResolve(pathToFileURL(SHARED + specifier.slice('ctox:shared/'.length)).href, context);
+    }
+    return nextResolve(specifier, context);
   },
-};
+});
+const { __ticketTestHooks, renderTicketList } = await import('../index.js');
+const indexJs = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
 
-__ticketTestHooks.setCommandStatusForSmoke(ctx, 'Ticket command rejected by native peer', true);
-assert(statusEl.hidden === false, 'command status is visible');
-assert(statusEl.textContent === 'Ticket command rejected by native peer', 'command status text is rendered');
-assert(statusEl.dataset.state === 'error', 'command status is marked as error');
+// v4: command status no longer renders inside the app; failures go to the shell's status zone.
+assert(!/data-ticket-command-status/.test(readFileSync(new URL('../index.html', import.meta.url), 'utf8')), 'no in-app command status line');
+assert(/api\.status\.report\(\{ level: 'error', code, text: `\$\{commandType\}: \$\{commandFailureMessage\(value, handle\.id\)\}`/.test(indexJs), 'failed command is reported to the status zone');
 
 assert(
   __ticketTestHooks.commandFailureMessage(
@@ -49,20 +33,7 @@ assert(
   'failed command has deterministic fallback',
 );
 
-assert(
-  resolveTicketListState({ sourceCount: 0, readiness: { ready: false, state: 'catching-up' } }) === 'syncing',
-  'empty unready ticket source renders syncing',
-);
-
-assert(
-  resolveTicketListState({ sourceCount: 0, readiness: { ready: true, state: 'live' } }) === 'empty',
-  'empty ready ticket source renders true empty',
-);
-
-assert(
-  resolveTicketListState({ sourceCount: 1, readiness: { ready: false, state: 'catching-up' } }) === 'content',
-  'existing ticket source is not readiness-gated',
-);
+assert(renderTicketList([], {}) === '', 'empty ticket list renders nothing (v4)');
 
 const recordContext = __ticketTestHooks.ticketRecordContextForSmoke({
   id: 'local:one',

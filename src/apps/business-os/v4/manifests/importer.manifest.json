@@ -1,0 +1,154 @@
+{
+  "_capability_evidence": {},
+  "_declaration": "modules/importer/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/importer/index.html",
+  "_rust_basis": "keine app-eigene Logik (`importer.rs` mit 4289 Z. dient Matching/Outbound-Import, nicht dieser App; `\"importer\"` nur ID-Liste `store.rs:36565`). App-Erzeugung = Plattform.",
+  "_source_dir": "src/apps/business-os/modules/importer",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "importer",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [],
+  "collections": {},
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {},
+  "files": {
+    "V4-PORT.md": "11cebfec3437c0720ded3b0e38d36e4ffad0efac9faacf1309ef2afe8f374283",
+    "assets/icon.jpg": "2cf8363841c711ef2ebda7601966deda35fed0cfe958b11c5398532e11abd5f0",
+    "assets/icon@512.jpg": "1a7af5616ecd747e13d431d8947c2629af407fa8d964bed9e2041991aacdfe72",
+    "collections.schema.json": "63a0a4167a82279e1f43176b3f0353a0900268293d8545bd2fb4c81ed3de2b11",
+    "icon.svg": "c0c8b2c7ccc5207bc51b76bec3a1ea2c741915ae061ceedf3bea7b2c2ecf105a",
+    "index.css": "ee7699858f94126b619af2be493509fc96a74e3d1b78e64bffbf3d46c492d07c",
+    "index.html": "0c5ce93057d6045d62d11905ca77532fddf7a4afcb4e0cc72fc5ebf4e844a67a",
+    "index.js": "d9839a4638771eb7dabf74e4df7155548cc80d27dc9b02975ec3406123efc1a4",
+    "locales/de.json": "d18399552b2fe7960ca9200927d2007648dafbce5e7949b3cb8c9ac5d8993ca2",
+    "locales/en.json": "64486af62593cf029a8af66193c6b1dbfe7317d888fac150a75001c45ece361a",
+    "module.json": "8a2f62d60db874c31e9565af471d83314dbf0fc45bbd195a364135889fc830ff",
+    "v4-manifest.json": "90dcd266b39063f5e0e17f39378a9a49f48ecd36277234a6a279086d7a33ff51"
+  },
+  "foreign_collections": {
+    "business_commands": {
+      "_evidence": {
+        "code_read": [
+          "index.js:521",
+          "index.js:524"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/importer/V4-PORT.md „Collections (für den Manifest-Generator)“, OFFEN 3",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "desktop_file_chunks": {
+      "_evidence": {
+        "code_read": [
+          "index.js:275",
+          "index.js:329"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/importer/V4-PORT.md „Collections (für den Manifest-Generator)“, OFFEN 3",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read",
+        "write"
+      ],
+      "owner_app": "desktop"
+    },
+    "desktop_files": {
+      "_evidence": {
+        "code_read": [
+          "index.js:162",
+          "index.js:275",
+          "index.js:301"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/importer/V4-PORT.md „Collections (für den Manifest-Generator)“, OFFEN 3",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read",
+        "write"
+      ],
+      "owner_app": "desktop"
+    }
+  },
+  "handlers": {},
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/importer.jpg (shared/operator-icon-selection.js, sha256 13c493fc01eb…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "category": "development",
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-importer\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-importer\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0ea5e9\" /><stop offset=\"100%\" stop-color=\"#6366f1\" /></linearGradient></defs><rect x=\"3\" y=\"9\" width=\"18\" height=\"12\" rx=\"2.5\" fill=\"url(#grad-importer)\" fill-opacity=\"0.12\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></rect><path d=\"M12 3v9\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M8.5 8.5 12 12l3.5-3.5\" stroke=\"url(#grad-importer)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path></svg>",
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 600,
+        "width": 860
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#ea580c",
+        "category": "Development",
+        "iconAssetId": "workjet.business-os.importer",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "form",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "App Importer"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "d80d47d42d707e5a019f964ed97e4cc8368569b873c9153761b80bd0a28853bd",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "App Importer",
+  "triggers": [],
+  "version": "0.3.0"
+}

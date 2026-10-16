@@ -1,0 +1,218 @@
+{
+ "app": "outbound",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [
+    "put outbound_campaigns/outbound_default_campaign local=ok result=accepted {\"id\":\"outbound_default_campaign\",\"name\":\"Outbound Firmenqualifizierung\",\"objective\":\"Unternehmen importieren, qualifizi",
+    "command knowledge.command local=ok result=accepted {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archived\"],\"client_context\":{\"source",
+    "command knowledge.command local=ok result=accepted {\"title\":\"Knowledge command\",\"args\":[\"data\",\"create\",\"--domain\",\"outbound\",\"--key\",\"campaign_outbound_default_campaign_c",
+    "command knowledge.command local=ok result=accepted {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archived\"],\"client_context\":{\"source",
+    "command knowledge.command local=ok result=accepted {\"title\":\"Knowledge command\",\"args\":[\"data\",\"create\",\"--domain\",\"outbound\",\"--key\",\"campaign_outbound_default_campaign_c",
+    "command knowledge.command local=ok result=accepted {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archived\"],\"client_context\":{\"source",
+    "command knowledge.command local=ok result=accepted {\"title\":\"Knowledge command\",\"args\":[\"data\",\"create\",\"--domain\",\"outbound\",\"--key\",\"campaign_outbound_default_campaign_r",
+    "command knowledge.command local=ok result=accepted {\"title\":\"Knowledge command\",\"args\":[\"skill\",\"add-skillbook\",\"--id\",\"business-os.outbound.campaigns.v1\",\"--title\",\"Busin",
+    "command knowledge.command local=ok result=accepted {\"title\":\"Knowledge command\",\"args\":[\"skill\",\"add-runbook\",\"--id\",\"business-os.outbound.outbound_default_campaign.runboo",
+    "command knowledge.command local=ok result=accepted {\"title\":\"Knowledge command\",\"args\":[\"skill\",\"add-item\",\"--id\",\"business-os.outbound.outbound_default_campaign.runbook.v",
+    "patch outbound_campaigns/outbound_default_campaign local=ok result=accepted {\"payload\":{\"outbound_only\":true,\"briefing\":\"\",\"briefing_template_id\":\"\",\"briefing_language\":\"de\",\"knowledge\":{\"domain\":"
+   ],
+   "title": "Outbound",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neue Campaign",
+    "button:Campaigns importieren",
+    "button:Campaigns exportieren",
+    "button:Kachelansicht",
+    "button:Listenansicht",
+    "button:Filter",
+    "nav:Alle (7)",
+    "nav:Aktiv (6)",
+    "nav:Planung (1)",
+    "nav:Beendet (0)",
+    "row:Outbound Firmenqualifizierung ",
+    "button:Outbound Firmenqualifizierung ",
+    "button:Importjob anlegen",
+    "button:Campaign Runbook öffnen",
+    "button:Campaign bearbeiten",
+    "button:Campaign löschen",
+    "row:Angebot Wartungsvertrag Halle ",
+    "button:Angebot Wartungsvertrag Halle ",
+    "row:Projektplan Relaunch Kundenpor",
+    "button:Projektplan Relaunch Kundenpor",
+    "row:Lieferantenbewertung 2026 repl",
+    "button:Lieferantenbewertung 2026 repl",
+    "row:Onboarding neue Mitarbeitende ",
+    "button:Onboarding neue Mitarbeitende ",
+    "row:Rahmenvertrag über Wartung und",
+    "button:Rahmenvertrag über Wartung und",
+    "row:Kundentermin Vorbereitung stri",
+    "button:Kundentermin Vorbereitung stri",
+    "button:Tabelle als Excel exportieren",
+    "button:Research-Felder einstellen",
+    "nav:Campaign",
+    "nav:Sequenz & Versand",
+    "nav:Input",
+    "nav:Research",
+    "nav:Qualifiziert",
+    "nav:Kontakte",
+    "nav:Leads",
+    "nav:Pipeline",
+    "nav:Nicht passend",
+    "check:on",
+    "select:Alle Status Offen Recherchiert",
+    "select:Alle Tags Entscheider Influenc",
+    "button:Versteckte Firmen 0",
+    "button:CTOX RESEARCH CTOX arbeitet ge",
+    "nav:UNTERNEHMEN ↕ TEL ↕ E-MAIL ↕ D",
+    "button:Unternehmen Sortieren",
+    "button:Tel Sortieren",
+    "button:E-Mail Sortieren",
+    "button:Domain Sortieren",
+    "button:Ansprechpartner Sortieren",
+    "button:Kontakt Sortieren",
+    "row:Rahmenvertrag über Wartung und",
+    "button:Rahmenvertrag über Wartung und",
+    "button:fischer.de",
+    "button:In Pipeline",
+    "button:Ausblenden",
+    "button:Unternehmensdaten nachrecherch",
+    "button:Recherche nach menschlicher Ko",
+    "button:Agent-Run-Log herunterladen",
+    "button:In Pipeline übernehmen"
+   ],
+   "shot": "outbound/420-01-open.png"
+  },
+  {
+   "step": "nav Alle (7)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "outbound/420-02-nav_Alle_7_.png"
+  },
+  {
+   "step": "nav Aktiv (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "outbound/420-03-nav_Aktiv_6_.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 1327,
+   "shot": "outbound/420-04-suche_ohne_Treffer.png",
+   "textAfter": 803
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "outbound/420-05-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "outbound_campaigns",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "knowledge.command",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "knowledge.command",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "knowledge.command",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "knowledge.command",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "knowledge.command",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "knowledge.command",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "knowledge.command",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "knowledge.command",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "knowledge.command",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "patch",
+   "coll": "outbound_campaigns",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "outbound",
+  "Outbound"
+ ]
+}

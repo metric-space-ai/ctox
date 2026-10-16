@@ -9,7 +9,6 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-t="rightKicker">Deine Apps</span>
           <h2 class="ctox-pane-title" data-t="rightTitle">Weiterarbeiten</h2>
         </div>
         <div class="ctox-pane-actions">
@@ -55,16 +54,15 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <h1 class="ctox-pane-title" data-t="centerTitle">Was möchtest du bauen?</h1>
+          <h1 class="ctox-pane-title" id="creator-center-title" data-t="centerTitle">Was möchtest du bauen?</h1>
         </div>
       </div>
     </header>
 
     <div class="ctox-pane-body">
       <div class="ctox-pane-scroll creator-workspace">
-        <section class="creator-composer" aria-labelledby="creator-request-label">
-          <label class="ctox-field-label" id="creator-request-label" for="app-request-input" data-t="requestLabel">Deine App-Idee</label>
-          <textarea id="app-request-input" class="ctox-textarea creator-request-textarea" placeholder="Zum Beispiel: Erstelle eine einfache CRM-App mit Kundenliste, Suche, Status und Detailansicht." data-t-placeholder="requestPlaceholder"></textarea>
+        <section class="creator-composer" aria-labelledby="creator-center-title">
+          <textarea id="app-request-input" class="ctox-textarea creator-request-textarea" aria-label="Deine App-Idee" data-t-aria="requestLabel" placeholder="z. B. CRM mit Kundenliste, Suche und Status" data-t-placeholder="requestPlaceholder"></textarea>
         </section>
 
         <section class="creator-examples" aria-labelledby="creator-examples-title">
@@ -116,7 +114,7 @@
                 <label class="ctox-field-label" for="select-app-archetype" data-t="fieldArchetype">Grundstruktur</label>
                 <select id="select-app-archetype" class="ctox-select">
                   <option value="record-workbench" selected data-t="archetypeRecordWorkbench">Liste &amp; Details</option>
-                  <option value="queue-workflow" data-t="archetypeQueueWorkflow">Warteschlange &amp; Workflow</option>
+                  <option value="queue-workflow" data-t="archetypeQueueWorkflow">Queue &amp; Workflow</option>
                   <option value="editor-document" data-t="archetypeEditorDocument">Editor &amp; Dokument</option>
                   <option value="automation" data-t="archetypeAutomation">Automatisierung</option>
                   <option value="timeline-thread" data-t="archetypeTimelineThread">Verlauf &amp; Thread</option>
@@ -143,22 +141,11 @@
         </details>
 
         <footer class="creator-submit">
-          <div class="sync-status">
-            <span class="sync-dot is-blocked" id="deploy-sync-dot"></span>
-            <span id="deploy-sync-text" aria-live="polite" data-t="requestMissing">Beschreibe zuerst kurz deine App.</span>
-          </div>
           <button type="button" id="btn-deploy-app" class="ctox-button ctox-run-control" disabled>
             <span data-t="deployButton">App erstellen</span>
             <span aria-hidden="true">→</span>
           </button>
         </footer>
-
-        <details class="creator-status-details">
-          <summary data-t="terminalTitle">Technischer Status</summary>
-          <div id="console-logs-container" class="console-logs os-scrollbar" aria-live="polite">
-            <div class="console-log-entry info">[SYSTEM] App Creator bereit.</div>
-          </div>
-        </details>
       </div>
     </div>
   </section>

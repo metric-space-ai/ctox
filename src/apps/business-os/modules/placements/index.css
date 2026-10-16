@@ -9,26 +9,38 @@
 /* ---- Explicit workspace pins (design-guide: pin panes to grid tracks so a
    hidden resizer never lets the main view slide onto an empty track). Pane
    rows: header / band / well / footer (left) and header / body / footer. ---- */
-.placements-module {
+[data-app="placements"] .placements-module {
   --ctox-left-width: 320px;
 }
 
-.placements-left {
+[data-app="placements"] .placements-left {
   grid-column: 1;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
-.placements-module > [data-resizer="left"] {
+[data-app="placements"] .placements-module > [data-resizer="left"] {
   grid-column: 2;
 }
 
-.placements-center {
+[data-app="placements"] .placements-center {
   grid-column: 3;
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
+/* Shell v4: Fenster-Icon und Fenstersteuerung liegen in einer eigenen
+   Chrome-Zeile UEBER dem App-root (v4/frame/frame.css .shell-window-content
+   grid-row 2), nicht mehr ueber dem Inhalt. Icon-Zone 0 (die calc()-Einzuege
+   fallen auf ihr normales Polster), die 74px-Steuerungszone rechts ist
+   entfernt. Der v4-Rahmen setzt keinen Container je Fenster (nur
+   `container: v4f` am Desktop), deshalb traegt das App-root den
+   Fenster-Container. */
+[data-app="placements"] {
+  --shell-v2-icon-size: 0px;
+  container: business-app-window / inline-size;
+}
+
 /* ---------------------------------------------------------------------------
-   Shell V2 head geometry. Reference: modules/knowledge/index.css, mirrored on
+   Shell V2 head geometry (v2-Herkunft; Zonen siehe v4-Hinweis oben). Reference: modules/knowledge/index.css, mirrored on
    the already-migrated modules/customers/index.css.
 
    `.shell-window-content` sits at inset: 0 and is NOT indented, so the app has
@@ -50,7 +62,7 @@
    "Vermittlungen" — and that title is the shell's version-menu trigger. The v2
    default column is therefore widened to pay the reservation; the resizer
    (260-520px) still overrides it. */
-.shell-window[data-shell-contract="v2"] .placements-module {
+[data-app="placements"] .placements-module {
   --ctox-left-width: 380px;
 }
 
@@ -61,7 +73,7 @@
    The icon clearance sits on the HEAD element itself so its measured
    padding-left pays the 80px contract floor (h2) and rows 1+2 plus the tray
    all inherit the indent. */
-.shell-window[data-shell-contract="v2"] .placements-module .placements-left > .ctox-pane-header {
+[data-app="placements"] .placements-module .placements-left > .ctox-pane-header {
   box-sizing: border-box;
   min-height: calc(2 * var(--shell-v2-header-row-size, 37px));
   padding: 0 0 0 calc(var(--shell-v2-icon-size, 80px) + 14px);
@@ -71,16 +83,16 @@
    top right of the LAST head of the top row. Contract §7.3 measures that head's
    own padding-right, not a child's, so the reservation lives on the head
    element; the title row adds only its ordinary 6px of air inside it. */
-.shell-window[data-shell-contract="v2"] .placements-module .placements-center > .ctox-pane-header {
+[data-app="placements"] .placements-module .placements-center > .ctox-pane-header {
   box-sizing: border-box;
   height: calc(2 * var(--shell-v2-header-row-size, 37px));
   min-height: calc(2 * var(--shell-v2-header-row-size, 37px));
-  padding: 0 calc(2 * var(--shell-v2-header-row-size, 37px)) 0 0;
+  padding: 0 14px 0 0;
 }
 
 /* Row 1 of both heads is the shell header band: identical height. */
-.shell-window[data-shell-contract="v2"] .placements-module .placements-left > .ctox-pane-header > .ctox-pane-title-row,
-.shell-window[data-shell-contract="v2"] .placements-module .placements-center > .ctox-pane-header > .ctox-pane-title-row {
+[data-app="placements"] .placements-module .placements-left > .ctox-pane-header > .ctox-pane-title-row,
+[data-app="placements"] .placements-module .placements-center > .ctox-pane-header > .ctox-pane-title-row {
   box-sizing: border-box;
   height: var(--shell-v2-header-row-size, 37px);
   min-height: var(--shell-v2-header-row-size, 37px);
@@ -90,7 +102,7 @@
    band border, so both rows together close at exactly 74px. Its left indent
    comes from the head's own padding; children (icons 30px, search capped
    below) stay inside the 36px row. */
-.shell-window[data-shell-contract="v2"] .placements-module .placements-left > .ctox-pane-header > .ctox-filterbar {
+[data-app="placements"] .placements-module .placements-left > .ctox-pane-header > .ctox-filterbar {
   box-sizing: border-box;
   height: calc(var(--shell-v2-header-row-size, 37px) - 1px);
   min-height: calc(var(--shell-v2-header-row-size, 37px) - 1px);
@@ -98,16 +110,16 @@
   padding: 0 12px 0 0;
 }
 
-.shell-window[data-shell-contract="v2"] .placements-module .placements-left > .ctox-pane-header .ctox-pane-search {
+[data-app="placements"] .placements-module .placements-left > .ctox-pane-header .ctox-pane-search {
   min-height: 30px;
   height: 30px;
 }
 
-.shell-window[data-shell-contract="v2"] .placements-module .placements-left > .ctox-pane-header > .ctox-pane-title-row {
+[data-app="placements"] .placements-module .placements-left > .ctox-pane-header > .ctox-pane-title-row {
   padding-right: 14px;
 }
 
-.shell-window[data-shell-contract="v2"] .placements-module .placements-center > .ctox-pane-header > .ctox-pane-title-row {
+[data-app="placements"] .placements-module .placements-center > .ctox-pane-header > .ctox-pane-title-row {
   padding-left: 14px;
   padding-right: 6px;
 }
@@ -118,11 +130,11 @@
    stays because it carries the record state. The shell hangs its version menu
    on the first .ctox-pane-header .ctox-pane-title, so that title must stay
    present and hittable. */
-.shell-window[data-shell-contract="v2"] .placements-module .placements-left > .ctox-pane-header .ctox-pane-kicker {
+[data-app="placements"] .placements-module .placements-left > .ctox-pane-header .ctox-pane-kicker {
   display: none;
 }
 
-.shell-window[data-shell-contract="v2"] .placements-module .ctox-pane-header .ctox-pane-titles {
+[data-app="placements"] .placements-module .ctox-pane-header .ctox-pane-titles {
   flex: 1 1 auto;
   flex-direction: row;
   align-items: baseline;
@@ -132,7 +144,7 @@
   overflow: hidden;
 }
 
-.shell-window[data-shell-contract="v2"] .placements-module .ctox-pane-header .ctox-pane-title {
+[data-app="placements"] .placements-module .ctox-pane-header .ctox-pane-title {
   flex: 0 1 auto;
   min-width: 44px;
   margin: 0;
@@ -141,17 +153,17 @@
   white-space: nowrap;
 }
 
-.shell-window[data-shell-contract="v2"] .placements-module .ctox-pane-header .ctox-pane-kicker {
+[data-app="placements"] .placements-module .ctox-pane-header .ctox-pane-kicker {
   flex: 0 1 auto;
   min-width: 0;
 }
 
 /* The action block never claims the title's width. */
-.shell-window[data-shell-contract="v2"] .placements-module .ctox-pane-header .ctox-pane-actions {
+[data-app="placements"] .placements-module .ctox-pane-header .ctox-pane-actions {
   flex: 0 0 auto;
 }
 
-.placements-workbench-scroll {
+[data-app="placements"] .placements-workbench-scroll {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -168,25 +180,25 @@
              line-height. Maximum density, nothing else.
 
    Selection styling stays with .ctox-list-item from the kit. ---- */
-.placements-module .ctox-list .placements-row {
+[data-app="placements"] .placements-module .ctox-list .placements-row {
   padding: 11px 14px;
 }
 
-.placements-shard {
+[data-app="placements"] .placements-shard {
   display: grid;
   gap: 3px;
   min-width: 0;
   line-height: 1.35;
 }
 
-.placements-shard-title {
+[data-app="placements"] .placements-shard-title {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
 }
 
-.placements-shard-title strong {
+[data-app="placements"] .placements-shard-title strong {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -195,7 +207,7 @@
   font-weight: 650;
 }
 
-.placements-shard-meta {
+[data-app="placements"] .placements-shard-meta {
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
@@ -208,12 +220,12 @@
    app-wide view marker (same convention as customers), `.is-compact` on the
    row says the row was rendered with the one-line markup, so the dense rules
    can never land on a card-shaped row. */
-.placements-module .ctox-list.is-list-view .placements-row.is-compact {
+[data-app="placements"] .placements-module .ctox-list.is-list-view .placements-row.is-compact {
   padding: 4px 14px;
   min-height: 26px;
 }
 
-.placements-row-compact {
+[data-app="placements"] .placements-row-compact {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -222,7 +234,7 @@
   line-height: 1.2;
 }
 
-.placements-compact-title {
+[data-app="placements"] .placements-compact-title {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -232,7 +244,7 @@
   font-weight: 600;
 }
 
-.placements-compact-tag {
+[data-app="placements"] .placements-compact-tag {
   flex: 0 0 auto;
   max-width: 40%;
   overflow: hidden;
@@ -244,51 +256,31 @@
 }
 
 /* ---- Workbench detail (auto-revealed on selection) + early-leave action. ---- */
-.placements-detail:empty {
+[data-app="placements"] .placements-detail:empty {
   display: none;
 }
 
-.placements-detail-card {
+[data-app="placements"] .placements-detail-card {
   display: grid;
   gap: 10px;
 }
 
-.placements-detail-actions {
+[data-app="placements"] .placements-detail-actions {
   display: flex;
   justify-content: flex-end;
 }
 
 /* ---- Optional create-only fields collapsed behind a native disclosure. ---- */
-.placements-module .ats-more > summary {
+[data-app="placements"] .placements-module .ats-more > summary {
   cursor: pointer;
   color: var(--muted);
   font-size: 11px;
 }
 
-.placements-module .ats-more[open] > summary {
+[data-app="placements"] .placements-module .ats-more[open] > summary {
   margin-bottom: 5px;
 }
 
-/* ---- Gate callout: collapse when empty (the kit callout has no :empty rule),
-   plus the secondary detail lines and blocker list rendered inside it. ---- */
-.placements-module [data-ats-gate]:empty {
-  display: none;
-}
-
-.placements-module .ats-result-row {
-  margin-top: 4px;
-  color: var(--muted);
-}
-
-.placements-module .ats-blockers {
-  margin: 6px 0 0;
-  padding-left: 18px;
-  color: var(--muted);
-}
-
-.placements-module .ats-blockers li {
-  margin: 2px 0;
-}
 
 /* ---- Shell breakpoint 1024px (three columns -> two) has nothing to do here:
    placements is a two-pane app, so its column count is already the 2-column
@@ -302,7 +294,7 @@
    therefore covers the icon zone itself (0..80 x 0..74) — the same geometry
    the abgenommene Knowledge app uses. Nothing else may paint there. ---- */
 @container business-app-window (max-width: 768px) {
-  .placements-module {
+  [data-app="placements"] .placements-module {
     grid-template-columns: minmax(0, 1fr);
     /* Window-relative, not screen-relative: the previous 34vh measured the
        display, which is the same mistake as @media in a window shell (§6).
@@ -316,27 +308,21 @@
     gap: 8px;
   }
 
-  .placements-module > [data-resizer="left"] {
+  [data-app="placements"] .placements-module > [data-resizer="left"] {
     display: none !important;
   }
 
-  .placements-left,
-  .placements-center {
+  [data-app="placements"] .placements-left,
+  [data-app="placements"] .placements-center {
     grid-column: 1;
   }
 
-  /* Stacked, the left head is also the LAST head of the top row, so it is the
-     one under the window control and must carry that reservation itself. */
-  .shell-window[data-shell-contract="v2"] .placements-module .placements-left > .ctox-pane-header {
-    padding-right: calc(2 * var(--shell-v2-header-row-size, 37px));
-  }
-
-  .shell-window[data-shell-contract="v2"] .placements-module .placements-left > .ctox-pane-header > .ctox-pane-title-row {
+  [data-app="placements"] .placements-module .placements-left > .ctox-pane-header > .ctox-pane-title-row {
     padding-right: 6px;
   }
 
   /* The filterbar keeps its own right air inside that reservation. */
-  .shell-window[data-shell-contract="v2"] .placements-module .placements-left > .ctox-pane-header > .ctox-filterbar {
+  [data-app="placements"] .placements-module .placements-left > .ctox-pane-header > .ctox-filterbar {
     padding-right: 6px;
   }
 }
@@ -345,28 +331,56 @@
    control reaches the 44px minimum; the disclosure summary gets a full
    finger-height hit area. ---- */
 @media (pointer: coarse) {
-  .placements-module button,
-  .placements-module input,
-  .placements-module select,
-  .placements-module textarea {
+  [data-app="placements"] .placements-module button,
+  [data-app="placements"] .placements-module input,
+  [data-app="placements"] .placements-module select,
+  [data-app="placements"] .placements-module textarea {
     min-height: 44px;
   }
 
-  .placements-module .ctox-pane-icon {
+  [data-app="placements"] .placements-module .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
 
-  .placements-module .ctox-pane-tab,
-  .placements-module .ctox-list-item,
-  .placements-row-compact,
-  .placements-shard {
+  [data-app="placements"] .placements-module .ctox-pane-tab,
+  [data-app="placements"] .placements-module .ctox-list-item,
+  [data-app="placements"] .placements-row-compact,
+  [data-app="placements"] .placements-shard {
     min-height: 44px;
   }
 
-  .placements-module .ats-more > summary {
+  [data-app="placements"] .placements-module .ats-more > summary {
     min-height: 44px;
     display: flex;
     align-items: center;
+  }
+}
+
+/* Anlegeformular nur im Modus „+ Neu“ (FIX9a). */
+[data-app="placements"] form[data-ats-form][hidden] { display: none; }
+
+/* FIX11 (G4, 420 px): zwischen Icon-Zone (links) und Knopfzone (rechts) kuerzte der Pane-Titel auf wenige Buchstaben.
+   Schmal bricht die Titelzeile um: der Titel behaelt seine volle Breite (Umbruch nur an Wortgrenzen, nie Buchstabe
+   fuer Buchstabe), die Kopfknoepfe rutschen in eine zweite Zeile darunter. Breit bleibt die Kopfzeile unveraendert. */
+@container business-app-window (max-width: 768px) {
+  [data-app="placements"] .ctox-pane .ctox-pane-header > .ctox-pane-title-row,
+  [data-app="placements"] .ctox-pane-header .ctox-pane-title-row {
+    flex-wrap: wrap;
+    row-gap: 4px;
+    height: auto;
+    max-height: none;
+  }
+  [data-app="placements"] .ctox-pane .ctox-pane-header .ctox-pane-titles,
+  [data-app="placements"] .ctox-pane-header .ctox-pane-title-row > .ctox-pane-titles { flex: 1 0 auto; max-width: 100%; min-width: 0; overflow: visible; }
+  [data-app="placements"] .ctox-pane .ctox-pane-header .ctox-pane-title,
+  [data-app="placements"] .ctox-pane-header .ctox-pane-titles > .ctox-pane-title {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: normal;
+    hyphens: manual;
+    -webkit-line-clamp: none;
+    line-clamp: none;
   }
 }

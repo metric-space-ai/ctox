@@ -1,0 +1,8 @@
+{
+  "app_id": "demo",
+  "title": "Demo",
+  "entry": "index.js",
+  "min_app_api": "4.0",
+  "capabilities_required": [],
+  "handlers": { "demo.recount": "handlers/recount.js" }
+}

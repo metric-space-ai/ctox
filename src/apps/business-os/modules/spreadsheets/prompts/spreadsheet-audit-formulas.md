@@ -1,0 +1,1 @@
+Scanne diese Tabelle nach allen Formeln. Analysiere sie auf syntaktische Fehler, logische Inkonsistenzen, unvollständige Summenbereiche, fehlende oder fehlerhafte Referenzen und liefere Korrekturempfehlungen.

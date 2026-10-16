@@ -33,6 +33,13 @@ export const SUPPORT_COMMAND_TYPES = Object.freeze([
   'support.agent.writeback',
   'support.agent.apply_suggestion',
   'support.agent.reject_suggestion',
+  'support.agent.task',
+]);
+
+// Abschlussbefehle des Agentenauftrags support.agent.task (Kern §16.30): der Core stellt sie zu, kein UI-Sender.
+export const SUPPORT_AGENT_CALLBACK_TYPES = Object.freeze([
+  'support.agent.task.complete',
+  'support.agent.task.failed',
 ]);
 
 export const SUPPORT_AGENT_SUGGESTION_KINDS = Object.freeze([
@@ -73,58 +80,37 @@ export function buildSupportCommand({
   };
 }
 
+// „CTOX fragen“ (Strang SKL-A1): App-Befehl support.agent.task an den eigenen Handler. Der Handler füllt das
+// Template prompts/agent-task.md und startet den Agenten mit dem App-Skill support/support-workflow; Vorschläge
+// kommen über support.agent.task.complete in support_agent_suggestions (vorher: Kernbefehl business_os.chat.task mit
+// Phantom-Skill business-os-support-workflow und writeback_contract).
 export function buildSupportAgentTaskCommand({
   id = '',
   conversationId,
   title,
-  instruction,
-  prompt,
   requestKind = 'summary',
+  status = '',
+  priority = '',
   recordSnapshot = {},
-  requiredSkills = ['business-os-support-workflow'],
   actor = {},
-  priority = 'normal',
 } = {}) {
   if (!conversationId) throw new Error('conversationId is required');
-  const commandId = id || `cmd_support_agent_${cryptoRandomId()}`;
-  const safeTitle = title || `Support CTOX task ${conversationId}`;
-  const safePrompt = prompt || instruction || safeTitle;
-  return {
-    id: commandId,
-    module: 'support',
-    command_type: 'business_os.chat.task',
-    record_id: conversationId,
-    inbound_channel: 'support',
-    payload: {
-      title: safeTitle,
-      instruction: instruction || safePrompt,
-      prompt: safePrompt,
-      user_message: safePrompt,
-      mode: 'data',
-      target: 'data',
-      priority,
-      source_module: 'support',
-      thread_key: `business-os/support/${conversationId}`,
-      required_skills: [...requiredSkills],
-      record_snapshot: recordSnapshot && typeof recordSnapshot === 'object' ? recordSnapshot : {},
-      writeback_contract: {
-        command_type: 'support.agent.writeback',
-        collection: 'support_agent_suggestions',
-        record_id: conversationId,
-        source_collection: 'support_conversations',
-        allowed_suggestion_kinds: [...SUPPORT_AGENT_SUGGESTION_KINDS],
-      },
-      response_channel: 'business_os_chat',
-      outbound_channel: 'business_os_chat',
-    },
-    client_context: withOptionalActor({
-      source: 'support-agent-task',
-      module: 'support',
-      surface: `support.agent.${requestKind}`,
-      record_type: 'support_conversation',
-      record_id: conversationId,
-    }, actor),
+  const payload = {
+    conversation_id: conversationId,
+    request_kind: requestKind,
+    record_snapshot: recordSnapshot && typeof recordSnapshot === 'object' ? recordSnapshot : {},
   };
+  if (title) payload.title = title;
+  if (status) payload.status = status;
+  if (priority) payload.priority = priority;
+  return buildSupportCommand({
+    id: id || `cmd_support_agent_${cryptoRandomId()}`,
+    commandType: 'support.agent.task',
+    recordId: conversationId,
+    actor,
+    surface: `support.agent.${requestKind}`,
+    payload,
+  });
 }
 
 export function buildAgentWritebackCommand({

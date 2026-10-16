@@ -1,0 +1,505 @@
+{
+ "app": "customers",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Kunden",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 744
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Kunde anlegen",
+    "button:Ansicht speichern",
+    "button:Importieren",
+    "button:Exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Alle Kunden (12)",
+    "nav:Aktive Kunden (3)",
+    "nav:Verlängerung (2)",
+    "nav:Gefährdet (4)",
+    "row:Kunde auswählen: Müller Maschi",
+    "row:Kunde auswählen: Schneider Log",
+    "row:Kunde auswählen: Becker & Söhn",
+    "row:Kunde auswählen: Hoffmann Medi",
+    "row:Kunde auswählen: Wagner Elektr",
+    "row:Kunde auswählen: Fischer Softw",
+    "row:Kunde auswählen: Krause Facili",
+    "row:Kunde auswählen: Richter Bau &",
+    "row:Kunde auswählen: Weiß Lebensmi",
+    "row:Kunde auswählen: Schäfer Autom",
+    "row:Kunde auswählen: Neumann Energ",
+    "row:Kunde auswählen: Zimmermann Ve",
+    "button:Linke Spalte anpassen",
+    "button:Kunde bearbeiten",
+    "button:Archivieren",
+    "nav:Übersicht",
+    "nav:Kontakte",
+    "nav:Verkaufschancen",
+    "nav:Aktivitäten",
+    "nav:Aufgaben",
+    "nav:Notizen",
+    "nav:Dateien",
+    "nav:Apps",
+    "nav:Übergabe",
+    "nav:Dubletten",
+    "button:Kontakt anlegen",
+    "button:Kontakt auswählen: Anna Schmid",
+    "button:Verkaufschance auswählen: Müll",
+    "row:Kontakt auswählen: Anna Schmid",
+    "row:Verkaufschance auswählen: Müll"
+   ],
+   "shot": "customers/1280-01-open.png"
+  },
+  {
+   "step": "nav Alle Kunden (12)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "customers/1280-02-nav_Alle_Kunden_12_.png"
+  },
+  {
+   "step": "nav Aktive Kunden (3)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "customers/1280-03-nav_Aktive_Kunden_3_.png"
+  },
+  {
+   "step": "nav Verlängerung (2)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "customers/1280-04-nav_Verl_ngerung_2_.png"
+  },
+  {
+   "step": "nav Gefährdet (4)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "customers/1280-05-nav_Gef_hrdet_4_.png"
+  },
+  {
+   "step": "nav Übersicht",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Kontakte",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 840>832"
+   ],
+   "open": true,
+   "kind": "nav",
+   "shot": "customers/1280-06-nav_Kontakte.png"
+  },
+  {
+   "step": "nav Verkaufschancen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-pane-scroll 1488>856"
+   ],
+   "open": true,
+   "kind": "nav",
+   "shot": "customers/1280-07-nav_Verkaufschancen.png"
+  },
+  {
+   "step": "nav Aktivitäten",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "customers/1280-08-nav_Aktivit_ten.png"
+  },
+  {
+   "step": "nav Aufgaben",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "customers/1280-09-nav_Aufgaben.png"
+  },
+  {
+   "step": "nav Notizen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "customers/1280-10-nav_Notizen.png"
+  },
+  {
+   "step": "nav Dateien",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "customers/1280-11-nav_Dateien.png"
+  },
+  {
+   "step": "nav Apps",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "customers/1280-12-nav_Apps.png"
+  },
+  {
+   "step": "nav Übergabe",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 860>832"
+   ],
+   "open": true,
+   "kind": "nav",
+   "shot": "customers/1280-13-nav_bergabe.png"
+  },
+  {
+   "step": "nav Dubletten",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 980>832"
+   ],
+   "open": true,
+   "kind": "nav",
+   "shot": "customers/1280-14-nav_Dubletten.png"
+  },
+  {
+   "step": "zurück zu Reiter Alle Kunden (12)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 980>832"
+   ],
+   "open": true,
+   "kind": "nav",
+   "shot": "customers/1280-15-zur_ck_zu_Reiter_Alle_Kunden_12_.png"
+  },
+  {
+   "step": "row Kunde auswählen: Müller Maschinenbau GmbH",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 980>832"
+   ],
+   "open": true,
+   "kind": "row",
+   "shot": "customers/1280-16-row_Kunde_ausw_hlen_M_ller_Maschinenbau_.png"
+  },
+  {
+   "step": "row Kunde auswählen: Schneider Logistik AG",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 980>832"
+   ],
+   "open": true,
+   "kind": "row",
+   "shot": "customers/1280-17-row_Kunde_ausw_hlen_Schneider_Logistik_A.png"
+  },
+  {
+   "step": "button Kunde anlegen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "customers/1280-18-button_Kunde_anlegen.png"
+  },
+  {
+   "step": "formular 6 Felder → Anlegen",
+   "changed": true,
+   "ops": [
+    "command customers.account.create local=ok result=accepted {\"name\":\"Rundgang Test\",\"domain\":\"rundgang test\",\"industry\":\"Rundgang Test\",\"account_owner_id\":\"Rundgang Test\",\"account_status\":\"active\",\"cu"
+   ],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 980>832"
+   ],
+   "open": true,
+   "kind": "submit",
+   "shot": "customers/1280-19-formular_6_Felder_Anlegen.png"
+  },
+  {
+   "step": "button Ansicht speichern",
+   "changed": 1,
+   "ops": [
+    "command customers.view.save local=ok result=accepted {\"view\":{\"name\":\"Kunden\",\"object_type\":\"account\",\"view_type\":\"table\",\"visibility\":\"private\",\"visible_columns\":[\"name\",\"customer_stage\",\"heal"
+   ],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 980>832"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "customers/1280-20-button_Ansicht_speichern.png"
+  },
+  {
+   "step": "button Importieren",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 980>832"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "customers/1280-21-button_Importieren.png"
+  },
+  {
+   "step": "button Exportieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 980>832"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "customers/1280-22-button_Exportieren.png"
+  },
+  {
+   "step": "button Als Liste anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 980>832"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "customers/1280-23-button_Als_Liste_anzeigen.png"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 980>832"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "customers/1280-24-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 980>832"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "customers/1280-25-button_Filter.png"
+  },
+  {
+   "step": "button Linke Spalte anpassen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 980>832"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "customers/1280-26-button_Linke_Spalte_anpassen.png"
+  },
+  {
+   "step": "button Kunde bearbeiten",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "customers/1280-27-button_Kunde_bearbeiten.png"
+  },
+  {
+   "step": "button Abbrechen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 980>832"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "customers/1280-28-button_Abbrechen.png"
+  },
+  {
+   "step": "button Bestehend behalten",
+   "changed": true,
+   "ops": [
+    "command customers.dedupe.resolve local=ok result=accepted {\"candidate_id\":\"dedupe-candidate-002\",\"decision\":\"keep_existing\"}"
+   ],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 980>832"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "customers/1280-29-button_Bestehend_behalten.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 980>832"
+   ],
+   "open": true,
+   "kind": "search",
+   "textBefore": 2168,
+   "shot": "customers/1280-30-suche_ohne_Treffer.png",
+   "textAfter": 952
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 980>832"
+   ],
+   "open": true,
+   "kind": "search",
+   "shot": "customers/1280-31-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "command",
+   "coll": "customers.account.create",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "customers.view.save",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "customers.dedupe.resolve",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "customers",
+  "Kunden"
+ ]
+}

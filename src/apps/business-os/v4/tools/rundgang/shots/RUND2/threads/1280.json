@@ -1,0 +1,484 @@
+{
+ "app": "threads",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Threads",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 748
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neue Notiz anlegen",
+    "button:Gefilterte Threads als JSON ex",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Handeln (0)",
+    "nav:Wartet (0)",
+    "nav:AI (0)",
+    "nav:Erledigt (1)",
+    "button:Linke Spaltenbreite anpassen",
+    "button:Aktionen & Aufmerksamkeit einb",
+    "button:Senden"
+   ],
+   "shot": "threads/1280-01-open.png"
+  },
+  {
+   "step": "nav Handeln (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "threads/1280-02-nav_Handeln_0_.png"
+  },
+  {
+   "step": "nav Wartet (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "threads/1280-03-nav_Wartet_0_.png"
+  },
+  {
+   "step": "nav AI (0)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Erledigt (1)",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear threads.render"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "threads/1280-04-nav_Erledigt_1_.png"
+  },
+  {
+   "step": "zurück zu Reiter Handeln (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "threads/1280-05-zur_ck_zu_Reiter_Handeln_0_.png"
+  },
+  {
+   "step": "button Neue Notiz anlegen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/1280-06-button_Neue_Notiz_anlegen.png"
+  },
+  {
+   "step": "formular 1 Felder → Notiz hinterlassen",
+   "changed": 1,
+   "ops": [
+    "command threads.note.create local=ok result=accepted {\"body\":\"Rundgang Test\",\"kind\":\"note\",\"target_user_ids\":[],\"thread_id\":\"\",\"title\":\"Rundgang Test\",\"source_context\":{\"module\":\"threads\",\"labe"
+   ],
+   "zone": [
+    "clear threads.command.threads.note.create"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "threads/1280-07-formular_1_Felder_Notiz_hinterlassen.png"
+  },
+  {
+   "step": "button Gefilterte Threads als JSON exportieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Als Liste anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/1280-08-button_Als_Liste_anzeigen.png"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/1280-09-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/1280-10-button_Filter.png"
+  },
+  {
+   "step": "button Linke Spaltenbreite anpassen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Aktionen & Aufmerksamkeit einblenden",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/1280-11-button_Aktionen_Aufmerksamkeit_einblende.png"
+  },
+  {
+   "step": "button Senden",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "auswahl Sekundäre Ansicht → delegated",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear threads.render"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "threads/1280-12-auswahl_Sekund_re_Ansicht_delegated.png"
+  },
+  {
+   "step": "button J Angebot Wartungsvertrag Halle 4 · Angebot vor 6 d unread ·",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/1280-13-button_J_Angebot_Wartungsvertrag_Halle_4.png"
+  },
+  {
+   "step": "button Abstimmung übernehmen",
+   "changed": 1,
+   "ops": [
+    "command threads.thread.claim local=ok result=accepted {\"thread_id\":\"thread-005\",\"expected_updated_at_ms\":1791541800000}"
+   ],
+   "zone": [
+    "clear threads.command.threads.thread.claim"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/1280-14-button_Abstimmung_bernehmen.png"
+  },
+  {
+   "step": "button An Teammitglied übergeben",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/1280-15-button_An_Teammitglied_bergeben.png"
+  },
+  {
+   "step": "formular 4 Felder → Senden",
+   "changed": 1,
+   "ops": [
+    "command threads.message.create local=ok result=accepted {\"thread_id\":\"thread-005\",\"body\":\"Rundgang Test\"}"
+   ],
+   "zone": [
+    "clear threads.command.threads.message.create"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "threads/1280-16-formular_4_Felder_Senden.png"
+  },
+  {
+   "step": "button Watch",
+   "changed": 1,
+   "ops": [
+    "command threads.thread.watch local=ok result=accepted {\"thread_id\":\"thread-005\"}"
+   ],
+   "zone": [
+    "clear threads.command.threads.thread.watch"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/1280-17-button_Watch.png"
+  },
+  {
+   "step": "button Snooze",
+   "changed": 1,
+   "ops": [
+    "command threads.thread.snooze local=ok result=accepted {\"thread_id\":\"thread-005\",\"snoozed_until_ms\":1792173334637}"
+   ],
+   "zone": [
+    "clear threads.command.threads.thread.snooze"
+   ],
+   "dialogs": [
+    "dialog: {\"kind\":\"prompt\",\"title\":\"Snooze in Stunden:\",\"text\":\"\",\"default\":\"24\"}"
+   ],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/1280-18-button_Snooze.png"
+  },
+  {
+   "step": "button Rechte Spaltenbreite anpassen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button AUFMERKSAMKEIT",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Speichern",
+   "changed": 1,
+   "ops": [
+    "command threads.notification.preferences.update local=ok result=accepted {\"priority_threshold\":20,\"quiet_start\":\"\",\"quiet_end\":\"\",\"notification_types\":[\"approval\",\"mention\",\"escalation\"]}"
+   ],
+   "zone": [
+    "clear threads.command.threads.notification.preferences.update"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/1280-19-button_Speichern.png"
+  },
+  {
+   "step": "button ÜBERGABE",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Übergeben",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button NEUE CTOX-AUFGABE",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/1280-20-button_NEUE_CTOX-AUFGABE.png"
+  },
+  {
+   "step": "button Neue Aufgabe starten",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button NEUE NOTIZ",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/1280-21-button_NEUE_NOTIZ.png"
+  },
+  {
+   "step": "button CTOX FREIGABE",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 1620,
+   "shot": "threads/1280-22-suche_ohne_Treffer.png",
+   "textAfter": 363
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear threads.render"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "threads/1280-23-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "command",
+   "coll": "threads.note.create",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "threads.thread.claim",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "threads.message.create",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "threads.thread.watch",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "threads.thread.snooze",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "threads.notification.preferences.update",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "threads",
+  "Threads"
+ ]
+}

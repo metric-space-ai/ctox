@@ -16,10 +16,11 @@ test('intake: manifest is consistent and has no inline SVG', () => {
   assert.ok(!manifest.layout || !manifest.layout.icon_svg, 'no inline SVG in manifest');
 });
 
-test('intake: schema declares its owned collection', () => {
-  const schemaSrc = read('schema.js');
-  assert.match(schemaSrc, /applications/);
-  assert.match(schemaSrc, /export const collections/);
+test('intake: collections.schema.json is the only schema source (schema.js removed, §16.13)', () => {
+  const schema = JSON.parse(read('collections.schema.json'));
+  assert.ok(schema.collections.applications, 'applications collection declared');
+  assert.deepEqual(schema.collections.applications.required, ['id', 'channel', 'updated_at_ms']);
+  assert.throws(() => read('schema.js'), /ENOENT/, 'schema.js is gone');
 });
 
 test('intake: left column carries the canonical grammar markup pins', () => {
@@ -29,7 +30,7 @@ test('intake: left column carries the canonical grammar markup pins', () => {
   assert.match(html, /data-pg-tray-toggle/, 'filter tray toggle');
   assert.match(html, /data-pg-tray\b/, 'collapsed tray');
   assert.match(html, /data-pg-reset/, 'tray reset control');
-  assert.match(html, /data-pg-footer/, 'one-line footer target');
+  assert.doesNotMatch(html, /data-pg-footer/, 'keine Fußzeile, die nur den Reiterzähler wiederholt (Textdiät Regel 5)');
 });
 
 test('intake: the view toggle is ONE action button, not a pressed-state pair', () => {
@@ -62,21 +63,21 @@ test('intake: cards and list are different densities, not the same row twice', (
 test('intake: card rows carry meta lines, list rows carry exactly one', async () => {
   const mod = await import('../index.js');
   const rec = {
-    id: 'a1', channel: 'job_board', status: 'screening', vacancy_id: 'VAC-7',
+    id: 'a1', channel: 'job_board', status: 'screening', vacancy_id: 'VAC-7', vacancy_title: 'Lagerist Nord',
     candidate: { name: 'Alice Ng', email: 'a@example.org' },
     documents: ['cv.pdf'], received_at_ms: Date.UTC(2026, 7, 30),
   };
   const card = mod.applicationRow(rec, { view: 'cards' });
   assert.equal((card.match(/class="intake-row-meta/g) || []).length, 2, 'card renders two meta lines below the title');
   assert.equal((card.match(/class="intake-row-head"/g) || []).length, 1, 'card renders a title/status head line');
-  assert.match(card, /VAC-7/, 'card shows the vacancy assignment');
+  assert.match(card, /Lagerist Nord/, 'card shows the vacancy assignment');
   assert.match(card, /a@example\.org/, 'card shows the contact');
   assert.match(card, /Jobbörse/, 'channel renders as a label, not a schema key');
 
   const row = mod.applicationRow(rec, { view: 'list' });
   assert.doesNotMatch(row, /intake-row-meta/, 'list row carries no meta lines');
   assert.match(row, /intake-row-side/, 'list row carries exactly one short meta on the right');
-  assert.doesNotMatch(row, /VAC-7|a@example\.org/, 'list row stays a single dense line');
+  assert.doesNotMatch(row, /Lagerist Nord|a@example\.org/, 'list row stays a single dense line');
 });
 
 test('intake: channel keys render as translated labels', async () => {
@@ -113,7 +114,7 @@ test('intake: import/export handlers are wired in index.js', () => {
   assert.match(indexJs, /URL\.createObjectURL/, 'export uses an object URL');
   // Import = file input reading JSON, upserting via the record helpers.
   assert.match(indexJs, /type = 'file'/, 'import creates a file input');
-  assert.match(indexJs, /\.upsert\(/, 'import upserts records');
+  assert.match(indexJs, /api\.put\(PRIMARY, prepareImport\(/, 'import writes records through api.put');
   assert.match(indexJs, /prepareImport\(/, 'import normalizes via the record helper');
 });
 
@@ -140,30 +141,23 @@ test('intake: record list renders selector rows from a stub doc array', async ()
   // No inline expansion inside the selection list.
   assert.ok(!/<details/.test(out), 'shards do not expand inline');
 
-  const empty = mod.renderRecordList([], { view: 'cards' });
-  assert.match(empty, /ctox-empty/, 'empty state renders the kit empty class');
+  assert.equal(mod.renderRecordList([], { view: 'cards' }), '', 'an empty list renders nothing (App-API 4.0)');
 });
 
-test('intake: data-driven empty is gated by collection readiness', async () => {
+test('intake: no readiness / syncing state in the content (App-API 4.0, R4/R11)', async () => {
   const mod = await import('../index.js');
-  // Empty + not-yet-replicated (ready === false) → kit syncing shell.
-  const syncing = mod.renderRecordList([], { view: 'cards', readiness: { ready: false, state: 'catching-up' } });
-  assert.match(syncing, /ctox-syncing/, 'empty + unready renders the kit syncing shell');
-  assert.match(syncing, /role="status"/, 'syncing shell is a polite status region');
-  assert.ok(!/ctox-empty/.test(syncing), 'syncing shell replaces the empty copy');
-  // Empty + live (ready === true) → the real empty state.
-  const ready = mod.renderRecordList([], { view: 'cards', readiness: { ready: true, state: 'live' } });
-  assert.match(ready, /ctox-empty/, 'empty + ready renders the kit empty class');
-  assert.ok(!/ctox-syncing/.test(ready), 'no syncing shell once the collection is live');
-  // Rows always win, even while the collection reports unready.
+  assert.equal(mod.renderRecordList([], { view: 'cards', readiness: { ready: false } }), '', 'no syncing shell, no empty copy');
   const rows = [{ id: 'a1', channel: 'email', status: 'new', candidate: { name: 'Alice Ng' } }];
-  const withRows = mod.renderRecordList(rows, { view: 'cards', readiness: { ready: false } });
-  assert.match(withRows, /Alice Ng/, 'rows render regardless of readiness');
-  assert.ok(!/ctox-syncing/.test(withRows), 'no syncing shell when rows exist');
-  // Filter empties pass readiness=null → plain (filter) empty copy.
-  const filtered = mod.renderRecordList([], { view: 'cards', readiness: null, emptyText: 'FILTERED' });
-  assert.match(filtered, /ctox-empty/, 'filter empty keeps the empty class');
-  assert.match(filtered, /FILTERED/, 'filter empty keeps its own copy');
+  assert.match(mod.renderRecordList(rows, { view: 'cards' }), /Alice Ng/, 'rows render');
+  assert.doesNotMatch(indexJs, /ctox-syncing|collectionReadiness|commandBus|ctx\.db/, 'no v3 data/sync paths left');
+  assert.match(indexJs, /api\.status\.report\(/, 'state goes to the shell status zone');
+});
+
+test('intake: capture result blockers are derived from the pushed command result', async () => {
+  const mod = await import('../index.js');
+  assert.equal(mod.captureBlockers({ ok: true, application_id: 'appl_1', dedupe_key: 'email:a' }), null);
+  assert.deepEqual(mod.captureBlockers({ ok: false, blockers: ['dup', { message: 'kein Kanal' }] }), ['dup', 'kein Kanal']);
+  assert.deepEqual(mod.captureBlockers({ status: 'blocked' }), []);
 });
 
 test('intake: band + counts derive from the record status field', async () => {

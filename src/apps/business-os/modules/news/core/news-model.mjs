@@ -2,8 +2,6 @@
 // exercise the scheduling, ranking, and command-shaping rules directly.
 
 export const MODULE_ID = 'news';
-export const NEWS_SKILL = 'news-aggregation';
-export const SCRAPE_SKILL = 'universal-scraping';
 export const ISSUE_OUTPUT_CONTRACT = 'ctox.news.issue.v1';
 export const CATEGORIES = Object.freeze(['model', 'tool', 'research', 'debate']);
 export const CADENCES = Object.freeze(['daily', 'weekly', 'deadline', 'manual']);
@@ -440,21 +438,7 @@ export function topicSnapshot(topic) {
   };
 }
 
-export function buildIssueInstruction(topic, sources, previousIssue, commandId = '') {
-  const enabled = sources.filter((source) => source.enabled !== false);
-  const signedIn = enabled.some((source) => authSourceFor(source));
-  const lines = [
-    `Erstelle die News-Ausgabe für das Thema "${topic.title}" mit dem Skill ${NEWS_SKILL}.`,
-    topic.prompt ? `Fokus: ${topic.prompt}` : '',
-    `Sprache: ${topic.language === 'en' ? 'Englisch' : 'Deutsch'}. Höchstens ${topic.max_posts} Beiträge, Kategorien: ${topic.categories.join(', ')}.`,
-    `Quellen (${enabled.length}): ${enabled.map((source) => `${source.kind}:${source.label}`).join('; ') || 'keine konfiguriert, nutze die Websuche'}.`,
-    signedIn && commandId ? `Angemeldete Quellen (X, Reddit) über das CTOX-Konto lesen; --task-id ${commandId}.` : '',
-    previousIssue ? `Vorherige Ausgabe ${previousIssue.issue_date}: wiederhole nur Meldungen mit neuer Entwicklung.` : '',
-    `Liefere das Ergebnis im Vertrag ${ISSUE_OUTPUT_CONTRACT}; jeder Beitrag braucht mindestens eine Quelle mit Link.`,
-  ];
-  return lines.filter(Boolean).join('\n');
-}
-
+// Anweisung, Skill und Rueckruf setzt der Handler news.issue.generate (prompts/issue.md, Skill news/news-aggregation).
 export function buildGenerateCommand(topic, sources, issue, previousIssue) {
   const topicSources = sources.filter((source) => source.topic_id === topic.id);
   const commandId = newCommandId(NEWS_ISSUE_GENERATE);
@@ -466,8 +450,6 @@ export function buildGenerateCommand(topic, sources, issue, previousIssue) {
     topic_id: topic.id,
     issue_id: issue.id,
     issue_date: issue.issue_date,
-    instruction: buildIssueInstruction(topic, topicSources, previousIssue, commandId),
-    required_skills: [NEWS_SKILL],
     thread_key: `business-os/news/${topic.id}`,
     output_contract: ISSUE_OUTPUT_CONTRACT,
     previous_issue_id: previousIssue?.id || '',
@@ -516,11 +498,6 @@ export function buildAdapterCommand(topic, source) {
     payload: {
     topic_id: topic?.id || source.topic_id,
     source_id: source.id,
-    instruction: [
-      `Richte für die News-Quelle "${source.label}" (${source.url || source.items?.join(', ') || source.kind}) einen wiederverwendbaren Scraper mit dem Skill ${SCRAPE_SKILL} ein.`,
-      `target_key: ${source.target_key}. Extrahiere je Meldung Titel, Datum, URL und Kurztext; teste den Lauf einmal.`,
-    ].join('\n'),
-    required_skills: [SCRAPE_SKILL],
     thread_key: `business-os/news/${source.topic_id}/sources`,
     record_snapshot: { source: sourceSnapshot(source) },
   },
@@ -528,9 +505,9 @@ export function buildAdapterCommand(topic, source) {
   });
 }
 
-// Account sources: the adapter is CTOX's own account. The run signs in, or
-// registers with the CTOX mailbox when no account exists yet, and answers
-// with ctox.news.source.v1.
+// Account sources: the adapter is CTOX's own account. The handler news.source.adapter
+// fills prompts/source-connect.md (sign in, or register with the CTOX mailbox; reply
+// ctox.news.source.v1); prompts/source-adapter.md for scrape targets.
 function buildConnectCommand(topic, source, authSource) {
   const commandId = newCommandId(NEWS_SOURCE_ADAPTER);
   return commandEnvelope({
@@ -541,12 +518,6 @@ function buildConnectCommand(topic, source, authSource) {
     topic_id: topic?.id || source.topic_id,
     source_id: source.id,
     auth_source: authSource,
-    instruction: [
-      `Verbinde die News-Quelle "${source.label}" über ein CTOX-Konto bei ${authSource} (Skill ${NEWS_SKILL}, Abschnitt "Konto verbinden").`,
-      `source_id: ${source.id}; --task-id ${commandId}.`,
-      `Ohne Konto: mit dem CTOX-Postfach registrieren (auth-assist-signup --generate-credential --confirm-provisioning). Antworte im Vertrag ${SOURCE_REPLY_CONTRACT}.`,
-    ].join('\n'),
-    required_skills: [NEWS_SKILL],
     thread_key: `business-os/news/${source.topic_id}/sources`,
     output_contract: SOURCE_REPLY_CONTRACT,
     record_snapshot: { source: sourceSnapshot(source) },

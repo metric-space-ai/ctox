@@ -1,0 +1,56 @@
+{
+  "_basis": {
+    "collection_overrides": "modules/knowledge/V4-PORT.md „Manifest-Ergänzung“ (E11)",
+    "commands_in": "modules/knowledge/V4-PORT.md KNOW2 „Manifest-Wunsch knowledge“ (nur von research, kein UI-Knopf)",
+    "multi_instance": "modules/knowledge/V4-PORT.md OFFEN-4; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "row_filters": "modules/knowledge/V4-PORT.md „Manifest-Ergänzung“ (E11)",
+    "triggers": "modules/knowledge/V4-PORT.md „Manifest-Ergänzung“ (E11)"
+  },
+  "_format": "ctox-shell-v4-app-declaration-1",
+  "_note": "Deklaration für gen-manifest.mjs (Strang MAN): nur Angaben, die sich nicht aus dem Code ableiten lassen. _basis = Fundstelle je Feld.",
+  "collection_overrides": {
+    "knowledge_table_rows": {
+      "_class_proposal": "modules/knowledge/V4-PORT.md Manifest-Ergänzung (E11): Projektion eines Sichtfensters, Zeilenfilter eigener Nutzer; client_limit Vorschlag",
+      "class": "window",
+      "client_limit": 5000
+    },
+    "knowledge_views": {
+      "_class_proposal": "modules/knowledge/V4-PORT.md Manifest-Ergänzung (E11): Fenster je Nutzer; client_limit Vorschlag",
+      "class": "window",
+      "client_limit": 200
+    }
+  },
+  "commands_in": [
+    {
+      "from": [
+        "research"
+      ],
+      "type": "knowledge.book.ingest"
+    }
+  ],
+  "multi_instance": false,
+  "row_filters": {
+    "knowledge_table_rows": {
+      "actor_id": "$self"
+    },
+    "knowledge_views": {
+      "actor_id": "$self"
+    }
+  },
+  "triggers": [
+    {
+      "handler": "handlers/knowledge.view.window.js",
+      "on": {
+        "collection": "knowledge_views",
+        "op": "insert"
+      }
+    },
+    {
+      "handler": "handlers/knowledge.view.window.js",
+      "on": {
+        "collection": "knowledge_views",
+        "op": "update"
+      }
+    }
+  ]
+}

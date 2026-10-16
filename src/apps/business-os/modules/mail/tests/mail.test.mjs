@@ -4,14 +4,19 @@ import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-import * as esbuild from 'esbuild';
-import { collections as conversationCollections } from '../../conversations/schema.js';
-// Gleicher Query-String wie in ../schema.js — sonst erzeugt Node eine zweite
-// Modulinstanz und die Referenzgleichheits-Pruefung unten schlaegt fehl.
-import { collections as ctoxCollections } from '../../ctox/schema.js?v=20260816-browser-sync-guards-v141';
-import { collections as appStoreCollections } from '../../app-store/schema.js';
-import { collections as documentCollections } from '../../documents/schema.js';
-import { collections as mailCollections } from '../schema.js';
+import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
+import { join as joinPath } from 'node:path';
+// Lader (OLDTEST): esbuild aus dem Klon, sonst ESBUILD_MODULE, sonst aus dem Haupt-Checkout
+// ~/Documents/ctox/src/apps/business-os/node_modules (wie PLAYWRIGHT_MODULE in den v4-api-Tests). Nicht installieren.
+const requireDev = createRequire(import.meta.url);
+function loadDev(name, envVar) {
+  try { return requireDev(name); } catch {
+    return requireDev(process.env[envVar] || joinPath(homedir(), 'Documents/ctox/src/apps/business-os/node_modules', name));
+  }
+}
+const esbuild = loadDev('esbuild', 'ESBUILD_MODULE');
+import { existsSync } from 'node:fs';
 import {
   MAIL_GROUP_SCHEMA,
   applyContentRevisionToPending,
@@ -39,6 +44,15 @@ const bundledModule = await esbuild.build({
   platform: 'browser',
   write: false,
   metafile: true,
+  // Wie der Service Worker (§16.15): ctox:shared/x.js → modules/../shared/x.js (PORTING §4 Falle 2).
+  plugins: [{
+    name: 'ctox-shared',
+    setup(build) {
+      build.onResolve({ filter: /^ctox:shared\// }, (args) => ({
+        path: fileURLToPath(new URL(`../../../shared/${args.path.slice('ctox:shared/'.length)}`, import.meta.url)),
+      }));
+    },
+  }],
 });
 assert.ok(
   Object.keys(bundledModule.metafile?.inputs || {}).some(path => path.endsWith('/mail/lib/mail-body-renderer.mjs')),
@@ -49,16 +63,19 @@ const { __mailTestHooks: hooks } = await import(
   `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
 );
 
-test('mail counts stay unknown until complete reads and replication readiness', () => {
+// App-API 4.0: keine Readiness mehr (PORTING R4); Zähler gelten, sobald der lokale Live-Stand gelesen ist.
+test('mail counts stay unknown until the local live read completed without error', () => {
   assert.equal(hooks.mailCountsKnown({ loading: true, mailReadComplete: false }), false);
-  assert.equal(hooks.mailCountsKnown({ loading: false, mailReadComplete: true, readiness: { ready: false } }), false);
-  assert.equal(hooks.mailCountsKnown({ loading: false, mailReadComplete: false, readiness: { ready: true } }), false);
-  assert.equal(hooks.mailCountsKnown({ loading: false, mailReadComplete: true, readiness: { ready: true }, mailReadError: 'denied' }), false);
-  assert.equal(hooks.mailCountsKnown({ loading: false, mailReadComplete: true, readiness: { ready: true } }), true);
+  assert.equal(hooks.mailCountsKnown({ loading: false, mailReadComplete: false }), false);
+  assert.equal(hooks.mailCountsKnown({ loading: false, mailReadComplete: true, mailReadError: 'denied' }), false);
+  assert.equal(hooks.mailCountsKnown({ loading: false, mailReadComplete: true }), true);
 });
 
-test('mail reuses canonical communication and outbound schemas', () => {
-  assert.deepEqual(Object.keys(mailCollections).sort(), [
+// App-API 4.0 (§16.13): einzige Schemaquelle ist collections.schema.json; schema.js ist gelöscht. Die geteilten
+// Collections bleiben feldgleich mit ihren Quell-Apps (keine zweite Mail-Wahrheit).
+test('mail declares the canonical communication and outbound collections in collections.schema.json', async () => {
+  const declared = JSON.parse(await readFile(new URL('collections.schema.json', moduleRoot), 'utf8')).collections;
+  assert.deepEqual(Object.keys(declared).sort(), [
     'business_commands',
     'business_module_catalog',
     'business_users',
@@ -74,26 +91,30 @@ test('mail reuses canonical communication and outbound schemas', () => {
     'outbound_messages',
     'outbound_pipeline_items',
   ]);
-  for (const [name, schema] of Object.entries(mailCollections)) {
-    const canonical = name === 'business_users'
-      ? ctoxCollections.business_users
-      : ['documents', 'document_versions', 'document_blob_chunks'].includes(name)
-        ? documentCollections[name]
-      : name === 'business_module_catalog' || name === 'business_commands'
-        ? appStoreCollections[name]
-        : conversationCollections[name];
-    assert.equal(schema, canonical);
+  assert.equal(existsSync(new URL('schema.js', moduleRoot)), false, 'schema.js is removed in v4');
+  const sources = {
+    conversations: ['communication_accounts', 'communication_messages', 'communication_threads', 'outbound_approvals',
+      'outbound_campaigns', 'outbound_engagements', 'outbound_messages', 'outbound_pipeline_items'],
+    documents: ['document_blob_chunks', 'document_versions', 'documents'],
+  };
+  for (const [app, names] of Object.entries(sources)) {
+    const source = JSON.parse(await readFile(new URL(`../${app}/collections.schema.json`, moduleRoot), 'utf8')).collections;
+    for (const name of names) {
+      assert.deepEqual(Object.keys(declared[name].properties).sort(), Object.keys(source[name].properties).sort(), name);
+      assert.deepEqual([...(declared[name].required || [])].sort(), [...(source[name].required || [])].sort(), name);
+      assert.equal(declared[name].version ?? 0, source[name].version ?? 0, name);
+    }
   }
 });
 
 test('ordinary users only see assigned or shared email accounts', () => {
   const accounts = [
-    { account_key: 'email:alice@example.test', channel: 'email', address: 'alice@example.test', profile_json: { owner_user_id: 'alice' } },
-    { account_key: 'email:bob@example.test', channel: 'email', address: 'bob@example.test', profile_json: { owner_user_id: 'bob' } },
-    { account_key: 'email:team@example.test', channel: 'email', address: 'team@example.test', profile_json: { owner_user_id: 'ops', shared_user_ids: ['alice'] } },
-    { account_key: 'email:legacy@example.test', channel: 'email', address: 'legacy@example.test', profile_json: {} },
-    { account_key: 'email:shared@example.test', channel: 'email', address: 'shared@example.test', profile_json: { shared_user_ids: ['alice'] } },
-    { account_key: 'whatsapp:alice', channel: 'whatsapp', address: '+49123', profile_json: { owner_user_id: 'alice' } },
+    { id: 'email:alice@example.test', account_key: 'email:alice@example.test', channel: 'email', address: 'alice@example.test', profile_json: { owner_user_id: 'alice' } },
+    { id: 'email:bob@example.test', account_key: 'email:bob@example.test', channel: 'email', address: 'bob@example.test', profile_json: { owner_user_id: 'bob' } },
+    { id: 'email:team@example.test', id: 'email:team@example.test', account_key: 'email:team@example.test', channel: 'email', address: 'team@example.test', profile_json: { owner_user_id: 'ops', shared_user_ids: ['alice'] } },
+    { id: 'email:legacy@example.test', account_key: 'email:legacy@example.test', channel: 'email', address: 'legacy@example.test', profile_json: {} },
+    { id: 'email:shared@example.test', account_key: 'email:shared@example.test', channel: 'email', address: 'shared@example.test', profile_json: { shared_user_ids: ['alice'] } },
+    { id: 'whatsapp:alice', account_key: 'whatsapp:alice', channel: 'whatsapp', address: '+49123', profile_json: { owner_user_id: 'alice' } },
   ];
   assert.deepEqual(
     hooks.visibleEmailAccounts(accounts, { id: 'alice', role: 'member' }).map((account) => account.account_key),
@@ -109,34 +130,23 @@ test('ordinary users only see assigned or shared email accounts', () => {
   assert.equal(hooks.isGlobalMailAdmin({ role: 'member' }), false);
 });
 
-test('native account authority overrides a previously authorized browser cache', async () => {
+// App-API 4.0: der native Gegenlesepfad (readNativeCollectionDocument) entfällt. Der Core entzieht Zugriff,
+// indem er die Projektion in communication_accounts ändert; die App folgt dem lokalen Live-Stand.
+test('account access follows the live communication_accounts projection', () => {
   const user = { id: 'alice', role: 'member' };
-  const cached = [{
+  const shared = {
     account_key: 'email:team@example.test', channel: 'email', address: 'team@example.test',
     profile_json: { owner_user_id: 'bob', shared_user_ids: ['alice'] },
-  }];
-  const allowed = async (_collection, accountKey) => ({
-    toJSON: () => ({ ...cached[0], account_key: accountKey }),
-  });
-  assert.equal((await hooks.authoritativeVisibleEmailAccounts(cached, user, allowed)).length, 1);
-  const revoked = async () => ({
-    toJSON: () => ({ ...cached[0], profile_json: { owner_user_id: 'bob', shared_user_ids: [] } }),
-  });
-  assert.deepEqual(await hooks.authoritativeVisibleEmailAccounts(cached, user, revoked), []);
-  assert.deepEqual(await hooks.authoritativeVisibleEmailAccounts(cached, user, async () => null), []);
-  assert.deepEqual(await hooks.authoritativeVisibleEmailAccounts(cached, user, async () => ({
-    ...cached[0], account_key: 'email:wrong@example.test',
-  })), []);
-  await assert.rejects(
-    hooks.authoritativeVisibleEmailAccounts(cached, user, null),
-    /Mail account verification is unavailable/i,
-  );
+  };
+  assert.equal(hooks.visibleEmailAccounts([shared], user).length, 1);
+  const revoked = { ...shared, profile_json: { owner_user_id: 'bob', shared_user_ids: [] } };
+  assert.deepEqual(hooks.visibleEmailAccounts([revoked], user), []);
+  assert.deepEqual(hooks.visibleEmailAccounts([{ ...shared, _deleted: true }], user), []);
+  assert.equal(hooks.authoritativeVisibleEmailAccounts, undefined);
 });
 
 test('mailserver configuration values are normalized without exposing secrets', () => {
-  assert.deepEqual(hooks.commandOutcome({ result: { outcome: { users: [{ username: 'alice@example.test' }] } } }), {
-    users: [{ username: 'alice@example.test' }],
-  });
+  assert.equal(hooks.commandOutcome, undefined, 'no command read path in v4');
   assert.equal(hooks.mailserverDomain({ domain_name: 'example.test' }), 'example.test');
   assert.equal(hooks.mailserverUsername({ username: 'alice@example.test' }), 'alice@example.test');
   assert.equal(hooks.isEmailAddress('alice@example.test'), true);
@@ -162,7 +172,7 @@ test('campaigns are scoped by ownership, sharing, or an assigned sender account'
     { id: 'shared', owner_id: 'bob', payload: { shared_user_ids: ['alice'] }, updated_at_ms: 2 },
     { id: 'account-linked', owner_id: 'bob', updated_at_ms: 1 },
   ];
-  const accounts = [{ account_key: 'email:alice@example.test' }];
+  const accounts = [{ id: 'email:alice@example.test', account_key: 'email:alice@example.test' }];
   const messages = [{ campaign_id: 'account-linked', sender_account_id: 'email:alice@example.test' }];
   assert.deepEqual(
     hooks.visibleMailCampaigns(campaigns, { id: 'alice', role: 'member' }, accounts, messages).map((campaign) => campaign.id),
@@ -242,8 +252,8 @@ test('content revision hashes are stable across object key order', async () => {
 
 test('mail folders derive from canonical thread and message direction', () => {
   const threads = [
-    { thread_key: 'inbox', account_key: 'email:alice@example.test', unread_count: 2, last_message_at: '2026-08-06T08:00:00Z' },
-    { thread_key: 'sent', account_key: 'email:alice@example.test', unread_count: 0, last_message_at: '2026-08-06T09:00:00Z' },
+    { id: 'inbox', thread_key: 'inbox', account_key: 'email:alice@example.test', unread_count: 2, last_message_at: '2026-08-06T08:00:00Z' },
+    { id: 'sent', thread_key: 'sent', account_key: 'email:alice@example.test', unread_count: 0, last_message_at: '2026-08-06T09:00:00Z' },
   ];
   const messages = [
     { thread_key: 'inbox', account_key: 'email:alice@example.test', direction: 'inbound', folder_hint: 'inbox' },
@@ -256,8 +266,8 @@ test('mail folders derive from canonical thread and message direction', () => {
 
 test('folder identity keeps delegated Sent mail and self-authored Inbox mail separate', () => {
   const account_key = 'email:owner@example.test';
-  const sent = { __kind: 'thread', thread_key: 'delegated', account_key, last_message_at: '2026-08-06T09:00:00Z' };
-  const inbox = { __kind: 'thread', thread_key: 'self', account_key, last_message_at: '2026-08-06T08:00:00Z' };
+  const sent = { __kind: 'thread', id: 'delegated', thread_key: 'delegated', account_key, last_message_at: '2026-08-06T09:00:00Z' };
+  const inbox = { __kind: 'thread', id: 'self', thread_key: 'self', account_key, last_message_at: '2026-08-06T08:00:00Z' };
   const messages = [
     { thread_key: 'delegated', account_key, direction: 'inbound', folder_hint: 'sent' },
     { thread_key: 'self', account_key, direction: 'outbound', folder_hint: 'inbox' },
@@ -269,8 +279,8 @@ test('folder identity keeps delegated Sent mail and self-authored Inbox mail sep
 });
 
 test('a shared provider thread ID never mixes messages from different accounts', () => {
-  const alice = { thread_key: 'shared-id', account_key: 'email:alice@example.test' };
-  const bob = { thread_key: 'shared-id', account_key: 'email:bob@example.test' };
+  const alice = { id: 'shared-id', thread_key: 'shared-id', account_key: 'email:alice@example.test' };
+  const bob = { id: 'shared-id', thread_key: 'shared-id', account_key: 'email:bob@example.test' };
   const messages = [
     { thread_key: 'shared-id', account_key: bob.account_key, direction: 'outbound', folder_hint: 'sent', body_text: 'Bob private body', external_created_at: '2026-08-06T10:00:00Z' },
     { thread_key: 'shared-id', account_key: alice.account_key, direction: 'inbound', folder_hint: 'inbox', body_text: 'Alice private body', external_created_at: '2026-08-06T09:00:00Z' },
@@ -283,8 +293,8 @@ test('a shared provider thread ID never mixes messages from different accounts',
 });
 
 test('route status for a shared thread ID stays with its source account', () => {
-  const alice = { __kind: 'thread', thread_key: 'shared-id', account_key: 'email:alice@example.test' };
-  const bob = { __kind: 'thread', thread_key: 'shared-id', account_key: 'email:bob@example.test' };
+  const alice = { __kind: 'thread', id: 'shared-id', thread_key: 'shared-id', account_key: 'email:alice@example.test' };
+  const bob = { __kind: 'thread', id: 'shared-id', thread_key: 'shared-id', account_key: 'email:bob@example.test' };
   const [route] = hooks.buildMailRouteCommands({
     batchId: 'batch-1', destinationModule: 'support', records: [bob], actor: { id: 'admin' },
   });
@@ -292,21 +302,41 @@ test('route status for a shared thread ID stays with its source account', () => 
   assert.equal(hooks.routeCommandForRecord(bob, [route])?.id, route.id);
 });
 
-test('composer builds the native Outbound command chain', () => {
-  const bundle = hooks.buildComposeCommandBundle({
+test('composer builds ONE outbound.message.compose payload (MAIL2)', () => {
+  const payload = hooks.buildComposePayload({
     accountKey: 'email:alice@example.test',
-    recipient: 'kunde@example.test',
     campaignId: 'campaign-1',
     subject: 'Hallo',
     body: 'Guten Tag',
-  }, { engagementId: 'eng-1', messageId: 'msg-1' }, 1234);
+    contentRevisionId: 'rev-1',
+    mode: 'approval',
+  }, [{ recipient_email: 'kunde@example.test', engagement_id: 'eng-1', message_id: 'msg-1' }], 1234);
 
-  assert.equal(bundle.engagement.commandType, 'outbound.engagement.create');
-  assert.equal(bundle.message.commandType, 'outbound.message.prepare');
-  assert.equal(bundle.approval.commandType, 'outbound.message.request_approval');
-  assert.equal(bundle.message.payload.sender_account_id, 'email:alice@example.test');
-  assert.equal(bundle.message.payload.recipient_email, 'kunde@example.test');
-  assert.equal(bundle.message.payload.campaign_id, 'campaign-1');
+  assert.equal(payload.mode, 'approval');
+  assert.equal(payload.sender_account_id, 'email:alice@example.test');
+  assert.equal(payload.campaign_id, 'campaign-1');
+  assert.equal(payload.body_text, 'Guten Tag');
+  assert.match(payload.body_html, /Guten Tag/);
+  assert.equal(payload.content_revision_id, 'rev-1');
+  assert.equal(payload.created_at_ms, 1234);
+  assert.deepEqual(payload.recipients, [{ recipient_email: 'kunde@example.test', engagement_id: 'eng-1', message_id: 'msg-1' }]);
+});
+
+test('mail_server_state rows map onto the mailbox admin view (MAIL2)', () => {
+  const state = hooks.mailserverStateFromRows([
+    { id: 'runtime', kind: 'runtime', status: 'running', data: { config: { enabled: true, smtp_port: 2525 }, health: { smtp_reachable: true, imap_reachable: false } } },
+    { id: 'domain:b.test', kind: 'domain', name: 'b.test', data: { dkim_selector: 'default', spf_record: 'v=spf1 -all' } },
+    { id: 'domain:a.test', kind: 'domain', name: 'a.test', data: {} },
+    { id: 'user:ada@a.test', kind: 'user', name: 'ada@a.test', data: { owner_user_id: 'u1' } },
+    { id: 'domain:gone.test', kind: 'domain', name: 'gone.test', _deleted: true },
+  ]);
+  assert.deepEqual(state.runtimeConfig, { enabled: true, smtp_port: 2525 });
+  assert.equal(state.runtimeStatus.state, 'running');
+  assert.equal(state.health.imap_reachable, false);
+  assert.deepEqual(state.domains.map((d) => d.domain_name), ['a.test', 'b.test']);
+  assert.equal(state.domains[1].spf_record, 'v=spf1 -all');
+  assert.deepEqual(state.users.map((u) => [u.username, u.owner_user_id]), [['ada@a.test', 'u1']]);
+  assert.deepEqual(hooks.mailserverStateFromRows([]), { runtimeConfig: {}, runtimeStatus: {}, health: {}, domains: [], users: [] });
 });
 
 test('composer validation and approval actions are deterministic', () => {
@@ -354,24 +384,19 @@ test('outbound message progress is a six-step status model rendered in the row',
   assert.equal(failed.percent, 60);
 });
 
-test('mail actions prefer shell icons and keep semantic fallback controls usable', () => {
+// App-API 4.0 hat keine Icon-API (app-api.d.ts OFFEN-D): die App-Glyphen sind die einzige Quelle.
+test('mail actions render app-local glyphs for every requested control', () => {
   const requested = [
     'add', 'check', 'chevronLeft', 'chevronRight', 'clock', 'close', 'columns',
     'download', 'edit', 'export', 'eye', 'filter', 'grid', 'link', 'list',
     'refresh', 'send', 'settings', 'warning',
   ];
-  assert.equal(
-    hooks.mailActionIcon({ getActionIcon: (name, size, strokeWidth) => `shell:${name}:${size}:${strokeWidth}` }, 'send', 11, 1.9),
-    'shell:send:11:1.9',
-  );
-  for (const provider of [undefined, { getActionIcon: () => '' }, { getActionIcon: () => '   ' }]) {
-    for (const name of requested) {
-      const svg = hooks.mailActionIcon(provider, name, 11, 1.9);
-      assert.match(svg, new RegExp('class="mail-action-icon mail-action-' + name + '"'));
-      assert.match(svg, /width="11" height="11"/);
-      assert.match(svg, /stroke-width="1\.9"/);
-      assert.doesNotMatch(svg, /class="mail-action-icon mail-action-more"/);
-    }
+  for (const name of requested) {
+    const svg = hooks.mailActionIcon(name, 11, 1.9);
+    assert.match(svg, new RegExp('class="mail-action-icon mail-action-' + name + '"'));
+    assert.match(svg, /width="11" height="11"/);
+    assert.match(svg, /stroke-width="1\.9"/);
+    assert.doesNotMatch(svg, /class="mail-action-icon mail-action-more"/);
   }
   const expectedPaths = {
     send: 'M4 12 20 4l-4 16-4.5-6.5L4 12ZM11.5 13.5 20 4',
@@ -382,10 +407,10 @@ test('mail actions prefer shell icons and keep semantic fallback controls usable
     grid: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
   };
   for (const [name, expected] of Object.entries(expectedPaths)) {
-    const actual = hooks.mailActionIcon({}, name).match(/ d="([^"]+)"/)?.[1];
+    const actual = hooks.mailActionIcon(name).match(/ d="([^"]+)"/)?.[1];
     assert.equal(actual, expected);
   }
-  const unlisted = hooks.mailActionIcon({}, 'unlisted-icon');
+  const unlisted = hooks.mailActionIcon('unlisted-icon');
   assert.match(unlisted, /class="mail-action-icon mail-action-unlisted-icon"/);
   assert.match(unlisted, /d="M6 12h\.01M12 12h\.01M18 12h\.01"/);
 });
@@ -421,9 +446,13 @@ test('mail surface provides a progressive inspector workbench and responsive com
   assert.match(css, /\.mail-module\.is-inspector-open/);
   assert.match(source, /function mailActionIcon\(/);
   assert.match(source, /const MAIL_ICON_FALLBACK_PATHS = Object\.freeze/);
-  assert.match(source, /mailActionIcon\(ctx, step\.icon, 11, 1\.9\)/);
-  assert.match(source, /const icon = \(name\) => mailActionIcon\(ctx, name\)/);
-  assert.match(source, /button\.innerHTML = mailActionIcon\(ctx, cards \? 'list' : 'grid'\)/);
+  assert.match(source, /mailActionIcon\(step\.icon, 11, 1\.9\)/);
+  assert.match(source, /const icon = \(name\) => mailActionIcon\(name\)/);
+  assert.match(source, /button\.innerHTML = mailActionIcon\(cards \? 'list' : 'grid'\)/);
+  // App-API 4.0: nur api.*, keine Schleifen, kein nativer/Befehls-Leseweg, keine Zustands-Platzhalter.
+  assert.match(source, /export async function mount\(host, api, \{ restored \} = \{\}\)/);
+  assert.doesNotMatch(source.replace(/\/\/.*$/gm, ''), /setInterval|readNativeCollectionDocument|commandBus|waitForCommand|\bctx\./);
+  assert.doesNotMatch(html, /data-mail-list-empty|data-mail-detail-empty|data-mail-read-error|role="status"/);
   const iconOnlyBranch = browserQaSource.match(/if \(mailIconOnly\) \{[\s\S]*?break mailQa;/)?.[0] || '';
   const browserErrorCheck = iconOnlyBranch.indexOf('assert.deepEqual(browserErrors, []');
   const iconSuccessLog = iconOnlyBranch.indexOf('console.log(`Mail icon QA OK');
@@ -450,7 +479,7 @@ test('Sellify handoff opens the canonical Mail series-email contract', () => {
 
 test('bulk routing uses native Support handoff and chunked app tasks', () => {
   const records = [
-    { __kind: 'thread', thread_key: 'thread-1', account_key: 'email:team@example.test', subject: 'Hilfe', unread_count: 2 },
+    { __kind: 'thread', id: 'thread-1', thread_key: 'thread-1', account_key: 'email:team@example.test', subject: 'Hilfe', unread_count: 2 },
     { __kind: 'outbound', id: 'message-1', recipient_email: 'a@example.test', subject: 'Follow-up' },
   ];
   const supportCommands = hooks.buildMailRouteCommands({
@@ -460,20 +489,21 @@ test('bulk routing uses native Support handoff and chunked app tasks', () => {
   assert.deepEqual(supportCommands[0].payload.source_record_ids, ['thread-1']);
   assert.equal(supportCommands[0].payload.thread_key, 'thread-1');
   assert.equal(supportCommands[0].type, undefined);
-  assert.equal(supportCommands[1].command_type, 'business_os.chat.task');
+  assert.equal(supportCommands[1].command_type, 'ctox.chat.task'); // SKL-D: Standardbefehl der Chat-App ctox
   assert.equal(supportCommands[1].module, 'support');
   assert.deepEqual(supportCommands[1].payload.source_record_ids, ['message-1']);
   assert.equal(supportCommands[1].client_context.surface, 'mail.bulk.route');
 
   const generic = hooks.buildMailRouteCommands({ batchId: 'mail_route_2', destinationModule: 'customers', records });
   assert.equal(generic.length, 1);
-  assert.equal(generic[0].command_type, 'business_os.chat.task');
-  assert.equal(generic[0].payload.record_snapshot.schema, 'ctox.mail.route-batch.v1');
+  assert.equal(generic[0].command_type, 'ctox.chat.task');
+  assert.equal(generic[0].payload.source_app, 'mail');
+  assert.equal(generic[0].payload.context.record_snapshot.schema, 'ctox.mail.route-batch.v1');
   assert.equal(hooks.routeCommandForRecord(records[0], supportCommands)?.module, 'support');
 });
 
 test('mail queues expose operational volume and routed evidence', () => {
-  const thread = { thread_key: 'thread-1', account_key: 'email:alice@example.test', unread_count: 3, last_message_at: '2026-08-06T09:00:00Z' };
+  const thread = { id: 'thread-1', thread_key: 'thread-1', account_key: 'email:alice@example.test', unread_count: 3, last_message_at: '2026-08-06T09:00:00Z' };
   const outbound = { id: 'message-1', approval_status: 'awaiting_approval', send_status: 'not_scheduled', updated_at_ms: 2 };
   const commands = hooks.buildMailRouteCommands({ batchId: 'route', destinationModule: 'support', records: [{ ...thread, __kind: 'thread' }] });
   const queues = hooks.mailQueueDefinitions({ threads: [thread], sentThreads: [thread], outboundMessages: [outbound], commands });
@@ -485,8 +515,8 @@ test('mail queues expose operational volume and routed evidence', () => {
 });
 
 test('sent mail from the communication store appears in the sent band', () => {
-  const received = { __kind: 'thread', thread_key: 'inbox' };
-  const sent = { __kind: 'thread', thread_key: 'sent' };
+  const received = { __kind: 'thread', id: 'inbox', thread_key: 'inbox' };
+  const sent = { __kind: 'thread', id: 'sent', thread_key: 'sent' };
   const messages = [
     { thread_key: 'inbox', direction: 'inbound', folder_hint: 'inbox' },
     { thread_key: 'sent', direction: 'outbound', folder_hint: 'sent' },

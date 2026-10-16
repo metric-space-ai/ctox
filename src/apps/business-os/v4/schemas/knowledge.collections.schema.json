@@ -1,0 +1,330 @@
+{
+  "_app_id": "knowledge",
+  "_format": "ctox-v4-collections-a9",
+  "_base_release": "main@4794af03d",
+  "_generator": "src/apps/business-os/v4/schemas/build-schemas.mjs",
+  "_sources": {
+    "knowledge_items": {
+      "source": "modules/knowledge/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "knowledge_runbooks": {
+      "source": "modules/knowledge/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "knowledge_table_rows": {
+      "source": "modules/knowledge/collections.schema.json",
+      "basis": "ownership.json: neue Collection, nur in collections.schema.json dieser App definiert"
+    },
+    "knowledge_tables": {
+      "source": "modules/knowledge/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "knowledge_tasks": {
+      "source": "(neu, Strang SKL-B2/KNOW2)",
+      "basis": "Agenten-Aufträge und Book-Übernahmen der App knowledge (Kern §16.30); nur in v4/schemas definiert, keine Kopie in modules/knowledge/collections.schema.json"
+    },
+    "knowledge_views": {
+      "source": "modules/knowledge/collections.schema.json",
+      "basis": "ownership.json: neue Collection, nur in collections.schema.json dieser App definiert"
+    }
+  },
+  "_foreign_copies_not_taken": [
+    {
+      "name": "business_commands",
+      "owner": "ctox-platform"
+    }
+  ],
+  "collections": {
+    "knowledge_items": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "source_path": {
+          "type": "string"
+        },
+        "subtitle": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "knowledge_runbooks": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "source_path": {
+          "type": "string"
+        },
+        "subtitle": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "knowledge_table_rows": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "content_hash": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "row_count": {
+          "type": "integer"
+        },
+        "row_index": {
+          "type": "integer"
+        },
+        "schema_hash": {
+          "type": "string"
+        },
+        "table_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "values": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "view_id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "window_key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "view_id",
+        "actor_id",
+        "row_index",
+        "values",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "knowledge_tables": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "source_path": {
+          "type": "string"
+        },
+        "subtitle": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "knowledge_tasks": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "acknowledged_at": {
+          "type": "string"
+        },
+        "acknowledged_by": {
+          "type": "string"
+        },
+        "command_id": {
+          "type": "string"
+        },
+        "command_type": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "error": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "record_id": {
+          "type": "string"
+        },
+        "result": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "status": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "command_id",
+        "command_type",
+        "title",
+        "status",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "knowledge_views": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "filter": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "skip": {
+          "type": "integer"
+        },
+        "sort": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "table": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "table",
+        "filter",
+        "sort",
+        "skip",
+        "limit",
+        "actor_id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    }
+  },
+  "migrations": {}
+}

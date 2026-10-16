@@ -1,0 +1,80 @@
+{
+ "app": "shiftflow",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Einsatzplanung",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 812
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Zurück zur Liste",
+    "button:Dienstplan automatisch generie",
+    "button:Vorherige Woche",
+    "button:Nächste Woche",
+    "nav:Dienstplan (0)",
+    "nav:Mehr ▾",
+    "button:Mitarbeiter-Timeline",
+    "button:Projekt-Timeline",
+    "button:Dienstplan veröffentlichen",
+    "button:Mitarbeiter-Details: Tanja Alb",
+    "button:Mitarbeiter-Details: Holger Br",
+    "button:Mitarbeiter-Details: Jule Enge",
+    "button:Mitarbeiter-Details: Martin Se",
+    "button:Mitarbeiter-Details: Nina Kais",
+    "button:Mitarbeiter-Details: Oliver Ro"
+   ],
+   "shot": "shiftflow/420-01-open.png"
+  },
+  {
+   "step": "nav Dienstplan (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "shiftflow/420-02-nav_Dienstplan_0_.png"
+  },
+  {
+   "step": "nav Mehr ▾",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "shiftflow/420-03-nav_Mehr_.png"
+  },
+  {
+   "step": "zurück zu Reiter Dienstplan (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "shiftflow/420-04-zur_ck_zu_Reiter_Dienstplan_0_.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "shiftflow",
+  "Einsatzplanung"
+ ]
+}

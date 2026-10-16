@@ -1,0 +1,506 @@
+{
+  "_capability_evidence": {},
+  "_declaration": "modules/shiftflow/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/shiftflow/index.html",
+  "_rust_basis": "keine dedizierte Logik (`planning_time_records` nur in ATS-Allowlist `rs:store_ats_commands.rs:317`).",
+  "_source_dir": "src/apps/business-os/modules/shiftflow",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "shiftflow",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [],
+  "collections": {
+    "planning_absences": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/shiftflow.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "employee_id": {
+            "type": "string"
+          },
+          "end_date": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "start_date": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "employee_id",
+          "type",
+          "start_date",
+          "end_date",
+          "status",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "planning_employees": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/shiftflow.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "avatar_color": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "departments": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "internal_hourly_rate": {
+            "type": "number"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "role": {
+            "type": "string"
+          },
+          "skills": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "weekly_target_hours": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "planning_projects": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/shiftflow.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "client": {
+            "type": "string"
+          },
+          "color": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "hourly_rate": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "hourly_rate",
+          "status",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "planning_shifts": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/shiftflow.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "department": {
+            "type": "string"
+          },
+          "employee_id": {
+            "type": "string"
+          },
+          "end_time": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "start_time": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "start_time",
+          "end_time",
+          "status",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "planning_time_records": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/shiftflow.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "approval_status": {
+            "type": "string"
+          },
+          "approved_by": {
+            "type": "string"
+          },
+          "billing_rate_applied": {
+            "type": "number"
+          },
+          "billing_status": {
+            "type": "string"
+          },
+          "breaks": {
+            "items": {
+              "properties": {
+                "end": {
+                  "type": "number"
+                },
+                "start": {
+                  "type": "number"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "employee_id": {
+            "type": "string"
+          },
+          "end_time": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "shift_id": {
+            "type": "string"
+          },
+          "start_time": {
+            "type": "number"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "employee_id",
+          "start_time",
+          "approval_status",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    }
+  },
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {
+    "planning_time_records": [
+      "read",
+      "write"
+    ]
+  },
+  "files": {
+    "V4-PORT.md": "9bfb8e648323be7e67bc1e2645c8bdc04519593e013f207a9825a9a101efbd18",
+    "assets/icon.jpg": "4f6654a4e1d6e571a7f129d6183a84e5d96f43365768a2843c3c42c55e197260",
+    "assets/icon@512.jpg": "1b3bc2c5b34333b00cc52e35ea841a9e4298279b510ab2fdb4e72bfd4b40abbd",
+    "collections.schema.json": "d3c0bed496c9c1a8e01f7beb849c2d60c87346815f23a67b646b18a54a896be7",
+    "core/arbzg.js": "05ba9f4ee093958140d294ad6f05d199e37a148d18a4181af70cf1a62712e006",
+    "core/leistungsnachweis.js": "157beadc426290f3d19fc6a6ecd6807b3c8ec09c1933db5f9646fb5ec388452f",
+    "core/tariff.js": "4590d03e47212ed3c2eeee97f937e26df36f52669c88ad1b45f54fb2b9e8a4c7",
+    "icon.svg": "d204d3a5db7c586f16e6c3e8226107bad9202c3e740db4d609ac75ac770599e4",
+    "index.css": "3d2b55982c7d6d5b9db40b97202cbf748e2a0ce314e117ce3528cb9d5081bb9e",
+    "index.html": "b9a981ac4302f9c8baa7185139656883ddea02fdf1611929ffe7839dc9362356",
+    "index.js": "48199020c4247a4e937bbbc014420ef0d6dff0cca54b1abb699bd73a1aafc9c2",
+    "locales/de.json": "2bbb317d55768b5a161e72073918acfbe733c051eab66af037b3e30f644cf0d2",
+    "locales/en.json": "64c0d9d49d36220134dc07b2e9d333ca81f2916f45145b135d74a61fcdd50b7e",
+    "module.json": "aaf623eee1d3fe10df63ccf20d6a059dbae71c70813448f3b1d2f663c3d761a5",
+    "v4-manifest.json": "8d9043e859d3d58ed3312b2d56f9329fd53713c0b5435ff912afdc5fb09dcc37"
+  },
+  "foreign_collections": {
+    "business_commands": {
+      "_evidence": {
+        "code_read": [
+          "core/arbzg.js:3"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "notes": {
+      "_evidence": {
+        "code_read": [
+          "index.js:1928",
+          "index.js:2506"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "notes"
+    }
+  },
+  "handlers": {},
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/shiftflow.jpg (shared/operator-icon-selection.js, sha256 19b53504a0ce…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "_multi_instance_basis": "v4-manifest.json; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "category": "Operations",
+    "drawers": {
+      "bottom": "Schnelleingabe & Massenaktionen",
+      "left": "Arbeitszeitmodelle und Einstellungen",
+      "right": "Dienstplaner und Detail-Inspektor"
+    },
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "icon_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-shiftflow\"><defs><linearGradient id=\"grad-shiftflow\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#8b5cf6\" /><stop offset=\"100%\" stop-color=\"#7c3aed\" /></linearGradient></defs><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"3\" fill=\"url(#grad-shiftflow)\" fill-opacity=\"0.12\" stroke=\"url(#grad-shiftflow)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><line x1=\"3\" y1=\"9\" x2=\"21\" y2=\"9\" stroke=\"url(#grad-shiftflow)\" stroke-width=\"2\" stroke-linecap=\"round\"></line><line x1=\"9\" y1=\"9\" x2=\"9\" y2=\"20\" stroke=\"url(#grad-shiftflow)\" stroke-width=\"1\" stroke-dasharray=\"2 2\" stroke-linecap=\"round\"></line><line x1=\"15\" y1=\"9\" x2=\"15\" y2=\"20\" stroke=\"url(#grad-shiftflow)\" stroke-width=\"1\" stroke-dasharray=\"2 2\" stroke-linecap=\"round\"></line><rect x=\"5\" y=\"12\" width=\"8\" height=\"4\" rx=\"1.5\" fill=\"url(#grad-shiftflow)\" fill-opacity=\"0.3\" stroke=\"url(#grad-shiftflow)\" stroke-width=\"1\"></rect><circle cx=\"17\" cy=\"15\" r=\"2.5\" stroke=\"url(#grad-shiftflow)\" stroke-width=\"1.2\"></circle><polyline points=\"17 13.5 17 15 18 15\" stroke=\"url(#grad-shiftflow)\" stroke-width=\"1\" stroke-linecap=\"round\"></polyline></svg>",
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 780,
+        "width": 1180
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#2563eb",
+        "category": "Operations",
+        "iconAssetId": "workjet.business-os.shiftflow",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "list-detail",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "Shiftflow"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "7251df7ebc4883b5418d40318728d25db483fd2e380d453009874d9374cf0bd2",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "Einsatzplanung",
+  "triggers": [],
+  "version": "1.0.2"
+}

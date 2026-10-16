@@ -1,0 +1,342 @@
+{
+ "app": "browser",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Browser",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 744
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neue Sitzung",
+    "button:Sitzungen importieren",
+    "button:Sitzungen exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Alle (6)",
+    "nav:Aktiv (1)",
+    "nav:Beendet (5)",
+    "nav:Scraping",
+    "row:○ Lieferantenbewertung 2026 Ru",
+    "row:👤 Onboarding neue Mitarbeiten",
+    "row:○ Rahmenvertrag über Wartung u",
+    "row:○ Kundentermin Vorbereitung Ru",
+    "row:○ Budgetplanung Vertrieb Süd R",
+    "row:○ Messeplanung Hannover 2027 R",
+    "button:Spaltenbreite anpassen",
+    "button:Sitzungsliste ein-/ausblenden",
+    "button:Präzise Eingabe",
+    "button:Erweiterte Aktionen",
+    "nav:Ansicht",
+    "nav:Skript",
+    "button:Tab schließen",
+    "button:Adresse löschen",
+    "button:Adresse öffnen",
+    "row:Kundentermin Vorbereitung ×"
+   ],
+   "shot": "browser/1280-01-open.png"
+  },
+  {
+   "step": "nav Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "browser/1280-02-nav_Alle_6_.png"
+  },
+  {
+   "step": "nav Aktiv (1)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "browser/1280-03-nav_Aktiv_1_.png"
+  },
+  {
+   "step": "nav Beendet (5)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "browser/1280-04-nav_Beendet_5_.png"
+  },
+  {
+   "step": "nav Scraping",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "browser/1280-05-nav_Scraping.png"
+  },
+  {
+   "step": "nav Scraping 12",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Ansicht",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Skript",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "{\"level\":\"info\",\"code\":\"browser.script.unavailable\",\"text\":\"Das Automatisierungsskript ist in dieser Shell-Version nicht abrufbar.\",\"ref\":\"session-001\"}"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "browser/1280-06-nav_Skript.png"
+  },
+  {
+   "step": "zurück zu Reiter Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "browser/1280-07-zur_ck_zu_Reiter_Alle_6_.png"
+  },
+  {
+   "step": "row ○ Lieferantenbewertung 2026 Ruhend · Persönlich · Verbindet ",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row"
+  },
+  {
+   "step": "row 👤 Onboarding neue Mitarbeitende Sie steuern · Persönlich · ",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "browser/1280-08-row_Onboarding_neue_Mitarbeitende_Sie_st.png"
+  },
+  {
+   "step": "button Neue Sitzung",
+   "changed": true,
+   "ops": [
+    "command browser.session.start local=ok result=accepted {\"session_id\":\"browser_session_owner_1792103275909\",\"tab_id\":\"browser_tab_1792103275909\",\"viewport_w\":1280,\"viewport_h\":720,\"url\":\"https://w"
+   ],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "browser/1280-09-button_Neue_Sitzung.png"
+  },
+  {
+   "step": "button Sitzungen importieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Sitzungen exportieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Als Liste anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "browser/1280-10-button_Als_Liste_anzeigen.png"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "browser/1280-11-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "browser/1280-12-button_Filter.png"
+  },
+  {
+   "step": "button Spaltenbreite anpassen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Sitzungsliste ein-/ausblenden",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "browser/1280-13-button_Sitzungsliste_ein-_ausblenden.png"
+  },
+  {
+   "step": "button Präzise Eingabe",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear browser.script.unavailable"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "browser/1280-14-button_Pr_zise_Eingabe.png"
+  },
+  {
+   "step": "button Erweiterte Aktionen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "browser/1280-15-button_Erweiterte_Aktionen.png"
+  },
+  {
+   "step": "button Adresse öffnen",
+   "changed": true,
+   "ops": [
+    "command browser.session.start local=ok result=accepted {\"session_id\":\"browser_session_owner_1792103280951\",\"tab_id\":\"browser_tab_1792103280951\",\"viewport_w\":1280,\"viewport_h\":720,\"url\":\"https://w"
+   ],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "browser/1280-16-button_Adresse_ffnen.png"
+  },
+  {
+   "step": "auswahl Desktop 1280×720 Mobil 390×844 → 390x844",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true
+  },
+  {
+   "step": "button Adresse löschen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "command",
+   "coll": "browser.session.start",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "browser.session.start",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "browser",
+  "Browser"
+ ]
+}

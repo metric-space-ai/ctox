@@ -1,0 +1,29 @@
+{
+ "app": "file-viewer",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Datei-Viewer",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 748
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [],
+   "shot": "file-viewer/1280-01-open.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "file-viewer",
+  "Datei-Viewer",
+  "Datei-Viewer"
+ ]
+}

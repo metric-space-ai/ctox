@@ -1,0 +1,399 @@
+{
+ "app": "esign",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "E-Signatur",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 812
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neu",
+    "button:Importieren",
+    "button:Exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Alle (6)",
+    "nav:Offen (2)",
+    "nav:Abgeschlossen (4)",
+    "button:Quartalsbericht Q3 2026 Abgesc",
+    "button:Angebot Wartungsvertrag Halle ",
+    "button:Projektplan Relaunch Kundenpor",
+    "button:Lieferantenbewertung 2026 Gese",
+    "button:Quartalsbericht Q3 2026 Teilwe",
+    "button:Angebot Wartungsvertrag Halle ",
+    "select:Arbeitsvertrag Vermittlungsver",
+    "button:Anlegen"
+   ],
+   "shot": "esign/420-01-open.png"
+  },
+  {
+   "step": "nav Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "esign/420-02-nav_Alle_6_.png"
+  },
+  {
+   "step": "nav Offen (2)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "esign/420-03-nav_Offen_2_.png"
+  },
+  {
+   "step": "nav Abgeschlossen (4)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "esign/420-04-nav_Abgeschlossen_4_.png"
+  },
+  {
+   "step": "zurück zu Reiter Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "esign/420-05-zur_ck_zu_Reiter_Alle_6_.png"
+  },
+  {
+   "step": "button Neu",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear esign.result",
+    "clear esign.blocked"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/420-06-button_Neu.png"
+  },
+  {
+   "step": "row Quartalsbericht Q3 2026 Angebot_Wartung_2026.pdf",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear esign.form.document_required"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "esign/420-07-row_Quartalsbericht_Q3_2026_Angebot_Wart.png"
+  },
+  {
+   "step": "button Importieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Exportieren",
+   "changed": 1,
+   "ops": [],
+   "zone": [
+    "{\"level\":\"info\",\"code\":\"esign.export.done\",\"text\":\"Export erstellt.\"}"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/420-08-button_Exportieren.png"
+  },
+  {
+   "step": "button Als Liste anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/420-09-button_Als_Liste_anzeigen.png"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/420-10-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/420-11-button_Filter.png"
+  },
+  {
+   "step": "button Quartalsbericht Q3 2026 Abgeschlossen string Aktualisiert 14",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear esign.result",
+    "clear esign.blocked"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/420-12-button_Quartalsbericht_Q3_2026_Abgeschlo.png"
+  },
+  {
+   "step": "button Angebot Wartungsvertrag Halle 4 Abgeschlossen string Aktuali",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear esign.result",
+    "clear esign.blocked"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/420-13-button_Angebot_Wartungsvertrag_Halle_4_A.png"
+  },
+  {
+   "step": "button Projektplan Relaunch Kundenportal Abgelehnt string Aktualisi",
+   "changed": 2,
+   "ops": [],
+   "zone": [
+    "clear esign.result",
+    "clear esign.blocked"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/420-14-button_Projektplan_Relaunch_Kundenportal.png"
+  },
+  {
+   "step": "button Lieferantenbewertung 2026 Gesendet string Aktualisiert 10.10",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear esign.result",
+    "clear esign.blocked"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/420-15-button_Lieferantenbewertung_2026_Gesende.png"
+  },
+  {
+   "step": "button Quartalsbericht Q3 2026 Teilweise signiert string Aktualisie",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear esign.result",
+    "clear esign.blocked"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/420-16-button_Quartalsbericht_Q3_2026_Teilweise.png"
+  },
+  {
+   "step": "button Angebot Wartungsvertrag Halle 4 Fehlgeschlagen string Aktual",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear esign.result",
+    "clear esign.blocked"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/420-17-button_Angebot_Wartungsvertrag_Halle_4_F.png"
+  },
+  {
+   "step": "button Detail einklappen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/420-18-button_Detail_einklappen.png"
+  },
+  {
+   "step": "button Ändern",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear esign.export.done"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/420-19-button_ndern.png"
+  },
+  {
+   "step": "row Rahmenvertrag über Wartung und Instandhaltung der Produktion",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear esign.form.document_required"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "esign/420-20-row_Rahmenvertrag_ber_Wartung_und_Instan.png"
+  },
+  {
+   "step": "button Anlegen",
+   "changed": true,
+   "ops": [
+    "command ats.signature.request local=ok result=accepted {\"document_id\":\"file-001\",\"subject_kind\":\"arbeitsvertrag\",\"signers\":[],\"record_id\":\"file-001\",\"client_context\":{\"module_id\":\"esign\"}}"
+   ],
+   "zone": [
+    "clear esign.result",
+    "clear esign.blocked",
+    "clear esign.form.document_required",
+    "clear esign.command.ats.signature.request",
+    "{\"level\":\"info\",\"code\":\"esign.result\",\"text\":\"Signatur-Anfrage angelegt. Anfrage: — Status: —\"}"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/420-21-button_Anlegen.png"
+  },
+  {
+   "step": "auswahl Vertragstyp filtern → arbeitsvertrag",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "esign/420-22-auswahl_Vertragstyp_filtern_arbeitsvertr.png"
+  },
+  {
+   "step": "auswahl Arbeitsvertrag Vermittlungsvertrag Überlassungsvertrag → vermittlungsvertrag",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true
+  },
+  {
+   "step": "button Filter zurücksetzen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/420-23-button_Filter_zur_cksetzen.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 812,
+   "shot": "esign/420-24-suche_ohne_Treffer.png",
+   "textAfter": 241
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "esign/420-25-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "command",
+   "coll": "ats.signature.request",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "esign",
+  "E-Signatur"
+ ]
+}

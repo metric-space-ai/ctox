@@ -1,0 +1,162 @@
+{
+  "_basis": {
+    "collection_overrides": "E29 (Kern 16.10.2026): legacy_records als Fenster-Collection",
+    "collection_rights": "modules/ctox/V4-HANDLERS.md „Rechte (Collection-Lesen)“; policy.rs ADMIN_ONLY_COLLECTIONS, is_cockpit_projection",
+    "command_rights": "modules/ctox/V4-HANDLERS.md „Manifest-Rechte, die der Core vor dem Handler prüft“; project.jour_fixe.prepare/.create: Muster Core-zugestellter Typen (gen-manifest.mjs net.ingest → roles:[]), Begründung v4/tools/textdiaet/JF.md",
+    "commands_in": "Kern §16.40 (ctox.chat.task wird allen Apps angeboten); shared/context-chat.js CONTEXT_CHAT_COMMAND/APP_MODIFY_COMMAND (Strang SKL-D); project.jour_fixe.prepare/.create bewusst NICHT in commands_in: Sender ist keine App (Kern-Ingress), §16.40 from erlaubt nur App-IDs bzw. '*' (v4/tools/textdiaet/JF.md)",
+    "exports": "modules/threads/V4-HANDLERS.md §6.4 Kern-Import („nur exports: ['read'] im ctox-Manifest ergänzen“) · E26/K-WJ-1 (Kern 16.10.): read-Export der Workjet-Collections an die Shell-Brücke (v4/shell/workjet, E24)",
+    "foreign_drop": "modules/ctox/V4-PORT.md OFFEN 2 (documents/communication_messages nur per Text-Literal erkannt, kein Lesen)"
+  },
+  "_format": "ctox-shell-v4-app-declaration-1",
+  "_note": "Deklaration für gen-manifest.mjs (Strang MAN): nur Angaben, die sich nicht aus dem Code ableiten lassen. _basis = Fundstelle je Feld.",
+  "collection_rights": {
+    "business_module_acl": {
+      "read": {
+        "roles": [
+          "admin",
+          "chef"
+        ]
+      }
+    },
+    "business_module_commits": {
+      "read": {
+        "roles": [
+          "admin",
+          "chef"
+        ]
+      }
+    },
+    "business_module_source_blob_chunks": {
+      "read": {
+        "roles": [
+          "admin",
+          "chef"
+        ]
+      }
+    },
+    "business_module_source_files": {
+      "read": {
+        "roles": [
+          "admin",
+          "chef"
+        ]
+      }
+    },
+    "business_users": {
+      "read": {
+        "roles": [
+          "admin",
+          "chef"
+        ]
+      }
+    },
+    "ctox_crew_learnings": {
+      "read": {
+        "roles": [
+          "admin",
+          "chef",
+          "founder"
+        ]
+      }
+    },
+    "ctox_harness_events": {
+      "read": {
+        "roles": [
+          "admin",
+          "chef",
+          "founder"
+        ]
+      }
+    },
+    "ctox_runs": {
+      "read": {
+        "roles": [
+          "admin",
+          "chef",
+          "founder"
+        ]
+      }
+    },
+    "legacy_records": {
+      "read": {
+        "roles": [
+          "admin"
+        ]
+      }
+    }
+  },
+  "command_rights": {
+    "ctox.crew.*": {
+      "_permission": "CrewManage",
+      "_todo": "Rollen/Zuweisung zu CrewManage aus policy.rs übertragen"
+    },
+    "ctox.queue.*": {
+      "_permission": "Cockpit-Recht",
+      "_todo": "Rollen/Zuweisung zum Cockpit-Recht aus policy.rs übertragen"
+    },
+    "ctox.task.*": {
+      "_permission": "CtoxTaskManage",
+      "_scope": "task",
+      "_todo": "Rollen/Zuweisung zu CtoxTaskManage (Task-Scope) aus policy.rs übertragen"
+    },
+    "project.jour_fixe.create": {
+      "roles": [],
+      "assigned_users": false,
+      "_permission": "nur Core-Zustellung: Vorbereitungs-Zeitplan des Kerns legt neue Termine an (AppRuntimeIngress, app_id vom Kern aufgelöst, record_id = vom Absender vergebene meeting_id), nie die UI"
+    },
+    "project.jour_fixe.prepare": {
+      "roles": [],
+      "assigned_users": false,
+      "_permission": "nur Core-Zustellung: AppRuntimeIngress (Kern APP-PLATFORM-4c, #868) mit vom Kern aufgelöster app_id; Sender gebundener Projekt-Supervisor bzw. Vorbereitungs-Zeitplan (Wire-Vertrag authorization bound_supervisor), nie die UI"
+    }
+  },
+  "commands_in": [
+    {
+      "from": "*",
+      "type": "ctox.chat.task"
+    },
+    {
+      "from": "*",
+      "type": "ctox.app.modify.request"
+    },
+    {
+      "from": "*",
+      "type": "business_os.chat.task",
+      "_basis": "Übergang alte Clients (Kern 15.10., §16.40); Löschplan L-35"
+    }
+  ],
+  "exports": {
+    "workjet_computers": [
+      "read"
+    ],
+    "workjet_jour_fixe_meetings": [
+      "read"
+    ],
+    "workjet_project_chats": [
+      "read"
+    ],
+    "workjet_session_transfers": [
+      "read"
+    ],
+    "workjet_sessions": [
+      "read"
+    ],
+    "workjet_worker_profile_bindings": [
+      "read"
+    ],
+    "workjet_working_copies": [
+      "read"
+    ]
+  },
+  "foreign_drop": [
+    "documents",
+    "communication_messages"
+  ],
+  "collection_overrides": {
+    "legacy_records": {
+      "_class_proposal": "E29 Cutover-Archiv: unbegrenzt wachsend, ohne UI; Browser laden nur ein Sichtfenster auf Abfrage (kein Voll-Replikat). Rechte: nur admin liest, kein Schreibrecht (Kern-Import schreibt nativ).",
+      "class": "window",
+      "client_limit": 200
+    }
+  }
+}

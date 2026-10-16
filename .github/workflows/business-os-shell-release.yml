@@ -103,6 +103,22 @@ jobs:
       - name: Install pinned browser test dependencies
         run: npm ci --prefix src/apps/business-os
 
+      - name: Select release gate series
+        id: series
+        shell: bash
+        env:
+          SHELL_VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Each release series runs its complete gate: 0.1.x ships the V2 shell, 0.2.x the Shell v4.
+          # An unknown series fails here, so no gate step can be skipped silently.
+          case "$SHELL_VERSION" in
+            0.1.*) series=v2 ;;
+            0.2.*) series=v4 ;;
+            *) echo "No release gate for shell version $SHELL_VERSION (known series: 0.1.x = V2, 0.2.x = v4)" >&2; exit 1 ;;
+          esac
+          echo "series=$series" >> "$GITHUB_OUTPUT"
+
       - name: Guard CTOX harness rendering
         run: node src/apps/business-os/modules/ctox/test.js
 
@@ -113,7 +129,12 @@ jobs:
       - name: Guard visible harness layout and loaded document identity
         run: node src/apps/business-os/modules/ctox/tests/layout.browser.mjs
 
+      - name: Guard App-API stub pin (v4)
+        if: steps.series.outputs.series == 'v4'
+        run: node --test src/apps/business-os/modules/ctox/tests/app-api-stub-pin.test.mjs
+
       - name: Run Office editor and sync regressions
+        if: steps.series.outputs.series == 'v2'
         run: >-
           node --test
           src/apps/business-os/office-engine/office-engine.test.mjs
@@ -123,11 +144,30 @@ jobs:
           src/apps/business-os/office-engine/version-recovery-races.test.mjs
           src/apps/business-os/modules/documents/documents.test.mjs
           src/apps/business-os/modules/spreadsheets/spreadsheets.test.mjs
+      - name: Run Office editor and sync regressions (v4)
+        if: steps.series.outputs.series == 'v4'
+        run: >-
+          node --test
+          src/apps/business-os/office-engine/office-engine.test.mjs
+          src/apps/business-os/office-engine/office-commit-upload.test.mjs
+          src/apps/business-os/office-engine/office-source-upload.v4.test.mjs
+          src/apps/business-os/office-engine/save-lifecycle.test.mjs
+          src/apps/business-os/office-engine/version-recovery-races.v4.test.mjs
+          src/apps/business-os/modules/documents/documents.test.mjs
+          src/apps/business-os/modules/spreadsheets/spreadsheets.test.mjs
 
       - name: Guard mobile Office editor height
+        if: steps.series.outputs.series == 'v2'
         run: npm --prefix src/apps/business-os run qa:shell-office-height -- --output-dir "${RUNNER_TEMP}/ctox-shell-office-height"
+      - name: Guard mobile Office editor height (v4)
+        if: steps.series.outputs.series == 'v4'
+        run: npm --prefix src/apps/business-os run qa:shell-office-height:v4 -- --output-dir "${RUNNER_TEMP}/ctox-shell-office-height"
       - name: Guard Office notification contract
+        if: steps.series.outputs.series == 'v2'
         run: npm --prefix src/apps/business-os run qa:office-notifications -- --output-dir "${RUNNER_TEMP}/ctox-office-notifications"
+      - name: Guard Office notification contract (v4)
+        if: steps.series.outputs.series == 'v4'
+        run: npm --prefix src/apps/business-os run qa:office-notifications:v4 -- --output-dir "${RUNNER_TEMP}/ctox-office-notifications"
 
       - name: Run focused shell artifact tests
         run: npm run test:shell-artifact --prefix src/apps/business-os

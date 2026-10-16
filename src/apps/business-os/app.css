@@ -8592,6 +8592,11 @@ button.shell-window-header-meta:focus-visible,
 .shell-window-layout-glyph--right::after { right: 2px; top: 2px; bottom: 2px; width: 4px; }
 .shell-window-layout-glyph--top::after { left: 2px; right: 2px; top: 2px; height: 4px; }
 .shell-window-layout-glyph--bottom::after { left: 2px; right: 2px; bottom: 2px; height: 4px; }
+/* Andock-Raster (M-01): Ecken als Viertel. */
+.shell-window-layout-glyph--top-left::after { left: 2px; top: 2px; width: 5px; height: 4px; }
+.shell-window-layout-glyph--top-right::after { right: 2px; top: 2px; width: 5px; height: 4px; }
+.shell-window-layout-glyph--bottom-left::after { left: 2px; bottom: 2px; width: 5px; height: 4px; }
+.shell-window-layout-glyph--bottom-right::after { right: 2px; bottom: 2px; width: 5px; height: 4px; }
 
 .shell-window-layout-menu {
   position: absolute;
@@ -8599,7 +8604,7 @@ button.shell-window-header-meta:focus-visible,
   right: 0;
   z-index: 50;
   display: grid;
-  grid-template-columns: repeat(4, 34px);
+  grid-template-columns: repeat(3, 34px);
   gap: 4px;
   padding: 6px;
   border: 1px solid color-mix(in srgb, var(--shell-v2-local-accent, var(--shell-v2-frame-end)) 55%, #252b34);
@@ -8624,6 +8629,9 @@ button.shell-window-header-meta:focus-visible,
   outline: none;
 }
 .shell-window-layout-menu .shell-window-layout-glyph { transform: scale(.82); }
+.shell-window-layout-menu button.is-wide { width: auto; display: flex; align-items: center; gap: 8px; padding: 0 8px; font: inherit; font-size: 12px; }
+.shell-window-layout-menu button.is-wide .shell-window-layout-glyph { margin: 0; flex: none; }
+.shell-window-layout-menu button[aria-current="true"] { box-shadow: inset 0 0 0 1.5px var(--shell-v2-local-accent, var(--shell-v2-frame-end)); }
 
 .shell-window[data-shell-contract="v2"] .shell-window-control--close,
 :root[data-shell-style] .shell-window[data-shell-contract="v2"] .shell-window-control--close {

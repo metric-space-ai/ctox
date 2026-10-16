@@ -1,0 +1,124 @@
+{
+  "_app_id": "placements",
+  "_format": "ctox-v4-collections-a9",
+  "_base_release": "main@4794af03d",
+  "_generator": "src/apps/business-os/v4/schemas/build-schemas.mjs",
+  "_sources": {
+    "offers": {
+      "source": "modules/placements/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "placements": {
+      "source": "modules/placements/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    }
+  },
+  "collections": {
+    "offers": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "_deleted": {
+          "type": "boolean"
+        },
+        "candidate_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "negotiation_notes": {
+          "type": "string"
+        },
+        "package": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "role": {
+          "type": "string"
+        },
+        "salary": {
+          "type": "number"
+        },
+        "start_date": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "vacancy_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "state",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "placements": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "_deleted": {
+          "type": "boolean"
+        },
+        "candidate_id": {
+          "type": "string"
+        },
+        "client_account_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "fee": {
+          "type": "number"
+        },
+        "fee_basis": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "guarantee_days": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "offer_id": {
+          "type": "string"
+        },
+        "start_ms": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "vacancy_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "candidate_id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    }
+  },
+  "migrations": {}
+}

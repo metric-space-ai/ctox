@@ -1,24 +1,26 @@
-import { showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
-import { loadModuleMessages } from '../../shared/i18n.js';
-import { preserveScrollDuring } from '../../shared/stable-dom.js';
-import { createCoalescedRefresh } from '../../office-engine/src/coalesced-refresh.mjs';
-import { autoWirePaneGrammar } from '../../shared/pane-grammar.js';
-import { createBusinessOsOfficeBridge } from '../../office-engine/src/business-os-bridge.mjs?v=20260908-office-source-upload-v1';
+import { preserveScrollDuring } from 'ctox:shared/stable-dom.js';
+import { contextChatModeMarkup, normalizeContextChatMode, sendContextChat } from 'ctox:shared/context-chat.js';
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
+import { BusinessOsPermissions } from 'ctox:shared/business-permissions.js';
+import { roleCanManage } from 'ctox:shared/roles.js';
+import { createOfficeBridgeV4, putFile, readFileBytes } from './office-bridge-v4.js';
 
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const MARKDOWN_MIME = 'text/markdown';
+// Startfristen des eingebetteten Office-Editors (iframe/Engine-Start, vendor/ctox-office) – keine Datenwege.
 const CTOX_DOCUMENTS_LOAD_TIMEOUT_MS = 60000;
 const CTOX_DOCUMENTS_READY_TIMEOUT_MS = 120000;
 const CTOX_DOCUMENTS_RECOVERY_DELAY_MS = 1200;
 const CTOX_DOCUMENTS_MAX_RECOVERY_ATTEMPTS = 3;
 const EDITOR_VERSION_CONTENT_READY_TIMEOUT_MS = 900;
 const EDITOR_VERSION_CONTENT_READY_POLL_MS = 25;
-const CHUNK_SIZE = 256000;
 const DOCUMENT_BLOB_CACHE_MAX_ENTRIES = 64;
 const DOCUMENT_BLOB_CACHE_MAX_BYTES = 16 * 1024 * 1024;
-const DOCX_TOOLBAR_VISIBILITY_KEY = 'ctox.businessOs.documents.docxToolbarVisible';
 const DOCUMENT_RENDER_DEBOUNCE_MS = 80;
-const DOCUMENTS_ASSET_REVISION = new URL(import.meta.url).searchParams.get('v') || '20260904-office-shell-v2';
+// Collections: eigene (Manifest collections) und fremde der App knowledge (nur lesen, foreign_collections;
+// V4-PORT.md OFFEN-2).
+const OWN_LIST_COLLECTIONS = Object.freeze(['documents', 'document_runbooks']);
+const FOREIGN_KNOWLEDGE_COLLECTIONS = Object.freeze(['knowledge_items', 'knowledge_runbooks', 'knowledge_tables']);
 const MAIL_MERGE_SOURCE_NAMES = new Set([
   'campaign-mail-merge',
   'mail-merge',
@@ -27,6 +29,8 @@ const MAIL_MERGE_SOURCE_NAMES = new Set([
   'series_letter',
   'serienbrief',
 ]);
+// Runbook-Auswahl; die Anweisungstexte liegen im App-Paket (prompts/<id>.md, Strang SKL-B3), der Handler
+// research.systematic.report.create füllt sie. prompt_template verweist nur noch auf das Template.
 const SYSTEMATIC_REPORT_RUNBOOKS = [
   {
     id: 'research.report.auto',
@@ -35,7 +39,7 @@ const SYSTEMATIC_REPORT_RUNBOOKS = [
     description: 'CTOX wählt den passenden Report-Typ und erstellt ein belastbares Word-Dokument.',
     command_type: 'research.systematic.report.create',
     report_type: 'auto',
-    prompt_template: 'Nutze den systematic-research Skill. Erstelle ein hochwertiges Word-Dokument (.docx), nicht Markdown. Führe Deep Research aus, nutze belastbare Quellen, baue sinnvolle Tabellen und Abbildungen ein und rendere das Ergebnis als DOCX.',
+    prompt_template: 'prompts/research-report-auto.md',
   },
   {
     id: 'research.report.feasibility_study',
@@ -44,7 +48,7 @@ const SYSTEMATIC_REPORT_RUNBOOKS = [
     description: 'Decision-grade Machbarkeitsstudie mit Evidenz, Bewertung und DOCX-Render.',
     command_type: 'research.systematic.report.create',
     report_type: 'feasibility_study',
-    prompt_template: 'Erstelle eine Machbarkeitsstudie als Word-Dokument via ctox report report_type=feasibility_study.',
+    prompt_template: 'prompts/research-report-feasibility-study.md',
   },
   {
     id: 'research.report.market_research',
@@ -53,7 +57,7 @@ const SYSTEMATIC_REPORT_RUNBOOKS = [
     description: 'Marktgröße, Segmente, Treiber, Wettbewerb, Barrieren und Empfehlung.',
     command_type: 'research.systematic.report.create',
     report_type: 'market_research',
-    prompt_template: 'Erstelle eine Marktanalyse als Word-Dokument via ctox report report_type=market_research.',
+    prompt_template: 'prompts/research-report-market-research.md',
   },
   {
     id: 'research.report.competitive_analysis',
@@ -62,7 +66,7 @@ const SYSTEMATIC_REPORT_RUNBOOKS = [
     description: 'Wettbewerber-Set, Bewertungsachsen, Matrix, Positionierung, Lücken und Empfehlung.',
     command_type: 'research.systematic.report.create',
     report_type: 'competitive_analysis',
-    prompt_template: 'Erstelle eine Wettbewerbsanalyse als Word-Dokument via ctox report report_type=competitive_analysis.',
+    prompt_template: 'prompts/research-report-competitive-analysis.md',
   },
   {
     id: 'research.report.technology_screening',
@@ -71,7 +75,7 @@ const SYSTEMATIC_REPORT_RUNBOOKS = [
     description: 'Optioneninventar, Kriterien, Shortlist und nächste Schritte.',
     command_type: 'research.systematic.report.create',
     report_type: 'technology_screening',
-    prompt_template: 'Erstelle ein Technologie-Screening als Word-Dokument via ctox report report_type=technology_screening.',
+    prompt_template: 'prompts/research-report-technology-screening.md',
   },
   {
     id: 'research.report.whitepaper',
@@ -80,7 +84,7 @@ const SYSTEMATIC_REPORT_RUNBOOKS = [
     description: 'These, Kontext, Argumente, Gegenargumente, Implikationen und Position.',
     command_type: 'research.systematic.report.create',
     report_type: 'whitepaper',
-    prompt_template: 'Erstelle ein Whitepaper als Word-Dokument via ctox report report_type=whitepaper.',
+    prompt_template: 'prompts/research-report-whitepaper.md',
   },
   {
     id: 'research.report.literature_review',
@@ -89,7 +93,7 @@ const SYSTEMATIC_REPORT_RUNBOOKS = [
     description: 'Literature Review mit Themen, Synthese, Lücken und offenen Fragen.',
     command_type: 'research.systematic.report.create',
     report_type: 'literature_review',
-    prompt_template: 'Erstelle eine Literature Review als Word-Dokument via ctox report report_type=literature_review.',
+    prompt_template: 'prompts/research-report-literature-review.md',
   },
   {
     id: 'research.report.decision_brief',
@@ -98,7 +102,7 @@ const SYSTEMATIC_REPORT_RUNBOOKS = [
     description: 'Kurzes empfehlungsorientiertes Memo mit Optionen, Kriterien und Bewertung.',
     command_type: 'research.systematic.report.create',
     report_type: 'decision_brief',
-    prompt_template: 'Erstelle eine Entscheidungsvorlage als Word-Dokument via ctox report report_type=decision_brief.',
+    prompt_template: 'prompts/research-report-decision-brief.md',
   },
   {
     id: 'research.report.project_description',
@@ -107,16 +111,16 @@ const SYSTEMATIC_REPORT_RUNBOOKS = [
     description: 'Unternehmens- und Projektbeschreibung für Innovations- und Fördervorhaben.',
     command_type: 'research.systematic.report.create',
     report_type: 'project_description',
-    prompt_template: 'Erstelle eine Projektbeschreibung/Fördervorhabenbeschreibung als Word-Dokument via ctox report report_type=project_description.',
+    prompt_template: 'prompts/research-report-project-description.md',
   },
   {
     id: 'research.report.source_review',
     document_type: 'word_document',
     title: 'Quellenreview',
-    description: 'Systematische Quellen- und Datenquellenrecherche mit Taxonomie und Priorisierung.',
+    description: 'Quellen- und Datenquellenrecherche mit Taxonomie und Priorisierung.',
     command_type: 'research.systematic.report.create',
     report_type: 'source_review',
-    prompt_template: 'Erstelle ein Quellenreview als Word-Dokument via ctox report report_type=source_review.',
+    prompt_template: 'prompts/research-report-source-review.md',
   },
 ];
 
@@ -125,21 +129,7 @@ const SYSTEMATIC_REPORT_RUNBOOKS = [
 // markup is written here once, right after mount() injects the file — the head
 // itself is never rebuilt afterwards.
 function applyStaticLabels(host, t) {
-  // Liste und Editor bekommen bewusst UNTERSCHIEDLICHE Lade-Texte: zwei
-  // identische "Workspace wird geladen."-Karten nebeneinander wirkten wie ein
-  // Render-Duplikat (Befund 31.08.2026, Geometry-Lab-Screenshot).
-  for (const placeholder of host.querySelectorAll('[data-documents-list-placeholder]')) {
-    const title = placeholder.querySelector('strong');
-    if (title) title.textContent = t('documentsTitle', 'Dokumente');
-    const copy = placeholder.querySelector('span');
-    if (copy) copy.textContent = t('listLoading', 'Dokumente werden geladen.');
-  }
-  for (const placeholder of host.querySelectorAll('.documents-editor-shell > .ctox-empty')) {
-    const title = placeholder.querySelector('strong');
-    if (title) title.textContent = t('documentsTitle', 'Dokumente');
-    const copy = placeholder.querySelector('span');
-    if (copy) copy.textContent = t('documentPreparing', 'Dokument wird vorbereitet.');
-  }
+  // v4: keine Lade-/Platzhaltertexte im Inhalt (PORTING R11); leere Liste und leerer Editor rendern nichts.
   const title = host.querySelector('[data-documents-title]');
   if (title) title.textContent = t('documentsTitle', 'Dokumente');
 
@@ -156,7 +146,7 @@ function applyStaticLabels(host, t) {
 
   const search = host.querySelector('[data-documents-search]');
   if (search) {
-    search.placeholder = t('searchPlaceholder', 'Dokument suchen...');
+    search.placeholder = t('searchPlaceholder', 'Suchen');
     search.setAttribute('aria-label', t('searchLabel', 'Dokumente suchen'));
   }
   const ariaOnly = [
@@ -186,60 +176,60 @@ function applyStaticLabels(host, t) {
   if (reset) reset.textContent = t('clearFilters', 'Filter zurücksetzen');
 }
 
-export async function mount(ctx) {
-  await ensureStyles();
-  const messages = await loadModuleMessages(import.meta.url, ctx.locale || 'de', {});
-  const t = (key, fallback, ...args) => {
-    let val = key.split('.').reduce((acc, curr) => acc?.[curr], messages) ?? fallback ?? key;
-    if (args.length) {
-      args.forEach((arg, i) => {
-        val = String(val).replace(`{${i}}`, arg);
-      });
-    }
+const SNAPSHOT_VIEW_KEYS = Object.freeze([
+  'selectedId', 'searchQuery', 'typeFilter', 'statusFilter', 'appFilter', 'sourceFilter', 'tagFilter', 'sortBy',
+  'listView', 'libraryOpen', 'docxToolbarVisible',
+]);
+
+function langFrom(locale) {
+  return String(locale || '').toLowerCase().startsWith('en') ? 'en' : 'de';
+}
+
+// api.shell.t ist der Schlüsselraum der Shell (app-api.d.ts OFFEN-B): 'documents.<key>' übersteuert, sonst gilt der
+// eingebettete Rückfalltext. Liefert t() den Schlüssel selbst zurück, ist er unbekannt.
+function createTranslator(api) {
+  return (key, fallback, ...args) => {
+    const full = `documents.${key}`;
+    let translated = '';
+    try { translated = api.shell.t(full); } catch {}
+    let val = translated && translated !== full ? translated : (fallback ?? key);
+    args.forEach((arg, i) => { val = String(val).replace(`{${i}}`, arg); });
     return val;
   };
+}
 
-  const html = await fetch(revisionedModuleAssetUrl('./index.html')).then((res) => res.text());
-  ctx.host.innerHTML = html;
-  // Documents is a two-pane app: file management on the left and Word in the
-  // remaining workspace. The shell's generic right pane must not reserve any
-  // width for this module.
-  ctx.left?.replaceChildren?.();
-  ctx.right?.replaceChildren?.();
-  const shellRightPane = ctx.right?.closest?.('[data-right-pane]') || null;
-  const shellRightWasHidden = shellRightPane?.hidden;
-  const shellLeftPane = ctx.left?.closest?.('[data-left-pane]') || null;
-  const shellLeftWasHidden = shellLeftPane?.hidden;
-  if (shellLeftPane) shellLeftPane.hidden = true;
-  if (shellRightPane) shellRightPane.hidden = true;
-  applyStaticLabels(ctx.host, t);
-  const requestedDocumentId = documentIdFromLaunchArgs(ctx.args);
-  const requestedVersionId = versionIdFromLaunchArgs(ctx.args);
+// Abos gehören der Montage (PORTING §4 Falle 1): jeder mount baut seinen eigenen state.
+export async function mount(root, api, { restored } = {}) {
+  if (!root.dataset.app) root.dataset.app = api.app?.id || 'documents';
+  const t = createTranslator(api);
+  // CSS lädt die Shell aus dem Manifest (Entwurf §5); index.html liefert der Service Worker versioniert (§16.15).
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  root.innerHTML = html;
+  applyStaticLabels(root, t);
+  api.shell.setTitle(t('documentsTitle', 'Dokumente'));
+  const restoredView = plainObject(restored) ? restored : {};
 
   const state = {
-    ctx,
+    api,
+    root,
+    disposers: [],
+    officeBridge: createOfficeBridgeV4(api, 'document'),
     formatModule: null,
     formatModuleLoadPromise: null,
-    superdocModule: null,
     ctoxDocumentsModule: null,
-    officeEngine: 'ctox_documents',
     documents: [],
-    documentsReadComplete: false,
-    documentsReadError: null,
-    documentsReadiness: null,
-    readinessCleanup: null,
-    runbooks: [],
+    rawDocuments: [],
+    runbooks: mergeDocumentRunbooks([]),
     knowledgeItems: [],
     knowledgeRunbooks: [],
     knowledgeTables: [],
     selectedId: '',
-    requestedSelectedId: requestedDocumentId,
-    requestedSourceFocus: requestedDocumentId && ctx.args?.return_thread_id
-      ? { recordId: requestedDocumentId, returnThreadId: String(ctx.args.return_thread_id) }
-      : null,
+    requestedSelectedId: '',
+    requestedSourceFocus: null,
     selectedVersion: null,
-    requestedVersionId,
-    requestedVersionDocumentId: requestedVersionId ? requestedDocumentId : '',
+    requestedVersionId: '',
+    requestedVersionDocumentId: '',
+    versionSubscription: null,
     mailMergeNavigation: null,
     editorHandle: null,
     editorDestroyPromise: null,
@@ -262,41 +252,23 @@ export async function mount(ctx) {
     listView: 'list',
     actionsOpen: false,
     libraryOpen: false,
-    docxToolbarVisible: ctx?.storageScope?.get?.(DOCX_TOOLBAR_VISIBILITY_KEY) !== 'false',
-    localSubscriptionCleanup: null,
-    launchCleanup: null,
+    docxToolbarVisible: true,
     contextMenu: null,
     contextMenuCleanup: null,
-    openFileToken: null,
     openFilePromise: Promise.resolve(),
     blobByteCache: createDocumentBlobByteCache(),
     blobPrefetchController: null,
     blobPrefetchTask: null,
+    pendingDraft: null,
     disposed: false,
     t,
-    lang: ctx.locale === 'en' ? 'en' : 'de',
+    lang: langFrom(api.shell.locale.get()),
   };
+  applyRestoredView(state, restoredView);
 
   const hasPendingEditorChanges = () => Boolean(
     state.dirty || state.needsFinalSave || state.editorHandle?.saving || state.superdocSavePromise,
   );
-  const unregisterCloseGuard = ctx.windowManager?.registerCloseGuard?.(ctx.host, async () => {
-    try {
-      await withTimeout(
-        flushActiveEditorDraft(state, undefined, { allowFailure: false, timeoutMs: 90000 }),
-        90000,
-        state.t('draftSaveTimeout', 'Automatische Draft-Speicherung beim Dokumentwechsel hat zu lange gedauert.'),
-      );
-      if (hasPendingEditorChanges()) {
-        ctx.notifications?.show?.({ type: 'error', message: state.t('draftSavePending', 'Weitere Änderungen sind noch nicht gespeichert. Bitte nach dem Speichern erneut versuchen, das Dokument zu wechseln.') });
-        return false;
-      }
-      return true;
-    } catch (error) {
-      ctx.notifications?.show?.({ type: 'error', message: error?.message || String(error) });
-      return false;
-    }
-  });
   const preventUnsavedUnload = (event) => {
     if (!hasPendingEditorChanges()) return;
     event.preventDefault();
@@ -304,84 +276,135 @@ export async function mount(ctx) {
   };
   window.addEventListener('beforeunload', preventUnsavedUnload);
 
-  state.launchCleanup = wireModule(state);
   state.paneCleanup = wireDocumentPanes(state);
-  state.openFileToken = ctx.eventBus?.on?.('desktop-app:open-file', (payload = {}) => {
-    if (payload.appId !== 'documents') return;
-    enqueueDocumentOpenFile(state, payload.args?.openFile);
-  }) || null;
-  state.localSubscriptionCleanup = wireLocalRealtime(state);
-  state.readinessCleanup = wireDocumentReadiness(state);
-  // Mount the workbench immediately. Seed/query work can legitimately wait
-  // for WebRTC catch-up and must not leave the window-manager promise pending
-  // after the visible app is already usable.
+  state.disposers.push(wireLocalRealtime(state));
+  state.disposers.push(api.shell.locale.subscribe((locale) => {
+    const lang = langFrom(locale);
+    if (lang === state.lang) return;
+    state.lang = lang;
+    applyStaticLabels(root, t);
+    renderLeft(state);
+    renderDocumentStrip(state);
+  }));
+  state.disposers.push(api.shell.onRoute((event) => handleRoute(state, event?.params || {})));
+  // Mount the workbench immediately; the live subscriptions above already delivered the current local state.
   renderLeft(state);
   renderRight(state);
   renderCenter(state);
-  Promise.all([
-    Promise.all([refreshDocuments(state), refreshOfficeEngineSettings(state)]).then(() => {
-      if (state.disposed) return;
-      renderRight(state);
-      renderCenter(state);
-    }),
-    Promise.resolve().then(() => ensureSeedRunbooks(ctx)).then(() => refreshRunbooks(state)),
-  ])
-    .then(async () => {
-      if (state.disposed) return;
-      if (ctx.args?.openFile) await enqueueDocumentOpenFile(state, ctx.args.openFile);
-      if (state.disposed) return;
-      renderLeft(state);
-      renderRight(state);
-      renderCenter(state);
-      reportRequestedDocumentFocus(state);
-    })
-    .catch((error) => {
-      if (!state.disposed) renderError(state, error?.message || String(error));
-    });
-  return () => {
-    state.disposed = true;
-    unregisterCloseGuard?.();
-    window.removeEventListener('beforeunload', preventUnsavedUnload);
-    if (state.superdocSaveTimer) clearTimeout(state.superdocSaveTimer);
-    state.contextMenuCleanup?.();
-    if (state.openFileToken) ctx.eventBus?.off?.('desktop-app:open-file', state.openFileToken);
-    state.contextMenu?.remove();
-    state.contextMenu = null;
-    state.localSubscriptionCleanup?.();
-    state.readinessCleanup?.();
-    state.launchCleanup?.();
-    state.paneCleanup?.();
-    clearDocumentBlobByteCache(state);
-    state.editorHandle?.destroy?.();
-    if (shellRightPane) shellRightPane.hidden = shellRightWasHidden;
-    if (shellLeftPane) shellLeftPane.hidden = shellLeftWasHidden;
+  ensureSeedRunbooks(state);
+  return {
+    async unmount() {
+      state.disposed = true;
+      window.removeEventListener('beforeunload', preventUnsavedUnload);
+      if (state.superdocSaveTimer) clearTimeout(state.superdocSaveTimer);
+      state.superdocSaveTimer = null;
+      state.contextMenuCleanup?.();
+      state.contextMenu?.remove();
+      state.contextMenu = null;
+      state.versionSubscription?.off?.();
+      state.versionSubscription = null;
+      for (const dispose of state.disposers.splice(0)) {
+        try { dispose(); } catch (error) { console.warn('[documents] unsubscribe failed', error); }
+      }
+      state.officeBridge.dispose();
+      state.paneCleanup?.();
+      clearDocumentBlobByteCache(state);
+      try { await state.editorHandle?.destroy?.(); } catch (error) { console.warn('[documents] editor destroy failed', error); }
+      state.editorHandle = null;
+      root.replaceChildren();
+    },
+    snapshot: () => documentsSnapshot(state),
   };
 }
 
+// Fensterzustand für den Live-Remount (PORTING §2): Ansicht, Auswahl, offener Markdown-Entwurf, Scroll.
+function documentsSnapshot(state) {
+  const snap = { v: 1 };
+  for (const key of SNAPSHOT_VIEW_KEYS) snap[key] = state[key];
+  if (state.selectedVersion?.id) snap.selectedVersionId = state.selectedVersion.id;
+  const markdown = state.root?.querySelector('.documents-markdown-textarea');
+  if (state.editorHandle?.kind === 'markdown' && markdown) {
+    snap.markdownDraft = { documentId: state.selectedId, versionId: state.selectedVersion?.id || '', text: markdown.value, editing: !markdown.hidden };
+  }
+  const list = state.root?.querySelector('[data-documents-list]');
+  snap.listScrollTop = list?.scrollTop || 0;
+  return snap;
+}
+
+function applyRestoredView(state, restored) {
+  if (!restored || restored.v !== 1) return;
+  for (const key of SNAPSHOT_VIEW_KEYS) {
+    if (!(key in restored)) continue;
+    if (typeof restored[key] === typeof state[key]) state[key] = restored[key];
+  }
+  if (state.selectedId) {
+    state.requestedSelectedId = state.selectedId;
+    if (typeof restored.selectedVersionId === 'string' && restored.selectedVersionId) {
+      state.requestedVersionId = restored.selectedVersionId;
+      state.requestedVersionDocumentId = state.selectedId;
+    }
+  }
+  const draft = restored.markdownDraft;
+  if (plainObject(draft) && typeof draft.text === 'string' && draft.documentId) state.pendingDraft = { ...draft };
+  if (Number.isFinite(restored.listScrollTop)) state.pendingListScrollTop = restored.listScrollTop;
+}
+
+// Deep-Link (api.shell.onRoute) statt eventBus/ctox-business-os-app-launch: {record|documentId, version|versionId,
+// return_thread_id, file_ref|ref}. Unbekannte Datensätze melden in die Zustandszone (R13, kein stiller Rückgriff).
+function handleRoute(state, params = {}) {
+  if (state.disposed) return;
+  const fileRef = String(params.file_ref || params.ref || '').trim();
+  if (fileRef) enqueueDocumentOpenFile(state, { ref: fileRef, name: params.name, mime: params.mime });
+  const documentId = documentIdFromLaunchArgs(params);
+  const versionId = versionIdFromLaunchArgs(params);
+  if (!documentId) return;
+  state.requestedSourceFocus = { recordId: documentId, returnThreadId: String(params.return_thread_id || '') };
+  if (state.documents.some((record) => record.id === documentId)) {
+    switchSelectedDocument(state, documentId, { versionId }).then(() => {
+      reportRequestedDocumentFocus(state);
+    }).catch((error) => reportDocumentError(state, 'documents.route.open', error));
+    return;
+  }
+  state.requestedSelectedId = documentId;
+  state.requestedVersionId = versionId;
+  state.requestedVersionDocumentId = versionId ? documentId : '';
+  state.selectedVersion = null;
+  reportRequestedDocumentFocus(state);
+}
+
 function enqueueDocumentOpenFile(state, input) {
-  if (!input?.file) return state.openFilePromise;
+  if (!input?.file && !input?.ref) return state.openFilePromise;
   state.openFilePromise = state.openFilePromise
     .then(() => openDocumentFile(state, input))
     .catch((error) => {
       console.error('[documents] opening file from Files failed', error);
-      renderError(state, error?.message || String(error));
+      reportDocumentError(state, 'documents.file.open', error);
       return null;
     });
   return state.openFilePromise;
 }
 
+// Datei aus dem Dateisystem der Plattform (api.files) öffnen: ref → Blob; Name/Typ aus dem files-Dokument.
+async function fileFromRef(state, input) {
+  const ref = String(input.ref || '').trim();
+  const meta = state.api.query('files', { selector: { ref }, limit: 1 }).get()[0] || null;
+  const blob = await state.api.files.get(ref);
+  const name = String(input.name || meta?.name || 'document.docx');
+  return new File([blob], name, { type: String(input.mime || meta?.mime || blob.type || '') });
+}
+
 async function openDocumentFile(state, input) {
-  const file = input?.file;
+  const file = input?.file || await fileFromRef(state, input);
+  if (state.disposed) return null;
   const validation = validateImportInput({ file });
   if (!validation.valid) throw new Error(state.t(validation.key, validation.message));
   const bytes = new Uint8Array(await file.arrayBuffer());
   const sourceSha = await sha256Hex(bytes);
-  await refreshDocuments(state);
   const existing = documentBySourceSha(state.documents, sourceSha);
   if (existing) {
     state.selectedId = existing.id;
     state.selectedVersion = null;
-    await loadSelectedVersion(state);
+    loadSelectedVersion(state);
     renderLeft(state);
     renderRight(state);
     renderCenter(state);
@@ -397,7 +420,7 @@ function documentBySourceSha(records = [], sourceSha = '') {
 }
 
 async function loadDocumentFormatModule() {
-  return import('../../vendor/document-format.mjs?v=20260904-office-shell-v2');
+  return import('./vendor/document-format.mjs');
 }
 
 async function ensureDocumentFormatModule(state) {
@@ -411,70 +434,15 @@ async function ensureDocumentFormatModule(state) {
   return state.formatModuleLoadPromise;
 }
 
-async function loadSuperDocModule(state) {
-  if (state.superdocModule) return state.superdocModule;
-  ensureSuperDocStyles();
-  state.superdocModule = await import('../../vendor/superdoc.mjs');
-  return state.superdocModule;
-}
-
 async function loadCtoxDocumentsModule(state) {
   if (!state.ctoxDocumentsModule) {
-    state.ctoxDocumentsModule = await import('../../vendor/ctox-office/ctox-office-document.mjs?v=20260904-office-shell-v2');
+    state.ctoxDocumentsModule = await import('ctox:lib/ctox-office@1/ctox-office-document.mjs');
   }
   return state.ctoxDocumentsModule;
 }
 
-async function refreshOfficeEngineSettings(state) {
-  const collection = state.ctx.db?.collection?.('ctox_runtime_settings');
-  if (!collection) return state.officeEngine;
-  const settings = await collection.findOne('runtime-settings').exec();
-  const projected = settings?.toJSON?.() || settings;
-  state.officeEngine = officeEngineFromSettings(projected);
-  return state.officeEngine;
-}
-
-function officeEngineFromSettings(settings) {
-  return settings?.office?.documents_engine === 'legacy' ? 'legacy' : 'ctox_documents';
-}
-
-function wireModule(state) {
-  const refreshLeft = () => renderLeft(state);
-  const handleAppLaunch = (event) => {
-    if (event?.detail?.appId && event.detail.appId !== state.ctx.module?.id) return;
-    const args = event?.detail?.args || {};
-    const documentId = documentIdFromLaunchArgs(args);
-    const versionId = versionIdFromLaunchArgs(args);
-    if (!documentId) return;
-    state.requestedSourceFocus = args.return_thread_id
-      ? { recordId: documentId, returnThreadId: String(args.return_thread_id) }
-      : null;
-    if (state.documents.some((record) => record.id === documentId)) {
-      switchSelectedDocument(state, documentId, { versionId }).then(() => {
-        reportRequestedDocumentFocus(state);
-      }).catch((error) => {
-        console.error('[documents] requested document could not be opened', error);
-      });
-      return;
-    }
-    state.requestedSelectedId = documentId;
-    state.requestedVersionId = versionId;
-    state.requestedVersionDocumentId = versionId ? documentId : '';
-    state.selectedVersion = null;
-    refreshDocumentsFromLocal(state).catch((error) => {
-      console.error('[documents] requested document could not be opened', error);
-    });
-  };
-  state.ctx.host.addEventListener('documents:refresh-left', refreshLeft);
-  state.ctx.host.addEventListener('ctox-business-os-app-launch', handleAppLaunch);
-  return () => {
-    state.ctx.host.removeEventListener('documents:refresh-left', refreshLeft);
-    state.ctx.host.removeEventListener('ctox-business-os-app-launch', handleAppLaunch);
-  };
-}
-
 function wireDocumentPanes(state) {
-  const root = state.ctx.host.querySelector('[data-documents-module]');
+  const root = state.root.querySelector('[data-documents-module]');
   const backdrop = root?.querySelector('[data-documents-drawer-backdrop]');
   const closeDrawers = () => {
     state.actionsOpen = false;
@@ -517,7 +485,7 @@ function wireDocumentPanes(state) {
 }
 
 function renderPaneVisibility(state) {
-  const root = state.ctx.host.querySelector('[data-documents-module]');
+  const root = state.root.querySelector('[data-documents-module]');
   const actions = root?.querySelector('[data-documents-actions-drawer]');
   const actionsResizer = root?.querySelector('[data-documents-actions-resizer]');
   const backdrop = root?.querySelector('[data-documents-drawer-backdrop]');
@@ -547,12 +515,11 @@ function initDocumentsContextMenu(state) {
   menu.hidden = true;
   // Nothing the app draws may leave the app window: the menu is positioned
   // inside the module root, never on document.body.
-  const root = state.ctx.host.querySelector('[data-documents-module]') || state.ctx.host;
+  const root = state.root.querySelector('[data-documents-module]') || state.root;
   root.append(menu);
   state.contextMenu = menu;
 
   const handleContextMenu = (event) => {
-    if (state.ctx.module?.id !== 'documents') return;
     const context = documentCommandContextFromElement(state, event.target);
     event.preventDefault();
     event.stopPropagation();
@@ -591,7 +558,7 @@ function documentCommandContextFromElement(state, target) {
   const record = state.documents.find((item) => item.id === recordId) || selectedRecord(state);
   const field = element?.closest?.('input, textarea, select, button');
   const column = recordElement?.dataset.documentsColumn
-    || (state.ctx.left?.contains?.(element) ? 'documents' : state.ctx.right?.contains?.(element) ? 'runbooks' : 'editor');
+    || (state.root.querySelector('[data-documents-library-pane]')?.contains?.(element) ? 'documents' : 'editor');
 
   return {
     module: 'documents',
@@ -619,9 +586,7 @@ function renderDocumentsContextMenu(state, context, x, y) {
         <button type="button" data-documents-context-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
       </header>
       <div class="documents-context-mode" role="radiogroup" aria-label="${escapeHtml(state.t('chatActionLabel', 'CTOX Aufgabe'))}">
-        <label><input type="radio" name="contextMode" value="data" checked /> ${escapeHtml(state.t('chatWorkDataLabel', 'Mit Daten arbeiten'))}</label>
-        <label><input type="radio" name="contextMode" value="ask" /> ${escapeHtml(state.t('chatAnswerLabel', 'Frage beantworten'))}</label>
-        ${canModifyApp ? `<label><input type="radio" name="contextMode" value="app" /> ${escapeHtml(state.t('chatModifyAppLabel', 'App modifizieren'))}</label>` : ''}
+        ${contextChatModeMarkup({ canModifyApp, escape: escapeHtml, labels: { data: state.t('chatWorkDataLabel', 'Mit Daten arbeiten'), ask: state.t('chatAnswerLabel', 'Frage beantworten'), app: state.t('chatModifyAppLabel', 'App modifizieren') } })}
       </div>
       <textarea data-documents-context-message placeholder="${escapeHtml(state.t('chatPlaceholder', 'Was soll CTOX hier tun oder prüfen?'))}"></textarea>
       <footer>
@@ -653,10 +618,12 @@ function renderDocumentsContextMenu(state, context, x, y) {
   requestAnimationFrame(() => textarea?.focus());
 }
 
+// Nur Spiegel für die Darstellung (R9); die Entscheidung trifft der Core beim Befehl.
 function canModifyDocumentsApp(state) {
-  if (typeof state.ctx.canModifyModule === 'function' && state.ctx.canModifyModule()) return true;
-  const user = state.ctx.session?.user || {};
-  const role = String(user.role || (user.is_admin ? 'admin' : 'user')).trim().toLowerCase().replace(/^business_os_/, '');
+  let permissions = [];
+  try { permissions = state.api.actor.permissions.get() || []; } catch {}
+  if (permissions.includes('apps.source.edit')) return true;
+  const role = String(state.api.actor.role || 'user').trim().toLowerCase().replace(/^business_os_/, '');
   return ['admin', 'chef'].includes(role);
 }
 
@@ -674,138 +641,123 @@ async function dispatchDocumentsContextChat(state, context, message, mode = 'dat
     return;
   }
 
-  const safeMode = mode === 'app' && canModifyDocumentsApp(state) ? 'app' : (mode === 'ask' ? 'ask' : 'data');
+  const canModifyApp = canModifyDocumentsApp(state);
+  const safeMode = normalizeContextChatMode(mode, { canModifyApp });
   const record = state.documents.find((item) => item.id === context.record_id) || selectedRecord(state);
   const runbookId = defaultRunbookId(state);
   const runbook = state.runbooks.find((item) => item.id === runbookId || item.command_type === runbookId) || null;
-  if (!document.querySelector('[data-ctox-chat-root]')) {
-    if (status) status.textContent = state.t('chatNotReady', 'Chat ist noch nicht bereit.');
-    return;
-  }
-  const openBusinessChat = state.ctx?.openBusinessChat || state.ctx?.businessChat?.open;
-  if (typeof openBusinessChat !== 'function') {
-    if (status) status.textContent = state.t('chatNotReady', 'Chat ist noch nicht bereit.');
-    return;
-  }
-  if (status) status.textContent = state.t('chatOpening', 'Chat wird geöffnet...');
   const titlePrefix = safeMode === 'app'
     ? state.t('chatModifyAppTitle', 'Dokumente-App anpassen')
     : safeMode === 'ask'
       ? state.t('chatAnswerLabel', 'Frage beantworten')
       : state.t('chatWorkDataTitle', 'Mit Dokumenten arbeiten');
   const title = `${titlePrefix} · ${context.label || record?.title || context.column || 'Dokumente'}`;
-  const instruction = safeMode === 'app'
-    ? state.t('chatModifyAppInstruction', `Passe die Dokumente-App anhand dieser Admin-Anweisung an. Kontext nur als UI-Bezug verwenden, Dokumentdaten selbst nicht als primäres Ziel verändern.\n\n{0}`, trimmed)
-    : safeMode === 'ask'
-      ? `Beantworte die folgende Frage ausschließlich lesend. Nutze nur vorhandene Daten und Kontext; führe keine Änderungen an Daten, Records, Dateien oder der App aus. Antworte knapp und direkt.\n\n${trimmed}`
-      : trimmed;
-  openBusinessChat({
-    text: trimmed,
-    draft: trimmed,
-    module: 'documents',
-    source_module: 'documents',
-    source_title: 'Dokumente',
-    action: 'context-chat',
-    reuseActive: false,
-    command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
-    record_id: safeMode === 'app' ? 'documents' : (record?.id || context.record_id || 'documents'),
-    title,
-    command_title: title,
-    instruction,
-    mode: safeMode,
-    target: safeMode === 'app' ? 'app' : (safeMode === 'ask' ? 'read' : 'data'),
-    payload: {
-      title,
-      instruction,
-      prompt: trimmed,
-      user_message: trimmed,
-      mode: safeMode,
-      target: safeMode === 'app' ? 'app' : (safeMode === 'ask' ? 'read' : 'data'),
-      selected_document: record || null,
-      selected_version_id: record?.current_version_id || '',
-      selected_runbook: runbook,
-      context,
-      thread_key: 'business-os/documents',
-    },
-    client_context: {
-      action: 'context-chat',
-      mode: safeMode,
-      column: context.column,
-      record_type: context.record_type,
-      document_id: record?.id || '',
-      filename: record?.filename || context.filename || '',
-    },
-  });
+  // Kontext-Auftrag an die Chat-App ctox über den Baustein (Strang SKL-D, Kern §16.40 commands_out): Anweisungstext,
+  // Skill und Rückweg liegen bei den Handlern ctox.chat.task / ctox.app.modify.request; der Sprung öffnet den Chat.
   hideDocumentsContextMenu(state);
+  sendContextChat(state.api, {
+    source_app: 'documents',
+    record_ref: record?.id || context.record_id || '',
+    selection: context.selected_text || '',
+    text: trimmed,
+    mode: safeMode,
+    canModifyApp,
+    title,
+    thread_key: 'business-os/documents',
+    context: { ...context, selected_version_id: record?.current_version_id || '', runbook_id: runbook?.id || '' },
+  }, { send: (type, payload, opts) => sendDocumentsCommand(state, { type, record_id: opts.record_id, payload, client_context: { action: 'context-chat', mode: safeMode } }) });
 }
 
+// Live-Abos statt ctx.db-Lesen, Readiness und Demand-Loadern (R3/R4): jede Abfrage ist lokal und vollständig,
+// subscribe() ruft sofort mit dem aktuellen Stand. Änderungen werden 80 ms gebündelt gerendert.
 function wireLocalRealtime(state) {
-  const collections = ['documents', 'document_versions', 'document_runbooks', 'document_blob_chunks', 'knowledge_items', 'knowledge_runbooks', 'knowledge_tables'];
+  const api = state.api;
+  const changed = new Set();
+  let timer = null;
   let disposed = false;
-  const refresh = createCoalescedRefresh({
-    delayMs: DOCUMENT_RENDER_DEBOUNCE_MS,
-    refresh: (changed, isActive) => refreshDocumentsFromLocal(state, changed, isActive),
-    onError: (error) => {
-      console.warn('[documents] local realtime render failed', error);
-    },
-  });
-  const subscriptions = collections
-    .map((collectionName) => documentCollection(state.ctx, collectionName)?.$?.subscribe?.(() => {
-      if (!disposed) refresh.notify(collectionName);
-    }) || null)
-    .filter(Boolean);
+  const flush = () => {
+    timer = null;
+    if (disposed || state.disposed) return;
+    const batch = new Set(changed);
+    changed.clear();
+    refreshDocumentsFromLocal(state, batch, () => !disposed && !state.disposed)
+      .catch((error) => reportDocumentError(state, 'documents.render', error));
+  };
+  state.notifyLocalChange = (name) => {
+    changed.add(name);
+    if (!timer) timer = setTimeout(flush, DOCUMENT_RENDER_DEBOUNCE_MS);
+  };
+  const offs = [];
+  const live = (collection, query, apply) => {
+    try {
+      offs.push(api.query(collection, query).subscribe((rows) => {
+        apply(Array.isArray(rows) ? rows : []);
+        state.notifyLocalChange(collection);
+      }));
+    } catch (error) {
+      // Fremde Collection ohne foreign_collections-Eintrag → forbidden (V4-PORT.md OFFEN-2).
+      reportDocumentError(state, `documents.read.${collection}`, error);
+    }
+  };
+  live('documents', { sort: [{ updated_at_ms: 'desc' }] }, (rows) => { state.rawDocuments = rows; refreshDocuments(state); });
+  live('document_runbooks', { sort: [{ title: 'asc' }] }, (rows) => { state.runbooks = mergeDocumentRunbooks(rows); });
+  for (const name of FOREIGN_KNOWLEDGE_COLLECTIONS) {
+    live(name, { sort: [{ updated_at_ms: 'desc' }] }, (rows) => applyKnowledgeRows(state, name, rows));
+  }
+  try {
+    offs.push(watchAgentFailures(state));
+  } catch (error) {
+    reportDocumentError(state, 'documents.read.business_commands', error);
+  }
   return () => {
     disposed = true;
-    refresh.dispose();
-    for (const sub of subscriptions) {
-      try { sub.unsubscribe?.(); } catch {}
+    if (timer) clearTimeout(timer);
+    timer = null;
+    state.notifyLocalChange = () => {};
+    for (const off of offs.splice(0)) {
+      try { off(); } catch {}
     }
   };
 }
 
-function wireDocumentReadiness(state) {
-  const sync = state.ctx?.sync;
-  const read = sync?.collectionReadiness;
-  if (typeof read === 'function') {
-    try { state.documentsReadiness = read.call(sync, 'documents') || null; } catch {}
-  }
-  const subscribe = sync?.subscribeCollectionReadiness;
-  if (typeof subscribe !== 'function') return () => {};
-  try {
-    const unsubscribe = subscribe.call(sync, 'documents', (snapshot) => {
-      if (state.disposed) return;
-      state.documentsReadiness = snapshot || null;
-      renderLeft(state);
-      // The collection may not have existed when the local subscription was
-      // first wired. A readiness change is also a chance to read its new rows.
-      state.localSubscriptionCleanup?.();
-      state.localSubscriptionCleanup = wireLocalRealtime(state);
-      refreshDocumentsFromLocal(state, new Set(['documents']))
-        .catch((error) => console.warn('[documents] readiness refresh failed', error));
-    });
-    return typeof unsubscribe === 'function' ? unsubscribe : () => {};
-  } catch (error) {
-    console.warn('[documents] readiness subscription failed', error);
-    return () => {};
-  }
+// Rückrufe on_failed der Agentenaufgaben (Kern §16.30; Handler research.systematic.report.failed,
+// document.runbook.failed, auch Abbruch) → Zustandszone, ein Eintrag je Aufgabe. Der erste Stand ist Vorgeschichte;
+// gemeldet wird, was eintrifft, solange die App offen ist (Ergebnisse selbst stehen live in den Collections).
+const AGENT_FAILED_TYPES = Object.freeze(['research.systematic.report.failed', 'document.runbook.failed']);
+function watchAgentFailures(state) {
+  let seen = null;
+  return state.api.query('business_commands', { selector: { type: { $in: [...AGENT_FAILED_TYPES] } } }).subscribe((rows) => {
+    const list = Array.isArray(rows) ? rows : [];
+    if (!seen) { seen = new Set(list.map((row) => row.id)); return; }
+    for (const row of list) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      const payload = row.payload || {};
+      const reason = typeof payload.error === 'string' ? payload.error : (payload.error?.message || payload.status || 'failed');
+      state.api.status.report({ level: 'error', code: `documents.agent.${payload.task_id || row.id}`, text: `${row.type}: ${reason}`, ref: row.id });
+    }
+  });
 }
 
-function documentCollection(ctx, collectionName) {
-  return ctx?.db?.collection?.(collectionName) || null;
+// Versionen des ausgewählten Dokuments live beobachten: ein Abo je Auswahl (Wechsel löst das alte).
+function ensureVersionSubscription(state, documentId) {
+  if (state.disposed) return;
+  const id = String(documentId || '');
+  if (state.versionSubscription?.documentId === id) return;
+  state.versionSubscription?.off?.();
+  state.versionSubscription = null;
+  if (!id) return;
+  const off = state.api.query('document_versions', { selector: { document_id: id } }).subscribe(() => {
+    state.notifyLocalChange?.('document_versions');
+  });
+  state.versionSubscription = { documentId: id, off };
 }
 
 async function refreshDocumentsFromLocal(state, changed = null, isActive = () => true) {
   if (!isActive()) return;
   const all = changed === null;
-  await Promise.all([
-    (all || changed.has('document_runbooks')) ? refreshRunbooks(state) : null,
-    (all || ['knowledge_items', 'knowledge_runbooks', 'knowledge_tables'].some((name) => changed.has(name)))
-      ? refreshKnowledge(state, changed) : null,
-    (all || changed.has('documents')) ? refreshDocuments(state, { isActive }) : null,
-  ]);
-  if (!isActive()) return;
   let selectedVersionLoaded = false;
-  if (all || ['documents', 'document_versions', 'document_blob_chunks'].some((name) => changed.has(name))) {
+  if (all || ['documents', 'document_versions'].some((name) => changed.has(name))) {
     const expectedSelectedVersionId = state.requestedVersionDocumentId === state.selectedId
       ? state.requestedVersionId
       : selectedRecord(state)?.current_version_id;
@@ -818,67 +770,48 @@ async function refreshDocumentsFromLocal(state, changed = null, isActive = () =>
   renderLeft(state);
   renderRight(state);
   renderDocumentStrip(state);
-  if (selectedVersionLoaded) renderCenter(state);
+  scheduleOfficePrewarm(state);
+  if (selectedVersionLoaded || all) renderCenter(state);
   reportRequestedDocumentFocus(state);
 }
 
+// Deep-Link auf einen Datensatz: erscheint er (live), wird er fokussiert und die Meldung geräumt; fehlt er und
+// steht kein Core-Rückstand mehr aus, meldet die Zustandszone (R13) – nie ein Kasten im Inhalt.
 function reportRequestedDocumentFocus(state) {
   const request = state.requestedSourceFocus;
   if (!request || state.disposed) return;
+  const code = 'documents.route.unknown_record';
   const recordExists = state.documents.some((record) => record.id === request.recordId);
   const focused = recordExists && state.selectedId === request.recordId;
-  const ready = state.ctx.sync?.collectionReadiness?.('documents')?.ready === true;
-  if (!focused && (recordExists || !ready || request.reportedUnavailable)) return;
-  const root = state.ctx.host.querySelector('[data-documents-module]') || state.ctx.host;
-  let status = root.querySelector('[data-documents-source-focus-status]');
-  if (focused) status?.remove();
-  else {
-    if (!status) {
-      status = document.createElement('div');
-      status.dataset.documentsSourceFocusStatus = '';
-      status.className = 'ctox-callout';
-      status.setAttribute('role', 'status');
-      root.prepend(status);
-    }
-    status.textContent = 'Verknüpftes Dokument ist hier nicht verfügbar. Die Dokumentenübersicht bleibt geöffnet.';
-  }
-  if (focused) state.requestedSourceFocus = null;
-  else request.reportedUnavailable = true;
-  state.ctx.host.dispatchEvent(new CustomEvent('ctox-business-os-record-focus', {
-    bubbles: true,
-    detail: { module: 'documents', status: focused ? 'record_focused' : 'unavailable',
-      recordId: request.recordId, returnThreadId: request.returnThreadId },
-  }));
-}
-
-async function refreshDocuments(state, { isActive = () => !state.disposed } = {}) {
-  const collection = documentCollection(state.ctx, 'documents');
-  if (!collection) {
-    state.documentsReadComplete = false;
-    state.documentsReadError = null;
-    if (isActive()) renderLeft(state);
+  if (focused) {
+    state.api.status.clear(code);
+    state.requestedSourceFocus = null;
     return;
   }
-  let rawDocuments = [];
-  try {
-    rawDocuments = await collection.find({ sort: [{ updated_at_ms: 'desc' }] }).exec();
-  } catch (error) {
-    state.documentsReadError = error?.message || String(error);
-    if (isActive()) renderLeft(state);
-    throw error;
-  }
-  state.documentsReadComplete = true;
-  state.documentsReadError = null;
-  state.documents = rawDocuments
-    .map((doc) => normalizeDocumentRecord(typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
+  if (recordExists || request.reportedUnavailable) return;
+  let backlog = 0;
+  try { backlog = Number(state.api.metrics.get()?.backlog || 0); } catch {}
+  if (backlog > 0) return;
+  request.reportedUnavailable = true;
+  state.api.status.report({
+    level: 'warn',
+    code,
+    text: state.t('linkedDocumentUnavailable', 'Verknüpftes Dokument {0} ist hier nicht vorhanden.', request.recordId),
+  });
+}
+
+function refreshDocuments(state) {
+  state.documents = (state.rawDocuments || [])
+    .map((doc) => normalizeDocumentRecord(doc))
     .filter(isActiveDocumentRecord);
 
   if (state.requestedSelectedId
       && state.documents.some((record) => record.id === state.requestedSelectedId)) {
+    const keepRestoredVersion = state.requestedVersionDocumentId === state.requestedSelectedId;
     state.selectedId = state.requestedSelectedId;
     state.requestedSelectedId = '';
     state.selectedVersion = null;
-    if (state.requestedVersionDocumentId !== state.selectedId) {
+    if (!keepRestoredVersion) {
       state.requestedVersionId = '';
       state.requestedVersionDocumentId = '';
     }
@@ -893,35 +826,14 @@ async function refreshDocuments(state, { isActive = () => !state.disposed } = {}
     state.mailMergeNavigation = null;
   }
   if (!state.selectedId && state.documents[0]) state.selectedId = state.documents[0].id;
-  if (isActive()) renderLeft(state);
+  ensureVersionSubscription(state, state.selectedId);
 }
 
-async function refreshRunbooks(state) {
-  const collection = documentCollection(state.ctx, 'document_runbooks');
-  const storedRunbooks = collection
-    ? (await collection.find({ sort: [{ title: 'asc' }] }).exec()).map((doc) => doc.toJSON())
-    : [];
-  state.runbooks = mergeDocumentRunbooks(storedRunbooks);
-}
-
-async function refreshKnowledge(state, changed = null) {
-  const read = async (name) => {
-    const collection = documentCollection(state.ctx, name);
-    if (!collection) return [];
-    const docs = await collection.find({ sort: [{ updated_at_ms: 'desc' }] }).exec();
-    return docs.map((doc) => normalizeKnowledgeRecord(typeof doc.toJSON === 'function' ? doc.toJSON() : doc));
-  };
-  const collections = [
-    ['knowledge_items', 'knowledgeItems'],
-    ['knowledge_runbooks', 'knowledgeRunbooks'],
-    ['knowledge_tables', 'knowledgeTables'],
-  ].filter(([name]) => changed === null || changed.has(name));
-  const results = await Promise.all(collections.map(([name]) => (
-    name === 'knowledge_tables' ? read(name).then(mergeKnowledgeTableReferences) : read(name)
-  )));
-  collections.forEach(([, field], index) => {
-    state[field] = results[index];
-  });
+function applyKnowledgeRows(state, name, rows) {
+  const normalized = rows.map((doc) => normalizeKnowledgeRecord(doc));
+  if (name === 'knowledge_items') state.knowledgeItems = normalized;
+  else if (name === 'knowledge_runbooks') state.knowledgeRunbooks = normalized;
+  else if (name === 'knowledge_tables') state.knowledgeTables = mergeKnowledgeTableReferences(normalized);
 }
 
 async function createMarkdownDocument(state, input = {}) {
@@ -956,7 +868,7 @@ async function createBlankWordDocument(state) {
     const title = nextBlankDocumentTitle(state);
     const formatModule = await ensureDocumentFormatModule(state);
     if (typeof formatModule.createBlankDocx !== 'function') {
-      throw new Error(state.t('blankDocumentUnavailable', 'Die Word-Dokumentvorlage ist nicht verfügbar.'));
+      throw new Error(state.t('blankDocumentUnavailable', 'Die Word-Dokumentvorlage fehlt im Formatmodul.'));
     }
     const bytes = await formatModule.createBlankDocx();
     const file = new File([bytes], ensureExtension(slugFilename(title), '.docx'), { type: DOCX_MIME });
@@ -965,11 +877,12 @@ async function createBlankWordDocument(state) {
       status: 'Draft',
       title,
     });
-    state.ctx.notifications?.show?.({ type: 'success', message: state.t('blankDocumentCreated', 'Leeres Word-Dokument erstellt.') });
+    // Erfolg bleibt still (neues Dokument ist ausgewählt); Fehler gehen in die Zustandszone.
+    state.api.status.clear('documents.document.create');
     return record;
   } catch (error) {
     console.error('[documents] blank Word document creation failed', error);
-    state.ctx.notifications?.show?.({ type: 'error', message: `${state.t('documentCreateFailed', 'Dokument konnte nicht erstellt werden:')} ${error?.message || error}` });
+    reportDocumentError(state, 'documents.document.create', error, state.t('documentCreateFailed', 'Dokument konnte nicht erstellt werden:'));
     return null;
   } finally {
     state.creatingBlankDocument = false;
@@ -977,9 +890,8 @@ async function createBlankWordDocument(state) {
 }
 
 async function importDocumentFile(state, file, workflow = {}) {
-  requireDocumentPersistence(state.ctx);
   if (!isSupportedDocumentFile(file)) {
-    renderError(state, 'Nur .docx, .md, .markdown oder .txt Dateien werden akzeptiert.');
+    reportDocumentError(state, 'documents.import.unsupported', new Error(state.t('validationUnsupportedFile', 'Nur .docx, .md, .markdown oder .txt Dateien werden akzeptiert.')));
     return null;
   }
   const isMarkdown = isMarkdownFile(file) || isTextFile(file);
@@ -1002,49 +914,16 @@ async function importDocumentFile(state, file, workflow = {}) {
   const status = String(workflow.status || '').trim() || 'Imported';
   const title = sanitizeDocumentTitle(workflow.title || titleFromFilename(file.name));
 
-  await saveBlobChunks(state.ctx, {
+  // Datei-Bytes über api.files (blob_id = id des files-Dokuments, ref = sha256); keine Chunk-Collection.
+  await saveBlobChunks(state, {
     blobId,
     documentId,
     versionId,
     mimeType,
     bytes,
+    name: file.name,
   });
 
-  await documentCollection(state.ctx, 'document_versions').insert({
-    id: versionId,
-    document_id: documentId,
-    version: 1,
-    source_kind: sourceKind,
-    blob_id: blobId,
-    model_json: parsed.document,
-    diagnostics: parsed.diagnostics,
-    created_at_ms: now,
-    updated_at_ms: now,
-  });
-
-  await documentCollection(state.ctx, 'documents').insert({
-    id: documentId,
-    title,
-    filename: file.name,
-    description: '',
-    mime_type: mimeType,
-    status,
-    document_type: documentType,
-    owner_id: '',
-    current_version_id: versionId,
-    source_sha256: sha,
-    page_count: 0,
-    diagnostics_count: parsed.diagnostics.length,
-    linked_records: [],
-    tags,
-    display_cache: {},
-    index_text: indexText,
-    is_deleted: false,
-    created_at_ms: now,
-    updated_at_ms: now,
-  });
-
-  state.selectedId = documentId;
   const record = {
     id: documentId,
     title,
@@ -1066,8 +945,27 @@ async function importDocumentFile(state, file, workflow = {}) {
     created_at_ms: now,
     updated_at_ms: now,
   };
+  // Lokal sofort committet (local), Bestätigung des Core läuft über die Outbox; Ablehnungen meldet der Kern.
+  await Promise.all([
+    state.api.put('document_versions', {
+      id: versionId,
+      document_id: documentId,
+      version: 1,
+      source_kind: sourceKind,
+      blob_id: blobId,
+      source_sha256: sha,
+      model_json: parsed.document,
+      diagnostics: parsed.diagnostics,
+      created_at_ms: now,
+      updated_at_ms: now,
+    }).local,
+    state.api.put('documents', { ...record }).local,
+  ]);
+
+  state.selectedId = documentId;
+  state.selectedVersion = null;
   if (workflow.applyRunbook) {
-    await dispatchDocumentRunbook(state, {
+    dispatchDocumentRunbook(state, {
       record,
       versionId,
       runbookId: workflow.runbookId,
@@ -1075,7 +973,7 @@ async function importDocumentFile(state, file, workflow = {}) {
       sourceAction: workflow.sourceAction || 'import_document',
     });
   }
-  await refreshDocuments(state);
+  refreshDocuments(state);
   renderLeft(state);
   renderRight(state);
   await loadSelectedVersion(state);
@@ -1083,6 +981,8 @@ async function importDocumentFile(state, file, workflow = {}) {
   return record;
 }
 
+// Version aus dem lokalen Stand (api.get ist synchron und vollständig). Fehlt sie, kommt sie live über das
+// Versionsabo nach (refreshDocumentsFromLocal); ein Ersatz-Kopf wird nie geöffnet.
 async function loadSelectedVersion(state) {
   const record = selectedRecord(state);
   if (!record?.id) {
@@ -1096,108 +996,43 @@ async function loadSelectedVersion(state) {
     && state.editorHandle === handle && handle?.activity === activity
     && state.selectedVersion === previousVersion && !ctoxDocumentsDraftProtected(state);
   if (!canApply()) return null;
-  const replication = await startDocumentVersionReplication(state.ctx);
+  ensureVersionSubscription(state, record.id);
   const requestedVersionId = state.requestedVersionId && state.requestedVersionDocumentId === record.id
     ? state.requestedVersionId
     : '';
   const targetVersionId = requestedVersionId || record.current_version_id;
-  const readLocalVersion = async (timeoutMs = 4500) => {
-    // A missing named head/history entry is a synchronization gap, not
-    // permission to open another version or move the authoritative head.
-    if (targetVersionId) {
-      return await withDocumentVersionTimeout(
-        documentCollection(state.ctx, 'document_versions').findOne(targetVersionId).exec(),
-        timeoutMs,
-        `Version ${targetVersionId} konnte nicht geladen werden.`,
-      );
-    }
-    const fallback = await withDocumentVersionTimeout(
-      documentCollection(state.ctx, 'document_versions').find({
-        selector: { document_id: record.id },
-        sort: [{ updated_at_ms: 'desc' }],
-        limit: 1,
-      }).exec(),
-      timeoutMs,
-      `Keine Versionen für ${record.id} gefunden.`,
-    );
-    return fallback[0] || null;
-  };
-  const doc = await resolveLocalFirst(
-    readLocalVersion,
-    () => awaitDocumentVersionReplication(replication, state.ctx),
-  );
+  const doc = targetVersionId
+    ? state.api.get('document_versions', targetVersionId).get()
+    : (state.api.query('document_versions', {
+      selector: { document_id: record.id },
+      sort: [{ updated_at_ms: 'desc' }],
+      limit: 1,
+    }).get()[0] || null);
   if (!canApply()) return null;
-  state.selectedVersion = doc?.toJSON() || null;
+  // Live-Zeilen sind eingefroren; der Editor arbeitet auf einer eigenen Kopie.
+  state.selectedVersion = doc ? structuredClone(doc) : null;
   state.dirty = false;
+  reportMissingVersion(state, record, targetVersionId, Boolean(doc));
   await refreshMailMergeNavigation(state);
   return state.selectedVersion;
 }
 
-async function startDocumentVersionReplication(ctx) {
-  if (typeof ctx?.sync?.startCollection !== 'function') return null;
-  return ctx.sync.startCollection('document_versions');
-}
-
-async function awaitDocumentVersionReplication(bridge, ctx) {
-  if (typeof ctx?.sync?.startCollection === 'function') {
-    bridge = await withTimeout(
-      ctx.sync.startCollection('document_versions', { forceDirect: true }),
-      60000,
-      'Dokumentversionen konnten nicht rechtzeitig synchronisiert werden.',
-    ) || bridge;
+function reportMissingVersion(state, record, versionId, found) {
+  const code = 'documents.version.missing';
+  if (found) {
+    state.api.status.clear(code);
+    return;
   }
-  if (bridge?.ready) {
-    bridge = await withTimeout(
-      typeof bridge.ready === 'function' ? bridge.ready() : bridge.ready,
-      60000,
-      'Dokumentversionen konnten nicht rechtzeitig synchronisiert werden.',
-    ) || bridge;
-  }
-  const replication = bridge?.state || bridge;
-  if (typeof replication?.waitForOpenPeerId === 'function') {
-    await withTimeout(
-      replication.waitForOpenPeerId(60000),
-      60000,
-      'Dokumentversionen konnten nicht vollständig synchronisiert werden.',
-    );
-  }
-}
-
-async function withDocumentVersionTimeout(promise, ms, message) {
-  let timer;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(Object.assign(new Error(message), {
-          code: 'document_version_read_timeout',
-        })), ms);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function resolveLocalFirst(readLocal, awaitReplication) {
-  try {
-    const localValue = await readLocal(4500);
-    if (localValue) return localValue;
-  } catch (error) {
-    if (!isTransientDocumentReadError(error)) throw error;
-  }
-  await awaitReplication();
-  return readLocal(60000);
-}
-
-function isTransientDocumentReadError(error) {
-  if (error?.code === 'document_version_read_timeout') return true;
-  const message = String(error?.message || error || '').toLowerCase();
-  return message.includes('webrtc replication cancelled')
-    || message.includes('query_cancelled')
-    || message.includes('replication-cancel')
-    || message.includes('database connection is closing')
-    || (message.includes('idbdatabase') && message.includes('closing'));
+  let backlog = 0;
+  try { backlog = Number(state.api.metrics.get()?.backlog || 0); } catch {}
+  if (backlog > 0) return;
+  state.api.status.report({
+    level: 'warn',
+    code,
+    // Kein Datensatz-/Versions-ID im Text (Geometrie G3); die Zuordnung trägt ref.
+    text: [state.t('noSavedVersionFound', 'Keine gespeicherte Dokumentversion gefunden.'), record.title].filter(Boolean).join(' '),
+    ref: record.id,
+  });
 }
 
 async function refreshMailMergeNavigation(state) {
@@ -1215,12 +1050,8 @@ async function refreshMailMergeNavigation(state) {
       || right.id.localeCompare(left.id)
     ))[0] || null;
   if (typedMailMergeRecord) {
-    const collection = documentCollection(state.ctx, 'document_versions');
-    const docs = collection
-      ? await collection.find({ selector: { document_id: typedMailMergeRecord.id } }).exec()
-      : [];
+    const docs = state.api.query('document_versions', { selector: { document_id: typedMailMergeRecord.id } }).get();
     entries = docs
-      .map((doc) => typeof doc?.toJSON === 'function' ? doc.toJSON() : doc)
       .filter((version) => (
         version?.id
         && (version.source_kind === 'mail_merge_recipient'
@@ -1269,23 +1100,20 @@ async function refreshMailMergeNavigation(state) {
 }
 
 function renderDocumentStrip(state) {
-  const host = state.ctx.host.querySelector('[data-documents-document-strip]');
+  const host = state.root.querySelector('[data-documents-document-strip]');
   if (!host) return;
   const record = selectedRecord(state);
   const navigation = state.mailMergeNavigation;
   const active = navigation?.entries?.[navigation.activeIndex] || null;
   const hasMailMerge = Boolean(active && navigation.entries.length);
-  const recipientLoading = state.mailMergeRecipientLoading;
-  const isActiveRecipientLoading = Boolean(
+  const recipientSwitch = state.mailMergeRecipientPending;
+  const isActiveRecipientSwitch = Boolean(
     active
-    && recipientLoading?.documentId === active.documentId
-    && recipientLoading?.versionId === active.versionId,
+    && recipientSwitch?.documentId === active.documentId
+    && recipientSwitch?.versionId === active.versionId,
   );
-  const recipientPosition = isActiveRecipientLoading
-    ? state.lang === 'en'
-      ? `Loading recipient ${navigation.activeIndex + 1} of ${navigation.entries.length} …`
-      : `Empfänger ${navigation.activeIndex + 1} von ${navigation.entries.length} wird geladen …`
-    : `${navigation?.activeIndex + 1} ${state.t('of', 'von')} ${navigation?.entries?.length}`;
+  // Während des Empfängerwechsels nur aria-busy, kein Zustandstext (R11).
+  const recipientPosition = `${navigation?.activeIndex + 1} ${state.t('of', 'von')} ${navigation?.entries?.length}`;
   host.innerHTML = `
     <div class="documents-strip-leading">
       <button class="ctox-pane-icon documents-library-toggle" type="button" data-documents-library-toggle aria-label="${escapeHtml(state.t('showDocuments', 'Dokumentliste öffnen'))}" title="${escapeHtml(state.t('showDocuments', 'Dokumentliste öffnen'))}" aria-expanded="${String(state.libraryOpen)}">${actionIcon(state, 'folder')}</button>
@@ -1293,7 +1121,7 @@ function renderDocumentStrip(state) {
         <span class="documents-series-label">${actionIcon(state, 'copy')}<strong>${escapeHtml(state.t('seriesLetter', 'Serienbrief'))}</strong></span>
         <div class="documents-recipient-navigator" data-documents-recipient-navigator>
           <button class="ctox-pane-icon" type="button" data-documents-recipient-previous aria-label="${escapeHtml(state.t('previousRecipient', 'Vorheriger Empfänger'))}" title="${escapeHtml(state.t('previousRecipient', 'Vorheriger Empfänger'))}" ${navigation.activeIndex <= 0 ? 'disabled aria-disabled="true"' : ''}>${actionIcon(state, 'chevronLeft')}</button>
-          <span class="documents-recipient-position" ${isActiveRecipientLoading ? 'role="status" aria-live="polite"' : ''}>${escapeHtml(recipientPosition)}</span>
+          <span class="documents-recipient-position" ${isActiveRecipientSwitch ? 'aria-busy="true"' : ''}>${escapeHtml(recipientPosition)}</span>
           <label class="documents-recipient-search">
             <span class="sr-only">${escapeHtml(state.t('searchRecipient', 'Empfänger suchen'))}</span>
             <input type="search" data-documents-recipient-search list="documents-recipient-options" value="${escapeHtml(active.label)}" aria-label="${escapeHtml(state.t('searchRecipient', 'Empfänger suchen'))}" autocomplete="off">
@@ -1390,23 +1218,23 @@ function syncMailMergeRecipientSearch(search, activeRecipient) {
   if (search.value !== label) search.value = label;
 }
 
-function beginMailMergeRecipientLoading(state, documentId, versionId) {
+function beginMailMergeRecipientSwitch(state, documentId, versionId) {
   const navigation = state.mailMergeNavigation;
   const activeIndex = navigation?.entries?.findIndex((entry) => (
     entry.documentId === documentId && entry.versionId === versionId
   ));
   if (!navigation || activeIndex < 0) return false;
   state.mailMergeNavigation = { ...navigation, activeIndex };
-  state.mailMergeRecipientLoading = { documentId, versionId };
+  state.mailMergeRecipientPending = { documentId, versionId };
   return true;
 }
 
-function clearMailMergeRecipientLoading(state, documentId, versionId) {
-  const loading = state.mailMergeRecipientLoading;
-  if (!loading) return;
-  if (documentId && loading.documentId !== documentId) return;
-  if (versionId && loading.versionId !== versionId) return;
-  state.mailMergeRecipientLoading = null;
+function clearMailMergeRecipientSwitch(state, documentId, versionId) {
+  const pendingSwitch = state.mailMergeRecipientPending;
+  if (!pendingSwitch) return;
+  if (documentId && pendingSwitch.documentId !== documentId) return;
+  if (versionId && pendingSwitch.versionId !== versionId) return;
+  state.mailMergeRecipientPending = null;
 }
 
 function documentListSignature(records = []) {
@@ -1427,30 +1255,21 @@ function documentListSignature(records = []) {
   ])));
 }
 
+// v4: Live-Abfragen sind lokal und vollständig – es gibt keinen Lade-, Offline- oder Lesefehler-Zustand der Liste.
 function documentListState(state, records) {
   if (records.length) return 'rows';
   if (state.documents.length) return 'filtered';
-  if (state.documentsReadError) return 'error';
-  if (state.documentsReadiness?.state === 'offline-pending') return 'offline-pending';
-  if (!state.documentsReadComplete || state.documentsReadiness?.ready === false) return 'loading';
-  // Older shells may not expose readiness. A shell that does
-  // must affirm the first pull before zero rows can mean "no documents".
-  const sync = state.ctx?.sync;
-  const hasReadinessFacade = typeof sync?.collectionReadiness === 'function'
-    || typeof sync?.subscribeCollectionReadiness === 'function';
-  if (hasReadinessFacade && state.documentsReadiness?.ready !== true) return 'loading';
   return 'empty';
 }
 
 function documentListFooter(state, listState, visibleCount, activeFilterCount) {
-  if (listState === 'loading') return state.lang === 'en' ? 'Loading documents' : 'Dokumente werden geladen';
-  if (listState === 'offline-pending') return state.lang === 'en' ? 'Connection pending' : 'Verbindung ausstehend';
-  if (listState === 'error') return state.lang === 'en' ? 'Document read failed' : 'Dokumente konnten nicht gelesen werden';
-  return `${visibleCount} ${state.lang === 'en' ? 'files' : 'Dateien'} · ${activeFilterCount ? (state.lang === 'en' ? 'Filtered' : 'Gefiltert') : (state.lang === 'en' ? 'All' : 'Alle')}`;
+  // Textdiät Regel 5: Zähler nur, wenn ein Filter die Liste kürzt.
+  if (!activeFilterCount) return '';
+  return `${visibleCount} ${state.lang === 'en' ? 'filtered' : 'gefiltert'}`;
 }
 
 function applyDocumentListSelection(state) {
-  const list = state.ctx?.host?.querySelector('[data-documents-list]');
+  const list = state.root?.querySelector('[data-documents-list]');
   if (!list) return;
   const groups = visibleDocuments(state);
   for (const card of list.querySelectorAll('.documents-card')) {
@@ -1466,15 +1285,14 @@ function applyDocumentListSelection(state) {
 // longer builds a head, so the head geometry is decidable from index.html and
 // the search input keeps focus and caret across every data tick.
 function renderLeft(state) {
-  const explorer = state.ctx.host.querySelector('[data-documents-explorer]');
+  const explorer = state.root.querySelector('[data-documents-explorer]');
   if (!explorer) return;
   const visible = visibleDocuments(state);
   const activeFilterCount = documentFilterCount(state);
 
   if (explorer.dataset.documentsHeadBound !== 'true') {
     explorer.dataset.documentsHeadBound = 'true';
-    // The static SVGs in index.html are the offline fallback; the shell icon
-    // set (ctx.getActionIcon) wins as soon as the module is mounted.
+    // 4.0 hat keine Icon-API (OFFEN-D): die App zeichnet ihre Glyphen selbst.
     replaceHeadIcon(state, explorer, '[data-documents-new-markdown]', 'add');
     replaceHeadIcon(state, explorer, '[data-documents-import-open]', 'upload');
     replaceHeadIcon(state, explorer, '[data-documents-export]', 'export');
@@ -1544,7 +1362,7 @@ function renderLeft(state) {
     populateDocumentList(state, list, visible);
     applyDocumentListSelection(state);
   }
-  autoWirePaneGrammar(state.ctx.host);
+  autoWirePaneGrammar(state.root);
   explorer.__ctoxPaneGrammar?.refreshDot();
   explorer.__ctoxPaneGrammar?.setFooter(documentListFooter(state, listState, visible.length, activeFilterCount));
   renderPaneVisibility(state);
@@ -1574,7 +1392,7 @@ function clearDocumentFilters(state, { resetSort = false } = {}) {
 
 function populateDocumentList(state, list, records = visibleDocuments(state)) {
   const listState = documentListState(state, records);
-  const signature = `${documentListSignature(records)}:${listState}:${listState === 'error' ? state.documentsReadError : ''}`;
+  const signature = `${documentListSignature(records)}:${listState}`;
   if (list.dataset.ctoxRenderSig === signature) {
     applyDocumentListSelection(state);
     return;
@@ -1610,65 +1428,20 @@ function populateDocumentList(state, list, records = visibleDocuments(state)) {
       manage.type = 'button';
       manage.className = 'documents-card-manage';
       manage.dataset.documentManage = record.id;
-      manage.title = `${escapeHtml(record.title)} ${escapeHtml(state.t('manageDocument', 'verwalten'))}`;
-      manage.setAttribute('aria-label', `${escapeHtml(record.title)} ${escapeHtml(state.t('manageDocument', 'verwalten'))}`);
-      manage.innerHTML = actionIcon(state, 'settings');
+      // FIX9b: „Weitere Aktionen“ (⋯) statt des unerklärten Zahnrad-/Sonnensymbols.
+      manage.title = state.t('documentActions', 'Weitere Aktionen');
+      manage.setAttribute('aria-label', `${record.title} – ${state.t('documentActions', 'Weitere Aktionen')}`);
+      manage.innerHTML = actionIcon(state, 'more');
       manage.addEventListener('click', () => openManageDocumentDrawer(state, selectedRecordInGroup(state, record)));
       card.append(button, manage);
       list.append(card);
     }
-    if (!records.length) {
-      const empty = document.createElement('div');
-      // A data-driven empty state is only true after the collection's first
-      // read and readiness signal. Filters still describe the local rows.
-      empty.className = listState === 'loading' || listState === 'offline-pending'
-        ? 'ctox-syncing documents-loading'
-        : listState === 'error' ? 'ctox-empty documents-error' : 'ctox-empty documents-empty';
-      if (listState === 'loading' || listState === 'offline-pending') {
-        empty.setAttribute('role', 'status');
-        empty.setAttribute('aria-live', 'polite');
-      }
-      if (listState === 'loading') {
-        empty.innerHTML = `<strong>${state.lang === 'en' ? 'Loading documents' : 'Dokumente werden geladen'}</strong><span>${state.lang === 'en' ? 'The document collection is still synchronizing.' : 'Die Dokumentsammlung wird noch synchronisiert.'}</span>`;
-      } else if (listState === 'offline-pending') {
-        empty.innerHTML = `<strong>${state.lang === 'en' ? 'Connection pending' : 'Verbindung ausstehend'}</strong><span>${state.lang === 'en' ? 'Documents will appear when synchronization resumes.' : 'Dokumente erscheinen, sobald die Synchronisierung fortgesetzt wird.'}</span>`;
-      } else if (listState === 'error') {
-        empty.innerHTML = `<strong>${state.lang === 'en' ? 'Document read failed' : 'Dokumente konnten nicht gelesen werden'}</strong><span>${escapeHtml(state.documentsReadError)}</span><div class="documents-empty-actions"><button class="ctox-button is-primary" type="button" data-documents-retry>${state.lang === 'en' ? 'Try again' : 'Erneut versuchen'}</button></div>`;
-      } else if (listState === 'filtered') {
-        empty.innerHTML = `
-        <strong>${escapeHtml(state.t('noMatches', 'Keine Treffer'))}</strong>
-        <span>${escapeHtml(state.t('adjustSearchFilter', 'Suche oder Filter anpassen.'))}</span>
-        <div class="documents-empty-actions">
-          <button class="ctox-button is-primary" type="button" data-documents-clear-filters>${escapeHtml(state.t('clearFilters', 'Filter zurücksetzen'))}</button>
-        </div>
-      `;
-      } else {
-        empty.innerHTML = `
-        <strong>${escapeHtml(state.t('noDocuments', 'Keine Dokumente'))}</strong>
-        <span>${escapeHtml(state.t('importPrompt', 'Ein leeres Word-Dokument erstellen oder DOCX beziehungsweise Markdown importieren.'))}</span>
-        <div class="documents-empty-actions">
-          <button class="ctox-button is-primary" type="button" data-documents-empty-new>${actionIcon(state, 'add')} ${escapeHtml(state.t('createWordDocument', 'Leeres Word-Dokument'))}</button>
-          <button class="ctox-button" type="button" data-documents-empty-import>${actionIcon(state, 'upload')} ${escapeHtml(state.t('importDocument', 'Dokument importieren'))}</button>
-        </div>
-      `;
-      }
-      empty.querySelector('[data-documents-empty-import]')?.addEventListener('click', () => openImportDrawer(state));
-      empty.querySelector('[data-documents-empty-new]')?.addEventListener('click', () => { void createBlankWordDocument(state); });
-      empty.querySelector('[data-documents-retry]')?.addEventListener('click', () => {
-        state.documentsReadError = null;
-        renderLeft(state);
-        refreshDocuments(state).then(() => {
-          if (state.disposed) return;
-          renderRight(state);
-          renderCenter(state);
-        }).catch((error) => console.warn('[documents] document list retry failed', error));
-      });
-      empty.querySelector('[data-documents-clear-filters]')?.addEventListener('click', () => {
-        clearDocumentFilters(state, { resetSort: true });
-      });
-      list.append(empty);
-    }
+    // Leere oder weggefilterte Liste rendert nichts (R11): Anlegen/Import stehen im Kopf, Filter-Reset im Filterband.
   });
+  if (Number.isFinite(state.pendingListScrollTop) && records.length) {
+    list.scrollTop = state.pendingListScrollTop;
+    state.pendingListScrollTop = null;
+  }
   list.dataset.ctoxRenderSig = signature;
   applyDocumentListSelection(state);
 }
@@ -1711,21 +1484,18 @@ async function switchSelectedDocument(state, documentId, options = {}, lifecycle
   const canReplaceEditorVersion = sameDocument && canReplaceActiveEditorVersion(state);
   if (!canReplaceEditorVersion || state.dirty || state.superdocSavePromise || state.editorHandle?.saving) {
     try {
-      await withTimeout(
-        flushDraft(state, previousRecord, { allowFailure: false }),
-        90000,
-        state.t('draftSaveTimeout', 'Automatische Draft-Speicherung beim Dokumentwechsel hat zu lange gedauert.'),
-      );
+      await flushDraft(state, previousRecord, { allowFailure: false });
     } catch (error) {
       if (state.switchSerial !== switchSerial) return;
-      state.ctx.notifications?.show?.({ type: 'error', message: error.message });
+      reportDocumentError(state, 'documents.draft.save', error);
       return;
     }
     if (state.switchSerial !== switchSerial) return;
     if (state.dirty || state.editorHandle?.saving) {
-      state.ctx.notifications?.show?.({ type: 'error', message: state.t('draftSavePending', 'Weitere Änderungen sind noch nicht gespeichert. Bitte nach dem Speichern erneut versuchen, das Dokument zu wechseln.') });
+      state.api.status.report({ level: 'warn', code: 'documents.draft.pending', text: state.t('draftSavePending', 'Weitere Änderungen sind noch nicht gespeichert. Bitte nach dem Speichern erneut versuchen, das Dokument zu wechseln.') });
       return;
     }
+    state.api.status.clear('documents.draft.pending');
   }
   if (state.switchSerial !== switchSerial) return;
 
@@ -1734,11 +1504,11 @@ async function switchSelectedDocument(state, documentId, options = {}, lifecycle
     const previousRequestedVersionId = state.requestedVersionId;
     const previousRequestedVersionDocumentId = state.requestedVersionDocumentId;
     const previousNavigation = state.mailMergeNavigation;
-    const previousLoading = state.mailMergeRecipientLoading;
+    const previousSwitch = state.mailMergeRecipientPending;
     const previousDirty = state.dirty;
     state.requestedVersionId = versionId;
     state.requestedVersionDocumentId = versionId ? documentId : '';
-    if (beginMailMergeRecipientLoading(state, documentId, versionId)) {
+    if (beginMailMergeRecipientSwitch(state, documentId, versionId)) {
       state.libraryOpen = false;
       renderSelection(state);
     }
@@ -1754,7 +1524,7 @@ async function switchSelectedDocument(state, documentId, options = {}, lifecycle
       state.requestedVersionId = previousRequestedVersionId;
       state.requestedVersionDocumentId = previousRequestedVersionDocumentId;
       state.mailMergeNavigation = previousNavigation;
-      state.mailMergeRecipientLoading = previousLoading;
+      state.mailMergeRecipientPending = previousSwitch;
       state.dirty = previousDirty;
       renderSelection(state);
       throw error;
@@ -1763,7 +1533,7 @@ async function switchSelectedDocument(state, documentId, options = {}, lifecycle
     try {
       await replaceEditorVersion(state, previousRecord, nextVersion);
       if (state.switchSerial !== switchSerial) return;
-      clearMailMergeRecipientLoading(state, documentId, versionId);
+      clearMailMergeRecipientSwitch(state, documentId, versionId);
       state.libraryOpen = false;
       renderSelection(state);
       scheduleMailMergeBlobPrefetch(state);
@@ -1781,13 +1551,13 @@ async function switchSelectedDocument(state, documentId, options = {}, lifecycle
         if (state.switchSerial !== switchSerial) return;
         await waitForEditorContent(state.editorHandle, previousRecord, nextVersion);
         if (state.switchSerial !== switchSerial) return;
-        clearMailMergeRecipientLoading(state, documentId, versionId);
+        clearMailMergeRecipientSwitch(state, documentId, versionId);
         renderSelection(state);
         scheduleMailMergeBlobPrefetch(state);
         return;
       } catch (rebuildError) {
         if (state.switchSerial !== switchSerial) return;
-        clearMailMergeRecipientLoading(state, documentId, versionId);
+        clearMailMergeRecipientSwitch(state, documentId, versionId);
         renderSelection(state);
         renderLoadError(
           state,
@@ -1806,12 +1576,11 @@ async function switchSelectedDocument(state, documentId, options = {}, lifecycle
   state.requestedVersionDocumentId = versionId ? documentId : '';
   state.selectedVersion = null;
   state.mailMergeNavigation = null;
-  state.mailMergeRecipientLoading = null;
+  state.mailMergeRecipientPending = null;
   state.libraryOpen = false;
   bindDocumentBlobByteCache(state, documentId);
   renderSelection(state);
-  const host = state.ctx.host.querySelector('[data-documents-editor]');
-  if (host) host.innerHTML = `<div class="ctox-empty documents-loading" role="status" aria-live="polite"><strong>${escapeHtml(state.t('loadingDocument', 'Lade Dokument'))}</strong><span>${state.lang === 'en' ? 'The saved version is being read locally or requested through synchronization.' : 'Die gespeicherte Version wird lokal gelesen oder über die Synchronisierung angefordert.'}</span></div>`;
+  state.root.querySelector('[data-documents-editor]')?.replaceChildren();
   try {
     await loadVersion(state);
   } catch (error) {
@@ -1886,13 +1655,17 @@ function openManageDocumentDrawer(state, record) {
   `;
   wireDrawerClose(state, body, { labelledBy: 'documents-manage-dialog-title' });
   body.querySelector('[data-documents-delete]')?.addEventListener('click', async () => {
-    const confirmed = await showBusinessConfirm(state.t('deleteConfirmMessage', 'Dokument "{0}" löschen?', record.title), {
+    // Bestätigung im App-Fenster über die Shell (R7); destruktiv → default:false.
+    const confirmed = await state.api.shell.dialog({
+      kind: 'confirm',
       title: state.t('deleteConfirmTitle', 'Dokument löschen'),
-      confirmLabel: state.t('deleteLabel', 'Löschen'),
+      text: state.t('deleteConfirmMessage', 'Dokument "{0}" löschen?', record.title),
+      confirm_label: state.t('deleteLabel', 'Löschen'),
+      default: false,
     });
     if (!confirmed) return;
     await deleteDocument(state, record.id);
-    state.ctx.closeDrawers();
+    closeDrawers(state);
   });
   body.querySelector('[data-documents-manage-form]')?.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -1903,9 +1676,9 @@ function openManageDocumentDrawer(state, record) {
       description: form.get('description')?.toString() || '',
       tags: form.get('tags')?.toString() || '',
     });
-    state.ctx.closeDrawers();
+    closeDrawers(state);
   });
-  state.ctx.openLeftDrawer(body);
+  openDrawer(state, body);
 }
 
 async function deleteDocument(state, documentId) {
@@ -1918,13 +1691,10 @@ async function deleteDocument(state, documentId) {
     });
   }
 
-  const doc = await documentCollection(state.ctx, 'documents').findOne(documentId).exec();
-  if (doc) {
-    await doc.incrementalPatch({
-      is_deleted: true,
-      updated_at_ms: Date.now(),
-    });
-  }
+  await state.api.patch('documents', documentId, {
+    is_deleted: true,
+    updated_at_ms: Date.now(),
+  }).local;
 
   if (state.selectedId === documentId) {
     const next = state.documents.find((record) => record.id !== documentId && !record.is_deleted);
@@ -1933,7 +1703,7 @@ async function deleteDocument(state, documentId) {
     state.dirty = false;
   }
 
-  await refreshDocuments(state);
+  refreshDocuments(state);
   if (state.selectedId) {
     await loadSelectedVersion(state).catch((error) => {
       console.warn('[documents] selected replacement version load failed', error);
@@ -1955,11 +1725,9 @@ async function updateDocumentMetadata(state, documentId, input) {
     tags: normalizeTags(input.tags),
     updated_at_ms: Date.now(),
   };
-  const doc = await documentCollection(state.ctx, 'documents').findOne(documentId).exec();
-  if (doc) await doc.incrementalPatch(patch);
-  Object.assign(sourceRecord, patch);
+  await state.api.patch('documents', documentId, patch).local;
   state.selectedId = documentId;
-  await refreshDocuments(state);
+  refreshDocuments(state);
   renderLeft(state);
   renderRight(state);
 }
@@ -1986,8 +1754,7 @@ function openNewDocumentDrawer(state) {
       </label>
       <label>
         <span>${escapeHtml(state.t('knowledgeBasis', 'Knowledge-Basis'))}</span>
-        <select name="knowledge">${knowledgeOptions(state, 'auto')}</select>
-        <small>${escapeHtml(state.t('knowledgeBasisHint', 'CTOX nutzt den Skill als Wissens-Hub und liest die verknüpften Originalquellen für Nachweise.'))}</small>
+        <select name="knowledge" title="${escapeHtml(state.t('knowledgeBasisHint', 'CTOX nutzt den Skill als Wissens-Hub und liest die verknüpften Originalquellen für Nachweise.'))}">${knowledgeOptions(state, 'auto')}</select>
       </label>
       <label>
         <span>${escapeHtml(state.t('tags', 'Tags'))}</span>
@@ -2018,10 +1785,7 @@ function openNewDocumentDrawer(state) {
     const submit = formElement.querySelector('button[type="submit"]');
     const form = new FormData(event.currentTarget);
     try {
-      if (submit) {
-        submit.disabled = true;
-        submit.textContent = state.t('taskCreating', 'Task wird angelegt...');
-      }
+      if (submit) submit.disabled = true;
       await dispatchNewDocumentReport(state, {
         title: form.get('title')?.toString() || '',
         runbookId: form.get('runbook')?.toString() || '',
@@ -2029,7 +1793,7 @@ function openNewDocumentDrawer(state) {
         prompt: form.get('prompt')?.toString() || '',
         tags: form.get('tags')?.toString() || '',
       });
-      state.ctx.closeDrawers();
+      closeDrawers(state);
     } catch (error) {
       renderError(state, `${state.t('taskCreationFailed', 'CTOX konnte den Dokument-Task nicht anlegen:')} ${error?.message || error}`);
       if (submit) {
@@ -2038,7 +1802,7 @@ function openNewDocumentDrawer(state) {
       }
     }
   });
-  state.ctx.openLeftDrawer(body);
+  openDrawer(state, body);
 }
 
 function openImportDrawer(state) {
@@ -2113,9 +1877,9 @@ function openImportDrawer(state) {
       tags: form.get('tags')?.toString() || '',
       sourceAction: importMode === 'runbook' ? 'import_with_runbook' : 'direct_import',
     });
-    state.ctx.closeDrawers();
+    closeDrawers(state);
   });
-  state.ctx.openLeftDrawer(body);
+  openDrawer(state, body);
 }
 
 function openExportDrawer(state) {
@@ -2154,9 +1918,23 @@ function openExportDrawer(state) {
     event.preventDefault();
     if (!canExportDocument(state)) return;
     await exportSelectedDocument(state, body.querySelector('[name="filename"]')?.value || '');
-    state.ctx.closeDrawers();
+    closeDrawers(state);
   });
-  state.ctx.openLeftDrawer(body);
+  openDrawer(state, body);
+}
+
+// Drawer liegen im App-Fenster (OFFEN-D: 4.0 hat keine Drawer-API; nichts außerhalb von root).
+function openDrawer(state, body) {
+  closeDrawers(state);
+  const drawer = document.createElement('aside');
+  drawer.className = 'documents-app-drawer';
+  drawer.dataset.documentsAppDrawer = 'left';
+  drawer.append(body);
+  (state.root.querySelector('[data-documents-module]') || state.root).append(drawer);
+}
+
+function closeDrawers(state) {
+  state.root?.querySelectorAll('[data-documents-app-drawer]').forEach((node) => node.remove());
 }
 
 function wireDrawerClose(state, body, options = {}) {
@@ -2178,7 +1956,7 @@ function wireDrawerClose(state, body, options = {}) {
   };
   const close = () => {
     cleanup();
-    state.ctx.closeDrawers();
+    closeDrawers(state);
   };
   function onKeyDown(event) {
     if (!body.isConnected) {
@@ -2191,7 +1969,7 @@ function wireDrawerClose(state, body, options = {}) {
   }
   body.querySelector('[data-documents-drawer-close]')?.addEventListener('click', close);
   body.querySelector('[data-documents-drawer-cancel]')?.addEventListener('click', close);
-  observer.observe(document.body, { childList: true, subtree: true });
+  observer.observe(state.root, { childList: true, subtree: true });
   window.addEventListener('keydown', onKeyDown, true);
   requestAnimationFrame(() => {
     if (!body.isConnected) return;
@@ -2782,16 +2560,6 @@ function resolveKnowledgeContext(state, requestedId = '', query = '') {
   };
 }
 
-function knowledgeContextInstruction(knowledgeContext) {
-  if (!knowledgeContext) {
-    return 'Waehle automatisch den fachlich passendsten aktuellen Skill oder Skillbook aus CTOX Knowledge.';
-  }
-  if (knowledgeContext.is_procedural_skill) {
-    return `Verwende als Knowledge-Hub ${knowledgeContext.kind} "${knowledgeContext.title}" (ID ${knowledgeContext.id}, Domain ${knowledgeContext.domain || 'ohne Domain'}). Lies den aktuellen Skill-Inhalt und seine verknuepften Ressourcen/Tabellen.`;
-  }
-  return `Verwende die ausgewählte Knowledge-Tabelle "${knowledgeContext.title}" (ID ${knowledgeContext.id}, Domain ${knowledgeContext.domain || 'ohne Domain'}) als Datenbasis. Diese Auswahl ist eine Tabelle und kein prozeduraler Skill; beachte ihren Vollständigkeitsstatus und ihre Tabellen-Lineage.`;
-}
-
 function knowledgeOptions(state, selectedId = 'auto') {
   const candidates = knowledgeCandidates(state);
   const automatic = `<option value="auto" ${!selectedId || selectedId === 'auto' ? 'selected' : ''}>${escapeHtml(state.t('knowledgeAuto', 'Automatisch passend wählen'))}</option>`;
@@ -3335,7 +3103,7 @@ function plainObject(value) {
 }
 
 function renderRight(state) {
-  const slot = state.ctx.host.querySelector('[data-documents-actions-content]');
+  const slot = state.root.querySelector('[data-documents-actions-content]');
   if (!slot) return;
   const record = selectedRecord(state);
   const selectedRunbook = defaultRunbookId(state);
@@ -3396,6 +3164,7 @@ function renderRight(state) {
       targetDocumentId: record.id,
       runbookId: selectedRunbook,
       knowledgeId,
+      // v4-allow: text – Agenten-Anweisung, kein Oberflächentext
       prompt: `Aktualisiere das bestehende Dokument "${record.title}" aus dem aktuellsten Stand des verknuepften Knowledge. Bewahre den Dokumentzweck, aktualisiere Fakten, Tabellen, Ableitungen und Quellen und kennzeichne wesentliche Aenderungen nachvollziehbar.`,
       tags: record.tags,
     });
@@ -3410,13 +3179,12 @@ function renderRight(state) {
   renderPaneVisibility(state);
 }
 
-async function dispatchDocumentRunbook(state, input) {
+function dispatchDocumentRunbook(state, input) {
   const runbookId = input.runbookId || defaultRunbookId(state);
   if (!runbookId && !String(input.prompt || '').trim()) return null;
   const runbook = state.runbooks.find((item) => item.id === runbookId || item.command_type === runbookId);
   const knowledgeContext = resolveKnowledgeContext(state, input.knowledgeId, `${input.record.title} ${input.prompt || ''}`);
-  return state.ctx.commandBus.dispatch({
-    module: 'documents',
+  return sendDocumentsCommand(state, {
     type: runbook?.command_type || runbookId || 'document.summarize',
     record_id: input.record.id,
     payload: {
@@ -3424,7 +3192,6 @@ async function dispatchDocumentRunbook(state, input) {
       version_id: input.versionId || input.record.current_version_id,
       prompt: input.prompt || '',
       runbook_id: runbook?.id || runbookId,
-      prompt_template: runbook?.prompt_template || '',
       source_action: input.sourceAction || 'document_runbook',
       knowledge_context: knowledgeContext,
     },
@@ -3452,33 +3219,12 @@ async function dispatchNewDocumentReport(state, input = {}) {
   const knowledgeContext = resolveKnowledgeContext(state, input.knowledgeId, `${title} ${prompt}`);
   const filename = ensureExtension(slugFilename(title), '.docx');
   const outputPath = `runtime/business-os/documents/generated/${filename}`;
-  const commandId = `cmd_${crypto.randomUUID()}`;
-  const instruction = [
-    `Erstelle das Word-Dokument "${title}".`,
-    `Nutzerauftrag: ${prompt}`,
-    '',
-    'Nutze den systematic-research Skill, die CTOX Report-Pipeline und den doc/Documents Word-Produktionsskill.',
-    knowledgeContextInstruction(knowledgeContext),
-    'Der Skill strukturiert die Ableitung, ist aber keine Primaerquelle. Lies fuer faktische Aussagen die darin referenzierten Originalquellen und zitiere diese, nicht den Skill als Ersatzquelle.',
-    'Halte die Knowledge-Lookup-Pflicht aus dem systematic-research Skill ein und verwende immer den neuesten verfuegbaren Knowledge-Stand.',
-    reportType && reportType !== 'auto'
-      ? `Verwende report_type_id=${reportType}.`
-      : 'Wähle den passenden report_type_id aus den CTOX Report-Blueprints.',
-    'Erzeuge ein solides .docx-Dokument mit sauberer Struktur, Quellen/Evidenz, Tabellen und sinnvollen Abbildungen/Diagrammen, wo sie fachlich tragen.',
-    'Wende den Documents-Skill-Workflow an: Design-Preset, echte Word-Styles, echte Listen/Tabellengeometrie, DOCX-Render/QA soweit die lokale Runtime es erlaubt.',
-    'Erzeuge kein Markdown als Endartefakt. Das finale Artefakt muss ein Word-Dokument sein.',
-    `Speichere das finale DOCX im Workspace unter ${outputPath}.`,
-    'Der Business-OS Writeback registriert genau diese DOCX-Datei danach automatisch im Documents-Modul.',
-  ].join('\n');
   const command = {
-    id: commandId,
-    module: 'documents',
     type: runbook.command_type || 'research.systematic.report.create',
     record_id: input.targetDocumentId || '',
-    inbound_channel: 'business_os.documents',
     payload: {
+      inbound_channel: 'business_os.documents',
       title,
-      instruction,
       prompt,
       report_type_id: reportType,
       selected_runbook_id: runbook.id || runbookId,
@@ -3486,7 +3232,6 @@ async function dispatchNewDocumentReport(state, input = {}) {
       desired_format: 'docx',
       output_filename: filename,
       output_path: outputPath,
-      required_skills: ['systematic-research', 'knowledge', 'doc'],
       knowledge_context: knowledgeContext,
       tags: normalizeTags(input.tags),
       thread_key: 'business-os/documents',
@@ -3526,34 +3271,46 @@ async function dispatchNewDocumentReport(state, input = {}) {
       knowledge_selection_mode: knowledgeContext?.selection_mode || 'auto',
     },
   };
-  const result = await state.ctx.commandBus.dispatch(command);
-  rememberDocumentTask(result, {
-    title,
-    filename,
-    runbookId: runbook.id || runbookId,
-    reportType,
-  });
-  return result;
+  // Befehl lokal anlegen, nie warten (R5); Status → Zustandszone. Die frühere sessionStorage-Übergabe an die
+  // CTOX-App (focusTask) entfällt: die Aufgabe ist über business_commands/<id> auffindbar (V4-PORT.md OFFEN-6).
+  return sendDocumentsCommand(state, command);
 }
 
-function rememberDocumentTask(result, meta = {}) {
-  const trackingId = result?.task_id || result?.command_id || '';
-  if (!trackingId) return;
+// api.command legt das Befehlsdokument an und liefert sofort; failed (oder lokal ungültig) → genau ein Eintrag in
+// der Zustandszone je Befehlstyp, done → räumen. Abos werden bei unmount gelöst.
+function sendDocumentsCommand(state, { type, module = 'documents', record_id: recordId = '', payload = {}, client_context: clientContext = {} }) {
+  const api = state.api;
+  const code = `documents.command.${type}`;
+  let handle;
   try {
-    sessionStorage.setItem('ctox.businessOs.focusTask', JSON.stringify({
-      taskId: result.task_id || trackingId,
-      commandId: result.command_id || '',
-      module: 'documents',
-      source: 'documents-new-document',
-      title: meta.title || '',
-      filename: meta.filename || '',
-      runbookId: meta.runbookId || '',
-      reportType: meta.reportType || '',
-      createdAt: new Date().toISOString(),
-    }));
-  } catch (_) {
-    // Ignore unavailable session storage.
+    handle = api.command(type, {
+      ...payload,
+      record_id: recordId,
+      module,
+      client_context: clientContext,
+    }, { record_id: recordId });
+  } catch (error) {
+    reportDocumentError(state, code, error, `${type}:`);
+    return null;
   }
+  let off = null;
+  let finished = false;
+  const stop = () => { finished = true; off?.(); off = null; };
+  off = handle.status.subscribe((value) => {
+    if (value?.status === 'failed') {
+      api.status.report({ level: 'error', code, text: `${type}: ${value.error || 'failed'}`, ref: handle.id });
+      stop();
+    } else if (value?.status === 'done') {
+      api.status.clear(code);
+      stop();
+    }
+  });
+  if (finished) off?.();
+  handle.local.catch((error) => {
+    api.status.report({ level: 'error', code, text: `${type}: ${error?.code || 'local'} ${error?.message || error}`, ref: handle.id });
+  });
+  state.disposers.push(stop);
+  return handle;
 }
 
 function runbookOptions(state, selectedId = '', options = {}) {
@@ -3570,10 +3327,10 @@ function defaultRunbookId(state) {
   return state.runbooks[0]?.id || state.runbooks[0]?.command_type || 'research.report.auto';
 }
 
-async function openKnowledgeRunbooks(state) {
-  const result = await state.ctx.commandBus.dispatch({
+function openKnowledgeRunbooks(state) {
+  const handle = sendDocumentsCommand(state, {
+    type: 'ctox.knowledge.runbooks.manage',
     module: 'ctox',
-    command_type: 'ctox.knowledge.runbooks.manage',
     payload: {
       title: state.t('manageDocumentRunbooksTitle', 'Document runbooks verwalten'),
       instruction: state.t('manageDocumentRunbooksInstruction', 'Öffne das CTOX Knowledge-System für die Verwaltung von dokumentbezogenen Skillbooks, Runbooks und Runbook-Items. Fokus: document/docx/markdown Runbooks, die vom Business-OS Documents-Modul beim Erstellen, Importieren und manuellen Ausführen verwendet werden.'),
@@ -3596,22 +3353,17 @@ async function openKnowledgeRunbooks(state) {
       target: 'ctox-knowledge-system',
     },
   });
-  sessionStorage.setItem('ctox.businessOs.focusTask', JSON.stringify({
-    commandId: result.command_id || '',
-    taskId: result.task_id || '',
-    taskStatus: result.task_status || result.status || 'queued',
-  }));
-  location.hash = 'ctox?focus=knowledge-runbooks';
-  document.querySelector('[data-module="ctox"]')?.click();
+  // Sprung in die CTOX-App über die Shell (R13) statt location.hash + sessionStorage.
+  state.api.shell.navigate('ctox', { focus: 'knowledge-runbooks', command_id: handle?.id || '' });
 }
 
 async function renderCenter(state) {
-  const host = state.ctx.host.querySelector('[data-documents-editor]');
+  const host = state.root.querySelector('[data-documents-editor]');
   const record = selectedRecord(state);
   renderDocumentStrip(state);
   if (ctoxDocumentsDraftProtected(state)) return state.editorHandle;
   const version = state.selectedVersion;
-  const renderKey = editorRenderKey(record, version, state.officeEngine);
+  const renderKey = editorRenderKey(record, version);
   const reusableTarget = currentEditorTarget(state, renderKey);
   if (reusableTarget) return reusableTarget;
   const renderSerial = (state.renderSerial || 0) + 1;
@@ -3623,47 +3375,33 @@ async function renderCenter(state) {
   await destroyActiveEditor(state);
   if (state.renderSerial !== renderSerial) return;
 
+  // Ohne Auswahl oder ohne lokale Version bleibt der Editor leer (R11); die Version erscheint live über das
+  // Versionsabo (refreshDocumentsFromLocal → renderCenter).
   if (!record) {
     state.mailMergeNavigation = null;
     renderDocumentStrip(state);
-    host.innerHTML = `<div class="ctox-empty documents-empty"><strong>${escapeHtml(state.t('noDocumentSelected', 'Kein Dokument ausgewählt.'))}</strong><span>${escapeHtml(state.t('noDocumentSelectedPrompt', 'Links ein DOCX importieren oder auswählen.'))}</span></div>`;
+    host.replaceChildren();
     return;
   }
   if (!version) {
-    host.innerHTML = `<div class="ctox-empty documents-loading" role="status" aria-live="polite"><strong>${escapeHtml(state.t('loadingDocument', 'Lade Dokument'))}</strong><span>${state.lang === 'en' ? 'The saved version is being read locally or requested through synchronization.' : 'Die gespeicherte Version wird lokal gelesen oder über die Synchronisierung angefordert.'}</span></div>`;
-    loadSelectedVersion(state)
-      .then((loadedVersion) => {
-        if (state.renderSerial !== renderSerial) return;
-        if (loadedVersion) {
-          renderCenter(state);
-          return;
-        }
-        renderError(state, state.t('noSavedVersionFound', 'Zu diesem Dokument wurde keine gespeicherte Version gefunden. Bitte erneut importieren oder den Datensatz verwalten.'), {
-          retry: () => renderCenter(state),
-        });
-      })
-      .catch((error) => {
-        if (state.renderSerial !== renderSerial) return;
-        renderError(state, `${state.t('loadVersionFailed', 'Dokumentversion konnte nicht geladen werden:')} ${error?.message || error}`, {
-          retry: () => renderCenter(state),
-        });
-      });
+    host.replaceChildren();
     return;
   }
+  state.api.status.clear('documents.editor');
   if (!state.mailMergeNavigation && selectedDocumentGroup(state)?.is_mail_merge) {
     await refreshMailMergeNavigation(state);
     if (state.renderSerial !== renderSerial) return;
     renderDocumentStrip(state);
   }
   if (isDocxDocumentRecord(record)) {
-    const useCtoxDocuments = state.officeEngine === 'ctox_documents';
-    host.innerHTML = `<div class="ctox-empty documents-loading"><strong>${escapeHtml(state.t('loadingDocxEditor', 'Lade Word-Editor'))}</strong><span>${escapeHtml(useCtoxDocuments ? state.t('documentEditorInitializing', 'Dokumenteditor wird initialisiert.') : state.t('superdocInitializing', 'SuperDoc wird initialisiert.'))}</span></div>`;
-    const mountEditor = useCtoxDocuments ? mountCtoxDocuments : mountSuperDocDocument;
-    const mountPromise = mountWordEditor(state, host, record, version, renderSerial, renderKey, mountEditor, useCtoxDocuments);
+    host.replaceChildren();
+    // FIX9b: sofort lesbar – Lesevorschau aus vorhandenen Daten, der Editor startet dahinter.
+    renderDocxReadPreview(state, host, record, version, renderSerial);
+    const mountPromise = mountWordEditor(state, host, record, version, renderSerial, renderKey);
     return trackEditorMount(state, renderKey, mountPromise);
   }
 
-  host.innerHTML = `<div class="ctox-empty documents-loading"><strong>${escapeHtml(state.t('loadingEditor', 'Lade Editor'))}</strong><span>${escapeHtml(state.t('documentPreparing', 'Dokument wird vorbereitet.'))}</span></div>`;
+  host.replaceChildren();
   ensureDocumentFormatModule(state).then((formatModule) => {
     if (state.renderSerial !== renderSerial) return;
     mountMarkdownDocument(state, host, version, formatModule, renderKey);
@@ -3671,6 +3409,65 @@ async function renderCenter(state) {
     if (state.renderSerial !== renderSerial) return;
     renderError(state, `${state.t('editorLoadFailed', 'Editor konnte nicht geladen werden:')} ${error?.message || error}`);
   });
+}
+
+// Lesevorschau eines Word-Dokuments (FIX9b): Inhalt aus der letzten Fassung (model_json der Version) bzw. dem
+// Suchtext des Dokuments (index_text). Steht sofort, der Office-Editor lädt dahinter und ersetzt sie, sobald er
+// das Dokument geöffnet hat. Ohne vorhandene Daten bleibt die Fläche leer (kein Wartetext).
+function docxReadPreviewHtml(record, version, formatModule = null) {
+  let markdown = '';
+  const model = version?.model_json;
+  if (formatModule && model && typeof model === 'object' && Object.keys(model).length) {
+    try { markdown = String(formatModule.exportMarkdown(model) || ''); } catch { markdown = ''; }
+  }
+  if (markdown.trim()) return renderMarkdownPreview(markdown);
+  const text = String(record?.index_text || '').trim();
+  if (!text) return '';
+  return text.split(/\n{2,}/).map((part) => `<p>${escapeHtml(part).replace(/\n/g, '<br>')}</p>`).join('');
+}
+
+function renderDocxReadPreview(state, host, record, version, renderSerial) {
+  const preview = document.createElement('article');
+  preview.className = 'documents-read-preview';
+  preview.dataset.documentsReadPreview = '';
+  preview.setAttribute('aria-label', state.t('readPreview', 'Lesevorschau'));
+  const sheet = document.createElement('div');
+  sheet.className = 'documents-read-preview-page';
+  preview.append(sheet);
+  const fill = (formatModule) => {
+    const html = docxReadPreviewHtml(record, version, formatModule);
+    sheet.innerHTML = html;
+    preview.hidden = !html;
+  };
+  fill(state.formatModule || null);
+  host.prepend(preview);
+  if (!state.formatModule && version?.model_json && Object.keys(version.model_json).length) {
+    ensureDocumentFormatModule(state).then((formatModule) => {
+      if (state.renderSerial !== renderSerial || !preview.isConnected) return;
+      fill(formatModule);
+    }).catch(() => {});
+  }
+  return preview;
+}
+
+function clearEditorHostKeepPreview(host) {
+  for (const child of [...host.children]) {
+    if (!child.matches('[data-documents-read-preview]')) child.remove();
+  }
+}
+
+// Vorwärmen (FIX9b): das Office-Bibliotheksmodul lädt im Leerlauf, sobald die Liste ein
+// Word-Dokument enthält; die Bibliothek selbst bleibt unverändert (der Editor startet weiter erst beim Öffnen).
+function scheduleOfficePrewarm(state) {
+  if (state.officePrewarmScheduled || state.ctoxDocumentsModule) return;
+  if (!(state.documents || []).some((record) => isDocxDocumentRecord(record))) return;
+  state.officePrewarmScheduled = true;
+  const run = () => {
+    if (state.disposed) return;
+    loadCtoxDocumentsModule(state).catch(() => { state.officePrewarmScheduled = false; });
+  };
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 2000 });
+  else setTimeout(run, 200);
 }
 
 function editorRenderKey(record, version, officeEngine = '') {
@@ -3702,22 +3499,21 @@ function trackEditorMount(state, renderKey, mountPromise) {
   return trackedPromise;
 }
 
-async function mountWordEditor(state, host, record, version, renderSerial, renderKey, mountEditor, useCtoxDocuments) {
+async function mountWordEditor(state, host, record, version, renderSerial, renderKey) {
   try {
     await initializeOfficeEditorWithRecovery({
-      initialize: () => mountEditor(state, host, record, version, renderSerial, renderKey),
+      initialize: () => mountCtoxDocuments(state, host, record, version, renderSerial, renderKey),
       isCurrent: () => isCurrentEditorRender(state, renderSerial),
-      shouldRetry: (error) => useCtoxDocuments && isTransientOfficeStartupError(error),
-      onRetry: async () => {
-        host.innerHTML = `<div class="ctox-empty documents-loading"><strong>${escapeHtml(state.t('loadingDocxEditor', 'Lade DOCX Editor'))}</strong><span>${escapeHtml(state.t('officeEditorRetry', 'Verbindung wird wiederhergestellt. Dokument wird erneut geöffnet.'))}</span></div>`;
-      },
+      shouldRetry: (error) => isTransientOfficeStartupError(error),
+      // Editor-Start (iframe/Engine) still wiederholen – kein Zustandstext im Inhalt; die Lesevorschau bleibt.
+      onRetry: async () => { clearEditorHostKeepPreview(host); },
       wait: delay,
       retryDelayMs: CTOX_DOCUMENTS_RECOVERY_DELAY_MS,
       maxRecoveryAttempts: CTOX_DOCUMENTS_MAX_RECOVERY_ATTEMPTS,
     });
   } catch (error) {
     if (state.renderSerial !== renderSerial) return;
-    console.error(`[documents] ${useCtoxDocuments ? 'CTOX Documents' : 'SuperDoc'} mount failed`, error);
+    console.error('[documents] CTOX Documents mount failed', error);
     renderError(state, `${state.t('docxEditorLoadFailed', 'DOCX editor konnte nicht geladen werden:')} ${error?.message || error}`);
   }
 }
@@ -3757,15 +3553,8 @@ function isTransientOfficeStartupError(error) {
   const code = String(error?.code || '').toLowerCase();
   const method = String(error?.details?.method || error?.method || '').toLowerCase();
   const retryableRpcMethod = ['bridge.loadversion', 'editor.open', 'editor.ready'].includes(method);
-  return message.includes('iframe load timed out')
-    || message.includes('editor.ready')
-    || message.includes('app-ready timed out')
-    || message.includes('fork sdk load timed out')
-    || message.includes('webrtc replication cancelled')
-    || message.includes('replication-cancel')
-    || message.includes('query_cancelled')
-    || message.includes('office rpc timed out: bridge.loadversion')
-    || message.includes('office rpc timed out: editor.open')
+  // Nur Start-/RPC-Fehler des eingebetteten Editors sind wiederholbar (Replikationsfehler gibt es in v4 nicht).
+  return /iframe load timed out|editor\.ready|app-ready timed out|fork sdk load timed out|office rpc timed out: (?:bridge\.loadversion|editor\.open)/.test(message)
     || (code === 'rpc_timeout' && retryableRpcMethod)
     || code === 'rpc_closed';
 }
@@ -3781,7 +3570,7 @@ async function replaceActiveEditorVersion(state, record, version, options = {}) 
   }
   const openResult = await editorHandle.openVersion({ recordId: record.id, versionId: version.id, version });
   await waitForActiveEditorVersionContent(editorHandle, record, version, { ...options, openResult });
-  editorHandle.renderKey = editorRenderKey(record, version, state.officeEngine);
+  editorHandle.renderKey = editorRenderKey(record, version);
   editorHandle.focus?.();
 }
 
@@ -3796,10 +3585,10 @@ async function waitForActiveEditorVersionContent(editorHandle, record, version, 
     if (isEditorVersionContentReady(inspection, record, version)) return inspection;
     if (typeof editorHandle?.inspect === 'function') {
       try {
-        inspection = await withTimeout(
+        inspection = await raceEditorDeadline(
           editorHandle.inspect(),
           Math.max(1, deadline - Date.now()),
-          `Office-Editor-Inspektion für Version ${version?.id || ''} hat zu lange gedauert.`,
+          `Office-Editor-Inspektion für Version ${version?.id || ''} hat die Frist überschritten.`,
         );
         inspectionError = null;
       } catch (error) {
@@ -3818,6 +3607,15 @@ async function waitForActiveEditorVersionContent(editorHandle, record, version, 
   error.code = 'editor_content_not_ready';
   error.details = { inspection };
   throw error;
+}
+
+// Frist für eine Editor-Inspektion (iframe-RPC des Office-Editors), kein Datenweg.
+function raceEditorDeadline(promise, ms, message) {
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([Promise.resolve(promise).finally(() => clearTimeout(timer)), deadline]);
 }
 
 function isEditorVersionContentReady(inspection, record, version) {
@@ -3922,6 +3720,15 @@ function mountMarkdownDocument(state, host, version, formatModule, renderKey = '
       else preview.focus?.();
     },
   };
+  // Live-Remount: offenen Entwurf aus restored zurückspielen, sobald genau diese Version im Editor steht.
+  const draft = state.pendingDraft;
+  if (draft && draft.documentId === state.selectedId && (!draft.versionId || draft.versionId === version.id)) {
+    state.pendingDraft = null;
+    textarea.value = draft.text;
+    preview.innerHTML = renderMarkdownPreview(textarea.value);
+    setEditing(Boolean(draft.editing));
+    return;
+  }
   setEditing(false);
 }
 
@@ -3992,14 +3799,17 @@ function ctoxDocumentsDraftProtected(state) {
 async function mountCtoxDocuments(state, host, record, version, renderSerial, renderKey) {
   const { createCtoxDocumentsEditor } = await loadCtoxDocumentsModule(state);
   if (!isCurrentEditorRender(state, renderSerial)) return;
-  host.replaceChildren();
+  clearEditorHostKeepPreview(host);
   const mount = document.createElement('div');
   mount.className = 'documents-superdoc-frame documents-ctox-documents-frame';
+  const preview = host.querySelector('[data-documents-read-preview]');
+  // Hinter der Lesevorschau startet der Editor unsichtbar (mit Layout, damit das iframe initialisiert).
+  if (preview && !preview.hidden) mount.classList.add('is-warming');
   host.append(mount);
-  const permissions = ctoxDocumentsPermissions(state.ctx);
+  const permissions = ctoxDocumentsPermissions(state.api);
   const editor = await createCtoxDocumentsEditor({
     host: mount,
-    bridge: createBusinessOsOfficeBridge(state.ctx, 'document'),
+    bridge: state.officeBridge,
     locale: state.lang,
     theme: document.documentElement.dataset.theme || 'system',
     permissions,
@@ -4031,7 +3841,7 @@ async function mountCtoxDocuments(state, host, record, version, renderSerial, re
     const currentRecord = state.documents.find((item) => item.id === record.id);
     if (currentRecord) currentRecord.current_version_id = versionId;
     state.selectedVersion = { ...state.selectedVersion, id: versionId, version_id: versionId };
-    handle.renderKey = editorRenderKey(record, state.selectedVersion, state.officeEngine);
+    handle.renderKey = editorRenderKey(record, state.selectedVersion);
     state.dirty = Boolean(dirty);
     state.needsFinalSave = state.dirty;
     if (state.dirty) scheduleCtoxDocumentsDraftSave(state, record);
@@ -4044,10 +3854,7 @@ async function mountCtoxDocuments(state, host, record, version, renderSerial, re
     if (state.superdocSaveTimer) clearTimeout(state.superdocSaveTimer);
     state.superdocSaveTimer = null;
     const error = payload?.error || payload;
-    state.ctx.notifications?.show?.({
-      type: 'error', message: error?.message || String(error), time: 0,
-      action: { label: state.t('close', 'Schließen'), callback: () => {} },
-    });
+    reportDocumentError(state, 'documents.editor.office', error);
   });
   const cleanupCallbacks = [removeDirtyListener, removeSavingListener, removeSavedListener, removeErrorListener];
   await openOfficeEditorInstance(
@@ -4060,6 +3867,8 @@ async function mountCtoxDocuments(state, host, record, version, renderSerial, re
     await editor.destroy();
     return;
   }
+  host.querySelector('[data-documents-read-preview]')?.remove();
+  mount.classList.remove('is-warming');
   state.editorHandle = handle = {
     kind: 'ctox-documents',
     recordId: record.id,
@@ -4101,10 +3910,13 @@ async function openOfficeEditorInstance(editor, request, cleanupCallbacks = []) 
   }
 }
 
-function ctoxDocumentsPermissions(ctx) {
-  const canWrite = ctx.permissions?.canWriteCollection?.('documents') !== false
-    && ctx.permissions?.canWriteCollection?.('document_versions') !== false
-    && ctx.permissions?.canWriteCollection?.('document_blob_chunks') !== false;
+// R9: Rechte-Spiegel aus api.actor (Rolle + Rechteliste) wie app-store/credentials – nur Darstellung, jede Mutation
+// entscheidet weiter der Kern (policy.rs: data.write = Owner/Admin oder zugewiesen). 4.0 liefert die Rechteliste ohne
+// Modul-Scope (OFFEN-6/7); ohne `data.write` und ohne Verwaltungsrolle zeigt der Editor weder Kommentar noch Review.
+function ctoxDocumentsPermissions(api) {
+  const list = api?.actor?.permissions?.get?.();
+  const canWrite = roleCanManage(api?.actor?.role)
+    || (Array.isArray(list) && list.includes(BusinessOsPermissions.DataWrite));
   return { read: true, write: canWrite, export: true, comment: canWrite, review: canWrite };
 }
 
@@ -4168,257 +3980,7 @@ function flushActiveEditorDraft(state, record = selectedRecord(state), options =
   if (state.editorHandle?.kind === 'ctox-documents') {
     return flushActiveCtoxDocumentsDraft(state, record, options);
   }
-  return flushActiveSuperDocDraft(state, record, options);
-}
-
-async function mountSuperDocDocument(state, host, record, version, renderSerial, renderKey) {
-  const bytes = await loadBlobBytes(
-    state.ctx,
-    version.blob_id,
-    bindDocumentBlobByteCache(state, record.id),
-  );
-  if (!isCurrentEditorRender(state, renderSerial)) return;
-  if (!bytes) throw new Error(`Missing DOCX blob ${version.blob_id}`);
-  const { SuperDoc } = await loadSuperDocModule(state);
-  if (!isCurrentEditorRender(state, renderSerial)) return;
-  host.replaceChildren();
-  const frame = document.createElement('div');
-  frame.className = 'documents-superdoc-frame';
-  frame.dataset.toolbarVisible = String(state.docxToolbarVisible);
-  const controls = document.createElement('div');
-  controls.className = 'documents-superdoc-controls';
-  const toolbarToggle = document.createElement('button');
-  toolbarToggle.type = 'button';
-  toolbarToggle.className = 'documents-superdoc-toolbar-toggle';
-  toolbarToggle.dataset.documentsToolbarToggle = 'true';
-  toolbarToggle.textContent = state.docxToolbarVisible ? state.t('hideEditorToolbar', 'Editorleiste ausblenden') : state.t('showEditorToolbar', 'Editorleiste einblenden');
-  toolbarToggle.setAttribute('aria-pressed', String(state.docxToolbarVisible));
-  toolbarToggle.setAttribute('aria-label', toolbarToggle.textContent);
-  toolbarToggle.addEventListener('click', () => {
-    state.docxToolbarVisible = !state.docxToolbarVisible;
-    try { state.ctx?.storageScope?.set?.(DOCX_TOOLBAR_VISIBILITY_KEY, String(state.docxToolbarVisible)); } catch {}
-    frame.dataset.toolbarVisible = String(state.docxToolbarVisible);
-    toolbarToggle.textContent = state.docxToolbarVisible ? state.t('hideEditorToolbar', 'Editorleiste ausblenden') : state.t('showEditorToolbar', 'Editorleiste einblenden');
-    toolbarToggle.setAttribute('aria-pressed', String(state.docxToolbarVisible));
-    toolbarToggle.setAttribute('aria-label', toolbarToggle.textContent);
-  });
-  controls.append(toolbarToggle);
-  const toolbar = document.createElement('div');
-  const toolbarId = `documents_superdoc_toolbar_${record.id.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-  toolbar.id = toolbarId;
-  toolbar.className = 'documents-superdoc-toolbar';
-  const ruler = document.createElement('div');
-  const rulerId = `documents_superdoc_ruler_${record.id.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-  ruler.id = rulerId;
-  ruler.className = 'documents-superdoc-ruler';
-  const editorHost = document.createElement('div');
-  editorHost.className = 'documents-superdoc-editor';
-  const mount = document.createElement('div');
-  mount.className = 'documents-superdoc-mount';
-  editorHost.append(mount);
-  frame.append(controls, toolbar, ruler, editorHost);
-  host.append(frame);
-  const file = new File([bytes], version.filename || record.filename || 'document.docx', { type: DOCX_MIME });
-  if (!isCurrentEditorRender(state, renderSerial)) return;
-  let replacingVersion = false;
-  const superdoc = new SuperDoc({
-    selector: mount,
-    document: file,
-    documentMode: 'editing',
-    role: 'editor',
-    contained: true,
-    pagination: true,
-    toolbar: `#${toolbarId}`,
-    comments: { visible: false },
-    rulers: true,
-    rulerContainer: `#${rulerId}`,
-    viewOptions: { layout: 'print' },
-    useLayoutEngine: true,
-    layoutEngineOptions: {
-      virtualization: {
-        enabled: false,
-      },
-    },
-    user: { name: 'Business OS', email: 'business-os@local' },
-    modules: {
-      toolbar: {
-        selector: toolbarId,
-        toolbarGroups: ['left', 'center', 'right'],
-        hideButtons: false,
-        responsiveToContainer: true,
-      },
-      comments: false,
-      collaboration: false,
-      whiteboard: false,
-      surfaces: { findReplace: true },
-    },
-    telemetry: { enabled: false },
-    onEditorUpdate: async () => {
-      if (replacingVersion) return;
-      state.dirty = true;
-      state.needsFinalSave = true;
-      await markRecordDraft(state, record);
-      scheduleSuperDocDraftSave(state, record);
-    },
-    onException: (event) => {
-      console.error('[documents] SuperDoc exception', event);
-    },
-  });
-  if (!isCurrentEditorRender(state, renderSerial)) {
-    superdoc.destroy?.();
-    return;
-  }
-  const replaceFile = superdoc.activeEditor?.replaceFile;
-  state.editorHandle = {
-    kind: 'superdoc',
-    renderKey,
-    superdoc,
-    ...(typeof replaceFile === 'function' ? {
-      async openVersion({ version: nextVersion }) {
-        const nextBytes = await loadBlobBytes(
-          state.ctx,
-          nextVersion?.blob_id,
-          bindDocumentBlobByteCache(state, record.id),
-        );
-        if (!nextBytes) throw new Error(`Missing DOCX blob ${nextVersion?.blob_id || ''}`);
-        const nextFile = new File(
-          [nextBytes],
-          nextVersion.filename || record.filename || 'document.docx',
-          { type: DOCX_MIME },
-        );
-        replacingVersion = true;
-        try {
-          await replaceFile.call(superdoc.activeEditor, nextFile);
-          state.dirty = false;
-          return {
-            record_id: record.id,
-            version_id: nextVersion.id,
-            content_ready: true,
-          };
-        } finally {
-          replacingVersion = false;
-        }
-      },
-    } : {}),
-    destroy() {
-      superdoc.destroy?.();
-      host.replaceChildren();
-    },
-    async export() {
-      return superdoc.export({ triggerDownload: false, isFinalDoc: false });
-    },
-    focus() {
-      host.querySelector('[contenteditable="true"]')?.focus();
-    },
-    inspect() {
-      return {
-        record_id: record.id,
-        version_id: state.selectedVersion?.id || version.id,
-        content_ready: true,
-      };
-    },
-  };
-  scheduleMailMergeBlobPrefetch(state);
-}
-
-function scheduleSuperDocDraftSave(state, record) {
-  if (state.superdocSaveTimer) clearTimeout(state.superdocSaveTimer);
-  state.superdocSaveTimer = setTimeout(() => {
-    state.superdocSaveTimer = null;
-    flushActiveSuperDocDraft(state, record, { final: false }).catch((error) => {
-      console.error('[documents] SuperDoc draft save failed', error);
-    });
-  }, 900);
-}
-
-async function flushActiveSuperDocDraft(state, record = selectedRecord(state), options = {}) {
-  if (state.superdocSaveTimer) {
-    clearTimeout(state.superdocSaveTimer);
-    state.superdocSaveTimer = null;
-  }
-  if (state.superdocSavePromise) {
-    try {
-      const result = await state.superdocSavePromise;
-      if (!options.force) return result;
-    } catch (error) {
-      if (!options.allowFailure) throw error;
-      console.warn('[documents] ignored pending SuperDoc draft save failure', error);
-      if (!options.force) return null;
-    }
-  }
-  if (state.editorHandle?.kind !== 'superdoc' || !record || !state.selectedVersion || (!state.dirty && !options.force)) return null;
-  const editorHandle = state.editorHandle;
-  const version = state.selectedVersion;
-  const versionId = version.id;
-  const recordId = record.id;
-  state.superdocSavePromise = (async () => {
-    const exported = await editorHandle.export();
-    const bytes = await exportDataToUint8(exported);
-    const now = Date.now();
-    const blobId = `${versionId}_draft_${now}`;
-    await saveBlobChunks(state.ctx, {
-      blobId,
-      documentId: recordId,
-      versionId,
-      mimeType: DOCX_MIME,
-      bytes,
-    });
-    const versionDoc = await documentCollection(state.ctx, 'document_versions').findOne(versionId).exec();
-    const previousBlobId = versionDoc?.get('blob_id') || '';
-    await versionDoc?.incrementalPatch({
-      source_kind: 'edited_docx',
-      blob_id: blobId,
-      updated_at_ms: now,
-    });
-    // The version now points at the new blob; reclaim the superseded draft
-    // blob's chunks so per-keystroke autosaves don't accumulate unbounded full-
-    // document copies that replicate over WebRTC (the original imported blob is
-    // preserved).
-    if (isReclaimableDraftBlob(previousBlobId, blobId)) {
-      await deleteBlobChunks(state.ctx, previousBlobId).catch((error) => {
-        console.warn('[documents] failed to reclaim superseded draft blob', error);
-      });
-    }
-    const recordDoc = await documentCollection(state.ctx, 'documents').findOne(recordId).exec();
-    await recordDoc?.incrementalPatch({
-      status: 'Draft',
-      updated_at_ms: now,
-    });
-    version.blob_id = blobId;
-    version.source_kind = 'edited_docx';
-    version.updated_at_ms = now;
-    const localRecord = state.documents.find((item) => item.id === recordId) || record;
-    localRecord.status = 'Draft';
-    localRecord.updated_at_ms = now;
-    if (state.selectedVersion?.id === versionId) {
-      state.selectedVersion.blob_id = blobId;
-      state.selectedVersion.source_kind = 'edited_docx';
-      state.selectedVersion.updated_at_ms = now;
-      state.dirty = false;
-      if (options.final !== false) state.needsFinalSave = false;
-    }
-    return blobId;
-  })();
-  try {
-    return await state.superdocSavePromise;
-  } catch (error) {
-    if (!options.allowFailure) throw error;
-    console.warn('[documents] ignored SuperDoc draft save failure', error);
-    return null;
-  } finally {
-    state.superdocSavePromise = null;
-  }
-}
-
-async function markRecordDraft(state, record) {
-  const now = Date.now();
-  const recordDoc = await documentCollection(state.ctx, 'documents').findOne(record.id).exec();
-  await recordDoc?.incrementalPatch({
-    status: 'Draft',
-    updated_at_ms: now,
-  });
-  record.status = 'Draft';
-  record.updated_at_ms = now;
+  return Promise.resolve(null);
 }
 
 async function saveDraftVersion(state, document) {
@@ -4427,13 +3989,11 @@ async function saveDraftVersion(state, document) {
   const formatModule = await ensureDocumentFormatModule(state);
   const now = Date.now();
   const indexText = formatModule.getDocumentText(document).slice(0, 20000);
-  const versionDoc = await documentCollection(state.ctx, 'document_versions').findOne(state.selectedVersion.id).exec();
-  await versionDoc?.incrementalPatch({
+  await patchIfPresent(state, 'document_versions', state.selectedVersion.id, {
     model_json: document,
     updated_at_ms: now,
   });
-  const recordDoc = await documentCollection(state.ctx, 'documents').findOne(record.id).exec();
-  await recordDoc?.incrementalPatch({
+  await patchIfPresent(state, 'documents', record.id, {
     status: 'Draft',
     index_text: indexText,
     updated_at_ms: now,
@@ -4459,7 +4019,7 @@ async function exportSelectedDocument(state, requestedFilename = '') {
   let data;
   if (isMarkdown) {
     data = formatModule.exportMarkdown(state.selectedVersion.model_json);
-  } else if (state.editorHandle?.kind === 'superdoc' || state.editorHandle?.kind === 'ctox-documents') {
+  } else if (state.editorHandle?.kind === 'ctox-documents') {
     data = await state.editorHandle.export();
   } else {
     renderError(state, state.t('docxExportSuperDocRequired', 'DOCX Export benötigt einen aktiven Office Editor. Bitte das Dokument erneut öffnen und danach exportieren.'));
@@ -4476,49 +4036,15 @@ async function exportSelectedDocument(state, requestedFilename = '') {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-async function saveBlobChunks(ctx, input) {
-  requireDocumentPersistence(ctx);
-  await createBusinessOsOfficeBridge(ctx, 'document').stageSourceBlob({
-    recordId: input.documentId,
-    versionId: input.versionId,
-    blobId: input.blobId,
-    mimeType: input.mimeType,
-    bytes: input.bytes,
-  });
+// Datei-Bytes über api.files (id = blob_id); Name/Chunks/Leases entfallen.
+async function saveBlobChunks(state, input) {
+  return putFile(state.api, input.blobId, input.bytes, input.mimeType, input.name);
 }
 
-async function writeCollectionDocuments(collection, docs) {
-  if (!docs.length) return;
-  if (typeof collection.bulkUpsert === 'function') {
-    await collection.bulkUpsert(docs);
-    return;
-  }
-  if (typeof collection.bulkInsert === 'function') {
-    await collection.bulkInsert(docs);
-    return;
-  }
-  for (const doc of docs) {
-    await collection.insert(doc);
-  }
-}
-
-// True when a version's previous blob is a superseded draft blob that can be
-// garbage-collected after the version is repointed to a new one. Draft blobs are
-// timestamped per autosave; the original imported source blob (no `_draft_`
-// marker) and the freshly written blob are never reclaimed.
-function isReclaimableDraftBlob(previousBlobId, currentBlobId) {
-  return Boolean(previousBlobId)
-    && previousBlobId !== currentBlobId
-    && String(previousBlobId).includes('_draft_');
-}
-
-async function deleteBlobChunks(ctx, blobId) {
-  requireDocumentPersistence(ctx);
-  if (!blobId) return;
-  const chunks = await documentCollection(ctx, 'document_blob_chunks')
-    .find({ selector: { blob_id: blobId } })
-    .exec();
-  await Promise.all(chunks.map((chunk) => chunk.remove()));
+// Wie incrementalPatch auf ein vorhandenes Dokument: fehlt es lokal, wird nichts geschrieben.
+async function patchIfPresent(state, collection, id, patch) {
+  if (!id || !state.api.get(collection, id).get()) return null;
+  return state.api.patch(collection, id, patch).local;
 }
 
 function createDocumentBlobByteCache(options = {}) {
@@ -4550,8 +4076,7 @@ function clearDocumentBlobByteCache(state) {
   state.blobByteCache.documentId = '';
 }
 
-async function loadBlobBytes(ctx, blobId, cache = null) {
-  requireDocumentPersistence(ctx);
+async function loadBlobBytes(state, blobId, cache = null) {
   if (!blobId) return null;
   const cached = cache?.entries?.get(blobId);
   if (cached) {
@@ -4561,16 +4086,11 @@ async function loadBlobBytes(ctx, blobId, cache = null) {
   }
   const entry = { promise: null, bytes: null, size: 0 };
   entry.promise = (async () => {
-    const chunks = await documentCollection(ctx, 'document_blob_chunks').find({
-      selector: { blob_id: blobId },
-      sort: [{ idx: 'asc' }],
-    }).exec();
-    if (!chunks.length) {
+    if (!state.api.get('files', blobId).get()) {
       if (cache?.entries?.get(blobId) === entry) cache.entries.delete(blobId);
       return null;
     }
-    const base64 = chunks.map((chunk) => chunk.toJSON().data || '').join('');
-    const bytes = base64ToUint8(base64);
+    const bytes = await readFileBytes(state.api, blobId);
     if (cache?.entries?.get(blobId) === entry) {
       entry.bytes = bytes;
       entry.size = bytes.byteLength;
@@ -4618,7 +4138,7 @@ function scheduleMailMergeBlobPrefetch(state) {
     for (const blobId of blobIds) {
       await waitForDocumentBlobPrefetchSlot(controller.signal);
       if (controller.signal.aborted || state.disposed || state.selectedId !== record.id) return;
-      await loadBlobBytes(state.ctx, blobId, cache).catch((error) => {
+      await loadBlobBytes(state, blobId, cache).catch((error) => {
         if (!controller.signal.aborted) {
           console.warn('[documents] mail merge recipient blob prefetch failed', error);
         }
@@ -4653,33 +4173,24 @@ function waitForDocumentBlobPrefetchSlot(signal) {
   });
 }
 
-function requireDocumentPersistence(ctx) {
-  if (!documentCollection(ctx, 'documents')
-    || !documentCollection(ctx, 'document_versions')
-    || !documentCollection(ctx, 'document_blob_chunks')) {
-    throw new Error('CTOX document persistence is unavailable. Document bytes must be stored through CTOX collections, not local files.');
-  }
-}
-
-async function ensureSeedRunbooks(ctx) {
-  const collection = documentCollection(ctx, 'document_runbooks');
-  if (!collection) return;
-  const existing = await collection.find().exec();
+// Seed-Runbooks: fehlende Standard-Runbooks lokal anlegen (api.put, Core bestätigt über die Outbox). Die Texte liegen
+// in prompts/ des App-Pakets; die Handler document.* füllen sie (Strang SKL-B3).
+function ensureSeedRunbooks(state) {
+  const existingIds = new Set(state.api.query('document_runbooks', {}).get().map((doc) => doc.id));
   const now = Date.now();
-  const existingIds = new Set(existing.map((doc) => doc.toJSON().id));
   const runbooks = mergeDocumentRunbooks([
-    { id: 'document.summarize', document_type: 'word_document', title: 'Zusammenfassen', command_type: 'document.summarize', prompt_template: 'Fasse das ausgewählte DOCX strukturiert zusammen.' },
-    { id: 'document.extract-requirements', document_type: 'word_document', title: 'Requirements extrahieren', command_type: 'document.extract-requirements', prompt_template: 'Extrahiere Anforderungen, offene Punkte und Nachweise.' },
-    { id: 'document.review-risks', document_type: 'word_document', title: 'Risiken prüfen', command_type: 'document.review-risks', prompt_template: 'Prüfe fachliche, rechtliche und Umsetzungsrisiken im Dokument.' },
+    { id: 'document.summarize', document_type: 'word_document', title: 'Zusammenfassen', command_type: 'document.summarize', prompt_template: 'prompts/document-summarize.md' },
+    { id: 'document.extract-requirements', document_type: 'word_document', title: 'Requirements extrahieren', command_type: 'document.extract-requirements', prompt_template: 'prompts/document-extract-requirements.md' },
+    { id: 'document.review-risks', document_type: 'word_document', title: 'Risiken prüfen', command_type: 'document.review-risks', prompt_template: 'prompts/document-review-risks.md' },
   ]);
   for (const runbook of runbooks) {
     if (existingIds.has(runbook.id)) continue;
-    await collection.insert({
+    state.api.put('document_runbooks', {
       ...runbook,
-      description: runbook.description || runbook.prompt_template || '',
+      description: runbook.description || '',
       created_at_ms: now,
       updated_at_ms: now,
-    });
+    }).local.catch((error) => reportDocumentError(state, 'documents.runbooks.seed', error));
   }
 }
 
@@ -4715,29 +4226,21 @@ function selectedRecordInGroup(state, group) {
   return group.records.find((record) => record.id === state.selectedId) || group.records[0] || null;
 }
 
-function withTimeout(promise, ms, message) {
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(message || `Zeitlimit nach ${ms} ms erreicht.`)), ms);
-  });
-  return Promise.race([
-    Promise.resolve(promise).finally(() => clearTimeout(timer)),
-    timeout,
-  ]);
-}
-
 function clampNumber(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-function renderError(state, message, { retry } = {}) {
-  const host = state.ctx.host.querySelector('[data-documents-editor]');
-  if (!host) return;
-  host.innerHTML = `<div class="ctox-empty documents-error"><strong>${escapeHtml(state.t('documentError', 'Dokumentfehler'))}</strong><span>${escapeHtml(message)}</span>${retry ? `<div class="documents-empty-actions"><button class="ctox-button is-primary" type="button" data-documents-retry-version>${state.lang === 'en' ? 'Try again' : 'Erneut versuchen'}</button></div>` : ''}</div>`;
-  host.querySelector('[data-documents-retry-version]')?.addEventListener('click', () => {
-    if (state.disposed) return;
-    Promise.resolve().then(retry).catch((error) => renderError(state, error?.message || String(error), { retry }));
-  });
+// Fehler gehen in die Zustandszone (R11), nie als Kasten in den Inhalt. Stabile Codes je Fall, damit clear greift.
+function renderError(state, message, { code = 'documents.editor' } = {}) {
+  if (state.disposed) return;
+  state.api.status.report({ level: 'error', code, text: String(message || '') });
+}
+
+function reportDocumentError(state, code, error, prefix = '') {
+  if (state.disposed) return;
+  const message = error?.message || String(error || '');
+  const detail = error?.code && !message.includes(error.code) ? ` (${error.code})` : '';
+  state.api.status.report({ level: 'error', code, text: `${prefix ? `${prefix} ` : ''}${message}${detail}` });
 }
 
 function isSupportedDocumentFile(file) {
@@ -4773,9 +4276,8 @@ const DOCUMENTS_LOCAL_ICON_PATHS = Object.freeze({
   knowledge: 'M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2ZM4 19.5A2.5 2.5 0 0 1 6.5 17H20',
 });
 
-// Standard action glyphs (shared/icons.js actionIconPaths) — used only when
-// the module runs without ctx.getActionIcon; the normal path is the shell
-// helper handed in through mount(ctx).
+// Standard action glyphs (shared/icons.js actionIconPaths). 4.0 hat keine Icon-API (OFFEN-D): die App zeichnet
+// ihre Glyphen selbst.
 const DOCUMENTS_FALLBACK_ACTION_ICON_PATHS = Object.freeze({
   add: 'M12 5v14M5 12h14',
   upload: 'M12 15V4M12 4 8 8M12 4l4 4M5 19h14',
@@ -4798,8 +4300,6 @@ function actionIcon(state, name, size = 16, strokeWidth = 1.8) {
   if (DOCUMENTS_LOCAL_ICON_PATHS[name]) {
     return strokeIconSvg(name, DOCUMENTS_LOCAL_ICON_PATHS[name], size, strokeWidth);
   }
-  const fromCtx = state?.ctx?.getActionIcon?.(name, size, strokeWidth);
-  if (typeof fromCtx === 'string' && fromCtx) return fromCtx;
   return strokeIconSvg(name, DOCUMENTS_FALLBACK_ACTION_ICON_PATHS[name] || DOCUMENTS_FALLBACK_ACTION_ICON_PATHS.more, size, strokeWidth);
 }
 
@@ -4838,63 +4338,15 @@ async function sha256Hex(bytes) {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-function uint8ToBase64(bytes) {
-  let binary = '';
-  for (let index = 0; index < bytes.length; index += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
-  }
-  return btoa(binary);
-}
-
-function base64ToUint8(base64) {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-}
-
-async function exportDataToUint8(data) {
-  if (data instanceof Uint8Array) return data;
-  if (data instanceof ArrayBuffer) return new Uint8Array(data);
-  if (data instanceof Blob) return new Uint8Array(await data.arrayBuffer());
-  if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-  throw new Error('Unsupported SuperDoc export payload');
-}
-
-async function ensureStyles() {
-  if (document.querySelector('link[data-documents-style]')) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = revisionedModuleAssetUrl('./index.css').href;
-  link.dataset.documentsStyle = 'true';
-  document.head.append(link);
-}
-
-function revisionedModuleAssetUrl(relativePath) {
-  const url = new URL(relativePath, import.meta.url);
-  url.searchParams.set('v', DOCUMENTS_ASSET_REVISION);
-  return url;
-}
-
-function ensureSuperDocStyles() {
-  if (document.querySelector('link[data-superdoc-style]')) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = new URL('../../vendor/superdoc.css', import.meta.url).href;
-  link.dataset.superdocStyle = 'true';
-  document.head.append(link);
-}
-
 export const __documentsTestHooks = {
+  docxReadPreviewHtml,
   loadSelectedVersion,
+  applyKnowledgeRows,
+  documentsSnapshot,
+  applyRestoredView,
   markCtoxDocumentsDraft,
   wireLocalRealtime,
   refreshDocumentsFromLocal,
-  refreshKnowledge,
-  withDocumentVersionTimeout,
-  awaitDocumentVersionReplication,
   documentKnowledgeLink,
   documentBySourceSha,
   isDocumentKnowledgeStale,
@@ -4904,7 +4356,6 @@ export const __documentsTestHooks = {
   normalizeDocumentRecord,
   documentListState,
   refreshDocuments,
-  wireDocumentReadiness,
   normalizeKnowledgeRecord,
   resolveKnowledgeContext,
   groupDocumentRecords,
@@ -4925,12 +4376,9 @@ export const __documentsTestHooks = {
   documentSourceIdentity,
   documentFilterCount,
   isDocxDocumentRecord,
-  knowledgeContextInstruction,
   validateImportInput,
   validateNewDocumentInput,
   visibleDocuments,
-  isReclaimableDraftBlob,
-  officeEngineFromSettings,
   ctoxDocumentsPermissions,
   saveBlobChunks,
   documentIdFromLaunchArgs,
@@ -4942,7 +4390,6 @@ export const __documentsTestHooks = {
   destroyActiveEditor,
   initializeOfficeEditorWithRecovery,
   isTransientOfficeStartupError,
-  resolveLocalFirst,
   openOfficeEditorInstance,
 };
 

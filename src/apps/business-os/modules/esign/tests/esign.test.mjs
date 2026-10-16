@@ -1,17 +1,27 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { registerHooks } from 'node:module';
 
-import {
+// App-API 4.0: 'ctox:shared/x.js' löst in der Shell der Service Worker auf (§16.15); hier wie dort auf shared/.
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.startsWith('ctox:shared/')) {
+      return nextResolve(new URL(`../../../shared/${specifier.slice('ctox:shared/'.length)}`, import.meta.url).href, context);
+    }
+    return nextResolve(specifier, context);
+  },
+});
+const {
   renderList,
   filterRecords,
   bandCounts,
   lifecycleBand,
   computeDetailVisible,
   normalizeSignatureRequest,
-} from '../index.js';
+} = await import('../index.js');
 
 const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (rel) => readFileSync(resolve(moduleRoot, rel), 'utf8');
@@ -23,10 +33,10 @@ test('esign: manifest is consistent and has no inline SVG', () => {
   assert.ok(!manifest.layout || !manifest.layout.icon_svg, 'no inline SVG in manifest');
 });
 
-test('esign: schema declares its owned collection', () => {
-  const schemaSrc = read('schema.js');
-  assert.match(schemaSrc, /signature_requests/);
-  assert.match(schemaSrc, /export const collections/);
+test('esign: schema declares its owned collection (v4: collections.schema.json ist die einzige Quelle)', () => {
+  const schema = JSON.parse(read('collections.schema.json'));
+  assert.ok((schema.collections || schema).signature_requests, 'signature_requests declared');
+  assert.ok(!existsSync(resolve(moduleRoot, 'schema.js')), 'schema.js entfällt (PORTING.md R17)');
 });
 
 test('esign: left column carries the canonical grammar markup pins', () => {
@@ -54,7 +64,7 @@ test('esign: left column carries the canonical grammar markup pins', () => {
   assert.match(html, /data-esign-view-icon="list"/);
   assert.match(html, /data-esign-view-icon="cards"/);
   // Footer target.
-  assert.match(html, /data-pg-footer/);
+  assert.doesNotMatch(html, /data-pg-footer/, 'keine Fußzeile, die nur den Reiterzähler wiederholt (Textdiät Regel 5)');
   // Counted view band with >= 2 real views (bands with a single tab are a
   // static-check failure).
   const bandTabs = (html.match(/data-pg-band=/g) || []).length;
@@ -72,25 +82,25 @@ test('esign: header carries Neu, Import and Export actions', () => {
 
 test('esign: import/export handlers are wired in index.js', () => {
   const js = read('index.js');
-  // Export via Blob URL download, import via file input + JSON, upsert through
-  // the shell-provided collection handle — no HTTP.
+  // Export via Blob URL download, import via file input + JSON, write through
+  // api.put (App-API 4.0) — no HTTP.
   assert.match(js, /new Blob\(/);
   assert.match(js, /URL\.createObjectURL/);
   assert.match(js, /input\.type = 'file'/);
   assert.match(js, /JSON\.parse/);
-  assert.match(js, /\.upsert\(/);
+  assert.match(js, /api\.put\(PRIMARY, record\)/);
   assert.match(js, /\[data-action="import"\]/);
   assert.match(js, /\[data-action="export"\]/);
 });
 
 test('esign: renders a shard list from a stub doc array with the context trio', () => {
   const docs = [
-    { id: 'r1', document_id: 'DOC-1', subject_kind: 'arbeitsvertrag', status: 'created', signers: [{ id: 's1', state: 'pending' }] },
-    { id: 'r2', document_id: 'DOC-2', subject_kind: 'vermittlungsvertrag', status: 'completed', signers: [{ id: 's2', state: 'signed' }] },
+    { id: 'r1', document_id: 'DOC-1', document_title: 'Vertrag Eins', subject_kind: 'arbeitsvertrag', status: 'created', signers: [{ id: 's1', state: 'pending' }] },
+    { id: 'r2', document_id: 'DOC-2', document_title: 'Vertrag Zwei', subject_kind: 'vermittlungsvertrag', status: 'completed', signers: [{ id: 's2', state: 'signed' }] },
   ];
   const cardsHtml = renderList(docs, { view: 'cards', selectedId: 'r2' });
-  assert.match(cardsHtml, /DOC-1/);
-  assert.match(cardsHtml, /DOC-2/);
+  assert.match(cardsHtml, /Vertrag Eins/);
+  assert.match(cardsHtml, /Vertrag Zwei/);
   assert.match(cardsHtml, /data-context-record-id="r1"/);
   assert.match(cardsHtml, /data-context-record-type="signature_request"/);
   assert.match(cardsHtml, /data-esign-row="r2"/);
@@ -99,13 +109,13 @@ test('esign: renders a shard list from a stub doc array with the context trio', 
   // Compact variant is a distinct rendering behind the toggle.
   const listHtml = renderList(docs, { view: 'list', selectedId: '' });
   assert.match(listHtml, /esign-row-compact/);
-  // Empty state.
-  assert.match(renderList([], { view: 'cards' }), /ctox-empty/);
+  // v4 (R11): an empty list renders nothing.
+  assert.equal(renderList([], { view: 'cards' }), '');
 });
 
 test('esign: cards and list are genuinely different renderings', () => {
   const docs = [{
-    id: 'r1', document_id: 'DOC-1', subject_kind: 'arbeitsvertrag', status: 'sent',
+    id: 'r1', document_id: 'DOC-1', document_title: 'Vertrag Eins', subject_kind: 'arbeitsvertrag', status: 'sent',
     signers: [{ id: 's1', state: 'signed' }, { id: 's2', state: 'pending' }],
     created_at_ms: 1756000000000, updated_at_ms: 1756600000000,
   }];
@@ -128,25 +138,12 @@ test('esign: cards and list are genuinely different renderings', () => {
   assert.ok(listHtml.length < cardsHtml.length, 'the list row must be leaner than the card');
 });
 
-test('esign: empty source list follows collection readiness', () => {
-  // Empty + not ready (never-synced / catching-up / offline-pending) ⇒ syncing shell.
-  const syncing = renderList([], { view: 'cards', readiness: { ready: false, state: 'catching-up' } });
-  assert.match(syncing, /ctox-syncing/);
-  assert.match(syncing, /role="status"/);
-  assert.doesNotMatch(syncing, /ctox-empty/);
-  // Empty + ready (live) ⇒ the real empty state.
-  const empty = renderList([], { view: 'cards', readiness: { ready: true, state: 'live' } });
-  assert.match(empty, /ctox-empty/);
-  assert.doesNotMatch(empty, /ctox-syncing/);
-  // No readiness hint (sync API absent) ⇒ legacy empty state.
-  assert.match(renderList([], { view: 'cards', readiness: null }), /ctox-empty/);
-  // Rows always win, even while not ready.
-  const rows = renderList(
-    [{ id: 'r1', document_id: 'DOC-1', status: 'created', signers: [] }],
-    { view: 'cards', readiness: { ready: false, state: 'never-synced' } },
-  );
-  assert.match(rows, /DOC-1/);
-  assert.doesNotMatch(rows, /ctox-syncing/);
+test('esign: v4 – no readiness, no syncing shell; empty renders nothing (App-API 4.0)', () => {
+  assert.equal(renderList([], { view: 'cards', readiness: { ready: false } }), '');
+  assert.match(renderList([{ id: 'r1', document_id: 'DOC-1', document_title: 'Vertrag Eins', status: 'created', signers: [] }], { view: 'cards' }), /Vertrag Eins/);
+  const js = read('index.js');
+  assert.doesNotMatch(js, /ctox-syncing|collectionReadiness|subscribeCollectionReadiness|commandBus/);
+  assert.match(js, /api\.query\(PRIMARY, \{\}\)\.subscribe\(onRows\)/);
 });
 
 test('esign: band counts and filtering derive from the status field', () => {

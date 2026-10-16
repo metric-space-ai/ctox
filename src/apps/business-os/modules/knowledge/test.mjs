@@ -3,7 +3,18 @@ import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-import { build } from 'esbuild';
+import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
+import { join as joinPath } from 'node:path';
+// Lader (OLDTEST/FIX5): esbuild aus dem Klon, sonst ESBUILD_MODULE, sonst aus dem Haupt-Checkout
+// ~/Documents/ctox/src/apps/business-os/node_modules (wie PLAYWRIGHT_MODULE in den v4-api-Tests). Nicht installieren.
+const requireDev = createRequire(import.meta.url);
+function loadDev(name, envVar) {
+  try { return requireDev(name); } catch {
+    return requireDev(process.env[envVar] || joinPath(homedir(), 'Documents/ctox/src/apps/business-os/node_modules', name));
+  }
+}
+const { build } = loadDev('esbuild', 'ESBUILD_MODULE');
 
 async function importBrowserBundle(relativePath) {
   const bundledModule = await build({
@@ -12,6 +23,13 @@ async function importBrowserBundle(relativePath) {
     format: 'esm',
     platform: 'browser',
     write: false,
+    // v4: ctox:shared/x.js wie der Service Worker (§16.15) auf shared/ abbilden.
+    plugins: [{
+      name: 'ctox-shared',
+      setup(b) {
+        b.onResolve({ filter: /^ctox:shared\// }, (args) => ({ path: fileURLToPath(new URL(`../../shared/${args.path.slice('ctox:shared/'.length)}`, import.meta.url)) }));
+      },
+    }],
   });
 
   const [{ text: bundledSource }] = bundledModule.outputFiles;
@@ -585,10 +603,10 @@ test('presentation follows compact Business OS knowledge contract', async () => 
   // breakpoint moved from 559px to the 768px/1024px pair the module ships.
   assert.match(css, /@container business-app-window \(max-width:\s*768px\)/);
   assert.match(css, /@container business-app-window \(max-width:\s*1024px\)/);
-  // The in-app overlay was replaced by the shell's bottom drawer, which the
-  // module opens through its host context — the rule it enforces is unchanged:
-  // nothing renders outside the app.
-  assert.match(js, /state\.ctx\.openBottomDrawer\(/, 'knowledge opens its panels through the host drawer');
+  // v4 (App-API 4.0): es gibt keine Shell-Drawer mehr; die App hängt ihre
+  // Drawer in den eigenen root – die Regel bleibt: nichts außerhalb der App.
+  assert.match(js, /function openDrawer\(side, body\)[\s\S]*?\(els\.root \|\| state\.root\)\.append\(drawer\)/, 'knowledge opens its panels inside its own root');
+  assert.doesNotMatch(js, /state\.ctx\b|ctx\.open(?:Left|Right|Bottom)Drawer/);
   assert.doesNotMatch(js, /document\.body\.appendChild/, 'knowledge must not render onto the shell body');
   assert.match(css, /\.knowledge-edit-drawer\s*\{/);
   // Dropped: an undocumented ban on the host drawers that contradicted both the
@@ -598,7 +616,8 @@ test('presentation follows compact Business OS knowledge contract', async () => 
   // the rule above actually protects. It kept this suite red on main.
   // The module renders its empty states through the kit's `.ctox-empty`, not a
   // module-local `knowledge-detail-empty` class.
-  assert.match(js, /class="ctox-empty"/);
+  // v4: leere Zustände rendern nichts; Zustand nur über api.status.report.
+  assert.doesNotMatch(js, /ctox-syncing|role="status"/);
   assert.equal(manifest.layout.min_width, 360);
   assert.equal(manifest.presentation.minimum_size.width, 360);
 });
@@ -656,48 +675,9 @@ test('pane chrome follows the canonical data-pg-* grammar contract', async () =>
   assert.match(js, /\.\/index\.html/);
 });
 
-test('data-driven empty states show syncing shell only until the collection is live', () => {
-  const syncing = knowledgeListStateHtml({
-    dataDriven: true,
-    readiness: { ready: false, state: 'catching-up' },
-    message: 'Keine Knowledge-Einträge gefunden.',
-    syncingText: 'Daten werden synchronisiert.',
-  });
-  assert.match(syncing, /class="ctox-syncing"/);
-  assert.match(syncing, /role="status"/);
-  assert.match(syncing, /aria-live="polite"/);
-  assert.match(syncing, /Daten werden synchronisiert\./);
-
-  const offlinePending = knowledgeListStateHtml({
-    dataDriven: true,
-    readiness: { ready: false, state: 'offline-pending' },
-    message: 'Keine Knowledge-Einträge gefunden.',
-    syncingText: 'Daten werden synchronisiert.',
-  });
-  assert.match(offlinePending, /class="ctox-syncing"/);
-
-  const empty = knowledgeListStateHtml({
-    dataDriven: true,
-    readiness: { ready: true, state: 'live' },
-    message: 'Keine Knowledge-Einträge gefunden.',
-    syncingText: 'Daten werden synchronisiert.',
-  });
-  assert.match(empty, /class="ctox-empty"/);
-  assert.doesNotMatch(empty, /ctox-syncing/);
-  assert.match(empty, /Keine Knowledge-Einträge gefunden\./);
-
-  // Unknown readiness fails open (no spinner forever), and selection/filter
-  // empties never get the syncing shell even while the collection syncs.
-  const unknown = knowledgeListStateHtml({ dataDriven: true, readiness: null, message: 'm', syncingText: 's' });
-  assert.match(unknown, /class="ctox-empty"/);
-  const selectionEmpty = knowledgeListStateHtml({
-    dataDriven: false,
-    readiness: { ready: false, state: 'catching-up' },
-    message: 'Keine Runbooks vorhanden.',
-    syncingText: 'Daten werden synchronisiert.',
-  });
-  assert.match(selectionEmpty, /class="ctox-empty"/);
-  assert.doesNotMatch(selectionEmpty, /ctox-syncing/);
+test('v4: empty states render nothing (no syncing shell, no empty text)', () => {
+  assert.equal(knowledgeListStateHtml(), '');
+  assert.equal(knowledgeListStateHtml({ dataDriven: true, readiness: { ready: false } }), '');
 });
 
 let passed = 0;

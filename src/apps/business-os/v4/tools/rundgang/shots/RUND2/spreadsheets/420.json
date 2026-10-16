@@ -1,0 +1,268 @@
+{
+ "app": "spreadsheets",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [
+    "put spreadsheet_runbooks/spreadsheet.summarize local=ok result=accepted {\"id\":\"spreadsheet.summarize\",\"document_type\":\"spreadsheet\",\"title\":\"Tabelle zusammenfassen\",\"description\":\"Fasse das au",
+    "put spreadsheet_runbooks/spreadsheet.audit-formulas local=ok result=accepted {\"id\":\"spreadsheet.audit-formulas\",\"document_type\":\"spreadsheet\",\"title\":\"Formeln auditieren\",\"description\":\"Finde sämtl",
+    "put spreadsheet_runbooks/spreadsheet.risk-review local=ok result=accepted {\"id\":\"spreadsheet.risk-review\",\"document_type\":\"spreadsheet\",\"title\":\"Finanzielle Risikoanalyse\",\"description\":\"Identif"
+   ],
+   "title": "Tabellen",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [
+    "console: Access to script at 'ctox:lib/ctox-office@1/ctox-office-spreadsheet.mjs' from origin 'http://127.0.0.1:62121' has been blocked by CORS policy: Cross origin requests are only supported for protocol schemes: chrome, chrome",
+    "console: Failed to load resource: net::ERR_FAILED",
+    "console: [spreadsheets] editor open failed TypeError: Failed to fetch dynamically imported module: ctox:lib/ctox-office@1/ctox-office-spreadsheet.mjs"
+   ],
+   "zoneText": "Editor konnte nicht geladen werden: Failed to fetch dynamically imported module: ctox:lib/ctox-office@1/ctox-office-spreadsheet.mjs Ausblenden",
+   "cands": [
+    "button:Dateiliste öffnen"
+   ],
+   "shot": "spreadsheets/420-01-open.png"
+  },
+  {
+   "step": "button Dateiliste öffnen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "spreadsheets/420-02-button_Dateiliste_ffnen.png"
+  },
+  {
+   "step": "button Leere Tabelle erstellen",
+   "changed": true,
+   "ops": [
+    "put spreadsheet_versions/sheet_bbaee8ec-2b6e-4b05-b44f-8869ec07a40a_v1 local=ok result=accepted {\"id\":\"sheet_bbaee8ec-2b6e-4b05-b44f-8869ec07a40a_v1\",\"spreadsheet_id\":\"sheet_bbaee8ec-2b6e-4b05-b44f-8869ec07a40a\",\"version\":1,\"source_kind",
+    "put spreadsheets/sheet_bbaee8ec-2b6e-4b05-b44f-8869ec07a40a local=ok result=accepted {\"id\":\"sheet_bbaee8ec-2b6e-4b05-b44f-8869ec07a40a\",\"title\":\"Neue Tabelle\",\"filename\":\"neue-tabelle.csv\",\"mime_type\":\"text/csv\",\"status\":\"Dra"
+   ],
+   "zone": [
+    "clear spreadsheets.format.unsupported",
+    "clear spreadsheets.version.missing",
+    "clear spreadsheets.create",
+    "{\"level\":\"error\",\"code\":\"spreadsheets.editor\",\"text\":\"Editor konnte nicht geladen werden: Failed to fetch dynamically imported module: ctox:lib/ctox-office@1/ctox-office-spreadsheet.mjs\"}"
+   ],
+   "dialogs": [],
+   "errors": [
+    "console: [spreadsheets] editor open failed TypeError: Failed to fetch dynamically imported module: ctox:lib/ctox-office@1/ctox-office-spreadsheet.mjs"
+   ],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "spreadsheets/420-03-button_Leere_Tabelle_erstellen.png"
+  },
+  {
+   "step": "button Tabelle importieren",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear spreadsheets.import.file",
+    "clear spreadsheets.import.file"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "spreadsheets/420-04-button_Tabelle_importieren.png"
+  },
+  {
+   "step": "formular 1 Felder → Leere Tabelle erstellen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit"
+  },
+  {
+   "step": "Overlay geschlossen (Escape/Schließen) vor Ausgewählte Tabelle exportieren"
+  },
+  {
+   "step": "button Ausgewählte Tabelle exportieren",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear spreadsheets.import.file"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "spreadsheets/420-05-button_Ausgew_hlte_Tabelle_exportieren.png"
+  },
+  {
+   "step": "Overlay geschlossen (Escape/Schließen) vor Als Karten anzeigen"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "spreadsheets/420-06-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Zur Listenansicht wechseln",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "spreadsheets/420-07-button_Zur_Listenansicht_wechseln.png"
+  },
+  {
+   "step": "button Zur Kachelansicht wechseln",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "spreadsheets/420-08-button_Zur_Kachelansicht_wechseln.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "spreadsheets/420-09-button_Filter.png"
+  },
+  {
+   "step": "button neue-tabelle.csv",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Tabelle verwalten",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear spreadsheets.import.file"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "spreadsheets/420-10-button_Tabelle_verwalten.png"
+  },
+  {
+   "step": "formular 1 Felder → Speichern",
+   "changed": true,
+   "ops": [
+    "patch spreadsheets/sheet_bbaee8ec-2b6e-4b05-b44f-8869ec07a40a local=ok result=accepted {\"title\":\"Neue Tabelle\",\"status\":\"Draft\",\"tags\":[\"Rundgang Test\"],\"updated_at_ms\":1792086865824}"
+   ],
+   "zone": [
+    "clear spreadsheets.import.file",
+    "clear spreadsheets.manage.save",
+    "clear spreadsheets.format.unsupported",
+    "clear spreadsheets.version.missing",
+    "{\"level\":\"error\",\"code\":\"spreadsheets.editor\",\"text\":\"Editor konnte nicht geladen werden: Failed to fetch dynamically imported module: ctox:lib/ctox-office@1/ctox-office-spreadsheet.mjs\"}"
+   ],
+   "dialogs": [],
+   "errors": [
+    "console: [spreadsheets] editor open failed TypeError: Failed to fetch dynamically imported module: ctox:lib/ctox-office@1/ctox-office-spreadsheet.mjs"
+   ],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "spreadsheets/420-11-formular_1_Felder_Speichern.png"
+  },
+  {
+   "step": "button Protokoll_Kickoff.docx",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear spreadsheets.format.unsupported",
+    "clear spreadsheets.version.missing",
+    "{\"level\":\"error\",\"code\":\"spreadsheets.editor\",\"text\":\"Editor konnte nicht geladen werden: Failed to fetch dynamically imported module: ctox:lib/ctox-office@1/ctox-office-spreadsheet.mjs\"}"
+   ],
+   "dialogs": [],
+   "errors": [
+    "console: [spreadsheets] editor open failed TypeError: Failed to fetch dynamically imported module: ctox:lib/ctox-office@1/ctox-office-spreadsheet.mjs"
+   ],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "spreadsheets/420-12-button_Protokoll_Kickoff.docx.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "spreadsheet_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "spreadsheet_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "spreadsheet_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "spreadsheet_versions",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "spreadsheets",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "patch",
+   "coll": "spreadsheets",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "spreadsheets",
+  "Tabellen"
+ ]
+}

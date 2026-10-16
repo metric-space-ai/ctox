@@ -8,7 +8,13 @@
 
 /* Default track width for the shell-owned resizer (it writes inline
    --ctox-left-width onto the frame while dragging). */
-.intake-module { --ctox-left-width: 320px; }
+[data-app="intake"] .intake-module { --ctox-left-width: 320px; }
+
+/* Shell v4: der Rahmen setzt keinen Container je Fenster (v4/frame/frame.css:
+   nur `container: v4f` am ganzen Desktop). Das App-root traegt deshalb selbst
+   den Fenster-Container, damit die Kit-Regeln aus base.css und die
+   Stapelregel unten auf die FENSTER-Breite reagieren. */
+[data-app="intake"] { container: business-app-window / inline-size; }
 
 /* Explicit column pins so the center pane never slides onto the resizer
    track when the kit hides resizers on narrow windows. Linke Spur
@@ -16,38 +22,32 @@
    Well (fuellt) - Footer. Die Zeilen sind explizit zugewiesen, weil die
    Filterablage [hidden] (display:none) ist und die automatische Platzierung
    sonst alle nachfolgenden Kinder eine Spur nach oben zoege. */
-.intake-rail { grid-column: 1; grid-template-rows: auto auto auto auto minmax(0, 1fr) auto; }
-.intake-rail > .ctox-pane-header { grid-row: 1; }
-.intake-rail > .ctox-filterbar { grid-row: 2; }
-.intake-rail > .ctox-filter-tray { grid-row: 3; }
-.intake-rail > .ctox-view-switch { grid-row: 4; }
-.intake-rail > .ctox-pane-body { grid-row: 5; }
-.intake-rail > .ctox-pane-footer { grid-row: 6; }
-.intake-module > [data-resizer="left"] { grid-column: 2; }
-.intake-main { grid-column: 3; grid-template-rows: auto minmax(0, 1fr); }
+[data-app="intake"] .intake-rail { grid-column: 1; grid-template-rows: auto auto auto auto minmax(0, 1fr) auto; }
+[data-app="intake"] .intake-rail > .ctox-pane-header { grid-row: 1; }
+[data-app="intake"] .intake-rail > .ctox-filterbar { grid-row: 2; }
+[data-app="intake"] .intake-rail > .ctox-filter-tray { grid-row: 3; }
+[data-app="intake"] .intake-rail > .ctox-view-switch { grid-row: 4; }
+[data-app="intake"] .intake-rail > .ctox-pane-body { grid-row: 5; }
+[data-app="intake"] .intake-rail > .ctox-pane-footer { grid-row: 6; }
+[data-app="intake"] .intake-module > [data-resizer="left"] { grid-column: 2; }
+[data-app="intake"] .intake-main { grid-column: 3; grid-template-rows: auto minmax(0, 1fr); }
 
-/* custom: Shell-v2-Kopfgeometrie (Referenz: modules/knowledge). Die Shell legt
-   drei Zonen UEBER den App-Inhalt, weil `.shell-window-content` `inset: 0`
-   bekommt und NICHT eingerueckt wird: App-Icon 80x80 oben links
-   (--shell-v2-icon-size, z-index 35), Header-Band 37px ueber die volle Breite
-   (--shell-v2-header-row-size = (80 - 6) / 2) und die Fenstersteuerung 74x74
-   oben rechts. Beide Koepfe der obersten Zeile sind exakt eine Header-Zeile
-   hoch. Das Icon deckt genau die zwei 37px-Zeilen (2 x 37 = 74 = 80 - 6px
-   Rahmen), deshalb ruecken im linken Rail sowohl die Titelzeile als auch die
-   Filterleiste ein; die rechte Spalte muss nur die Fenstersteuerung freihalten. */
-.shell-window[data-shell-contract="v2"] .intake-module .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .intake-module .ctox-filterbar {
+/* custom: Kopfgeometrie (Referenz: modules/knowledge). Beide Koepfe der
+   obersten Zeile sind exakt eine Header-Zeile hoch (37px, aus Shell v2
+   uebernommen); Freihaltezonen fuer Icon/Fenstersteuerung gibt es in v4 nicht. */
+[data-app="intake"] .intake-module .ctox-pane-header,
+[data-app="intake"] .intake-module .ctox-filterbar {
   box-sizing: border-box;
   min-height: var(--shell-v2-header-row-size, 37px);
   height: var(--shell-v2-header-row-size, 37px);
   padding-block: 0;
 }
 
-.shell-window[data-shell-contract="v2"] .intake-module .ctox-filterbar {
+[data-app="intake"] .intake-module .ctox-filterbar {
   align-items: center;
 }
 
-.shell-window[data-shell-contract="v2"] .intake-module .ctox-pane-title-row {
+[data-app="intake"] .intake-module .ctox-pane-title-row {
   height: 100%;
   min-width: 0;
 }
@@ -56,7 +56,7 @@
    Grundlinie (identisch zur Knowledge-Referenz). Der Titel traegt das
    Versionsmenue der Shell (`.ctox-pane-header .ctox-pane-title`) und darf
    deshalb nicht auf wenige Pixel zusammengedrueckt werden. */
-.shell-window[data-shell-contract="v2"] .intake-module .ctox-pane-titles {
+[data-app="intake"] .intake-module .ctox-pane-titles {
   flex-direction: row;
   align-items: baseline;
   gap: 8px;
@@ -65,7 +65,7 @@
   overflow: hidden;
 }
 
-.shell-window[data-shell-contract="v2"] .intake-module .ctox-pane-title {
+[data-app="intake"] .intake-module .ctox-pane-title {
   min-width: 0;
   margin-top: 0;
   line-height: 1.1;
@@ -75,37 +75,38 @@
 }
 
 /* Der Aktionsblock beansprucht nie die Titelbreite. */
-.shell-window[data-shell-contract="v2"] .intake-module .ctox-pane-actions {
+[data-app="intake"] .intake-module .ctox-pane-actions {
   flex: 0 0 auto;
 }
 
-/* Linke Spalte: Icon-Zone (80px) freihalten - Titelzeile UND Filterleiste.
-   Rechts nur 10px: der Titel traegt das Versionsmenue der Shell und blieb mit
-   14px in der 320px-Spur um exakt 1px zu schmal fuer "Bewerbungen"
-   (gemessen: scrollWidth 101 / clientWidth 100 -> sichtbare Ellipse). */
-.shell-window[data-shell-contract="v2"] .intake-module .intake-rail > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .intake-module .intake-rail > .ctox-filterbar {
-  padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
+/* Shell v4: Fenster-Icon und Fenstersteuerung liegen in einer eigenen
+   Chrome-Zeile UEBER dem App-root (v4/frame/frame.css .shell-window-content
+   grid-row 2), nicht mehr ueber dem Inhalt. Die v2-Freihaltezonen (Icon 80px
+   links, Steuerung 70px rechts) entfallen; es bleibt der normale Einzug.
+   Rechts 10px: der Titel blieb mit 14px in der 320px-Spur um 1px zu schmal
+   fuer "Bewerbungen" (gemessen v2: scrollWidth 101 / clientWidth 100). */
+[data-app="intake"] .intake-module .intake-rail > .ctox-pane-header,
+[data-app="intake"] .intake-module .intake-rail > .ctox-filterbar {
+  padding-left: 14px;
   padding-right: 10px;
 }
 
 /* Die Filterablage oeffnet unterhalb der reservierten Zone und behaelt den
    kit-eigenen Einzug. */
-.shell-window[data-shell-contract="v2"] .intake-module .intake-rail > .ctox-filter-tray {
+[data-app="intake"] .intake-module .intake-rail > .ctox-filter-tray {
   padding: 6px 12px 8px;
 }
 
-/* Rechte Spalte: Fenstersteuerung (74x74) freihalten. */
-.shell-window[data-shell-contract="v2"] .intake-module .intake-main > .ctox-pane-header {
+[data-app="intake"] .intake-module .intake-main > .ctox-pane-header {
   padding-left: 14px;
-  padding-right: 70px;
+  padding-right: 14px;
 }
 
 /* Main workbench: subtitle + scroll rhythm. Die Beschreibung stand frueher im
    Pane-Kopf; der Kopf ist jetzt exakt eine 37px-Shell-Zeile hoch, also fuehrt
    sie die Arbeitsflaeche an. */
-.intake-main .intake-sub { margin: 0; color: var(--muted); font-size: 12px; }
-.intake-workbench {
+[data-app="intake"] .intake-main .intake-sub { margin: 0; color: var(--muted); font-size: 12px; }
+[data-app="intake"] .intake-workbench {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -113,16 +114,16 @@
 }
 
 /* Auto-reveal detail readout for the selected record. */
-.intake-detail { margin: 0; }
-.intake-detail-head {
+[data-app="intake"] .intake-detail { margin: 0; }
+[data-app="intake"] .intake-detail-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 8px;
 }
-.intake-detail-titles { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.intake-detail-name {
+[data-app="intake"] .intake-detail-titles { display: flex; align-items: center; gap: 8px; min-width: 0; }
+[data-app="intake"] .intake-detail-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -135,18 +136,18 @@
    (Betreiber-Direktive 31.08.):
      KARTE  drei Zeilen, grosszuegiges Padding, fetter Name.
      LISTE  genau eine Zeile, enge Zeilenhoehe, ein Kurz-Meta rechts. */
-.intake-row { display: grid; gap: 3px; }
+[data-app="intake"] .intake-row { display: grid; gap: 3px; }
 
 /* --- Karten (Shards) ---------------------------------------------------- */
-.intake-row--cards {
+[data-app="intake"] .intake-row--cards {
   padding-top: 11px;
   padding-bottom: 11px;
   line-height: 1.45;
 }
-.intake-row--cards .intake-row-title { font-weight: 700; }
+[data-app="intake"] .intake-row--cards .intake-row-title { font-weight: 700; }
 
 /* --- Liste: exakt eine Zeile -------------------------------------------- */
-.intake-row--list {
+[data-app="intake"] .intake-row--list {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -155,69 +156,59 @@
   padding-bottom: 3px;
   line-height: 1.25;
 }
-.intake-row--list .intake-row-title { font-weight: 500; }
+[data-app="intake"] .intake-row--list .intake-row-title { font-weight: 500; }
 /* Ein einziges Kurz-Meta rechts; es darf nie umbrechen oder den Namen
    verdraengen. */
-.intake-row--list .intake-row-side {
+[data-app="intake"] .intake-row--list .intake-row-side {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   white-space: nowrap;
 }
-.intake-row--list .ctox-badge {
+[data-app="intake"] .intake-row--list .ctox-badge {
   padding-block: 0;
   font-size: 10px;
   line-height: 1.5;
 }
 
-.intake-row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.intake-row-title {
+[data-app="intake"] .intake-row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+[data-app="intake"] .intake-row-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
 }
-.intake-row-meta {
+[data-app="intake"] .intake-row-meta {
   color: var(--muted);
   font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.intake-row-meta--facts { color: color-mix(in srgb, var(--muted) 80%, transparent); }
+[data-app="intake"] .intake-row-meta--facts { color: var(--muted); /* DARK: volle --muted-Stärke (vorher 80 %, Kontrast 3,1) */ }
 
 /* Ein-Knopf-Umschalter: darf in der Filterleiste nie schrumpfen. */
-.intake-module .intake-view-toggle { flex: 0 0 auto; }
+[data-app="intake"] .intake-module .intake-view-toggle { flex: 0 0 auto; }
 
 /* Record-IDs render as code. */
-.intake-detail .ats-tag { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); }
+[data-app="intake"] .intake-detail .ats-tag { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); }
 
 /* Optional capture fields (phone, vacancy, channel) collapse behind a native
    disclosure — only the common name/e-mail pair stays visible. */
-.intake-main .ats-more > summary {
+[data-app="intake"] .intake-main .ats-more > summary {
   cursor: pointer;
   color: var(--muted);
   font-size: 11px;
 }
-.intake-main .ats-more[open] > summary { margin-bottom: 5px; }
-
-/* The kit callout has no :empty collapse; the gate starts empty and is cleared
-   between runs, so hide it until JS fills it. */
-.intake-main .ctox-callout:empty { display: none; }
-
-/* custom: result rows and blocker list inside the gate callout — the kit has
-   no list-in-callout component. */
-.intake-main .ats-result-row { margin-top: 4px; color: var(--muted); }
-.intake-main .ats-blockers { margin: 6px 0 0; padding-left: 18px; }
-.intake-main .ats-blockers li { margin: 2px 0; }
+[data-app="intake"] .intake-main .ats-more[open] > summary { margin-bottom: 5px; }
 
 /* Narrow windows: stack the two panes and drop the resizer. Grenze = die
    shell-eigene 2-auf-1-Marke (app.css, `[data-shell-columns]`); die
    3-auf-2-Marke (1024px) beruehrt diese App nicht, sie hat nur zwei Spalten.
    Andere Grenzen definiert das Modul bewusst nicht (Vertrag §6). */
 @container business-app-window (max-width: 768px) {
-  .ctox-workspace.intake-module {
+  [data-app="intake"] .ctox-workspace.intake-module {
     grid-template-columns: minmax(0, 1fr);
     /* Fensterrelativ, nicht bildschirmrelativ (Vertrag §6): mit 40vh teilte
        sich die Spur nach der BILDSCHIRMhoehe auf — in einem flachen Fenster
@@ -235,16 +226,10 @@
        Breitform haelt sie frei — Bringschuld der App (Vertrag §3). */
     padding: 12px;
   }
-  .intake-module > [data-resizer] { display: none !important; }
+  [data-app="intake"] .intake-module > [data-resizer] { display: none !important; }
   /* Explizite Spuren: keine leeren Grid-Reste aus der Breitform. */
-  .intake-rail { grid-column: 1; grid-row: 1; }
-  .intake-main { grid-column: 1; grid-row: 2; }
-  /* Gestapelt ist der Rail-Kopf die oberste Zeile und muss zusaetzlich die
-     74x74-Fenstersteuerung freihalten. */
-  .shell-window[data-shell-contract="v2"] .intake-module .intake-rail > .ctox-pane-header,
-  .shell-window[data-shell-contract="v2"] .intake-module .intake-rail > .ctox-filterbar {
-    padding-right: 70px;
-  }
+  [data-app="intake"] .intake-rail { grid-column: 1; grid-row: 1; }
+  [data-app="intake"] .intake-main { grid-column: 1; grid-row: 2; }
 }
 
 /* Touch-Bedienung auf groben Zeigern (Telefon/Tablet): jedes interaktive
@@ -252,34 +237,34 @@
    Listenzeilen und das Disclosure bekommen fingerhohe Tap-Flaechen. Das
    Spalten-Stacking steuert die @container-Regel oben (768px). */
 @media (pointer: coarse) {
-  .intake-module button,
-  .intake-module input,
-  .intake-module select,
-  .intake-module textarea {
+  [data-app="intake"] .intake-module button,
+  [data-app="intake"] .intake-module input,
+  [data-app="intake"] .intake-module select,
+  [data-app="intake"] .intake-module textarea {
     min-height: 44px;
   }
 
-  .intake-module .ctox-pane-icon {
+  [data-app="intake"] .intake-module .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
 
-  .intake-module .ctox-pane-tab,
-  .intake-module .ctox-sort-dir {
+  [data-app="intake"] .intake-module .ctox-pane-tab,
+  [data-app="intake"] .intake-module .ctox-sort-dir {
     min-height: 44px;
   }
 
-  .intake-module .ctox-sort-dir {
+  [data-app="intake"] .intake-module .ctox-sort-dir {
     width: 44px;
     min-width: 44px;
   }
 
-  .intake-module .ctox-list-item,
-  .intake-module .intake-row {
+  [data-app="intake"] .intake-module .ctox-list-item,
+  [data-app="intake"] .intake-module .intake-row {
     min-height: 44px;
   }
 
-  .intake-main .ats-more > summary {
+  [data-app="intake"] .intake-main .ats-more > summary {
     display: flex;
     align-items: center;
     min-height: 44px;
@@ -288,27 +273,27 @@
 
 /* Shared shell-v2 frame: reserve the desktop glyph corner and keep the local
    list controls in the compact two-row grammar. */
-.shell-window[data-shell-contract="v2"] .intake-module {
+[data-app="intake"] .intake-module {
   padding: 0;
-  background: var(--shell-v2-surface, var(--bg));
+  background: var(--bg);
 }
-.shell-window[data-shell-contract="v2"] .intake-module .ctox-pane {
+[data-app="intake"] .intake-module .ctox-pane {
   border: 0;
   border-radius: 0;
-  background: var(--shell-v2-surface-alt, var(--surface));
+  background: var(--surface);
   box-shadow: none;
 }
-.shell-window[data-shell-contract="v2"] .intake-rail > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .intake-main > .ctox-pane-header { padding: 0; background: var(--shell-v2-surface-alt, var(--surface)); }
-.shell-window[data-shell-contract="v2"] .intake-rail > .ctox-pane-header > [data-shell-v2-header-row="1"] {
+[data-app="intake"] .intake-rail > .ctox-pane-header,
+[data-app="intake"] .intake-main > .ctox-pane-header { padding: 0; background: var(--surface); }
+[data-app="intake"] .intake-rail > .ctox-pane-header > [data-shell-v2-header-row="1"] {
   height: var(--shell-v2-header-row-size, 37px);
   padding: 0 8px 0 calc(var(--shell-v2-icon-size, 80px) + 8px);
 }
-.shell-window[data-shell-contract="v2"] .intake-main > .ctox-pane-header > [data-shell-v2-header-row="1"] {
+[data-app="intake"] .intake-main > .ctox-pane-header > [data-shell-v2-header-row="1"] {
   height: var(--shell-v2-header-row-size, 37px);
   padding: 0 62px 0 8px;
 }
-.shell-window[data-shell-contract="v2"] .intake-module [data-shell-v2-header-row="2"] {
+[data-app="intake"] .intake-module [data-shell-v2-header-row="2"] {
   box-sizing: border-box;
   min-height: var(--shell-v2-header-row-size, 37px);
   height: var(--shell-v2-header-row-size, 37px);
@@ -317,10 +302,35 @@
   overflow-y: hidden;
   white-space: nowrap;
 }
-.shell-window[data-shell-contract="v2"] .intake-rail .ctox-pane-kicker { display: none; }
-.shell-window[data-shell-contract="v2"] .intake-module .ctox-pane-title-row { height: 100%; }
-.shell-window[data-shell-contract="v2"] .intake-module .ctox-pane-title { margin-top: 0; line-height: 1.1; }
-.shell-window[data-shell-contract="v2"] .intake-module .ctox-pane-icon {
+[data-app="intake"] .intake-rail .ctox-pane-kicker { display: none; }
+[data-app="intake"] .intake-module .ctox-pane-title-row { height: 100%; }
+[data-app="intake"] .intake-module .ctox-pane-title { margin-top: 0; line-height: 1.1; }
+[data-app="intake"] .intake-module .ctox-pane-icon {
   width: min(26px, var(--shell-v2-header-row-size, 37px));
   height: min(26px, var(--shell-v2-header-row-size, 37px));
+}
+
+/* FIX11 (G4, 420 px): zwischen Icon-Zone (links) und Knopfzone (rechts) kuerzte der Pane-Titel auf wenige Buchstaben.
+   Schmal bricht die Titelzeile um: der Titel behaelt seine volle Breite (Umbruch nur an Wortgrenzen, nie Buchstabe
+   fuer Buchstabe), die Kopfknoepfe rutschen in eine zweite Zeile darunter. Breit bleibt die Kopfzeile unveraendert. */
+@container business-app-window (max-width: 768px) {
+  [data-app="intake"] .ctox-pane .ctox-pane-header > .ctox-pane-title-row,
+  [data-app="intake"] .ctox-pane-header .ctox-pane-title-row {
+    flex-wrap: wrap;
+    row-gap: 4px;
+    height: auto;
+    max-height: none;
+  }
+  [data-app="intake"] .ctox-pane .ctox-pane-header .ctox-pane-titles,
+  [data-app="intake"] .ctox-pane-header .ctox-pane-title-row > .ctox-pane-titles { flex: 1 0 auto; max-width: 100%; min-width: 0; overflow: visible; }
+  [data-app="intake"] .ctox-pane .ctox-pane-header .ctox-pane-title,
+  [data-app="intake"] .ctox-pane-header .ctox-pane-titles > .ctox-pane-title {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: normal;
+    hyphens: manual;
+    -webkit-line-clamp: none;
+    line-clamp: none;
+  }
 }

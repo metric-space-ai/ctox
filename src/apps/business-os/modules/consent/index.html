@@ -8,7 +8,6 @@
     <header class="ctox-pane-header ctox-pane-band" data-shell-v2-header-row="1">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-i18n="kicker">ATS</span>
           <h2 class="ctox-pane-title" data-i18n="listTitle">Einwilligungen</h2>
         </div>
         <div class="ctox-pane-actions">
@@ -51,7 +50,6 @@
     <div class="ctox-pane-body ctox-well">
       <div class="ctox-record-list" data-ats-list></div>
     </div>
-    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
   </aside>
 
   <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="260" data-resizer-max="480" aria-label="Spaltenbreite anpassen"></button>
@@ -66,7 +64,6 @@
     <header class="ctox-pane-header ctox-pane-band" data-shell-v2-header-row="1">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-ats-sub></span>
           <h1 class="ctox-pane-title" data-ats-title>Einwilligungen</h1>
         </div>
         <div class="ctox-pane-actions">
@@ -81,15 +78,15 @@
 
       <form class="ctox-compact-form" data-ats-form>
         <div class="ctox-compact-form__fields">
-          <label class="ctox-compact-field"><span data-i18n="subjectLabel">Subjekt</span><input class="ctox-input" type="text" name="subject_id" placeholder="Subjekt-ID" data-i18n-placeholder="subjectPlaceholder" required data-f /></label>
-          <label class="ctox-compact-field"><span data-i18n="purposeLabel">Zweck</span><input class="ctox-input" type="text" name="purpose" placeholder="Zweck (optional — leer = nur Existenz)" data-i18n-placeholder="purposePlaceholder" data-f /></label>
+          <label class="ctox-compact-field"><span data-i18n="subjectLabel">Person</span><input class="ctox-input" type="text" name="subject_id" placeholder="Kandidaten-ID" data-i18n-placeholder="subjectPlaceholder" required data-f /></label>
+          <label class="ctox-compact-field"><span data-i18n="purposeLabel">Zweck</span><input class="ctox-input" type="text" name="purpose" placeholder="optional" data-i18n-placeholder="purposePlaceholder" data-f /></label>
         </div>
         <div class="ctox-compact-form__actions"><button type="submit" class="ctox-button is-primary" data-i18n="checkConsent">Einwilligung prüfen</button></div>
       </form>
 
       <form class="ctox-compact-form" data-ats-subject-form>
         <div class="ctox-compact-form__fields">
-          <label class="ctox-compact-field"><span data-i18n="rightsLabel">Betroffenenrechte</span><input class="ctox-input" type="text" name="subject_id" placeholder="Subjekt-ID für Betroffenenrechte" data-i18n-placeholder="rightsSubjectPlaceholder" data-f /></label>
+          <label class="ctox-compact-field"><span data-i18n="rightsLabel">Betroffenenrechte</span><input class="ctox-input" type="text" name="subject_id" placeholder="Kandidaten-ID" data-i18n-placeholder="rightsSubjectPlaceholder" data-f /></label>
         </div>
         <div class="ctox-compact-form__actions">
           <button type="submit" class="ctox-button" data-subject-action="ats.subject.export" title="Recht auf Auskunft (DSGVO Art. 15)" data-i18n="exportArticle15" data-i18n-title="exportTitle">Auskunft (Art. 15)</button>
@@ -97,7 +94,7 @@
         </div>
       </form>
 
-      <div class="ctox-callout" data-ats-gate></div>
+      <div class="ctox-card consent-result" data-ats-gate hidden></div>
     </div>
   </section>
 </main>

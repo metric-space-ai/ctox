@@ -1,0 +1,112 @@
+{
+ "app": "invoices",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Rechnungen",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 812
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neue Rechnung",
+    "button:Weitere Aktionen",
+    "button:Kachelansicht",
+    "button:Listenansicht",
+    "button:Filter",
+    "nav:Alle (6)",
+    "nav:Offen (2)",
+    "nav:Bezahlt (1)",
+    "nav:Überfällig (1)",
+    "button:RE-2026-1040 Gebucht Müller Ma",
+    "button:RE-2026-1041 Überfällig Schnei",
+    "button:RE-2026-1042 Bezahlt Becker & ",
+    "button:RE-2026-1043 Teilweise bezahlt",
+    "button:RE-2026-1044 Entwurf Wagner El",
+    "button:RE-2026-1045 Storniert Fischer",
+    "row:RE-2026-1040 Gebucht Müller Ma",
+    "row:RE-2026-1041 Überfällig Schnei",
+    "row:RE-2026-1042 Bezahlt Becker & ",
+    "row:RE-2026-1043 Teilweise bezahlt",
+    "row:RE-2026-1044 Entwurf Wagner El",
+    "row:RE-2026-1045 Storniert Fischer"
+   ],
+   "shot": "invoices/420-01-open.png"
+  },
+  {
+   "step": "nav Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "invoices/420-02-nav_Alle_6_.png"
+  },
+  {
+   "step": "nav Offen (2)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "invoices/420-03-nav_Offen_2_.png"
+  },
+  {
+   "step": "nav Bezahlt (1)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "invoices/420-04-nav_Bezahlt_1_.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 101,
+   "shot": "invoices/420-05-suche_ohne_Treffer.png",
+   "textAfter": 84
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "invoices/420-06-suche_geleert.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "invoices",
+  "Rechnungen"
+ ]
+}

@@ -1,0 +1,67 @@
+{
+  "_app_id": "submissions",
+  "_format": "ctox-v4-collections-a9",
+  "_base_release": "main@4794af03d",
+  "_generator": "src/apps/business-os/v4/schemas/build-schemas.mjs",
+  "_sources": {
+    "submissions": {
+      "source": "modules/submissions/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    }
+  },
+  "collections": {
+    "submissions": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "_deleted": {
+          "type": "boolean"
+        },
+        "candidate_id": {
+          "type": "string"
+        },
+        "client_account_id": {
+          "type": "string"
+        },
+        "client_contact_id": {
+          "type": "string"
+        },
+        "consent_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "feedback": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "sent_at_ms": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "vacancy_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "candidate_id",
+        "client_account_id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    }
+  },
+  "migrations": {}
+}

@@ -1,11 +1,10 @@
-import { loadModuleMessages } from '../../shared/i18n.js';
-import { replaceChildrenIfChanged, renderHtmlIfChanged } from '../../shared/stable-dom.js';
+// App-API 4.0 (Shell v4): mount(root, api, {restored}) -> {unmount, snapshot}.
+// Port-Protokoll: V4-PORT.md; Ersetzungsregeln: ../../v4/tools/port/PORTING.md.
+import { replaceChildrenIfChanged, renderHtmlIfChanged } from 'ctox:shared/stable-dom.js';
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
+import { normalizeContextChatMode, sendContextChat } from 'ctox:shared/context-chat.js';
 
 const KNOWLEDGE_RENDER_DEBOUNCE_MS = 80;
-const KNOWLEDGE_SYNC_START_WAIT_MS = 1500;
-const KNOWLEDGE_INITIAL_RETRY_DELAYS_MS = Object.freeze([750, 1500, 3000, 5000, 8000]);
-const KNOWLEDGE_OPEN_TARGET_KEY = 'ctox.businessOs.knowledge.openId';
-const KNOWLEDGE_OPEN_DOMAIN_KEY = 'ctox.businessOs.knowledge.openDomain';
 const KNOWLEDGE_DATA_COLLECTIONS = Object.freeze([
   'knowledge_items',
   'knowledge_runbooks',
@@ -18,54 +17,22 @@ const labels = {
     runbooks: 'Runbooks',
     selected: 'Ausgewählt',
     noSelection: 'Kein Eintrag ausgewählt',
-    detailEmptyHint: 'Wähle links einen Knowledge-Eintrag, um ihn hier anzuzeigen.',
-    loading: 'Knowledge wird geladen',
-    noItems: 'Keine Knowledge-Einträge gefunden.',
-    noResults: 'Keine passenden Knowledge-Einträge gefunden.',
-    noVisibleItems: 'Keine Knowledge-Einträge in dieser Ansicht.',
-    syncUnavailable: 'Knowledge Store ist noch nicht verbunden.',
-    syncingData: 'Daten werden synchronisiert.',
-    noRunbooks: 'Keine Runbooks vorhanden.',
-    noResources: 'Keine verifizierten Quellen zugeordnet.',
-    tableUnavailable: 'Für diesen Eintrag ist keine Tabelle verfügbar.',
     dataIncomplete: 'Daten unvollständig',
-    dataIncompleteHint: 'Die Tabelle wird erst angezeigt, wenn alle Daten-Chunks konsistent und vollständig repliziert wurden.',
-    rowsLoading: 'Zeilen werden geladen',
-    rowsLoadFailed: 'Zeilen konnten nicht geladen werden',
-    rowsRetry: 'Erneut versuchen',
-    queued: 'Command angelegt',
-    queueFailed: 'Command konnte nicht angelegt werden',
     edit: 'Bearbeiten',
     closeEditor: 'Editor schließen',
     showAsList: 'Als Liste anzeigen',
     showAsCards: 'Als Karten anzeigen',
-    scopeUser: 'User',
+    scopeUser: 'Eigene',
     scopeSystem: 'System',
-    scopeMixed: 'User + System',
-    neverEdited: 'Noch nicht bearbeitet',
+    scopeMixed: 'Eigene + System',
+    dismiss: 'Ausblenden',
   },
   en: {
     sources: 'Sources',
     runbooks: 'Runbooks',
     selected: 'Selected',
     noSelection: 'No entry selected',
-    detailEmptyHint: 'Pick a knowledge entry on the left to view it here.',
-    loading: 'Loading knowledge',
-    noItems: 'No knowledge entries found.',
-    noResults: 'No matching knowledge entries found.',
-    noVisibleItems: 'No knowledge entries in this view.',
-    syncUnavailable: 'Knowledge store is not connected yet.',
-    syncingData: 'Syncing data.',
-    noRunbooks: 'No runbooks available.',
-    noResources: 'No verified sources assigned.',
-    tableUnavailable: 'This item has no table.',
     dataIncomplete: 'Incomplete data',
-    dataIncompleteHint: 'The table is shown only after all data chunks are replicated consistently and completely.',
-    rowsLoading: 'Loading rows',
-    rowsLoadFailed: 'Rows could not be loaded',
-    rowsRetry: 'Try again',
-    queued: 'Command queued',
-    queueFailed: 'Could not queue command',
     edit: 'Edit',
     closeEditor: 'Close editor',
     showAsList: 'Show as list',
@@ -73,12 +40,18 @@ const labels = {
     scopeUser: 'User',
     scopeSystem: 'System',
     scopeMixed: 'User + System',
-    neverEdited: 'Never edited',
+    dismiss: 'Dismiss',
   },
 };
 
 const state = {
-  ctx: null,
+  api: null,
+  root: null,
+  disposers: [],
+  records: { knowledge_items: [], knowledge_runbooks: [], knowledge_tables: [] },
+  renderTimer: null,
+  pendingRestore: null,
+  pendingRoute: null,
   lang: 'de',
   items: [],
   runbooks: [],
@@ -93,6 +66,8 @@ const state = {
   activeTab: 'skill',
   tableOffset: 0,
   tableLimit: 120,
+  tableFilter: '',
+  tableSort: Object.freeze([]),
   editing: false,
   sourceScope: 'all',
   sortMode: 'recent',
@@ -103,77 +78,206 @@ const state = {
   messages: null,
   openGroups: new Set(['research/drone-design/drone-bearing-loads']),
   contextMenu: null,
-  localSubscriptionCleanup: null,
-  readinessCleanup: null,
-  collectionReadiness: {},
-  syncWarmupPromise: null,
-  initialRetryTimer: null,
-  initialRetryAttempt: 0,
   refreshInFlight: false,
   refreshPending: false,
-  missingCollections: [],
-  loadError: '',
+  tableRowsUnsubscribe: null,
+  tableRowsKey: '',
+  tableRows: null,
+  tableViewKey: '',
+  tableViewTable: '',
+  tableFilterTimer: null,
 };
+const INITIAL_STATE = Object.freeze({ ...state, records: null, openGroups: null, flagFilters: null, disposers: null });
+
+function resetState() {
+  Object.assign(state, INITIAL_STATE, {
+    records: { knowledge_items: [], knowledge_runbooks: [], knowledge_tables: [] },
+    openGroups: new Set(['research/drone-design/drone-bearing-loads']),
+    flagFilters: new Set(),
+    disposers: [],
+  });
+  for (const key of Object.keys(els)) delete els[key];
+}
 
 const els = {};
 let knowledgeTableRenderToken = 0;
-let knowledgeTableAbort = null;
-
-export async function mount(ctx) {
-  await ensureStyles();
-  cancelInitialKnowledgeRetry();
-  state.initialRetryAttempt = 0;
-  state.ctx = ctx;
-  state.lang = ctx.locale === 'en' ? 'en' : 'de';
-  state.messages = await loadModuleMessages(import.meta.url, state.lang, labels);
-  ctx.host.innerHTML = await loadModuleMarkup();
-  ctx.left.replaceChildren();
-  ctx.right.replaceChildren();
-  bindElements(ctx.host);
+export async function mount(root, api, { restored } = {}) {
+  resetState();
+  // Abos gehören dieser Montage (lokal festgehalten): ein zweites mount() derselben Modulinstanz darf die
+  // Abmeldung der ersten nicht verlieren (gemessen im v4-Test: 3 verwaiste Abos). V4-PORT.md OFFEN-4.
+  const disposers = state.disposers;
+  state.api = api;
+  state.root = root;
+  if (!root.dataset.app) root.dataset.app = api.app?.id || 'knowledge';
+  state.lang = langFrom(api.shell.locale.get());
+  state.messages = messagesFor(state.lang);
+  // CSS lädt die Shell aus dem Manifest (Entwurf §5 Schritt 3); fetch('./index.html') liefert der
+  // Service Worker versioniert (§16.15).
+  root.innerHTML = await loadModuleMarkup();
+  bindElements(root);
   wireEvents();
-  let disposed = false;
+  autoWirePaneGrammar(root);
+  api.shell.setTitle('Knowledge');
+  state.pendingRestore = isPlainObject(restored) ? restored : null;
+  applyRestoredView(state.pendingRestore);
   renderKnowledgeList();
   renderRunbooks();
-  renderEmptyKnowledgeSelection();
-  state.localSubscriptionCleanup = wireLocalRealtime();
-  state.readinessCleanup = wireCollectionReadiness();
-  loadKnowledgeFromLocal({ initial: true }).catch((error) => {
-    if (disposed || state.ctx !== ctx) return;
-    state.loadError = error?.message || String(error);
-    renderKnowledgeList();
-    renderEmptyKnowledgeSelection();
-  });
-  window.addEventListener('message', handleShellMessage);
-  return () => {
-    disposed = true;
-    knowledgeTableRenderToken += 1;
-    knowledgeTableAbort?.abort();
-    knowledgeTableAbort = null;
-    window.removeEventListener('message', handleShellMessage);
-    window.removeEventListener('click', handleContextOutsideClick, { capture: true });
-    window.removeEventListener('keydown', handleContextEscape);
-    state.localSubscriptionCleanup?.();
-    state.localSubscriptionCleanup = null;
-    state.readinessCleanup?.();
-    state.readinessCleanup = null;
-    state.collectionReadiness = {};
-    cancelInitialKnowledgeRetry();
-    state.contextMenu?.remove();
-    state.contextMenu = null;
+  for (const collection of KNOWLEDGE_DATA_COLLECTIONS) {
+    state.disposers.push(api.query(collection, { sort: [{ updated_at_ms: 'desc' }] }).subscribe((rows) => {
+      state.records[collection] = Array.isArray(rows) ? rows : [];
+      scheduleKnowledgeRender();
+    }));
+  }
+  // Aufträge/Übernahmen (SKL-B2, KNOW2): je Ziel höchstens ein Fehler in der Zustandszone, bis „Ausblenden“
+  // (acknowledged_at am Datensatz) oder ein neuerer erfolgreicher Lauf desselben Ziels ihn erledigt.
+  const taskZoneCodes = new Set();
+  state.disposers.push(api.query('knowledge_tasks', { sort: [{ updated_at_ms: 'desc' }] }).subscribe((rows) => {
+    reportKnowledgeTasks(api, Array.isArray(rows) ? rows : [], taskZoneCodes);
+  }));
+  state.disposers.push(api.shell.locale.subscribe((locale) => {
+    const lang = langFrom(locale);
+    if (lang === state.lang) return;
+    state.lang = lang;
+    state.messages = messagesFor(lang);
+    syncViewToggle();
+  }));
+  state.disposers.push(api.shell.onRoute((event) => {
+    state.pendingRoute = event?.params || null;
+    scheduleKnowledgeRender();
+  }));
+  return {
+    unmount() {
+      knowledgeTableRenderToken += 1;
+      if (state.renderTimer) clearTimeout(state.renderTimer);
+      state.renderTimer = null;
+      state.tableRowsUnsubscribe?.();
+      state.tableRowsUnsubscribe = null;
+      if (state.tableFilterTimer) clearTimeout(state.tableFilterTimer);
+      state.tableFilterTimer = null;
+      for (const dispose of disposers.splice(0)) {
+        try { dispose(); } catch (error) { console.warn('[knowledge] unsubscribe failed', error); }
+      }
+      window.removeEventListener('click', handleContextOutsideClick, { capture: true });
+      window.removeEventListener('keydown', handleContextEscape);
+      state.contextMenu?.remove();
+      state.contextMenu = null;
+      root.replaceChildren();
+      if (state.root === root) {
+        state.api = null;
+        state.root = null;
+      }
+    },
+    snapshot: knowledgeSnapshot,
   };
 }
 
-async function ensureStyles() {
-  // Carry the module's own cache-buster over to the stylesheet: index.js is
-  // imported as index.js?v=<build>, but a bare index.css URL would revalidate
-  // against the browser cache and can serve a STALE sheet next to fresh JS.
-  const version = String(import.meta.url).split('?v=')[1] || '';
-  const href = new URL('./index.css', import.meta.url).pathname + (version ? `?v=${version}` : '');
-  if (document.querySelector(`link[href="${href}"]`)) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = href;
-  document.head.append(link);
+function langFrom(locale) {
+  return String(locale || '').toLowerCase().startsWith('en') ? 'en' : 'de';
+}
+
+// api.shell.t ist live und schaltet App-Texte um; die eingebetteten labels sind der Rückfall,
+// solange der Schlüsselraum von t() offen ist (app-api.d.ts OFFEN).
+function messagesFor(lang) {
+  const base = { ...labels.de, ...labels[lang] };
+  const t = state.api?.shell?.t;
+  if (typeof t !== 'function') return base;
+  for (const key of Object.keys(base)) {
+    const scoped = `knowledge.${key}`;
+    const value = t.call(state.api.shell, scoped);
+    if (typeof value === 'string' && value && value !== scoped) base[key] = value;
+  }
+  return base;
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+const SNAPSHOT_VIEW_KEYS = Object.freeze([
+  'selectedId', 'selectedGroupId', 'selectedSkillbookId', 'selectedTableId', 'selectedRunbookId', 'selectedResourceId',
+  'activeTab', 'tableOffset', 'tableFilter', 'sourceScope', 'sortMode', 'sortDir', 'listView', 'searchTerm',
+]);
+
+// Snapshot für den Live-Remount (§10.2a Nr. 1): Auswahl, Ansicht und offene Editor-Inhalte.
+function knowledgeSnapshot() {
+  const snap = { v: 1 };
+  for (const key of SNAPSHOT_VIEW_KEYS) snap[key] = state[key];
+  snap.flagFilters = [...state.flagFilters];
+  snap.openGroups = [...state.openGroups];
+  snap.tableSort = state.tableSort.map((entry) => ({ ...entry }));
+  snap.editing = Boolean(state.editing);
+  if (state.editing && els.markdownEditor && !els.markdownEditor.hidden) {
+    snap.markdownDraft = els.markdownEditor.value;
+  }
+  if (state.editing && els.runbookForm && !els.runbookForm.hidden) {
+    snap.runbookDraft = { title: els.runbookTitle?.value || '', prompt: els.runbookPrompt?.value || '' };
+  }
+  snap.listScrollTop = els.list?.scrollTop || 0;
+  return snap;
+}
+
+function applyRestoredView(restored) {
+  if (!restored) return;
+  for (const key of SNAPSHOT_VIEW_KEYS) {
+    if (restored[key] !== undefined && typeof restored[key] === typeof INITIAL_STATE[key]) state[key] = restored[key];
+  }
+  if (Array.isArray(restored.flagFilters)) state.flagFilters = new Set(restored.flagFilters.map(String));
+  if (Array.isArray(restored.openGroups)) state.openGroups = new Set(restored.openGroups.map(String));
+  if (Array.isArray(restored.tableSort)) state.tableSort = normalizeTableSort(restored.tableSort);
+  if (els.tableFilter) els.tableFilter.value = state.tableFilter;
+  const search = state.root?.querySelector('[data-pg-search]');
+  if (search && state.searchTerm) search.value = state.searchTerm;
+  state.root?.querySelectorAll('[data-pg-tray] [data-flag]').forEach((chip) => {
+    chip.setAttribute('aria-pressed', String(state.flagFilters.has(chip.dataset.flag)));
+  });
+  syncViewToggle();
+}
+
+// Editor-Entwürfe erst zurückspielen, wenn die Auswahl in den Live-Daten steht.
+async function restoreDraftsIfReady() {
+  const restored = state.pendingRestore;
+  if (!restored) return;
+  if (restored.selectedId && !state.items.some((item) => item.id === restored.selectedId)) return;
+  state.pendingRestore = null;
+  if (restored.editing && typeof restored.markdownDraft === 'string' && state.activeTab !== 'runbooks') {
+    state.editing = true;
+    els.markdownEditor.value = restored.markdownDraft;
+    els.markdownEditor.hidden = false;
+    els.markdownView.hidden = true;
+    syncMarkdownEditControls();
+  }
+  if (restored.editing && restored.runbookDraft && state.activeTab === 'runbooks') {
+    startRunbookEdit();
+    if (els.runbookTitle) els.runbookTitle.value = restored.runbookDraft.title || '';
+    if (els.runbookPrompt) els.runbookPrompt.value = restored.runbookDraft.prompt || '';
+  }
+  if (els.list && restored.listScrollTop) els.list.scrollTop = restored.listScrollTop;
+}
+
+// Live-Abfragen ersetzen Laden, Readiness und Retry-Kette: jede Emission rendert entprellt neu.
+function scheduleKnowledgeRender() {
+  if (state.renderTimer) return;
+  state.renderTimer = setTimeout(() => {
+    state.renderTimer = null;
+    if (!state.api) return;
+    runCoalescedRefresh(state, renderKnowledgeFromRecords).catch((error) => {
+      state.api?.status.report({ level: 'error', code: 'knowledge.render', text: String(error?.message || error) });
+    });
+  }, KNOWLEDGE_RENDER_DEBOUNCE_MS);
+}
+
+async function renderKnowledgeFromRecords() {
+  applyKnowledgeRecords({
+    items: state.records.knowledge_items,
+    runbooks: state.records.knowledge_runbooks,
+    tables: state.records.knowledge_tables,
+  });
+  renderKnowledgeList();
+  renderRunbooks();
+  if (state.selectedId) await selectKnowledge(state.selectedId);
+  else renderEmptyKnowledgeSelection();
+  await restoreDraftsIfReady();
+  state.api?.status.clear('knowledge.render');
 }
 
 // Monochrome stroke icons for header/close buttons. Delegates to the shell
@@ -188,21 +292,14 @@ const ACTION_ICON_FALLBACK_PATHS = {
 };
 
 function actionIcon(name) {
-  const fromShell = state.ctx?.getActionIcon?.(name);
-  if (fromShell) return fromShell;
   const path = ACTION_ICON_FALLBACK_PATHS[name] || ACTION_ICON_FALLBACK_PATHS.add;
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${path}"></path></svg>`;
 }
 
 async function loadModuleMarkup() {
-  // index.html is the single source of truth for the module markup (same
-  // contract as ctox/coding-agents): the shell imports ONLY index.js
-  // (app.js moduleBasePath → modules/knowledge/index.js?v=<build>), so the
-  // module fetches its own markup here. Markup inherits the JS cache-buster —
-  // a deploy must never leave fresh JS binding against stale cached markup.
-  const version = String(import.meta.url).split('?v=')[1] || '';
-  const markupHref = new URL('./index.html', import.meta.url).pathname + (version ? `?v=${version}` : '');
-  const html = await fetch(markupHref).then((res) => res.text());
+  // index.html bleibt die Markup-Quelle; der Service Worker liefert sie unter der versionierten
+  // Artefakt-URL aus, deshalb kein Cache-Buster mehr.
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
   return doc.body.innerHTML;
@@ -226,6 +323,7 @@ function bindElements(root) {
   els.tableSwitcher = root.querySelector('[data-table-switcher]');
   els.tableTitle = root.querySelector('[data-table-title]');
   els.tableMeta = root.querySelector('[data-table-meta]');
+  els.tableFilter = ensureTableFilterInput(root);
   els.runbookSwitcher = root.querySelector('[data-runbook-switcher]');
   els.runbookView = root.querySelector('[data-runbook-view]');
   els.runbookList = root.querySelector('[data-runbook-list]');
@@ -253,17 +351,19 @@ function wireEvents() {
     renderKnowledgeList({ resetScroll: true });
   });
   syncViewToggle();
-  state.ctx.host.querySelector('[data-action="prev-rows"]').addEventListener('click', () => pageTable(-1));
-  state.ctx.host.querySelector('[data-action="next-rows"]').addEventListener('click', () => pageTable(1));
-  state.ctx.host.querySelector('[data-action="export-table-csv"]')?.addEventListener('click', exportActiveTableCsv);
-  state.ctx.host.querySelector('[data-action="create-knowledge-book"]')?.addEventListener('click', () => openCreateKnowledgeBookDrawer());
-  state.ctx.host.querySelector('[data-action="import-knowledge-book"]')?.addEventListener('click', () => openImportKnowledgeBookDrawer());
-  state.ctx.host.querySelector('[data-action="export-knowledge-book"]')?.addEventListener('click', () => openExportKnowledgeBookDrawer());
-  state.ctx.host.querySelector('[data-action="configure-knowledge"]')?.addEventListener('click', () => openKnowledgeConfig());
+  state.root.querySelector('[data-action="prev-rows"]').addEventListener('click', () => pageTable(-1));
+  state.root.querySelector('[data-action="next-rows"]').addEventListener('click', () => pageTable(1));
+  els.tableFilter?.addEventListener('input', onTableFilterInput);
+  els.tableHost?.addEventListener('click', onTableHeaderClick);
+  state.root.querySelector('[data-action="export-table-csv"]')?.addEventListener('click', exportActiveTableCsv);
+  state.root.querySelector('[data-action="create-knowledge-book"]')?.addEventListener('click', () => openCreateKnowledgeBookDrawer());
+  state.root.querySelector('[data-action="import-knowledge-book"]')?.addEventListener('click', () => openImportKnowledgeBookDrawer());
+  state.root.querySelector('[data-action="export-knowledge-book"]')?.addEventListener('click', () => openExportKnowledgeBookDrawer());
+  state.root.querySelector('[data-action="configure-knowledge"]')?.addEventListener('click', () => openKnowledgeConfig());
   // Domain-specific leftover: the sort-direction toggle inside the tray has no
   // grammar equivalent (the grammar owns filter VALUES, not direction) — same
   // pattern as ctox's data-task-sort-direction.
-  state.ctx.host.querySelector('[data-action="toggle-sort-dir"]')?.addEventListener('click', (event) => {
+  state.root.querySelector('[data-action="toggle-sort-dir"]')?.addEventListener('click', (event) => {
     state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
     const btn = event.currentTarget;
     btn.dataset.dir = state.sortDir;
@@ -272,7 +372,7 @@ function wireEvents() {
   });
   // Kind chips are module-owned (the grammar filters are select/input values,
   // not aria-pressed chips).
-  state.ctx.host.querySelectorAll('[data-pg-tray] [data-flag]').forEach((chip) => {
+  state.root.querySelectorAll('[data-pg-tray] [data-flag]').forEach((chip) => {
     chip.addEventListener('click', () => {
       const flag = chip.dataset.flag;
       if (state.flagFilters.has(flag)) state.flagFilters.delete(flag);
@@ -286,38 +386,38 @@ function wireEvents() {
   // (this listener was attached at mount, BEFORE the shell-wired grammar
   // handler, so it runs first and the grammar's emit re-renders with the
   // cleared module state).
-  state.ctx.host.querySelector('[data-pg-reset]')?.addEventListener('click', () => {
+  state.root.querySelector('[data-pg-reset]')?.addEventListener('click', () => {
     state.sortDir = 'desc';
     state.flagFilters.clear();
-    const dirBtn = state.ctx.host.querySelector('[data-action="toggle-sort-dir"]');
+    const dirBtn = state.root.querySelector('[data-action="toggle-sort-dir"]');
     if (dirBtn) { dirBtn.dataset.dir = 'desc'; dirBtn.title = 'Absteigend'; }
-    state.ctx.host.querySelectorAll('[data-pg-tray] [data-flag]').forEach((chip) => chip.setAttribute('aria-pressed', 'false'));
+    state.root.querySelectorAll('[data-pg-tray] [data-flag]').forEach((chip) => chip.setAttribute('aria-pressed', 'false'));
   });
   // Mobile master-detail: back to the list.
-  state.ctx.host.querySelector('[data-action="mobile-back"]')?.addEventListener('click', () => {
-    state.ctx.host.querySelector('[data-knowledge-root]')?.classList.remove('is-detail');
+  state.root.querySelector('[data-action="mobile-back"]')?.addEventListener('click', () => {
+    state.root.querySelector('[data-knowledge-root]')?.classList.remove('is-detail');
   });
   // Fractal header edit: the pencil in the pane header edits whatever the
   // active tab shows — it just triggers the edit control of that panel.
-  state.ctx.host.querySelector('[data-action="edit-active"]')?.addEventListener('click', () => {
-    const editBtn = state.ctx.host.querySelector('.knowledge-tab-panel:not([hidden]) [data-action="edit-markdown"], .knowledge-tab-panel:not([hidden]) [data-action="edit-runbook"]');
+  state.root.querySelector('[data-action="edit-active"]')?.addEventListener('click', () => {
+    const editBtn = state.root.querySelector('.knowledge-tab-panel:not([hidden]) [data-action="edit-markdown"], .knowledge-tab-panel:not([hidden]) [data-action="edit-runbook"]');
     if (editBtn) editBtn.click();
   });
-  state.ctx.host.querySelector('[data-action="edit-markdown"]')?.addEventListener('click', toggleMarkdownEditor);
-  state.ctx.host.querySelector('[data-action="save-markdown"]')?.addEventListener('click', queueMarkdownSave);
-  state.ctx.host.querySelector('[data-action="cancel-markdown"]')?.addEventListener('click', cancelMarkdownEdit);
-  state.ctx.host.querySelector('[data-action="delete-skill"]')?.addEventListener('click', () => {
+  state.root.querySelector('[data-action="edit-markdown"]')?.addEventListener('click', toggleMarkdownEditor);
+  state.root.querySelector('[data-action="save-markdown"]')?.addEventListener('click', queueMarkdownSave);
+  state.root.querySelector('[data-action="cancel-markdown"]')?.addEventListener('click', cancelMarkdownEdit);
+  state.root.querySelector('[data-action="delete-skill"]')?.addEventListener('click', () => {
     const item = state.items.find((entry) => entry.id === state.selectedId);
-    if (item) deleteKnowledgeEntry(item, activeGroup());
+    if (item) deleteKnowledgeEntry(item);
   });
-  state.ctx.host.querySelector('[data-action="delete-runbook"]')?.addEventListener('click', () => {
+  state.root.querySelector('[data-action="delete-runbook"]')?.addEventListener('click', () => {
     const runbook = state.runbooks.find((entry) => runbookIdMatches(entry.id || entry.runbook_id, state.selectedRunbookId));
-    if (runbook) deleteKnowledgeEntry(runbook, activeGroup());
+    if (runbook) deleteKnowledgeEntry(runbook);
   });
-  state.ctx.host.querySelector('[data-action="edit-runbook"]')?.addEventListener('click', startRunbookEdit);
-  state.ctx.host.querySelector('[data-action="save-runbook"]')?.addEventListener('click', queueRunbookSave);
-  state.ctx.host.querySelector('[data-action="cancel-runbook"]')?.addEventListener('click', cancelRunbookEdit);
-  state.ctx.host.querySelector('[data-action="execute-runbook"]')?.addEventListener('click', executeRunbook);
+  state.root.querySelector('[data-action="edit-runbook"]')?.addEventListener('click', startRunbookEdit);
+  state.root.querySelector('[data-action="save-runbook"]')?.addEventListener('click', queueRunbookSave);
+  state.root.querySelector('[data-action="cancel-runbook"]')?.addEventListener('click', cancelRunbookEdit);
+  state.root.querySelector('[data-action="execute-runbook"]')?.addEventListener('click', executeRunbook);
   els.runbookForm?.addEventListener('submit', (event) => {
     event.preventDefault();
     queueRunbookSave();
@@ -374,9 +474,6 @@ function onCenterGrammarChange(event) {
   if (detail.band) setTab(detail.band);
 }
 
-async function loadKnowledgeFromLocal(options = {}) {
-  return runCoalescedRefresh(state, () => refreshKnowledgeFromLocal(options));
-}
 
 async function runCoalescedRefresh(status, refresh) {
   if (status.refreshInFlight) {
@@ -395,55 +492,6 @@ async function runCoalescedRefresh(status, refresh) {
   }
 }
 
-async function refreshKnowledgeFromLocal(options = {}) {
-  state.loadError = '';
-  state.missingCollections = [];
-  // Local-first: render whatever is in IndexedDB RIGHT NOW. Never block the
-  // first paint on a sync round trip — `wireLocalRealtime()` subscribes to
-  // the knowledge collections and re-renders the moment replicated records
-  // land, and the sync toast surfaces "data still loading". The old initial
-  // path awaited a sync warm-up AND polled up to 9s for records before
-  // showing anything, which made every Knowledge open feel frozen.
-  if (options.initial) {
-    // Kick sync off in the background; do NOT await it.
-    ensureKnowledgeDataSyncStarted().catch(() => {});
-  }
-  const snapshot = await readLocalKnowledgeSnapshot();
-  state.loadError = snapshot.error || '';
-  state.missingCollections = snapshot.missingCollections || [];
-  applyKnowledgeRecords(snapshot);
-  renderKnowledgeList();
-  renderRunbooks();
-  if (state.selectedId) await selectKnowledge(state.selectedId);
-  else renderEmptyKnowledgeSelection();
-  if (state.items.length || state.runbooks.length || state.tables.length) {
-    cancelInitialKnowledgeRetry();
-    state.initialRetryAttempt = 0;
-  } else if (options.initial || options.initialRetry) {
-    scheduleInitialKnowledgeRetry(state.ctx);
-  }
-}
-
-function scheduleInitialKnowledgeRetry(ctx) {
-  if (!ctx || state.initialRetryTimer || state.initialRetryAttempt >= KNOWLEDGE_INITIAL_RETRY_DELAYS_MS.length) return;
-  const delayMs = KNOWLEDGE_INITIAL_RETRY_DELAYS_MS[state.initialRetryAttempt];
-  state.initialRetryAttempt += 1;
-  state.initialRetryTimer = window.setTimeout(() => {
-    state.initialRetryTimer = null;
-    if (state.ctx !== ctx) return;
-    loadKnowledgeFromLocal({ initialRetry: true }).catch((error) => {
-      if (state.ctx !== ctx) return;
-      state.loadError = error?.message || String(error);
-      renderKnowledgeList();
-    });
-  }, delayMs);
-}
-
-function cancelInitialKnowledgeRetry() {
-  if (state.initialRetryTimer) window.clearTimeout(state.initialRetryTimer);
-  state.initialRetryTimer = null;
-}
-
 function applyKnowledgeRecords({ items = [], runbooks = [], tables = [] }) {
   const normalizedItems = Array.isArray(items) ? items.map(normalizeStoredKnowledgeRecord).filter(isActiveKnowledgeRecord) : [];
   const normalizedRunbooks = Array.isArray(runbooks) ? runbooks.map(normalizeStoredKnowledgeRecord).filter(isActiveKnowledgeRecord) : [];
@@ -457,9 +505,11 @@ function applyKnowledgeRecords({ items = [], runbooks = [], tables = [] }) {
   ]);
   state.runbooks = normalizedRunbooks;
   state.groups = buildKnowledgeBundles(state.items, state.runbooks, state.tables);
-  const requestedId = sessionStorage.getItem(KNOWLEDGE_OPEN_TARGET_KEY) || '';
+  // Deep-Link über api.shell.onRoute (ersetzt sessionStorage-Übergabe zwischen Apps).
+  const route = state.pendingRoute || {};
+  const requestedId = String(route.id || '');
   if (requestedId && state.items.some((item) => item.id === requestedId)) {
-    sessionStorage.removeItem(KNOWLEDGE_OPEN_TARGET_KEY);
+    state.pendingRoute = { ...route, id: '' };
     state.selectedId = requestedId;
     state.activeTab = requestedId.startsWith('runbook:') ? 'runbooks' : state.activeTab;
     const group = findGroupForItem(requestedId);
@@ -468,12 +518,16 @@ function applyKnowledgeRecords({ items = [], runbooks = [], tables = [] }) {
       state.openGroups.add(group.id);
     }
   }
-  const requestedDomain = sessionStorage.getItem(KNOWLEDGE_OPEN_DOMAIN_KEY) || '';
+  const requestedDomain = String(state.pendingRoute?.domain || '');
   const requestedGroup = requestedDomain
     ? state.groups.find((group) => knowledgeGroupMatchesDomain(group, requestedDomain))
     : null;
+  if (requestedDomain && !requestedGroup) {
+    state.api?.status.report({ level: 'warn', code: 'knowledge.route.unknown_domain', text: `Wissensbereich unbekannt: ${requestedDomain}`, ref: requestedDomain });
+  }
+  if (requestedGroup || requestedDomain) state.pendingRoute = null;
   if (requestedGroup) {
-    sessionStorage.removeItem(KNOWLEDGE_OPEN_DOMAIN_KEY);
+    state.api?.status.clear('knowledge.route.unknown_domain');
     state.selectedGroupId = requestedGroup.id;
     state.openGroups.add(requestedGroup.id);
     state.selectedSkillbookId = firstSkillbookForGroup(requestedGroup)?.id || '';
@@ -509,33 +563,6 @@ function knowledgeGroupMatchesDomain(group, domain) {
   });
 }
 
-async function readLocalKnowledgeSnapshot() {
-  const missingCollections = [];
-  const results = await Promise.allSettled(KNOWLEDGE_DATA_COLLECTIONS.map((collectionName) => (
-    loadLocalKnowledgeRecords(collectionName, missingCollections)
-  )));
-  const [items = [], runbooks = [], tables = []] = results.map((result) => (
-    result.status === 'fulfilled' ? result.value : []
-  ));
-  const error = results
-    .filter((result) => result.status === 'rejected')
-    .map((result) => result.reason?.message || String(result.reason))
-    .join('; ');
-  return { items, runbooks, tables, missingCollections, error };
-}
-
-async function loadLocalKnowledgeRecords(collectionName, missingCollections = state.missingCollections) {
-  const collection = knowledgeCollection(collectionName);
-  if (!collection) {
-    missingCollections.push(collectionName);
-    return [];
-  }
-  const docs = await collection.find().exec();
-  return sortKnowledgeRecords(docs
-    .map((doc) => normalizeStoredKnowledgeRecord(doc.toJSON()))
-    .filter(isActiveKnowledgeRecord));
-}
-
 function sortKnowledgeRecords(records) {
   return [...records].sort((left, right) => (
     Number(right?.updated_at_ms || 0) - Number(left?.updated_at_ms || 0)
@@ -568,107 +595,9 @@ function isActiveKnowledgeRecord(record) {
   return Boolean(record?.id && !record._deleted && !record.is_deleted);
 }
 
-async function ensureKnowledgeDataSyncStarted() {
-  // The shell owns a scoped module lease for every declared collection before
-  // mount. Starting collections here would pin them as permanent shell
-  // consumers and leak their bridges after the Knowledge window closes.
-  // Reactive queries below drive foreground priority through the shared active
-  // collection registry; they do not need a second app-owned warm-up.
-}
-
-function promiseWithTimeout(promise, timeoutMs) {
-  return Promise.race([
-    promise,
-    new Promise((resolve) => window.setTimeout(resolve, timeoutMs)),
-  ]);
-}
-
-function delay(ms) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
-function wireLocalRealtime() {
-  const collections = ['knowledge_items', 'knowledge_runbooks', 'knowledge_tables'];
-  let timer = null;
-  const schedule = () => {
-    if (timer) return;
-    timer = window.setTimeout(() => {
-      timer = null;
-      loadKnowledgeFromLocal().catch((error) => {
-        console.warn('[knowledge] local realtime render failed', error);
-      });
-    }, KNOWLEDGE_RENDER_DEBOUNCE_MS);
-  };
-  const subscriptions = collections
-    .map((collectionName) => knowledgeCollection(collectionName)?.$?.subscribe?.(schedule) || null)
-    .filter(Boolean);
-  return () => {
-    if (timer) window.clearTimeout(timer);
-    timer = null;
-    for (const sub of subscriptions) {
-      try { sub.unsubscribe?.(); } catch {}
-    }
-  };
-}
-
-function knowledgeCollection(collectionName) {
-  return state.ctx?.db?.collection?.(collectionName) || null;
-}
-
-// Canonical collection readiness (shell sync API): while a replicated
-// collection has not finished its initial sync, an empty local result is a
-// SYNC state, not a "no data" state. Subscribing emits an immediate snapshot
-// and re-emits only on state changes; each emission re-renders the lists that
-// draw from that collection so the syncing shell flips to data/empty live.
-function wireCollectionReadiness() {
-  const sync = state.ctx?.sync;
-  const subscribe = sync?.subscribeCollectionReadiness;
-  if (typeof subscribe !== 'function') return () => {};
-  const unsubscribes = KNOWLEDGE_DATA_COLLECTIONS.map((collectionName) => {
-    const unsubscribe = subscribe.call(sync, collectionName, (snapshot) => {
-      state.collectionReadiness[collectionName] = snapshot || null;
-      renderKnowledgeList();
-      renderRunbooks();
-      if (state.activeTab === 'runbooks') {
-        renderRunbookWorkspace().catch((error) => console.warn('[knowledge] readiness re-render failed', error));
-      }
-    });
-    return typeof unsubscribe === 'function' ? unsubscribe : () => {};
-  });
-  return () => {
-    for (const unsubscribe of unsubscribes) {
-      try { unsubscribe(); } catch {}
-    }
-  };
-}
-
-function knowledgeReadinessSnapshot(collectionName) {
-  const snapshot = state.collectionReadiness?.[collectionName];
-  if (snapshot) return snapshot;
-  const read = state.ctx?.sync?.collectionReadiness;
-  return typeof read === 'function' ? read.call(state.ctx.sync, collectionName) : null;
-}
-
-// The knowledge list bundles records from ALL data collections, so its
-// data-driven empty branch is a sync state until every source is live.
-// Missing snapshots fail open (unknown → no syncing shell): readiness is a
-// render hint, never a mount blocker.
-function knowledgeSourceReadiness() {
-  const snapshots = KNOWLEDGE_DATA_COLLECTIONS.map(knowledgeReadinessSnapshot).filter(Boolean);
-  if (!snapshots.length) return null;
-  if (snapshots.some((snapshot) => snapshot.ready === false)) return { ready: false };
-  if (snapshots.every((snapshot) => snapshot.ready === true)) return { ready: true };
-  return null;
-}
-
-// Rows always win; the .ctox-syncing shell appears only for a data-driven
-// empty (the unfiltered replicated source is empty) whose collection is not
-// ready yet — selection/filter/permission empties stay .ctox-empty.
-function knowledgeListStateHtml({ dataDriven, readiness, message, syncingText }) {
-  if (dataDriven && readiness?.ready === false) {
-    return `<div class="ctox-syncing" role="status" aria-live="polite"><strong>${escapeHtml(syncingText)}</strong></div>`;
-  }
-  return `<div class="ctox-empty"><strong>${escapeHtml(message)}</strong></div>`;
+// v4: eine leere Liste rendert nichts – kein Sync-, Lade- oder Leer-Text (Entwurf §7).
+function knowledgeListStateHtml() {
+  return '';
 }
 
 function renderEmptyKnowledgeSelection() {
@@ -682,16 +611,14 @@ function renderEmptyKnowledgeSelection() {
   state.activeTab = 'skill';
   // Right-column header is the detail-view, not a second category label.
   if (els.selectedKind) els.selectedKind.textContent = copy.selected || 'Selected';
-  els.selectedTitle.textContent = copy.noSelection || (state.lang === 'en' ? 'No entry selected' : 'Kein Eintrag ausgewählt');
+  els.selectedTitle.textContent = '';
   els.markdownEditor.hidden = true;
   els.markdownView.hidden = false;
   els.markdownEditor.value = '';
-  // The list-pane on the left already shows the "no entries" empty-state.
-  // Do not repeat it inside the detail-view; show a brief hint instead.
-  els.markdownView.innerHTML = `<p>${escapeHtml(copy.detailEmptyHint || (state.lang === 'en' ? 'Pick a knowledge entry on the left to view it here.' : 'Wähle links einen Knowledge-Eintrag, um ihn hier anzuzeigen.'))}</p>`;
-  els.tableHost.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(copy.tableUnavailable)}</strong></div>`;
+  els.markdownView.innerHTML = '';
+  els.tableHost.innerHTML = '';
   if (els.runbookSwitcher) els.runbookSwitcher.innerHTML = '';
-  if (els.runbookView) els.runbookView.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(copy.noRunbooks)}</strong></div>`;
+  if (els.runbookView) els.runbookView.innerHTML = '';
   syncMarkdownEditControls();
   syncRunbookEditControls(false);
   syncKnowledgeTabControls();
@@ -863,7 +790,7 @@ function buildKnowledgeBundles(items, runbooks, tables) {
   for (const [key, entries] of Object.entries(remainingSkillsByPath)) {
     groups.push(makeGroup({
       id: `skills/${key}`,
-      title: titleFromSlug(key),
+      title: domainTitleFor(entries[0], key),
       domainLabel: 'Skills',
       domain: key,
       entries,
@@ -875,7 +802,7 @@ function buildKnowledgeBundles(items, runbooks, tables) {
   for (const [key, entries] of Object.entries(remainingByDomain)) {
     groups.push(makeGroup({
       id: `knowledge/${key}`,
-      title: titleFromSlug(key),
+      title: domainTitleFor(entries[0], key),
       domainLabel: domainLabelFor(entries[0]),
       domain: key,
       entries,
@@ -1254,6 +1181,14 @@ function titleFromSlug(value) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+// Anzeigetitel einer Domänengruppe: der Originaltext aus dem Untertitel (Umlaute bleiben), der Slug nur als
+// Rückfall – titleFromSlug('budgetplanung-vertrieb-s-d') machte aus „Süd“ ein „S D“.
+function domainTitleFor(item, key) {
+  const parts = String(item?.subtitle || '').split('·').map((part) => part.trim()).filter(Boolean);
+  const raw = parts[parts.length - 1];
+  return raw && normaliseName(raw) === key ? raw : titleFromSlug(key);
+}
+
 function domainKeyFor(item) {
   const subtitle = String(item.subtitle || '').split('·').map((part) => part.trim()).filter(Boolean);
   return normaliseName(subtitle[subtitle.length - 1] || item.kind || 'knowledge');
@@ -1335,7 +1270,7 @@ function relatedToSkillbook(skillbook, entry) {
 async function selectSkillbook(group, skillbook) {
   if (!group) return;
   // Mobile master-detail: selecting an entry switches to the content view.
-  state.ctx?.host?.querySelector('[data-knowledge-root]')?.classList.add('is-detail');
+  state.root?.querySelector('[data-knowledge-root]')?.classList.add('is-detail');
   const skillbookEntry = typeof skillbook === 'string' ? group.entries.find((entry) => entry.id === skillbook) : skillbook;
   const context = skillbookContext(group, skillbookEntry);
   state.selectedGroupId = group.id;
@@ -1394,13 +1329,7 @@ function renderKnowledgeList({ resetScroll = false } = {}) {
     // Only the UNFILTERED empty source (knowledgeEmptyStateMessage's noItems
     // branch) is data-driven and gets the readiness gate; search/filter and
     // error empties stay plain .ctox-empty.
-    const dataDriven = !state.loadError && !state.missingCollections.length && !term && !state.items.length;
-    const emptyHtml = knowledgeListStateHtml({
-      dataDriven,
-      readiness: knowledgeSourceReadiness(),
-      message: knowledgeEmptyStateMessage(copy, term),
-      syncingText: copy.syncingData,
-    });
+    const emptyHtml = knowledgeListStateHtml();
     renderHtmlIfChanged(els.list, emptyHtml, {
       signature: `empty:${emptyHtml}`,
       preserveScroll: !resetScroll,
@@ -1438,9 +1367,8 @@ function renderKnowledgeList({ resetScroll = false } = {}) {
   // One-line pane footer via the shell-wired grammar handle (null-guarded: the
   // shell wires the panes debounced ~120ms after mount, so early renders fall
   // back to the direct data-pg-footer target).
-  const n = visibleGroups.length;
-  const scopeLabel = state.sourceScope === 'all' ? 'Alle' : state.sourceScope === 'system' ? 'System' : 'User';
-  const footerText = `${n} ${n === 1 ? 'Eintrag' : 'Einträge'} · ${scopeLabel}`;
+  // Textdiät R2: der Fuß wiederholte nur Zahl und Herkunftsfilter („4 Einträge · Alle“).
+  const footerText = '';
   const pg = els.leftPane?.__ctoxPaneGrammar;
   if (pg?.setFooter) pg.setFooter(footerText);
   else {
@@ -1456,11 +1384,8 @@ function isInternalSkillOnlyGroup(group) {
   ));
 }
 
-function knowledgeEmptyStateMessage(copy, term = '') {
-  if (state.loadError || state.missingCollections.length) return copy.syncUnavailable;
-  if (term) return copy.noResults;
-  if (state.items.length) return copy.noVisibleItems;
-  return copy.noItems;
+function knowledgeEmptyStateMessage() {
+  return '';
 }
 
 function sourceScopeFor(entry) {
@@ -1469,11 +1394,22 @@ function sourceScopeFor(entry) {
   return 'user';
 }
 
+// FIX8: Zeitstempel kommen als Millisekunden, Sekunden (Kern-Importe) oder ISO-Text. Vorher wurden Sekunden als
+// Millisekunden gelesen („21.01.1970“). Sekunden (< 1e11) → ×1000; Text → Date.parse; vor 2000 bzw. 0 = kein Datum.
+const MIN_PLAUSIBLE_MS = Date.UTC(2000, 0, 1);
+export function toEpochMs(value) {
+  if (value == null || value === '') return 0;
+  let ms = typeof value === 'number' ? value : (/^\s*-?\d+(\.\d+)?\s*$/.test(String(value)) ? Number(value) : Date.parse(String(value)));
+  if (!Number.isFinite(ms) || ms <= 0) return 0;
+  if (ms < 1e11) ms *= 1000;
+  return ms >= MIN_PLAUSIBLE_MS ? ms : 0;
+}
+
 // Newest entry timestamp in a group, for the "Zuletzt bearbeitet" sort.
 function groupRecency(group) {
   let max = 0;
   for (const entry of group.entries || []) {
-    const t = Number(entry.updated_at_ms || entry.updated_at || entry.payload?.updated_at_ms || 0) || 0;
+    const t = toEpochMs(entry.updated_at_ms || entry.updated_at || entry.payload?.updated_at_ms || 0);
     if (t > max) max = t;
   }
   return max;
@@ -1483,7 +1419,7 @@ function groupRecency(group) {
 function groupCreated(group) {
   let min = Infinity;
   for (const entry of group.entries || []) {
-    const t = Number(entry.created_at_ms || entry.created_at || entry.payload?.created_at_ms || 0) || 0;
+    const t = toEpochMs(entry.created_at_ms || entry.created_at || entry.payload?.created_at_ms || 0);
     if (t && t < min) min = t;
   }
   return min === Infinity ? 0 : min;
@@ -1497,17 +1433,22 @@ function groupSize(group) {
 
 // Scannable count badges (Research-style numbers) — only non-zero kinds show,
 // so you can tell whether a shard has content before clicking it.
+function sameText(a, b) {
+  return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+}
+
 function bundleCountsHtml(skillbooks, runbooks, tables) {
   // Parenthesized counts for every kind — zeros included — as ONE inline text
   // line, not pill badges: three numbers must not cost two rows of chrome.
-  const part = (n, label) => `<span class="kb-count${n > 0 ? '' : ' kb-zero'}">${label} (${n})</span>`;
-  return [part(skillbooks, 'Skillbooks'), part(runbooks, 'Runbooks'), part(tables, 'Tabellen')].join(' · ');
+  // Textdiät Regel 5 (15.10.): nur Arten mit Inhalt; „Skillbooks (0) · Runbooks (0)“ sagt nichts.
+  const part = (n, label) => (n > 0 ? `<span class="kb-count">${label} (${n})</span>` : '');
+  return [part(skillbooks, 'Skillbooks'), part(runbooks, 'Runbooks'), part(tables, 'Tabellen')].filter(Boolean).join(' · ');
 }
 
 // Short absolute day for the shard meta line. Deliberately not a relative
 // phrase ("vor 3 Tagen"): a shard meta must stay stable while the list is open.
 function shortDay(ms, lang) {
-  const t = Number(ms) || 0;
+  const t = toEpochMs(ms);
   if (!t) return '';
   const d = new Date(t);
   if (Number.isNaN(d.getTime())) return '';
@@ -1562,12 +1503,14 @@ function renderKnowledgeBundle(group, view = 'cards') {
     </button>
   `;
   } else {
-    const edited = shortDay(groupRecency(group), state.lang) || (copy.neverEdited || labels.de.neverEdited);
+    // Fehlt ein Datum, steht nichts da (kein Ersatztext, kein Epoch-Datum).
+    const edited = shortDay(groupRecency(group), state.lang);
+    const countsHtml = bundleCountsHtml(skillbookCount, runbookCount, tableCount);
     section.innerHTML = `
     <button class="bundle-select" type="button" title="${fullTitle}">
       <strong>${escapeHtml(group.title)}</strong>
-      <small class="bundle-meta"><span class="bundle-domain">${escapeHtml(domain)}</span> · <span class="bundle-scope">${escapeHtml(groupScopeLabel(group, copy))}</span></small>
-      <small class="bundle-meta"><span class="bundle-counts">${bundleCountsHtml(skillbookCount, runbookCount, tableCount)}</span> · <span class="bundle-edited">${escapeHtml(edited)}</span></small>
+      <small class="bundle-meta">${sameText(domain, group.title) ? '' : `<span class="bundle-domain">${escapeHtml(domain)}</span> · `}<span class="bundle-scope">${escapeHtml(groupScopeLabel(group, copy))}</span></small>
+      ${countsHtml || edited ? `<small class="bundle-meta">${[countsHtml ? `<span class="bundle-counts">${countsHtml}</span>` : '', edited ? `<span class="bundle-edited">${escapeHtml(edited)}</span>` : ''].filter(Boolean).join(' · ')}</small>` : ''}
     </button>
   `;
   }
@@ -1586,14 +1529,11 @@ function renderKnowledgeBundle(group, view = 'cards') {
 
 // Deletion is destructive — always confirm. Wired to the module delete path
 // if present; otherwise it surfaces a clear message rather than silently no-op.
-function deleteKnowledgeEntry(item, group) {
+async function deleteKnowledgeEntry(item) {
   const name = item.title || item.id;
-  if (!window.confirm(`„${name}" wirklich löschen?`)) return;
-  if (typeof requestKnowledgeDelete === 'function') {
-    requestKnowledgeDelete(item, group);
-  } else if (state.ctx?.commandBus?.dispatch) {
-    state.ctx.commandBus.dispatch({ command_type: 'knowledge.entry.delete', payload: { id: item.id } }).catch(() => {});
-  }
+  const confirmed = await state.api.shell.dialog({ kind: 'confirm', title: 'Löschen', text: `„${name}" wirklich löschen?`, confirm_label: 'Löschen', default: false });
+  if (!confirmed) return;
+  dispatchKnowledgeCommand({ type: 'knowledge.entry.delete', record_id: item.id, payload: { id: item.id } });
 }
 
 // In-place selection: flip is-selected/aria-selected across the existing rows,
@@ -1658,12 +1598,7 @@ function renderRunbooks() {
   if (!visibleRunbooks.length) {
     // Group-scoped filtering is a selection empty; only an entirely empty
     // knowledge_runbooks source is data-driven and readiness-gated.
-    els.runbookList.innerHTML = knowledgeListStateHtml({
-      dataDriven: !state.runbooks.length,
-      readiness: knowledgeReadinessSnapshot('knowledge_runbooks'),
-      message: copy.noRunbooks,
-      syncingText: copy.syncingData,
-    });
+    els.runbookList.innerHTML = knowledgeListStateHtml();
     fillRunbookForm(null);
     return;
   }
@@ -1718,7 +1653,7 @@ function setTab(tab) {
 }
 
 function setActionHidden(action, hidden) {
-  const button = state.ctx.host.querySelector(`[data-action="${action}"]`);
+  const button = state.root.querySelector(`[data-action="${action}"]`);
   if (button) button.hidden = hidden;
 }
 
@@ -1743,10 +1678,8 @@ function updateViewCounts() {
     const node = pane.querySelector(`[data-pg-count="${key}"]`);
     if (node) node.textContent = ` (${value})`;
   }
-  const item = state.items.find((entry) => entry.id === state.selectedId);
-  const footerText = item
-    ? [groupLabel(item.kind || 'knowledge'), domainLabelFor(item)].filter(Boolean).join(' · ')
-    : '';
+  // Textdiät Regel 3 (15.10.): der Fuß wiederholte nur Art und Titel aus dem Kopf.
+  const footerText = '';
   if (pg?.setFooter) pg.setFooter(footerText);
   else {
     const node = pane.querySelector('[data-pg-footer]');
@@ -1804,7 +1737,7 @@ function renderSkillbookSwitcher() {
 
 function syncKnowledgeTabControls() {
   if (isKnowledgeTabDisabled(state.activeTab, state.selectedId)) state.activeTab = 'skill';
-  for (const button of state.ctx.host.querySelectorAll('[data-pg-band]')) {
+  for (const button of state.root.querySelectorAll('[data-pg-band]')) {
     const disabled = isKnowledgeTabDisabled(button.dataset.pgBand, state.selectedId);
     const selected = button.dataset.pgBand === state.activeTab;
     button.disabled = disabled;
@@ -1812,7 +1745,7 @@ function syncKnowledgeTabControls() {
     button.setAttribute('aria-selected', String(selected));
     button.classList.toggle('is-active', selected);
   }
-  for (const panel of state.ctx.host.querySelectorAll('[data-panel]')) {
+  for (const panel of state.root.querySelectorAll('[data-panel]')) {
     panel.hidden = panel.dataset.panel !== state.activeTab;
   }
 }
@@ -1845,12 +1778,7 @@ async function renderRunbookWorkspace() {
     els.runbookSwitcher.hidden = true;
     // Same gate as the runbook list: group/skillbook-scoped empties are
     // selection states, an empty knowledge_runbooks source is data-driven.
-    els.runbookView.innerHTML = knowledgeListStateHtml({
-      dataDriven: !state.runbooks.length,
-      readiness: knowledgeReadinessSnapshot('knowledge_runbooks'),
-      message: copy.noRunbooks,
-      syncingText: copy.syncingData,
-    });
+    els.runbookView.innerHTML = knowledgeListStateHtml();
     fillRunbookForm(null);
     syncRunbookEditControls(false);
     return;
@@ -1900,7 +1828,7 @@ async function renderResourceWorkspace() {
   els.selectedTitle.textContent = context.skillbook?.title || activeGroup()?.title || 'Knowledge';
   if (!resources.length) {
     els.resourceSwitcher.hidden = true;
-    els.resourceView.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(copy.noResources)}</strong></div>`;
+    els.resourceView.innerHTML = '';
     return;
   }
   if (!resources.some((resource) => resource.id === state.selectedResourceId)) {
@@ -1953,7 +1881,7 @@ function runbookDetailsHtml(runbook) {
     ${renderKnowledgeListSection('Abbruch und Eskalation', escalateWhen)}
     ${renderKnowledgeListSection('Ergebnis und Writeback', output)}
     ${!instruction && !inputs.length && !toolActions.length
-      ? '<div class="ctox-empty"><strong>Kein ausführbarer Runbook-Vertrag vorhanden.</strong></div>'
+      ? ''
       : ''}
   `;
 }
@@ -2002,9 +1930,6 @@ function renderTableSwitcher() {
 
 async function renderTable() {
   const token = ++knowledgeTableRenderToken;
-  knowledgeTableAbort?.abort();
-  const abort = new AbortController();
-  knowledgeTableAbort = abort;
   const current = () => token === knowledgeTableRenderToken;
   const copy = state.messages || labels[state.lang];
   const tableId = activeTableId();
@@ -2015,50 +1940,45 @@ async function renderTable() {
   els.selectedTitle.textContent = tableSource?.title || skillbookContext().skillbook?.title || 'DataFrame';
   if (!tableSource?.has_table) {
     els.tableTitle.textContent = 'DataFrame';
-    els.tableMeta.textContent = copy.tableUnavailable;
-    els.tableHost.innerHTML = `<div class="ctox-empty"><strong>${copy.tableUnavailable}</strong></div>`;
+    els.tableMeta.textContent = '';
+    els.tableHost.innerHTML = '';
+    if (els.tableFilter) els.tableFilter.hidden = true;
+    releaseTableRows();
     setRowPageButtons({ previous: true, next: true });
     return;
   }
   try {
     const completeness = dataFrameCompleteness(tableSource);
     if (!completeness.complete) {
+      // Unvollständige Daten sind ein Zustand → Zustandszone, die Tabelle bleibt leer.
       els.tableTitle.textContent = schemaTitleForTable(tableSource);
-      els.tableMeta.textContent = `${copy.dataIncomplete} · ${completeness.reason}`;
-      els.tableHost.innerHTML = `<div class="ctox-empty knowledge-error" role="alert"><strong>${escapeHtml(copy.dataIncomplete)}</strong><span>${escapeHtml(copy.dataIncompleteHint)}</span><span>${escapeHtml(completeness.reason)}</span></div>`;
+      els.tableMeta.textContent = '';
+      els.tableHost.innerHTML = '';
+      state.api?.status.report({ level: 'warn', code: 'knowledge.table.incomplete', text: `${copy.dataIncomplete}: ${completeness.reason}`, ref: tableSource.id || tableId });
       setRowPageButtons({ previous: true, next: true });
       return;
     }
     const catalog = isKnowledgeCatalogDocument(tableSource);
     let pageRows = null;
     let pageRowCount = null;
+    let pageFirstIndex = state.tableOffset;
+    state.api?.status.clear('knowledge.table.incomplete');
+    if (els.tableFilter) els.tableFilter.hidden = !catalog;
     if (catalog) {
-      const loader = await knowledgeRowsLoaderFor(state.ctx);
-      if (!current()) return;
-      if (loader) {
-        els.tableTitle.textContent = schemaTitleForTable(tableSource);
-        els.tableMeta.textContent = copy.rowsLoading;
-        els.tableHost.innerHTML = `<div class="ctox-empty" role="status"><strong>${escapeHtml(copy.rowsLoading)}</strong></div>`;
-        setRowPageButtons({ previous: true, next: true });
-        try {
-          const page = await loader.fetchRows(knowledgeRowsTableId(tableSource), {
-            offset: state.tableOffset,
-            limit: state.tableLimit,
-            signal: abort.signal,
-          });
-          if (!current()) return;
-          pageRows = Array.isArray(page?.rows) ? page.rows : [];
-          pageRowCount = Number.isFinite(Number(page?.rowCount)) ? Number(page.rowCount) : null;
-        } catch (error) {
-          if (!current() || isRowsFetchCancelled(error)) return;
-          renderRowsLoadError(copy, error);
-          return;
-        }
-      }
+      // Katalog-Tabellen (Parquet im Core), Entscheidung E11: die App schreibt ihr Sichtfenster nach
+      // knowledge_views, ein Trigger-Handler projiziert es nach knowledge_table_rows; gelesen wird nur lokal.
+      // Angezeigt wird immer der lokale Stand – nach einem Fensterwechsel bis zum Umlauf das vorige Fenster.
+      const local = watchTableRows(tableSource);
+      pageRows = local.rows;
+      pageFirstIndex = local.firstIndex ?? state.tableOffset;
+      pageRowCount = local.rowCount ?? (state.tableFilter ? null : catalogRowCount(tableSource));
+    } else {
+      releaseTableRows();
     }
     if (!current()) return;
     const localRows = pageRows || completeness.rows;
     const schema = localDataFrameSchema(tableSource);
+    if (pageRows && !schema.columns?.length && pageRows.length) schema.columns = normalizeColumns(Object.keys(pageRows[0] || {}));
     const rows = pageRows
       ? { returned: pageRows.length, rows: pageRows }
       : localRows.length
@@ -2070,63 +1990,172 @@ async function renderTable() {
     els.tableTitle.textContent = schema.title || tableSource.title || 'DataFrame';
     const totalRows = pageRowCount != null
       ? pageRowCount
+      : pageRows ? pageFirstIndex + pageRows.length
       : Number.isFinite(Number(schema.row_count)) ? Number(schema.row_count) : localRows.length;
-    const firstVisible = rows.returned ? state.tableOffset + 1 : 0;
-    const lastVisible = rows.returned ? Math.min(totalRows, state.tableOffset + rows.returned) : 0;
+    const firstVisible = rows.returned ? pageFirstIndex + 1 : 0;
+    const lastVisible = rows.returned ? Math.min(totalRows, pageFirstIndex + rows.returned) : 0;
     els.tableMeta.textContent = `${schema.columns?.length || 0} Spalten · Zeilen ${firstVisible.toLocaleString('de-DE')}-${lastVisible.toLocaleString('de-DE')} von ${totalRows.toLocaleString('de-DE')}`;
     setRowPageButtons({
       previous: state.tableOffset <= 0,
-      next: lastVisible >= totalRows || rows.returned === 0,
+      next: pageRows
+        ? state.tableOffset + state.tableLimit >= totalRows
+        : lastVisible >= totalRows || rows.returned === 0,
     });
-    renderDataFrameTable(schema.columns || [], rows.rows || []);
+    renderDataFrameTable(schema.columns || [], rows.rows || [], { sortable: catalog });
   } catch (error) {
-    if (!current() || isRowsFetchCancelled(error)) return;
-    els.tableHost.innerHTML = `<div class="ctox-empty knowledge-error"><strong>DataFrame konnte nicht geladen werden</strong><span>${escapeHtml(error.message || String(error))}</span></div>`;
+    if (!current()) return;
+    els.tableHost.innerHTML = '';
+    state.api?.status.report({ level: 'error', code: 'knowledge.table.render', text: `DataFrame: ${error?.message || String(error)}` });
   }
 }
 
+const TABLE_ROWS_COLLECTION = 'knowledge_table_rows';
+const TABLE_VIEWS_COLLECTION = 'knowledge_views';
+const TABLE_VIEW_ID_MAX = 160;
+const TABLE_FILTER_DEBOUNCE_MS = 250;
+
+// Sichtfenster je Nutzer und Tabelle (E11). Die Id ist stabil, damit Blättern/Filtern dasselbe Dokument
+// aktualisiert (Trigger op:update) und eine wieder gewählte Tabelle sofort ihr letztes lokales Fenster zeigt.
+function tableViewId(tableId) {
+  const actor = String(state.api?.actor?.id || 'local').replace(/[^A-Za-z0-9_.@-]/g, '_').slice(0, 48);
+  const table = String(tableId || '').replace(/[^A-Za-z0-9_.:@-]/g, '_');
+  return `kv:${actor}:${table}`.slice(0, TABLE_VIEW_ID_MAX);
+}
+
+function tableViewDoc(tableId) {
+  const filter = state.tableFilter.trim() ? { text: state.tableFilter.trim() } : {};
+  return {
+    id: tableViewId(tableId),
+    table: tableId,
+    filter,
+    sort: state.tableSort.map((entry) => ({ ...entry })),
+    skip: state.tableOffset,
+    limit: state.tableLimit,
+    actor_id: String(state.api?.actor?.id || ''),
+    updated_at_ms: Date.now(),
+  };
+}
+
+// Fenster als gewöhnliches Dokument schreiben (api.put, kein RPC, nie warten).
+function writeTableView(tableId) {
+  const view = tableViewDoc(tableId);
+  const key = JSON.stringify([view.id, view.table, view.filter, view.sort, view.skip, view.limit]);
+  if (key === state.tableViewKey) return;
+  state.tableViewKey = key;
+  const api = state.api;
+  const report = (text) => api?.status.report({ level: 'error', code: 'knowledge.table.view', text: `DataFrame-Fenster: ${text}`, ref: view.id });
+  const handle = api.put(TABLE_VIEWS_COLLECTION, view);
+  handle.local.catch((error) => report(error?.message || String(error?.code || error)));
+  handle.result.then((result) => {
+    if (result?.status === 'rejected') report(result.reason || 'rejected');
+    else api?.status.clear('knowledge.table.view');
+  });
+}
+
+function watchTableRows(tableSource) {
+  const tableId = knowledgeRowsTableId(tableSource);
+  if (state.tableViewTable && state.tableViewTable !== tableId) resetTableWindowControls();
+  state.tableViewTable = tableId;
+  writeTableView(tableId);
+  const viewId = tableViewId(tableId);
+  if (viewId !== state.tableRowsKey) {
+    releaseTableRows();
+    const key = viewId;
+    state.tableRowsKey = key;
+    let first = true;
+    state.tableRowsUnsubscribe = state.api.query(TABLE_ROWS_COLLECTION, {
+      selector: { view_id: viewId },
+      sort: [{ row_index: 'asc' }],
+    }).subscribe((docs) => {
+      state.tableRows = Array.isArray(docs) ? docs : [];
+      if (first) { first = false; return; }
+      if (state.tableRowsKey === key && state.activeTab === 'data') renderTable();
+    });
+  }
+  const docs = state.tableRows || [];
+  const firstIndex = Number.isInteger(docs[0]?.row_index) ? docs[0].row_index : null;
+  const rowCount = Number.isInteger(docs[0]?.row_count) ? docs[0].row_count : null;
+  return { rows: docs.map(tableRowValues), firstIndex, rowCount };
+}
+
+function releaseTableRows() {
+  state.tableRowsUnsubscribe?.();
+  state.tableRowsUnsubscribe = null;
+  state.tableRowsKey = '';
+  state.tableRows = null;
+}
+
+function resetTableWindowControls() {
+  state.tableFilter = '';
+  state.tableSort = Object.freeze([]);
+  state.tableOffset = 0;
+  if (els.tableFilter) els.tableFilter.value = '';
+}
+
+function normalizeTableSort(value) {
+  const out = [];
+  for (const entry of Array.isArray(value) ? value : []) {
+    const [column, dir] = Object.entries(isPlainObject(entry) ? entry : {})[0] || [];
+    if (column && (dir === 'asc' || dir === 'desc')) out.push({ [column]: dir });
+  }
+  return Object.freeze(out.slice(0, 1));
+}
+
+// Zeilenfilter des Fensters: eigenes Suchfeld in der Tabellenleiste (nur Katalog-Tabellen).
+function ensureTableFilterInput(root) {
+  const pager = root.querySelector('.table-pager');
+  if (!pager) return null;
+  let input = pager.querySelector('[data-table-filter]');
+  if (!input) {
+    input = document.createElement('input');
+    input.type = 'search';
+    input.className = 'ctox-pane-search knowledge-table-filter';
+    input.dataset.tableFilter = '';
+    input.placeholder = 'Zeilen filtern…';
+    input.setAttribute('aria-label', 'Zeilen filtern');
+    input.hidden = true;
+    pager.prepend(input);
+  }
+  return input;
+}
+
+function onTableFilterInput(event) {
+  const value = String(event?.target?.value ?? '').slice(0, 200);
+  if (state.tableFilterTimer) clearTimeout(state.tableFilterTimer);
+  state.tableFilterTimer = setTimeout(() => {
+    state.tableFilterTimer = null;
+    if (value === state.tableFilter) return;
+    state.tableFilter = value;
+    state.tableOffset = 0;
+    renderTable();
+  }, TABLE_FILTER_DEBOUNCE_MS);
+}
+
+// Sortierung des Fensters über den Spaltenkopf: aus → aufsteigend → absteigend → aus.
+function onTableHeaderClick(event) {
+  const th = event.target?.closest?.('th[data-sort-key]');
+  if (!th || !els.tableHost?.contains(th)) return;
+  const column = th.dataset.sortKey;
+  const current = state.tableSort[0];
+  const dir = current && Object.prototype.hasOwnProperty.call(current, column) ? current[column] : '';
+  const next = dir === '' ? 'asc' : dir === 'asc' ? 'desc' : '';
+  state.tableSort = Object.freeze(next ? [{ [column]: next }] : []);
+  state.tableOffset = 0;
+  renderTable();
+}
+
+function tableRowValues(doc) {
+  if (doc && typeof doc.values === 'object' && doc.values) return doc.values;
+  if (doc && typeof doc.row === 'object' && doc.row) return doc.row;
+  return doc;
+}
+
 function setRowPageButtons({ previous = true, next = true } = {}) {
-  const host = state.ctx?.host;
+  const host = state.root;
   const previousButton = host?.querySelector?.('[data-action="prev-rows"]');
   const nextButton = host?.querySelector?.('[data-action="next-rows"]');
   if (previousButton) previousButton.disabled = previous;
   if (nextButton) nextButton.disabled = next;
-}
-
-function isRowsFetchCancelled(error) {
-  return error?.name === 'AbortError' || error?.code === 'ROWS_CANCELLED';
-}
-
-function renderRowsLoadError(copy, error) {
-  els.tableMeta.textContent = copy.rowsLoadFailed;
-  const host = document.createElement('div');
-  host.className = 'ctox-empty knowledge-error';
-  host.setAttribute('role', 'alert');
-  const title = document.createElement('strong');
-  title.textContent = copy.rowsLoadFailed;
-  const detail = document.createElement('span');
-  detail.textContent = error?.message || String(error || '');
-  host.append(title, detail);
-  if (error?.retryable === true) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'ctox-button';
-    button.textContent = copy.rowsRetry;
-    button.addEventListener('click', () => { renderTable(); });
-    host.append(button);
-  }
-  els.tableHost.replaceChildren(host);
-  setRowPageButtons({ previous: true, next: true });
-}
-
-async function knowledgeRowsLoaderFor(ctx) {
-  try {
-    if (typeof ctx?.sync?.startCollection !== 'function') return null;
-    const bridge = await ctx.sync.startCollection('knowledge_tables');
-    return bridge?.state?.knowledgeRowsLoader || null;
-  } catch {
-    return null;
-  }
 }
 
 function knowledgeRowsTableId(table) {
@@ -2152,23 +2181,28 @@ function activeTableId() {
   return state.selectedTableId || context.tables[0]?.id || group?.tableIds?.[0] || '';
 }
 
-function renderDataFrameTable(columns, rows) {
+function renderDataFrameTable(columns, rows, { sortable = false } = {}) {
   if (!columns.length) {
-    els.tableHost.innerHTML = '<div class="ctox-empty"><strong>Keine Spalten</strong></div>';
+    // Leeres Fenster ohne Spaltenkopf: nichts rendern (kein Zustandstext, R11).
+    els.tableHost.replaceChildren();
     return;
   }
   const normalColumns = normalizeColumns(columns);
   const table = document.createElement('table');
   table.className = 'ctox-table dataframe-table';
   table.innerHTML = `
-    <thead><tr>${normalColumns.map((column) => dataframeHeaderHtml(column)).join('')}</tr></thead>
+    <thead><tr>${normalColumns.map((column) => dataframeHeaderHtml(column, sortable)).join('')}</tr></thead>
     <tbody>${rows.map((row) => `<tr>${normalColumns.map((column) => `<td>${escapeHtml(formatCell(valueForColumn(row, column), column))}</td>`).join('')}</tr>`).join('')}</tbody>
   `;
   els.tableHost.replaceChildren(table);
 }
 
-function dataframeHeaderHtml(column) {
+function dataframeHeaderHtml(column, sortable = false) {
   const label = columnHeaderLabel(column);
+  const sortKey = sortable ? String(column?.key || column?.name || column?.field || column?.id || '') : '';
+  const sortEntry = sortKey ? state.tableSort.find((entry) => Object.prototype.hasOwnProperty.call(entry, sortKey)) : null;
+  const ariaSort = sortEntry ? (sortEntry[sortKey] === 'desc' ? 'descending' : 'ascending') : 'none';
+  const sortAttrs = sortKey ? ` data-sort-key="${escapeHtml(sortKey)}" aria-sort="${ariaSort}"` : '';
   const help = columnHeaderHelp(column);
   const meta = [
     column.dtype || column.type || '',
@@ -2176,7 +2210,7 @@ function dataframeHeaderHtml(column) {
     column.key && column.key !== label ? `Key: ${column.key}` : '',
   ].filter(Boolean).join(' · ');
   return `
-    <th title="${escapeHtml(help || meta)}">
+    <th title="${escapeHtml(help || meta)}"${sortAttrs}>
       <span class="column-label">${escapeHtml(label)}</span>
       ${help ? `<span class="column-help" tabindex="0" aria-label="${escapeHtml(help)}" data-tooltip="${escapeHtml(help)}">i</span>` : ''}
     </th>
@@ -2203,7 +2237,7 @@ function syncMarkdownEditControls(options = {}) {
   setActionHidden('edit-markdown', isEditing);
   setActionHidden('save-markdown', !isEditing);
   setActionHidden('cancel-markdown', !isEditing);
-  const editButton = state.ctx.host.querySelector('[data-action="edit-markdown"]');
+  const editButton = state.root.querySelector('[data-action="edit-markdown"]');
   if (editButton) {
     editButton.disabled = !canEdit;
     editButton.setAttribute('aria-disabled', String(!canEdit));
@@ -2230,25 +2264,22 @@ async function queueMarkdownSave() {
   if (!canEditSelectedMarkdown()) return;
   const item = state.items.find((entry) => entry.id === state.selectedId);
   const markdown = state.editing ? els.markdownEditor.value : els.markdownView.textContent;
-  const result = await dispatchKnowledgeCommand({
-    command_type: 'ctox.knowledge.document.modify',
+  dispatchKnowledgeCommand({
+    type: 'ctox.knowledge.document.modify',
     record_id: state.selectedId,
     payload: {
       title: `Knowledge Änderung · ${item?.title || state.selectedId}`,
-      instruction: `Prüfe und persistiere die folgende Knowledge-Änderung im CTOX Knowledge Store. Erhalte Skill-, Skillbook-, Runbook- und Ressourcenstruktur; schreibe Änderungen über die passende CTOX-Schicht zurück.`,
       markdown,
       selected_item: item,
     },
   });
-  if (els.skillStatus) els.skillStatus.textContent = result?.ok ? `${(state.messages || labels[state.lang]).queued} · ${result.task_id || result.command_id}` : (state.messages || labels[state.lang]).queueFailed;
-  if (result?.ok) {
+  {
     els.markdownView.innerHTML = markdownToHtml(markdown || '');
     state.editing = false;
     els.markdownEditor.hidden = true;
     els.markdownView.hidden = false;
     syncMarkdownEditControls({ keepStatus: true });
   }
-  showCommandStatus(result);
 }
 
 function canEditSelectedMarkdown(selectedId = state.selectedId, items = state.items) {
@@ -2281,12 +2312,11 @@ function cancelRunbookEdit() {
 async function queueRunbookSave() {
   const copy = state.messages || labels[state.lang];
   const runbook = state.runbooks.find((entry) => runbookIdMatches(entry.id || entry.runbook_id, state.selectedRunbookId));
-  const result = await dispatchKnowledgeCommand({
-    command_type: 'ctox.knowledge.runbook.modify',
+  dispatchKnowledgeCommand({
+    type: 'ctox.knowledge.runbook.modify',
     record_id: state.selectedRunbookId,
     payload: {
       title: `Runbook Änderung · ${els.runbookTitle.value || runbook?.title || state.selectedRunbookId}`,
-      instruction: `Prüfe und persistiere die Runbook-Änderung im CTOX Knowledge Store. Aktualisiere Runbook, Items, Ressourcenbindungen und Ausführungskontrakt konsistent.`,
       runbook,
       draft: {
         title: els.runbookTitle?.value || runbook?.title || '',
@@ -2294,9 +2324,7 @@ async function queueRunbookSave() {
       },
     },
   });
-  if (els.runbookStatus) els.runbookStatus.textContent = result?.ok ? `${copy.queued} · ${result.task_id || result.command_id}` : copy.queueFailed;
-  else showCommandStatus(result);
-  if (result?.ok) {
+  {
     state.editing = false;
     syncRunbookEditControls(false, { keepStatus: true });
   }
@@ -2317,15 +2345,16 @@ async function executeRunbook() {
     || runbook?.description
     || '';
   if (!runbook || !instruction.trim()) {
-    if (els.runbookStatus) els.runbookStatus.textContent = 'Runbook ist nicht vollständig ausführbar.';
+    state.api.status.report({ level: 'warn', code: 'knowledge.runbook.not_executable', text: 'Runbook ist nicht vollständig ausführbar.', ref: state.selectedRunbookId });
     return;
   }
-  const result = await dispatchKnowledgeCommand({
-    command_type: 'ctox.knowledge.runbook.execute',
+  state.api.status.clear('knowledge.runbook.not_executable');
+  dispatchKnowledgeCommand({
+    type: 'ctox.knowledge.runbook.execute',
     record_id: state.selectedRunbookId,
     payload: {
       title: `Runbook ausführen · ${runbook?.title || state.selectedRunbookId}`,
-      instruction,
+      runbook_instruction: instruction,
       selected_item: item,
       runbook,
       runbook_item: runbookItem || null,
@@ -2334,31 +2363,121 @@ async function executeRunbook() {
       thread_key: 'business-os/knowledge',
     },
   });
-  if (els.runbookStatus) els.runbookStatus.textContent = result?.ok ? `${copy.queued} · ${result.task_id || result.command_id}` : copy.queueFailed;
-  else showCommandStatus(result);
 }
 
-async function dispatchKnowledgeCommand(command) {
+// Befehle: api.command legt das Befehlsdokument lokal an und liefert sofort; die UI wartet nie auf
+// Annahme. Fehlschläge erscheinen über api.status.report in der Zustandszone, Erfolg bleibt still.
+function dispatchKnowledgeCommand(command) {
+  const type = command.type || command.command_type;
   const clientContext = {
     active_tab: state.activeTab,
     selected_knowledge_id: state.selectedId,
     selected_runbook_id: state.selectedRunbookId,
     ...(command.client_context || {}),
   };
-  if (state.ctx.commandBus) {
-    return state.ctx.commandBus.dispatch({
-      ...command,
-      module: 'knowledge',
-      client_context: clientContext,
-    });
-  }
-  throw new Error('The local command service is not available.');
+  const handle = state.api.command(type, {
+    ...(command.payload || {}),
+    record_id: command.record_id,
+    module: 'knowledge',
+    client_context: clientContext,
+  });
+  followCommand(handle, type);
+  return handle;
 }
 
-function showCommandStatus(result) {
-  const copy = state.messages || labels[state.lang];
-  const message = result?.ok ? `${copy.queued} · ${result.task_id || result.command_id}` : copy.queueFailed;
-  state.ctx.openBottomDrawer(drawerContent('Knowledge Command', message));
+// Ziel eines Auftrags: Befehlstyp + Datensatz; ohne Datensatz ist jeder Auftrag sein eigenes Ziel.
+function knowledgeTaskTarget(task) {
+  const recordId = typeof task.record_id === 'string' ? task.record_id.trim() : '';
+  return recordId ? `${task.command_type || 'task'}:${recordId}` : `task:${task.id}`;
+}
+const knowledgeTaskStart = (task) => Number(task.created_at_ms || task.updated_at_ms || 0) || 0;
+
+/**
+ * Offene Fehler der Zustandszone aus knowledge_tasks (rein, ohne api): je Ziel nur der jüngste fehlgeschlagene bzw.
+ * abgebrochene Lauf, und nur, wenn er weder quittiert ist (acknowledged_at) noch ein gleich alter oder neuerer Lauf
+ * desselben Ziels erfolgreich war. Ältere Fehler desselben Ziels sind damit überholt und erscheinen nie wieder.
+ */
+export function knowledgeTaskAlerts(rows) {
+  const byTarget = new Map();
+  for (const task of rows || []) {
+    if (!task || typeof task.id !== 'string') continue;
+    const key = knowledgeTaskTarget(task);
+    const entry = byTarget.get(key) || { failed: null, success: -Infinity };
+    if (task.status === 'completed') entry.success = Math.max(entry.success, knowledgeTaskStart(task));
+    else if ((task.status === 'failed' || task.status === 'cancelled') && (!entry.failed || knowledgeTaskStart(task) >= knowledgeTaskStart(entry.failed))) entry.failed = task;
+    byTarget.set(key, entry);
+  }
+  const alerts = [];
+  for (const [target, { failed, success }] of byTarget) {
+    if (!failed || failed.acknowledged_at || success >= knowledgeTaskStart(failed)) continue;
+    alerts.push({ target, task: failed, code: `knowledge.task.${target}` });
+  }
+  return alerts;
+}
+
+function reportKnowledgeTasks(api, rows, shown) {
+  const next = new Set();
+  for (const { code, task } of knowledgeTaskAlerts(rows)) {
+    next.add(code);
+    const reason = task.error?.message || task.status;
+    api.status.report({
+      level: task.status === 'failed' ? 'error' : 'warn',
+      code,
+      text: `${task.title || task.command_type}: ${reason}`,
+      ref: task.command_id || task.id,
+      action: { label: state.messages?.dismiss || labels.de.dismiss, run: () => acknowledgeKnowledgeTask(api, task) },
+    });
+  }
+  for (const code of shown) if (!next.has(code)) api.status.clear(code);
+  shown.clear();
+  for (const code of next) shown.add(code);
+}
+
+// Zonen-Aktion „Ausblenden“: Quittung am Datensatz (für alle Clients und jede spätere Montage), nie warten.
+function acknowledgeKnowledgeTask(api, task) {
+  const patch = { acknowledged_at: new Date().toISOString(), updated_at_ms: Date.now() };
+  if (typeof api.actor?.id === 'string' && api.actor.id) patch.acknowledged_by = api.actor.id;
+  const handle = api.patch('knowledge_tasks', task.id, patch);
+  handle?.local?.catch?.((error) => {
+    api.status.report({ level: 'error', code: 'knowledge.task.acknowledge', text: `${error?.code || 'local'} ${error?.message || error}`, ref: task.id });
+  });
+  return true;
+}
+
+function followCommand(handle, type) {
+  const api = state.api;
+  const code = `knowledge.command.${type}`;
+  let off = null;
+  let finished = false;
+  const stop = () => { finished = true; off?.(); off = null; };
+  off = handle.status.subscribe((value) => {
+    if (value?.status === 'failed') {
+      api.status.report({ level: 'error', code, text: `${type}: ${value.error || 'failed'}`, ref: handle.id });
+      stop();
+    } else if (value?.status === 'done') {
+      api.status.clear(code);
+      stop();
+    }
+  });
+  if (finished) off?.();
+  handle.local.catch((error) => {
+    api.status.report({ level: 'error', code, text: `${type}: ${error?.code || 'local'} ${error?.message || error}`, ref: handle.id });
+  });
+  state.disposers.push(stop);
+}
+
+// Drawer liegen im App-Fenster (nichts außerhalb von root); die Shell stellt in 4.0 keine Drawer.
+function openDrawer(side, body) {
+  closeDrawers();
+  const drawer = document.createElement('aside');
+  drawer.className = `knowledge-drawer is-${side}`;
+  drawer.dataset.knowledgeDrawer = side;
+  drawer.append(body);
+  (els.root || state.root).append(drawer);
+}
+
+function closeDrawers() {
+  state.root?.querySelectorAll('[data-knowledge-drawer]').forEach((node) => node.remove());
 }
 
 function openCreateKnowledgeBookDrawer() {
@@ -2384,7 +2503,6 @@ function openCreateKnowledgeBookDrawer() {
     `,
     buildPayload: (data) => ({
       title: `Knowledge Book erstellen · ${data.title || 'Untitled'}`,
-      instruction: 'Lege ein neues Knowledge Book im CTOX Knowledge Store an. Erzeuge die Skillbook-Struktur, einen initialen Skill und bereite Runbook-/DataFrame-Slots vor.',
       knowledge_book: {
         title: data.title,
         domain: data.domain,
@@ -2394,7 +2512,7 @@ function openCreateKnowledgeBookDrawer() {
       },
     }),
   });
-  state.ctx.openLeftDrawer(body);
+  openDrawer('left', body);
 }
 
 function openImportKnowledgeBookDrawer() {
@@ -2420,7 +2538,6 @@ function openImportKnowledgeBookDrawer() {
     `,
     buildPayload: (data) => ({
       title: `Knowledge Book importieren · ${data.source || data.source_type}`,
-      instruction: 'Importiere die angegebene Quelle als Knowledge Book. Extrahiere Skillbook, Skill, Runbooks und DataFrame-Definitionen, ohne bestehende Knowledge-Struktur unkontrolliert zu ueberschreiben.',
       import_request: {
         source_type: data.source_type,
         source: data.source,
@@ -2429,7 +2546,7 @@ function openImportKnowledgeBookDrawer() {
       },
     }),
   });
-  state.ctx.openLeftDrawer(body);
+  openDrawer('left', body);
 }
 
 function openExportKnowledgeBookDrawer() {
@@ -2461,7 +2578,6 @@ function openExportKnowledgeBookDrawer() {
     `,
     buildPayload: (data) => ({
       title: `Knowledge Books exportieren · ${data.scope}`,
-      instruction: 'Exportiere Knowledge Books aus dem CTOX Knowledge Store mit Skillbook-, Runbook- und DataFrame-Metadaten.',
       export_request: {
         scope: data.scope,
         format: data.format,
@@ -2473,7 +2589,7 @@ function openExportKnowledgeBookDrawer() {
       },
     }),
   });
-  state.ctx.openLeftDrawer(body);
+  openDrawer('left', body);
 }
 
 function knowledgeActionDrawer({ title, subtitle, fields, actionLabel, commandType, recordId, commandTitle, buildPayload }) {
@@ -2490,13 +2606,11 @@ function knowledgeActionDrawer({ title, subtitle, fields, actionLabel, commandTy
     <form class="knowledge-action-form">
       <div class="knowledge-action-fields">${fields}</div>
       <footer class="knowledge-drawer-actions">
-        <span data-command-status></span>
         <button class="ctox-button is-primary" type="submit" disabled aria-disabled="true">${escapeHtml(actionLabel)}</button>
       </footer>
     </form>
   `;
   const form = body.querySelector('form');
-  const status = body.querySelector('[data-command-status]');
   const submitButton = form.querySelector('button[type="submit"]');
   const requiredFields = Array.from(form.querySelectorAll('[required][name]')).map((input) => input.name);
   const updateSubmitState = () => {
@@ -2504,7 +2618,7 @@ function knowledgeActionDrawer({ title, subtitle, fields, actionLabel, commandTy
     submitButton.disabled = !valid;
     submitButton.setAttribute('aria-disabled', String(!valid));
   };
-  body.querySelector('[data-close-drawer]').addEventListener('click', state.ctx.closeDrawers);
+  body.querySelector('[data-close-drawer]').addEventListener('click', closeDrawers);
   form.addEventListener('input', updateSubmitState);
   form.addEventListener('change', updateSubmitState);
   form.addEventListener('submit', async (event) => {
@@ -2514,9 +2628,8 @@ function knowledgeActionDrawer({ title, subtitle, fields, actionLabel, commandTy
       return;
     }
     const data = Object.fromEntries(new FormData(form).entries());
-    status.textContent = 'Sende...';
     const payload = buildPayload(data);
-    const result = await dispatchKnowledgeCommand({
+    dispatchKnowledgeCommand({
       type: commandType,
       record_id: recordId,
       payload: {
@@ -2531,9 +2644,7 @@ function knowledgeActionDrawer({ title, subtitle, fields, actionLabel, commandTy
         drawer: title,
       },
     });
-    const trackingId = result?.task_id || result?.command_id || '';
-    status.textContent = result?.ok ? `Task-ID: ${trackingId || 'angelegt'}` : 'Konnte nicht angelegt werden.';
-    showCommandStatus(result);
+    closeDrawers();
   });
   updateSubmitState();
   return body;
@@ -2565,7 +2676,7 @@ async function openKnowledgeConfig() {
       <button class="ctox-button is-primary" type="button" data-drawer-save disabled aria-disabled="true">An CTOX geben</button>
     </footer>
   `;
-  body.querySelector('[data-close-drawer]').addEventListener('click', state.ctx.closeDrawers);
+  body.querySelector('[data-close-drawer]').addEventListener('click', closeDrawers);
   const configTextarea = body.querySelector('[data-drawer-markdown]');
   const configSave = body.querySelector('[data-drawer-save]');
   const updateConfigSubmit = () => {
@@ -2582,12 +2693,12 @@ async function openKnowledgeConfig() {
     await queueMarkdownSave();
   });
   updateConfigSubmit();
-  state.ctx.openLeftDrawer(body);
+  openDrawer('left', body);
 }
 
 function openRunbookConfig() {
   const runbook = state.runbooks.find((entry) => runbookIdMatches(entry.id || entry.runbook_id, state.selectedRunbookId));
-  state.ctx.openRightDrawer(drawerContent('Runbook Runtime', [
+  openDrawer('right', drawerContent('Runbook Runtime', [
     ['Ausführung', 'CTOX Task Queue'],
     ['Command history', 'Local command data'],
     ['Ausgewählt', runbook?.title || state.selectedRunbookId || 'kein Runbook'],
@@ -2602,7 +2713,7 @@ function drawerContent(title, rows) {
     ? `<dl class="ctox-fields knowledge-config-list">${rows.map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd>`).join('')}</dl>`
     : `<p>${escapeHtml(rows)}</p>`;
   body.innerHTML = `<header class="drawer-header-row"><div><h2>${escapeHtml(title)}</h2></div><button class="ctox-pane-icon" type="button" data-close-drawer aria-label="Schließen">${actionIcon('close')}</button></header>${content}`;
-  body.querySelector('[data-close-drawer]').addEventListener('click', state.ctx.closeDrawers);
+  body.querySelector('[data-close-drawer]').addEventListener('click', closeDrawers);
   return body;
 }
 
@@ -2695,9 +2806,11 @@ function renderKnowledgeContextMenu(context, x, y) {
 }
 
 function canModifyKnowledgeApp() {
-  if (typeof state.ctx.canModifyModule === 'function' && state.ctx.canModifyModule()) return true;
-  const user = state.ctx.session?.user || {};
-  const role = String(user.role || (user.is_admin ? 'admin' : 'user')).trim().toLowerCase().replace(/^business_os_/, '');
+  // Nur Spiegel (api.actor); entschieden wird im Core.
+  const actor = state.api?.actor;
+  const permissions = actor?.permissions?.get?.() || [];
+  if (permissions.includes('apps.source.edit')) return true;
+  const role = String(actor?.role || '').trim().toLowerCase().replace(/^business_os_/, '');
   return ['admin', 'chef'].includes(role);
 }
 
@@ -2726,63 +2839,41 @@ function activeRunbookForContext(context) {
   return state.runbooks.find((entry) => runbookIdMatches(entry.id || entry.runbook_id, state.selectedRunbookId)) || null;
 }
 
-async function dispatchContextAction(action, context) {
-  const item = itemForCommandContext(context);
-  const runbook = activeRunbookForContext(context);
-  const selectedKnowledgeId = selectedKnowledgeIdForContext(context, item);
-  const selectedTableId = selectedTableIdForContext(context, item);
-  const selectedRunbookId = normaliseRunbookId(runbook?.id || runbook?.runbook_id || '');
-  if (selectedRunbookId) state.selectedRunbookId = selectedRunbookId;
-  const result = await dispatchKnowledgeCommand({
-    type: action.type,
-    record_id: context.record_id,
-    payload: {
-      title: `${action.label} · ${context.label || item?.title || runbook?.title || 'Knowledge'}`,
-      instruction: `${action.label}. Nutze den Kontext aus dem Knowledge-Modul und schreibe Änderungen über die CTOX Queue, nicht direkt im Browser.`,
-      selected_item: item,
-      selected_runbook: runbook,
-      selected_table_id: selectedTableId,
-      context,
-    },
-    client_context: {
-      action: 'context-menu',
-      context_action: action.type,
-      column: context.column,
-      record_type: context.record_type,
-      selected_knowledge_id: selectedKnowledgeId,
-      selected_runbook_id: selectedRunbookId,
-      selected_table_id: selectedTableId,
-    },
-  });
-  showCommandStatus(result);
-}
-
 async function dispatchContextChat(context, message, mode = 'data') {
   const trimmed = String(message || '').trim();
   const status = state.contextMenu?.querySelector('[data-context-status]');
-  if (!trimmed) {
-    if (status) status.textContent = 'Nachricht fehlt.';
-    return;
-  }
-  const safeMode = mode === 'app' && canModifyKnowledgeApp() ? 'app' : 'data';
+  if (!trimmed) return;
+  const canModifyApp = canModifyKnowledgeApp();
+  const safeMode = normalizeContextChatMode(mode, { canModifyApp, includeAsk: false });
   const item = itemForCommandContext(context);
   const runbook = activeRunbookForContext(context);
   const selectedKnowledgeId = selectedKnowledgeIdForContext(context, item);
   const selectedTableId = selectedTableIdForContext(context, item);
   const selectedRunbookId = normaliseRunbookId(runbook?.id || runbook?.runbook_id || '');
-  if (status) status.textContent = 'Sende...';
-  const result = await dispatchKnowledgeCommand({
-    type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'ctox.knowledge.chat',
-    record_id: safeMode === 'app' ? 'knowledge' : (context.record_id || selectedKnowledgeId || 'knowledge'),
+  const contextLabel = context.label || item?.title || runbook?.title || context.column || 'Knowledge';
+  // App ändern: Standardbefehl der Chat-App ctox über den Baustein (Strang SKL-D, Kern §16.40 commands_out).
+  // Daten bearbeiten bleibt der eigene Befehl ctox.knowledge.chat (Handler der App, SKL-B2).
+  const handle = safeMode === 'app'
+    ? sendContextChat(state.api, {
+      source_app: 'knowledge',
+      record_ref: context.record_id || selectedKnowledgeId || '',
+      text: trimmed,
+      mode: 'app',
+      canModifyApp,
+      title: `Knowledge App modifizieren · ${contextLabel}`,
+      thread_key: 'business-os/knowledge',
+      context,
+    }, { send: (type, payload, opts) => dispatchKnowledgeCommand({ type, record_id: opts.record_id, payload, client_context: { action: 'context-chat', mode: 'app' } }), navigate: false })
+    : dispatchKnowledgeCommand({
+    type: 'ctox.knowledge.chat',
+    record_id: context.record_id || selectedKnowledgeId || 'knowledge',
     payload: {
-      title: `${safeMode === 'app' ? 'Knowledge App modifizieren' : 'Knowledge Daten bearbeiten'} · ${context.label || item?.title || runbook?.title || context.column || 'Knowledge'}`,
-      instruction: safeMode === 'app'
-        ? `Modifiziere die Knowledge-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, Daten selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
-        : trimmed,
+      title: `Knowledge Daten bearbeiten · ${contextLabel}`,
+      instruction: trimmed,
       prompt: trimmed,
       user_message: trimmed,
       mode: safeMode,
-      target: safeMode === 'app' ? 'app' : 'data',
+      target: 'data',
       selected_item: item,
       selected_runbook: runbook,
       selected_table_id: selectedTableId,
@@ -2799,36 +2890,13 @@ async function dispatchContextChat(context, message, mode = 'data') {
       selected_table_id: selectedTableId,
     },
   });
-  const trackingId = result?.task_id || result?.command_id || '';
-  if (result?.ok && trackingId) rememberCtoxTask({ taskId: result.task_id, commandId: result.command_id, trackingId, context, mode: safeMode });
   if (status) {
-    if (result?.ok) {
-      status.innerHTML = `Task-ID: <code>${escapeHtml(trackingId || 'unbekannt')}</code> <button class="ctox-button" type="button" data-open-ctox-task>Im CTOX Modul öffnen</button>`;
-      status.querySelector('[data-open-ctox-task]')?.addEventListener('click', () => {
-        hideKnowledgeContextMenu();
-        location.hash = 'ctox';
-      });
-    } else {
-      status.textContent = 'Konnte nicht angelegt werden.';
-    }
-  }
-}
-
-function rememberCtoxTask({ taskId, commandId, trackingId, context, mode }) {
-  try {
-    sessionStorage.setItem('ctox.businessOs.focusTask', JSON.stringify({
-      taskId: taskId || trackingId,
-      commandId: commandId || '',
-      module: 'knowledge',
-      source: 'knowledge-context-chat',
-      mode,
-      recordId: context?.record_id || '',
-      recordType: context?.record_type || '',
-      label: context?.label || '',
-      createdAt: new Date().toISOString(),
-    }));
-  } catch (_) {
-    // Ignore unavailable session storage.
+    // Aktion statt Zustandstext: Sprung in die CTOX-App mit dem Befehl als Ziel.
+    status.innerHTML = '<button class="ctox-button" type="button" data-open-ctox-task>Im CTOX Modul öffnen</button>';
+    status.querySelector('[data-open-ctox-task]')?.addEventListener('click', () => {
+      hideKnowledgeContextMenu();
+      state.api.shell.navigate('ctox', { command_id: handle.id || '', module: 'knowledge', source: 'knowledge-context-chat', mode: safeMode, record_id: context?.record_id || '', record_type: context?.record_type || '' });
+    });
   }
 }
 
@@ -2861,12 +2929,6 @@ function selectedTableIdForContext(context, item) {
 
 function hideKnowledgeContextMenu() {
   if (state.contextMenu) state.contextMenu.hidden = true;
-}
-
-function handleShellMessage(event) {
-  if (event.data?.type === 'ctox-business-os-language') {
-    state.lang = event.data.lang === 'en' ? 'en' : 'de';
-  }
 }
 
 function localDataFrameSchema(item) {
@@ -3195,6 +3257,7 @@ function inferColumnSemantics(column = {}) {
       unit: explicitUnit || 'in',
       metricUnit: 'mm',
       valueKind: 'propeller_size',
+      // v4-allow: text – nur Tooltip der Spaltenhilfe (columnHeaderHelp → title/aria-label/data-tooltip), kein sichtbarer Satz
       description: 'Propellergröße wie 9x5 bedeutet 9 Zoll Durchmesser und 5 Zoll Steigung. Knowledge normalisiert dies als Durchmesser x Steigung in Millimetern für metrischen Vergleich und CSV-Export.',
     };
   }
@@ -3721,10 +3784,10 @@ function downloadTextFile(filename, content, type = 'text/plain;charset=utf-8') 
   // Der Desktop-Body ist nicht der Host dieses Moduls: ein Anker dort haengt
   // ausserhalb des App-Fensters (siehe scripts/assert-shell-v2-contract.mjs,
   // Regel body-overlay).
-  (els.root || state.ctx?.host || document.documentElement).append(link);
+  (els.root || state.root).append(link);
   link.click();
   link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function escapeHtml(value) {
@@ -3742,6 +3805,7 @@ function isKnowledgeActionFormReady(values, requiredFields = []) {
 }
 
 export const __knowledgeTestHooks = {
+  knowledgeSnapshot,
   renderKnowledgeBundle,
   groupScopeLabel,
   shortDay,

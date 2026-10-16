@@ -1,8 +1,20 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
-import { createRxDatabase } from '../../rxdb/src/index.mjs';
-import {
+import { registerHooks } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+// App-API 4.0: 'ctox:shared/x.js' resolves onto the shell's shared/ (as the Service Worker rewrites it).
+const SHARED = fileURLToPath(new URL('../../shared/', import.meta.url));
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.startsWith('ctox:shared/')) {
+      return nextResolve(pathToFileURL(SHARED + specifier.slice('ctox:shared/'.length)).href, context);
+    }
+    return nextResolve(specifier, context);
+  },
+});
+const {
   __ticketTestHooks,
   ticketBandOf,
   matchesTicketStatusFilter,
@@ -10,10 +22,9 @@ import {
   countsForTickets,
   ticketOpsFlowActive,
   resolveOpsVisible,
-  resolveTicketListState,
   renderTicketList,
   ticketRowHtml,
-} from './index.js';
+} = await import('./index.js');
 
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 const html = read('./index.html');
@@ -35,29 +46,16 @@ test('tickets: agent record context + command-failure contract', () => {
   assert.equal(__ticketTestHooks.commandFailureMessage({ status: 'failed', error: 'denied' }), 'denied');
 });
 
-test('tickets: canonical collection readiness separates syncing from true empty', () => {
-  assert.equal(
-    resolveTicketListState({ sourceCount: 0, readiness: { ready: false, state: 'catching-up' } }),
-    'syncing',
-    'an empty unready source remains in the syncing state',
-  );
-  assert.equal(
-    resolveTicketListState({ sourceCount: 0, readiness: { ready: true, state: 'live' } }),
-    'empty',
-    'an empty ready source is a true empty state',
-  );
-  assert.equal(
-    resolveTicketListState({ sourceCount: 2, readiness: { ready: false, state: 'catching-up' } }),
-    'content',
-    'readiness does not gate filter-empty rendering once source tickets exist',
-  );
-  assert.match(indexJs, /sync\?\.subscribeCollectionReadiness/, 'canonical readiness changes are subscribed');
-  assert.match(indexJs, /subscribe\.call\(state\.ctx\.sync, TICKET_PRIMARY_COLLECTION/, 'primary collection is wired to readiness');
-  assert.match(indexJs, /stopReadiness\(\)/, 'readiness subscription is cleaned up');
-  assert.match(indexJs, /ctox-empty ctox-syncing/, 'syncing state uses the canonical kit class');
+test('tickets v4: no readiness gating, no loading/syncing copy — empty renders nothing', () => {
+  // App-API 4.0 (PORTING.md R4/R11): live queries are local and complete; state goes to the zone only.
+  assert.doesNotMatch(indexJs, /subscribeCollectionReadiness|collectionReadiness|startCollection/);
+  assert.doesNotMatch(indexJs, /ctox-syncing|resolveTicketListState|ticketReadiness/);
+  assert.doesNotMatch(indexJs, /commandBus|until: 'accepted'|state\.ctx/);
   assert.doesNotMatch(indexJs, /sync\.diagnostics|frameTransport|initialReplicationState/, 'private diagnostics heuristics are removed');
+  assert.equal(renderTicketList([], { view: 'cards' }), '');
   const detailRenderer = indexJs.slice(indexJs.indexOf('function renderDetail('), indexJs.indexOf('function renderOps('));
-  assert.doesNotMatch(detailRenderer, /ticketReadiness|resolveTicketListState/, 'selection empty is not readiness-gated');
+  assert.match(detailRenderer, /body\.innerHTML = '';/, 'no selection → empty stage, no hint copy');
+  assert.match(indexJs, /api\.status\.report\(/, 'failures go to the status zone');
 });
 
 test('tickets: presentation stays within the kit guard rails', () => {
@@ -195,8 +193,8 @@ test('tickets: renderTicketList renders selector shards and marks selection', ()
   assert.match(out, /is-selected/, 'the selected row is marked');
   assert.ok(!/<details/.test(out), 'shards do not expand inline');
 
-  const empty = renderTicketList([], { view: 'cards', emptyText: 'Nichts' });
-  assert.match(empty, /ctox-empty/, 'empty state uses the kit empty class');
+  const empty = renderTicketList([], { view: 'cards' });
+  assert.equal(empty, '', 'v4: an empty list renders nothing');
 
   const listRow = ticketRowHtml(rows[0], { view: 'list', selected: false });
   assert.match(listRow, /ticket-row--list/);
@@ -237,76 +235,14 @@ test('tickets: ops pane auto-reveal follows mode + operation flow', () => {
 });
 
 
-test('tickets realtime refresh hints do not start an unused denied queue snapshot', async () => {
-  const names = ['ctox_ticket_items', 'ctox_queue_tasks', 'ctox_crew_members'];
-  const databases = [];
-  const handles = new Map();
-  const observers = new Map();
-  const reads = { demand: 0, storage: 0 };
-  const denied = Object.assign(new Error('peer is not authorized for collection ctox_queue_tasks'), {
-    code: 'REMOTE_ERROR',
-  });
-  let refreshes = 0;
-  let cleanup;
-  const wait = () => new Promise(resolve => setTimeout(resolve, 120));
-  try {
-    for (const name of names) {
-      const listeners = new Set();
-      observers.set(name, listeners);
-      const storage = {
-        primaryPath: 'id', schemaIndexes: () => [],
-        observe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-        async queryDocuments() { reads.storage++; return []; },
-        async allDocuments() { reads.storage++; return []; },
-        async findDocumentsById() { reads.storage++; return {}; },
-      };
-      const db = await createRxDatabase({
-        name: 'tickets-realtime-' + name,
-        storage: { nativeStorage: { collection: () => storage, close() {} } },
-      });
-      databases.push(db);
-      await db.addCollections({ [name]: { schema: {
-        version: 0, primaryKey: 'id', type: 'object', properties: { id: { type: 'string' } },
-      } } });
-      const collection = db.collection(name);
-      collection.setDemandLoader({ async resolveQuery() {
-        reads.demand++;
-        if (name === 'ctox_queue_tasks') throw denied;
-        return [{ id: 'visible-record', _rev: '1-record', _deleted: false }];
-      } });
-      handles.set(name, collection);
-    }
-    const declarationStart = indexJs.indexOf('const collectionNames = [');
-    const declarationEnd = indexJs.indexOf('];', declarationStart) + 2;
-    const functionStart = indexJs.indexOf('function wireRealtime() {');
-    const functionEnd = indexJs.indexOf('\nfunction readPrimaryTicketReadiness(', functionStart);
-    assert(declarationStart >= 0 && declarationEnd > declarationStart && functionStart >= 0 && functionEnd > functionStart);
-    // Run the production function and collection list, with actual RxDB handles.
-    // Its callback only schedules the existing bounded refresh; no snapshot is consumed.
-    const wire = new Function('ticketCollection', 'scheduleRefresh',
-      indexJs.slice(declarationStart, declarationEnd) + '\n'
-      + indexJs.slice(functionStart, functionEnd) + '\nreturn wireRealtime;')(
-      name => handles.get(name), () => { refreshes++; },
-    );
-    cleanup = wire();
-    await wait();
-    assert.equal(refreshes, 3, 'initial invalidation reaches each present source');
-    assert.deepEqual(reads, { demand: 0, storage: 0 }, 'subscribing does not issue implicit native reads');
-    for (const listener of observers.get('ctox_ticket_items')) listener({ external: true, ids: ['visible-record'] });
-    await wait();
-    assert.equal(refreshes, 4, 'a changed ticket still schedules refresh');
-    assert.deepEqual(reads, { demand: 0, storage: 0 });
-    assert.equal((await handles.get('ctox_ticket_items').find().exec()).length, 1);
-    await assert.rejects(handles.get('ctox_queue_tasks').find().exec(), error => error === denied);
-    assert.equal(reads.demand, 2, 'explicit reads retain both authorized data and native denial');
-    cleanup();
-    cleanup();
-    assert.equal([...observers.values()].reduce((total, listeners) => total + listeners.size, 0), 0);
-    for (const handle of handles.values()) handle.notifyQueryWindowChange();
-    await wait();
-    assert.equal(refreshes, 4, 'closing Tickets detaches every realtime listener');
-  } finally {
-    cleanup?.();
-    await Promise.all(databases.map(db => db.close()));
-  }
+test('tickets realtime: one live query per collection; queue tasks and crew stay bounded reads', () => {
+  // v3 guarded against implicit native snapshots of denied collections (RxDB demand loader). In v4 the
+  // reads are plain api.query subscriptions; the crew reads keep their bounded selector + limit.
+  const mount = indexJs.slice(indexJs.indexOf('export async function mount('), indexJs.indexOf('function setLanguage('));
+  assert.match(mount, /for \(const name of collectionNames\) \{\s*disposers\.push\(api\.query\(name, \{\}\)\.subscribe/);
+  assert.match(mount, /api\.query\('ctox_queue_tasks', \{ selector: \{ ticket_key: \{ \$gt: '' \} \}, limit: 200 \}\)/);
+  assert.match(mount, /api\.query\('ctox_crew_members', \{ selector: \{ archived: false \}, limit: 64 \}\)/);
+  // Every subscription is released on unmount.
+  assert.match(mount, /for \(const dispose of disposers\.splice\(0\)\)/);
+  assert.doesNotMatch(indexJs, /\.find\(\)\.exec\(\)|\$\.subscribe/);
 });

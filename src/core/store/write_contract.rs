@@ -12,11 +12,11 @@ use std::sync::Arc;
 
 #[path = "command_contract.rs"]
 mod command;
-pub(super) use command::check_command_input;
 pub use command::{
     activate_command_projections, backfill_command_projections, command_document_schema,
     project_command, read_command_projection, validate_migrated_command, CommandProjection,
 };
+pub(super) use command::{apply_command_patch, check_command_input};
 pub(super) use command::{check_command, duplicate_command};
 pub use command::{
     check_executor_fence, claim_command, command_lease, rejection_code, with_command_fence,

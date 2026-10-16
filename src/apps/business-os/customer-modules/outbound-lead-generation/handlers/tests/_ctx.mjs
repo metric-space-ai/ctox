@@ -1,0 +1,243 @@
+// In-memory ctx stand-in for the outbound-lead-generation v4 handler tests.
+// Copied from modules/outbound/handlers/tests/_ctx.mjs and extended by $regex/$options
+// (Mango subset of index.d.ts: JS-Regex, only flag `i`).
+//
+// Implements the fixed handler contract: read(collection, mango) / get / put /
+// patch / remove / transaction / command / model / http / cap.<name>.<fn> /
+// now / log. Mango subset: $eq $ne $gt $gte $lt $lte $in $nin $exists $and
+// $or, dotted paths, implicit equality, plus `sort` and `limit`.
+//
+// Capabilities are recorded calls; a test supplies implementations through
+// `caps: { 'mail.send': async (args) => ({...}) }`. A call without an
+// implementation throws {code:'unavailable'} — exactly what a missing
+// capability would do in the real runtime.
+
+import { readFileSync } from 'node:fs';
+
+// ctx.asset (§16.34) für Handler, die Paket-Templates lesen (prompts/*.md): Paketordner = zwei Ebenen über tests/.
+const APP_DIR = new URL('../../', import.meta.url);
+
+function clone(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+function getPath(doc, path) {
+  let cursor = doc;
+  for (const key of path.split('.')) {
+    if (cursor === null || typeof cursor !== 'object' || !(key in cursor)) return undefined;
+    cursor = cursor[key];
+  }
+  return cursor;
+}
+
+function equal(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function compare(a, b) {
+  if (typeof a !== typeof b) return null;
+  if (typeof a === 'number' || typeof a === 'string') return a < b ? -1 : a > b ? 1 : 0;
+  return null;
+}
+
+function matchOperator(value, op, arg) {
+  switch (op) {
+    case '$eq': return Array.isArray(value) && !Array.isArray(arg) ? value.some((v) => equal(v, arg)) : equal(value, arg);
+    case '$ne': return !matchOperator(value, '$eq', arg);
+    case '$gt': { const c = compare(value, arg); return c !== null && c > 0; }
+    case '$gte': { const c = compare(value, arg); return c !== null && c >= 0; }
+    case '$lt': { const c = compare(value, arg); return c !== null && c < 0; }
+    case '$lte': { const c = compare(value, arg); return c !== null && c <= 0; }
+    case '$in': return Array.isArray(arg) && arg.some((candidate) => matchOperator(value, '$eq', candidate));
+    case '$nin': return Array.isArray(arg) && !arg.some((candidate) => matchOperator(value, '$eq', candidate));
+    case '$exists': return arg ? value !== undefined : value === undefined;
+    case '$regex': {
+      if (typeof value !== 'string') return false;
+      const re = arg instanceof RegExp ? arg : new RegExp(arg, '');
+      return re.test(value);
+    }
+    case '$options': return true;
+    default: throw Object.assign(new Error(`unsupported mango operator ${op}`), { code: 'invalid' });
+  }
+}
+
+export function matchesSelector(doc, selector) {
+  if (!selector || typeof selector !== 'object') return true;
+  for (const [key, condition] of Object.entries(selector)) {
+    if (key === '$and') {
+      if (!condition.every((sub) => matchesSelector(doc, sub))) return false;
+      continue;
+    }
+    if (key === '$or') {
+      if (!condition.some((sub) => matchesSelector(doc, sub))) return false;
+      continue;
+    }
+    const value = getPath(doc, key);
+    const isOperatorObject = condition !== null && typeof condition === 'object' && !Array.isArray(condition)
+      && Object.keys(condition).length > 0 && Object.keys(condition).every((k) => k.startsWith('$'));
+    if (isOperatorObject) {
+      for (const [op, arg] of Object.entries(condition)) {
+        const effective = op === '$regex' && condition.$options === 'i' && !(arg instanceof RegExp) ? new RegExp(arg, 'i') : arg;
+        if (!matchOperator(value, op, effective)) return false;
+      }
+    } else if (!matchOperator(value, '$eq', condition)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function applySort(docs, sort) {
+  if (!Array.isArray(sort) || sort.length === 0) return docs;
+  return docs.sort((left, right) => {
+    for (const entry of sort) {
+      const [field, direction] = Object.entries(entry)[0];
+      const c = compare(getPath(left, field), getPath(right, field));
+      if (c) return direction === 'desc' ? -c : c;
+    }
+    return 0;
+  });
+}
+
+function createStore(collections) {
+  const api = {
+    async read(collection, query = {}) {
+      const mango = query && query.selector !== undefined ? query : { selector: query };
+      const rows = Object.values(collections[collection] ?? {})
+        .filter((doc) => !doc._deleted && matchesSelector(doc, mango.selector))
+        .map(clone);
+      const sorted = applySort(rows, mango.sort);
+      const skipped = mango.skip ? sorted.slice(mango.skip) : sorted;
+      return typeof mango.limit === 'number' ? skipped.slice(0, mango.limit) : skipped;
+    },
+    async get(collection, id) {
+      const doc = collections[collection]?.[id];
+      return doc && !doc._deleted ? clone(doc) : null;
+    },
+    async put(collection, doc) {
+      if (!doc || typeof doc.id !== 'string' || !doc.id) {
+        throw Object.assign(new Error('put requires doc.id'), { code: 'invalid' });
+      }
+      collections[collection] ??= {};
+      collections[collection][doc.id] = clone(doc);
+      return { ok: true, id: doc.id };
+    },
+    async patch(collection, id, patch) {
+      const existing = collections[collection]?.[id];
+      if (!existing || existing._deleted) throw Object.assign(new Error('not found'), { code: 'not_found' });
+      collections[collection][id] = { ...existing, ...clone(patch), id };
+      return { ok: true, id };
+    },
+    async remove(collection, id) {
+      if (collections[collection]) delete collections[collection][id];
+      return { ok: true, id };
+    },
+  };
+  return api;
+}
+
+export function createTestCtx({ data = {}, now = 1_700_000_000_000, caps = {}, http = null } = {}) {
+  const state = { collections: clone(data) };
+  const calls = { commands: [], caps: [], model: [], http: [], logs: [], writes: [] };
+  let currentNow = now;
+
+  const tracked = (store) => ({
+    read: store.read,
+    get: store.get,
+    async put(collection, doc) { calls.writes.push({ op: 'put', collection, id: doc?.id }); return store.put(collection, doc); },
+    async patch(collection, id, patch) { calls.writes.push({ op: 'patch', collection, id }); return store.patch(collection, id, patch); },
+    async remove(collection, id) { calls.writes.push({ op: 'remove', collection, id }); return store.remove(collection, id); },
+  });
+
+  const makeCapProxy = (prefix) => new Proxy(() => {}, {
+    get(_target, key) {
+      if (typeof key !== 'string' || key === 'then') return undefined;
+      return makeCapProxy(prefix ? `${prefix}.${key}` : key);
+    },
+    async apply(_target, _this, args) {
+      calls.caps.push({ name: prefix, args: clone(args) });
+      const impl = caps[prefix];
+      if (!impl) throw Object.assign(new Error(`capability ${prefix} unavailable`), { code: 'unavailable' });
+      return impl(...args);
+    },
+  });
+
+  const ctx = {
+    ...tracked(createStore(state.collections)),
+    async transaction(fn) {
+      const snapshot = clone(state.collections);
+      const working = clone(state.collections);
+      const tx = tracked(createStore(working));
+      try {
+        const result = await fn(tx);
+        for (const key of Object.keys(state.collections)) delete state.collections[key];
+        Object.assign(state.collections, working);
+        return result;
+      } catch (error) {
+        for (const key of Object.keys(state.collections)) delete state.collections[key];
+        Object.assign(state.collections, snapshot);
+        throw error;
+      }
+    },
+    async command(type, payload) {
+      const id = `cmd_test_${calls.commands.length + 1}`;
+      calls.commands.push({ id, type, payload: clone(payload) });
+      return { id };
+    },
+    async model(request) {
+      calls.model.push(clone(request));
+      if (!caps.model) throw Object.assign(new Error('model unavailable'), { code: 'unavailable' });
+      return caps.model(request);
+    },
+    async http(request) {
+      calls.http.push(clone(request));
+      if (!http) throw Object.assign(new Error('http not declared'), { code: 'forbidden' });
+      return http(request);
+    },
+    cap: makeCapProxy(''),
+    now() { return currentNow; },
+    uuid() { calls.uuid = (calls.uuid ?? 0) + 1; return `00000000-0000-4000-8000-${String(calls.uuid).padStart(12, '0')}`; },
+    log(level, msg, data) { calls.logs.push({ level, msg, data }); },
+    asset(path) {
+      if (typeof path !== 'string' || path.startsWith('/') || path.split('/').includes('..')) throw Object.assign(new Error('asset path'), { code: 'invalid' });
+      return readFileSync(new URL(path, APP_DIR), 'utf8');
+    },
+  };
+
+  return {
+    ctx,
+    calls,
+    state,
+    setNow(value) { currentNow = value; },
+    doc(collection, id) { return clone(state.collections[collection]?.[id] ?? null); },
+    all(collection) { return Object.values(state.collections[collection] ?? {}).map(clone); },
+  };
+}
+
+/** Build a contract command. */
+export function cmd(type, payload = {}, extra = {}) {
+  return {
+    id: extra.id ?? `cmd_${type}`,
+    type,
+    payload,
+    actor: extra.actor ?? { id: 'user_1', role: 'admin' },
+    app_id: 'outbound-lead-generation',
+    app_ver: '4.0.0-test',
+    ...extra,
+  };
+}
+
+/** Assert helper: run and capture a contract error. */
+export async function rejects(promise) {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  throw new Error('expected handler to throw');
+}
+
+/** Default caps used by tests that need audit events. */
+export function auditCaps(extra = {}) {
+  return { 'audit.event': async () => ({ ok: true }), ...extra };
+}

@@ -6,7 +6,7 @@
    tickets-specific bits: shard rows, the event timeline, prose bodies, card
    action clusters and the command-status line. */
 
-.tickets-module {
+[data-app="tickets"] .tickets-module {
   --ctox-left-width: 340px;
   --ctox-right-width: 360px;
 }
@@ -14,29 +14,29 @@
 /* Explicit column pins so the center pane never slides onto a resizer track
    when the kit hides resizers on narrow windows. Primary (center) keeps a hard
    minimum; the on-demand side pane yields. */
-.tickets-left { grid-column: 1; grid-template-rows: auto auto minmax(0, 1fr) auto; }
-.tickets-module > [data-resizer="left"] { grid-column: 2; }
-.tickets-center { grid-column: 3; grid-template-rows: auto minmax(0, 1fr); }
-.tickets-module > [data-resizer="right"] { grid-column: 4; }
-.tickets-right { grid-column: 5; grid-template-rows: auto minmax(0, 1fr); }
+[data-app="tickets"] .tickets-left { grid-column: 1; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+[data-app="tickets"] .tickets-module > [data-resizer="left"] { grid-column: 2; }
+[data-app="tickets"] .tickets-center { grid-column: 3; grid-template-rows: auto minmax(0, 1fr); }
+[data-app="tickets"] .tickets-module > [data-resizer="right"] { grid-column: 4; }
+[data-app="tickets"] .tickets-right { grid-column: 5; grid-template-rows: auto minmax(0, 1fr); }
 
 /* Operations pane is ON-DEMAND: hidden by default, the center timeline owns the
    full width. Opened from the MAIN header icon / auto-revealed on an operation
    flow (the module drops .is-ops-hidden). */
-.tickets-module {
+[data-app="tickets"] .tickets-module {
   grid-template-columns: var(--ctox-left-width, 340px) 12px minmax(300px, 1fr) 12px var(--ctox-right-width, 360px);
 }
 
-.tickets-module.is-ops-hidden {
+[data-app="tickets"] .tickets-module.is-ops-hidden {
   grid-template-columns: var(--ctox-left-width, 340px) 12px minmax(300px, 1fr);
 }
 
-.tickets-module.is-ops-hidden .tickets-right,
-.tickets-module.is-ops-hidden > [data-resizer="right"] {
+[data-app="tickets"] .tickets-module.is-ops-hidden .tickets-right,
+[data-app="tickets"] .tickets-module.is-ops-hidden > [data-resizer="right"] {
   display: none;
 }
 
-.tickets-center [data-action="toggle-ops"].is-active {
+[data-app="tickets"] .tickets-center [data-action="toggle-ops"].is-active {
   color: var(--accent);
   background: var(--accent-soft);
 }
@@ -49,28 +49,29 @@
    control at the top right. The app has to keep those zones free itself.
    Geometry only — colours, typography and pane content stay as above.
    -------------------------------------------------------------------------- */
-.shell-window[data-shell-contract="v2"] .tickets-module {
+[data-app="tickets"] .tickets-module {
   /* The window control is exactly two header rows wide and high. */
-  --tickets-v2-control-inset: calc(var(--shell-v2-header-row-size, 37px) * 2);
+  /* Regel 8 (15.10.): Rahmen-Variable der rechten Steuerzone, v2-Rückfall zwei Kopfzeilen. */
+  --tickets-v2-control-inset: var(--shell-v2-control-inset, calc(var(--shell-v2-header-row-size, 37px) * 2));
   padding: 0;
 }
 
 /* The v2 frame already draws the window edge; the pane borders would push the
    first header row one pixel out of the shell band. */
-.shell-window[data-shell-contract="v2"] .tickets-module .tickets-pane {
+[data-app="tickets"] .tickets-module .tickets-pane {
   border: 0;
   border-radius: 0;
 }
 
 /* Every pane head starts flush at the top so its first row lines up with the
    shell band. The left head keeps its filterbar and filter tray below it. */
-.shell-window[data-shell-contract="v2"] .tickets-module .ctox-pane-header.ctox-pane-band {
+[data-app="tickets"] .tickets-module .ctox-pane-header.ctox-pane-band {
   padding-top: 0;
   padding-bottom: 0;
 }
 
 /* Top row of every pane head: exactly one shell header row. */
-.shell-window[data-shell-contract="v2"] .tickets-module .ctox-pane-title-row {
+[data-app="tickets"] .tickets-module .ctox-pane-title-row {
   box-sizing: border-box;
   min-width: 0;
   min-height: var(--shell-v2-header-row-size, 37px);
@@ -79,7 +80,7 @@
 
 /* Kicker and title share the single row instead of stacking; the title keeps
    the ellipsis so a long ticket subject never squeezes to zero width. */
-.shell-window[data-shell-contract="v2"] .tickets-module .ctox-pane-titles {
+[data-app="tickets"] .tickets-module .ctox-pane-titles {
   flex: 1 1 auto;
   flex-direction: row;
   align-items: baseline;
@@ -89,7 +90,7 @@
   overflow: hidden;
 }
 
-.shell-window[data-shell-contract="v2"] .tickets-module .ctox-pane-title {
+[data-app="tickets"] .tickets-module .ctox-pane-title {
   min-width: 0;
   margin-top: 0;
   overflow: hidden;
@@ -98,24 +99,24 @@
   line-height: 1.1;
 }
 
-.shell-window[data-shell-contract="v2"] .tickets-module .ctox-pane-actions {
+[data-app="tickets"] .tickets-module .ctox-pane-actions {
   flex: 0 0 auto;
 }
 
 /* Left head is the first head: keep the app icon zone free. The header's own
    inset already indents the filterbar and tray, so they drop their local one. */
-.shell-window[data-shell-contract="v2"] .tickets-module .tickets-left > .ctox-pane-header {
+[data-app="tickets"] .tickets-module .tickets-left > .ctox-pane-header {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
 }
 
-.shell-window[data-shell-contract="v2"] .tickets-module .tickets-left .ctox-filterbar,
-.shell-window[data-shell-contract="v2"] .tickets-module .tickets-left .ctox-filter-tray {
+[data-app="tickets"] .tickets-module .tickets-left .ctox-filterbar,
+[data-app="tickets"] .tickets-module .tickets-left .ctox-filter-tray {
   padding-inline: 0;
 }
 
 /* Second row of the left head: the filterbar is exactly one shell header row,
    so title row + filterbar together fill the two-row shell band (2 x 37px). */
-.shell-window[data-shell-contract="v2"] .tickets-module .tickets-left .ctox-filterbar {
+[data-app="tickets"] .tickets-module .tickets-left .ctox-filterbar {
   box-sizing: border-box;
   min-height: var(--shell-v2-header-row-size, 37px);
   height: var(--shell-v2-header-row-size, 37px);
@@ -126,16 +127,16 @@
    on-demand operations pane hidden that is the center head, otherwise the
    operations head. The state class sits in :where() so the narrow-window
    overrides further down keep the same specificity and win by source order. */
-.shell-window[data-shell-contract="v2"] .tickets-module:where(.is-ops-hidden) .tickets-center > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .tickets-module:where(:not(.is-ops-hidden)) .tickets-right > .ctox-pane-header {
+[data-app="tickets"] .tickets-module:where(.is-ops-hidden) .tickets-center > .ctox-pane-header,
+[data-app="tickets"] .tickets-module:where(:not(.is-ops-hidden)) .tickets-right > .ctox-pane-header {
   padding-right: var(--tickets-v2-control-inset);
 }
 
 /* Center/ops heads are static markup and visible in EVERY state (empty state
    included). They match the left head's two-row height (title row + filterbar
    row) so all top-row heads measure identically. */
-.shell-window[data-shell-contract="v2"] .tickets-module .tickets-center > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .tickets-module .tickets-right > .ctox-pane-header {
+[data-app="tickets"] .tickets-module .tickets-center > .ctox-pane-header,
+[data-app="tickets"] .tickets-module .tickets-right > .ctox-pane-header {
   /* content-box: two content rows + the kit's 1px band border, exactly like
      the left head's natural title-row + filterbar flow. */
   box-sizing: content-box;
@@ -144,7 +145,7 @@
 
 /* Pane body below the static head hosts the JS-rendered scroller, empty or
    loading state and hands it the full remaining pane height. */
-.tickets-pane-body {
+[data-app="tickets"] .tickets-pane-body {
   display: grid;
   grid-template-rows: minmax(0, 1fr);
   min-height: 0;
@@ -152,39 +153,39 @@
 
 /* Empty/loading states are injected as a pane's only child: span both pane grid
    rows so .ctox-empty fills the whole column. */
-.tickets-pane > .ctox-empty {
+[data-app="tickets"] .tickets-pane > .ctox-empty {
   grid-row: 1 / -1;
 }
 
 /* Detail / operations scrollers stack sections and cards vertically. */
-.tickets-detail-scroll,
-.tickets-ops-scroll {
+[data-app="tickets"] .tickets-detail-scroll,
+[data-app="tickets"] .tickets-ops-scroll {
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding: 12px;
 }
 
-.tickets-section {
+[data-app="tickets"] .tickets-section {
   display: grid;
   gap: 6px;
   align-content: start;
 }
 
-.tickets-section > h3 {
+[data-app="tickets"] .tickets-section > h3 {
   margin: 0;
 }
 
 /* Card header holds a title on the left and a collected icon cluster top-right,
    the canonical element-actions placement. */
-.tickets-ops-scroll .ctox-card > header {
+[data-app="tickets"] .tickets-ops-scroll .ctox-card > header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.tickets-card-actions {
+[data-app="tickets"] .tickets-card-actions {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -192,12 +193,12 @@
 
 /* custom: the shard/list switch is ONE button that names the view it produces;
    both glyphs live in the same button and the current view picks one. */
-.tickets-view-toggle > [data-view-icon] {
+[data-app="tickets"] .tickets-view-toggle > [data-view-icon] {
   display: none;
 }
 
-.tickets-view-toggle[data-pg-view="cards"] > [data-view-icon="list"],
-.tickets-view-toggle[data-pg-view="list"] > [data-view-icon="cards"] {
+[data-app="tickets"] .tickets-view-toggle[data-pg-view="cards"] > [data-view-icon="list"],
+[data-app="tickets"] .tickets-view-toggle[data-pg-view="list"] > [data-view-icon="cards"] {
   display: block;
 }
 
@@ -207,20 +208,20 @@
    echten Ticket-Detailfeldern (Schluessel, Quelle, Zuordnung, Aktualisierung)
    und grosszuegigem Padding; die Liste genau EINE kompakte Zeile aus Titel und
    einem kurzen Meta rechts. */
-.ticket-row {
+[data-app="tickets"] .ticket-row {
   display: grid;
   gap: 4px;
 }
 
 /* KARTEN: 2-3 Zeilen je Eintrag, grosszuegiges Padding. */
-.ticket-row--cards {
+[data-app="tickets"] .ticket-row--cards {
   gap: 3px;
   padding-top: 11px;
   padding-bottom: 11px;
 }
 
 /* LISTE: eine Zeile, maximale Dichte. */
-.ticket-row--list {
+[data-app="tickets"] .ticket-row--list {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -230,7 +231,7 @@
   padding-bottom: 3px;
 }
 
-.ticket-row-head {
+[data-app="tickets"] .ticket-row-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -238,8 +239,8 @@
   min-width: 0;
 }
 
-.ticket-row-title,
-.tickets-context-item-title {
+[data-app="tickets"] .ticket-row-title,
+[data-app="tickets"] .tickets-context-item-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -251,18 +252,18 @@
 
 /* Der Listentitel traegt keine Karten-Emphase und nimmt den Schlupf, damit das
    Kurz-Meta auf jeder Zeile buendig rechts sitzt. */
-.ticket-row--list .ticket-row-title {
+[data-app="tickets"] .ticket-row--list .ticket-row-title {
   flex: 1 1 auto;
   font-weight: 500;
   line-height: 1.4;
 }
 
-.ticket-row--list > .ctox-badge {
+[data-app="tickets"] .ticket-row--list > .ctox-badge {
   flex: 0 0 auto;
 }
 
-.ticket-row-meta,
-.tickets-context-item-meta {
+[data-app="tickets"] .ticket-row-meta,
+[data-app="tickets"] .tickets-context-item-meta {
   overflow: hidden;
   color: var(--muted);
   text-overflow: ellipsis;
@@ -271,19 +272,19 @@
 }
 
 /* Zweite Meta-Zeile der Karte: Zuordnung und Aktualisierung, eine Stufe leiser. */
-.ticket-row-meta--sub {
+[data-app="tickets"] .ticket-row-meta--sub {
   font-variant-numeric: tabular-nums;
   opacity: 0.85;
 }
 
-.tickets-context-item-meta {
+[data-app="tickets"] .tickets-context-item-meta {
   margin: 2px 0 6px;
   font-size: 12px;
 }
 
 /* custom: event timeline — chronological protocol lines with pre-wrap bodies;
    the kit has no timeline pattern. */
-.ticket-timeline {
+[data-app="tickets"] .ticket-timeline {
   display: grid;
   gap: 8px;
   margin: 0;
@@ -291,7 +292,7 @@
   list-style: none;
 }
 
-.ticket-timeline li {
+[data-app="tickets"] .ticket-timeline li {
   display: grid;
   gap: 5px;
   min-width: 0;
@@ -301,22 +302,22 @@
   background: var(--surface);
 }
 
-.ticket-timeline li > span {
+[data-app="tickets"] .ticket-timeline li > span {
   color: var(--muted);
   font-size: 11px;
 }
 
-.ticket-timeline strong {
+[data-app="tickets"] .ticket-timeline strong {
   font-size: 12.5px;
   line-height: 1.35;
 }
 
-.ticket-timeline small {
+[data-app="tickets"] .ticket-timeline small {
   color: var(--muted);
   font-size: 11px;
 }
 
-.ticket-timeline p {
+[data-app="tickets"] .ticket-timeline p {
   margin: 4px 0 0;
   white-space: pre-wrap;
   font-size: 12px;
@@ -324,7 +325,7 @@
 }
 
 /* custom: prose bodies (ticket description, clarification answers). */
-.tickets-body {
+[data-app="tickets"] .tickets-body {
   max-width: 78ch;
   margin: 8px 0 0;
   white-space: pre-wrap;
@@ -332,7 +333,7 @@
   line-height: 1.55;
 }
 
-.tickets-note {
+[data-app="tickets"] .tickets-note {
   margin: 6px 0 0;
   white-space: pre-wrap;
   font-size: 12px;
@@ -341,20 +342,20 @@
 
 /* Command feedback line under the left pane tools (transient; hidden until JS
    fills it). [data-state] is a JS hook: module JS toggles data-state="error". */
-.tickets-command-status {
+[data-app="tickets"] .tickets-command-status {
   margin: 8px 0 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
 }
 
-.tickets-command-status[data-state="error"] {
+[data-app="tickets"] .tickets-command-status[data-state="error"] {
   color: var(--danger);
 }
 
 /* Inline "no entries" line inside cards/sections — pane-level empty states use
    the kit .ctox-empty instead. */
-.tickets-inline-empty {
+[data-app="tickets"] .tickets-inline-empty {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
@@ -364,8 +365,8 @@
    columns instead of squeezing the timeline. 1024px is the shell's own
    breakpoint; the module adds none of its own. */
 @container business-app-window (max-width: 1024px) {
-  .tickets-module,
-  .tickets-module.is-ops-hidden {
+  [data-app="tickets"] .tickets-module,
+  [data-app="tickets"] .tickets-module.is-ops-hidden {
     grid-template-columns: var(--ctox-left-width, 340px) 12px minmax(0, 1fr);
   }
 
@@ -373,28 +374,28 @@
      list + timeline row only. The rows are fractions of the WINDOW (fr against
      the module's own height), never of the screen: `vh` would measure the
      display while the app sits in a window of any size (Vertrag §6). */
-  .tickets-module {
+  [data-app="tickets"] .tickets-module {
     grid-template-rows: minmax(0, 1.6fr) minmax(240px, 1fr);
   }
-  .tickets-module.is-ops-hidden {
+  [data-app="tickets"] .tickets-module.is-ops-hidden {
     grid-template-rows: minmax(0, 1fr);
   }
 
-  .tickets-left { grid-column: 1; grid-row: 1; }
-  .tickets-module > [data-resizer="left"] { grid-column: 2; grid-row: 1; }
-  .tickets-center { grid-column: 3; grid-row: 1; }
-  .tickets-right { grid-column: 1 / -1; grid-row: 2; }
+  [data-app="tickets"] .tickets-left { grid-column: 1; grid-row: 1; }
+  [data-app="tickets"] .tickets-module > [data-resizer="left"] { grid-column: 2; grid-row: 1; }
+  [data-app="tickets"] .tickets-center { grid-column: 3; grid-row: 1; }
+  [data-app="tickets"] .tickets-right { grid-column: 1 / -1; grid-row: 2; }
 
-  .tickets-module > [data-resizer="right"] {
+  [data-app="tickets"] .tickets-module > [data-resizer="right"] {
     display: none !important;
   }
 
   /* The center head is now the right-most head of the top row; the ops head
      runs full width below the window control. */
-  .shell-window[data-shell-contract="v2"] .tickets-module .tickets-center > .ctox-pane-header {
+  [data-app="tickets"] .tickets-module .tickets-center > .ctox-pane-header {
     padding-right: var(--tickets-v2-control-inset);
   }
-  .shell-window[data-shell-contract="v2"] .tickets-module .tickets-right > .ctox-pane-header {
+  [data-app="tickets"] .tickets-module .tickets-right > .ctox-pane-header {
     padding-right: 14px;
   }
 }
@@ -402,8 +403,8 @@
 /* Two columns → one: the panes stack vertically. The on-demand ops pane keeps
    its is-ops-hidden state. */
 @container business-app-window (max-width: 768px) {
-  .tickets-module,
-  .tickets-module.is-ops-hidden {
+  [data-app="tickets"] .tickets-module,
+  [data-app="tickets"] .tickets-module.is-ops-hidden {
     grid-template-columns: minmax(0, 1fr);
     height: 100%;
     min-height: 0;
@@ -416,34 +417,34 @@
   /* Ops shown → three stacked rows; ops hidden → the list + timeline only.
      Shares of the WINDOW height (fr), never `vh`: the app measures its window,
      not the screen (Vertrag §6). */
-  .tickets-module {
+  [data-app="tickets"] .tickets-module {
     grid-template-rows: minmax(180px, 1fr) minmax(240px, 1.4fr) minmax(200px, 1fr);
   }
-  .tickets-module.is-ops-hidden {
+  [data-app="tickets"] .tickets-module.is-ops-hidden {
     grid-template-rows: minmax(200px, 1fr) minmax(260px, 1.4fr);
   }
 
-  .tickets-module > [data-resizer] {
+  [data-app="tickets"] .tickets-module > [data-resizer] {
     display: none !important;
   }
 
-  .tickets-left { grid-column: 1; grid-row: 1; }
-  .tickets-center { grid-column: 1; grid-row: 2; }
-  .tickets-right { grid-column: 1; grid-row: 3; }
+  [data-app="tickets"] .tickets-left { grid-column: 1; grid-row: 1; }
+  [data-app="tickets"] .tickets-center { grid-column: 1; grid-row: 2; }
+  [data-app="tickets"] .tickets-right { grid-column: 1; grid-row: 3; }
 
-  .tickets-left,
-  .tickets-center,
-  .tickets-right {
+  [data-app="tickets"] .tickets-left,
+  [data-app="tickets"] .tickets-center,
+  [data-app="tickets"] .tickets-right {
     min-height: 220px;
   }
 
   /* Stacked: the left head is the only head in the top row, so it carries both
      the icon and the window-control inset. */
-  .shell-window[data-shell-contract="v2"] .tickets-module .tickets-left > .ctox-pane-header {
+  [data-app="tickets"] .tickets-module .tickets-left > .ctox-pane-header {
     padding-right: var(--tickets-v2-control-inset);
   }
-  .shell-window[data-shell-contract="v2"] .tickets-module .tickets-center > .ctox-pane-header,
-  .shell-window[data-shell-contract="v2"] .tickets-module .tickets-right > .ctox-pane-header {
+  [data-app="tickets"] .tickets-module .tickets-center > .ctox-pane-header,
+  [data-app="tickets"] .tickets-module .tickets-right > .ctox-pane-header {
     padding-right: 14px;
   }
 }
@@ -454,14 +455,14 @@
    business-app-window rules above, and only at the shell's own two
    breakpoints (1024px / 768px). */
 @media (pointer: coarse) {
-  .tickets-module button,
-  .tickets-module input,
-  .tickets-module select,
-  .tickets-module textarea {
+  [data-app="tickets"] .tickets-module button,
+  [data-app="tickets"] .tickets-module input,
+  [data-app="tickets"] .tickets-module select,
+  [data-app="tickets"] .tickets-module textarea {
     min-height: 44px;
   }
 
-  .tickets-module .ctox-pane-icon {
+  [data-app="tickets"] .tickets-module .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
@@ -470,16 +471,16 @@
 /* Kopf/Koerper-Trennung (UI-Review 31.08.2026, Befund 11): eine Hairline unter
    jedem Spaltenkopf-Band, damit Kopfzone und Arbeitsflaeche auch im
    Leerzustand ablesbar getrennt sind - in allen drei Spalten identisch. */
-.tickets-module .ctox-pane > .ctox-pane-header {
+[data-app="tickets"] .tickets-module .ctox-pane > .ctox-pane-header {
   border-bottom: 1px solid var(--line);
 }
-.tickets-module .ctox-view-switch {
+[data-app="tickets"] .tickets-module .ctox-view-switch {
   border-bottom: 1px solid var(--line);
 }
 
 /* Crew on tickets (H5): the member holding the ticket's work, named by its
    reference badge; the creature itself exists once (crew bar, CTOX map). */
-.ticket-row-crew {
+[data-app="tickets"] .ticket-row-crew {
   display: inline-grid;
   place-items: center;
   flex: 0 0 20px;
@@ -488,34 +489,47 @@
   margin-right: 8px;
   vertical-align: middle;
 }
-.ticket-row--list .ticket-row-crew {
+[data-app="tickets"] .ticket-row--list .ticket-row-crew {
   margin-right: 6px;
 }
-.tickets-crew-body {
+[data-app="tickets"] .tickets-crew-body {
   display: flex;
   align-items: center;
   gap: 12px;
 }
-.tickets-crew-portrait {
+[data-app="tickets"] .tickets-crew-portrait {
   display: grid;
   place-items: center;
   flex: 0 0 32px;
   width: 32px;
   height: 32px;
 }
-.tickets-crew-facts {
+[data-app="tickets"] .tickets-crew-facts {
   display: grid;
   gap: 3px;
   min-width: 0;
 }
-.tickets-crew-facts small {
+[data-app="tickets"] .tickets-crew-facts small {
   color: var(--muted);
 }
-.tickets-crew-assign {
+[data-app="tickets"] .tickets-crew-assign {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   margin-top: 4px;
   color: var(--muted);
   font-size: var(--fs-meta, 12px);
+}
+
+/* Textdiät: Kicker ohne Inhalt (Ticketnummer/„Crew“/„Aktionen“ entfernt) nehmen keinen Platz ein. */
+[data-app="tickets"] .tickets-module .ctox-pane-kicker:empty { display: none; }
+
+/* Textdiät R2 (15.10.): Listen-Fuß ohne Inhalt (Zählerwiederholung entfernt) nimmt keinen Platz ein. */
+[data-app="tickets"] .ctox-pane-footer:has(> [data-pg-footer]:empty) { display: none; }
+
+/* Textdiät R2 (15.10.): schmale Fenster – Spaltentitel einzeilig mit Ellipse statt Wort-/Silbenbruch
+   (420: „Kunden / konten“, „Kampagnen / & Sequenzen“). Voller Titel bleibt im title-Attribut bzw. im Fenster. */
+@container business-app-window (max-width: 768px) {
+  [data-app="tickets"] .ctox-pane-titles { min-width: 0; }
+  [data-app="tickets"] .ctox-pane-title { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; hyphens: manual; overflow-wrap: normal; }
 }
