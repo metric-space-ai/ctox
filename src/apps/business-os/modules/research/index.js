@@ -6,6 +6,7 @@ import {
   GRAPH_RELATION_TYPES,
   sliceResearchGraphProjection,
 } from './research-graph-data.mjs';
+import { systematicRunInstruction, systematicRunPromptName } from './handlers/_lib/enqueue.js';
 
 // App-API 4.0 (Shell v4): Daten nur über api.query/get/put/patch/remove, Befehle über api.command ohne
 // Warten, Zustand nur über api.status.report. Keine Sync-Kopplung, keine Ladefunktion, kein Cache-Buster
@@ -4245,9 +4246,37 @@ async function runSelectedResearch() {
     research_command_id: commandId,
     knowledge_table_refs: knowledgeTableRefs,
   };
-  // v3 übergab den Lauf an den Business Chat (openBusinessChat, der Bediener sendet selbst) und nutzte den
-  // direkten Befehlsweg nur ohne Chat-Fläche. App-API 4.0 hat keine Chat-Übergabe (V4-PORT.md OFFEN-3):
-  // es gilt der bestehende direkte Weg. api.command wartet nie; der Status kommt live über die Collections.
+  // Der Lauf geht wie in V2 über den Business Chat (RCH2, E37/E39 Nr. 4): der Bediener sieht die vollständige
+  // Anweisung als Entwurf, kann sie prüfen und sendet selbst; der Chat schickt dann research.systematic.run mit genau
+  // diesen Befehlsparametern. Ohne Chatleiste bleibt der direkte Weg (api.command wartet nie; Status live).
+  const commandParams = researchCommandParams({
+    module: 'research',
+    record_id: task.id,
+    payload: { ...payload, research_command_id: commandId },
+    client_context: clientContext,
+  });
+  if (await offerRunToChat({ task, title, commandParams })) {
+    const run = {
+      id: researchRunId,
+      task_id: task.id,
+      // Im Chat-Weg läuft nichts, bis der Bediener sendet: kein `collecting`, kein Sprung in die CTOX-App.
+      status: 'chat',
+      command_id: '',
+      research_command_id: commandId,
+      task_queue_id: '',
+      identified_count: state.candidateRows.length + state.sourceRows.length,
+      accepted_count: evidenceRankedSources().length,
+      used_count: evidenceRankedSources().length,
+      payload: { result: { ok: true, research_command_id: commandId, status: 'chat', task_status: 'chat', title, thread_key: threadKey, transport: 'business-chat' } },
+      created_at_ms: now,
+      updated_at_ms: now,
+    };
+    state.runs = [run, ...state.runs.filter((item) => item.id !== run.id)];
+    upsertDoc('research_runs', run);
+    clearStatus('research.run.blocked');
+    render();
+    return;
+  }
   const handle = dispatchResearchCommand('research.systematic.run', {
     module: 'research',
     record_id: task.id,
@@ -4766,7 +4795,10 @@ async function focusCtoxRun(taskQueueId, commandId, taskStatus = '') {
   if (taskQueueId) params.task_id = taskQueueId;
   if (commandId) params.command_id = commandId;
   if (taskStatus) params.task_status = taskStatus;
-  state.api?.shell.navigate('ctox', params);
+  const shell = state.api?.shell;
+  // Ohne CTOX-App kein Sprung und kein Zonenfehler (RCH2 (c)); Rahmen ohne Vorabprüfung: navigate wie bisher.
+  if (typeof shell?.canNavigate === 'function' && !shell.canNavigate('ctox', params)) return;
+  shell?.navigate('ctox', params);
 }
 
 function initResearchContextMenu() {
@@ -4921,17 +4953,61 @@ async function dispatchResearchContextChat(context, message, mode = 'data') {
   state.contextMenu.hidden = true;
 }
 
-// Befehle: api.command legt das Befehlsdokument lokal an und liefert sofort; die UI wartet nie auf Annahme.
-// Fehlschläge erscheinen über api.status.report in der Zustandszone, Erfolg bleibt still (Muster knowledge).
-function dispatchResearchCommand(type, { module = 'research', record_id = null, payload = {}, client_context = {} } = {}) {
-  const handle = state.api.command(type, {
+// Befehlsparameter wie api.command sie bekommt (direkter Weg und Chat-Übergabe teilen sie, RCH2).
+function researchCommandParams({ module = 'research', record_id = null, payload = {}, client_context = {} } = {}) {
+  return {
     ...(payload || {}),
     record_id,
     module,
     client_context: { source_module: 'research', ...(client_context || {}) },
-  });
+  };
+}
+
+// Befehle: api.command legt das Befehlsdokument lokal an und liefert sofort; die UI wartet nie auf Annahme.
+// Fehlschläge erscheinen über api.status.report in der Zustandszone, Erfolg bleibt still (Muster knowledge).
+function dispatchResearchCommand(type, options = {}) {
+  const handle = state.api.command(type, researchCommandParams(options));
   followCommand(handle, type);
   return handle;
+}
+
+// RCH2: Chat-Übergabe des systematischen Laufs. Die Anweisung entsteht wie im Handler research.systematic.run
+// (handlers/_lib/enqueue.js systematicRunInstruction, Template prompts/*.md aus dem eigenen Paket), damit der Entwurf
+// byte-gleich zu dem ist, was der Handler aus demselben Befehl rendert. Erst prüfen (canNavigate, ohne Zoneneintrag),
+// dann rendern, dann navigate('ctox', {chat_draft, …}); false → Aufrufer nimmt den direkten Weg.
+const RUN_COMMAND = 'research.systematic.run';
+const promptTemplates = new Map();
+function promptTemplate(name) {
+  if (!promptTemplates.has(name)) {
+    const load = fetch(new URL(`./prompts/${name}.md`, import.meta.url))
+      .then((res) => (res.ok ? res.text() : Promise.reject(new Error(`prompts/${name}.md: HTTP ${res.status}`))));
+    load.catch(() => promptTemplates.delete(name));
+    promptTemplates.set(name, load);
+  }
+  return promptTemplates.get(name);
+}
+
+async function offerRunToChat({ task, title, commandParams }) {
+  const shell = state.api?.shell;
+  const probe = { chat_draft: '', command_type: RUN_COMMAND };
+  if (typeof shell?.canNavigate !== 'function' || !shell.canNavigate('ctox', probe)) return false;
+  const command = { record_id: commandParams.record_id, payload: commandParams };
+  let draft;
+  try {
+    draft = systematicRunInstruction(await promptTemplate(systematicRunPromptName(command)), command);
+  } catch (error) {
+    console.warn('[research] chat draft', error);
+    return false;
+  }
+  if (state.api?.shell !== shell) return false;
+  return !!shell.navigate('ctox', {
+    chat_draft: draft,
+    command_type: RUN_COMMAND,
+    payload: commandParams,
+    record_id: task.id,
+    title,
+    source: 'research',
+  });
 }
 
 function followCommand(handle, type) {

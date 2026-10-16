@@ -30,9 +30,10 @@ test('reader recovers a dropped result event from durable meta.local_seq',async(
  const reader=createKernel({...opts,transport:new CapturingTransport()});await reader.ready;
  reader.sim.dropBroadcasts(true);
  const h=reader.appApi('notes','1').put('notes',{id:'a'});await h.local;
- for(let i=0;i<20 && !transport.sent?.length;i++)await tick();
+ for(let i=0;i<300 && !transport.sent?.length;i++)await tick();
  // A dropped outbox hint is repaired on leader's periodic local scan, not network polling.
- if(!transport.sent?.length){reader.sim.dropBroadcasts(false);reader.appApi('notes','1').put('notes',{id:'wake'});for(let i=0;i<20 && !transport.sent?.length;i++)await tick();reader.sim.dropBroadcasts(true);}
+ assert.equal(transport.sent?.length,1,"the original write must be sent without a wake-up write");
+ assert.equal(transport.sent[0].op_id,h.op_id);
  await transport.events.write_result({op_id:h.op_id,status:'accepted',seq:'1',rev:'r'});
  await reader.sim.reconcile();assert.equal((await h.result).status,'accepted');
  await leader.close();await reader.close();

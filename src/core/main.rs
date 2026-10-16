@@ -575,9 +575,38 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
 
 fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
     let command = args.first().map(String::as_str);
-    let owns_lifecycle = matches!(command, None | Some("service" | "start" | "stop" | "status" | "tui" | "tui-smoke" | "business-os" | "business" | "sync"));
-    let stateless = matches!(command, Some("help" | "--help" | "-h" | "version" | "office" | "jour-fixe" | "update" | "upgrade" | "doctor" | "source-status"));
-    if owns_lifecycle || stateless {
+    let owns_lifecycle = matches!(
+        command,
+        None | Some(
+            "service"
+                | "start"
+                | "stop"
+                | "status"
+                | "tui"
+                | "tui-smoke"
+                | "business-os"
+                | "business"
+                | "sync"
+        )
+    );
+    let stateless = matches!(
+        command,
+        Some(
+            "help"
+                | "--help"
+                | "-h"
+                | "version"
+                | "office"
+                | "jour-fixe"
+                | "update"
+                | "upgrade"
+                | "doctor"
+                | "source-status"
+        )
+    );
+    let coding_models_ipc = matches!(command, Some("coding-agent" | "coding-agents"))
+        && coding_agents::coding_models_cli_args_are_valid(&args[1..]);
+    if owns_lifecycle || stateless || coding_models_ipc {
         return dispatch_owned_command(root, args);
     }
     let work = root.to_owned();
@@ -595,12 +624,11 @@ fn dispatch_owned_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
             Ok(())
         }
         Some("crew") => {
-            let conn = rusqlite::Connection::open_with_flags(paths::core_db(&root), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-                .context("Crew database is not readable yet; start CTOX once to initialize it (WAL readers also require access to its shared-memory directory)")?;
-            conn.busy_timeout(persistence::sqlite_busy_timeout_duration())?;
-            let initialized: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='crew_members')", [], |r| r.get(0))?;
-            anyhow::ensure!(initialized, "Crew has not been initialized yet; start CTOX once to create the crew tables");
-            let members = crew::members(&conn)?;
+            let members = lcm::with_lcm_read(&paths::core_db(root), |conn| {
+                let initialized: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='crew_members')", [], |r| r.get(0))?;
+                anyhow::ensure!(initialized, "Crew has not been initialized yet; start CTOX once to create the crew tables");
+                crew::members(conn)
+            })?;
             match args.get(1).map(String::as_str) {
                 Some("list") if args.len() == 2 => println!("{}", serde_json::to_string_pretty(&members)?),
                 Some("show") if args.len() == 3 => {

@@ -32,6 +32,15 @@ async fn guard_followup_blocking_entry_preserves_owner_and_context_boundaries() 
             );
             Ok(())
         })?;
+        let callback_root = work.clone();
+        crate::business_os::store::run_subscription_persistence(&work, move || {
+            store_text_value(&callback_root, "provider-callback", Some("same-owner"))?;
+            assert_eq!(
+                load_text_value(&callback_root, "provider-callback")?.as_deref(),
+                Some("same-owner")
+            );
+            Ok(())
+        })?;
         assert!(
             require_sync_owner_context().is_err(),
             "admission leaked to the caller"
@@ -47,6 +56,21 @@ async fn guard_followup_blocking_entry_preserves_owner_and_context_boundaries() 
     })
     .join()
     .expect("ordinary-thread caller joins")?;
+    let work = root.path().to_owned();
+    ctox_app_runtime::daemon::BlockingExecutor::run(
+        &CoreCompatibilityExecutor,
+        Box::new(move || {
+            require_sync_owner_context()?;
+            store_text_value(&work, "app-runtime-callback", Some("same-owner"))
+        }),
+    )
+    .await?;
+    assert_eq!(
+        load_text_value_owned(root.path(), "app-runtime-callback")
+            .await?
+            .as_deref(),
+        Some("same-owner")
+    );
     let error = run_core_blocking::<()>(&runtime, || {
         panic!("async worker must not execute blocking body")
     })
@@ -119,6 +143,16 @@ async fn guard_followup_origin_on_plain_thread_distinguishes_absence_from_store_
     })
     .join()
     .expect("typed SQL failure returned");
+    let work = root.path().to_owned();
+    let error = run_core_sync(move || crate::business_os::store::runtime_settings_for_rxdb(&work))
+        .await
+        .expect_err("runtime projection must not replace failed storage with defaults");
+    assert!(
+        error
+            .to_string()
+            .contains("runtime settings configuration read failed"),
+        "{error:#}"
+    );
     fixture.close().await?;
     Ok(())
 }

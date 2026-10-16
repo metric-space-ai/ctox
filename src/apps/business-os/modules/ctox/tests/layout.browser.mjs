@@ -69,6 +69,10 @@ after(async () => {
   await new Promise((r) => server?.close(r));
 });
 
+// Befehlsrouten der echten ctox-Version (v4/manifests/ctox.manifest.json): handlers und command_rights.
+const CTOX_MANIFEST = JSON.parse(await readFile(join(HERE, '../../../v4/manifests/ctox.manifest.json'), 'utf8'));
+const CTOX_MANIFEST_ROUTES = { handlers: CTOX_MANIFEST.handlers ?? {}, command_rights: CTOX_MANIFEST.command_rights ?? {} };
+
 // One page per scenario: a fresh stub kernel with the routing-failure fixture, mounted into #win.
 async function openFixture(width, { extra = null } = {}) {
   const page = await browser.newPage({ viewport: { width, height: 710 } });
@@ -77,12 +81,15 @@ async function openFixture(width, { extra = null } = {}) {
   page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
   page.__errors = errors;
   await page.goto(base);
-  await page.evaluate(async (extraFixture) => {
+  await page.evaluate(async ({ extraFixture, ctoxManifest }) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     const mod = await import('/modules/ctox/index.js');
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, actor: { role: 'admin', permissions: ['apps.source.edit'] } });
     await kernel.ready;
     await kernel.sim.push('business_apps', [{ id: 'ctox', title: 'Crew' }, { id: 'shell', title: 'Shell' }]);
+    // E35 (Option B): die aktive ctox-Version mit ihren Befehlsrouten veröffentlichen (nach der business_apps-Zeile, sonst fehlt active_ver), wie die anderen v4-Gate-Dateien.
+    // Ohne aktives Manifest lehnt der Kern App-Befehle (ctox.queue.pause) beim Schreiben mit unknown_command ab.
+    await kernel.sim.publishAppVersion('ctox', '1.1.2', { title: 'Crew', manifestExtra: ctoxManifest });
     await kernel.sim.push('business_commands', [{ id: 'layout-command', command_id: 'layout-command', execution_task_id: 'layout-task', execution_mode: 'queue', execution_phase: 'queued', status: 'accepted', payload: { title: 'Cereda' }, execution_progress: { phase: 'queued', steps: [] }, updated_at_ms: Date.now() }]);
     await kernel.sim.push('ctox_queue_tasks', [{ id: 'layout-task', command_id: 'layout-command', status: 'queued', route_status: 'failed', failure_class: 'terminal', failure_attempt_count: 4, status_note: 'thread/start MCP handshake timeout', updated_at_ms: Date.now() }]);
     await kernel.sim.push('ctox_harness_status', [{ id: 'harness', paused: false, service_running: true, worker_capacity: 1, updated_at_ms: 1 }]);
@@ -93,7 +100,7 @@ async function openFixture(width, { extra = null } = {}) {
     window.__app = await mod.mount(document.getElementById('win'), window.__api, {});
     window.__commands = () => window.__api.query('business_commands', { sort: [{ created_at: 'asc' }] }).get().filter((c) => c.type);
     window.__zone = () => kernel.statusZone.forApp('ctox').get().filter((e) => e.source === 'app');
-  }, extra);
+  }, { extraFixture: extra, ctoxManifest: CTOX_MANIFEST_ROUTES });
   await settle(page);
   return page;
 }

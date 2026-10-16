@@ -440,38 +440,20 @@
   }
 }
 
-@media (max-width: 620px) {
-  [data-app="mail"] .mail-content-editor-commandbar.is-integrated {
-    gap: 2px;
-  }
-
-  [data-app="mail"] .mail-content-editor-commandbar.is-integrated .mail-content-editor-panel-button {
-    width: 28px;
-    min-width: 28px;
-    max-width: 28px;
-    padding-inline: 7px;
-    overflow: hidden;
-  }
-
-  [data-app="mail"] .mail-content-editor-commandbar.is-integrated .mail-content-editor-panel-button > span:last-child {
-    display: none;
-  }
-
-  [data-app="mail"] .mail-content-editor-commandbar.is-integrated .mail-content-editor-html-tools {
-    margin-inline-start: 4px;
-    padding-inline-start: 4px;
-  }
-
-  [data-app="mail"] .mail-content-editor-commandbar.is-integrated .mail-content-editor-viewport-tools {
-    display: none;
-  }
-
-  [data-app="mail"] .mail-content-editor-commandbar.is-integrated .mail-content-editor-history-tools {
-    display: none;
-  }
-}
-
-@media (min-width: 621px) and (max-width: 1100px) {
+/* The integrated command bar lives in the head of the group-content surface,
+   so its width steps follow that surface (container `mail-content-surface`,
+   modules/mail/index.css), never the viewport: in v4 the app is a window that
+   can be much narrower than the screen, and the head also reserves the shell's
+   app-icon and window-control zones (94px + 70px below 768px window width).
+   The surface head costs ~254px beside the bar (close, save, title at its
+   96px minimum, control inset), so the steps are:
+     > 840px  labels on the four panel buttons (unchanged wide look)
+     <= 840px icon-only panel buttons            (V2: viewport 621-1100px)
+     <= 700px undo/redo fold away
+     <= 635px preview widths fold away, 28px buttons (V2: viewport <= 620px)
+     <= 500px the bar breaks into two lines: modes over panel buttons, both
+              inside the head's two 37px rows. */
+@container mail-content-surface (max-width: 840px) {
   [data-app="mail"] .mail-content-editor-commandbar.is-integrated .mail-content-editor-panel-button {
     width: 30px;
     min-width: 30px;
@@ -482,6 +464,50 @@
 
   [data-app="mail"] .mail-content-editor-commandbar.is-integrated .mail-content-editor-panel-button > span:last-child {
     display: none;
+  }
+}
+
+@container mail-content-surface (max-width: 700px) {
+  [data-app="mail"] .mail-content-editor-commandbar.is-integrated .mail-content-editor-history-tools {
+    display: none;
+  }
+}
+
+@container mail-content-surface (max-width: 635px) {
+  [data-app="mail"] .mail-content-editor-commandbar.is-integrated {
+    gap: 2px;
+  }
+
+  [data-app="mail"] .mail-content-editor-commandbar.is-integrated .mail-content-editor-panel-button {
+    width: 28px;
+    min-width: 28px;
+    max-width: 28px;
+    padding-inline: 7px;
+  }
+
+  [data-app="mail"] .mail-content-editor-commandbar.is-integrated .mail-content-editor-html-tools {
+    margin-inline-start: 4px;
+    padding-inline-start: 4px;
+  }
+
+  [data-app="mail"] .mail-content-editor-commandbar.is-integrated .mail-content-editor-viewport-tools {
+    display: none;
+  }
+}
+
+@container mail-content-surface (max-width: 500px) {
+  [data-app="mail"] .mail-content-editor-commandbar.is-integrated {
+    flex-wrap: wrap;
+    align-content: flex-start;
+    row-gap: 5px;
+  }
+
+  [data-app="mail"] .mail-content-editor-commandbar.is-integrated .mail-content-editor-html-tools {
+    flex: 1 0 100%;
+    justify-content: center;
+    margin-inline-start: 0;
+    padding-inline-start: 0;
+    border-inline-start: 0;
   }
 }
 

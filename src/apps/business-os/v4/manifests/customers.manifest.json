@@ -1227,7 +1227,7 @@
     "V4-PORT.md": "25c8e62136c6c1f4c02c4e4a86b3cbd82c6dfadd59851311e5bb448f37cecb36",
     "assets/icon.jpg": "1b15a944de072f9d8bdc70a63813ca82a39b248d7f40e3a64a809638d6ae4e3d",
     "assets/icon@512.jpg": "8cfc6a6f3e884019f6ba14f0f6670e9d5ec0b5c7a528e5bb75214597a2a399ab",
-    "collections.schema.json": "7df98b853f5b887f0c48699b124814fe44af76c23bc5a884ea6fcb21367fd82e",
+    "collections.schema.json": "b98f52f13cda85025dfaf37ff3160e60cfe7ebdbc374b6865c2be907685710b4",
     "handlers/_lib.js": "5f70b411b685b7277f3df0cea031bc9fc72e6ae71fb7b1de9c127471b33852dd",
     "handlers/customers.account.archive.js": "ac26319dd72726cd762dd9acd1bf9b17db47f0ebe7b76f4a5edae850ab22b4fa",
     "handlers/customers.account.create.js": "af849b67ebcb2cabd085d48b376f1fbf74a3ccb03a1ea01643d80f3ce746cabb",
@@ -1487,7 +1487,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "ca41d31d4698160ff8dec3118983e68ecaecc6dc5c26273af2d8486670b51874",
+    "base_hash": "04b40a0502a18e5e7735a414117f2f2711c5c1f3a4f6f2f7a193434a592126ab",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

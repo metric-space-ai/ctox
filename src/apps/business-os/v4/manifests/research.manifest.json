@@ -26,13 +26,13 @@
   },
   "_commands_out_evidence": {
     "ctox ctox.app.modify.request": [
-      "index.js:4884"
+      "index.js:4916"
     ],
     "ctox ctox.chat.task": [
-      "index.js:4884"
+      "index.js:4916"
     ],
     "documents research.systematic.report.create": [
-      "index.js:2551"
+      "index.js:2552"
     ],
     "knowledge knowledge.book.ingest": [
       "handlers/_lib/callback.js:212"
@@ -284,7 +284,7 @@
     "assets/icon@512.jpg": "4b1b5a5704ff7e69c53e0dd39056a59bcc8ceb632178f62e6fd2e823b2a27b45",
     "collections.schema.json": "07660238426e42713f11a538bb07048d69e2ba1fa5f2b51415ca2b56a7f49e03",
     "handlers/_lib/callback.js": "db5b7895347fb66aff367b379a6c9f6f3a85cb1bf53cdc2f18b0914fab305b9f",
-    "handlers/_lib/enqueue.js": "db40415eed2f3bb9949438e51d9901fd6fa31370c765c1a5a3ac05ecaa49a8b3",
+    "handlers/_lib/enqueue.js": "b274359443e473e563c44ff2f04d6ad70944b0109bb7aabc239d93c3ff9daa8c",
     "handlers/_lib/errors.js": "7438ffa06346f5e8edab02ca70339861877985442c5ca0862819ed70e3853b17",
     "handlers/_lib/records.js": "f4da8f0a07ec1868ef5fc2b877b61baaef3005917271da8180ed3f55a41c7817",
     "handlers/_lib/systematic.js": "e8b47694d5688bfb510555d98572fdb232565d7fc7c40e0044770d2f0034658b",
@@ -298,7 +298,7 @@
     "icon.svg": "2d8b8ef72e461476f16ddd2cba18ead04097970c06bd0fe4594254650a6a3f7a",
     "index.css": "150e49cd3fcceb10a1dd47585b2438b538f10c99c9c43382125e1036e0ff8572",
     "index.html": "25f868d023f9ac56d329d88c0df53247094d5cb600e8faef8673ceba0709c7e6",
-    "index.js": "44a9c136b3603d45f3a59345b491b7eb270cfca0d6884d2ac7230760a08f5f95",
+    "index.js": "68214f9e8b5daafd09f63ae7a7c395a4dd6e6d15704f7cada1626b1a4b4eef89",
     "locales/de.json": "cd71d3819ba3e17d7ba944d1d6256dcc6fe09983dd4bb7e6aa2fdaa486414562",
     "locales/en.json": "dfe78bce15c01f0413162edc264ca10dcd229623a873c8a38fd6daab5cc98f65",
     "module.json": "cb7c1e9e8fa99ecc6ab3ad3165639d6f06a8c360a0332d0db9928b79b843956d",
@@ -332,7 +332,7 @@
         "code_read": [
           "handlers/_lib/records.js:3",
           "handlers/research.systematic.run.complete.js:28",
-          "index.js:22"
+          "index.js:23"
         ],
         "code_write": [],
         "declaration_basis": "modules/research/V4-HANDLERS.md „Manifest-Deklarationen“; modules/research/V4-PORT.md OFFEN 1",
@@ -350,9 +350,9 @@
     "ctox_queue_tasks": {
       "_evidence": {
         "code_read": [
-          "index.js:23",
-          "index.js:605",
-          "index.js:5017"
+          "index.js:24",
+          "index.js:606",
+          "index.js:5093"
         ],
         "code_write": [],
         "declaration_basis": "modules/research/V4-HANDLERS.md „Manifest-Deklarationen“; modules/research/V4-PORT.md OFFEN 1",
@@ -370,9 +370,9 @@
     "document_blob_chunks": {
       "_evidence": {
         "code_read": [
-          "index.js:16",
-          "index.js:5859",
-          "index.js:5874"
+          "index.js:17",
+          "index.js:5935",
+          "index.js:5950"
         ],
         "code_write": [],
         "sources": [
@@ -388,9 +388,9 @@
     "document_versions": {
       "_evidence": {
         "code_read": [
-          "index.js:16",
-          "index.js:5859",
-          "index.js:5871"
+          "index.js:17",
+          "index.js:5935",
+          "index.js:5947"
         ],
         "code_write": [],
         "sources": [
@@ -406,9 +406,9 @@
     "documents": {
       "_evidence": {
         "code_read": [
-          "index.js:24",
-          "index.js:2551",
-          "index.js:2589"
+          "index.js:25",
+          "index.js:2552",
+          "index.js:2590"
         ],
         "code_write": [],
         "sources": [
@@ -439,7 +439,7 @@
     "knowledge_items": {
       "_evidence": {
         "code_read": [
-          "index.js:4632"
+          "index.js:4661"
         ],
         "code_write": [],
         "sources": [
@@ -455,7 +455,7 @@
     "knowledge_runbooks": {
       "_evidence": {
         "code_read": [
-          "index.js:4632"
+          "index.js:4661"
         ],
         "code_write": [],
         "sources": [
@@ -471,9 +471,9 @@
     "knowledge_table_rows": {
       "_evidence": {
         "code_read": [
-          "index.js:28",
-          "index.js:655",
-          "index.js:688"
+          "index.js:29",
+          "index.js:656",
+          "index.js:689"
         ],
         "code_write": [],
         "declaration_basis": "modules/research/V4-HANDLERS.md „Manifest-Deklarationen“; modules/research/V4-PORT.md OFFEN 1",
@@ -575,7 +575,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "9f85fbc965569ff7237c10772192cbca1c4082eee523e151e85ada5e35d236c5",
+    "base_hash": "ad3eafdf28c2647dbb8ed30c2bb118fe49147e619304257d3b6d02a89769f41d",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

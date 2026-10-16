@@ -1566,6 +1566,110 @@
         "version": 0
       }
     },
+    "planned_steps": {
+      "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "_schema_source": "v4/schemas/ctox.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": {
+        "_basis": "v4-manifest.json; modules/ctox/V4-HANDLERS.md „Rechte (Collection-Lesen)“; policy.rs ADMIN_ONLY_COLLECTIONS, is_cockpit_projection",
+        "read": "all",
+        "write": "core"
+      },
+      "schema": {
+        "additionalProperties": false,
+        "indexes": [
+          "project_id",
+          "goal_id"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "completed_at_ms": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "failed_step_id": {
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "goal_id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "goal_revision": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "goal_status": {
+            "enum": [
+              "active",
+              "blocked",
+              "failed",
+              "completed"
+            ],
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "owner_user_id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "project_id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "queued",
+              "blocked",
+              "failed",
+              "completed"
+            ],
+            "type": "string"
+          },
+          "step_id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "goal_id",
+          "goal_revision",
+          "goal_status",
+          "step_id",
+          "status",
+          "project_id",
+          "owner",
+          "owner_user_id",
+          "title",
+          "failed_step_id"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
     "workjet_computers": {
       "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
       "_schema_source": "v4/schemas/ctox.collections.schema.json",
@@ -3703,7 +3807,8 @@
   "entry": "index.js",
   "exports": {
     "business_chats": [
-      "read"
+      "read",
+      "write"
     ],
     "business_module_releases": [
       "read"
@@ -3720,6 +3825,12 @@
       "write"
     ],
     "ctox_crew_members": [
+      "read"
+    ],
+    "ctox_harness_events": [
+      "read"
+    ],
+    "ctox_harness_status": [
       "read"
     ],
     "workjet_computers": [
@@ -3795,7 +3906,7 @@
     "prompts/chat-ask.md": "ad9b7ce9c87b66fbd23d29276b64ff6e3566d7dd73f27c6d0646e6a7edeabcbc",
     "prompts/chat-data.md": "401fe54de442034408ae1e4cafad1a342468dcbcc64ccca9c7a995d5385a38e3",
     "schema.js": "6978d657693d2a00412dacd7bca3f0b2f1c0a65236c07a82f6388530d7c9ff72",
-    "v4-manifest.json": "123bd09d4fb8fa4b6c8f9898c18c6d9c7c827420ebe6650816e5630c7a38f1e5"
+    "v4-manifest.json": "6de572c65101276b8e02d7d5c2d7ac72cd62b38dbc82a8b3b09afd60e347f2de"
   },
   "foreign_collections": {
     "business_commands": {
@@ -4122,7 +4233,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "ca65b020dad3ca62d6b2bd0bd56a790f95ce0dd0b0874cda9e40e41ef2f5f37e",
+    "base_hash": "812c9813233a234bc168784059c89cdb78b2d9124588c9e310f15172004c38d8",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

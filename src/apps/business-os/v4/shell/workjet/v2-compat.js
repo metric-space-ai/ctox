@@ -182,7 +182,8 @@ export function createV2Compat({ kernel, shellVer = 'dev', appId = 'shell' } = {
   // prüft die Inhaltsadresse selbst (Stub: ganze Datei vor dem Schnitt, Kern: je Transferchunk); hier entsteht genau
   // EIN Chunk über den ganzen Bereich, sein hash beschreibt die gelieferten Bytes. Unbekannte Datei (found:false) →
   // leere Liste: der V2-Leser meldet dann wie bei fehlenden Chunks „Dateiinhalt fehlt.“ (ctox_file_chunk_missing).
-  // Kernfehler (invalid/path range, forbidden) gehen unverändert an den Aufrufer.
+  // Kernfehler (invalid/path range, forbidden) gehen unverändert an den Aufrufer. Seit E30 lehnt der Kern auch
+  // unbekannte IDs mit forbidden ab (keine Existenzauskunft); found:false liefern nur ältere Kerne.
   const canFiles = typeof api?.files?.get === 'function';
   if (!canFiles) gaps.add('files');
   const toBase64 = (bytes) => {

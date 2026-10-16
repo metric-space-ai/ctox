@@ -13,10 +13,20 @@ use serde_json::Value;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::Semaphore;
 
+pub type BlockingOperation = Box<dyn FnOnce() -> Result<()> + Send + 'static>;
+pub type BlockingFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'static>>;
+/// The native host supplies its bounded Core compatibility admission. The
+/// portable runtime never grants itself database or credential authority.
+pub trait BlockingExecutor: Send + Sync + 'static {
+    fn run(&self, operation: BlockingOperation) -> BlockingFuture;
+}
+
 #[derive(Clone)]
 pub struct AppRuntimeDaemon {
     service: Arc<AppRuntimeService>,
     blocking_calls: Arc<Semaphore>,
+    executor: Option<Arc<dyn BlockingExecutor>>,
 }
 impl AppRuntimeDaemon {
     pub(crate) fn bootstrap_published(&self, app: &str, version: &str) -> Result<()> {
@@ -31,7 +41,12 @@ impl AppRuntimeDaemon {
         Self {
             service: Arc::new(service),
             blocking_calls: Arc::new(Semaphore::new(2)),
+            executor: None,
         }
+    }
+    pub fn with_executor(mut self, executor: Arc<dyn BlockingExecutor>) -> Self {
+        self.executor = Some(executor);
+        self
     }
     async fn call<T: Send + 'static>(
         &self,
@@ -44,6 +59,19 @@ impl AppRuntimeDaemon {
             .try_acquire_owned()
             .map_err(|_| anyhow::anyhow!("unavailable: app runtime busy"))?;
         let service = self.service.clone();
+        if let Some(executor) = &self.executor {
+            let (send, receive) = tokio::sync::oneshot::channel();
+            executor
+                .run(Box::new(move || {
+                    let _permit = permit;
+                    let _ = send.send(operation(&service));
+                    Ok(())
+                }))
+                .await?;
+            return receive
+                .await
+                .context("unavailable: admitted app runtime call stopped")?;
+        }
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             operation(&service)

@@ -111,6 +111,47 @@ const {
 } = require('./business_os_production_smoke_registry');
 
 const root = path.resolve(__dirname, '../../../..');
+
+// §16.13: a module's collections.schema.json is the only schema source; the v4
+// app ports deleted schema.js. Definitions are read in Node and handed to the
+// page as RxDB addCollections() creators ({ schema, ...creatorOptions }).
+// The schema body comes from modules/<id>/collections.schema.json — the same
+// source build_business_os_schema_contract.mjs feeds the native contract, so
+// browser and native schema hashes agree. Both documents go through the v4
+// shell manifest generator's own normalizer. Creator options the module file
+// does not carry (conflictStrategy, syncProfile) are taken from the corrected
+// v4/schemas/<id>.collections.schema.json, which the manifest generator ranks
+// first (§16.21) — but only when its schema body is identical.
+const MODULE_SCHEMA_CREATOR_OPTIONS = Object.freeze(['conflictStrategy', 'syncProfile']);
+const moduleCollectionDefinitionCache = new Map();
+async function moduleCollectionDefinitions(moduleId) {
+  if (moduleCollectionDefinitionCache.has(moduleId)) return moduleCollectionDefinitionCache.get(moduleId);
+  const { normalizeCollectionsSchema } = await import(require('url').pathToFileURL(
+    path.join(root, 'src/apps/business-os/v4/tools/manifest/gen-manifest.mjs'),
+  ).href);
+  const readDocument = (file) => normalizeCollectionsSchema(JSON.parse(fs.readFileSync(file, 'utf8')));
+  const own = readDocument(path.join(root, 'src/apps/business-os/modules', moduleId, 'collections.schema.json'));
+  const correctedFile = path.join(root, 'src/apps/business-os/v4/schemas', `${moduleId}.collections.schema.json`);
+  const corrected = fs.existsSync(correctedFile) ? readDocument(correctedFile) : null;
+  const canonical = (value) => JSON.stringify(value, (_key, item) => (
+    item && typeof item === 'object' && !Array.isArray(item)
+      ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, item[key]]))
+      : item
+  ));
+  const definitions = {};
+  for (const [name, schema] of Object.entries(own.collections)) {
+    const options = { ...(own.wrappers[name] || {}) };
+    const correctedOptions = corrected?.wrappers?.[name];
+    if (correctedOptions && canonical(corrected.collections[name]) === canonical(schema)) {
+      for (const key of MODULE_SCHEMA_CREATOR_OPTIONS) {
+        if (options[key] === undefined && correctedOptions[key] !== undefined) options[key] = correctedOptions[key];
+      }
+    }
+    definitions[name] = { ...options, schema };
+  }
+  moduleCollectionDefinitionCache.set(moduleId, definitions);
+  return definitions;
+}
 const runtimeRootProvided = !!process.env.CTOX_SMOKE_ROOT;
 const runtimeRoot = process.env.CTOX_SMOKE_ROOT || fs.mkdtempSync(path.join(os.tmpdir(), 'ctox-rxdb-smoke-'));
 const keepSmokeArtifacts = process.env.CTOX_SMOKE_KEEP_ARTIFACTS === '1';
@@ -3297,13 +3338,13 @@ async function runPresenceMergeTwoBrowsersMode(pageA) {
     }
     throw new Error(`${label} did not converge within ${timeoutMs}ms: ${JSON.stringify(last)}`);
   };
-  const setupNotes = (page) => page.evaluate(async () => {
+  const notesDefinitions = await moduleCollectionDefinitions('notes');
+  const setupNotes = (page) => page.evaluate(async (notes) => {
     const state = globalThis.ctoxBusinessOsSmoke.state;
-    const schemaMod = await import('/modules/notes/schema.js');
-    await state.db.addCollections({ notes: schemaMod.collections.notes });
+    await state.db.addCollections({ notes });
     await state.sync.startCollection('notes');
     return true;
-  });
+  }, notesDefinitions.notes);
 
   const profileB = fs.mkdtempSync(path.join(runtimeRoot, 'browser-profile-b-'));
   const browserB = await chromium.launchPersistentContext(profileB, chromiumLaunchOptions());
@@ -3549,20 +3590,22 @@ async function runConcurrentWritersConvergenceMode(pageA) {
       unsyncedTotal: Number(unsynced?.byCollection?.[collection] || 0),
     };
   }, { collection, id });
-  const setupCollections = (page) => page.evaluate(async () => {
+  const convergenceDefinitions = {
+    business_consents: (await moduleCollectionDefinitions('consent')).business_consents,
+    customer_accounts: (await moduleCollectionDefinitions('customers')).customer_accounts,
+  };
+  const setupCollections = (page) => page.evaluate(async (definitions) => {
     const state = globalThis.ctoxBusinessOsSmoke.state;
-    const consentMod = await import('/modules/consent/schema.js');
-    const customersMod = await import('/modules/customers/schema.js');
     await state.db.addCollections({
       // Default whole-doc LWW collection (no conflictStrategy declared).
-      business_consents: consentMod.collections.business_consents,
+      business_consents: definitions.business_consents,
       // First shipped field-merge consumer (§8.2).
-      customer_accounts: customersMod.collections.customer_accounts,
+      customer_accounts: definitions.customer_accounts,
     });
     await state.sync.startCollection('business_consents');
     await state.sync.startCollection('customer_accounts');
     return true;
-  });
+  }, convergenceDefinitions);
   const runId = `${Date.now()}_${token(6)}`;
   const lwwId = `conv-lww-${runId}`;
   const mergeId = `conv-merge-${runId}`;
@@ -5336,16 +5379,15 @@ function ensureCtoxSmokeBinary() {
       // database is ready. The native tables and fixture were provisioned
       // before peer startup so this step cannot invalidate native statements.
       if (smokeMode === 'business-os-threads-scale-ui') {
-        await page.evaluate(async () => {
+        await page.evaluate(async (threadsDefinitions) => {
           const rawDb = globalThis.ctoxBusinessOsSmoke?.state?.db?.raw;
           if (!rawDb?.addCollections) throw new Error('threads scale smoke database unavailable');
-          const schemaMod = await import('/modules/threads/schema.js');
           const missing = {};
-          for (const [name, schema] of Object.entries(schemaMod.collections || {})) {
-            if (!rawDb[name]) missing[name] = { schema };
+          for (const [name, definition] of Object.entries(threadsDefinitions)) {
+            if (!rawDb[name]) missing[name] = definition;
           }
           if (Object.keys(missing).length) await rawDb.addCollections(missing);
-        });
+        }, await moduleCollectionDefinitions('threads'));
       }
       if (smokeMode === 'business-os-sellify-scale-ui') {
         const setupDeadline = Date.now() + Number(process.env.SELLIFY_SCALE_SETUP_TIMEOUT_MS || 240000);
@@ -7774,6 +7816,10 @@ function ensureCtoxSmokeBinary() {
       : null;
     // Backlog OS-C3/SYNC-02: the two-browser modes drive a second isolated
     // peer from the node side instead of the single-page evaluate below.
+    const smokeModuleCollections = Object.fromEntries(await Promise.all([
+      'buchhaltung', 'calendar', 'coding-agents', 'ctox', 'customers', 'desktop', 'documents', 'invoices',
+      'iot', 'matching', 'notes', 'outbound', 'research', 'shiftflow', 'spreadsheets', 'tickets',
+    ].map(async (moduleId) => [moduleId, await moduleCollectionDefinitions(moduleId)])));
     const browserEvaluationTarget = smokeMode === 'business-os-sellify-scale-ui'
       ? sellifyScaleStateHandle
       : page;
@@ -7821,7 +7867,7 @@ function ensureCtoxSmokeBinary() {
       })
       : await browserEvaluationTarget.evaluate(async (stateOrArgs, maybeArgs) => {
       const sellifyScaleAppState = maybeArgs ? stateOrArgs : null;
-      const { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, sellifyScaleSeed, sellifyScaleProvisionOnly, officeRestartFixtureBytes, uiCatalogFixture } = maybeArgs || stateOrArgs;
+      const { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, sellifyScaleSeed, sellifyScaleProvisionOnly, officeRestartFixtureBytes, uiCatalogFixture, smokeModuleCollections } = maybeArgs || stateOrArgs;
       if (['command-browser-to-rust','command-roundtrip-timing-browser-to-rust'].includes(smokeMode)) {
         const kernel=globalThis.ctoxBusinessOsSmoke?.state?.kernel??globalThis.ctoxKernel;
         const {exerciseKernelCommands}=await import('/kernel/testkit/command-contracts.mjs');
@@ -8035,10 +8081,9 @@ function ensureCtoxSmokeBinary() {
           if (ticketClarificationSmokeMode) requiredTicketCollections.push('ctox_ticket_clarification_requests');
           const missingTicketCollections = requiredTicketCollections.filter((name) => !appState.db.raw?.[name]);
           if (missingTicketCollections.length) {
-            const ticketSchemaMod = await import('/modules/tickets/schema.js');
             const ticketCollections = {};
             for (const name of missingTicketCollections) {
-              ticketCollections[name] = { schema: ticketSchemaMod.collections[name] };
+              ticketCollections[name] = smokeModuleCollections.tickets[name];
             }
             await appState.db.raw.addCollections(ticketCollections);
           }
@@ -8051,29 +8096,26 @@ function ensureCtoxSmokeBinary() {
           ];
           const missingCodingAgentCollections = requiredCodingAgentCollections.filter((name) => !appState.db.raw?.[name]);
           if (missingCodingAgentCollections.length) {
-            const codingAgentsSchemaMod = await import('/modules/coding-agents/schema.js');
             const codingAgentCollections = {};
             for (const name of missingCodingAgentCollections) {
-              codingAgentCollections[name] = { schema: codingAgentsSchemaMod.collections[name] };
+              codingAgentCollections[name] = smokeModuleCollections['coding-agents'][name];
             }
             await appState.db.raw.addCollections(codingAgentCollections);
           }
         }
         if (outboundActiveUiSmokeMode) {
-          const outboundSchemaMod = await import('/modules/outbound/schema.js');
           const outboundCollections = {};
-          for (const [name, schema] of Object.entries(outboundSchemaMod.collections || {})) {
-            if (!appState.db.raw?.[name]) outboundCollections[name] = { schema };
+          for (const [name, definition] of Object.entries(smokeModuleCollections.outbound)) {
+            if (!appState.db.raw?.[name]) outboundCollections[name] = definition;
           }
           if (Object.keys(outboundCollections).length) {
             await appState.db.raw.addCollections(outboundCollections);
           }
         }
         if (spreadsheetsActiveUiSmokeMode || officeSpreadsheetRestartSmokeMode) {
-          const schemaMod = await import('/modules/spreadsheets/schema.js');
           const missing = {};
-          for (const [name, schema] of Object.entries(schemaMod.collections || {})) {
-            if (!appState.db.raw?.[name]) missing[name] = { schema };
+          for (const [name, definition] of Object.entries(smokeModuleCollections.spreadsheets)) {
+            if (!appState.db.raw?.[name]) missing[name] = definition;
           }
           if (Object.keys(missing).length) await appState.db.raw.addCollections(missing);
           const handles = await Promise.all([
@@ -8085,10 +8127,9 @@ function ensureCtoxSmokeBinary() {
           await Promise.all(appSpreadsheetProjectionStates.map((state) => bounded(state?.awaitInitialReplication?.(), 15000)));
         }
         if (documentsActiveUiSmokeMode || officeDocumentRestartSmokeMode) {
-          const schemaMod = await import('/modules/documents/schema.js');
           const missing = {};
-          for (const [name, schema] of Object.entries(schemaMod.collections || {})) {
-            if (!appState.db.raw?.[name]) missing[name] = { schema };
+          for (const [name, definition] of Object.entries(smokeModuleCollections.documents)) {
+            if (!appState.db.raw?.[name]) missing[name] = definition;
           }
           if (Object.keys(missing).length) await appState.db.raw.addCollections(missing);
           const handles = await Promise.all([
@@ -8100,14 +8141,10 @@ function ensureCtoxSmokeBinary() {
           await Promise.all(appDocumentProjectionStates.map((state) => bounded(state?.awaitInitialReplication?.(), 15000)));
         }
         if (invoicesActiveUiSmokeMode) {
-          const schemaMod = await import('/modules/invoices/schema.js');
           const required = ['customer_accounts', 'accounting_invoices'];
           const missing = {};
           for (const name of required) {
-            if (!appState.db.raw?.[name]) {
-              const definition = schemaMod.collections[name];
-              missing[name] = definition?.schema ? definition : { schema: definition };
-            }
+            if (!appState.db.raw?.[name]) missing[name] = smokeModuleCollections.invoices[name];
           }
           if (Object.keys(missing).length) await appState.db.raw.addCollections(missing);
           const handles = await Promise.all(required.map((name) => startAppSyncCollection(appState, name, 'invoices-active-ui')));
@@ -8115,7 +8152,6 @@ function ensureCtoxSmokeBinary() {
           await Promise.all(appInvoiceProjectionStates.map((state) => bounded(state?.awaitInitialReplication?.(), 15000)));
         }
         if (buchhaltungActiveUiSmokeMode) {
-          const schemaMod = await import('/modules/buchhaltung/schema.js');
           const required = [
             'accounting_accounts',
             'accounting_journal_entries',
@@ -8123,7 +8159,7 @@ function ensureCtoxSmokeBinary() {
           ];
           const missing = {};
           for (const name of required) {
-            if (!appState.db.raw?.[name]) missing[name] = { schema: schemaMod.collections[name] };
+            if (!appState.db.raw?.[name]) missing[name] = smokeModuleCollections.buchhaltung[name];
           }
           if (Object.keys(missing).length) await appState.db.raw.addCollections(missing);
           const handles = await Promise.all(required.map((name) => startAppSyncCollection(appState, name, 'buchhaltung-active-ui')));
@@ -8254,8 +8290,6 @@ function ensureCtoxSmokeBinary() {
             });
         const rxdb = await import('/rxdb/dist/ctox-rxdb-js.mjs');
         registerRxdbPlugin(rxdb, rxdb.RxDBMigrationSchemaPlugin || rxdb.RxDBMigrationPlugin);
-        const desktopSchemaMod = await import('/modules/desktop/schema.js');
-        const ctoxSchemaMod = await import('/modules/ctox/schema.js');
         db = await rxdb.createRxDatabase({
           name: `ctox_smoke_${Date.now()}`,
           storage: rxdb.getCtoxIndexedDbStorage(),
@@ -8265,12 +8299,12 @@ function ensureCtoxSmokeBinary() {
         ownsDb = true;
         const collections = {};
         if (needsCommandCollections) {
-          collections.business_commands = { schema: ctoxSchemaMod.collections.business_commands };
-          collections.ctox_queue_tasks = { schema: ctoxSchemaMod.collections.ctox_queue_tasks };
+          collections.business_commands = smokeModuleCollections.ctox.business_commands;
+          collections.ctox_queue_tasks = smokeModuleCollections.ctox.ctox_queue_tasks;
         }
         if (needsFileCollections) {
-          collections.desktop_files = { schema: desktopSchemaMod.collections.desktop_files };
-          collections.desktop_file_chunks = { schema: desktopSchemaMod.collections.desktop_file_chunks };
+          collections.desktop_files = smokeModuleCollections.desktop.desktop_files;
+          collections.desktop_file_chunks = smokeModuleCollections.desktop.desktop_file_chunks;
         }
         await db.addCollections(collections);
 
@@ -11801,7 +11835,7 @@ function ensureCtoxSmokeBinary() {
               source: 'local',
               install_scope: 'store',
               entry: 'modules/coding-agents/index.html',
-              schema: '/modules/coding-agents/schema.js',
+              schemaModule: 'coding-agents',
               collection: 'coding_agent_sessions',
               collections: [
                 'business_commands',
@@ -11816,7 +11850,7 @@ function ensureCtoxSmokeBinary() {
               source: 'packaged',
               install_scope: 'starter',
               entry: 'modules/calendar/index.html',
-              schema: '/modules/calendar/schema.js',
+              schemaModule: 'calendar',
               collection: 'calendar_events',
               collections: [
                 'business_commands',
@@ -11836,7 +11870,7 @@ function ensureCtoxSmokeBinary() {
               source: 'local',
               install_scope: 'store',
               entry: 'modules/buchhaltung/index.html',
-              schema: '/modules/buchhaltung/schema.js',
+              schemaModule: 'buchhaltung',
               collection: 'accounting_journal_entries',
               collections: [
                 'business_commands',
@@ -11875,7 +11909,7 @@ function ensureCtoxSmokeBinary() {
               source: 'local',
               install_scope: 'store',
               entry: 'modules/customers/index.html',
-              schema: '/modules/customers/schema.js',
+              schemaModule: 'customers',
               collection: 'customer_accounts',
               collections: [
                 'business_commands',
@@ -11931,7 +11965,7 @@ function ensureCtoxSmokeBinary() {
               source: 'local',
               install_scope: 'store',
               entry: 'modules/invoices/index.html',
-              schema: '/modules/invoices/schema.js',
+              schemaModule: 'invoices',
               collection: 'accounting_invoices',
               collections: [
                 'business_commands',
@@ -11965,7 +11999,7 @@ function ensureCtoxSmokeBinary() {
               source: 'local',
               install_scope: 'store',
               entry: 'modules/iot/index.html',
-              schema: '/modules/iot/schema.js',
+              schemaModule: 'iot',
               collection: 'iot_widgets',
               collections: [
                 'business_commands',
@@ -11988,7 +12022,7 @@ function ensureCtoxSmokeBinary() {
               source: 'packaged',
               install_scope: 'starter',
               entry: 'modules/notes/index.html',
-              schema: '/modules/notes/schema.js',
+              schemaModule: 'notes',
               collection: 'notes',
               collections: [
                 'business_commands',
@@ -12001,7 +12035,7 @@ function ensureCtoxSmokeBinary() {
               source: 'local',
               install_scope: 'store',
               entry: 'modules/outbound/index.html',
-              schema: '/modules/outbound/schema.js',
+              schemaModule: 'outbound',
               collection: 'outbound_campaigns',
               collections: [
                 'business_commands',
@@ -12028,7 +12062,7 @@ function ensureCtoxSmokeBinary() {
               source: 'local',
               install_scope: 'store',
               entry: 'modules/research/index.html',
-              schema: '/modules/research/schema.js',
+              schemaModule: 'research',
               collection: 'research_tasks',
               collections: [
                 'business_commands',
@@ -12048,7 +12082,7 @@ function ensureCtoxSmokeBinary() {
               source: 'local',
               install_scope: 'store',
               entry: 'modules/matching/index.html',
-              schema: '/modules/matching/schema.js',
+              schemaModule: 'matching',
               collection: 'matching_requirements',
               collections: [
                 'matching_requirements',
@@ -12062,7 +12096,7 @@ function ensureCtoxSmokeBinary() {
               source: 'local',
               install_scope: 'store',
               entry: 'modules/shiftflow/index.html',
-              schema: '/modules/shiftflow/schema.js',
+              schemaModule: 'shiftflow',
               collection: 'planning_shifts',
               collections: [
                 'business_commands',
@@ -12158,12 +12192,12 @@ function ensureCtoxSmokeBinary() {
             };
             state.session = packagedGuardSession;
             state.governance = governance;
-            if (spec.schema && !state.db?.collection?.(packagedGuardCollection)) {
-              const schemaModule = await import(spec.schema);
+            if (spec.schemaModule && !state.db?.collection?.(packagedGuardCollection)) {
+              const moduleDefinitions = smokeModuleCollections[spec.schemaModule] || {};
               const missingCollections = {};
               for (const name of spec.collections) {
-                if (state.db?.collection?.(name) || !schemaModule.collections?.[name]) continue;
-                missingCollections[name] = { schema: schemaModule.collections[name] };
+                if (state.db?.collection?.(name) || !moduleDefinitions[name]) continue;
+                missingCollections[name] = moduleDefinitions[name];
               }
               if (Object.keys(missingCollections).length) {
                 await state.db?.raw?.addCollections?.(missingCollections);
@@ -16955,7 +16989,7 @@ function ensureCtoxSmokeBinary() {
           desktop_file_chunks: describeReplicationPool(appChunkReplicationState),
         },
       };
-    }, { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, sellifyScaleSeed, sellifyScaleProvisionOnly, officeRestartFixtureBytes, uiCatalogFixture });
+    }, { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, sellifyScaleSeed, sellifyScaleProvisionOnly, officeRestartFixtureBytes, uiCatalogFixture, smokeModuleCollections });
     outerPhaseTimings.pageEvaluateMs = Date.now() - pageEvaluateStartedAt;
 
     if (result.mode === 'business-os-ui-regression') {
