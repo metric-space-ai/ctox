@@ -173,6 +173,7 @@ pub struct Association {
     cumulative_tsn_ack_point: u32,
     advanced_peer_tsn_ack_point: u32,
     use_forward_tsn: bool,
+    t3_initial_packet_pending: bool,
 
     pub(crate) rto_mgr: RtoManager,
     timers: TimerTable,
@@ -262,6 +263,7 @@ impl Default for Association {
             cumulative_tsn_ack_point: 0,
             advanced_peer_tsn_ack_point: 0,
             use_forward_tsn: false,
+            t3_initial_packet_pending: false,
 
             rto_mgr: RtoManager::default(),
             timers: TimerTable::default(),
@@ -343,6 +345,123 @@ mod ctox_window_ack_contract {
             "one gap SACK must not masquerade as eight separate RTT observations"
         );
         assert_eq!(association.min_tsn2measure_rtt, 10);
+    }
+
+    #[test]
+    fn post_t3_recovery_prioritizes_control_without_exceeding_window_credit() {
+        let now = Instant::now();
+        let mut association = Association {
+            cwnd: 2400,
+            rwnd: 150,
+            mtu: 1200,
+            cumulative_tsn_ack_point: 0,
+            ..Default::default()
+        };
+        association.pending_queue.set_priority(17, 1024);
+        for (tsn, sid, size) in [(1, 7, 100), (2, 7, 1000), (3, 17, 50)] {
+            association.inflight_queue.push_no_check(ChunkPayloadData {
+                tsn,
+                stream_identifier: sid,
+                user_data: bytes::Bytes::from(vec![23; size]),
+                retransmit: true,
+                nsent: 1,
+                beginning_fragment: true,
+                ending_fragment: true,
+                ..Default::default()
+            });
+        }
+        let wire = association
+            .get_data_packets_to_retransmit(now)
+            .into_iter()
+            .flat_map(|packet| packet.chunks)
+            .map(|chunk| ChunkPayloadData::unmarshal(&chunk.marshal().unwrap()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            wire.iter().map(|c| c.tsn).collect::<Vec<_>>(),
+            [3, 1],
+            "control must preempt bulk after the initial T3 packet"
+        );
+        assert!(wire.iter().map(|c| c.user_data.len()).sum::<usize>() <= 150);
+        assert_eq!(association.inflight_queue.get(2).unwrap().nsent, 1);
+        assert!(association.inflight_queue.get(2).unwrap().retransmit);
+        assert_eq!(association.inflight_queue.get(3).unwrap().nsent, 2);
+        // RFC4960 E3's first packet remains the earliest complete MTU prefix.
+        association.t3_initial_packet_pending = true;
+        association.cwnd = 1200;
+        association.rwnd = 1100;
+        association.mtu = 1200;
+        association.inflight_queue.mark_all_to_retrasmit();
+        let packets = association.get_data_packets_to_retransmit(now);
+        let tsns = packets
+            .into_iter()
+            .flat_map(|packet| packet.chunks)
+            .map(|c| {
+                ChunkPayloadData::unmarshal(&c.marshal().unwrap())
+                    .unwrap()
+                    .tsn
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            tsns,
+            [1, 2],
+            "initial T3 packet must retain the lowest-TSN MTU prefix"
+        );
+        assert!(!association.t3_initial_packet_pending);
+        association.rwnd = 0;
+        association.inflight_queue.mark_all_to_retrasmit();
+        let packets = association.get_data_packets_to_retransmit(now);
+        let tsns = packets
+            .into_iter()
+            .flat_map(|packet| packet.chunks)
+            .map(|c| {
+                ChunkPayloadData::unmarshal(&c.marshal().unwrap())
+                    .unwrap()
+                    .tsn
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            tsns,
+            [1],
+            "zero-window recovery must preserve the earliest DATA probe"
+        );
+    }
+
+    #[test]
+    fn retransmit_packetization_keeps_control_inside_path_mtu() {
+        let association = Association {
+            mtu: 1200,
+            ..Default::default()
+        };
+        let chunks = [(1, 7, 1120), (2, 17, 49)]
+            .into_iter()
+            .map(|(tsn, sid, size)| ChunkPayloadData {
+                tsn,
+                stream_identifier: sid,
+                user_data: bytes::Bytes::from(vec![23; size]),
+                beginning_fragment: true,
+                ending_fragment: true,
+                ..Default::default()
+            })
+            .collect();
+        let packets = association.bundle_data_chunks_into_packets(chunks);
+        let wire = packets
+            .iter()
+            .map(|p| p.marshal().unwrap())
+            .collect::<Vec<_>>();
+        assert!(
+            wire.iter().all(|p| p.len() <= 1200),
+            "control bundle exceeded path MTU"
+        );
+        assert_eq!(
+            packets
+                .into_iter()
+                .flat_map(|p| p.chunks)
+                .map(|c| ChunkPayloadData::unmarshal(&c.marshal().unwrap())
+                    .unwrap()
+                    .tsn)
+                .collect::<Vec<_>>(),
+            [1, 2]
+        );
     }
 
     #[test]
@@ -2303,6 +2422,7 @@ impl Association {
                         &self.streams,
                     );
                     to_fast_retrans.push(Box::new(c.clone()));
+                    trace!(target: "ctox_sctp_timeline", "event=fast_retransmit side={} sid={} tsn={} ssn={} nsent={} rto_ms={}", self.side, c.stream_identifier, c.tsn, c.stream_sequence_number, c.nsent, self.rto_mgr.get_rto());
                     trace!(
                         "[{}] fast-retransmit: tsn={} sent={} htna={}",
                         self.side, c.tsn, c.nsent, self.fast_recover_exit_point
@@ -2426,19 +2546,57 @@ impl Association {
         let awnd = std::cmp::min(self.cwnd, self.rwnd);
         let mut chunks = vec![];
         let mut bytes_to_send = 0;
-        let mut done = false;
-        let mut i = 0;
-        while !done {
-            let tsn = self.cumulative_tsn_ack_point + i + 1;
-            if let Some(c) = self.inflight_queue.get_mut(tsn) {
-                if !c.retransmit {
-                    i += 1;
-                    continue;
+        // ref: webrtc-rs/rtc@b808b74f712ed379312a114b848ede133880d58a/rtc-sctp/src/association/mod.rs:2325-2377
+        // RFC 4960 6.3.3 E3 retains the initial lowest-TSN packet intact.
+        // After that packet, already-assigned TSNs can be retransmitted in DCEP
+        // priority order. Do not give a control retransmission extra cwnd/rwnd
+        // credit, change fragment TSNs, or skip the oldest zero-window probe.
+        let mut eligible: Vec<_> = self
+            .inflight_queue
+            .sorted
+            .iter()
+            .copied()
+            .filter(|tsn| self.inflight_queue.get(*tsn).is_some_and(|c| c.retransmit))
+            .collect();
+        let mut protected = 0;
+        if self.t3_initial_packet_pending {
+            let mut packet_size = COMMON_HEADER_SIZE;
+            for tsn in &eligible {
+                let c = self.inflight_queue.get(*tsn).unwrap();
+                let size = DATA_CHUNK_HEADER_SIZE + c.user_data.len() as u32;
+                let size = size + (4 - size % 4) % 4;
+                if packet_size + size > self.mtu {
+                    break;
                 }
-
-                if i == 0 && self.rwnd < c.user_data.len() as u32 {
-                    // Send it as a zero window probe
-                    done = true;
+                protected += 1;
+                packet_size += size;
+            }
+        }
+        // Retain the original earliest-TSN zero-window probe too.
+        if let Some(first) = eligible
+            .first()
+            .and_then(|tsn| self.inflight_queue.get(*tsn))
+        {
+            if first.tsn == self.cumulative_tsn_ack_point.wrapping_add(1)
+                && self.rwnd < first.user_data.len() as u32
+            {
+                protected = protected.max(1);
+            }
+        }
+        if eligible.len() > protected {
+            eligible[protected..].sort_by_key(|tsn| {
+                std::cmp::Reverse(
+                    self.pending_queue
+                        .priority(self.inflight_queue.get(*tsn).unwrap().stream_identifier),
+                )
+            });
+        }
+        for tsn in eligible {
+            if let Some(c) = self.inflight_queue.get_mut(tsn) {
+                if tsn == self.cumulative_tsn_ack_point.wrapping_add(1)
+                    && self.rwnd < c.user_data.len() as u32
+                {
+                    // Send it as a zero window probe.
                 } else if bytes_to_send + c.user_data.len() > awnd as usize {
                     break;
                 }
@@ -2470,9 +2628,14 @@ impl Association {
                 chunks.push(c.clone());
                 trace!(target: "ctox_sctp_timeline", "event=retransmit side={} sid={} tsn={} ssn={} nsent={} rto_ms={}", self.side, c.stream_identifier, c.tsn, c.stream_sequence_number, c.nsent, self.rto_mgr.get_rto());
             }
-            i += 1;
+            if self.rwnd < bytes_to_send as u32 {
+                break;
+            }
         }
 
+        if !chunks.is_empty() {
+            self.t3_initial_packet_pending = false;
+        }
         self.bundle_data_chunks_into_packets(chunks)
     }
 
@@ -2566,13 +2729,17 @@ impl Association {
             //   single packet.  Furthermore, DATA chunks being retransmitted MAY be
             //   bundled with new DATA chunks, as long as the resulting packet size
             //   does not exceed the path MTU.
-            if bytes_in_packet + c.user_data.len() as u32 > self.mtu {
+            // ref: webrtc-rs/rtc@b808b74f712ed379312a114b848ede133880d58a/rtc-sctp/src/association/mod.rs:2457-2484
+            // RFC4960 6.1: the DATA header and alignment are part of the MTU.
+            let data_size = DATA_CHUNK_HEADER_SIZE + c.user_data.len() as u32;
+            let data_size = data_size + (4 - data_size % 4) % 4;
+            if bytes_in_packet + data_size > self.mtu {
                 packets.push(self.create_packet(chunks_to_send));
                 chunks_to_send = vec![];
                 bytes_in_packet = COMMON_HEADER_SIZE;
             }
 
-            bytes_in_packet += DATA_CHUNK_HEADER_SIZE + c.user_data.len() as u32;
+            bytes_in_packet += data_size;
             chunks_to_send.push(Box::new(c));
         }
 
@@ -2936,6 +3103,7 @@ impl Association {
                     self.side, n_rtos, self.cwnd, self.ssthresh
                 );
 
+                self.t3_initial_packet_pending = true;
                 self.inflight_queue.mark_all_to_retrasmit();
                 self.awake_write_loop();
             }

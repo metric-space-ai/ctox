@@ -27,6 +27,10 @@ impl PendingQueue {
         self.priorities.insert(stream, priority);
     }
 
+    pub(crate) fn priority(&self, stream: u16) -> u16 {
+        self.priorities.get(&stream).copied().unwrap_or(256)
+    }
+
     pub(crate) fn push(&mut self, c: ChunkPayloadData) {
         self.n_bytes += c.user_data.len();
         if c.unordered {
