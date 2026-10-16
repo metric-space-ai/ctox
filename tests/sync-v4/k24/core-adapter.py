@@ -30,6 +30,19 @@ def query(database):
     with sqlite3.connect(database.as_uri()+'?mode=ro', uri=True, timeout=3) as db:
         db.execute('PRAGMA query_only=ON')
         db.execute('BEGIN')
+        if kind == 'audit' and db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='business_events'").fetchone():
+            record = os.environ.get('K24_RECORD')
+            if record and not record.startswith('cmd:'):
+                raise ValueError('K24_RECORD must be cmd:<command_id>')
+            # cap.audit.event persists these native fields (caps/audit.rs).
+            # App identity is the native _cap provenance, never a test actor.
+            sql = "SELECT event_id,json_extract(payload_json,'$._cap.app_id'),command_type,record_id,collection,json_extract(payload_json,'$.label') FROM business_events WHERE json_extract(payload_json,'$._cap.app_id')=?"
+            params = [app]
+            if record:
+                sql += ' AND record_id=?'
+                params.append(record)
+            sql += ' ORDER BY observed_at_ms,event_id'
+            return [dict(zip(('id','app_id','event_type','record_id','collection','label'), row)) for row in db.execute(sql, params)]
         registry = {r[0]: r for r in db.execute(
             "SELECT name,table_name,gen,app_id FROM _collections WHERE state='active'")}
         def documents(name):
@@ -63,9 +76,9 @@ def query(database):
         archive = []
         # Return native recorded removal metadata, never infer removed_by from a
         # test actor or fabricate an app version from the active pointer.
-        for (body,) in db.execute('SELECT data FROM _archive WHERE app_id=? ORDER BY archive_id', (app,)):
+        for ident, version, body in db.execute('SELECT id,app_ver,data FROM _archive WHERE app_id=? ORDER BY archive_id', (app,)):
             row = json.loads(body)
-            archive.append({key: row.get(key) for key in ('id','app_ver','removed_by','app_active_ver')})
+            archive.append(dict(id=ident,app_ver=version,removed_by=row.get('removed_by'),app_active_ver=row.get('app_active_ver')))
         counts = {}
         for name, gen in (('k24_ticks', None), ('k24_ticks', 2), ('k24_runs', None)):
             key = name+('@g2' if gen == 2 else '')
@@ -109,6 +122,7 @@ if __name__ == '__main__':
     parser.add_argument('operation', choices=('query','fingerprint'))
     parser.add_argument('--root', required=True, type=Path)
     parser.add_argument('--database', type=Path)
+    parser.add_argument('--audit-database', type=Path)
     parser.add_argument('--pid', type=int)
     parser.add_argument('--config', action='append', type=Path, default=[])
     args = parser.parse_args()
@@ -117,7 +131,8 @@ if __name__ == '__main__':
     if marker.get('owner') != OWNER or marker.get('synthetic') is not True:
         raise ValueError('Only the owned synthetic profile')
     if args.operation == 'query':
-        database = args.database.resolve(strict=True)
+        file = args.audit_database if os.environ.get('K24_QUERY') == 'audit' and args.audit_database else args.database
+        database = file.resolve(strict=True)
         if root not in database.parents:
             raise ValueError('Database outside private profile')
         result = query(database)

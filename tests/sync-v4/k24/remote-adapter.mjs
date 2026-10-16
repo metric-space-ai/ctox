@@ -17,7 +17,10 @@ if(operation==='query'){
  }
 }
 cmd.push('python3',c.adapter,operation,'--root',c.root);
-if(operation==='query')cmd.push('--database',c.database);
+if(operation==='query'){
+ cmd.push('--database',c.database);
+ if(c.auditDatabase)cmd.push('--audit-database',c.auditDatabase);
+}
 else{
  cmd.push('--pid',String(c.pid));
  for(const path of c.configs)cmd.push('--config',path);

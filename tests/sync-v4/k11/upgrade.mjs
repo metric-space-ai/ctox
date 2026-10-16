@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import {join,resolve} from 'node:path';
 import {createServer} from 'node:http';
-import {spawn,execFileSync} from 'node:child_process';
+import {spawn,spawnSync,execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {verifiedBuild,owner} from '../../sync-v4-e2e/native.mjs';
 const hash=b=>createHash('sha256').update(b).digest('hex');
@@ -65,7 +65,7 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
  });
  await new Promise(r=>server.listen(0,'127.0.0.1',r));base='http://127.0.0.1:'+server.address().port;
  // Explicit allowlist avoids ambient credentials, proxies and host service buses.
- const env={PATH:process.env.PATH,HOME:home,TMPDIR:tmpdir,LANG:'C.UTF-8',CTOX_ROOT:join(installRoot,'current'),CTOX_INSTALL_ROOT:installRoot,CTOX_STATE_ROOT:stateRoot,XDG_CONFIG_HOME:join(home,'.config'),XDG_CACHE_HOME:join(home,'.cache'),XDG_RUNTIME_DIR:proof.serviceManager?.runtime??join(home,'run')};if(proof.serviceManager)env.DBUS_SESSION_BUS_ADDRESS=proof.serviceManager.bus;fs.mkdirSync(env.XDG_RUNTIME_DIR,{recursive:true,mode:0o700});
+ const env={PATH:process.env.PATH,HOME:home,TMPDIR:tmpdir,LANG:'C.UTF-8',BUILD_LANE_BIN:process.env.BUILD_LANE_BIN,CTOX_ROOT:join(installRoot,'current'),CTOX_INSTALL_ROOT:installRoot,CTOX_STATE_ROOT:stateRoot,XDG_CONFIG_HOME:join(home,'.config'),XDG_CACHE_HOME:join(home,'.cache'),XDG_RUNTIME_DIR:proof.serviceManager?.runtime??join(home,'run')};if(proof.serviceManager)env.DBUS_SESSION_BUS_ADDRESS=proof.serviceManager.bus;fs.mkdirSync(env.XDG_RUNTIME_DIR,{recursive:true,mode:0o700});
  const calls=[];
  const serviceCalls=[];
  const quiesce=()=>{
@@ -97,6 +97,34 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
   return {evidence:file,...JSON.parse(fs.readFileSync(file))};
  };
  try{
+  // E29.7: observe the REAL V3 owner before freezing, not a guessed pathname.
+  // The enclosing private PID/net/mount/user namespace is already verified.
+  if(!resumeRolledBack){
+   const log=fs.openSync(join(output,'v3-freeze-owner.log'),'w',0o600),at=Date.now();
+   const old=spawn(join(initial,'bin/ctox'),['service','--foreground','--root',initial],{cwd:initial,env,stdio:['ignore',log,log]});fs.closeSync(log);
+   const ended=new Promise(r=>old.once('exit',(code,signal)=>r({code,signal})));
+   record.v3Freeze={pid:old.pid,startedAtMs:at,stopAfterSeconds:15};
+   try{
+    await new Promise(r=>setTimeout(r,1500));
+    if(old.exitCode===null&&old.signalCode===null){
+     const file=join(output,'v3-open-databases.json');
+     const p=spawnSync('python3',[new URL('./m7-freeze.py',import.meta.url).pathname,'--pid',String(old.pid),'--root',root,'--output',file],{env,encoding:'utf8',timeout:5000});
+     record.v3Freeze.captureExit=p.status;
+     if(p.status===0)record.v3Freeze.custody=JSON.parse(fs.readFileSync(file));
+     else record.v3Freeze.captureError=p.stderr;
+    }
+   }finally{
+    old.kill('SIGTERM');
+    const timer=setTimeout(()=>old.kill('SIGKILL'),5000);
+    record.v3Freeze.exit=await ended;clearTimeout(timer);
+    record.v3Freeze.durationMs=Date.now()-at;
+   }
+   const frozen=join(output,'v3-frozen-snapshot');
+   const p=spawnSync('python3',[new URL('./m7-backup.py',import.meta.url).pathname,'snapshot','--root',root,'--output',frozen],{env,encoding:'utf8',timeout:180000});
+   record.v3Freeze.snapshotExit=p.status;
+   record.v3Freeze.tableManifest=join(frozen,'snapshot.json');
+   if(p.status!==0)throw Error('E29 SQLite-API freeze failed: '+p.stderr);
+  }
   record.dataBefore=readback('before');
   await cli(['update','status']);
   await cli(['update','channel','set-github','--repo','e2e/fixture','--api-base',base]);
