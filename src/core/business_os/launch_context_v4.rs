@@ -114,10 +114,8 @@ pub(crate) async fn build(
     let session = peer.clone();
     // Reuse the V3 browser credential and configured/ctox.dev TURN route. This
     // existing helper performs network/secret-owner I/O outside the Sync snapshot.
-    let config =
-        crate::persistence::run_core_sync(move || store::sync_config_for_browser(&root, &session))
-            .await
-            .context("resolve browser signaling and TURN")?;
+    let config = super::browser_bootstrap::config(&root, &session)
+        .context("read prepared browser signaling and TURN")?;
     ensure!(
         config.instance_id == signer.instance_id(),
         "instance identity differs"
@@ -287,7 +285,7 @@ pub(crate) fn verify_offer(hello: &Hello, peer: &str, key: &[u8; 32]) -> Result<
 fn quote(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
-fn documents(db: &Connection, collection: &str) -> Result<Vec<Value>> {
+pub(super) fn documents(db: &Connection, collection: &str) -> Result<Vec<Value>> {
     let table: String = db.query_row(
         "SELECT table_name FROM _collections WHERE name=?1 AND state='active'",
         [collection],

@@ -742,6 +742,29 @@ fn write_native_signaling_token(root: &Path, token: &str, source: &str) -> anyho
     Ok(())
 }
 
+// Secret material stays in the owning process, without Debug/Serialize.
+pub(crate) struct BrowserBootstrapMaterial {
+    config: BusinessOsSyncConfig,
+    turn: Option<(String, String)>,
+}
+impl BrowserBootstrapMaterial {
+    pub(crate) fn for_session(&self, session: &str) -> BusinessOsSyncConfig {
+        let mut config = self.config.clone();
+        if let Some((url, secret)) = &self.turn {
+            let (username, credential) = mint_ephemeral_turn_credentials(secret, session, now_ms() as i64);
+            config.ice_servers.push(serde_json::json!({"urls": url,"username":username,"credential":credential}));
+        }
+        config.ice_diagnostics = ice_diagnostics(&config.ice_servers);
+        config
+    }
+}
+pub(crate) fn browser_bootstrap_material(root: &Path) -> anyhow::Result<BrowserBootstrapMaterial> {
+    let mut config = sync_config(root)?;
+    config.signaling_room_password.clear();
+    let turn = business_os_turn_url(root).zip(business_os_turn_secret(root));
+    Ok(BrowserBootstrapMaterial { config, turn })
+}
+
 pub fn sync_config_for_browser(
     root: &Path,
     turn_session_id: &str,
