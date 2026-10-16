@@ -1,9 +1,17 @@
 //! Real file-owner harness for the original Pi regression cases.
 use std::path::Path;
 
-pub(super) fn run<T: Send + 'static>(
+pub(in crate::coding_agents) fn run<T: Send + 'static>(
     body: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
 ) -> anyhow::Result<T> {
+    // Each body holds one of the process-wide Core admission permits (four,
+    // non-waiting) for its whole duration. Under libtest's default parallelism
+    // these harness tests would exhaust them and fail with `Busy`, so they take
+    // turns here instead of racing the production admission bound.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _turn = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -11,7 +19,7 @@ pub(super) fn run<T: Send + 'static>(
     crate::persistence::run_core_blocking(runtime.handle(), body)
 }
 
-pub(super) struct Root {
+pub(in crate::coding_agents) struct Root {
     directory: tempfile::TempDir,
     handle: tokio::runtime::Handle,
     owners: Option<Owners>,
@@ -23,11 +31,11 @@ struct Owners {
     readers: ctox_store::read_pool::ReadPool,
 }
 impl Root {
-    pub(super) fn path(&self) -> &Path {
+    pub(in crate::coding_agents) fn path(&self) -> &Path {
         self.directory.path()
     }
 }
-pub(super) fn root() -> anyhow::Result<Root> {
+pub(in crate::coding_agents) fn root() -> anyhow::Result<Root> {
     let directory = tempfile::tempdir()?;
     let handle = tokio::runtime::Handle::try_current()?;
     let owners = handle.block_on(async {
