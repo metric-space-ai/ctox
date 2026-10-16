@@ -34,11 +34,11 @@ static FACTORIES: OnceLock<Mutex<Factories>> = OnceLock::new();
 #[cfg(all(test, unix))]
 static TEST_ROOTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 #[cfg(all(test, unix))]
-pub(super) struct ForegroundTestScope {
+pub(crate) struct ForegroundTestScope {
     _lock: tokio::sync::MutexGuard<'static, ()>,
 }
 #[cfg(all(test, unix))]
-pub(super) async fn isolate_test_roots() -> ForegroundTestScope {
+pub(crate) async fn isolate_test_roots() -> ForegroundTestScope {
     ForegroundTestScope {
         _lock: TEST_ROOTS.lock().await,
     }
