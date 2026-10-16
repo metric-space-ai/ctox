@@ -121,6 +121,11 @@ with tempfile.TemporaryDirectory(prefix='m7-fix2-snapshot-',dir='/dev/shm') as s
         value = json.loads((out / name / 'result.json').read_text())
         record[name] = value
         save()
+        # A crash, transport error or leaked child is not a causal latency red.
+        assert 'error' not in value and value['groupAbsent'] and value['inferiorsAbsent']
+        assert value['signaling']['groupAbsent']
+        assert len(value['rows']) == 20 and all(row.get('status') == 200 and 'error' not in row for row in value['rows'])
+        assert value['p99Ms'] is not None
         assert value['pass'] is (name != 'removed-admission'), (name, value)
     record['pass'] = True
 except Exception as error:
