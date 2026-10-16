@@ -5,13 +5,32 @@ use super::*;
 use ctox_store::{change_log::subscription::{protocol::{OrderedWrite,Write,WriteStatus},write_contract,WriteAuthority,WritePermission},schema};
 use rusqlite::{Connection,Transaction};
 use serde_json::{json,Value};
+// Fixture marshalling only (RFC7396), not authorization. Both admission and
+// final-result policy decisions below use the production manifest/mask code.
+fn fixture_delta(target:&mut Value,patch:&Value){
+    if let Some(fields)=patch.as_object(){
+        if !target.is_object(){*target=json!({});}
+        let object=target.as_object_mut().unwrap();
+        for (key,value) in fields {if value.is_null(){object.remove(key);}else{fixture_delta(object.entry(key.clone()).or_insert(Value::Null),value);}}
+    }else{*target=patch.clone();}
+}
 struct CommittedPolicy;
 impl WriteAuthority for CommittedPolicy {
     fn authorize(&self,tx:&Transaction<'_>,participant:&str,w:&Write)->rusqlite::Result<WritePermission>{
         let r=read(tx)?;
         let allowed=r.resolve_app_collection("p6-leads","user",participant,&w.collection)
             .ok().is_some_and(|s|s.projection(&w.collection).is_some());
-        Ok(if allowed{WritePermission::Permit}else{WritePermission::Reject("forbidden".into())})
+        if !allowed{return Ok(WritePermission::Reject("forbidden".into()));}
+        // Guard the actual incoming delta before a three-way merge may erase
+        // its forbidden intent; the native browser binding is still pending.
+        let c=schema::active_collection(tx,&w.collection)?.unwrap();
+        let raw:String=tx.query_row(&format!("SELECT data FROM {} WHERE id=?1",c.table),[&w.id],|r|r.get(0))?;
+        let before:Value=serde_json::from_str(&raw).unwrap();let mut candidate=before.clone();
+        fixture_delta(&mut candidate,w.body.as_ref().unwrap());
+        let actor=crate::business_os::policy::BusinessOsActor::new(Some(participant.into()),"user");
+        Ok(match crate::business_os::policy::write_sync_document(&actor,&r,"p6-leads","leads",Some(&before),Some(&candidate),None){
+            Ok(())=>WritePermission::Permit,Err(reason)=>WritePermission::Reject(reason)
+        })
     }
     fn validate_document(&self,tx:&Transaction<'_>,participant:&str,c:&schema::Collection,doc:&Value)->rusqlite::Result<WritePermission>{
         let raw:String=tx.query_row(&format!("SELECT data FROM {} WHERE id=?1",c.table),[doc["id"].as_str().unwrap()],|r|r.get(0))?;
