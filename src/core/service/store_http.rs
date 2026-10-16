@@ -84,8 +84,8 @@ impl HttpSurface {
                 .name(format!("ctox-bootstrap-{index}"))
                 .spawn(move || {
                     while !closing.load(Ordering::Acquire) {
-                        match server.recv_timeout(Duration::from_millis(100)) {
-                            Ok(Some(request)) => {
+                        match server.recv() {
+                            Ok(request) => {
                                 let result = answer(&inputs, &app, request.url(), request.method());
                                 let (status, mime, body) = result.unwrap_or((
                                     503,
@@ -106,7 +106,6 @@ impl HttpSurface {
                                 response.add_header(Header::from_bytes("Content-Security-Policy", "default-src 'self'; script-src 'self' blob:; connect-src 'self' wss:; object-src 'none'; base-uri 'none'").unwrap());
                                 let _ = request.respond(response);
                             }
-                            Ok(None) => (),
                             Err(_) => break,
                         }
                     }
