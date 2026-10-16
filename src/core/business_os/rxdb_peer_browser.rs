@@ -4971,7 +4971,65 @@ const CORE_BROWSER_COMMANDS: &[&str] = &[
     "browser.clipboard.clear",
     "browser.session.stop",
     "web_stack.auth_assist.complete",
+    // §16.48: read/act steps run as Core-owned templates (no app script).
+    "browser.extract",
+    "browser.click",
+    "browser.wait",
 ];
+
+/// §16.48: Core-authored page script for extract/click/wait. App input is
+/// only JSON-encoded data (selectors, field specs, limits) – never code.
+/// The extract result is a JSON string so the runner's generic serializer
+/// cannot truncate it.
+fn core_browser_step_script(command_type: &str, payload: &Value) -> anyhow::Result<String> {
+    let text = |key: &str| -> anyhow::Result<String> {
+        let value = payload
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty() && value.len() <= 512)
+            .with_context(|| format!("browser step {key} is required"))?;
+        Ok(serde_json::to_string(value)?)
+    };
+    Ok(match command_type {
+        "browser.click" => format!(
+            "await page.locator({}).first().click({{ timeout: 15000 }}); return {{ clicked: true }};",
+            text("selector")?
+        ),
+        "browser.wait" => match payload.get("ms").and_then(Value::as_u64) {
+            Some(ms) => {
+                anyhow::ensure!((1..=30_000).contains(&ms), "browser wait ms out of range");
+                format!("await page.waitForTimeout({ms}); return {{ waited_ms: {ms} }};")
+            }
+            None => format!(
+                "await page.locator({}).first().waitFor({{ timeout: 30000 }}); return {{ found: true }};",
+                text("selector")?
+            ),
+        },
+        "browser.extract" => {
+            let limit = payload
+                .get("limit")
+                .and_then(Value::as_u64)
+                .filter(|limit| (1..=1000).contains(limit))
+                .context("browser extract limit is required")?;
+            let spec = serde_json::to_string(&json!({
+                "selector": payload.get("selector"),
+                "fields": payload.get("fields"),
+                "limit": limit,
+            }))?;
+            format!(
+                "const spec = {spec}; \
+                 const items = await page.$$eval(spec.selector, (els, spec) => els.slice(0, spec.limit).map((el) => {{ \
+                 const out = {{}}; \
+                 for (const [name, f] of Object.entries(spec.fields)) {{ \
+                 const target = f.selector === ':scope' ? el : el.querySelector(f.selector); \
+                 out[name] = !target ? null : (f.text ? target.innerText : target.getAttribute(f.attr)); }} \
+                 return out; }}), spec); \
+                 return JSON.stringify({{ items }});"
+            )
+        }
+        other => anyhow::bail!("not a browser step: {other}"),
+    })
+}
 
 fn core_browser_audit(
     root: &Path,
@@ -5093,6 +5151,42 @@ pub(crate) fn apply_core_browser_command(
             // An app opens its session with navigate; the engine names that start.
             let existing =
                 find_browser_document(&database, "browser_sessions", &session_id).await?;
+            if matches!(
+                command_type.as_str(),
+                "browser.extract" | "browser.click" | "browser.wait"
+            ) {
+                // Steps act in an existing session of exactly this user.
+                anyhow::ensure!(existing.is_object(), "browser session not found");
+                let owner = existing
+                    .get("owner_user_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                anyhow::ensure!(owner == user, "browser session belongs to another user");
+                let output = browser_session_automation_with_database(
+                    root.to_path_buf(),
+                    &database,
+                    BrowserSessionAutomationRequest {
+                        session_id: session_id.clone(),
+                        dir: None,
+                        timeout_ms: Some(45_000),
+                        source: core_browser_step_script(&command_type, &payload)?,
+                        profile_owner: Some(user.clone()),
+                    },
+                )
+                .await?;
+                let result = output.get("result").cloned().unwrap_or(Value::Null);
+                if command_type == "browser.extract" {
+                    let raw = result
+                        .as_str()
+                        .context("browser extract returned no result")?;
+                    anyhow::ensure!(
+                        raw.len() <= 1024 * 1024,
+                        "browser extract result exceeds 1 MiB"
+                    );
+                    return Ok(serde_json::from_str(raw)?);
+                }
+                return Ok(result);
+            }
             let command_type = if command_type == "browser.navigate" && !existing.is_object() {
                 "browser.session.start".to_string()
             } else {

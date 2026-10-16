@@ -443,22 +443,28 @@ fn app_capabilities_cap2_mail_delivery_once_contract() {
         );
     }
     {
+        // Sender resolution is a synchronous Core caller: daemon owners for
+        // this root, on the bounded run_core_sync executor.
         let root = tempfile::tempdir().unwrap();
-        let ctx = Host::new().ctx;
-        let mut settings = std::collections::BTreeMap::new();
-        settings.insert("CTO_EMAIL_ADDRESS".into(), "instance@example.test".into());
-        settings.insert("CTO_EMAIL_PROVIDER".into(), "imap".into());
-        crate::inference::runtime_env::save_runtime_env_map(root.path(), &settings).unwrap();
-        let sender = mail::resolve_sender(root.path(), &ctx, "instance@example.test").unwrap();
-        assert_eq!(sender.address, "instance@example.test");
-        assert_eq!(sender.provider.as_deref(), Some("imap"));
-        assert_eq!(
-            mail::resolve_sender(root.path(), &ctx, "unconfigured@example.test")
-                .err()
-                .unwrap()
-                .code,
-            ErrorCode::NotFound
-        );
+        let path = root.path().to_path_buf();
+        crate::app_capabilities::cap3::tests::run_with_core_owners(path.clone(), move || {
+            let root = path.as_path();
+            let ctx = Host::new().ctx;
+            let mut settings = std::collections::BTreeMap::new();
+            settings.insert("CTO_EMAIL_ADDRESS".into(), "instance@example.test".into());
+            settings.insert("CTO_EMAIL_PROVIDER".into(), "imap".into());
+            crate::inference::runtime_env::save_runtime_env_map(root, &settings).unwrap();
+            let sender = mail::resolve_sender(root, &ctx, "instance@example.test").unwrap();
+            assert_eq!(sender.address, "instance@example.test");
+            assert_eq!(sender.provider.as_deref(), Some("imap"));
+            assert_eq!(
+                mail::resolve_sender(root, &ctx, "unconfigured@example.test")
+                    .err()
+                    .unwrap()
+                    .code,
+                ErrorCode::NotFound
+            );
+        });
     }
     {
         use std::sync::{

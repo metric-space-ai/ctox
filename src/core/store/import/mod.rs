@@ -76,6 +76,19 @@ pub(crate) fn insert_document(tx: &Transaction<'_>, doc: &Document) -> Result<bo
         )
         .optional())?;
     let incoming_delete = doc.body["_deleted"].as_bool().unwrap_or(false);
+    // The base publisher now exposes the V4 contract. Initial legacy import
+    // must satisfy the same migration boundary as generation backfill; merely
+    // stamping schema_ver=3 on a legacy body would bypass the Core contract.
+    if doc.collection == "business_commands"
+        && active.definition.schema_ver == 3
+        && !incoming_delete
+    {
+        sql(
+            crate::change_log::subscription::write_contract::validate_migrated_command(
+                &doc.body, &doc.id,
+            ),
+        )?;
+    }
     if let Some((body, deleted)) = previous {
         if deleted != incoming_delete
             || (!deleted

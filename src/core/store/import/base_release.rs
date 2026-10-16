@@ -12,6 +12,8 @@ pub const FROM_VERSION: &str = "main@4794af03d";
 pub struct ReleasePlan {
     pub version: String,
     pub manifests: Vec<Value>,
+    #[serde(default)]
+    pub libs: Vec<schema::BaseReleaseLibrary>,
     pub collections: BTreeMap<String, Vec<CollectionDefinition>>,
     pub migrations: BTreeMap<String, Value>,
     pub removed_sync_settings: Vec<String>,
@@ -179,6 +181,7 @@ pub fn load(
     Ok(ReleasePlan {
         version: defaults.app_ver.clone(),
         manifests: input.manifests,
+        libs: input.libs,
         collections,
         migrations,
         removed_sync_settings: removed,

@@ -717,8 +717,8 @@
       "test": "unknown terminal command outcome stays pending and does not publish nested success"
     },
     {
-      "file": "src/apps/business-os/shared/command-bus.test.mjs",
-      "test": "duplicate command id rejects a changed immutable payload without regressing state"
+      "file": "src/apps/business-os/kernel/tests/command-state.test.mjs",
+      "test": "Core: doppelte Befehls-id mit geänderter Absicht → idempotency_conflict, gleiche Absicht → kein Rückschritt"
     },
     {
       "file": "src/apps/business-os/shared/command-lifecycle.test.mjs",

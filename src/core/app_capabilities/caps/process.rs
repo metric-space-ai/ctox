@@ -37,6 +37,9 @@ struct Run {
     #[serde(default)]
     env: std::collections::BTreeMap<String, String>,
     timeout_ms: Option<u64>,
+    /// Target domains the E20 sandbox opens for untrusted code (only used there).
+    #[serde(default)]
+    allowed_domains: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -62,6 +65,41 @@ pub struct ProgramSpec {
     pub script: Option<String>,
     #[serde(default)]
     pub env: std::collections::BTreeMap<String, String>,
+    /// §16.48 Nr. 3: the entry runs generated (untrusted) code – only inside
+    /// the E20 sandbox; never with a shell as interpreter.
+    #[serde(default)]
+    pub untrusted_code: bool,
+}
+/// E20 OS sandbox (built by the separate v4/e20-sandbox strand): network only
+/// to the call's target domains, only the workspace writable, resource
+/// limits. Bound once by the composition root; unbound = unavailable.
+pub struct SandboxRequest {
+    pub program: String,
+    pub args: Vec<String>,
+    pub cwd: std::path::PathBuf,
+    pub env: std::collections::BTreeMap<String, String>,
+    pub stdin: Vec<u8>,
+    pub timeout_ms: u64,
+    pub allowed_domains: Vec<String>,
+}
+pub trait ProcessSandbox: Send + Sync {
+    fn run(&self, ctx: &CapCallContext, request: SandboxRequest) -> Result<Value, CtoxError>;
+}
+static SANDBOX: std::sync::OnceLock<std::sync::Arc<dyn ProcessSandbox>> =
+    std::sync::OnceLock::new();
+pub fn bind_process_sandbox(sandbox: std::sync::Arc<dyn ProcessSandbox>) -> Result<(), CtoxError> {
+    SANDBOX
+        .set(sandbox)
+        .map_err(|_| CtoxError::new(ErrorCode::Conflict, "process sandbox already bound"))
+}
+const SHELLS: &[&str] = &[
+    "sh", "bash", "dash", "zsh", "ksh", "fish", "ash", "csh", "tcsh",
+];
+fn untrusted(entry: &AllowEntry) -> Option<&ProgramSpec> {
+    match entry {
+        AllowEntry::Spec(spec) if spec.untrusted_code => Some(spec),
+        _ => None,
+    }
 }
 /// (executable, leading args, base environment) of an entry; absolute paths only.
 fn resolve_entry(
@@ -132,11 +170,40 @@ pub(super) fn execute(
         .ok_or_else(|| invalid("$.program"))?;
     let programs = super::process_defaults::allowlist(root, ctx, name)?;
     let request: Run = decode(args)?;
+    let entry = programs
+        .get(&request.program)
+        .ok_or_else(|| forbidden("program is not allowlisted"))?;
     let (program, prefix_args, base_env) =
-        programs
-            .get(&request.program)
-            .and_then(resolve_entry)
-            .ok_or_else(|| forbidden("program is not allowlisted"))?;
+        resolve_entry(entry).ok_or_else(|| forbidden("program is not allowlisted"))?;
+    let untrusted = untrusted(entry);
+    if let Some(spec) = untrusted {
+        // Generated code needs the interpreter + host-script form and never a shell.
+        let interpreter = spec.interpreter.as_deref().unwrap_or_default();
+        let name = Path::new(interpreter)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if spec.script.is_none() || SHELLS.contains(&name) {
+            return Err(forbidden("untrusted code needs a non-shell interpreter"));
+        }
+    }
+    if untrusted.is_some() && SANDBOX.get().is_none() {
+        return Err(CtoxError::new(
+            ErrorCode::Unavailable,
+            "untrusted code runs only inside the E20 sandbox",
+        ));
+    }
+    if request.allowed_domains.len() > 16
+        || request.allowed_domains.iter().any(|domain| {
+            domain.is_empty()
+                || domain.len() > 253
+                || !domain.bytes().all(|b| {
+                    b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'-')
+                })
+        })
+    {
+        return Err(invalid("$.allowed_domains"));
+    }
     if request.args.len() > 128
         || request
             .args
@@ -194,6 +261,23 @@ pub(super) fn execute(
         }
         Some(_) => return Err(invalid("$.cwd_ref")),
     };
+    // Reached only through the E20 check above: untrusted code never spawns here.
+    if let (Some(_), Some(sandbox)) = (untrusted, SANDBOX.get()) {
+        let mut env = base_env.clone();
+        env.extend(request.env.clone());
+        return sandbox.run(
+            ctx,
+            SandboxRequest {
+                program,
+                args: prefix_args.into_iter().chain(request.args).collect(),
+                cwd,
+                env,
+                stdin,
+                timeout_ms: timeout,
+                allowed_domains: request.allowed_domains,
+            },
+        );
+    }
     let mut command = std::process::Command::new(&program);
     command
         .args(&prefix_args)

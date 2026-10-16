@@ -20,6 +20,15 @@ use std::path::Path;
 /// per turn, killed on drop.
 pub(crate) mod pi_sidecar;
 
+/// §16.44: coding agent in Business OS source mode — bounded turns on the
+/// caller's own draft (`app_drafts`), progress in `coding_turns`.
+/// The canonical store owner constructs `draft_turn::CodingPanel` with its
+/// WriterHandle and CAS (same injection as the app platform owner); until that
+/// owner lands, nothing in the daemon constructs it.
+#[allow(dead_code)]
+#[path = "draft_turn.rs"]
+pub(crate) mod draft_turn;
+
 /// main has already resolved the global root, but retains its pair in argv.
 pub(crate) fn coding_models_cli_args_are_valid(args: &[String]) -> bool {
     matches!(args, [command] if command == "models")
