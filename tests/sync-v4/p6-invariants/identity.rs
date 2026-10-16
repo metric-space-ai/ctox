@@ -228,7 +228,7 @@ async fn p6_identity_first_start_child() -> anyhow::Result<()> {
         std::env::var_os("CTOX_P6_FIRST_START_ROOT")
             .ok_or_else(|| anyhow::anyhow!("child scope missing"))?,
     );
-    let result = std::path::PathBuf::from(
+    let result_path = std::path::PathBuf::from(
         std::env::var_os("CTOX_P6_FIRST_START_RESULT")
             .ok_or_else(|| anyhow::anyhow!("child result missing"))?,
     );
@@ -242,6 +242,6 @@ async fn p6_identity_first_start_child() -> anyhow::Result<()> {
         Err(StoreError::AlreadyOwned) => serde_json::json!({"admitted":false}),
         Err(_) => anyhow::bail!("first start failed for a reason other than instance ownership"),
     };
-    std::fs::write(result, serde_json::to_vec(&result)?)?;
+    std::fs::write(result_path, serde_json::to_vec(&result)?)?;
     Ok(())
 }
