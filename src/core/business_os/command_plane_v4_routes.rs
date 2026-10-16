@@ -94,10 +94,23 @@ fn dispatch_authorized(
             return Err(routes::error("forbidden", "native_permission_denied"));
         }
     }
-    if matches!(native.kind.as_str(), "ctox.crew.execution.list" | "ctox.crew.execution.claim" | "ctox.crew.execution.plan.update" | "ctox.crew.execution.report" | "ctox.task.create") {
+    if matches!(
+        native.kind.as_str(),
+        "ctox.crew.execution.list"
+            | "ctox.crew.execution.claim"
+            | "ctox.crew.execution.plan.update"
+            | "ctox.crew.execution.report"
+            | "ctox.task.create"
+    ) {
         // Both callers enter under the actual retained native authority/fence.
-        return super::super::mcp_channel::native_tasks::execute(root, &native.command_id, &native.kind, &native.payload, session)
-            .map_err(|e| routes::native_error(&e.to_string()));
+        return super::super::mcp_channel::native_tasks::execute(
+            root,
+            &native.command_id,
+            &native.kind,
+            &native.payload,
+            session,
+        )
+        .map_err(|e| routes::native_error(&e.to_string()));
     }
     let mut prepared = PreparedBusinessCommand::from_command(command)
         .map_err(|_| routes::error("invalid", "native_payload_invalid"))?;

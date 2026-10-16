@@ -8865,16 +8865,27 @@ pub(crate) fn revalidate_business_command_execution_authorization(
     // Authorization needs the immutable native snapshot, not presentation progress.
     let lookup_id = command_id.to_owned();
     let canonical = crate::persistence::read_core_snapshot_blocking(root, move |core| {
-        Ok(channels::business_command_projection_from_conn(core, &lookup_id))
+        Ok(channels::business_command_projection_from_conn(
+            core, &lookup_id,
+        ))
     })??;
     let native_authorization = canonical.get("native_authorization");
     let command = if native_authorization.is_some() {
         // Native tasks have no V3 business_commands shadow row.
         BusinessCommand {
             id: Some(command_id.to_owned()),
-            module: canonical["module"].as_str().context("native command module missing")?.into(),
-            command_type: canonical["command_type"].as_str().context("native command type missing")?.into(),
-            record_id: canonical["record_id"].as_str().filter(|id| !id.is_empty()).map(str::to_owned),
+            module: canonical["module"]
+                .as_str()
+                .context("native command module missing")?
+                .into(),
+            command_type: canonical["command_type"]
+                .as_str()
+                .context("native command type missing")?
+                .into(),
+            record_id: canonical["record_id"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned),
             payload: canonical["payload"].clone(),
             client_context: canonical["client_context"].clone(),
             origin: CommandOrigin::ReplicatedPeer,
