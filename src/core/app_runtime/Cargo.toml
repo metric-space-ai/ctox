@@ -38,6 +38,9 @@ tempfile = "3"
 
 # Match the Core host patch; dependency patches are not inherited by Cargo.
 [patch.crates-io]
+rtc-turn = { path = "../rxdb/patches/rtc-turn" }
 rtc-ice = { path = "../rxdb/patches/rtc-ice" }
+rtc = { path = "../rxdb/patches/rtc" }
+webrtc = { path = "../rxdb/patches/webrtc" }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Pipes", "Win32_Security"] }
