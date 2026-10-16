@@ -174,6 +174,8 @@ struct Runtime {
     /// Handler answer and the delay before the handler answers.
     answer: RefCell<Option<(Value, Duration)>>,
     dispatched: RefCell<Vec<(String, String, Value)>>,
+    pending_replies: RefCell<Vec<std::sync::mpsc::Sender<Value>>>,
+    abandon_reply: Cell<bool>,
     /// (owner app, files.ref) → bytes.
     files: RefCell<BTreeMap<(String, String), Vec<u8>>>,
 }
@@ -189,6 +191,8 @@ impl Default for Runtime {
             .collect(),
             answer: RefCell::new(None),
             dispatched: RefCell::new(Vec::new()),
+            pending_replies: RefCell::new(Vec::new()),
+            abandon_reply: Cell::new(false),
             files: RefCell::new(BTreeMap::new()),
         }
     }
@@ -217,6 +221,9 @@ impl ingest::IngestRuntime for Runtime {
                 std::thread::sleep(delay);
                 let _ = sender.send(answer);
             });
+        } else if !self.abandon_reply.get() {
+            // A running handler retains its reply channel until completion.
+            self.pending_replies.borrow_mut().push(sender);
         }
         Ok(receiver)
     }
@@ -763,29 +770,29 @@ fn third() -> Host {
 
 #[test]
 fn app_capabilities_cap3_flow_platform_contract() {
-    let f = Fixture::new();
-    let record =
-        json!({"event_kind":"cockpit.control","title":"ctox.task.pause","metadata":{"task":"t"}});
-    assert_eq!(
-        code(f.call(
-            &Host::new("outbound", "admin"),
-            "agent.flow",
-            "record",
-            record.clone()
-        )),
-        ErrorCode::Forbidden
-    );
-    let recorded = f
-        .call(&Host::new("ctox", "admin"), "agent.flow", "record", record)
-        .unwrap();
-    assert!(recorded["event_id"]
-        .as_str()
-        .is_some_and(|id| !id.is_empty()));
-    let forged = json!({"event_kind":"k","title":"t","metadata":{"_cap":{"app_id":"x"}}});
-    assert_eq!(
-        code(f.call(&Host::new("ctox", "admin"), "agent.flow", "record", forged)),
-        ErrorCode::Invalid
-    );
+    with_core_owners(|f| {
+        let record = json!({"event_kind":"cockpit.control","title":"ctox.task.pause","metadata":{"task":"t"}});
+        assert_eq!(
+            code(f.call(
+                &Host::new("outbound", "admin"),
+                "agent.flow",
+                "record",
+                record.clone()
+            )),
+            ErrorCode::Forbidden
+        );
+        let recorded = f
+            .call(&Host::new("ctox", "admin"), "agent.flow", "record", record)
+            .unwrap();
+        assert!(recorded["event_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()));
+        let forged = json!({"event_kind":"k","title":"t","metadata":{"_cap":{"app_id":"x"}}});
+        assert_eq!(
+            code(f.call(&Host::new("ctox", "admin"), "agent.flow", "record", forged)),
+            ErrorCode::Invalid
+        );
+    });
 }
 
 #[test]
@@ -906,7 +913,11 @@ fn app_capabilities_cap3_ingest_register_contract() {
     );
 }
 
-fn ingress(f: &Fixture, path: &str, wait: Duration) -> ingest::HttpResponse {
+fn ingress_result(
+    f: &Fixture,
+    path: &str,
+    wait: Duration,
+) -> Result<ingest::HttpResponse, CtoxError> {
     let request = ingest::IngressRequest {
         method: "GET".into(),
         path: path.into(),
@@ -920,7 +931,10 @@ fn ingress(f: &Fixture, path: &str, wait: Duration) -> ingest::HttpResponse {
         body: Vec::new(),
         received_at_ms: 7,
     };
-    ingest::handle_ingress(f.root.path(), &f.runtime, &request, wait).unwrap()
+    ingest::handle_ingress(f.root.path(), &f.runtime, &request, wait)
+}
+fn ingress(f: &Fixture, path: &str, wait: Duration) -> ingest::HttpResponse {
+    ingress_result(f, path, wait).unwrap()
 }
 fn registered_fixture() -> Fixture {
     let f = Fixture::new();
@@ -961,7 +975,7 @@ fn app_capabilities_cap3_ingest_fallback_contract() {
         ingress(&f, "/mail/track/o/abc.gif", Duration::from_secs(2)).status,
         204
     );
-    // No handler answer at all: the default for a registration without one is 202.
+    // A running handler keeps its channel: the registered default is 202.
     *f.runtime.answer.borrow_mut() = None;
     assert_eq!(
         ingress(&f, "/ingest/iot/webhook/dev-1", Duration::from_millis(20)).status,
@@ -971,6 +985,11 @@ fn app_capabilities_cap3_ingest_fallback_contract() {
         ingress(&f, "/ingest/iot/unknown", Duration::from_millis(20)).status,
         404
     );
+    f.runtime.abandon_reply.set(true);
+    let error =
+        ingress_result(&f, "/ingest/iot/webhook/dev-1", Duration::from_millis(20)).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Unavailable);
+    assert_eq!(ingest::error_status(&error), 503);
 }
 
 #[test]
@@ -1246,10 +1265,10 @@ fn app_capabilities_cap3_ingest_body_ref_contract() {
         .files
         .borrow_mut()
         .insert(("iot".into(), reference.clone()), pixel);
-    assert_eq!(
-        ingress(&f, "/ingest/outbound/tracking", Duration::from_secs(2)).status,
-        502
-    );
+    let error =
+        ingress_result(&f, "/ingest/outbound/tracking", Duration::from_secs(2)).unwrap_err();
+    assert_eq!(error.code, ErrorCode::NotFound);
+    assert_eq!(ingest::error_status(&error), 502);
     let both = json!({"status":200,"body":"x","body_ref":{"ref":reference}});
     assert!(ingest::admissible_response(&both).is_none());
 }

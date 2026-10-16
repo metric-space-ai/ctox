@@ -490,6 +490,16 @@ fn find_route(conn: &rusqlite::Connection, request_path: &str) -> Result<Option<
     Ok(None)
 }
 
+/// A missing/foreign response file is a bad handler response. Storage and
+/// disconnected-handler failures remain service errors, never default success.
+pub fn error_status(error: &CtoxError) -> u16 {
+    if error.code == ErrorCode::NotFound {
+        502
+    } else {
+        503
+    }
+}
+
 /// The Core HTTPS ingress: request → one app command → admissible response,
 /// or the registered default after `wait` (production: RESPONSE_WAIT).
 pub fn handle_ingress(

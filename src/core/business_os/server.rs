@@ -4087,7 +4087,10 @@ fn respond_ingest(root: &Path, mut request: Request, url: &str) -> anyhow::Resul
     }) {
         Ok(answer) => answer,
         Err(error) => {
-            respond_status(request, 503, "native ingress unavailable")?;
+            let status = error
+                .downcast_ref::<crate::app_capabilities::CtoxError>()
+                .map_or(503, ingest::error_status);
+            respond_status(request, status, "native ingress unavailable")?;
             return Err(error.context("Business OS ingress dispatch failed"));
         }
     };
