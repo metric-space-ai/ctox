@@ -2,6 +2,7 @@ import { requestSupervisorRoute } from './shared/workjet-supervisor-route-native
 import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261016-shell-v2-plan-step-retry';
 import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261016-shell-v2-plan-step-retry';
 import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261016-shell-v2-plan-step-retry';
+import { connectWorkjetCalendar } from './shared/workjet-calendar-connect.mjs?v=20261016-shell-v2-plan-step-retry';
 import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261016-shell-v2-plan-step-retry';
 import { requestDictation } from './shared/speech-dictation.mjs?v=20261016-shell-v2-plan-step-retry';
 import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261016-shell-v2-plan-step-retry';
@@ -13968,6 +13969,18 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
         || actorContext(state.session).id !== ownerUserId
         || (state.syncConfig?.instance_id || state.sync?.config?.instance_id) !== instance) {
         throw new Error('Speech settings instance or authority changed.');
+      }
+    });
+  }
+  // Workjet #784 / Kern ctox#875: „Google Kalender verbinden“. Fehler kommen als {action, commandId, error} zurück.
+  if (action === 'project.calendar.account.connect.start' || action === 'project.calendar.account.connect.complete') {
+    const sync = state.sync;
+    const instance = state.syncConfig?.instance_id || sync?.config?.instance_id || null;
+    return connectWorkjetCalendar(sync, request, () => {
+      if (state.session !== requestSession || state.db !== requestDb || state.sync !== sync
+        || actorContext(state.session).id !== ownerUserId
+        || (state.syncConfig?.instance_id || state.sync?.config?.instance_id || null) !== instance) {
+        throw new Error('Calendar scope changed.');
       }
     });
   }

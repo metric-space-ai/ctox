@@ -7,6 +7,7 @@ import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from '.
 import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './workjet-project-kpis-contract.generated.mjs';
 import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './workjet-jour-fixe-contract.generated.mjs';
 import { readWorkjetCalendar } from './workjet-calendar-native.mjs';
+import { connectWorkjetCalendar } from './workjet-calendar-connect.mjs';
 import { PROJECT_EXECUTION_POLICY_SCHEMA, validateProjectExecutionPolicyValue } from './workjet-project-execution-policy-contract.generated.mjs';
 import { validateSupervisorLumaValue } from './workjet-supervisor-luma-contract.generated.mjs';
 
@@ -31,6 +32,27 @@ test('calendar reads use the authenticated guest without loading project or comm
     return { schema: 'ctox.workjet.calendar.v1', request_id: 'read-1', action: 'accounts', data: { ok: true, accounts: [], truncated: false } };
   };
   await assert.rejects(context.control({ action: 'project.calendar.accounts.read', commandId: 'read-1' }), /scope changed/);
+});
+test('calendar connect forwards start/complete through the guest lane and answers errors without throwing', async () => {
+  const calls = [];
+  const state = {
+    session: { id: 'owner-1' }, db: {}, syncConfig: { instance_id: 'instance-1' },
+    sync: { requestNative: async (method, params, options) => { calls.push({ method, params, options }); return { authorizeUrl: 'https://accounts.google.com/o', attemptId: 'att-1' }; } },
+  };
+  const context = vm.createContext({ state, readWorkjetCalendar, connectWorkjetCalendar, actorContext: session => session });
+  vm.runInContext(controlSource + '\nglobalThis.control = workjetProjectControl;', context);
+  const start = { action: 'project.calendar.account.connect.start', commandId: 'conn-1', provider: 'capability-probe' };
+  assert.deepEqual(JSON.parse(JSON.stringify(await context.control(start))), {
+    action: start.action, commandId: 'conn-1', authorizeUrl: 'https://accounts.google.com/o', attemptId: 'att-1',
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0])), {
+    method: 'ctox.workjet.calendar.connect.v1', params: { action: start.action, provider: 'capability-probe' },
+    options: { collection: 'communication_accounts', timeoutMs: 29000 },
+  });
+  state.sync.requestNative = async () => { throw 'permission_denied'; };
+  assert.deepEqual(JSON.parse(JSON.stringify(await context.control(start))), { action: start.action, commandId: 'conn-1', error: 'permission_denied' });
+  state.sync.requestNative = async () => { state.session = { id: 'owner-2' }; return { authorizeUrl: 'u' }; };
+  assert.deepEqual(JSON.parse(JSON.stringify(await context.control(start))), { action: start.action, commandId: 'conn-1', error: 'scope_changed' });
 });
 test('Workjet project control is installed and uses the RxDB command plane', () => {
   assert.match(appSource, /globalThis\.workjetProjectControl = workjetProjectControl/);
