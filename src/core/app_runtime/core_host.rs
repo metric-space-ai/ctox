@@ -371,6 +371,10 @@ impl CoreRuntimeHost {
         }))
     }
     fn read(&self, binding: &Value, collection: &str) -> Result<Value> {
+        ensure!(
+            collection != "business_commands",
+            "forbidden: read an app projection instead of command documents"
+        );
         let codec = self.codec.clone();
         let binding = binding.clone();
         let collection = collection.to_owned();
@@ -521,6 +525,9 @@ impl CoreRuntimeHost {
                 write_only.push(name.clone());
             }
         }
+        // Command authority stays in Core; even a legacy manifest must not put
+        // command bodies into an app's transactional read snapshot.
+        names.retain(|name| name != "business_commands");
         let codec = self.codec.clone();
         let context = binding.clone();
         let snapshot = self.read_job(ReadJob::new(Self::options(), move |db| {

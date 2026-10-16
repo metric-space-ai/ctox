@@ -957,6 +957,10 @@ fn callback(
                 .first()
                 .and_then(Value::as_str)
                 .context("invalid: collection")?;
+            ensure!(
+                method != "read" || name != "business_commands",
+                "forbidden: read an app projection instead of command documents"
+            );
             if bundle.manifest["collections"].get(name).is_none() {
                 let rule = &bundle.manifest["foreign_collections"][name];
                 let owner = string(rule, "owner_app")?;

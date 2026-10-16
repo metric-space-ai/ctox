@@ -149,7 +149,44 @@ fn terminal_result_requires_current_store_executor_after_inflight_takeover() {
 fn terminal_error_requires_current_store_executor_after_inflight_takeover() {
     terminal_frame_after_takeover(true);
 }
+#[cfg(feature = "legacy-store")]
+#[test]
+fn legacy_adapter_terminal_result_requires_current_store_executor() {
+    terminal_frame_with_adapter(false, true);
+}
+#[cfg(feature = "legacy-store")]
+#[test]
+fn legacy_adapter_terminal_error_requires_current_store_executor() {
+    terminal_frame_with_adapter(true, true);
+}
 fn terminal_frame_after_takeover(fail: bool) {
+    terminal_frame_with_adapter(fail, false);
+}
+#[cfg(feature = "legacy-store")]
+impl crate::legacy_store::LegacyStorePolicy for LeaseHost {
+    fn project_read(&self, _: &str, _: &Value, _: &str, _: &Value) -> Result<Option<Value>> {
+        anyhow::bail!("unexpected: this lease test only logs")
+    }
+    fn prepare_write(
+        &self,
+        _: &str,
+        _: &Value,
+        _: &str,
+        _: Option<&Value>,
+        _: Option<Value>,
+    ) -> Result<Option<Value>> {
+        anyhow::bail!("unexpected: this lease test only logs")
+    }
+}
+#[cfg(feature = "legacy-store")]
+struct LeaseHash;
+#[cfg(feature = "legacy-store")]
+impl rxdb::types::HashFunction for LeaseHash {
+    fn hash<'a>(&'a self, input: String) -> rxdb::types::HashOutput<'a> {
+        Box::pin(async move { rxdb::plugins::utils::utils_hash::native_sha256(&input) })
+    }
+}
+fn terminal_frame_with_adapter(fail: bool, legacy: bool) {
     {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -223,13 +260,53 @@ fn terminal_frame_after_takeover(fail: bool) {
             now: AtomicU64::new(NOW),
             handoff: Mutex::new(None),
         });
+        let runtime_host: Arc<dyn RuntimeHost> = host.clone();
+        #[cfg(feature = "legacy-store")]
+        let legacy_db = if legacy {
+            use rxdb::rx_database::{create_rx_database, RxDatabaseCreator};
+            use rxdb::storage::sqlite::{get_rx_storage_sqlite, RxStorageSqliteSettings};
+            Some(
+                runtime
+                    .block_on(create_rx_database(RxDatabaseCreator {
+                        name: format!("lease-adapter-{}", Uuid::new_v4()),
+                        storage: get_rx_storage_sqlite(RxStorageSqliteSettings {
+                            database_path: root.path().join("legacy.sqlite"),
+                        }),
+                        multi_instance: false,
+                        password: None,
+                        hash_function: Arc::new(LeaseHash),
+                        options: Default::default(),
+                        ignore_duplicate: false,
+                        close_duplicates: false,
+                        event_reduce: false,
+                        allow_slow_count: false,
+                    }))
+                    .unwrap(),
+            )
+        } else {
+            None
+        };
+        #[cfg(feature = "legacy-store")]
+        let runtime_host: Arc<dyn RuntimeHost> = match &legacy_db {
+            Some(db) => Arc::new(
+                crate::legacy_store::LegacyStoreAdapter::new(
+                    db.clone(),
+                    runtime.handle().clone(),
+                    host.clone(),
+                )
+                .unwrap(),
+            ),
+            None => runtime_host,
+        };
+        #[cfg(not(feature = "legacy-store"))]
+        assert!(!legacy);
         let node =
             PathBuf::from(std::env::var("CTOX_APP_RUNTIME_TEST_NODE").expect("lane Node runtime"));
         let pool = Arc::new(
             RuntimePool::with_limits(
                 node,
                 root.path().join("ipc"),
-                host.clone(),
+                runtime_host,
                 CALL_LIMIT,
                 IDLE_LIMIT,
             )
@@ -283,6 +360,10 @@ fn terminal_frame_after_takeover(fail: bool) {
         );
         drop(pool);
         drop(host);
+        #[cfg(feature = "legacy-store")]
+        if let Some(db) = legacy_db {
+            runtime.block_on(db.close()).unwrap();
+        }
         runtime.block_on(store.shutdown()).unwrap();
     }
 }

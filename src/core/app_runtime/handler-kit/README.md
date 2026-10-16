@@ -61,6 +61,11 @@ werden geprüft. Absolute Pfade, ausbrechende Pfade und Symlinks sind verboten.
   `$regex` mit höchstens Flag `i`, `$and/$or/$not`, eine Ebene `$elemMatch`.
   Fehlend unterscheidet sich von null; Sortiergleichstände werden nach id gelöst.
 - `get(collection,id)` liefert ein Dokument oder null.
+  P9: Fachzustand wird aus der zuständigen App-Projektion gelesen (z. B.
+  `coding_turns`), nicht aus `business_commands`. Direkte read/get-Zugriffe auf
+  Command-Dokumente sind auch innerhalb einer Transaktion verboten; der Core
+  nimmt sie nicht in den App-Snapshot auf. `ctx.command` liefert weiterhin nur
+  die Annahme des Auftrags, keine Lese-Abkürzung.
 - `put(collection,doc,{base_rev?})`, `patch(collection,id,patch,{base_rev?})`,
   `remove(collection,id,{base_rev?})`; alternativ `write(collection,op)`.
   Revisionen des Kits sind ausschließlich Testrevisionen.
