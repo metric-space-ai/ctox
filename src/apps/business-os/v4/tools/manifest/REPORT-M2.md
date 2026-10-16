@@ -2,7 +2,7 @@
 
 Quellen: module.json, collections.schema.json (Vorrang v4/schemas/<app_id>.collections.schema.json), handlers/*.js,
 Code (commands_out, Trigger-Exporte, net.ingest), je App v4-manifest.json (commands_in, exports, Rechte, multi_instance, Fremdzugriffs-ops, Trigger),
-ownership-baseline.json (eingefrorene Eigentümer-Zuordnung), Plattform-exports aus /Volumes/tmp/shell-v4-pr/src/core/business_os/v4/ctox-platform.manifest.json.
+ownership-baseline.json (eingefrorene Eigentümer-Zuordnung), Plattform-exports aus /Volumes/tmp/ctox-sync-v4/clones/integration3/src/core/business_os/v4/ctox-platform.manifest.json.
 Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.mjs`; `node src/apps/business-os/v4/tools/manifest/gen-manifest.mjs --check`.
 
 ## Zahlen

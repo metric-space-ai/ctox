@@ -2512,7 +2512,7 @@
           "write"
         ]
       },
-      "source": "/Volumes/tmp/shell-v4-pr/src/core/business_os/v4/ctox-platform.manifest.json",
+      "source": "/Volumes/tmp/ctox-sync-v4/clones/integration3/src/core/business_os/v4/ctox-platform.manifest.json",
       "used_by": {
         "app_activations": [],
         "app_catalog": [
