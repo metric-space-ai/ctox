@@ -91,6 +91,7 @@ test('bootV4 hands exactly the launch context to the transport and brings the lo
   assert.deepEqual(p4,ctx.v4.hello.offer,'native peer receives exactly the launch-context hello (plus the E14 session envelope)');
   assert.equal(typeof session_id,'string');assert.equal(resume_from.length,6);
   assert.deepEqual(boot.transport.options.address,ctx.v4.signaling);assert.equal(typeof boot.transport.options.verifyPackage,'function');
+  assert.equal(boot.kernel.identity.device_id,ctx.v4.hello.offer.device_proof.device_id,'device identity from the admitted bootstrap');
   assert.equal(boot.kernel.isLeader,true);assert.equal(boot.kernel.identity?.actor?.id??boot.kernel.actor?.get?.()?.id??'alice','alice');
   assert.equal(boot.transport.session.instance_id,'instance');assert.deepEqual(boot.transport.session.scope_tokens.length,COLLECTIONS.length);
   assert.equal((await boot.transport.scope('notes')).scope_hash,'scope:notes');
