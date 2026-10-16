@@ -43,6 +43,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
+mod control_loss;
 pub(crate) mod state;
 pub(crate) mod stats;
 pub(crate) mod stream;
@@ -208,6 +209,7 @@ pub struct Association {
 
     // for testing
     pub(crate) ack_mode: AckMode,
+    control_loss: control_loss::ControlLoss,
 }
 
 impl Default for Association {
@@ -298,6 +300,7 @@ impl Default for Association {
 
             // for testing
             ack_mode: AckMode::default(),
+            control_loss: control_loss::ControlLoss::default(),
         }
     }
 }
@@ -632,7 +635,11 @@ impl Association {
     /// - a call was made to `handle_timeout`
     #[must_use]
     pub fn poll_timeout(&self) -> Option<Instant> {
-        self.timers.next_timeout()
+        self.timers
+            .next_timeout()
+            .into_iter()
+            .chain(self.control_loss_deadline())
+            .min()
     }
 
     /// Returns packets to transmit
@@ -644,6 +651,7 @@ impl Association {
     #[must_use]
     pub fn poll_transmit(&mut self, now: Instant) -> Option<TransportMessage<Payload>> {
         let (contents, _) = self.gather_outbound(now);
+        self.arm_control_probe(now);
         if contents.is_empty() {
             None
         } else {
@@ -676,6 +684,7 @@ impl Association {
     /// `Instant` that was output by `poll_timeout`; however spurious extra calls will simply
     /// no-op and therefore are safe.
     pub fn handle_timeout(&mut self, now: Instant) {
+        self.recover_control_loss(now);
         for &timer in &Timer::VALUES {
             let (expired, failure, n_rtos) = self.timers.is_expired(timer, now);
             if !expired {
@@ -1794,6 +1803,7 @@ impl Association {
         now: Instant,
     ) -> Result<(HashMap<u16, i64>, u32)> {
         let mut bytes_acked_per_stream = HashMap::new();
+        let mut delivered = Vec::new();
 
         // New ack point, so pop all ACKed packets from inflight_queue
         // We add 1 because the "currentAckPoint" has already been popped from the inflight queue
@@ -1804,6 +1814,7 @@ impl Association {
             if let Some(c) = self.inflight_queue.pop(i) {
                 trace!(target: "ctox_sctp_timeline", "event=acked side={} sid={} tsn={} ssn={} nsent={}", self.side, c.stream_identifier, c.tsn, c.stream_sequence_number, c.nsent);
                 if !c.acked {
+                    delivered.push((c.since, c.nsent));
                     // RFC 4096 sec 6.3.2.  Retransmission Timer Rules
                     //   R3)  Whenever a SACK is received that acknowledges the DATA chunk
                     //        with the earliest outstanding TSN for that address, restart the
@@ -1881,6 +1892,7 @@ impl Association {
 
                 if let Some(c) = self.inflight_queue.get(tsn) {
                     if !is_acked {
+                        delivered.push((c.since, c.nsent));
                         // Sum the number of bytes acknowledged per stream
                         if let Some(amount) = bytes_acked_per_stream.get_mut(&c.stream_identifier) {
                             *amount += n_bytes_acked;
@@ -1919,6 +1931,9 @@ impl Association {
             }
         }
 
+        for (sent, nsent) in delivered {
+            self.control_loss.acknowledge(sent, nsent, now);
+        }
         Ok((bytes_acked_per_stream, htna))
     }
 
