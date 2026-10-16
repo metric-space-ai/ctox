@@ -1,4 +1,4 @@
-// E39 case matrix follows stub a848602094, using real native owners and processes.
+// E39 case matrix follows stub f967bafa, using real native owners and processes.
 use super::*;
 
 async fn intent(database: &Database, id: &str, kind: &str, target: Option<&str>, payload: Value) -> Result<Value> {
@@ -77,7 +77,7 @@ pub(super) async fn prove(database: &Database, cas: &Cas) -> Result<()> {
     let allowed=terminal(database,"business_commands","e39-user-allowed").await?;
     anyhow::ensure!(allowed["status"]=="done" && allowed["result"]["sender"]=="hot-app","E39 actual target user role denied: {allowed}");
     receiver_hotplug_and_forgery(database).await?;
-    println!("APP_PLATFORM_E39_PROOF {}",json!({"matrix":"stub:a848602094","target":"receiver","sender":"hot-app","target_scope_write":true,"sender_callback":true,"mandatory_inbound":true,"handler_and_target_right":true,"ambiguous_matching_and_own_targets":true,"payload_sender_ignored":true,"wildcard_and_right_precedence":true,"unknown_type_write_rejected":true,"platform_inventory_to_core":true}));Ok(())
+    println!("APP_PLATFORM_E39_PROOF {}",json!({"matrix":"stub:f967bafa","target":"receiver","sender":"hot-app","target_scope_write":true,"sender_callback":true,"mandatory_inbound":true,"handler_and_target_right":true,"ambiguous_matching_and_own_targets":true,"payload_sender_ignored":true,"wildcard_and_right_precedence":true,"unknown_type_write_rejected":true,"platform_inventory_to_core":true}));Ok(())
 }
 
 async fn republish_receiver(database: &Database, id: &str, incoming: Value) -> Result<()> {

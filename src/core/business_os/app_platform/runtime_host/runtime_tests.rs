@@ -454,6 +454,15 @@ fn e39_missing_inbound_is_forbidden_even_with_target_right() {
     assert!(err.to_string().contains("receiver commands_in missing"),"E39 inbound consent is mandatory despite target right: {err}");
 }
 #[test]
+fn e39_missing_handler_is_forbidden_even_with_inbound_and_target_right() {
+    let mut f = routing_fixture();
+    route_release(&mut f, "receiver", json!({"handlers":{},"commands_in":[{"type":"run","from":["app"]}],"command_rights":{"run":{"roles":["admin"]}}}), &["receiver_rows"]);
+    let doc = document(&f.db, "business_commands", "cmd").unwrap().unwrap();
+    let err = f.codec.route(&f.db, &doc).unwrap_err();
+    assert!(err.to_string().contains("target handler missing"), "E39 target handler is mandatory: {err}");
+}
+
+#[test]
 fn e39_target_user_right_cannot_be_borrowed_from_sender() {
     let mut f=routing_fixture();
     route_release(&mut f,"receiver",json!({"handlers":{"run":"handlers/run.js"},"commands_in":[{"type":"run","from":"*"}],"command_rights":{"run":{"roles":["user"]}}}), &[]);
