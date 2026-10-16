@@ -67,6 +67,7 @@ def run(name, args, timeout=1200, expected=0):
         'p6_core_only_handler_has_native_origin_and_rejects_ui':'native core-origin event denied by E23.1 core-only rights',
         'mutation-policy-red':'writer used policy from before the transaction',
         'mutation-signature-red':'invalidly signed manifest authorized an applied document',
+        'mutation-retired-authority-red':'retired native authority returned a usable membership response',
         'mutation-cpu-red':'unbounded CPU handler completed without quota failure',
         'mutation-result-red':'oversized app result passed IPC budget',
         'mutation-heap-red':'320 MiB old-space allocation succeeded beyond the configured 256 MiB heap limit',
@@ -125,6 +126,7 @@ signal.signal(signal.SIGTERM, stopped)
 signal.signal(signal.SIGINT, stopped)
 parser=argparse.ArgumentParser()
 parser.add_argument('--mutations', action='store_true')
+parser.add_argument('--repairs-only', action='store_true', help='qualify corrected native fixtures and independent process guards')
 parser.add_argument('--skip-root', action='store_true', help='reuse root evidence and run only the process/signature checks')
 options=parser.parse_args()
 source_paths = [
@@ -196,6 +198,8 @@ try:
             # The worker independently attests the exact heap flag. Raise both
             # guards so this mutation reaches allocation, rather than failing setup.
             change('src/core/app_runtime/worker.mjs',old,'--max-old-space-size=512','heap-attestation')
+            # The worker has an independent result budget, like the heap attestation.
+            change('src/core/app_runtime/worker.mjs','const LIMIT = 1024 * 1024;','const LIMIT = 2 * 1024 * 1024;','worker-result-budget')
             change('src/core/app_runtime/lib.rs','value.saturating_sub(baseline) >= cpu_limit.as_millis() as u64','value.saturating_sub(baseline) >= 60_000','cpu-budget')
             change('src/core/app_runtime/lib.rs','const RESULT_LIMIT: usize = 1024 * 1024;','const RESULT_LIMIT: usize = 2 * 1024 * 1024;','result-budget')
             if run('mutation-heap-build',appcargo)==0:
@@ -228,10 +232,25 @@ try:
             ('p6_invalid_release_signature_never_admits_document_effect',0,30),
             ('p6_blob_bytes_require_digest_size_and_private_cas',0,30),
             ('p6_core_only_handler_has_native_origin_and_rejects_ui',101,180),
-            ('foreground_retains_real_native_authority_after_sixty_seconds_idle',0,180),
+            ('p6_native_authority_is_retired_after_session_end',0,180),
         ]:
+            if options.repairs_only and test not in ['p6_core_only_handler_has_native_origin_and_rejects_ui','p6_native_authority_is_retired_after_session_end']:
+                continue
             run(test,[binary,test,'--nocapture','--test-threads=1'],timeout,expected)
-    if options.mutations and not options.skip_root:
+    if options.mutations and options.repairs_only:
+        path='src/core/sync/src/authority/node.rs'
+        node=ROOT/path; baseline=node.read_bytes()
+        try:
+            change(path,'pub async fn worker_membership(&self, node_id: NodeId) -> io::Result<Option<WorkerMembership>> {','pub async fn worker_membership(&self, node_id: NodeId) -> io::Result<Option<WorkerMembership>> {\n        if self.stopped.load(Ordering::Acquire) { return Ok(None); }','retired-native-authority')
+            if run('mutation-retired-authority-build',cargo)==0:
+                mutated=binary_from_log('mutation-retired-authority-build','ctox')
+                run('mutation-retired-authority-red',[mutated,'p6_native_authority_is_retired_after_session_end','--nocapture','--test-threads=1'],120,101)
+        finally:
+            node.write_bytes(baseline)
+        if run('restored-authority-build',cargo)==0:
+            restored=binary_from_log('restored-authority-build','ctox')
+            run('restored-native-authority',[restored,'p6_native_authority_is_retired_after_session_end','--nocapture','--test-threads=1'],120)
+    if options.mutations and not options.skip_root and not options.repairs_only:
         codec='src/core/business_os/app_platform/runtime_host/codec.rs'
         secrets='src/core/secrets.rs'
         auth='src/core/sync/src/authority/auth.rs'
