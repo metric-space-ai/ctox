@@ -274,3 +274,18 @@ test('Konflikt: Live-Änderung überschreibt die Eingabe nicht, Speichern mit ve
   assert.ok((await page.evaluate(() => window.__zone())).includes('buchhaltung.receipt.conflict'));
   assert.deepEqual(page.__errors, []);
 });
+
+test('Upload: Core lehnt die Datei nach der lokalen Quittung ab → Beleg bleibt, markiert, Grund in der Zone', async (t) => {
+  const supported = await page.evaluate(() => typeof window.__k.sim.rejectNextUpload === 'function');
+  if (!supported) { t.skip('Stub vor E35/STUB-E30 (kein sim.rejectNextUpload)'); return; }
+  await page.evaluate(() => window.__k.sim.rejectNextUpload({ code: 'quota', reason: 'Speicher voll' }));
+  await upload('abgelehnt.png', 'image/png', PNG);
+  await page.waitForTimeout(400);
+  await settle();
+  const r = await receipt('abgelehnt.png');
+  assert.ok(r, 'Beleg bleibt erhalten (nicht gelöscht)');
+  assert.equal(r.file_state, 'rejected', 'Beleg als „Datei abgelehnt“ markiert');
+  assert.match(String(r.file_error), /Speicher voll|quota/);
+  const zone = await page.evaluate(() => window.__zone());
+  assert.ok(zone.some((code) => code.startsWith('buchhaltung.receipt.upload_rejected.')), JSON.stringify(zone));
+});

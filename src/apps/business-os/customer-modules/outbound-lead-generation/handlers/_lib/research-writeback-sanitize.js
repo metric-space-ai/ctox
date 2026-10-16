@@ -17,7 +17,7 @@
 //    attempts:[{kind,query_or_url,result,artifact_path,at}], reason, extra}
 // `field_status` is a Rust BTreeMap → JS object kept in code-point key order (sortKeys).
 //
-// OWNER-REGEL (THESEN): `requiredIndependentSources` = 1 für jedes Feld (Rust-Stand 4794af03d,
+// OWNER-REGEL (Kundeninstanz): `requiredIndependentSources` = 1 für jedes Feld (Rust-Stand 4794af03d,
 // „Owner rule 23.09.2026“) – unverändert übernommen, nicht ausgelegt.
 import { fail, has, isObject } from './olg.js';
 import { jsonEqual } from './research-source-adapter.js';

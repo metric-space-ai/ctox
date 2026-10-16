@@ -8,9 +8,6 @@
     ]
   },
   "_commands_out_evidence": {
-    "ctox business_os.chat.task": [
-      "v4/shell/chat/index.js (commandBus.dispatch → api.command; shared/business-chat.js Standardtyp business_os.chat.task, CHAT4.md)"
-    ],
     "ctox ctox.chat.task": [
       "v4/shell/app-host.js:500 (Menüpunkt ctox.ask „CTOX fragen…“ → Eingabeblatt → Standardbefehl ctox.chat.task)"
     ]
@@ -40,10 +37,6 @@
   "collections": {},
   "command_rights": {},
   "commands_out": [
-    {
-      "app": "ctox",
-      "type": "business_os.chat.task"
-    },
     {
       "app": "ctox",
       "type": "ctox.chat.task"
@@ -148,8 +141,9 @@
     "v4/frame/window-sheet.js": "a0c508dff3ab4441343ea062744644447424790de099195528820935072bbeaf",
     "v4/shell/app-host.js": "ed97baf7dd7d170b09ee2d6d155418a02f1e682cb5dd8de765bfb8f2a09a5d4b",
     "v4/shell/chat/chat-v2.css": "2b8052b88bf02528c4db3aca499620b9228826a97546acfbe817fe6d88a51317",
-    "v4/shell/chat/index.js": "a4f9814e95ae333320f27ba161eeaaf725dcde74c863679f2d60a88c26a02963",
-    "v4/shell/chat/raw-db.js": "e0f95f754656563c2f719cc11ce84b454143f0e8b1b53b2697270bd5add5ca87",
+    "v4/shell/chat/chat-v4.css": "4b87f2262874e47d228d3ef0120f267a61f4552c524aa5240004c70246c008fa",
+    "v4/shell/chat/index.js": "8d4e4119272572b17afb1c2ce173ee0c6043026ae6b389b150b696e1d8a35b35",
+    "v4/shell/chat/raw-db.js": "bcd41043400bc909b56b45538387921b981ea0542e627d534dfb2f137b61d065",
     "v4/shell/column-resizers.js": "ccd8e1b9615381987ccc8f710ae8faf01c924f3d7c74a76b3a029469f71c554e",
     "v4/shell/kernel-adapter.js": "d52b5123bacdc2e08db0970f8a4d84cf29006eed2fda01af5a7b603212160eb2",
     "v4/shell/report.js": "2809f32401811004129ad7742c61d72da1e8f25792a5a87b0b94a650460971ff",
@@ -371,7 +365,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "e6028bd1d5c7aa94433307d9e2d899d0d42c357bcbbbfff2b0ea7dde932a0651",
+    "base_hash": "2c9817f7d27576e928015bf64e1341e0c2139c4dab60e86e39e9a71ce3d76f3b",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

@@ -32,6 +32,9 @@
 //   5. v4/boot.js may name exactly one control-plane path, '/api/business-os/launch-context' (E38: authenticated
 //      bootstrap, no business data; AGENTS.md allows HTTP for bootstrap/auth) – the same allowance the V2 script
 //      gives app.js for this path. Any other /api/business-os/… path in boot.js stays red.
+//   6. kernel/boot.mjs may declare exactly one control-plane path, DEFAULT_LAUNCH_CONTEXT_URL =
+//      '/api/business-os/launch-context' (E38/E41), used by fetchV4LaunchContext (GET). kernel/session.mjs keeps
+//      its V2 allowance '/api/business-os/auth/capability'. Every other HTTP path under kernel/ stays red.
 //      NO_V4 (no meaning in v4, reason):
 //        - "viewer/explorer import shared/file-integrity.js?v=…": v4 apps load no shell file by path and carry
 //          no ?v= cache buster (App-API 4.0 §10.2a Nr. 4, isolation rule R1); the kernel owns integrity.
@@ -361,6 +364,15 @@ function contentForForbiddenHttpScan(file, content) {
     // path (constant and the comment that names it, like the V2 sync.js allowance); no sub-path, no other path.
     allow(
       /\/api\/business-os\/launch-context(?![\w/.-])/g,
+    );
+  }
+
+  if (rel === 'src/apps/business-os/kernel/boot.mjs') {
+    // Difference 6 (E38/E41, kernel decision 16.10.): fetchV4LaunchContext reads the authenticated bootstrap
+    // (GET, no business data) through exactly the exported constant DEFAULT_LAUNCH_CONTEXT_URL. Only that
+    // declaration is allowed; any other /api/business-os/… literal in boot.mjs stays red.
+    allow(
+      /export const DEFAULT_LAUNCH_CONTEXT_URL\s*=\s*'\/api\/business-os\/launch-context';/g,
     );
   }
 

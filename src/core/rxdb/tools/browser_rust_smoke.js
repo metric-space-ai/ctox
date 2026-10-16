@@ -112,43 +112,15 @@ const {
 
 const root = path.resolve(__dirname, '../../../..');
 
-// §16.13: a module's collections.schema.json is the only schema source; the v4
-// app ports deleted schema.js. Definitions are read in Node and handed to the
-// page as RxDB addCollections() creators ({ schema, ...creatorOptions }).
-// The schema body comes from modules/<id>/collections.schema.json — the same
-// source build_business_os_schema_contract.mjs feeds the native contract, so
-// browser and native schema hashes agree. Both documents go through the v4
-// shell manifest generator's own normalizer. Creator options the module file
-// does not carry (conflictStrategy, syncProfile) are taken from the corrected
-// v4/schemas/<id>.collections.schema.json, which the manifest generator ranks
-// first (§16.21) — but only when its schema body is identical.
-const MODULE_SCHEMA_CREATOR_OPTIONS = Object.freeze(['conflictStrategy', 'syncProfile']);
+// E45: packaged schema bodies come only from v4/schemas; module JSON supplies
+// creator metadata (E45.1). Both use the manifest generator's normalizer.
 const moduleCollectionDefinitionCache = new Map();
 async function moduleCollectionDefinitions(moduleId) {
   if (moduleCollectionDefinitionCache.has(moduleId)) return moduleCollectionDefinitionCache.get(moduleId);
-  const { normalizeCollectionsSchema } = await import(require('url').pathToFileURL(
-    path.join(root, 'src/apps/business-os/v4/tools/manifest/gen-manifest.mjs'),
+  const { readPackagedModuleDefinitions } = await import(require('url').pathToFileURL(
+    path.join(__dirname, 'business_os_schema_source.mjs'),
   ).href);
-  const readDocument = (file) => normalizeCollectionsSchema(JSON.parse(fs.readFileSync(file, 'utf8')));
-  const own = readDocument(path.join(root, 'src/apps/business-os/modules', moduleId, 'collections.schema.json'));
-  const correctedFile = path.join(root, 'src/apps/business-os/v4/schemas', `${moduleId}.collections.schema.json`);
-  const corrected = fs.existsSync(correctedFile) ? readDocument(correctedFile) : null;
-  const canonical = (value) => JSON.stringify(value, (_key, item) => (
-    item && typeof item === 'object' && !Array.isArray(item)
-      ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, item[key]]))
-      : item
-  ));
-  const definitions = {};
-  for (const [name, schema] of Object.entries(own.collections)) {
-    const options = { ...(own.wrappers[name] || {}) };
-    const correctedOptions = corrected?.wrappers?.[name];
-    if (correctedOptions && canonical(corrected.collections[name]) === canonical(schema)) {
-      for (const key of MODULE_SCHEMA_CREATOR_OPTIONS) {
-        if (options[key] === undefined && correctedOptions[key] !== undefined) options[key] = correctedOptions[key];
-      }
-    }
-    definitions[name] = { ...options, schema };
-  }
+  const definitions = await readPackagedModuleDefinitions(root, moduleId);
   moduleCollectionDefinitionCache.set(moduleId, definitions);
   return definitions;
 }

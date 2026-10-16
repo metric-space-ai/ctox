@@ -1,4 +1,4 @@
-import { subscriptionModelUnavailable } from './model-access-health.js?v=20261016-shell-v2-v4-schema-contract';
+import { subscriptionModelUnavailable } from './model-access-health.js?v=20261016-shell-v2-v4-schema-one-source';
 import { appReleaseProjection } from './app-lifecycle.js?v=20260831-ctox-desktopapp-ports-v328';
 import {
   BusinessOsPermissions,
