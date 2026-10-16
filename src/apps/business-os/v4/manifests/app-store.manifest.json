@@ -60,7 +60,7 @@
     "v4-manifest.json": "84e1a51804e0f5a51cce115d7d4a04e1ddb877d0ae909dc086ab69ff5dc40065",
     "vendor/store-shelf/box-art.mjs": "e3a842c0d2264aa147349429eb1d46e1be58f2405832602179fe7131f7c670ff",
     "vendor/store-shelf/provenance.json": "ad1b9705156e73e5e600fbe23d5d5437963da8c4d1ab6edc29e53459f6dbb037",
-    "vendor/store-shelf/store-shelf.mjs": "b435eac8d877955abaf5340331b7a7c5ba5ce629d3bf54ab009dc79dc4c5a1a9",
+    "vendor/store-shelf/store-shelf.mjs": "f4036e74846cc3478025ef81caa7268650a0b094ac28c0520ec0b9258f4fae60",
     "vendor/three/RoundedBoxGeometry.js": "047158fdb27e8b64a42b03af68c69c32f667818a8f328ea2b85691e0bf974414",
     "vendor/three/provenance.json": "594225efa7691c0863248ecc7aad74b4b2ef8c001eb3957cd39297e05d918872",
     "vendor/three/three.core.min.js": "05b2609338c76cd65daf74f3ac515bc9a5045e1b3b33edc07d8c9bd55250fa90",
@@ -264,7 +264,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "0ece22e7189cfc5e434801b95862d30b047f96af8d632f44d13090dfc466110e",
+    "base_hash": "9e2be00c0b88e2928a3cfc8d55b8cc104dde0d77a98e21153c9bc750f6187c37",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

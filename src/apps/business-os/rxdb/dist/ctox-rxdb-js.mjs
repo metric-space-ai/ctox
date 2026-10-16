@@ -299,12 +299,17 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   user_threads: "97a226600a64559f18c795e6a6c39b56e478d455bc5ce1485b714e1d13c2e5cb",
   workjet_computers: "367b6f7af7849a06616267a13d2ef49e539e10b2267628dc860b1d82ba10f595",
   workjet_jour_fixe_meetings: "6e5b9e06ebd73c9b729975a11909e805ffe9a7cd3340a85a4fcf0a1cd5b924e4",
+  workjet_luma_state: "2dc10dafada77fe54e0556b2b9f28faab7a09aafe38c3c6e39280083ad010f20",
+  workjet_mailbox_envelopes: "9b7896a988a081ab6652e1432936a7d925023bb4ff4120d52015c86121bb7557",
   workjet_project_chats: "f68e34d8702d58f1ffc430bd12edb61f01528b26a2e5197df3e46e393819bc2e",
   workjet_project_workers: "f2c2dfcf7f722902e47a2d947b81f8afae740b6a642bb9b392a4260ce79d4892",
   workjet_projects: "a89d21f4956fd4fd8e3bc8627306fa504b7190a92cf623e52b1fcdecd1ceee1d",
   workjet_provider_registry: "63c5d64f36877e182cf07829f4a08c62605e2fd82ac10a8cce6ca9f2b2f6bef6",
   workjet_session_transfers: "61086f70447993a3744dc6be99c3b57f3c96360134b8b83b9f7fff37dfdb7e77",
   workjet_sessions: "88d53e262c9302b9ba866dbd0b3334648fdb9d4b475a1dfd2d5675da74bf8be5",
+  workjet_worker_dispatch_intents: "6d5591776eb08de51251bf957603d99029646f7f3442392929f26f1d62b5c626",
+  workjet_worker_dispatch_outcomes: "0aeceb00aac0377f4f9691e66e82e08543855addff2aa2e0a0b5f0c39f9e5aeb",
+  workjet_worker_dispatch_sources: "a2bba7819352edc3e641dd7ae38d22fa72d1337dd8f1bc37981e46f768e79879",
   workjet_worker_profile_bindings: "c59012d23dbe90dea21a33086dad073c837e8395d0f2973daed56453ef0733e4",
   workjet_working_copies: "a2e418eafc2ee8900b9d1422dbcfb68dfd4b542226ec022b26c2484837cf0e08"
 });
