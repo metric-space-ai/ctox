@@ -868,7 +868,19 @@ pub(super) fn execute(
             let Some(draft) = draft else {
                 return reject("not_found");
             };
-            if !can_read_draft(actor, &draft, current.as_ref()) {
+            let author = draft
+                .get("author")
+                .or_else(|| draft.get("user_id"))
+                .and_then(Value::as_str);
+            if author != actor.id.as_deref()
+                && !permission_in_store(
+                    tx,
+                    actor,
+                    BusinessOsPermission::AppsModify,
+                    current.as_ref(),
+                    &request.app_id,
+                )
+            {
                 return reject("forbidden");
             }
             if draft["app_id"] != request.app_id {
