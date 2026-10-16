@@ -332,8 +332,19 @@ async fn second_process_write_is_refused() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("owned fixture path missing"))?;
     let writer =
         ctox_store::registry::Registry.open(ctox_store::DbId::new(path)?, Default::default())?;
+    // Queue an actual write intent before startup resolves. The file owner
+    // must reject this process before either SQLite open or this SQL effect.
+    let attempted = writer.submit(WriteJob::new(Default::default(), |tx| {
+        tx.execute_batch("CREATE TABLE cutover_forbidden_second_writer(id INTEGER)")?;
+        Ok(())
+    }));
     match writer.ready().await {
-        Err(ctox_store::StoreError::AlreadyOwned) => println!("C5_SECOND_WRITER_REFUSED"),
+        Err(ctox_store::StoreError::AlreadyOwned) => {
+            if let Ok(job) = attempted {
+                anyhow::ensure!(job.await.is_err(), "second process write committed");
+            }
+            println!("C5_SECOND_WRITER_REFUSED");
+        }
         other => {
             let _ = writer.shutdown().await;
             anyhow::bail!("second writer was not refused: {other:?}");
