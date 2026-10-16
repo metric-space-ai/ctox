@@ -247,6 +247,7 @@ async fn installed_daemons_keep_identity_authority_and_exclusive_writers() -> an
     }
     let mut rows = Vec::new();
     for (i, node) in nodes.iter().enumerate() {
+        let mut expected_writers = std::collections::BTreeSet::new();
         for (request_id, name) in ["core", "sync", "runtime", "secrets"]
             .into_iter()
             .enumerate()
@@ -264,6 +265,11 @@ async fn installed_daemons_keep_identity_authority_and_exclusive_writers() -> an
             .await?;
             let inspect: serde_json::Value = serde_json::from_slice(&result)?;
             assert_eq!(inspect["queryOnly"], true);
+            let generation = inspect["generation"].as_u64().unwrap();
+            anyhow::ensure!(
+                expected_writers.insert(format!("ctox-store-{generation}")),
+                "two database handles share a writer generation"
+            );
             rows.push(serde_json::json!({"node":i+1,"file":name,"inspection":inspect}));
         }
         let second = tokio::process::Command::new(std::env::current_exe()?)
@@ -287,12 +293,12 @@ async fn installed_daemons_keep_identity_authority_and_exclusive_writers() -> an
             .map(|n| n.trim().to_owned())
             .collect();
         anyhow::ensure!(
-            names
+            expected_writers.iter().all(|expected| names
                 .iter()
-                .filter(|n| n.starts_with("ctox-store-"))
+                .filter(|name| *name == expected)
                 .count()
-                == 4,
-            "unexpected owner thread count"
+                == 1),
+            "each database generation must have exactly one live writer thread"
         );
         anyhow::ensure!(
             !names.iter().any(|n| n.starts_with("business-os-rxd")),
