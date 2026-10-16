@@ -102,7 +102,7 @@ impl HttpSurface {
                                     Header::from_bytes("X-Content-Type-Options", "nosniff")
                                         .unwrap(),
                                 );
-                                response.add_header(Header::from_bytes("Content-Security-Policy", "default-src 'self'; script-src 'self' blob:; connect-src 'self' wss:; object-src 'none'; base-uri 'none'").unwrap());
+                                response.add_header(Header::from_bytes("Content-Security-Policy", "default-src 'self'; script-src 'self' blob:; connect-src 'self' wss:; object-src 'none'; base-uri 'self'").unwrap());
                                 let _ = request.respond(response);
                             }
                             Err(_) => break,
@@ -199,19 +199,23 @@ fn answer(
     if path.starts_with("/api/") {
         return Ok((404, "text/plain", Vec::new()));
     }
-    // §10.1 is a bootstrap allowlist, not an unauthenticated module/record
-    // server. Active Shell/app artifacts must arrive over the V4 data stream.
-    if !matches!(path, "/" | "/index.html" | "/loader.mjs" | "/sw.js")
-        && !(path.starts_with("/kernel/") && path.ends_with(".mjs"))
+    // E38.1: the active slot is the bootstrap root. Never accidentally serve
+    // its legacy V2 index. Business data remains exclusively on the V4 stream.
+    let relative = match path {
+        "/" | "/index.html" => "v4/index.html",
+        "/sw.js" => "v4/sw.js",
+        path if path.starts_with("/kernel/") => &path[1..],
+        path if path.starts_with("/business-os/") => &path["/business-os/".len()..],
+        _ => return Ok((404, "text/plain", Vec::new())),
+    };
+    // E38.2 excludes test-only kernel fixtures even through the slot alias.
+    if relative.starts_with("kernel/")
+        && relative
+            .split('/')
+            .any(|part| matches!(part, "tests" | "testkit") || part.starts_with("fake-core"))
     {
         return Ok((404, "text/plain", Vec::new()));
     }
-    let relative = path.strip_prefix('/').unwrap_or(path);
-    let relative = if relative.is_empty() {
-        "index.html"
-    } else {
-        relative
-    };
     if Path::new(relative)
         .components()
         .any(|c| !matches!(c, Component::Normal(_)))
@@ -292,7 +296,24 @@ mod tests {
             app.join("index.html"),
             "<!doctype html><title>bootstrap fixture</title>",
         )?;
-        std::fs::write(app.join("loader.mjs"), "export const fixture = true;")?;
+        std::fs::create_dir_all(app.join("v4"))?;
+        std::fs::create_dir_all(app.join("kernel/vendor"))?;
+        std::fs::create_dir_all(app.join("kernel/tests"))?;
+        std::fs::create_dir_all(app.join("assets"))?;
+        for (path, body) in [
+            (
+                "v4/index.html",
+                "<!doctype html><base href=/business-os/><title>V4</title>",
+            ),
+            ("v4/sw.js", "// V4 service worker"),
+            ("v4/boot.js", "// V4 boot"),
+            ("kernel/boot.mjs", "// kernel boot"),
+            ("kernel/vendor/hello.mjs", "// kernel vendor"),
+            ("kernel/tests/private.mjs", "// forbidden fixture"),
+            ("assets/ctox-app-icon.png", "icon fixture"),
+        ] {
+            std::fs::write(app.join(path), body)?;
+        }
         let mut owner = super::super::store_startup::Foreground::start(
             root.path().to_owned(),
             tokio::runtime::Handle::current(),
@@ -354,12 +375,43 @@ mod tests {
                     Err(error) => Err(error.into()),
                 }
             };
-            for url in ["/", "/?role=admin", "/?role=user", "/loader.mjs"] {
+            for url in ["/", "/?role=admin", "/?role=user"] {
+                let response = get(url)?;
                 assert_eq!(
-                    get(url)?.status(),
+                    response.status(),
                     200,
                     "HTTP failed beside foreground owner: {url}"
                 );
+                assert_eq!(
+                    response
+                        .header("Content-Security-Policy")
+                        .unwrap()
+                        .split("base-uri ")
+                        .nth(1),
+                    Some("'self'")
+                );
+                assert!(
+                    response.into_string()?.contains("<title>V4</title>"),
+                    "V2 index leaked into V4 entry"
+                );
+            }
+            for (url, body) in [
+                ("/sw.js?db=probe", "// V4 service worker"),
+                ("/kernel/boot.mjs", "// kernel boot"),
+                ("/kernel/vendor/hello.mjs", "// kernel vendor"),
+                ("/business-os/v4/boot.js", "// V4 boot"),
+                ("/business-os/assets/ctox-app-icon.png", "icon fixture"),
+            ] {
+                let response = get(url)?;
+                assert_eq!(response.status(), 200, "missing E38 route: {url}");
+                assert_eq!(response.into_string()?, body);
+            }
+            for url in [
+                "/kernel/tests/private.mjs",
+                "/business-os/kernel/tests/private.mjs",
+                "/business-os/%2e%2e/index.html",
+            ] {
+                assert_eq!(get(url)?.status(), 404, "bootstrap path escape: {url}");
             }
             let bootstrap: serde_json::Value = get("/api/business-os/bootstrap")?.into_json()?;
             assert_eq!(bootstrap["instance_id"], expected.0);
