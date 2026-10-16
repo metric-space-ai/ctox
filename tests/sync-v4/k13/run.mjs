@@ -73,12 +73,12 @@ async function namespace(config,log) {
   }
 }
 if(build && !summary.scenarios.length) {
-  for(const [id,seconds] of [['K13',180],['K21',1200],['K22',900]]) {
+  for(const [id,seconds] of [['K13',180],['K21',1200],['K22',900]].filter(([id])=>!flags.has('--scenario') || flags.get('--scenario')===id)) {
     if(cancelled){summary.scenarios.push({id,status:'not_run',pass:false,acceptanceComplete:false,reason:'Controller interrupted',daemonExecuted:false});save();continue;}
     const dir=join(output,id);fs.mkdirSync(dir,{mode:0o700});
     const config={owner:summary.owner,...build,output:dir,profile:'small',clients:1,rttMs:20,warmRttMs:20,lossPercent:0,
       uid:process.getuid(),gid:process.getgid(),hostNamespaces:Object.fromEntries(['user','net','mnt','pid'].map(k=>[k,fs.readlinkSync('/proc/self/ns/'+k)])),seedAfterStart:false,leadProfile:'eager',prime:false,
-      catalog:true,scenarioRoot:resolve(here,'..'),scenario:id,prepareOnly:flags.get('--prepare-only')==='true',
+      controlOnly:flags.get('--control-only')==='true',catalog:true,scenarioRoot:resolve(here,'..'),scenario:id,prepareOnly:flags.get('--prepare-only')==='true',
       root:join('/tmp','p6-'+id.toLowerCase()+'-'+expected.slice(0,8)),port:19865,signalingPort:19866,turnPort:34789,
       runner:join(here,'service-runner.mjs'),sourceManifest,buildReceipt:resolve(flags.get('--build')),
       lane,canonicalTmpdir:process.env.TMPDIR,durationSeconds:seconds,hostNetworkNamespace:fs.readlinkSync('/proc/self/ns/net'),

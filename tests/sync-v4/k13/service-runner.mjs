@@ -55,6 +55,7 @@ try {
   if(pressureDone.committed<2 || BigInt(pressureDone.last_seq)<=BigInt(pressureDone.first_seq))throw Error('Native load did not commit positive ordered writes');
   report.control={ownerBacked:true,writeReadback:true,nonAdminWriteRejected:userDenied,pressure:pressureDone,seq:committed.seq,unissuedSessionRejected:denied,process:await call(admin,'processIdentity')};
   save();
+  if(config.controlOnly)throw Error('not_run(control-qualification-only)');
   try {
     const shell=await call(admin,'sourceRelease',{appId:'shell'});
     report.shellProvisioning={source:shell.source,appId:shell.appId,files:shell.files,status:shell.receipt.status,appVer:shell.receipt.app_ver};

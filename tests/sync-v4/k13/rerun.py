@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Lane-only K rerun; builds the composed source and preserves measured/not-run criteria."""
-import argparse,hashlib,json,os,re,signal,subprocess,time,zipfile
+import argparse,hashlib,json,os,re,shutil,signal,subprocess,time,zipfile
 from pathlib import Path
-P=argparse.ArgumentParser();P.add_argument('--revision',required=True);P.add_argument('--deadline',type=float,required=True);P.add_argument('--prepare-only',action='store_true');P.add_argument('--reuse-build');a=P.parse_args()
+P=argparse.ArgumentParser();P.add_argument('--revision',required=True);P.add_argument('--deadline',type=float,required=True);P.add_argument('--prepare-only',action='store_true');P.add_argument('--reuse-build');P.add_argument('--control-mutation',action='store_true');a=P.parse_args()
 ROOT=Path(__file__).resolve().parents[3];HERE=Path(__file__).resolve().parent
 assert os.environ.get('BUILD_LANE_BIN') and os.environ.get('CARGO_TARGET_DIR'),'canonical lane required'
 OUT=Path(os.environ['CARGO_TARGET_DIR'])/('p6-k-rerun-'+time.strftime('%Y%m%dT%H%M%SZ',time.gmtime()));OUT.mkdir()
@@ -75,6 +75,7 @@ try:
    if len(bins)!=1:raise RuntimeError('native fixture executable ambiguous')
    fixture_binary=Path(bins[0])
   finally:fixture_source.write_bytes(fixture_original)
+  retained_fixture=OUT/'native-fixture';shutil.copy2(fixture_binary,retained_fixture);fixture_binary=retained_fixture
   binary=Path(os.environ['CARGO_TARGET_DIR'])/'debug/ctox'
   build={'pass':True,'terminal':True,'revision':a.revision,'source':str(ROOT),'binary':str(binary),'binarySha256':hash_file(binary),'fixtureBinary':str(fixture_binary),'fixtureBinarySha256':hash_file(fixture_binary)}
  receipt=OUT/'build.json';receipt.write_text(json.dumps(build,indent=2))
@@ -92,6 +93,29 @@ try:
   rejected=mcode!=0 and not private(ms) and all(not r['daemonExecuted'] and 'Private mapped user/net/mount/PID namespaces required' in (mp/(r['id']+'.log')).read_text() for r in ms['scenarios'])
   results['namespace_mutation']={'source':'tests/sync-v4/k13/run.mjs','line':next(i for i,l in enumerate(original.splitlines(),1) if old in l),'mutation':'remove --net','positive':private(s),'mutant_rejected_before_daemon':rejected}
  finally:mutant.unlink(missing_ok=True)
+ if a.control_mutation:
+  provider=HERE/'control-provider.rs';provider_original=provider.read_bytes()
+  guard='anyhow::ensure!(actor.is_admin && actor.role == "admin", "admin session required");'
+  replacement='anyhow::ensure!(true, "admin session required");'
+  assert provider_original.decode().count(guard)==1,'control mutation anchor'
+  original_product=(ROOT/'src/core/business_os/app_platform/runtime_host/native_proof.rs').read_bytes()
+  try:
+   provider.write_bytes(provider_original.replace(guard.encode(),replacement.encode()))
+   fixture_source=ROOT/'src/core/business_os/app_platform/runtime_host/native_proof.rs'
+   fixture_source.write_bytes(original_product+('\n#[path = '+json.dumps(str(HERE/'enrolled-fixture.rs'))+']\nmod p6_k_fixture;\n').encode())
+   fcode,flog=run('control-mutation-build',['cargo','test','--locked','--jobs','2','--bin','ctox','--features','app-runtime-node','--no-run','--message-format=json'],1200)
+   if fcode:raise RuntimeError('control mutation build unverified')
+   bins=[j['executable'] for line in flog.splitlines() if line.startswith('{') for j in [json.loads(line)] if j.get('reason')=='compiler-artifact' and j.get('target',{}).get('name')=='ctox' and j.get('profile',{}).get('test') and j.get('executable')]
+   assert len(bins)==1,'mutation executable ambiguous'
+   mutated=dict(build,fixtureBinary=bins[0],fixtureBinarySha256=hash_file(bins[0]),mutation={'file':'tests/sync-v4/k13/control-provider.rs','line':next(i for i,l in enumerate(provider_original.decode().splitlines(),1) if guard in l),'replacement':replacement})
+   (OUT/'control-mutant-build.json').write_text(json.dumps(mutated,indent=2))
+  finally:
+   provider.write_bytes(provider_original);fixture_source.write_bytes(original_product)
+  mcode,mtext=run('control-auth-mutation',['node',HERE/'run.mjs','--build',OUT/'control-mutant-build.json','--expected-revision',a.revision,'--scenario','K13','--control-only','true'],180)
+  mp,ms=summary(mtext);mutant_case=json.loads((mp/'K13/result.json').read_text())
+  positive=all(json.loads((path/r['id']/'result.json').read_text()).get('control',{}).get('nonAdminWriteRejected') is True for r in s['scenarios'])
+  rejected=mcode!=0 and mutant_case.get('error')=='Native control admitted a non-admin fixture write'
+  results['control_auth_mutation']={**mutated['mutation'],'positive':positive,'mutant_rejected_for_expected_reason':rejected,'restored_source_sha256':hash_file(provider)};save()
 except Exception as e:
  results['runner_error']=str(e);print('P6_K_ERROR',str(e),flush=True)
 finally:
@@ -103,6 +127,6 @@ finally:
     rel=p.relative_to(d)
     if not p.is_file() or p.is_symlink() or any(part.startswith('tenant-') for part in rel.parts) or p.name.endswith('.private.json'):continue
     if p.suffix not in ['.json','.log','.txt']:continue
-    z.write(p,Path('positive' if i==0 else 'namespace-mutant')/rel)
+    z.write(p,Path(['positive','namespace-mutant','control-auth-mutant'][i])/rel)
  print('P6_K_EVIDENCE',OUT,flush=True)
 raise SystemExit(0 if results.get('acceptance') else 1)
