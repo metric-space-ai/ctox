@@ -5251,32 +5251,34 @@ mod tests {
     fn p4_handler_send_failure_has_one_event_counter_and_log() {
         // The production counters are process-global. A child test process
         // isolates this measurement from unrelated parallel handler tests.
-        const CHILD: &str = "CTOX_P4_SEND_WIRING_CHILD";
-        if std::env::var_os(CHILD).is_none() {
-            let module = module_path!().split_once("::").unwrap().1;
-            let output = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    &format!("{module}::p4_handler_send_failure_has_one_event_counter_and_log"),
-                    "--nocapture",
-                    "--test-threads=1",
-                ])
-                .env(CHILD, "1")
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "isolated handler wiring failed:\n{}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            assert!(
-                String::from_utf8_lossy(&output.stdout).contains("1 passed"),
-                "the isolated wiring test must actually run"
-            );
-            return;
-        }
+        let module = module_path!().split_once("::").unwrap().1;
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!("{module}::p4_handler_send_failure_isolated"),
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated handler wiring failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "the isolated wiring test must actually run"
+        );
+    }
 
+    // Executed by the wrapper above in its own process so global counters and
+    // tracing remain isolated without a process-environment test switch.
+    #[test]
+    #[ignore = "invoked by p4_handler_send_failure_has_one_event_counter_and_log"]
+    fn p4_handler_send_failure_isolated() {
         #[derive(Clone)]
         struct LogWriter(Arc<Mutex<Vec<u8>>>);
         impl std::io::Write for LogWriter {
