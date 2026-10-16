@@ -326,6 +326,7 @@ export async function mount(root, api, { restored } = {}) {
 
   return {
     unmount() {
+      revokeReceiptFileUrl();
       disposed = true;
       if (state.reloadTimer) clearTimeout(state.reloadTimer);
       state.reloadTimer = null;
@@ -368,6 +369,7 @@ function scheduleFibuReload() {
     loadAllFibuData().then(() => {
       renderBookingList();
       renderActiveView();
+      syncOpenReceiptForm();
     });
   }, 40);
 }
@@ -1479,10 +1481,169 @@ function selectReceipt(id) {
   openReceiptDrawer(receipt);
 }
 
+// =========================================================================
+// Belegkontierung (BUCH-3): Felder untereinander, Speichern je Änderung per api.patch. Die App-API 4.0 kennt kein
+// expected_revision; die Konfliktprüfung nutzt updated_at_ms des Belegs als Revision der App: beim Öffnen gemerkt,
+// vor jedem Speichern verglichen. Weicht sie ab, wird nichts geschrieben und der Grund steht in der Zone.
+// =========================================================================
+const RECEIPT_TAX_RATES = Object.freeze([19, 7, 0]);
+const RECEIPT_TEXT_FIELDS = Object.freeze(['supplier_name', 'invoice_number', 'invoice_date', 'suggested_account_id']);
+const RECEIPT_AMOUNT_FIELDS = Object.freeze(['net_amount', 'tax_amount', 'gross_amount']);
+
+function parseEuroCents(text) {
+  const raw = String(text ?? '').replace(/[\s€]/g, '');
+  if (!raw) return null;
+  const norm = raw.includes(',') ? raw.replace(/\./g, '').replace(',', '.') : raw;
+  const n = Number(norm);
+  return Number.isFinite(n) ? Math.round(n * 100) : NaN;
+}
+function centsInputValue(cents) {
+  return hasAmount(cents) ? (Number(cents) / 100).toFixed(2).replace('.', ',') : '';
+}
+function suggestedTax(net, rate) {
+  return hasAmount(net) && hasAmount(rate) ? Math.round((Number(net) * Number(rate)) / 100) : null;
+}
+
+function receiptFormMarkup(receipt, isPosted) {
+  const dis = isPosted ? ' disabled' : '';
+  const accounts = (state.accounts || []).filter((a) => !a.is_group && a.account_type !== 'group');
+  const accountOptions = accounts.map((a) => `<option value="${escapeHtml(a.id)}"${a.id === receipt.suggested_account_id ? ' selected' : ''}>${escapeHtml(`${a.code} ${a.name}`)}</option>`).join('');
+  const rate = hasAmount(receipt.tax_rate) ? Number(receipt.tax_rate) : null;
+  const rateOptions = RECEIPT_TAX_RATES.map((r) => `<option value="${r}"${rate === r ? ' selected' : ''}>${r} %</option>`).join('');
+  const row = (label, control) => `<label class="fibu-receipt-row"><span class="ctox-field-label">${label}</span>${control}</label>`;
+  const text = (name, value, extra = '') => `<input class="ctox-input" name="${name}" value="${escapeHtml(value || '')}" autocomplete="off"${extra}${dis} />`;
+  const amount = (name) => `<input class="ctox-input is-num" name="${name}" inputmode="decimal" value="${centsInputValue(receipt[name])}" autocomplete="off"${dis} />`;
+  return `
+      <form class="fibu-receipt-form" data-receipt-form data-receipt-id="${escapeHtml(receipt.id)}" data-base-updated="${Number(receipt.updated_at_ms) || 0}" novalidate>
+        ${row('Lieferant', text('supplier_name', receipt.supplier_name))}
+        ${row('Rechnungsnummer', text('invoice_number', receipt.invoice_number))}
+        ${row('Belegdatum', `<input class="ctox-input" type="date" name="invoice_date" value="${escapeHtml(receipt.invoice_date || '')}"${dis} />`)}
+        ${row('Konto', `<select class="ctox-select" name="suggested_account_id"${dis}><option value=""${receipt.suggested_account_id ? '' : ' selected'}>—</option>${accountOptions}</select>`)}
+        ${row('Netto', amount('net_amount'))}
+        ${row('Steuersatz', `<select class="ctox-select" name="tax_rate"${dis}><option value=""${rate == null ? ' selected' : ''}>—</option>${rateOptions}</select>`)}
+        ${row('Steuer', amount('tax_amount'))}
+        ${row('Brutto', amount('gross_amount'))}
+      </form>`;
+}
+
+function receiptFormFor(receiptId) {
+  const form = state.els.drawerContent?.querySelector('[data-receipt-form]');
+  return form && form.dataset.receiptId === String(receiptId) ? form : null;
+}
+
+// Formularwerte im Speicherformat: Texte getrimmt ('' = leer), Beträge in Cent (null = leer, NaN = ungültig).
+function readReceiptForm(form) {
+  const out = {};
+  for (const name of RECEIPT_TEXT_FIELDS) out[name] = String(form.elements[name]?.value ?? '').trim();
+  const rate = form.elements.tax_rate?.value;
+  out.tax_rate = rate === '' || rate == null ? null : Number(rate);
+  for (const name of RECEIPT_AMOUNT_FIELDS) out[name] = parseEuroCents(form.elements[name]?.value);
+  return out;
+}
+
+// Steuer und Brutto als Vorschlag, solange der Nutzer sie nicht selbst geändert hat (data-manual).
+function applyReceiptSuggestions(form) {
+  const v = readReceiptForm(form);
+  const tax = form.elements.tax_amount;
+  const gross = form.elements.gross_amount;
+  if (tax && tax.dataset.manual !== '1') {
+    const t = suggestedTax(v.net_amount, v.tax_rate);
+    tax.value = t == null ? tax.value : centsInputValue(t);
+  }
+  const taxCents = parseEuroCents(tax?.value);
+  if (gross && gross.dataset.manual !== '1' && hasAmount(v.net_amount) && hasAmount(taxCents)) {
+    gross.value = centsInputValue(Number(v.net_amount) + Number(taxCents));
+  }
+}
+
+function bindReceiptForm(form, receipt) {
+  if (!form) return;
+  // Gespeicherte Abweichungen gelten als Nutzereintrag und bleiben stehen.
+  const rate = hasAmount(receipt.tax_rate) ? Number(receipt.tax_rate) : null;
+  if (hasAmount(receipt.tax_amount) && receipt.tax_amount !== suggestedTax(receipt.net_amount, rate)) form.elements.tax_amount.dataset.manual = '1';
+  if (hasAmount(receipt.gross_amount) && !(hasAmount(receipt.net_amount) && hasAmount(receipt.tax_amount) && Number(receipt.net_amount) + Number(receipt.tax_amount) === Number(receipt.gross_amount))) {
+    form.elements.gross_amount.dataset.manual = '1';
+  }
+  form.addEventListener('submit', (event) => event.preventDefault());
+  form.addEventListener('input', (event) => {
+    form.dataset.dirty = '1';
+    const name = event.target?.name;
+    if (name === 'tax_amount' || name === 'gross_amount') event.target.dataset.manual = event.target.value.trim() ? '1' : '';
+    if (name === 'net_amount' || name === 'tax_amount') applyReceiptSuggestions(form);
+    updateReceiptDrawerOptions(form.dataset.receiptId);
+  });
+  form.addEventListener('change', (event) => {
+    if (event.target?.name === 'tax_rate') applyReceiptSuggestions(form);
+    form.dataset.dirty = '1';
+    updateReceiptDrawerOptions(form.dataset.receiptId);
+    void saveReceiptForm(form);
+  });
+}
+
+// Speichert die geänderten Felder. false = nicht gespeichert (Konflikt, ungültig, Fehler); Grund in der Zone.
+async function saveReceiptForm(form) {
+  const api = state.api;
+  const id = form?.dataset.receiptId;
+  if (!api || !id) return false;
+  const current = api.get('accounting_receipts', id).get();
+  if (!current || current.status === 'posted') return false;
+  const base = Number(form.dataset.baseUpdated) || 0;
+  if ((Number(current.updated_at_ms) || 0) !== base) {
+    fibuNotice('receipt.conflict', `${current.filename || id}: Beleg wurde inzwischen geändert. Eingabe nicht gespeichert, Beleg neu öffnen.`, 'error');
+    return false;
+  }
+  const values = readReceiptForm(form);
+  if (RECEIPT_AMOUNT_FIELDS.some((name) => Number.isNaN(values[name]))) {
+    fibuNotice('receipt.invalid_amount', `${current.filename || id}: Betrag ungültig.`, 'warn');
+    return false;
+  }
+  api.status.clear('buchhaltung.receipt.invalid_amount');
+  const patch = {};
+  for (const [name, value] of Object.entries(values)) {
+    const empty = value === '' || value == null;
+    const had = current[name] !== undefined && current[name] !== null && current[name] !== '';
+    if (empty ? had : current[name] !== value) patch[name] = empty ? null : value;
+  }
+  if (!Object.keys(patch).length) { delete form.dataset.dirty; return true; }
+  const now = Math.max(Date.now(), base + 1);
+  patch.updated_at_ms = now;
+  form.dataset.baseUpdated = String(now);
+  try {
+    const handle = api.patch('accounting_receipts', id, patch);
+    handle.result?.then?.((result) => {
+      if (result?.status === 'rejected') fibuNotice('receipt.save_rejected', `${current.filename || id}: Speichern abgelehnt (${result.reason || 'rejected'})`, 'error');
+    }, () => {});
+    await handle.local;
+  } catch (error) {
+    form.dataset.baseUpdated = String(base);
+    fibuNotice('receipt.save_failed', `${current.filename || id}: Speichern fehlgeschlagen (${error?.code || error?.message || error})`, 'error');
+    return false;
+  }
+  delete form.dataset.dirty;
+  api.status.clear('buchhaltung.receipt.conflict');
+  api.status.clear('buchhaltung.receipt.save_failed');
+  return true;
+}
+
+// Live-Daten: ein unverändertes Formular übernimmt den neuen Stand (Werte + Revision); ein Formular mit offenen
+// Eingaben bleibt unangetastet, damit nichts überschrieben wird (Konflikt meldet dann das Speichern).
+function syncOpenReceiptForm() {
+  const form = state.els.drawerContent?.querySelector('[data-receipt-form]');
+  if (!form || form.dataset.dirty === '1') return;
+  const doc = state.api?.get('accounting_receipts', form.dataset.receiptId).get();
+  if (!doc || (Number(doc.updated_at_ms) || 0) === (Number(form.dataset.baseUpdated) || 0)) return;
+  if (form.contains(document.activeElement)) return;
+  for (const name of RECEIPT_TEXT_FIELDS) if (form.elements[name]) form.elements[name].value = doc[name] || '';
+  if (form.elements.tax_rate) form.elements.tax_rate.value = hasAmount(doc.tax_rate) ? String(Number(doc.tax_rate)) : '';
+  for (const name of RECEIPT_AMOUNT_FIELDS) if (form.elements[name]) form.elements[name].value = centsInputValue(doc[name]);
+  form.dataset.baseUpdated = String(Number(doc.updated_at_ms) || 0);
+}
+
 // Buchen nur mit erfassten Angaben – ein leerer Beleg ergäbe eine Buchung über 0 € ohne Datum.
 function receiptIsComplete(receipt) {
   return Boolean(receipt?.invoice_date) && Boolean(receipt?.suggested_account_id)
-    && hasAmount(receipt.net_amount) && hasAmount(receipt.tax_amount) && hasAmount(receipt.gross_amount);
+    && hasAmount(receipt.net_amount) && hasAmount(receipt.tax_amount) && hasAmount(receipt.gross_amount)
+    && Number(receipt.net_amount) + Number(receipt.tax_amount) === Number(receipt.gross_amount);
 }
 
 // Beleg-Evidenz: nur gespeicherte Angaben, keine nachgebildete Rechnung (keine Belegerkennung vorhanden).
@@ -1522,9 +1683,10 @@ function renderOcrInvoicePreview(receipt) {
         </dl>
       </div>
     </section>
+    <section class="ctox-card fibu-receipt-file" data-receipt-file></section>
     <div class="ctox-card ocr-raw-meta-badge">
       <div class="ctox-card-body">
-        <span class="ctox-field-label">GoBD-Archivpfad</span>
+        <span class="ctox-field-label">Datei-Referenz</span>
         <div class="ocr-archive-path-wrapper">
           <code class="ocr-archive-path" title="${escapeHtml(receipt.file_storage_url || '')}">${truncateArchiveUrl(receipt.file_storage_url || '')}</code>
           <button type="button" class="ctox-pane-icon" onclick="window.fibuCopyArchivePath('${escapeHtml(receipt.file_storage_url || '')}')" aria-label="Archivpfad kopieren" title="Archivpfad kopieren">📋</button>
@@ -1532,6 +1694,52 @@ function renderOcrInvoicePreview(receipt) {
       </div>
     </div>
   `;
+  renderReceiptFile(container.querySelector('[data-receipt-file]'), receipt);
+}
+
+// Datei des Belegs aus api.files: PDF und Bild als Vorschau, sonst Name + Öffnen (file-viewer).
+const FILE_REF_RE = /^[0-9a-f]{64}$/;
+function revokeReceiptFileUrl() {
+  if (state.receiptFileUrl) URL.revokeObjectURL(state.receiptFileUrl);
+  state.receiptFileUrl = null;
+}
+function renderReceiptFile(host, receipt) {
+  revokeReceiptFileUrl();
+  if (!host) return;
+  const ref = String(receipt.file_storage_url || '');
+  if (!FILE_REF_RE.test(ref) || !state.api?.files) { host.remove(); return; }
+  const token = (state.receiptFileToken = (state.receiptFileToken || 0) + 1);
+  const name = receipt.filename || receipt.id;
+  const mime = String(receipt.mime_type || '');
+  const openButton = `<button type="button" class="ctox-button ctox-button--sm" data-receipt-file-open>Öffnen</button>`;
+  host.innerHTML = `<header><h3>${escapeHtml(name)}</h3>${openButton}</header>`;
+  host.querySelector('[data-receipt-file-open]')?.addEventListener('click', () => {
+    state.api.shell?.navigate?.('file-viewer', { ref, file_id: receipt.file_id || '', name, mime, size: receipt.file_size });
+  });
+  if (!/^application\/pdf$|^image\//.test(mime)) return;
+  Promise.resolve().then(() => state.api.files.get(ref)).then((blob) => {
+    if (token !== state.receiptFileToken || !host.isConnected || !blob) return;
+    state.api.status.clear('buchhaltung.receipt.file_unavailable');
+    const url = URL.createObjectURL(blob);
+    state.receiptFileUrl = url;
+    const body = document.createElement('div');
+    body.className = 'fibu-receipt-file-view';
+    if (mime.startsWith('image/')) {
+      const img = document.createElement('img');
+      img.src = url;
+      img.alt = name;
+      body.append(img);
+    } else {
+      const frame = document.createElement('iframe');
+      frame.src = url;
+      frame.title = name;
+      body.append(frame);
+    }
+    host.append(body);
+  }, (error) => {
+    if (token !== state.receiptFileToken) return;
+    fibuNotice('receipt.file_unavailable', `${name}: Datei nicht geladen (${error?.code || error?.message || error})`, 'warn');
+  });
 }
 
 // =========================================================================
@@ -2162,20 +2370,7 @@ function openReceiptDrawer(receipt) {
 
   let html = `
     <div id="receipt-drawer-advanced-container">
-      <div class="fibu-form-row">
-        <div class="fibu-form-group">
-          <label class="ctox-field-label">Lieferant</label>
-          <input type="text" class="ctox-input" value="${escapeHtml(receipt.supplier_name || '')}" readonly />
-        </div>
-        <div class="fibu-form-group">
-          <label class="ctox-field-label">Rechnungsnummer</label>
-          <input type="text" class="ctox-input" value="${escapeHtml(receipt.invoice_number || '')}" readonly />
-        </div>
-        <div class="fibu-form-group">
-          <label class="ctox-field-label">Belegdatum</label>
-          <input type="text" class="ctox-input" value="${receipt.invoice_date || ''}" readonly />
-        </div>
-      </div>
+      ${receiptFormMarkup(receipt, isPosted)}
 
       <div style="margin-top:15px;">
         <div class="fibu-form-group">
@@ -2221,6 +2416,7 @@ function openReceiptDrawer(receipt) {
     </div>
   `;
   state.els.drawerContent.innerHTML = html;
+  bindReceiptForm(state.els.drawerContent.querySelector('[data-receipt-form]'), receipt);
 
   // Initial draw
   updateReceiptDrawerOptions(receipt.id);
@@ -2545,13 +2741,34 @@ async function handleBelegeUpload(e) {
   if (!db) return;
 
   // Nur echte Angaben der Datei (Strang BUCH-2): keine erkannten Lieferanten, Nummern, Daten oder Beträge – es gibt
-  // keine Belegerkennung. Lieferant, Rechnungsnummer, Datum und Beträge bleiben leer, bis sie jemand erfasst. Die
-  // Datei selbst legt die App (noch) nicht ab: file_storage_url ist Pflicht im Schema und bleibt deshalb leer.
+  // keine Belegerkennung. Die Datei geht über api.files (BUCH-3, Muster cv-print-builder/app-store); file_storage_url
+  // trägt die Datei-Referenz (sha256), file_id das files-Dokument. Ohne gespeicherte Datei kein Beleg.
   for (const file of files) {
+    const id = 'rcpt-' + Math.random().toString(36).substring(2, 9);
+    const fileId = `fibu_receipt_file_${id}`;
+    const mime = file.type || 'application/octet-stream';
+    let ref = '';
+    try {
+      const upload = state.api.files.put(file, { id: fileId, name: file.name, mime });
+      await upload.local;
+      ref = String(await upload.ref || '');
+      upload.result?.then?.((result) => {
+        if (result?.status === 'rejected') fibuNotice(`receipt.upload_rejected.${id}`, `${file.name}: Datei vom Core abgelehnt (${result.reason || 'rejected'})`, 'error');
+      }, () => {});
+    } catch (error) {
+      fibuNotice('receipt.upload_failed', `${file.name}: Datei nicht gespeichert (${error?.code || error?.message || error})`, 'error');
+      continue;
+    }
+    if (!ref) {
+      fibuNotice('receipt.upload_failed', `${file.name}: Datei nicht gespeichert (keine Referenz)`, 'error');
+      continue;
+    }
+    state.api.status.clear('buchhaltung.receipt.upload_failed');
     const now = Date.now();
     await db.accounting_receipts.add({
-      id: 'rcpt-' + Math.random().toString(36).substring(2, 9),
-      file_storage_url: '',
+      id,
+      file_storage_url: ref,
+      file_id: fileId,
       filename: file.name,
       file_size: Number(file.size) || 0,
       mime_type: file.type || '',
@@ -2671,8 +2888,11 @@ function compileReceiptPreviewLines(receipt, paymentMethod, isBewirtung, isGesch
 }
 
 window.updateReceiptDrawerOptions = (receiptId) => {
-  const receipt = state.receipts.find(r => r.id === receiptId);
-  if (!receipt) return;
+  const stored = state.receipts.find(r => r.id === receiptId);
+  if (!stored) return;
+  // Vorschau aus dem Formular (auch ungespeicherte Eingaben), sonst aus dem gespeicherten Beleg.
+  const form = receiptFormFor(receiptId);
+  const receipt = form ? { ...stored, ...readReceiptForm(form) } : stored;
 
   const paymentMethod = document.getElementById('rcpt-payment-method').value;
   const isBewirtung = document.getElementById('rcpt-bewirtung').checked;
@@ -2720,11 +2940,15 @@ window.postReceiptWithAdvancedOptions = async (receiptId) => {
   const db = fibuDb();
   if (!db) return;
 
-  const receipt = state.receipts.find(r => r.id === receiptId);
+  // Offene Eingaben zuerst speichern; gebucht wird der gespeicherte Stand (nicht die evtl. veraltete Liste).
+  const form = receiptFormFor(receiptId);
+  if (form && (await saveReceiptForm(form)) === false) return;
+  const receipt = db.accounting_receipts.byId(receiptId) || state.receipts.find(r => r.id === receiptId);
   if (!receipt) return;
+  if (receipt.status === 'posted') return;
 
   if (!receiptIsComplete(receipt)) {
-    fibuNotice('receipt.incomplete', 'Beleg unvollständig: Datum, Konto oder Beträge fehlen.', 'warn');
+    fibuNotice('receipt.incomplete', 'Beleg unvollständig oder Brutto ≠ Netto + Steuer.', 'warn');
     return;
   }
   state.api?.status.clear('buchhaltung.receipt.incomplete');
@@ -2942,11 +3166,15 @@ window.postReceiptDirectly = async (receiptId) => {
   const db = fibuDb();
   if (!db) return;
 
-  const receipt = state.receipts.find(r => r.id === receiptId);
+  // Offene Eingaben zuerst speichern; gebucht wird der gespeicherte Stand (nicht die evtl. veraltete Liste).
+  const form = receiptFormFor(receiptId);
+  if (form && (await saveReceiptForm(form)) === false) return;
+  const receipt = db.accounting_receipts.byId(receiptId) || state.receipts.find(r => r.id === receiptId);
   if (!receipt) return;
+  if (receipt.status === 'posted') return;
 
   if (!receiptIsComplete(receipt)) {
-    fibuNotice('receipt.incomplete', 'Beleg unvollständig: Datum, Konto oder Beträge fehlen.', 'warn');
+    fibuNotice('receipt.incomplete', 'Beleg unvollständig oder Brutto ≠ Netto + Steuer.', 'warn');
     return;
   }
   state.api?.status.clear('buchhaltung.receipt.incomplete');

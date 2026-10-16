@@ -767,6 +767,75 @@
   opacity: 0.35;
 }
 
+/* Belegkontierung (BUCH-3): Felder untereinander, Bezeichnung links, dicht (Vorbild DATEV/lexoffice). */
+[data-app="buchhaltung"] .fibu-receipt-form {
+  display: grid;
+  gap: 6px;
+}
+
+[data-app="buchhaltung"] .fibu-receipt-row {
+  display: grid;
+  grid-template-columns: minmax(96px, 32%) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+}
+
+[data-app="buchhaltung"] .fibu-receipt-row .ctox-field-label {
+  margin: 0;
+}
+
+[data-app="buchhaltung"] .fibu-receipt-row .ctox-input,
+[data-app="buchhaltung"] .fibu-receipt-row .ctox-select {
+  width: 100%;
+  min-width: 0;
+}
+
+@container business-app-window (max-width: 768px) {
+  [data-app="buchhaltung"] .fibu-receipt-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+}
+
+[data-app="buchhaltung"] .fibu-receipt-row .is-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Belegdatei in der Evidenz: PDF/Bild als Vorschau. */
+[data-app="buchhaltung"] .fibu-receipt-file {
+  margin-top: 12px;
+}
+
+[data-app="buchhaltung"] .fibu-receipt-file > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+[data-app="buchhaltung"] .fibu-receipt-file > header h3 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-app="buchhaltung"] .fibu-receipt-file-view img,
+[data-app="buchhaltung"] .fibu-receipt-file-view iframe {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--hairline, var(--line));
+  border-radius: var(--control-radius);
+  background: var(--surface);
+}
+
+[data-app="buchhaltung"] .fibu-receipt-file-view iframe {
+  height: 420px;
+}
+
 /* Beleg-Metadaten: Kit-Card (.ctox-card); lokal nur die Mono-Pfadbox. */
 [data-app="buchhaltung"] .ocr-raw-meta-badge {
   margin-top: 20px;

@@ -189,3 +189,96 @@ Rechnungsnummer und Belegdatum; Buchungssatz ohne Konto und Betrag.
    und die Datei-Referenz in `file_storage_url`. Danach ließe sich die Datei in der Evidenz zeigen.
 3. Bestehende Belege, die die alte Attrappe schon in echte Bücher geschrieben hat (Hetzner/Telekom mit 100/19/119 €),
    bleiben in den Daten der Kunden. Bereinigen, z. B. als Liste zur Prüfung?
+
+---
+
+# BUCH-3 – Belegkontierung bearbeitbar, Datei über api.files (16.10.2026)
+
+## Abweichung vom Auftrag: `expected_revision` gibt es nicht
+Die App-API 4.0 (eingefrorener Stub, Pin 68b83a3, `index.d.ts:169`) kennt nur
+`patch(collection, id, patch): WriteHandle`, ohne Revisionsparameter. Die Dokumente tragen keine Revision
+(`LiveDoc.get()` liefert nur das Dokument). Laut Stub-README Nr. 10 prüft der Core nur bei `delete` auf eine
+veraltete Basis; `put`/`patch` gewinnen immer. Weder buchhaltung noch eine andere App nutzt `expected_revision` (grep
+über `modules/*`). Erfunden habe ich nichts; umgesetzt ist die nächstliegende ehrliche Form **auf App-Seite**:
+- Revision = `updated_at_ms` des Belegs (Pflichtfeld im Schema). Gemerkt beim Öffnen der Kontierung
+  (`data-base-updated`), vor jedem Speichern mit dem lokalen Stand verglichen. Weicht sie ab: kein `api.patch`, Zone
+  `buchhaltung.receipt.conflict` („Beleg wurde inzwischen geändert. Eingabe nicht gespeichert, Beleg neu öffnen.“).
+- Grenze: Das ist kein atomarer Vergleich im Core. Eine fremde Änderung, die erst *nach* dem lokalen Vergleich und
+  vor der Annahme im Core eintrifft, mischt der Core feldweise. Echtes `expected_revision` braucht eine
+  Kern-Erweiterung (App-API > 4.0) und ist hier nicht möglich (`src/core/**`, `v4/**` gesperrt).
+
+## 1. Belegkontierung
+- Ersetzt die drei `readonly`-Felder durch ein Formular (`receiptFormMarkup`, Klasse `fibu-receipt-form`): Felder
+  untereinander, Bezeichnung links, dicht, ohne Erklärtext. Ab Containerbreite ≤ 768 px steht die Bezeichnung über dem
+  Feld. Die Haltepunkte 1024/768 schreibt der Vertrag vor; 520 px war abgelehnt.
+  Felder: Lieferant, Rechnungsnummer, Belegdatum (`type=date`), Konto (alle Buchungskonten des aktiven SKR aus
+  `state.accounts`, keine Gruppen), Netto, Steuersatz (19/7/0 %, Vorgabe „—“, nichts vorausgewählt), Steuer, Brutto.
+- Speichern: je Änderung (`change`) per `api.patch` nur der geänderten Felder plus `updated_at_ms`. Beträge in
+  Cent, leere Felder per `null` entfernt (Merge-Patch), ungültiger Betrag → Zone, nichts gespeichert. Neues Feld
+  `tax_rate` (Zahl; `additionalProperties: true`).
+- Vorschlag: Steuer = Netto × Satz, Brutto = Netto + Steuer, solange der Nutzer das Feld nicht selbst geändert hat
+  (`data-manual`). Ein gespeicherter abweichender Wert gilt beim Öffnen als Nutzereintrag und bleibt stehen.
+- Live-Daten: Ein Formular ohne offene Eingabe übernimmt neue Werte samt Revision (`syncOpenReceiptForm`). Ein
+  Formular mit offener Eingabe wird nie überschrieben, der Konflikt kommt dann beim Speichern.
+- Buchsperre `receiptIsComplete`: zusätzlich **Netto + Steuer = Brutto**, sonst wäre die Buchung unausgeglichen.
+  Beide Buchwege (Drawer, Listenknopf) speichern vorher offene Eingaben und buchen den gespeicherten Stand
+  (`api.get`), nicht die evtl. veraltete Liste.
+- Buchungssatz-Vorschau rechnet mit den Formularwerten (auch ungespeichert).
+
+## 2. Datei ablegen
+- Upload: `api.files.put(file, {id: 'fibu_receipt_file_<beleg>', name, mime})` wie cv-print-builder. Erst nach
+  `upload.local` und `upload.ref` wird der Beleg angelegt: `file_storage_url = <sha256-Ref>`, `file_id = <files-ID>`.
+  Scheitert `put`, entsteht kein Beleg; Zone `buchhaltung.receipt.upload_failed`. Lehnt der Core später ab: Zone
+  `buchhaltung.receipt.upload_rejected.<beleg>` (der Beleg existiert dann schon).
+- Evidenz: Karte mit Dateiname und „Öffnen“ (→ `api.shell.navigate('file-viewer', {ref, file_id, name, mime, size})`,
+  Muster explorer). PDF als `iframe`, Bild als `img` aus `api.files.get(ref)` (Object-URL, beim nächsten Rendern und
+  beim Unmount freigegeben). Datei lokal nicht ladbar → Zone `buchhaltung.receipt.file_unavailable`.
+  Feldname „GoBD-Archivpfad“ → „Datei-Referenz“.
+
+## 3. Tests
+Neu `tests/belegkontierung.test.mjs` (7 Tests, echte Maus/Tastatur, Stub-Kern in Chromium):
+1. Upload PNG per Maus → `files`-Dokument mit derselben Ref, gespeicherte Bytes = hochgeladene Bytes,
+   `file_storage_url` = Ref; Evidenz zeigt das Bild (`blob:`-URL, natürliche Breite 1); „Öffnen“ → file-viewer mit Ref.
+2. `files.put` scheitert (Testhebel im API-Wrapper) → kein Beleg, Zone `receipt.upload_failed`.
+3. Ausfüllen per Maus und Tastatur: Steuer 47,50 und Brutto 297,50 als Vorschlag, nach Tab gespeichert (Cent-Werte,
+   Konto-ID, Datum, `tax_rate` 19).
+4. Brutto 300,00 von Hand, danach Netto 260,00: Steuer 49,40 neu, Brutto bleibt 300,00; Buchen → keine Buchung,
+   Zone `receipt.incomplete`; Brutto auf 309,40.
+5. Reload (unmount + mount): alle 8 Felder mit den gespeicherten Werten; Screenshots 1280/420; kein seitliches
+   Scrollen bei 420.
+6. Buchen per Maus → genau eine neue Buchung zum Beleg, Datum 2026-10-14, Soll = Haben = 309,40, Zeile 260,00 auf das
+   gewählte Konto, Vorsteuer 49,40, Beleg `posted`.
+7. Konflikt: Eingabe offen, fremde Änderung kommt über den Core (`sim.push`, neue `updated_at_ms`) → Feld behält die
+   Eingabe; Tab → nichts gespeichert (Lieferant bleibt „Fremd GmbH“), Zone `receipt.conflict`, keine Seitenfehler.
+
+Gegenproben:
+- Alter Code (Stand nach BUCH-2, vorher nach `scratchpad/buch3-old/` kopiert, `BUCH_OLD_DIR`): 0/7 grün.
+- Mutation: Revisionsvergleich in `saveReceiptForm` abgeschaltet → genau Test 7 rot (6/7); danach zurückgesetzt.
+- `tests/beleg-upload.test.mjs` angepasst: statt leerem Archivpfad wird jetzt die sha256-Ref und `file_id` verlangt.
+  Die Kontierungsfelder werden über `[data-receipt-form] [name=…]` gelesen.
+
+Alle App-Tests: **39/39** (vorher 32; +7).
+
+Screenshots (selbst angesehen):
+- `tests/shots/buch3-kontierung-1280.png`: ausgefüllte Kontierung untereinander; Evidenz mit Feldern, Bildvorschau,
+  „Öffnen“ und Datei-Referenz; Listenzeile 260,00 € / 19 % / 309,40 €.
+- `tests/shots/buch3-kontierung-420.png`: Bezeichnungen über den Feldern, kein seitliches Scrollen.
+
+Das Datum erscheint im Test als 10/14/2026, weil Headless-Chromium mit Gebietsschema en-US läuft. Bei de-DE zeigt
+der Browser 14.10.2026; gespeichert wird ISO `2026-10-14`.
+
+## Abnahme
+- `node v4/debt/ratchet.mjs`: OK. Zwischendurch rot durch die Vokabel „nicht verfügbar“ in einer neuen Meldung;
+  ersetzt durch „nicht geladen“.
+- `node scripts/assert-shell-v2-contract.mjs`: 38/38. Zwischendurch rot durch einen 520-px-Haltepunkt; jetzt 768 px.
+- `node scripts/assert-design-system.mjs`: OK
+- Textdiät buchhaltung: 0. Eine zu lange Meldung gekürzt auf „Beleg unvollständig oder Brutto ≠ Netto + Steuer.“
+
+## Offene Fragen (BUCH-3)
+1. **Echte Revisionsprüfung im Core** (`patch` mit `expected_revision` → `rejected{conflict}`) gibt es in App-API 4.0
+   nicht. Die App-seitige Prüfung über `updated_at_ms` deckt den Normalfall (fremde Änderung schon lokal angekommen)
+   ab, nicht das enge Zeitfenster dazwischen. Braucht eine Kern-Erweiterung.
+2. Bei 420 px liegen Kontierung und Evidenz im gestapelten Layout übereinander, und die Kontierung scrollt in ihrem
+   Bereich. Das gestapelte Layout gab es schon vorher; nicht Teil dieses Auftrags.
+3. Lehnt der Core den Datei-Upload erst nach dem lokalen Commit ab, existiert der Beleg schon (nur Zonenmeldung).
+   Soll der Beleg dann entfernt oder markiert werden?

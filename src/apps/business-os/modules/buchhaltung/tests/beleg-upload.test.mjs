@@ -113,7 +113,9 @@ test('Upload per Maus: genau ein Beleg mit echten Metadaten, ohne erfundene Feld
   assert.equal(r.mime_type, 'application/pdf');
   assert.ok(r.uploaded_at_ms >= t0 && r.uploaded_at_ms <= Date.now(), `uploaded_at_ms ${r.uploaded_at_ms}`);
   assert.equal(r.status, 'draft');
-  assert.equal(r.file_storage_url, '', 'Datei wird nicht abgelegt → kein vorgetäuschter Archivpfad');
+  // BUCH-3: die Datei liegt über api.files im Speicher, file_storage_url ist ihre sha256-Referenz.
+  assert.match(r.file_storage_url, /^[0-9a-f]{64}$/, 'Datei-Referenz statt vorgetäuschtem Archivpfad');
+  assert.ok(r.file_id, 'files-Dokument verknüpft');
   assertHonest(r);
 });
 
@@ -136,7 +138,7 @@ test('Anzeige: Liste, Evidenz und Belegkontierung zeigen nur echte Angaben (leer
       text: win.innerText,
       rowText: win.querySelector('[data-receipt-click-id] ~ tr, [data-receipt-click-id]') ? [...win.querySelectorAll('[data-receipt-click-id]')].find((tr) => tr.innerText.includes('Rechnung_Maerz.pdf'))?.innerText : '',
       evidence: win.querySelector('[data-ocr-preview-container]')?.innerText || '',
-      drawerInputs: [...(drawer?.querySelectorAll('input[type="text"]') || [])].slice(0, 3).map((i) => i.value),
+      drawerInputs: ['supplier_name', 'invoice_number', 'invoice_date'].map((n) => drawer?.querySelector(`[data-receipt-form] [name="${n}"]`)?.value ?? 'fehlt'),
     };
   });
   assert.doesNotMatch(ui.text, FAKE_TEXT);
