@@ -6,7 +6,7 @@ p=argparse.ArgumentParser();p.add_argument('--deadline',type=float,required=True
 root=Path.cwd();out=Path(os.environ['CARGO_TARGET_DIR'])/('p6-real-browser-'+time.strftime('%Y%m%dT%H%M%SZ',time.gmtime()));out.mkdir()
 env=dict(os.environ,CARGO_BUILD_JOBS='2',RUST_TEST_THREADS='2',CMAKE_BUILD_PARALLEL_LEVEL='2',CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS='1')
 r={'owner':'01a14204-d613','out':str(out),'head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'steps':[],'mutations':[]};active=None
-rust=['src/core/store/app_grant.rs','src/core/store/app_grant_route.rs','src/core/store/subscription.rs','src/core/service/store_browser_scope_grant.rs','src/core/service/store_browser_ingress.rs','src/core/service/store_browser_write.rs','src/core/service/store_browser_grant_stream.rs','src/core/rxdb/src/plugins/replication_webrtc/v4_session.rs','tests/sync-v4/p6-e55/contract.rs']
+rust=['src/core/store/app_grant_reader.rs','src/core/store/app_grant.rs','src/core/store/app_grant_route.rs','src/core/store/subscription.rs','src/core/service/store_browser_scope_grant.rs','src/core/service/store_browser_ingress.rs','src/core/service/store_browser_write.rs','src/core/service/store_browser_grant_stream.rs','src/core/rxdb/src/plugins/replication_webrtc/v4_session.rs','tests/sync-v4/p6-e55/contract.rs']
 def save(): (out/'result.json').write_text(json.dumps(r,indent=2))
 def stop(signum,frame):
  if active:

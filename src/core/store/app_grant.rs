@@ -12,6 +12,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+#[path = "app_grant_reader.rs"]
+pub mod reader;
+
 pub const DOMAIN: &[u8] = b"ctox:v4:scope\0";
 pub const MAX_TOKEN_BYTES: usize = 16 * 1024;
 const MAX_APPS: usize = 256;

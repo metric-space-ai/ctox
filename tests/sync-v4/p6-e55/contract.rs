@@ -54,11 +54,13 @@ impl InstanceSigner for Key {
         if !self.active.load(Ordering::Acquire) {
             return Err("retired".into());
         }
-        assert!(bytes.starts_with(DOMAIN));
-        let claims: AppGrantClaims = serde_json::from_slice(&bytes[DOMAIN.len()..]).unwrap();
-        assert_eq!(signing_bytes(&claims).unwrap(), bytes);
-        let packet = ctox_sync::authority::auth::CanonicalInstancePacket::from_scope_bytes(bytes)
-            .map_err(|_| "canonical E22 encoder denied")?;
+        let packet = if bytes.starts_with(DOMAIN) {
+            let claims: AppGrantClaims = serde_json::from_slice(&bytes[DOMAIN.len()..]).unwrap();
+            assert_eq!(signing_bytes(&claims).unwrap(), bytes);
+            ctox_sync::authority::auth::CanonicalInstancePacket::from_scope_bytes(bytes)
+        } else {
+            ctox_sync::authority::auth::CanonicalInstancePacket::from_stream_bytes(bytes)
+        }.map_err(|_| "canonical E22 encoder denied")?;
         Ok(self.identity.sign_instance_packet(&packet))
     }
 }
@@ -495,5 +497,30 @@ async fn p6_browser_binding_uses_app_hash_and_retracts_retained_tokens() {
     assert!(f.session.bound_token(Some(&hash),"alpha",1,None).is_err(),"revoked subscription survived");
     assert!(f.session.token_current(&token,1001).is_err(),"queued publication survived revoke");
     assert!(f.read(&token,"alpha",1001).await.is_err());
+    f.close().await;
+}
+
+#[tokio::test]
+async fn p6_shell_boot_preference_cursor_uses_real_p8_and_e55_reader() {
+    use ctox_store::change_log::subscription::{Subscription,SubscriptionKey};
+    let f=Fixture::new().await;
+    f.store.writer().submit(WriteJob::new(Default::default(),|tx| {
+        for (app,user) in [("shell","alice"),("shell","bob"),("b","alice")] {
+            let doc=json!({"id":format!("{app}/{user}/layout"),"app_id":app,"user_id":user,"key":"layout","value":7});
+            tx.execute("INSERT INTO c_app_user_preferences(id,rev,schema_ver,data,deleted) VALUES(?1,'1',1,?2,0)",rusqlite::params![doc["id"].as_str().unwrap(),doc.to_string()])?;
+        }
+        Ok(())
+    })).unwrap().await.unwrap();
+    let token=f.session.issue("shell",1000).await.unwrap();
+    let hash=claims(&token)["scope_hash"].as_str().unwrap().to_owned();
+    let ctx=ctox_store::preferences::Context::authenticated("shell","alice",claims(&token)["rights_ver"].as_str().unwrap().parse().unwrap()).unwrap();
+    assert_ne!(hash,ctx.scope_hash(),"fixture must exercise aggregate E55 scope");
+    let key=SubscriptionKey{participant:"alice".into(),collection:"app_user_preferences".into(),scope_hash:hash,gen:1};
+    let reader=Arc::new(reader::AppGrantReader::new(f.session.clone(),key.clone(),||1001).unwrap());
+    let mut cursor=Subscription::new(f.store.readers(),&f.store.writer(),key,None).unwrap();
+    let page=cursor.next_page(100,reader,&*f.key,||1_001_000).await.expect("shell boot preferences cursor rejected aggregate grant");
+    assert_eq!(page.docs.len(),1,"foreign preference row reached real P8 cursor");
+    assert_eq!(page.docs[0].id,"shell/alice/layout");
+    assert!(!page.sig.is_empty(),"P8 cursor must use held E22 signer");
     f.close().await;
 }

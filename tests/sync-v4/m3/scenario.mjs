@@ -10,7 +10,13 @@ export default {
    const apps=kernel.shellApi().apps.get();
    if(!Array.isArray(apps)||!apps.length)throw Error('No native collection rows reached browser');
    const api=kernel.appApi('shell',globalThis.__p6Boot.loader.shellVersion);
-   const grant=await transport.grantApp('shell');
+   const {decodeAppGrant}=await import('/kernel/app-grants.mjs');
+   const owner=apps.find(app=>app.id!=='shell' && app.id!=='ctox-platform');
+   if(!owner)throw Error('No owner app available for E55 control grant');
+   const held=()=>transport.options.authSession.tokens().find(token=>decodeAppGrant(token)?.claims.app_id===owner.id);
+   if(!held())await transport.grantApp(owner.id);
+   const grant=held();
+   if(!grant)throw Error('Owner app grant missing after native control response');
    const write=api.prefs.set('p6.real-path',value);await write.local;
    const receipt=await write.result;
    if(receipt.status!=='accepted')throw Error('Browser write rejected: '+receipt.reason);

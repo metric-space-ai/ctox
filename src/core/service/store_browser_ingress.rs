@@ -263,62 +263,6 @@ struct Source {
     inputs: Weak<StoreInputs>,
     admission: Arc<BrowserAdmission>,
 }
-struct Reader {
-    preferences: Option<ctox_store::preferences::Context>,
-    admission: Arc<BrowserAdmission>,
-    peer: Arc<BrowserPeer>,
-}
-impl Reader {
-    fn scope(
-        &self,
-        tx: &rusqlite::Transaction<'_>,
-        key: &SubscriptionKey,
-    ) -> rusqlite::Result<sync_rights::scope::ResolvedScope> {
-        self.admission.ensure_current().map_err(|_| sql_invalid("retired session"))?;
-        if self.peer.expires <= Instant::now() || key.participant != self.peer.user {
-            return Err(sql_invalid("subscription binding"));
-        }
-        let owner=scope_grant_route::bound_owner(&self.admission,&self.peer).map_err(|_|sql_invalid("grant owner unavailable"))?;
-        let session=owner.session();
-        let token=session.bound_token(Some(&key.scope_hash),&key.collection,key.gen,None).map_err(sql_invalid)?;
-        session.scope_in_transaction(tx,&token,&key.collection,now()/1000).map_err(sql_invalid)
-    }
-}
-impl ReadAuthority for Reader {
-    fn preference_context(&self,participant:&str)->Option<ctox_store::preferences::Context> {
-        (participant==self.peer.user).then(||self.preferences.clone()).flatten()
-    }
-    fn authorize_preference_scope(&self,tx:&rusqlite::Transaction<'_>,key:&SubscriptionKey,_:&ctox_store::preferences::Context)->rusqlite::Result<()> {
-        self.scope(tx,key).map(|_|())
-    }
-    fn authorize(
-        &self,
-        tx: &rusqlite::Transaction<'_>,
-        key: &SubscriptionKey,
-    ) -> rusqlite::Result<()> {
-        self.scope(tx, key).map(|_| ())
-    }
-    fn project(
-        &self,
-        tx: &rusqlite::Transaction<'_>,
-        key: &SubscriptionKey,
-        doc: &change_log::ChangeDocument,
-    ) -> rusqlite::Result<Option<Value>> {
-        let scope = self.scope(tx, key)?;
-        match sync_rights::scope::scope_filter::project(
-            scope.projection(&key.collection),
-            &key.collection,
-            &doc.id,
-            doc.seq,
-            doc.body.as_ref(),
-        )
-        .map_err(sql_invalid)?
-        {
-            sync_rights::scope::scope_filter::ProjectedChange::Put { doc, .. } => Ok(Some(doc)),
-            sync_rights::scope::scope_filter::ProjectedChange::Unproject { .. } => Ok(None),
-        }
-    }
-}
 struct Publication {
     grant: Option<(Arc<sync_rights::app_grant::AppGrantSession>, String)>,
     revocation: bool,
@@ -389,17 +333,13 @@ impl V4StreamSource for Source {
             let sub: Subscribe = serde_json::from_value(request).map_err(|_| invalid())?;
             let grant_session=scope_grant_route::bound_owner(&self.admission,&binding)?.session();
             grant_session.bound_token(Some(&sub.scope_hash),&sub.collection,sub.gen,None).map_err(|_|invalid())?;
-            let claims=grant_session.issued_claims().map_err(|_|invalid())?.into_iter()
-                .find(|c|c.scope_hash==sub.scope_hash).ok_or_else(invalid)?;
-            let preferences=if sub.collection==ctox_store::preferences::COLLECTION {
-                Some(ctox_store::preferences::Context::authenticated(&claims.app_id,&binding.user,claims.rights_ver.parse().map_err(|_|invalid())?).map_err(|_|invalid())?)
-            } else {None};
             let key = SubscriptionKey {
                 participant: binding.user.clone(),
                 collection: sub.collection,
                 scope_hash: sub.scope_hash,
                 gen: sub.gen,
             };
+            let authority: Arc<dyn ReadAuthority> = Arc::new(sync_rights::app_grant::reader::AppGrantReader::new(grant_session,key.clone(),||now()/1000).map_err(|_|invalid())?);
             let cursor = Subscription::new(
                 inputs.sync.readers.clone(),
                 &inputs.sync.writer,
@@ -407,11 +347,6 @@ impl V4StreamSource for Source {
                 sub.checkpoint,
             )
             .map_err(|_| invalid())?;
-            let authority: Arc<dyn ReadAuthority> = Arc::new(Reader {
-                preferences,
-                admission: self.admission.clone(),
-                peer: binding,
-            });
             let signer = inputs.instance_signer().map_err(|_| invalid())?;
             Ok(stream::try_unfold(
                 (cursor, authority, signer),
