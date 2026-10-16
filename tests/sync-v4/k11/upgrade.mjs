@@ -89,7 +89,15 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
   calls.push({args,executable,executableSha256,startedAtMs:at,durationMs:Date.now()-at,code});if(code!==0)throw Error('Real installer CLI failed: '+args.join(' ')+' exit '+code);
  };
  const record={before:{revision:before.revision,binarySha256:before.binarySha256},after:{revision:after.revision,binarySha256:after.binarySha256},stateRoot,archive,archiveSha256,canonicalReleasePackage:!!after.package,calls,serviceCalls,requests,resumeRolledBack,installerExecuted:false,migrationExecuted:false};
+ const readback=phase=>{
+  const file=join(output,'data-'+phase+'.json');
+  const args=[new URL('./m7-data-readback.py',import.meta.url).pathname,'--root',root,'--output',file];
+  if(phase!=='before')args.push('--expect',join(output,'data-before.json'));
+  execFileSync('python3',args,{env:{...env,BUILD_LANE_BIN:process.env.BUILD_LANE_BIN},encoding:'utf8',timeout:30000});
+  return {evidence:file,...JSON.parse(fs.readFileSync(file))};
+ };
  try{
+  record.dataBefore=readback('before');
   await cli(['update','status']);
   await cli(['update','channel','set-github','--repo','e2e/fixture','--api-base',base]);
   await cli(['update','apply','--version',release]);
@@ -106,10 +114,12 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
    const rolled=JSON.parse(fs.readFileSync(join(stateRoot,'update_state.json'))),oldCurrent=fs.realpathSync(join(installRoot,'current'));
    if(rolled.phase!=='rolled_back'||oldCurrent!==initial||hash(fs.readFileSync(join(oldCurrent,'bin/ctox')))!==before.binarySha256)throw Error('Supported rollback did not activate the verified old binary');
    record.rollback={startedAtMs,durationMs:Date.now()-startedAtMs,currentRelease:oldCurrent,binarySha256:before.binarySha256,phase:rolled.phase,stateBackupPath:snapshot,stateRestoreSemantics:'Official update rollback restores the recorded pre-update state; not binary-only'};
+   quiesce();record.rollback.dataReadback=readback('rollback');
    const forwardAt=Date.now();quiesce();await cli(['update','apply','--version',release,'--force']);
    const finalCurrent=fs.realpathSync(join(installRoot,'current')),final=JSON.parse(fs.readFileSync(join(stateRoot,'update_state.json')));
    if(final.phase!=='completed'||finalCurrent!==join(releases,release)||hash(fs.readFileSync(join(finalCurrent,'bin/ctox')))!==after.binarySha256)throw Error('Forward re-install did not restore the verified candidate');
    record.forward={startedAtMs:forwardAt,durationMs:Date.now()-forwardAt,binarySha256:after.binarySha256,phase:final.phase};
+   quiesce();record.forward.dataReadback=readback('forward');
    record.roundtripExecuted=true;record.finalUpdateState=final;
   }
   return record;

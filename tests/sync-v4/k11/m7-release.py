@@ -53,6 +53,10 @@ def verify_package(report):
 
 
 def main():
+    def interrupted(signum, _frame):
+        raise RuntimeError('Owned release producer interrupted: '+str(signum))
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGINT, interrupted)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--reuse-build', type=Path)

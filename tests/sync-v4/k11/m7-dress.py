@@ -27,6 +27,10 @@ def sha(path):
 
 
 def main():
+    def interrupted(signum, _frame):
+        raise RuntimeError('Owned dress rehearsal interrupted: '+str(signum))
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGINT, interrupted)
     parser = argparse.ArgumentParser(description=__doc__)
     for flag in ('release', 'before', 'profile', 'output'):
         parser.add_argument('--'+flag, type=Path, required=True)
@@ -184,9 +188,9 @@ def main():
             code = run('supported-update-rollback', ['node',HERE/'upgrade-controller.mjs',args.before,args.release,private,transition,'yes'],660)
             proof = transition/'installer.json'
             details = json.loads(proof.read_text()) if proof.exists() else {}
-            success = code == 0 and details.get('roundtripExecuted') and details.get('canonicalReleasePackage')
+            success = code == 0 and details.get('roundtripExecuted') and details.get('canonicalReleasePackage') and details.get('rollback',{}).get('dataReadback',{}).get('matchesBefore') and details.get('forward',{}).get('dataReadback',{}).get('matchesBefore')
             criterion('supported-update-rollback', 'pass' if success else 'fail', 'DevOps',
-                      evidence=str(proof), exit=code, dataReadback='not_run: separate frozen coverage required')
+                      evidence=str(proof), exit=code, dataReadback='full synthetic app row/schema match required; frozen WELSCH coverage remains separate')
         for name, owner, reason in [
             ('base-import-daemon-attachment','phase1 / Architecture','Library-only E21 witness is not a productive import attached to this installed daemon.'),
             ('cutover-coverage','phase1','No cutover-coverage.json custody supplied for frozen WELSCH data.'),
