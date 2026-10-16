@@ -214,10 +214,10 @@ export const SHELL_FOREIGN = {
 };
 
 // ROUTE (Kernentscheidung E39, Präzisierung §16.40): Befehle der Shell an fremde Apps. Der Chat der Shell
-// (v4/shell/chat → shared/business-chat.js, commandBus.dispatch) sendet business_os.chat.task, „CTOX fragen…“
+// (v4/shell/chat → shared/business-chat.js, commandBus.dispatch) sendet business_os.chat.task – E46: Plattformroute,
+// nativer Kern-Chatpfad, keine Deklaration –, „CTOX fragen…“
 // (v4/shell/app-host.js Menüpunkt ctox.ask → Eingabeblatt) den Standardbefehl ctox.chat.task. Empfänger ist ctox.
 export const SHELL_COMMANDS_OUT = [
-  { app: 'ctox', type: 'business_os.chat.task', sources: ['v4/shell/chat/index.js (commandBus.dispatch → api.command; shared/business-chat.js Standardtyp business_os.chat.task, CHAT4.md)'] },
   { app: 'ctox', type: 'ctox.chat.task', sources: ['v4/shell/app-host.js:500 (Menüpunkt ctox.ask „CTOX fragen…“ → Eingabeblatt → Standardbefehl ctox.chat.task)'] },
 ];
 

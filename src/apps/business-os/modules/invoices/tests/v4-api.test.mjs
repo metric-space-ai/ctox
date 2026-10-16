@@ -11,6 +11,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -57,11 +58,15 @@ before(async () => {
   page.on('response', (r) => { if (r.status() >= 400) console.error('[page] HTTP', r.status(), r.url()); });
   page.__errors = errors;
   await page.goto(base);
+  // Befehlsrouten der echten invoices-Version (v4/manifests/invoices.manifest.json, wie customers/E35): ohne aktive
+  // Version lehnt der Kern seit E26/E27 z. B. invoices.payment.allocate beim Schreiben mit unknown_command ab.
+  await page.evaluate((routes) => { window.__invoicesRoutes = routes; }, realManifestRoutes('invoices'));
   await page.evaluate(async () => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import('/modules/invoices/index.js');
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, userId: 'acc-1', actor: { id: 'acc-1', role: 'admin', permissions: ['apps.source.edit'] } });
     await kernel.ready;
+    await kernel.sim.publishAppVersion('invoices', '0.1.0', { title: 'Rechnungen', manifestExtra: window.__invoicesRoutes });
     const day = 86400000;
     const now = Date.now();
     await kernel.sim.push('customer_accounts', [{ id: 'cust_1', name: 'Acme GmbH', email: 'buchhaltung@acme.test', updated_at_ms: 1 }]);

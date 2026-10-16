@@ -59,12 +59,18 @@ before(async () => {
   page.on('response', (r) => { if (r.status() >= 400) console.error('[page] HTTP', r.status(), r.url()); });
   page.__errors = errors;
   await page.goto(base);
+  // Befehlsrouten der echten customers-Version (v4/manifests/customers.manifest.json): handlers und command_rights.
+  const manifest = JSON.parse(await readFile(new URL('../../../v4/manifests/customers.manifest.json', import.meta.url), 'utf8'));
+  await page.evaluate((routes) => { window.__customersRoutes = routes; }, { handlers: manifest.handlers ?? {}, command_rights: manifest.command_rights ?? {} });
   await page.evaluate(async (accounts) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import('/modules/customers/index.js');
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, actor: { role: 'admin', permissions: [] } });
     await kernel.ready;
     await kernel.sim.push('business_apps', [{ id: 'customers', title: 'Kunden' }, { id: 'documents', title: 'Dokumente' }]);
+    // Wie die anderen v4-Gate-Dateien (E35): aktive customers-Version mit ihren Befehlsrouten veröffentlichen, nach der
+    // business_apps-Zeile (sonst fehlt active_ver). Ohne Route lehnt der Kern z. B. customers.import.from_outbound ab.
+    await kernel.sim.publishAppVersion('customers', '1', { title: 'Kunden', manifestExtra: window.__customersRoutes });
     await kernel.sim.push('customer_accounts', accounts);
     await kernel.sim.push('customer_contacts', [
       { id: 'contact-a', account_id: 'acct-a', first_name: 'Ada', last_name: 'Lovelace', email: 'ada@acme.test', job_title: 'CTO', is_primary_contact: true, is_deleted: false, updated_at_ms: 3 },

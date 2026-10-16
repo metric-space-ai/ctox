@@ -1165,8 +1165,8 @@ test('ROUTE: Typ mit Handlern in mehreren Apps → commands_out_ambiguous (rot)'
   }
 });
 
-test('ROUTE: Shell trägt commands_out {ctox, business_os.chat.task} und {ctox, ctox.chat.task}; ctox nimmt sie von * an', () => {
-  const expected = [{ app: 'ctox', type: 'business_os.chat.task' }, { app: 'ctox', type: 'ctox.chat.task' }];
+test('ROUTE/E46: Shell trägt commands_out {ctox, ctox.chat.task}; business_os.chat.task ist Plattformroute ohne ctox-Handler', () => {
+  const expected = [{ app: 'ctox', type: 'ctox.chat.task' }];
   assert.deepEqual(SHELL_COMMANDS_OUT.map((c) => ({ app: c.app, type: c.type })), expected);
   const sh = first.manifests[SHELL_APP_ID];
   assert.deepEqual(sh.commands_out, expected);
@@ -1177,6 +1177,10 @@ test('ROUTE: Shell trägt commands_out {ctox, business_os.chat.task} und {ctox, 
     assert.ok(ctox.commands_in.some((x) => x.type === c.type && x.from === '*'), `ctox nimmt ${c.type} von * an`);
   }
   assert.ok(!first.drift.commands_unmatched.some((d) => d.from === SHELL_APP_ID));
+  // E46: der Chatbefehl geht nativ an den Kern-Chatpfad; toter ctox-Port-Handler und commands_in-Eintrag sind entfernt.
+  assert.ok(!('business_os.chat.task' in ctox.handlers), 'kein ctox-Handler business_os.chat.task');
+  assert.ok(!ctox.commands_in.some((x) => x.type === 'business_os.chat.task'), 'kein commands_in business_os.chat.task');
+  assert.ok(isPlatformRoute('business_os.chat.task', loadPlatformRoutes(DEFAULT_REPO)));
 });
 
 test('ROUTE heutiger Baum: mail → outbound beidseitig deklariert (FIX9a), abgeleitete commands_in nie *', () => {

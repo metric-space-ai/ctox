@@ -12,6 +12,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const APP = 'consent';
 const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
@@ -55,12 +56,16 @@ before(async () => {
   page.on('response', (r) => { if (r.status() >= 400) console.error('[page] HTTP', r.status(), r.url()); });
   page.__errors = errors;
   await page.goto(base);
+  // E26/E27: Befehlsrouten + Deklarationen der echten consent-Version (v4/manifests/consent.manifest.json);
+  // ohne aktive Version lehnt der Kern App-Befehle (ats.subject.erase) beim Schreiben mit unknown_command ab.
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes('consent'));
   await page.evaluate(async (APP) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import(`/modules/${APP}/index.js`);
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false });
     await kernel.ready;
     await kernel.sim.push('business_apps', [{ id: APP, title: 'Einwilligungen' }]);
+    await kernel.sim.publishAppVersion(APP, '1', { title: 'Einwilligungen', manifestExtra: window.__routes });
     await kernel.sim.push('business_consents', [
       { id: 'c-1', subject_id: 'cand-alpha', subject_name: 'Alpha Person', purpose: 'Alpha Talentpool', legal_basis: 'consent', granted_at_ms: Date.now() - 864e5, updated_at_ms: 2 },
       { id: 'c-2', subject_id: 'cand-beta', subject_name: 'Beta Person', purpose: 'Beta Newsletter', legal_basis: 'consent', granted_at_ms: Date.now() - 864e5, withdrawn_at_ms: Date.now() - 3600e3, updated_at_ms: 1 },

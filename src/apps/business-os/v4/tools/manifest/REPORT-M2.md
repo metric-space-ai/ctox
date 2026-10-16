@@ -12,22 +12,22 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | Apps (modules + customer-modules) | 41 |
 | Manifeste gesamt (Apps + shell) | 42 |
 | Collections gesamt / App-eigen / ctox-platform | 236 / 221 / 15 |
-| Handler gesamt (Apps mit Handlern) | 399 (29) |
+| Handler gesamt (Apps mit Handlern) | 398 (29) |
 | Legacy-Rest gesamt (ctx.cap.legacy) | 0 |
 | Capabilities gesamt (verschieden, ohne legacy) | 71 |
 | Trigger | 11 |
 | command_rights-Einträge | 55 |
-| foreign-Deklarationen (davon write / nur Code-Scan) | 293 (32 / 94) |
+| foreign-Deklarationen (davon write / nur Code-Scan) | 294 (32 / 94) |
 | **foreign ohne passendes exports (Soll 0)** | **0** |
 | Plattformzugriffe auf exports beschränkt | 1 |
 | Befehlstypen mit Handlern in mehreren Apps | 8 |
 | eigene Collections ohne Schema | 0 |
 | schema.js noch vorhanden / nicht ladbar | 3 / 0 |
-| Shell-Dateien | 125 |
+| Shell-Dateien | 126 |
 | Apps mit styles / write_guard-Collections | 41 / 1 |
 | offene _todo gesamt | 149 |
 | Deklarationsdateien v4-manifest.json | 40 |
-| commands_out / commands_in | 25 / 13 |
+| commands_out / commands_in | 25 / 12 |
 | **commands ohne Gegenstück (Soll 0)** | **0** |
 | ctx.command mit nicht auflösbarem Ziel | 0 |
 | **UI-Befehle ohne Route (E40, Soll 0)** / mehrdeutig | **0** / 0 |
@@ -50,14 +50,14 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | conversations | 0 | 0 | 0 | 0 | 0 | 5 | 3 | 4 |
 | creator | 0 | 0 | 0 | 0 | 0 | 2 | 0 | 3 |
 | credentials | 3 | 0 | 3 | 0 | 1 | 1 | 0 | 3 |
-| ctox | 22 | 0 | 9 | 0 | 5 | 4 | 16 | 4 |
+| ctox | 21 | 0 | 9 | 0 | 5 | 4 | 16 | 4 |
 | customers | 20 | 0 | 0 | 0 | 0 | 9 | 3 | 3 |
 | cv-print-builder | 3 | 0 | 3 | 0 | 0 | 7 | 0 | 3 |
 | desktop | 0 | 0 | 0 | 0 | 0 | 4 | 2 | 3 |
 | documents | 13 | 0 | 8 | 0 | 0 | 9 | 3 | 3 |
 | esign | 2 | 0 | 2 | 0 | 1 | 14 | 1 | 3 |
 | explorer | 0 | 0 | 0 | 0 | 0 | 8 | 0 | 3 |
-| file-viewer | 0 | 0 | 0 | 0 | 0 | 2 | 0 | 3 |
+| file-viewer | 0 | 0 | 0 | 0 | 0 | 3 | 0 | 3 |
 | importer | 0 | 0 | 0 | 0 | 0 | 3 | 0 | 3 |
 | intake | 1 | 0 | 2 | 0 | 1 | 12 | 1 | 3 |
 | interviews | 1 | 0 | 3 | 0 | 1 | 13 | 2 | 3 |
@@ -181,8 +181,8 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 
 | Absender | Ziel-App | Typ | Beleg |
 |---|---|---|---|
-| buchhaltung | ctox | `ctox.app.modify.request` | index.js:4373 |
-| buchhaltung | ctox | `ctox.chat.task` | index.js:4373 |
+| buchhaltung | ctox | `ctox.app.modify.request` | index.js:4389 |
+| buchhaltung | ctox | `ctox.chat.task` | index.js:4389 |
 | desktop | ctox | `ctox.app.modify.request` | index.js:469 |
 | desktop | ctox | `ctox.chat.task` | index.js:469 |
 | documents | ctox | `ctox.app.modify.request` | index.js:658 |
@@ -209,7 +209,6 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 
 | Empfänger | Typ | from |
 |---|---|---|
-| ctox | `business_os.chat.task` | * |
 | ctox | `ctox.app.modify.request` | * |
 | ctox | `ctox.chat.task` | * |
 | documents | `research.systematic.report.create` | research |
@@ -228,7 +227,6 @@ Ohne Gegenstück (0, Soll 0):
 Nicht auflösbares Ziel (0):
 
 Shell (SHELL_COMMANDS_OUT + UI-Scan v4/frame, v4/shell, v4/source):
-- shell → ctox `business_os.chat.task`: v4/shell/chat/index.js (commandBus.dispatch → api.command; shared/business-chat.js Standardtyp business_os.chat.task, CHAT4.md)
 - shell → ctox `ctox.chat.task`: v4/shell/app-host.js:500 (Menüpunkt ctox.ask „CTOX fragen…“ → Eingabeblatt → Standardbefehl ctox.chat.task)
 
 ### commands_in aus der UI-Nutzung abgeleitet (E40, je Absender, nie '*') (1)
