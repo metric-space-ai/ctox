@@ -125,6 +125,8 @@ impl SidecarRunner for ProcessRunner {
 }
 
 struct Env {
+    // Declared first: the binding drops before the runtime and the Store owner.
+    _policy: policy::PolicyAuthorityRegistration,
     _rt: tokio::runtime::Runtime,
     _dir: tempfile::TempDir,
     fixture: StoreFixture,
@@ -216,7 +218,21 @@ fn env() -> Env {
         Ok(())
     }))
     .unwrap();
+    // CUTOVER-6 (#888): `may_edit_source` first asks the live policy authority
+    // bound to THIS Store file (`policy::evaluate_in_store`), exactly as the
+    // composition root binds it in `store_startup::NativeOwners::attach`. Attach
+    // after the rights rows exist so the router starts on the base release.
+    let _policy = rt.block_on(async {
+        let rights = policy::sync_rights::StoreRightsAuthority::attach(
+            fixture.writer(),
+            "draft-turn".into(),
+        )
+        .await
+        .unwrap();
+        policy::bind_policy_authority(rights).unwrap()
+    });
     Env {
+        _policy,
         _rt: rt,
         _dir: dir,
         fixture,
