@@ -24,6 +24,19 @@ class Freeze(unittest.TestCase):
                 import shutil
                 out=pathlib.Path(os.environ['E34_PROOF_DIR']);out.mkdir(exist_ok=True,parents=True)
                 shutil.copyfile(path,out/'freeze.sqlite3');(out/'freeze.json').write_text(json.dumps(third))
+    def test_autoincrement_internal_tables_are_excluded_but_unknown_user_tables_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=pathlib.Path(tmp);path=root/'copy.sqlite3'
+            with sqlite3.connect(path) as db:
+                db.execute('CREATE TABLE events(id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT)')
+                db.execute("INSERT INTO events(body) VALUES('synthetic event')")
+                self.assertIn(('sqlite_sequence',),db.execute("SELECT name FROM sqlite_master").fetchall())
+            coverage={'tables':[{'database':'bos.sqlite3','table':'events'}]}
+            inputs={'schema':'ctox.v4.freeze_inputs.v1','frozen':True,'frozen_root':str(root),'files':[{'database':'bos.sqlite3','live_file':'/original/bos.sqlite3','frozen_file':str(path),'lsof_receipt_sha256':'b'*64}]}
+            measured=m.collect(coverage,inputs)['tables']
+            self.assertEqual([(r['table'],r['row_count']) for r in measured],[('events',1)])
+            with sqlite3.connect(path) as db: db.execute('CREATE TABLE unlisted_user_table(id TEXT)')
+            with self.assertRaisesRegex(ValueError,'unlisted_user_table'): m.collect(coverage,inputs)
     def test_protected_values_not_read_and_unlisted_tables_fail_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=pathlib.Path(tmp);path=root/'copy.sqlite3'

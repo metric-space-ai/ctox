@@ -69,7 +69,7 @@ def collect(coverage, manifest):
         uri='file:'+quote(str(path),safe='/')+'?mode=ro&immutable=1'
         with sqlite3.connect(uri,uri=True) as db:
             db.execute('PRAGMA query_only=ON');db.execute('BEGIN')
-            actual={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            actual={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND substr(name,1,7)<>'sqlite_'")}
             if actual != expected[database]: raise ValueError("table inventory differs: "+database+" missing="+str(sorted(expected[database]-actual))+" extra="+str(sorted(actual-expected[database])))
             db.text_factory=Text
             for table in sorted(actual):
