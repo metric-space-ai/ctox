@@ -69,6 +69,9 @@ pub(super) async fn prove(database: &Database, cas: &Cas) -> Result<()> {
         let mut app=document(tx,"business_apps","receiver")?.unwrap();app["assigned_user_ids"]=json!(["target-user"]);
         super::super::super::commands::put(tx,"business_apps","receiver",&app)
     }))?.await?;
+    let readonly=json!({"id":"e39-user-readonly-fallback","app_id":"hot-app","type":"hot.fallback","actor_id":"target-user","status":"queued","created_at":chrono::Utc::now().to_rfc3339(),"payload":{"write":false,"n":44}});
+    database.writer.submit(WriteJob::new(Default::default(),move|tx|store_command(tx,&readonly)))?.await?;
+    denied(&terminal(database,"business_commands","e39-user-readonly-fallback").await?,"read-only user cannot borrow sender or admin app-write fallback")?;
     let user_doc=json!({"id":"e39-user-allowed","app_id":"hot-app","type":"hot.restricted","actor_id":"target-user","status":"queued","created_at":chrono::Utc::now().to_rfc3339(),"payload":{"write":false,"n":44}});
     database.writer.submit(WriteJob::new(Default::default(),move|tx|store_command(tx,&user_doc)))?.await?;
     let allowed=terminal(database,"business_commands","e39-user-allowed").await?;

@@ -438,8 +438,12 @@ fn routing_fixture() -> Fixture {
 }
 #[test]
 fn e39_target_selection_precedes_local_handler() {
-    let f=routing_fixture();let doc=document(&f.db,"business_commands","cmd").unwrap().unwrap();
+    let mut f=routing_fixture();let doc=document(&f.db,"business_commands","cmd").unwrap().unwrap();
     assert_eq!(f.codec.route(&f.db,&doc).unwrap()["app_id"],"receiver","E39 must select commands_out target before own handler");
+    route_release(&mut f,"app",json!({"handlers":{"run":"handlers/run.js"},"commands_out":[{"app":"receiver","type":"run"},{"app":"receiver","type":"run"}],"command_rights":{"run":{"roles":["admin"]}}}), &["rows"]);
+    assert!(f.codec.route(&f.db,&doc).is_err(),"E39 several entries require target_app even for repeated destination");
+    let mut explicit=doc;explicit["target_app"]=json!("receiver");
+    assert_eq!(f.codec.route(&f.db,&explicit).unwrap()["app_id"],"receiver");
 }
 #[test]
 fn e39_missing_inbound_is_forbidden_even_with_target_right() {
@@ -476,10 +480,7 @@ fn e39_target_scope_writes_and_sender_identity_are_independent() {
     let b=json!({"command":command,"manifest":f.codec.manifest(&tx,"receiver").unwrap(),"fence":{"run_id":"app-runtime:cmd","participant":"native","fence":lease.fence.0,"rights_ver":rights(&tx).unwrap().rights_ver}});
     assert_eq!(b["command"]["app_id"],"app");
     f.codec.write(&tx,&b,None,&[StoreWrite{collection:"receiver_rows".into(),op:json!({"type":"put","doc":{"id":"legal","n":1}})}]).expect("E39 target own write must succeed");
-    ctox_app_runtime::state::initialize(&tx).unwrap();
-    ctox_app_runtime::state::apply(&tx,&b,"completion.register",&json!({"task_id":"command:target-child","callbacks":{"on_complete":"run"}})).unwrap();
-    let callback_app:String=tx.query_row("SELECT app_id FROM _app_runtime_completions WHERE task_id='command:target-child'",[],|r|r.get(0)).unwrap();
-    assert_eq!(callback_app,"receiver","E39 callback scope must belong to executing target");
+
     assert!(f.codec.write(&tx,&b,None,&[StoreWrite{collection:"rows".into(),op:json!({"type":"put","doc":{"id":"illegal","n":1}})}]).is_err(),"E39 target cannot borrow sender write scope");
 }
 

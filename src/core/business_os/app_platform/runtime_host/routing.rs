@@ -1,5 +1,6 @@
 //! E39: immutable sender, independently authorized execution target.
 use super::*;
+use ctox_app_runtime::core_host::StoreCodec;
 
 pub(super) fn core_route(kind: &str) -> bool {
     static INVENTORY: std::sync::OnceLock<Value> = std::sync::OnceLock::new();

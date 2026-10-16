@@ -169,14 +169,14 @@ pub fn command_declarations(sender: &Value, receiver: &Value, kind: &str, option
 pub fn declared_target<'a>(manifest: &'a Value, kind: &str, requested: Option<&'a str>) -> Result<&'a str> {
     let sender = string(manifest, "app_id")?;
     if core_command(kind) { return Ok(sender); }
-    let targets: BTreeSet<&str> = manifest["commands_out"].as_array().into_iter().flatten()
+    let targets: Vec<&str> = manifest["commands_out"].as_array().into_iter().flatten()
         .filter(|r| r["type"] == kind).filter_map(|r| r["app"].as_str()).collect();
     if targets.is_empty() {
         ensure!(requested.is_none_or(|app| app == sender), "forbidden: sender commands_out missing");
         return Ok(sender);
     }
     if let Some(target) = requested {
-        ensure!(targets.contains(target), "forbidden: undeclared command target");
+        ensure!(targets.contains(&target), "forbidden: undeclared command target");
         return Ok(target);
     }
     ensure!(targets.len() == 1, "forbidden: ambiguous command target");
@@ -766,11 +766,15 @@ impl RuntimePool {
             .inner
             .host
             .shared_modules(binding.as_ref().unwrap_or(&Value::Null))?;
-        self.inner.host.authorize(
-            app,
-            &actor,
-            &json!({"operation":operation, "target":target}),
-        )?;
+        // Bound admission checks the actual target command right and retained
+        // native origin. App visibility is not an additional command grant.
+        if binding.is_none() || migration {
+            self.inner.host.authorize(
+                app,
+                &actor,
+                &json!({"operation":operation, "target":target}),
+            )?;
+        }
         let path = if migration {
             ensure!(
                 bundle.manifest["collections"].get(target).is_some(),
