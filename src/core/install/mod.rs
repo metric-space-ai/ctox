@@ -2364,13 +2364,17 @@ fn ensure_no_restore_handles(state_root: &Path) -> Result<()> {
         for fd in fds {
             let fd = match fd {
                 Ok(fd) => fd,
-                Err(error) if pid != own_pid && error.kind() == ErrorKind::PermissionDenied => continue,
+                Err(error) if pid != own_pid && error.kind() == ErrorKind::PermissionDenied => {
+                    continue
+                }
                 Err(error) => return Err(error).context("cannot enumerate DB handles"),
             };
             let target = match fs::read_link(fd.path()) {
                 Ok(path) => path,
                 Err(error) if error.kind() == ErrorKind::NotFound => continue,
-                Err(error) if pid != own_pid && error.kind() == ErrorKind::PermissionDenied => continue,
+                Err(error) if pid != own_pid && error.kind() == ErrorKind::PermissionDenied => {
+                    continue
+                }
                 Err(error) => return Err(error).context("cannot inspect DB handle"),
             };
             let text = target.to_string_lossy();
