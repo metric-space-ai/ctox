@@ -187,6 +187,7 @@ export function createKernelSession({instanceId,userId,hello,verifyScopeToken,re
       selected=value;
     },
     async acceptAppGrant(appId,token) {
+      if(appId==='shell')throw new CtoxError('forbidden','Shell grant requires hello_ok');
       if(!selected || !await verifyScopeToken(token,{instanceId,userId,epoch:selected.epoch,rights_ver:selected.rights_ver,appId}))throw new CtoxError('forbidden','Collection grant missing',{app_id:appId});
       selected={...selected,scope_tokens:selected.scope_tokens.filter(t=>decodeAppGrant(t)?.claims.app_id!==appId)};
       appTokens.set(appId,token);return token;

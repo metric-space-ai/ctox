@@ -10,7 +10,7 @@ import { evictCollection, reclaimCache, CLIENT_CACHE_BUDGET } from './cache.mjs'
 import { KernelTransport, decimalSeq, seqGreater, maxSeq, checkpointKey } from './transport.mjs';
 import { assertLeader, acquireGeneration } from './leader.mjs';
 // Local App API 4.0 kernel. Derived from the reviewed executable contract; no legacy runtime imports.
-import { CtoxError, StaleLeader, cloneValue, deepFreeze, deepEqual, jsonEq, liveEqual, mergePatch, fnv1a, uuidv7, sha256Js, sha256Hex, hasBlob, isBlob, isPlainObject } from './values.mjs';
+import { CtoxError, StaleLeader, stripReadMetadata, cloneValue, deepFreeze, deepEqual, jsonEq, liveEqual, mergePatch, fnv1a, uuidv7, sha256Js, sha256Hex, hasBlob, isBlob, isPlainObject } from './values.mjs';
 import { compileQuery, runCompiledQuery, normalizeJson, validateSchema } from './app-api.mjs';
 import { openBackend, deleteBackend } from './store-idb-v5.mjs';
 import { emptyBase, byOpId, enqueueWrite, reserveWrites, docKey, nsName, applyOp, recompute } from './outbox.mjs';
@@ -615,12 +615,13 @@ export function createKernel(opts = {}) {
       if (!ownRowOk(collection, id)) throw new CtoxError('forbidden', `${collection}: nur die eigene Zeile (id = actor.id)`, { path: 'id' });
       if (collection === 'app_drafts' && app.id !== PLATFORM_APP.id) throw new CtoxError('forbidden', 'app_drafts nur über kernel.source(appId).draft.*', { path: 'collection' });
       const ns = resolveNs(app, collection);
+      body = stripReadMetadata(body);
+      if (isPlainObject(body) && Object.keys(body).some(key=>key.startsWith('_'))) throw new CtoxError('invalid','Underscore document fields are reserved',{path:Object.keys(body).find(key=>key.startsWith('_'))});
       let clean = null;
       if (op === 'put') {
         clean = normalizeJson(body, '');
         if (!isPlainObject(clean)) throw new CtoxError('invalid', 'Dokument muss ein Objekt sein', { path: '' });
       } else if (op === 'patch') clean = normalizeJsonPatch(body);
-      if (clean && Object.keys(clean).some(key=>key.startsWith('_'))) throw new CtoxError('invalid','Underscore document fields are reserved',{path:Object.keys(clean).find(key=>key.startsWith('_'))});
       const cur = mirrorGet(ns, id);
       const st = applyOp(cur ? { data: cur.data, deleted: cur.deleted } : { data: null, deleted: false }, { op, body: clean, id });
       if (collection===PREFERENCE_COLLECTION) {

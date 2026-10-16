@@ -33,7 +33,7 @@ test('E48 navigation grants exactly one files.get for the exact ref, expires, ca
  assert.ok(audit.some(x=>x.event==='consumed'&&x.ref===a.ref));
 });
 
-test('E48 generated platform manifest equals the native source without handwritten grants',async()=>{const {readFile}=await import('node:fs/promises');const {PLATFORM_MANIFEST}=await import('../platform-manifest.generated.mjs');assert.deepEqual(PLATFORM_MANIFEST,JSON.parse(await readFile(new URL('../../../../core/business_os/v4/ctox-platform.manifest.json',import.meta.url),'utf8')));});
+test('E48 generated platform manifest equals the native source without handwritten grants',async()=>{const {readFile}=await import('node:fs/promises');const {createHash}=await import('node:crypto');const {PLATFORM_MANIFEST,PLATFORM_MANIFEST_SOURCE_SHA256}=await import('../platform-manifest.generated.mjs');const raw=await readFile(new URL('../../../../core/business_os/v4/ctox-platform.manifest.json',import.meta.url));const message='Platform manifest drift; run node src/apps/business-os/kernel/tests/generate-platform-manifest.mjs --stub-root <stub>';assert.equal(PLATFORM_MANIFEST_SOURCE_SHA256,createHash('sha256').update(raw).digest('hex'),message);assert.deepEqual(PLATFORM_MANIFEST,JSON.parse(raw),message);});
 
 test('E48 read grants end with the session even though their audit persists',async t=>{
  const k=await open(t);for(const id of ['vault','viewer'])await k.sim.publishAppVersion(id,'1',{collections:{[id+'_rows']:definition}});

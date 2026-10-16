@@ -241,14 +241,27 @@ test('E55 live owner grants renew before expiry and stop on signed revocation an
 });
 
 
-test('E55 renewed Shell grant replaces the Hello token and its old scope hash',async()=>{
- let issued=0;const h=harness({tokenFor:appId=>scopeToken(appId,{scopeHash:appId==='shell'&&++issued>1?'scope:shell-renewed':`scope:${appId}`})});
- const boot=await bootV4({fetchImpl:fetchFake([context()]).impl,createPeer:h.createPeer,loaderOptions});
+test('E55 Shell grant comes only from hello and app acquisition is reused across boot callers',async()=>{
+ const h=harness(),boot=await bootV4({fetchImpl:fetchFake([context()]).impl,createPeer:h.createPeer,loaderOptions});
  try{
-  assert.equal((await boot.transport.scope('business_apps')).scope_hash,'scope:shell');
-  await boot.transport.grantApp('shell');
-  assert.equal((await boot.transport.scope('business_apps')).scope_hash,'scope:shell-renewed');
-  assert.equal(boot.transport.options.authSession.tokens().length,1,'only the current grant for the same app is retained');
+  const shell=await boot.transport.grantApp('shell');let reused;await assert.doesNotReject(async()=>{reused=await boot.transport.grantApp('shell',{renew:true});});assert.equal(reused,shell);
+  assert.equal(boot.transport.grantRenewals.has('shell'),false,'no Shell control renewal timer');
+  await assert.rejects(boot.transport.apply({type:'scope.grant',token:scopeToken('shell')},0),e=>e.code==='forbidden');
+  await assert.rejects(boot.transport.options.authSession.acceptAppGrant('shell',scopeToken('shell')),e=>e.code==='forbidden');
+  await Promise.all([boot.transport.grantApp('ctox-platform'),boot.transport.grantApp('ctox-platform')]);
+  for(let i=0;i<5;i++)await boot.transport.grantApp('ctox-platform');
+  assert.equal(h.peers[0].messages.filter(m=>m.type==='scope.grant.request'&&m.app_id==='shell').length,0);
+  assert.equal(h.peers[0].messages.filter(m=>m.type==='scope.grant.request'&&m.app_id==='ctox-platform').length,1);
+  const peer=h.peers[0],previousTokenFor=peer.tokenFor;peer.tokenFor=appId=>appId==='denied'?scopeToken(appId,{device:'other-device'}):previousTokenFor(appId);
+  for(let i=0;i<3;i++)await assert.rejects(boot.transport.grantApp('denied'),e=>e.code==='forbidden');
+  assert.equal(peer.messages.filter(m=>m.type==='scope.grant.request'&&m.app_id==='denied').length,1,'denied boot acquisitions are also shared');
+  const changed={type:'scope_revoke',instance_id:'instance',key_id:'instance-key-1',participant:'alice',app_id:'denied',rights_ver:'2'};
+  await boot.transport.apply({...changed,sig:[...sign(null,Buffer.from(STREAM_DOMAIN+canonicalJson(changed)),KEY.privateKey)]},0);
+  peer.tokenFor=appId=>scopeToken(appId,{rightsVer:'2'});
+  const refreshed=await boot.transport.grantApp('ctox-platform');assert.equal(JSON.parse(Buffer.from(refreshed,'base64url')).claims.rights_ver,'2','a signed rights change invalidates boot cache authority');
+  assert.equal(peer.messages.filter(m=>m.type==='scope.grant.request'&&m.app_id==='ctox-platform').length,2);
+  await boot.transport.options.authSession.acceptHello({...boot.transport.session,rights_ver:'2',scope_tokens:[scopeToken('shell',{rightsVer:'2',scopeHash:'scope:shell-next-hello'})]});
+  assert.equal((await boot.transport.scope('business_apps')).scope_hash,'scope:shell-next-hello');
  }finally{await boot.loader.close();for(const p of h.peers)p.close();}
 });
 

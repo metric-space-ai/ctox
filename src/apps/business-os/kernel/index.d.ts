@@ -6,7 +6,7 @@
 // Teil 1 – App-API (an jede App übergeben, app_api_ver = 4.0)
 // ============================================================================================================
 
-/** E47: read-only local view metadata; confirmed opaque revision (same token as expected_revision), null for local-only rows. */
+/** E47/E47.1: read-only view metadata. put/patch discard only _rev/_pending; CAS uses expected_revision explicitly. */
 export type ReadDocument<T> = T & {readonly _rev: string | null; readonly _pending: boolean};
 
 /** Live-Ergebnis einer Abfrage. Ergebnisse sortiert, Gleichstände nach `id`; ohne Zeilendeckel. */

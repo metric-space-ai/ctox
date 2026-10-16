@@ -4,7 +4,7 @@
 import {createFakeAppGrantIssuer} from './fake-core-grants.mjs';
 import {preferenceError,PREFERENCE_COLLECTION} from './preferences.mjs';
 import { KernelTransport, decimalSeq } from './transport.mjs';
-import { cloneValue, CtoxError, fnv1a, mergePatch } from './values.mjs';
+import { cloneValue, stripReadMetadata, CtoxError, fnv1a, mergePatch } from './values.mjs';
 import { applyOp } from './outbox.mjs';
 import { createCoreRuntime, FAKE_CORE_CAPABILITIES } from './fake-core-runtime.mjs';
 import { checkCommandTransition, COMMAND_IMMUTABLE_FIELDS } from './command-state.mjs';
@@ -77,7 +77,7 @@ export class MemoryCoreTransport extends KernelTransport {
   /** user = {id, role, permissions}: der Core kennt den Nutzer (Rechte wirken); ohne user prüft der Core keine Rechte. */
   constructor({ namespace = 'test', latencyMs = 5, user = null, everyMs, agentDelayMs, deviceLabel, codingDelayMs } = {}) {
     super(); this.namespace = namespace; this.latencyMs = latencyMs;
-    this.core = coreFor(namespace);this.issueAppGrant=createFakeAppGrantIssuer();this.appGrants=new Map();this.grantMessages=[];this.deniedAppGrants=new Set(); this.reject = []; this.rejectUpload = []; this.migrate = []; this.handlers = new Map(); this.failures = new Map();
+    this.core = coreFor(namespace);this.issueAppGrant=createFakeAppGrantIssuer();this.appGrants=new Map();this.appGrantAcquisitions=new Map();this.grantMessages=[];this.deniedAppGrants=new Set(); this.reject = []; this.rejectUpload = []; this.migrate = []; this.handlers = new Map(); this.failures = new Map();
     if (everyMs !== undefined) this.core.everyMs = everyMs;
     if (agentDelayMs !== undefined) this.core.agentDelayMs = agentDelayMs;
     if (codingDelayMs !== undefined) this.core.codingDelayMs = codingDelayMs;
@@ -110,11 +110,16 @@ export class MemoryCoreTransport extends KernelTransport {
   get backlog(){return [...this.core.docs.values()].filter(row=>this.subscriptions.has(row.collection) && BigInt(row.seq)>BigInt(this.subscriptions.get(row.collection).checkpoint_seq??'0')).length;}
   get head() { return decimalSeq(this.core.head); }
   async grantApp(app_id) {
-    this.grantMessages.push({type:'scope.grant.request',app_id});
+    const app=this.core.docs.get(this.key('business_apps',app_id))?.data;
+    const cacheKey=`${app_id}@${app?.active_ver??''}`;
+    if(this.appGrantAcquisitions.has(cacheKey))return this.appGrantAcquisitions.get(cacheKey);
+    const acquire=(async()=>{
+    if(app_id!=='shell')this.grantMessages.push({type:'scope.grant.request',app_id});
     if(this.deniedAppGrants.has(app_id)){this.grantMessages.push({type:'forbidden',app_id,reason:'forbidden'});throw new CtoxError('forbidden','Collection grant missing');}
-    const app=this.core.docs.get(this.key('business_apps',app_id))?.data,manifest=this.core.docs.get(this.key('business_app_versions',`${app_id}@${app?.active_ver}`))?.data?.manifest;
+    const manifest=this.core.docs.get(this.key('business_app_versions',`${app_id}@${app?.active_ver}`))?.data?.manifest;
     const claims={instance_id:this.identity.instanceId,user_id:this.identity.userId,app_id,scope_hash:`scope:${app_id}`,rights_ver:'1',device_id:this.deviceId(this.identity.instanceId,this.identity.userId),exp:Math.floor(Date.now()/1000)+3600,collections:Object.keys(manifest?.collections??{}).map(c=>({collection:c.includes('@g')||!(manifest.generations?.[c]>1)?c:`${c}@g${manifest.generations[c]}`,gen:manifest.generations?.[c]??1,rights:['read','write'],field_mask_digest:'fake:all'}))};
-    const token=await this.issueAppGrant(claims);this.appGrants.set(app_id,token);this.grantMessages.push({type:'scope.grant',token});return token;
+    const token=await this.issueAppGrant(claims);this.appGrants.set(app_id,token);if(app_id!=='shell')this.grantMessages.push({type:'scope.grant',token});return token;
+    })();this.appGrantAcquisitions.set(cacheKey,acquire);return acquire;
   }
   async subscribe(sub) {
     this.subscriptions.set(sub.collection, cloneValue(sub)); this.sent.delete(sub.collection);
@@ -158,6 +163,7 @@ export class MemoryCoreTransport extends KernelTransport {
   async push(collection, docs) { return this.core.commit(collection, docs); }
   async write(entry) {
     if (!this.online || this.closed) throw new CtoxError('unavailable', 'Test core offline');
+    entry = {...entry, body:stripReadMetadata(entry.body)};
     const previous = this.core.ops.get(entry.op_id); if (previous) return cloneValue(previous);
     const old = this.core.docs.get(this.key(entry.collection,entry.id));
     const rejection = this.reject.shift();
