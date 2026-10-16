@@ -10,6 +10,7 @@ pub mod config;
 pub mod import;
 pub mod ipc;
 pub mod publication;
+pub mod preferences;
 pub mod read_pool;
 pub mod registry;
 pub mod rxdb_schema_adapter;

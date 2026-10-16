@@ -47,6 +47,10 @@
     "shell_preferences": {
       "source": "~/.local/state/ctox-sync-v4/docs/v4-manifests/ctox-platform.manifest.json",
       "basis": "ownership.json: Entscheidung: Plattform-Collection (§16.19 Nr. 3)"
+    },
+    "app_user_preferences": {
+      "source": "ctox-platform.manifest.json",
+      "basis": "E51: platform-owned preferences bound to authenticated app and user"
     }
   },
   "collections": {
@@ -732,6 +736,57 @@
       "byte_budget": 65536,
       "class": "full",
       "client_limit": 1,
+      "rights": {
+        "read": "own",
+        "write": "own"
+      }
+    },
+    "app_user_preferences": {
+      "schema": {
+        "version": 0,
+        "primaryKey": "id",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "app_id",
+          "user_id",
+          "key",
+          "value"
+        ],
+        "indexes": [
+          [
+            "app_id",
+            "user_id"
+          ]
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 579
+          },
+          "app_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "user_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z0-9._-]+$"
+          },
+          "value": {}
+        }
+      },
+      "class": "full",
+      "client_limit": null,
+      "byte_budget": 17408,
       "rights": {
         "read": "own",
         "write": "own"
