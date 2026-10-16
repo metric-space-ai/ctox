@@ -3,6 +3,8 @@
 
 #[path = "../store/business_store_adapter.rs"]
 pub(crate) mod business_store_adapter;
+#[path = "store_chat_blob.rs"]
+mod chat_blob;
 #[path = "store_peer_revocations.rs"]
 mod peer_revocations;
 #[path = "store_security_projections.rs"]
@@ -109,6 +111,7 @@ use crate::capabilities::scrape;
 use crate::mission::channels;
 use anyhow::Context;
 use base64::Engine;
+pub(super) use chat_blob::failure_outcome as chat_blob_failure_outcome;
 use ctox_app_server_protocol::AuthMode as ApiAuthMode;
 pub use peer_revocations::is_business_peer_revoked;
 use ring::rand::{SecureRandom, SystemRandom};
@@ -6812,6 +6815,7 @@ fn record_command_inner(
     if let (Some(authority), Some(receipt)) = (authority, native_authorization.as_mut()) {
         receipt["managed_mcp_authority"] = authority.receipt()?;
     }
+    chat_blob::preflight(root, &command_id, &command, native_authorization.as_ref())?;
     {
         let conn = open_store(root)?;
         if let Some(denied) = claim_or_reject_business_chat(root, &conn, &command_id, &command)? {
@@ -25484,6 +25488,7 @@ fn materialize_business_chat_attachments(
     root: &Path,
     command_id: &str,
     command: &BusinessCommand,
+    native_authorization: Option<&Value>,
 ) -> anyhow::Result<Vec<MaterializedBusinessChatAttachment>> {
     let refs = business_chat_attachment_refs(command);
     if refs.is_empty() {
@@ -25492,6 +25497,16 @@ fn materialize_business_chat_attachments(
     let mut attachments = Vec::with_capacity(refs.len());
     let mut seen = HashSet::new();
     for attachment_ref in refs {
+        if attachment_ref.get("kind").and_then(Value::as_str) == Some("blob") {
+            attachments.push(chat_blob::materialize(
+                root,
+                command_id,
+                command,
+                native_authorization,
+                &attachment_ref,
+            )?);
+            continue;
+        }
         let file_id = attachment_ref_string(&attachment_ref, &["file_id", "fileId"])
             .with_context(|| "Business OS attachment reference is missing file_id")?;
         let generation_id =
@@ -25523,6 +25538,9 @@ fn business_chat_attachment_refs(command: &BusinessCommand) -> Vec<Value> {
                 refs.extend(items.iter().filter_map(|item| {
                     if !item.is_object() {
                         return None;
+                    }
+                    if item.get("kind").and_then(Value::as_str) == Some("blob") {
+                        return Some(item.clone());
                     }
                     let file_id = attachment_ref_string(item, &["file_id", "fileId"])?;
                     let kind = attachment_ref_string(item, &["kind"])
@@ -26738,7 +26756,8 @@ fn create_ctox_queue_task(
     if !is_cv_print_parse_command(command) {
         command_instruction(command)?;
     }
-    let attachments = materialize_business_chat_attachments(root, command_id, command)?;
+    let attachments =
+        materialize_business_chat_attachments(root, command_id, command, native_authorization)?;
     let prompt_enrichment = business_command_prompt_enrichment(root, command_id, command)?;
     let title = command_title(command);
     let prompt = command_prompt(
@@ -26929,7 +26948,11 @@ pub(crate) fn rebuild_business_command_queue_prompt_for_task(
     if !is_cv_print_parse_command(&command) {
         command_instruction(&command)?;
     }
-    let attachments = materialize_business_chat_attachments(root, command_id, &command)?;
+    let authorization = command_value
+        .get("native_authorization")
+        .or_else(|| context.get("native_authorization"));
+    let attachments =
+        materialize_business_chat_attachments(root, command_id, &command, authorization)?;
     let prompt_enrichment = business_command_prompt_enrichment(root, command_id, &command)?;
     Ok(Some(command_prompt(
         command_id,
@@ -27672,19 +27695,29 @@ fn business_chat_attachment_prompt_manifest(
         return String::new();
     }
     let mut output = String::from(
-        "\n\nBusiness OS attachments:\nThe files below were uploaded in the Business OS chat, reconstructed from RxDB desktop_file_chunks, and verified before this task was queued. Inspect relevant images/PDFs via the available local file/image tools before relying on their visual contents.\n",
+        "\n\nBusiness OS attachments:\nThe files below were uploaded in the Business OS chat and verified before this task was queued. Inspect relevant images/PDFs via the available local file/image tools before relying on their visual contents.\n",
     );
     for (idx, attachment) in attachments.iter().enumerate() {
+        let source = if attachment.generation_id == "cas" {
+            format!(
+                "files/{} ref {}",
+                attachment.file_id, attachment.content_hash
+            )
+        } else {
+            format!(
+                "desktop_files/{} generation {}",
+                attachment.file_id, attachment.generation_id
+            )
+        };
         output.push_str(&format!(
-            "- attachment_{}: {}\n  mime_type: {}\n  size_bytes: {}\n  local_path: {}\n  sha256: {}\n  source: desktop_files/{} generation {}\n",
+            "- attachment_{}: {}\n  mime_type: {}\n  size_bytes: {}\n  local_path: {}\n  sha256: {}\n  source: {}\n",
             idx + 1,
             attachment.name,
             attachment.mime_type,
             attachment.size_bytes,
             attachment.local_path,
             attachment.content_hash,
-            attachment.file_id,
-            attachment.generation_id
+            source
         ));
     }
     output

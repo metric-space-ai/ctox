@@ -2505,7 +2505,17 @@ fn dispatch_business_command(
                 return super::decision_hub::handle_command(root, command_id, command)
                     .map(BusinessCommandDispatchOutcome::Returned);
             }
-            let accepted = record_command(root, command.clone())?;
+            let accepted = match record_command(root, command.clone()) {
+                Ok(accepted) => accepted,
+                Err(error) => {
+                    if let Some(outcome) =
+                        super::store::chat_blob_failure_outcome(command_id, &error)
+                    {
+                        return Ok(BusinessCommandDispatchOutcome::Returned(outcome));
+                    }
+                    return Err(error);
+                }
+            };
             Ok(BusinessCommandDispatchOutcome::Returned(
                 serde_json::to_value(accepted)?,
             ))

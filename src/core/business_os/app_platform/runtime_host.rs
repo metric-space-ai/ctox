@@ -152,7 +152,7 @@ fn collection(db: &Connection, name: &str) -> Result<Collection, StoreError> {
         Ok((r.get::<_,String>(0)?,r.get::<_,u64>(1)?,r.get::<_,String>(2)?,r.get::<_,u32>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?))
     }).map_err(Into::into).and_then(|(table,gen,schema,schema_ver,app_ver,owner)| Ok(Collection{table,gen,schema:serde_json::from_str(&schema).map_err(sql_error)?,schema_ver,app_ver,owner}))
 }
-fn document(db: &Connection, name: &str, id: &str) -> Result<Option<Value>, StoreError> {
+pub(crate) fn document(db: &Connection, name: &str, id: &str) -> Result<Option<Value>, StoreError> {
     let c = collection(db, name)?;
     let raw: Option<String> = db
         .query_row(
@@ -167,7 +167,7 @@ fn document(db: &Connection, name: &str, id: &str) -> Result<Option<Value>, Stor
     raw.map(|s| serde_json::from_str(&s).map_err(sql_error))
         .transpose()
 }
-fn rights(db: &Connection) -> Result<sync_rights::RightsSnapshot, StoreError> {
+pub(crate) fn rights(db: &Connection) -> Result<sync_rights::RightsSnapshot, StoreError> {
     // Decode the existing P6 tables in the caller's already-open WAL snapshot.
     // Policy evaluation itself is the canonical policy.rs implementation.
     let rights_ver = db.query_row(
@@ -222,7 +222,7 @@ fn rights(db: &Connection) -> Result<sync_rights::RightsSnapshot, StoreError> {
         manifests,
     })
 }
-pub(super) fn actor(db: &Connection, id: &str) -> Result<BusinessOsActor, StoreError> {
+pub(crate) fn actor(db: &Connection, id: &str) -> Result<BusinessOsActor, StoreError> {
     let user = document(db, "business_users", id)?
         .ok_or_else(|| invalid("revoked: native user missing"))?;
     if user["active"] != true || user.get("user_id").and_then(Value::as_str).unwrap_or(id) != id {
