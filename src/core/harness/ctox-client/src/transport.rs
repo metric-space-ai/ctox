@@ -41,7 +41,7 @@ impl ReqwestTransport {
         }
     }
 
-    fn build(&self, req: Request) -> Result<CodexRequestBuilder, TransportError> {
+    fn build(&self, req: Request) -> Result<CodexRequestBuilder, String> {
         let Request {
             method,
             url,
@@ -63,21 +63,20 @@ impl ReqwestTransport {
         if let Some(body) = body {
             if compression != RequestCompression::None {
                 if headers.contains_key(http::header::CONTENT_ENCODING) {
-                    return Err(TransportError::Build(
+                    return Err(
                         "request compression was requested but content-encoding is already set"
                             .to_string(),
-                    ));
+                    );
                 }
 
-                let json = serde_json::to_vec(&body)
-                    .map_err(|err| TransportError::Build(err.to_string()))?;
+                let json = serde_json::to_vec(&body).map_err(|err| err.to_string())?;
                 let pre_compression_bytes = json.len();
                 let compression_start = std::time::Instant::now();
                 let (compressed, content_encoding) = match compression {
                     RequestCompression::None => unreachable!("guarded by compression != None"),
                     RequestCompression::Zstd => (
                         zstd::stream::encode_all(std::io::Cursor::new(json), 3)
-                            .map_err(|err| TransportError::Build(err.to_string()))?,
+                            .map_err(|err| err.to_string())?,
                         http::HeaderValue::from_static("zstd"),
                     ),
                 };
@@ -132,7 +131,7 @@ impl HttpTransport for ReqwestTransport {
         }
 
         let url = req.url.clone();
-        let builder = self.build(req)?;
+        let builder = self.build(req).map_err(TransportError::Build)?;
         let resp = builder.send().await.map_err(Self::map_error)?;
         let status = resp.status();
         let headers = resp.headers().clone();
@@ -164,7 +163,7 @@ impl HttpTransport for ReqwestTransport {
         }
 
         let url = req.url.clone();
-        let builder = self.build(req)?;
+        let builder = self.build(req).map_err(TransportError::Build)?;
         let resp = builder.send().await.map_err(Self::map_error)?;
         let status = resp.status();
         let headers = resp.headers().clone();
