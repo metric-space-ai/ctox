@@ -84,6 +84,10 @@ try {
     if(!enrolled?.cookie)throw Error('Server-issued fixture cookie required before navigation');
     const context=await browser.newContext();contexts.push(context);
     await context.addCookies([{name:'ctox_business_os_auth',value:enrolled.cookie,url:origin,httpOnly:true,sameSite:'Strict'}]);
+    // Diagnostic control-plane probe only; the page still fetches its own
+    // fresh context through the unmodified bootV4 entry below.
+    const launch=await context.request.get(origin+'/api/business-os/launch-context',{timeout:15000,maxRedirects:0});
+    report.bootstrapResponses.push({userId:enrolled.id,path:'/api/business-os/launch-context',status:launch.status(),diagnostic:true});save();
     const connect=await installBrowserEntry(context,origin);
     const p=await context.newPage();
     const bootstrapPath=path=>path==='/api/business-os/launch-context' || path==='/sw.js' || path.startsWith('/kernel/') || path.startsWith('/business-os/');
