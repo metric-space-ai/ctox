@@ -345,40 +345,28 @@ mod tests {
             identity.key_id().to_owned(),
         );
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let client = reqwest::blocking::Client::builder()
+            let client = ureq::AgentBuilder::new()
                 .timeout(Duration::from_secs(3))
-                .build()?;
+                .build();
+            let get = |path: &str| -> anyhow::Result<ureq::Response> {
+                match client.get(&format!("http://{}{path}", listen.addr)).call() {
+                    Ok(response) | Err(ureq::Error::Status(_, response)) => Ok(response),
+                    Err(error) => Err(error.into()),
+                }
+            };
             for url in ["/", "/?role=admin", "/?role=user", "/loader.mjs"] {
                 assert_eq!(
-                    client
-                        .get(format!("http://{}{url}", listen.addr))
-                        .send()?
-                        .status(),
+                    get(url)?.status(),
                     200,
                     "HTTP failed beside foreground owner: {url}"
                 );
             }
-            let bootstrap: serde_json::Value = client
-                .get(format!("http://{}/api/business-os/bootstrap", listen.addr))
-                .send()?
-                .json()?;
+            let bootstrap: serde_json::Value = get("/api/business-os/bootstrap")?.into_json()?;
             assert_eq!(bootstrap["instance_id"], expected.0);
             assert_eq!(bootstrap["instance_public_key"], expected.1);
             assert!(bootstrap.get("session").is_none());
-            assert_eq!(
-                client
-                    .get(format!("http://{}/api/business-os/records", listen.addr))
-                    .send()?
-                    .status(),
-                404
-            );
-            assert_eq!(
-                client
-                    .get(format!("http://{}/modules/private/index.js", listen.addr))
-                    .send()?
-                    .status(),
-                404
-            );
+            assert_eq!(get("/api/business-os/records")?.status(), 404);
+            assert_eq!(get("/modules/private/index.js")?.status(), 404);
             Ok(())
         })
         .await??;
