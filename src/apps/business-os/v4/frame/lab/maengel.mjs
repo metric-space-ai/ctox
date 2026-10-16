@@ -3,7 +3,7 @@
 // wo es um Breite geht zusätzlich 420×800. Screenshots: shots/maengel-M-XX-*.png.
 //
 // Lauf (aus src/apps/business-os):
-//   CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/637caf6 node v4/frame/lab/maengel.mjs [M01,M02,…]
+//   CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/8265bd7 node v4/frame/lab/maengel.mjs [M01,M02,…]
 // Rahmen-Fälle laufen gegen lab/stub-lab.html (Kern-Stub, gebundene Shell-URL wie im echten Ladeweg), echte Apps
 // (credentials, coding-agents, reports, news) über den Server des Geometrie-Labors (v4/tools/geometry/geometry-v4.mjs).
 import { createRequire } from 'node:module';
@@ -11,8 +11,10 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { startServer } from './serve.mjs';
-import { serve as geoServe, appConfig, configs } from '../../tools/geometry/geometry-v4.mjs';
+// Default-Pin vor dem Laden von serve.mjs/geometry-v4.mjs setzen (serve.mjs teilt seinen Default mit anderen Laboren).
+process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
+const { startServer } = await import('./serve.mjs');
+const { serve: geoServe, appConfig, configs } = await import('../../tools/geometry/geometry-v4.mjs');
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(path.join(os.homedir(), 'Documents/ctox/src/apps/business-os/package.json'));
