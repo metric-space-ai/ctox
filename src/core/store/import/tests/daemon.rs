@@ -312,32 +312,69 @@ fn cutover_specialized_tracking_keeps_raw_rows_and_adds_native_projection() -> R
     let frozen = path.parent().unwrap().join("tracking.sqlite3");
     source.backup(rusqlite::DatabaseName::Main, &frozen, None)?;
     let ro = Connection::open_with_flags(&frozen, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let names = ["stalwart_mail_tracking_tokens", "stalwart_mail_tracking_events"];
+    let names = [
+        "stalwart_mail_tracking_tokens",
+        "stalwart_mail_tracking_events",
+    ];
     let mut source = Source {
-        choice: FileChoice { database: "tracking".into(), live_file: live, frozen_file: frozen, lsof_receipt_sha256: "b".repeat(64) },
-        kind: SourceKind::Core, internal_table: None, measurement_sha256: String::new(),
+        choice: FileChoice {
+            database: "tracking".into(),
+            live_file: live,
+            frozen_file: frozen,
+            lsof_receipt_sha256: "b".repeat(64),
+        },
+        kind: SourceKind::Core,
+        internal_table: None,
+        measurement_sha256: String::new(),
         collectors: vec![super::super::daemon_collectors::Collector::MailTracking],
-        tables: names.iter().enumerate().map(|(i, name)| Ok(Decision {
-            rule: "E29-R5".into(),
-            table: Table { name: (*name).into(), collection: format!("legacy_{name}"), version: 0,
-                id_column: if i == 0 { "token" } else { "id" }.into(), body_column: None,
-                entity: cutover::Entity::Core, mode: Mode::Rows },
-            measurement: Some(freeze::measure(&ro, name)?),
-        })).collect::<Result<_>>()?,
+        tables: names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                Ok(Decision {
+                    rule: "E29-R5".into(),
+                    table: Table {
+                        name: (*name).into(),
+                        collection: format!("legacy_{name}"),
+                        version: 0,
+                        id_column: if i == 0 { "token" } else { "id" }.into(),
+                        body_column: None,
+                        entity: cutover::Entity::Core,
+                        mode: Mode::Rows,
+                    },
+                    measurement: Some(freeze::measure(&ro, name)?),
+                })
+            })
+            .collect::<Result<_>>()?,
     };
     measurements(&mut source);
-    snapshot.inventory.insert("tracking".into(), names.map(str::to_owned).into_iter().collect());
+    snapshot.inventory.insert(
+        "tracking".into(),
+        names.map(str::to_owned).into_iter().collect(),
+    );
     snapshot.databases.push(source);
     fs::write(&path, serde_json::to_vec(&snapshot).unwrap())?;
     let prepared = prepare(path.clone(), &[], migration)?;
     let docs = &prepared.import.snapshot.documents;
-    let token = docs.iter().find(|d| d.collection == "outbound_tracking_tokens").expect("specialized collector must run");
+    let token = docs
+        .iter()
+        .find(|d| d.collection == "outbound_tracking_tokens")
+        .expect("specialized collector must run");
     assert_eq!(token.body["created_at_ms"], 123000);
-    assert!(docs.iter().any(|d| d.collection == cutover::ARCHIVE && d.body["source_table"] == names[0] && d.body["doc"]["created_at"] == 123));
-    assert!(prepared.import.audit.target_documents["tracking:stalwart_mail_tracking_tokens"].contains(&(token.collection.clone(), token.id.clone())));
+    assert!(docs.iter().any(|d| d.collection == cutover::ARCHIVE
+        && d.body["source_table"] == names[0]
+        && d.body["doc"]["created_at"] == 123));
+    assert!(
+        prepared.import.audit.target_documents["tracking:stalwart_mail_tracking_tokens"]
+            .contains(&(token.collection.clone(), token.id.clone()))
+    );
     let mut snapshot: Snapshot = serde_json::from_slice(&fs::read(&path)?).unwrap();
-    snapshot.databases[1].collectors.push(super::super::daemon_collectors::Collector::MailTracking);
+    snapshot.databases[1]
+        .collectors
+        .push(super::super::daemon_collectors::Collector::MailTracking);
     fs::write(&path, serde_json::to_vec(&snapshot).unwrap())?;
-    assert!(matches!(prepare(path, &[], migration), Err(StoreError::Invalid(s)) if s == "cutover_duplicate_collector_source"));
+    assert!(
+        matches!(prepare(path, &[], migration), Err(StoreError::Invalid(s)) if s == "cutover_duplicate_collector_source")
+    );
     Ok(())
 }

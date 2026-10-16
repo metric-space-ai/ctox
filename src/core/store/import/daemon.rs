@@ -373,7 +373,12 @@ fn prepare(path: PathBuf, live: &[PathBuf], migration: Migration) -> Result<Prep
     let mut files = Vec::new();
     for (index, source) in snapshot.databases.iter().enumerate() {
         super::daemon_collectors::collect(
-            &transactions[index], source, &plan, &mut import, &mut files, root,
+            &transactions[index],
+            source,
+            &plan,
+            &mut import,
+            &mut files,
+            root,
         )?;
     }
     for table in &mut tables {
@@ -464,9 +469,22 @@ pub async fn execute(
     for files in prepared.files {
         let prepared_files = file_import::prepare(files.plan, &cas, &scratch).await?;
         for key in files.tables {
-            let targets = report.audit.target_documents.entry(key.clone()).or_default();
-            targets.extend(prepared_files.documents.iter().map(|d| (d.collection.clone(), d.id.clone())));
-            if let Some(table) = report.tables.iter_mut().find(|t| format!("{}:{}", t.database, t.table) == key) {
+            let targets = report
+                .audit
+                .target_documents
+                .entry(key.clone())
+                .or_default();
+            targets.extend(
+                prepared_files
+                    .documents
+                    .iter()
+                    .map(|d| (d.collection.clone(), d.id.clone())),
+            );
+            if let Some(table) = report
+                .tables
+                .iter_mut()
+                .find(|t| format!("{}:{}", t.database, t.table) == key)
+            {
                 table.expected_target_rows = targets.len();
             }
         }
@@ -513,7 +531,11 @@ pub async fn execute(
             }
         }
     }
-    for table in report.tables.iter_mut().filter(|t| !t.retained_source && t.source_rows == Some(0) && t.expected_target_rows == 0) {
+    for table in report
+        .tables
+        .iter_mut()
+        .filter(|t| !t.retained_source && t.source_rows == Some(0) && t.expected_target_rows == 0)
+    {
         table.target_rows = Some(0);
     }
     for table in report.tables.iter_mut().filter(|t| t.retained_source) {
