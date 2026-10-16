@@ -85,7 +85,11 @@ impl HttpSurface {
                     while !closing.load(Ordering::Acquire) {
                         match server.recv() {
                             Ok(request) => {
-                                let result = answer(&inputs, &app, request.url(), request.method());
+                                let result = if request.url().split('?').next() == Some("/api/business-os/launch-context") {
+                                    super::store_launch::response(&inputs, &request)
+                                } else {
+                                    answer(&inputs, &app, request.url(), request.method())
+                                };
                                 let (status, mime, body) = result.unwrap_or((
                                     503,
                                     "text/plain",
@@ -418,6 +422,7 @@ mod tests {
             assert_eq!(bootstrap["instance_public_key"], expected.1);
             assert!(bootstrap.get("session").is_none());
             assert_eq!(get("/api/business-os/records")?.status(), 404);
+            assert_eq!(get("/api/business-os/launch-context")?.status(), 401);
             assert_eq!(get("/modules/private/index.js")?.status(), 404);
             Ok(())
         })
