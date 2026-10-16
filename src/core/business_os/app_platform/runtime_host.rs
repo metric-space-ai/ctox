@@ -3,6 +3,8 @@
 mod authority;
 mod codec;
 mod feed;
+mod origin;
+pub(crate) use origin::{enqueue_core_command, CoreCommandSource};
 #[cfg(all(test, unix, feature = "app-runtime-node"))]
 mod native_proof;
 #[cfg(test)]
@@ -277,7 +279,9 @@ impl RuntimeOwners {
 
 pub(super) fn store_command(tx: &rusqlite::Transaction<'_>, doc: &Value) -> Result<(), StoreError> {
     let id = text(doc, "id").map_err(sql_error)?;
+    let provenance = origin::before_native_write(tx, doc)?;
     super::commands::put(tx, "business_commands", id, doc)?;
+    origin::after_native_write(tx, doc, provenance)?;
     let c = collection(tx, "business_commands")?;
     let (rev, seq): (String, u64) = tx.query_row(
         "SELECT rev,seq FROM _changes WHERE collection='business_commands' AND gen=?1 AND id=?2",

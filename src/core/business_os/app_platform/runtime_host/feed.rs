@@ -110,7 +110,7 @@ async fn drive(
         db.prepare(&format!("SELECT data FROM {} WHERE deleted=0 AND json_extract(data,'$.status') IN ('pending','accepted','queued') ORDER BY id",quote(&c.table)))?.query_map([],|r|r.get::<_,String>(0))?.map(|r|r.map_err(Into::into).and_then(|s|serde_json::from_str::<Value>(&s).map_err(sql_error))).collect::<Result<Vec<_>,StoreError>>()
     })).await?;
     for doc in startup {
-        if doc["runtime_event"] != true {
+        if !is_native_event(&database, &doc).await? {
             dispatch_committed(
                 &database,
                 &authority,
@@ -154,7 +154,7 @@ async fn drive(
                     }
                 } else if collection == "business_commands" {
                     if let Some(doc) = doc {
-                        if doc["runtime_event"] != true {
+                        if !is_native_event(&database, &doc).await? {
                             match doc["status"].as_str() {
                                 Some("pending" | "accepted" | "queued") => {
                                     dispatch_committed(
@@ -180,13 +180,15 @@ async fn drive(
                 let changed = ingress
                     .change(ChangeEvent {
                         seq,
-                        collection,
+                        collection: collection.clone(),
                         op,
-                        record_id: id,
+                        record_id: id.clone(),
                     })
                     .await;
                 authority.finish_events(changed.is_ok()).await?;
-                changed?;
+                changed.with_context(|| {
+                    format!("native change seq={seq} collection={collection} id={id}")
+                })?;
                 cursor = seq;
                 database
                     .writer
@@ -228,7 +230,14 @@ async fn dispatch_committed(
                 {
                     reason.clone()
                 }
-                _ => return Err(error),
+                _ => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "native command admission id={} type={}",
+                            doc["id"], doc["type"]
+                        )
+                    })
+                }
             };
             database
                 .writer
@@ -237,6 +246,7 @@ async fn dispatch_committed(
                     if document(tx, "business_commands", id)?.as_ref() != Some(&doc) {
                         return Err(invalid("conflict: command changed during rejection"));
                     }
+                    origin::audit_rejection(tx, &doc, error_code(&reason))?;
                     let mut rejected = doc;
                     rejected["status"] = json!("failed");
                     rejected["error"] =
@@ -279,7 +289,7 @@ async fn dispatch_committed(
         codec.check_fence(tx,&b)?;
         let mut doc=document(tx,"business_commands",&id)?.ok_or_else(||invalid("not_found: command"))?;
         doc["status"]=outcome["status"].clone();for key in ["result","error"]{if let Some(value)=outcome.get(key){doc[key]=value.clone();}}
-        super::super::commands::put(tx,"business_commands",&id,&doc)?;
+        store_command(tx,&doc)?;
         let c=collection(tx,"business_commands")?;
         let (rev,seq):(String,u64)=tx.query_row("SELECT rev,seq FROM _changes WHERE collection='business_commands' AND gen=?1 AND id=?2",params![c.gen,id],|r|Ok((r.get(0)?,r.get(1)?)))?;
         write_contract::project_command(tx,&id,c.gen,&rev,seq,&doc)?;Ok(())
@@ -412,4 +422,14 @@ impl crate::service::store_startup::RunningEngine for RuntimeBinding {
             Ok(())
         })
     }
+}
+
+async fn is_native_event(database: &Database, doc: &Value) -> Result<bool> {
+    let doc = doc.clone();
+    Ok(database
+        .readers
+        .read_job(ReadJob::new(Default::default(), move |db| {
+            origin::native_event(db, &doc)
+        }))
+        .await?)
 }
