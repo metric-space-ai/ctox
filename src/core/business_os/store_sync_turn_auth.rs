@@ -748,14 +748,17 @@ pub(crate) struct BrowserBootstrapMaterial {
     turn: Option<(String, String)>,
 }
 impl BrowserBootstrapMaterial {
+    pub(crate) fn refresh_after(&self) -> Option<std::time::Duration> {
+        // Managed relay credentials expire even without a Store mutation.
+        let expiry = self.config.ice_diagnostics["credentialExpiresAtMs"].as_i64()?;
+        let delay = expiry.saturating_sub(now_ms() as i64).saturating_sub(30_000);
+        Some(std::time::Duration::from_millis(delay.max(60_000) as u64))
+    }
     pub(crate) fn for_session(&self, session: &str) -> BusinessOsSyncConfig {
         let mut config = self.config.clone();
         if let Some((url, secret)) = &self.turn {
-            let (username, credential) =
-                mint_ephemeral_turn_credentials(secret, session, now_ms() as i64);
-            config
-                .ice_servers
-                .push(serde_json::json!({"urls": url,"username":username,"credential":credential}));
+            let (username, credential) = mint_ephemeral_turn_credentials(secret, session, now_ms() as i64);
+            config.ice_servers.push(serde_json::json!({"urls": url,"username":username,"credential":credential}));
         }
         config.ice_diagnostics = ice_diagnostics(&config.ice_servers);
         config
@@ -961,7 +964,11 @@ fn managed_turn_edge_key(root: &Path) -> Option<String> {
     if let Ok(value) = env::var(BUSINESS_OS_TURN_EDGE_KEY) {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
-            let _ = crate::secrets::set_credential(root, BUSINESS_OS_TURN_EDGE_KEY, trimmed);
+            // Avoid generating a new encrypted row/notification on every read
+            // of an unchanged environment-imported edge key.
+            if crate::secrets::get_credential(root, BUSINESS_OS_TURN_EDGE_KEY).as_deref() != Some(trimmed) {
+                let _ = crate::secrets::set_credential(root, BUSINESS_OS_TURN_EDGE_KEY, trimmed);
+            }
             return Some(trimmed.to_owned());
         }
     }

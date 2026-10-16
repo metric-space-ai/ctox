@@ -125,6 +125,7 @@ async fn build_principal(
     let catalog = prepared.catalog;
     let id = user.id.clone();
     let key = raw_key;
+    let rights_started = std::time::Instant::now();
     let snapshot = owners
         .activation_snapshot(move |tx| {
             snapshot(tx, &id, &key, local, &catalog)
@@ -133,6 +134,7 @@ async fn build_principal(
         .await
         .context("read launch identity and grants")?
         .value;
+    eprintln!("ctox_bootstrap_launch_timing={}", serde_json::json!({"current_rights_snapshot_us":rights_started.elapsed().as_micros(),"launch_config_value_us":0,"legacy_catalog_computation_us":0}));
     let config = prepared.config;
     ensure!(
         config.instance_id == signer.instance_id(),
@@ -402,8 +404,7 @@ fn snapshot(
             continue;
         };
         let version_id = format!("{app_id}@{ver}");
-        let version = catalog["business_app_versions"]
-            .as_array()
+        let version = catalog["business_app_versions"].as_array()
             .and_then(|versions| versions.iter().find(|version| version["id"] == version_id))
             .context("active app release preparation pending")?;
         ensure!(

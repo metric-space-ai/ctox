@@ -519,9 +519,7 @@ fn mutate_secret_records(
         }
         Ok(true)
     })?;
-    if changed {
-        crate::business_os::browser_bootstrap::invalidate(root);
-    }
+    if changed { crate::business_os::browser_bootstrap::invalidate(root); }
     Ok(changed)
 }
 
@@ -547,9 +545,7 @@ pub fn delete_secret_records(root: &Path, keys: &[(&str, &str)]) -> Result<usize
         }
         Ok(deleted)
     })?;
-    if deleted > 0 {
-        crate::business_os::browser_bootstrap::invalidate(root);
-    }
+    if deleted > 0 { crate::business_os::browser_bootstrap::invalidate(root); }
     Ok(deleted)
 }
 
