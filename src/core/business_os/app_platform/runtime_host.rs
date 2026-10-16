@@ -251,24 +251,10 @@ fn error_code(message: &str) -> &str {
     }
 }
 
-/// The Store crate and rxdb compile the protocol source in distinct modules.
-/// Forward to E22's one retained key owner; never load or generate another key.
-struct SharedSigner(Arc<dyn rxdb::plugins::replication_webrtc::v4_stream::InstanceSigner>);
-impl ctox_store::change_log::subscription::protocol::InstanceSigner for SharedSigner {
-    fn instance_id(&self) -> &str {
-        self.0.instance_id()
-    }
-    fn key_id(&self) -> &str {
-        self.0.key_id()
-    }
-    fn sign(&self, bytes: &[u8]) -> Result<Vec<u8>, String> {
-        self.0.sign(bytes)
-    }
-}
 impl RuntimeOwners {
     pub(crate) fn from_store_inputs(
         inputs: &crate::service::store_inputs::StoreInputs,
-        signer: Arc<dyn rxdb::plugins::replication_webrtc::v4_stream::InstanceSigner>,
+        signer: super::Signer,
         execution: Arc<dyn ExecutionAuthority>,
         cas: Cas,
     ) -> Result<Self, StoreError> {
@@ -282,7 +268,7 @@ impl RuntimeOwners {
             sync: inputs.sync.clone(),
             secrets,
             runtime: inputs.runtime.clone(),
-            signer: Arc::new(SharedSigner(signer)),
+            signer,
             execution,
             cas,
         })

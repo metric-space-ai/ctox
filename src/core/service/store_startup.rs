@@ -256,10 +256,8 @@ impl Foreground {
             }
         }
         let app_engine =
-            crate::business_os::command_plane::app_platform::runtime_host::attach_native(
-                owner.inputs.clone(),
-            )
-            .await; // APP-PLATFORM-4 attach
+            crate::business_os::app_platform::runtime_host::attach_native(owner.inputs.clone())
+                .await; // APP-PLATFORM-4 attach
         match app_engine {
             Ok(Some(engine)) => owner.engines.push(engine),
             Ok(None) => (),
