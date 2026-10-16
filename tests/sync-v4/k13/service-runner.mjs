@@ -48,7 +48,12 @@ try {
   if(committed.source!=='owner-writer-commit' || stored.rows.length!==1 || stored.rows[0].n!==17)throw Error('Native owner control positive proof failed');
   let denied=false;try{await call({...admin,cookie:'p6-unissued'},'readNative',{collection:'p6_control_rows'});}catch(e){denied=e.message==='control request denied';}
   if(!denied)throw Error('Native control admitted an unissued session');
-  report.control={ownerBacked:true,writeReadback:true,seq:committed.seq,unissuedSessionRejected:denied,process:await call(admin,'processIdentity')};
+  let userDenied=false;try{await call(native.fixture.identities.find(i=>i.name==='user'),'writeProbe',{id:probeId,n:99});}catch(e){userDenied=e.message==='control request denied';}
+  if(!userDenied)throw Error('Native control admitted a non-admin fixture write');
+  const pressure=await call(admin,'startWrites',{collection:'p6_control_rows',intervalMs:25,stopAfterMs:1000});
+  await pause(100);const pressureDone=await call(admin,'stopWrites',{owner:pressure.owner});
+  if(pressureDone.committed<2 || BigInt(pressureDone.last_seq)<=BigInt(pressureDone.first_seq))throw Error('Native load did not commit positive ordered writes');
+  report.control={ownerBacked:true,writeReadback:true,nonAdminWriteRejected:userDenied,pressure:pressureDone,seq:committed.seq,unissuedSessionRejected:denied,process:await call(admin,'processIdentity')};
   save();
   const origin='http://127.0.0.1:'+config.port;
   const require=createRequire(join(config.modulesRoot,'playwright/package.json'));

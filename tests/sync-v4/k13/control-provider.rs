@@ -6,7 +6,12 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
 const MAX_REQUEST: u64 = 65536;
 
-async fn dispatch(inputs: Arc<StoreInputs>, request: Value) -> Result<Value> {
+struct Load {
+    id:String,
+    stop:tokio::sync::watch::Sender<bool>,
+    task:tokio::task::JoinHandle<Result<Value>>,
+}
+async fn dispatch(inputs: Arc<StoreInputs>, request: Value, load:&mut Option<Load>) -> Result<Value> {
     let cookie = request["cookie"].as_str().context("session required")?.to_owned();
     let root = inputs.root.clone();
     let actor = crate::persistence::run_core_sync(move || {
@@ -38,9 +43,13 @@ async fn dispatch(inputs: Arc<StoreInputs>, request: Value) -> Result<Value> {
                 // never accepts SQL or a physical table name.
                 let table: String = db.query_row("SELECT table_name FROM _collections WHERE name=?1 AND state='active'", [&name], |r|r.get(0))?;
                 let mut statement = db.prepare(&format!("SELECT data FROM {} WHERE deleted=0 AND (?1 IS NULL OR id=?1) ORDER BY id LIMIT 100001", quote(&table)))?;
-                let rows=statement.query_map([id], |r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-                if rows.len()>100000 {return Err(invalid("control read budget exceeded"));}
-                rows.into_iter().map(|s|serde_json::from_str::<Value>(&s).map_err(|_|invalid("invalid stored JSON"))).collect::<Result<Vec<_>,StoreError>>()
+                let mut rows=Vec::new();let mut bytes=0;
+                for raw in statement.query_map([id], |r|r.get::<_,String>(0))? {
+                    let raw=raw?;bytes+=raw.len();
+                    if rows.len()>=100000 || bytes>8*1024*1024 {return Err(invalid("control read budget exceeded"));}
+                    rows.push(serde_json::from_str::<Value>(&raw).map_err(|_|invalid("invalid stored JSON"))?);
+                }
+                Ok(rows)
             })).await?;
             Ok(json!({"rows":rows,"source":"owner-reader"}))
         }
@@ -57,6 +66,53 @@ async fn dispatch(inputs: Arc<StoreInputs>, request: Value) -> Result<Value> {
             }).await??;
             Ok(json!({"seq":committed.head_seq.to_string(),"source":"owner-writer-commit",
                 "generation":committed.generation.0}))
+        }
+        "startWrites" => {
+            anyhow::ensure!(load.is_none(),"one bounded native writer load at a time");
+            let collection=text(args,"collection")?.to_owned();
+            let interval=args["intervalMs"].as_u64().context("intervalMs")?;
+            let duration=args["stopAfterMs"].as_u64().context("stopAfterMs")?;
+            anyhow::ensure!((25..=1000).contains(&interval) && (100..=30000).contains(&duration),"load budget");
+            let id=format!("p6-native-load-{}",now());
+            let stop_at=now()+duration;
+            let writer=inputs.sync.writer.clone();
+            let (stop,mut stopping)=tokio::sync::watch::channel(false);
+            let (ready,first)=tokio::sync::oneshot::channel();
+            let task=tokio::spawn(async move {
+                let mut first=Some(ready);let mut committed=0u64;let mut first_seq=0;let mut last_seq=0;
+                let until=tokio::time::Instant::now()+Duration::from_millis(duration);
+                let mut tick=tokio::time::interval(Duration::from_millis(interval));
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    tokio::select! {
+                        _=tokio::time::sleep_until(until)=>break,
+                        _=stopping.changed()=>break,
+                        _=tick.tick()=>{
+                            let name=collection.clone();let n=committed;
+                            let seq=writer.submit(WriteJob::new(Default::default(),move|tx|{
+                                let id=format!("p6-load-{}",n%128);
+                                crate::business_os::app_platform::commands::put(tx,&name,&id,&json!({"id":id,"n":n}))?;
+                                Ok(tx.query_row("SELECT v FROM _seq WHERE singleton=1",[],|r|r.get::<_,u64>(0))?)
+                            }))?.await?;
+                            committed+=1;if first_seq==0 {first_seq=seq;}last_seq=seq;
+                            if let Some(ready)=first.take(){let _=ready.send(seq);}
+                        }
+                    }
+                }
+                Ok(json!({"committed":committed,"first_seq":first_seq.to_string(),"last_seq":last_seq.to_string()}))
+            });
+            *load=Some(Load{id:id.clone(),stop,task});
+            // A caller may revoke immediately: return only after a durable first
+            // write so the before half of its commit bracket is real.
+            let first_seq=tokio::time::timeout(Duration::from_secs(5),first).await??;
+            Ok(json!({"owner":id,"stopAt":stop_at,"first_seq":first_seq.to_string(),"source":"owner-writer"}))
+        }
+        "stopWrites" => {
+            let id=text(args,"owner")?;
+            anyhow::ensure!(load.as_ref().is_some_and(|l|l.id==id),"unknown native load owner");
+            let load=load.take().context("load")?;load.stop.send_replace(true);
+            let mut result=tokio::time::timeout(Duration::from_secs(5),load.task).await???;
+            result["owner"]=json!(load.id);Ok(result)
         }
         "setRights" => {
             let expected=args["expected_ver"].as_u64().context("expected_ver")?;
@@ -101,14 +157,19 @@ async fn p6_run_controlled_foreground() -> Result<()> {
     let listener=tokio::net::UnixListener::bind(&path)?;
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&path,std::fs::Permissions::from_mode(0o600))?;
+    let mut load:Option<Load>=None;
     loop {
         tokio::select! {
-            result=&mut foreground=>{let _=std::fs::remove_file(&path);return result?;},
+            result=&mut foreground=>{
+                if let Some(load)=load.take(){load.stop.send_replace(true);let _=load.task.await;}
+                let _=std::fs::remove_file(&path);return result?;
+            },
             next=listener.accept()=>{
                 let (stream,_)=next?;
                 // Sequential admission, request byte cap and wall deadline;
                 // peer cannot create an unbounded task or read pool.
                 let inputs=inputs.clone();
+                let load=&mut load;
                 let result=tokio::time::timeout(Duration::from_secs(10),async move {
                     use tokio::io::AsyncReadExt;
                     let (read,mut write)=stream.into_split();
@@ -116,7 +177,7 @@ async fn p6_run_controlled_foreground() -> Result<()> {
                     let mut line=String::new();reader.read_line(&mut line).await?;
                     let response=if line.len()>MAX_REQUEST as usize {json!({"ok":false,"error":"request budget exceeded"})}
                     else {match serde_json::from_str::<Value>(&line) {
-                        Ok(request)=>match dispatch(inputs,request).await {
+                        Ok(request)=>match dispatch(inputs,request,load).await {
                             Ok(value)=>json!({"ok":true,"value":value}),
                             // Never serialize raw errors: request contains a cookie.
                             Err(error)=>{let reason=error.to_string();let public=if reason.starts_with("not_run("){reason}else{"control request denied".into()};json!({"ok":false,"error":public})}
