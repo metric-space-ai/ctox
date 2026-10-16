@@ -87,6 +87,7 @@ pub fn resolved() -> scope::ResolvedScope {
             "business_app_versions",
             "files",
             "shell_preferences",
+            "app_drafts",
         ]
         .into_iter()
         .map(|name| scope::Projection {
@@ -108,7 +109,7 @@ impl ReadAuthority for Policy {
             || k.scope_hash != self.hash
             || resolved().projection(&k.collection).is_none()
         {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(rusqlite::Error::InvalidParameterName(format!("fixture read authority denied participant={} collection={} scope={}", k.participant, k.collection, k.scope_hash)));
         }
         Ok(())
     }
@@ -153,9 +154,26 @@ impl Source {
     pub async fn open(path: &str) -> Result<Arc<Self>, Box<dyn std::error::Error>> {
         let db = DbId::new(path)?;
         let writer=Registry.open(db.clone(),WriterOptions{head_seq:Some(Arc::new(|c|Ok(c.query_row("SELECT v FROM _seq WHERE singleton=1",[],|r|r.get(0))?))),configure:Some(Arc::new(|c|{ConnectionConfig::default().apply_writer(c)?;let tx=c.unchecked_transaction()?;
-   for name in ["notes","business_commands","business_apps","business_app_versions","files","shell_preferences"]{ctox_store::schema::create_collection(&tx,&ctox_store::schema::CollectionDefinition{name:name.into(),app_id:(if name=="notes"{"notes"}else{"ctox-platform"}).into(),schema_ver:1,schema_json:json!({"type":"object","properties":{}}),class:"full".into(),client_limit:10000,byte_budget:10000000,rights_ver:1,app_ver:"1".into()})?;}
+   for name in ["notes","business_commands","business_apps","business_app_versions","files","shell_preferences","app_drafts"]{ctox_store::schema::create_collection(&tx,&ctox_store::schema::CollectionDefinition{name:name.into(),app_id:(if name=="notes"{"notes"}else{"ctox-platform"}).into(),schema_ver:1,schema_json:json!({"type":"object","properties":{}}),class:"full".into(),client_limit:10000,byte_budget:10000000,rights_ver:1,app_ver:"1".into()})?;}
    tx.execute_batch("CREATE TABLE IF NOT EXISTS e2e_activations(app_id TEXT PRIMARY KEY,report TEXT NOT NULL); INSERT INTO c_notes VALUES('seed','r0',1,'{\"id\":\"seed\",\"title\":\"actual SQLite seed\"}',0);")?;tx.commit()?;Ok(())}))})?;
         writer.ready().await?;
+        // Register the data-only test app through the real platform collections.
+        // API reads are local; the kernel subscribes app collections from manifests.
+        // No UI/artifact-loading acceptance is claimed by this transport bench.
+        writer.submit(WriteJob::new(JobOptions::default(), |tx| {
+            let app = json!({"id":"notes","active_ver":"1","migrated_at_seq":"0"});
+            let version = json!({"id":"notes@1","app_id":"notes","app_ver":"1","migrated_at_seq":"0","manifest":{
+                "app_id":"notes","app_ver":"1","entry":"","files":{},
+                "collections":{"notes":{"schema":{"type":"object","properties":{}}}},
+                "generations":{},"retires":{},"layout":{},"styles":[],"handlers":{},
+                "min_app_api":"4.0","capabilities_required":[],
+                "provenance":{"base_release":null,"base_hash":null,"locally_modified":false},
+                "author":"native-fixture","created_at":"2026-10-15T00:00:00Z"
+            }});
+            tx.execute("INSERT INTO c_business_apps VALUES('notes','r0',1,?1,0)",[app.to_string()])?;
+            tx.execute("INSERT INTO c_business_app_versions VALUES('notes@1','r0',1,?1,0)",[version.to_string()])?;
+            Ok(())
+        }))?.await?;
         let reader = ReadPool::for_database(
             &db,
             writer.generation(),
@@ -239,6 +257,7 @@ impl V4StreamSource for Source {
             else {
                 return Err(error("subscribe required"));
             };
+            crate::emit(json!({"kind":"subscribe","collection":sub.collection}));
             let hash = resolved().hash().map_err(error)?;
             if sub.scope_hash != hash {
                 return Err(error("scope mismatch"));
@@ -259,6 +278,7 @@ impl V4StreamSource for Source {
                 let page = sub
                     .next_page(256, Arc::new(Policy { hash: hash.clone() }), &Key, now)
                     .await;
+                if let Ok(packet) = &page {crate::emit(json!({"kind":"page_produced","collection":packet.collection,"seq_to":packet.seq_to,"docs":packet.docs.iter().map(|d|d.id.clone()).collect::<Vec<_>>()}));}
                 Some((
                     page.map_err(error)
                         .and_then(|p| serde_json::to_value(p).map_err(error)),
@@ -284,7 +304,7 @@ impl V4StreamSource for Source {
                 .map_err(error)?;
             crate::emit(json!({"kind":"gap_deadline","at_ms":batch.next_deadline_ms}));
             for result in batch.results {
-                crate::emit(json!({"kind":"write_committed","op_id":result.result.op_id,"seq":result.result.seq,"status":result.result.status,"client_seq":result.client_seq}));
+                crate::emit(json!({"kind":"write_committed","op_id":result.result.op_id,"seq":result.result.seq,"status":result.result.status,"reason":result.result.reason,"client_seq":result.client_seq}));
                 if source.drop_next.swap(false,std::sync::atomic::Ordering::SeqCst){std::future::pending::<()>().await;}
                 let mut value=serde_json::to_value(result).map_err(error)?;value["type"]="write_result".into();source.results.send(value).map_err(error)?;
             }

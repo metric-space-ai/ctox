@@ -10,7 +10,8 @@ import assert from 'node:assert/strict';
 const out=path.resolve(process.env.E2E_OUT),root=process.cwd();fs.mkdirSync(out,{recursive:true});
 const require=createRequire(process.env.PLAYWRIGHT_MODULE),{chromium}=require('playwright'),{WebSocketServer}=require(process.env.WS_MODULE);
 const report={started:new Date().toISOString(),path:'Chromium kernel ↔ TURN ↔ native P4/P5/P6/P8 SQLite store',pass:false,events:[],errors:[]};
-let native,browser,server,wss,turn,page,browserTmp,deadlineTimer,cleaning=false;const sockets=new Map(),owned=[];
+let native,browser,server,wss,turn,page,browserTmp,deadlineTimer,joinedTimer,resolveNativeJoin,cleaning=false;const sockets=new Map(),owned=[];
+const nativeJoined=new Promise(resolve=>{resolveNativeJoin=resolve;});report.signals=[];
 const waiters=new Set();
 function emit(event){report.events.push(event);if(event.kind==='gap_deadline'){clearTimeout(deadlineTimer);if(Number.isSafeInteger(event.at_ms))deadlineTimer=setTimeout(()=>{if(!cleaning)send('expire');},Math.max(0,event.at_ms-Date.now()));}for(const waiter of [...waiters])if(waiter.predicate(event)){waiters.delete(waiter);clearTimeout(waiter.timer);waiter.resolve(event);}}
 function event(predicate){return new Promise((resolve,reject)=>{const waiter={predicate,resolve,reject,timer:setTimeout(()=>{waiters.delete(waiter);reject(Error('native event deadline'));},15000)};waiters.add(waiter);});}
@@ -34,7 +35,7 @@ try{
   try{response.setHeader('Content-Type','text/javascript');response.end(fs.readFileSync(file));}catch{response.writeHead(404);response.end();}
  });
  wss=new WebSocketServer({server,path:'/signal'});wss.on('connection',(socket,req)=>{const url=new URL(req.url,'http://local'),id=url.searchParams.get('peerId')??crypto.randomUUID(),row={socket,room:null,role:url.searchParams.get('role')??'browser'};sockets.set(id,row);socket.send(JSON.stringify({type:'init',yourPeerId:id}));
-  socket.on('message',raw=>{const message=JSON.parse(raw);if(message.type==='join'){row.room=message.room;broadcast();}else if(message.type==='signal'){const target=sockets.get(message.receiverPeerId);if(row.room&&target?.room===row.room)target.socket.send(JSON.stringify({...message,senderPeerId:id}));}});
+  socket.on('message',raw=>{const message=JSON.parse(raw);report.signals.push({peer:id,type:message.type,signal:message.data?.type,receiver:message.receiverPeerId});if(message.type==='join'){row.room=message.room;broadcast();if(id==='native000001'&&row.room===room)resolveNativeJoin();}else if(message.type==='signal'){const target=sockets.get(message.receiverPeerId);if(row.room&&target?.room===row.room)target.socket.send(JSON.stringify({...message,senderPeerId:id}));}});
   socket.on('close',()=>{if(sockets.get(id)===row)sockets.delete(id);broadcast();});
  });await new Promise(r=>server.listen(0,'127.0.0.1',r));
  const port=server.address().port,room='e2e-'+crypto.randomBytes(8).toString('hex'),signalingUrl=`ws://127.0.0.1:${port}/signal`,turnUrl=`turn:127.0.0.1:${turnPort}?transport=udp`;
@@ -42,6 +43,7 @@ try{
  native.on('error',childFailed);native.stdin.on('error',childFailed);native.on('exit',(code,signal)=>{if(!cleaning)childFailed(Error(`native exited ${code??signal}`));});
  readline.createInterface({input:native.stdout}).on('line',line=>{try{emit(JSON.parse(line));}catch{report.errors.push('invalid native stdout');}});
  const ready=event(row=>row.kind==='ready');native.stdin.write(JSON.stringify({db:path.join(out,'sync-'+crypto.randomBytes(6).toString('hex')+'.sqlite'),signalingUrl:signalingUrl+'?peerId=native000001&role=ctox_instance',turnUrl,room})+'\n');await ready;
+ await Promise.race([nativeJoined,new Promise((_,reject)=>{joinedTimer=setTimeout(()=>reject(Error('native signaling join deadline')),15000);})]);clearTimeout(joinedTimer);
  // Keep Chrome's AF_UNIX socket path short (the baseline exposed long TMPDIR failures).
  browserTmp=fs.mkdtempSync('/mnt/nvme1/build-lane/tmp/e1-');
  browser=await chromium.launch({headless:true,env:{...process.env,TMPDIR:browserTmp},executablePath:process.env.CHROME_BIN??'/usr/bin/google-chrome',args:['--disable-gpu']});const context=await browser.newContext();page=await context.newPage();page.on('pageerror',error=>report.errors.push(error.message));
@@ -78,17 +80,19 @@ try{
  report.command={p50_ms:latencies[Math.floor(latencies.length*.50)],p95_ms:latencies[Math.floor(latencies.length*.95)],p99_ms:latencies[Math.floor(latencies.length*.99)],semantics:report.m3.semantics};
  report.steadyCommand=await page.evaluate(()=>e2e.command());assert.equal(report.steadyCommand.status,'accepted');
  report.afterLatency=await command('status');assert.equal(report.afterLatency.ops,1002,'latency probe is separate from the 1000-command M3 window');
+ report.control=await page.evaluate(()=>e2e.control());assert.equal(report.control.samples,100);
  report.browser=await page.evaluate(()=>e2e.stats());assert.equal(report.browser.errors.length,0);assert.ok(report.browser.wire.maxFrame<=16384);assert.ok(report.browser.wire.maxBuffered<=131072);
  await page.screenshot({path:path.join(out,'02-resend-once.png')});
  await page.evaluate(async()=>{const {IdbBackend}=await import('/kernel/store-idb-v5.mjs');const db=await IdbBackend.open('ctox-close-proof');let completed=false;
   const raw=db.db.transaction('meta','readwrite');raw.addEventListener('complete',()=>{completed=true;},{once:true});const tx=db.trackTransaction(raw);const store=tx.objectStore('meta');let closed;
   await new Promise((resolve,reject)=>{const req=store.put({key:'close-proof',value:1});req.onerror=()=>reject(req.error);req.onsuccess=()=>{closed=db.close().then(()=>{if(!completed)throw Error('Close resolved before owned transaction completed');});tx.addEventListener('complete',()=>{completed=true;resolve();},{once:true});};});await closed;
  });
- report.pass=report.errors.length===0;console.log('E2E_PATH '+JSON.stringify({pass:report.pass,first:report.first,push:report.push,command:report.command,m3:{commands:report.m3.commands,drops:report.m3.drops,losses:report.m3.losses,duplicates:report.m3.duplicates,elapsed_ms:report.m3.elapsed_ms},resend:report.result,relay:report.browser.relay}));assert.ok(report.pass);
-}catch(error){report.error=error.stack;if(page)report.diagnostic=await page.evaluate(()=>globalThis.e2eDiagnostic?.()).catch(()=>null);console.error(error);process.exitCode=1;}
+ report.pass=report.errors.length===0;console.log('E2E_PATH '+JSON.stringify({pass:report.pass,first:report.first,push:report.push,command:report.command,control:report.control,m3:{commands:report.m3.commands,drops:report.m3.drops,losses:report.m3.losses,duplicates:report.m3.duplicates,elapsed_ms:report.m3.elapsed_ms},resend:report.result,relay:report.browser.relay}));assert.ok(report.pass);
+}catch(error){report.error=error.stack;if(page){report.diagnostic=await page.evaluate(()=>globalThis.e2eDiagnostic?.()).catch(()=>null);await page.screenshot({path:path.join(out,'failure.png')}).catch(()=>{});}console.error(error);process.exitCode=1;}
 finally{
  cleaning=true;
  clearTimeout(deadlineTimer);
+ clearTimeout(joinedTimer);
  if(page)await page.evaluate(()=>globalThis.e2e?.close()).catch(()=>{});if(browser)await browser.close();
  for(const waiter of waiters){clearTimeout(waiter.timer);waiter.resolve({kind:'cleanup'});}waiters.clear();
  for(const child of owned.reverse())await stop(child);

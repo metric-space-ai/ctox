@@ -36,7 +36,10 @@ export async function start(config){
    const token=JSON.parse(session.scope_tokens[0]);if(token.claims.instance_id!=='e2e-fixture'||token.claims.device_id!=='browser0'||token.claims.exp*1000<Date.now()||!await verify(unb64(token.signature),utf8.encode('ctox:v4:scope\0'+canonical(token.claims))))throw Error('scope signature invalid');
    return {scope_hash:token.claims.scope_hash,gen:1};
   },verifyPackage:async packet=>{const {sig,...body}=packet;return packet.instance_id==='e2e-fixture'&&packet.participant==='alice'&&await verify(new Uint8Array(sig),utf8.encode('ctox.sync.v4.stream\0'+canonical(body)));}});
- globalThis.e2eDiagnostic=()=>({channels:Object.entries(transport.channels??{}).map(([lane,c])=>({lane,label:c.label,state:c.readyState})),received:wire.channels??[],link:connection?.peer.connectionState});
+ const applied=[],failures=[],apply=transport.apply.bind(transport),fail=transport.fail.bind(transport);
+ transport.apply=async(message,lane)=>{applied.push({type:message.type,lane,collection:message.collection,seq_to:message.seq_to,docs:message.docs?.map(d=>({id:d.id,seq:d.seq}))});return apply(message,lane);};
+ transport.fail=error=>{failures.push(error.message);return fail(error);};
+ globalThis.e2eDiagnostic=()=>({channels:Object.entries(transport.channels??{}).map(([lane,c])=>({lane,label:c.label,state:c.readyState})),received:wire.channels??[],link:connection?.peer.connectionState,errors,failures,applied,sent:transport.reliable.sent.map(String),acked:transport.reliable.acked.map(String),delivered:transport.reliable.delivered.map(String),wire});
  kernel=createKernel({instanceId:'e2e-fixture',userId:'alice',transport});await kernel.ready;
  const localReadyMs=performance.now()-started,api=kernel.appApi('notes','1'),seed=api.get('notes','seed');
  await transport.ready;await observed(seed,doc=>doc?.title==='actual SQLite seed');
@@ -51,6 +54,17 @@ export async function start(config){
   async command(){const before=performance.now(),handle=api.command('bench.noop',{});await handle.local;const result=await deadline(handle.result,'command acceptance deadline');return {roundtripMs:performance.now()-before,status:result.status,semantics:'Core write acceptance; P9 handler completion not measured'};},
   async queueCommands(offset,count){this.batch=[];for(let i=0;i<count;i++){const started=performance.now(),handle=api.command('bench.noop',{ordinal:offset+i});this.batch.push({handle,started});await handle.local;}return this.batch.map(x=>x.handle.id);},
   async batchAccepted(){return deadline(Promise.all(this.batch.map(async({handle,started})=>({id:handle.id,...await handle.result,roundtripMs:performance.now()-started}))),'M3 command result deadline',90000);},
+  async control(){
+   const state=transport.reliable,ack=state.ack,latencies=[];let pending;
+   state.ack=function(lane,upto){ack.call(this,lane,upto);if(lane===0&&pending&&this.acked[0]>=pending.seq)pending.resolve();};
+   try{for(let i=0;i<100;i++){
+    const before=performance.now(),seq=state.sent[0]+1n;let timer;
+    const confirmed=new Promise((resolve,reject)=>{pending={seq,resolve};timer=setTimeout(()=>reject(Error('control ACK deadline')),5000);});
+    try{await Promise.all([transport.scheduler.send('control',{type:'priority',collection:'notes',priority:'P1'}),confirmed]);latencies.push(performance.now()-before);}
+    finally{clearTimeout(timer);pending=null;}
+   }}finally{state.ack=ack;}
+   latencies.sort((a,b)=>a-b);return {samples:latencies.length,p50_ms:latencies[50],p95_ms:latencies[95],p99_ms:latencies[99],semantics:'Spur 0 priority send to native E14 ACK after application ingress; no App API acknowledgement'};
+  },
   async stats(){const stats=await connection.peer.getStats();let relay=false;for(const row of stats.values())if(row.type==='candidate-pair'&&row.state==='succeeded'&&row.nominated){const local=stats.get(row.localCandidateId);relay=local?.candidateType==='relay';}if(!relay)throw Error('TURN relay not selected');return {relay,firstVisibleMs,localReadyMs,metrics:kernel.shell.metrics.get(),wire,errors};},
   async close(){await kernel.close();}
  };
