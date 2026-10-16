@@ -27,7 +27,9 @@ try{
   assert.ok(t.sent,'real kernel did not dispatch the pending patch');
   assert.equal(t.sent.op,'patch');
   assert.deepEqual(t.sent.body,patch,'kernel patch carried stale server-owned fields');
-  const keys=['client_seq','op_id','prev_op_id','collection','id','base_rev','base_seq','gen','schema_ver','app_ver','op','body'];
+  // Field-ownership contract: bind the captured revision and body. The native
+  // optional base_seq is omitted; synthetic page cursors are not native CAS proof.
+  const keys=['client_seq','op_id','prev_op_id','collection','id','base_rev','gen','schema_ver','app_ver','op','body'];
   const wire=Object.fromEntries(keys.map(key=>[key,t.sent[key]]));
   const input=join(out,mode+'-input.json'),output=join(out,mode+'-native.json');
   fs.writeFileSync(input,JSON.stringify({case:mode,wire},null,2));
