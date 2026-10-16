@@ -16,7 +16,7 @@ for(let i=0;i<argv.length;i+=2) {
 }
 if(process.platform!=='linux' || !process.env.BUILD_LANE_BIN || !process.env.TMPDIR || !process.env.CARGO_TARGET_DIR)
   throw Error('Canonical Linux lane required');
-const allowed=new Set(['--build','--expected-revision','--output','--chrome','--modules-root','--turn-bin','--turn-lib','--os-bootstrap']);
+const allowed=new Set(['--build','--expected-revision','--output','--chrome','--modules-root','--turn-bin','--turn-lib','--prepare-only']);
 for(const flag of flags.keys())if(!allowed.has(flag))throw Error('Unsupported P6 option: '+flag);
 const expected=flags.get('--expected-revision');
 if(!/^[a-f0-9]{40}$/.test(expected??''))throw Error('Immutable expected daemon revision required');
@@ -78,14 +78,15 @@ if(build && !summary.scenarios.length) {
     const dir=join(output,id);fs.mkdirSync(dir,{mode:0o700});
     const config={owner:summary.owner,...build,output:dir,profile:'small',clients:1,rttMs:20,warmRttMs:20,lossPercent:0,
       uid:process.getuid(),gid:process.getgid(),hostNamespaces:Object.fromEntries(['user','net','mnt','pid'].map(k=>[k,fs.readlinkSync('/proc/self/ns/'+k)])),seedAfterStart:false,leadProfile:'eager',prime:false,
-      catalog:true,scenarioRoot:resolve(here,'..'),scenario:id,osBootstrap:flags.get('--os-bootstrap')??null,
+      catalog:true,scenarioRoot:resolve(here,'..'),scenario:id,prepareOnly:flags.get('--prepare-only')==='true',
       root:join(dir,'tenant-'+expected.slice(0,12)),port:19865,signalingPort:19866,turnPort:34789,
       runner:join(here,'service-runner.mjs'),sourceManifest,buildReceipt:resolve(flags.get('--build')),
       lane,canonicalTmpdir:process.env.TMPDIR,durationSeconds:seconds,hostNetworkNamespace:fs.readlinkSync('/proc/self/ns/net'),
       chrome:flags.get('--chrome')??'/opt/google/chrome/chrome',
       modulesRoot:flags.get('--modules-root')??join(lane,'deps/shell-browser-collection-auth/node_modules'),
-      turnBin:flags.get('--turn-bin')??'/usr/bin/turnserver',turnLib:flags.get('--turn-lib')??''};
+      turnBin:flags.get('--turn-bin')??'/usr/bin/turnserver',turnLib:flags.get('--turn-lib','--prepare-only')??''};
     const configPath=join(dir,'config.private.json');
+    config.configPath=configPath;config.fixturePrivate=join(dir,'fixture.private.json');
     fs.writeFileSync(configPath,JSON.stringify(config,null,2),{mode:0o600});
     const log=fs.openSync(join(output,id+'.log'),'w',0o600);
     let controller,error;

@@ -1,28 +1,31 @@
-// P6 uses the real foreground root; no V3 readiness or SQL fixture path.
+// Real foreground + E38 browser entry. No V3 SQL/readiness/bootstrap path.
 import fs from 'node:fs';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {createRequire} from 'node:module';
 import {Native,pause} from '../../sync-v4-e2e/native.mjs';
 import {installServiceEntry} from './service-entry.mjs';
+import {installBrowserEntry} from './browser-entry.mjs';
 const config=JSON.parse(fs.readFileSync(process.argv[2]));
-if(config.osBootstrap && (!config.osBootstrap.startsWith('/') || config.osBootstrap.startsWith('//') || /[?#]/.test(config.osBootstrap)))
-  throw Error('OS bootstrap must be an exact same-origin static module path');
 if(!config.canonicalTmpdir || !fs.statSync(config.canonicalTmpdir).isDirectory())throw Error('Canonical lane TMPDIR required');
 process.env.TMPDIR=config.canonicalTmpdir;
 installServiceEntry(Native);
-const native=new Native(config),contexts=[];
+const native=new Native(config),contexts=[],bindings=new WeakMap();
 const scenario=(await import(pathToFileURL(join(config.scenarioRoot,config.scenario.toLowerCase(),'scenario.mjs')))).default;
+const row={id:scenario.id,criterion:scenario.criterion,status:'not_run',pass:false,acceptanceComplete:false};
 const report={owner:config.owner,revision:config.revision,binarySha256:config.binarySha256,netem:config.netem,
   startedAt:new Date().toISOString(),processLimits:fs.readFileSync('/proc/self/limits','utf8').split('\n').filter(line=>line.startsWith('Max processes')),
-  scenarios:[],terminal:false,pass:false};
+  scenarios:[row],terminal:false,pass:false,browserEntries:[]};
 const save=()=>fs.writeFileSync(join(config.output,'result.json'),JSON.stringify(report,null,2));
 let browser,interrupted=false;
 process.once('SIGTERM',()=>{interrupted=true;void native.close();});
 const deadline=setTimeout(()=>{interrupted=true;void native.close();},config.durationSeconds*1000);
 save();
 try {
-  await native.prepare();
+  report.fixture=await native.prepare();save();
+  if(config.prepareOnly){row.reason='not_run(branches-pending): native enrollment prepared; criteria not started';}else {
+  native.start('signaling',process.execPath,[join(config.source,'src/core/rxdb/tools/local_signaling_server.js'),String(config.signalingPort)],
+    {...process.env,SIGNALING_HOST:'127.0.0.1',SIGNALING_PORT:String(config.signalingPort)});
   const at=Date.now();native.serve();
   const log=join(config.output,'daemon.log');
   for(let n=0;n<300;n++) {
@@ -39,49 +42,43 @@ try {
   if(!report.daemon?.ready)throw Error('Foreground readiness deadline');
   save();
   const origin='http://127.0.0.1:'+config.port;
-  try {
-    const response=await fetch(origin+'/api/business-os/sync/config',{signal:AbortSignal.timeout(2000)});
-    report.bootstrap={reachable:true,status:response.status};
-  } catch(error) {
-    report.bootstrap={reachable:false,code:error.cause?.code??error.name};
-  }
-  const row={id:scenario.id,criterion:scenario.criterion,status:'not_run',pass:false,acceptanceComplete:false};
-  report.scenarios.push(row);
-  if(!report.bootstrap.reachable || !config.osBootstrap) {
-    row.reason=(!report.bootstrap.reachable?'Real foreground has no listening browser bootstrap':'No native-backed OS scenario adapter supplied')+
-      '; native browser/fixture transport must be bound before authenticated K measurements';
-    row.blockedBeforePolicyEvaluation=true;
-    row.criteria=Object.fromEntries(Object.entries(scenario.criterion).map(([name,target])=>[name,{target,actual:null,status:!report.bootstrap.reachable?'not_run(native-browser-listener)':'not_run(native-scenario-control)'}]));
-    row.dependencies=[{file:'src/core/service/store_native.rs',line:77,reason:'Fresh tenant requires explicit native enrollment; no synthetic voter/authority'},
-      {file:'src/core/service/store_startup.rs',line:147,reason:'CUTOVER-6 binds Store rights before engine admission; readiness is not browser admission'},
-      {file:'src/core/service/store_inputs.rs',line:125,reason:'Native session is required, never fabricated'}];
-  } else {
-    native.start('signaling',process.execPath,[join(config.source,'src/core/rxdb/tools/local_signaling_server.js'),String(config.signalingPort)],
-      {...process.env,SIGNALING_HOST:'127.0.0.1',SIGNALING_PORT:String(config.signalingPort)});
-    const require=createRequire(join(config.modulesRoot,'playwright/package.json'));
-    const {chromium}=require('playwright');
-    browser=await chromium.launch({executablePath:config.chrome,headless:true,timeout:30000,args:['--disable-gpu','--no-sandbox']});
-    const page=async()=>{const context=await browser.newContext();contexts.push(context);const p=await context.newPage();
-      await p.goto(origin+'/index.html',{waitUntil:'domcontentloaded'});return p;};
-    const h={config,page,newClient:page,pause,offline:(p,value)=>p.context().setOffline(value),
-      observe:(phase,measured)=>{row.phase=phase;(row.observations??=[]).push({phase,...measured});save();},
-      os:p=>p.evaluate(async path=>{const module=await import(path),os=await module.connectScenario();
-        if(os.transportKind!=='native-webrtc'||!os.nativePeerId||!os.kernel?.shellApi)throw Error('Actual native OS binding required');
-        globalThis.__e2eOS={...os,shell:os.kernel.shellApi()};return {available:true};},config.osBootstrap)};
-    Object.assign(row,await scenario.run(h));
+  const require=createRequire(join(config.modulesRoot,'playwright/package.json'));
+  const {chromium}=require('playwright');
+  browser=await chromium.launch({executablePath:config.chrome,headless:true,timeout:30000,args:['--disable-gpu','--no-sandbox']});
+  const page=async(identity=native.fixture.identities.find(i=>i.name==='admin'))=>{
+    const enrolled=native.fixture.identities.find(i=>i.id===identity.id);
+    if(!enrolled?.cookie)throw Error('Server-issued fixture cookie required before navigation');
+    const context=await browser.newContext();contexts.push(context);
+    await context.addCookies([{name:'ctox_business_os_auth',value:enrolled.cookie,url:origin,httpOnly:true,sameSite:'Strict'}]);
+    const connect=await installBrowserEntry(context,origin);
+    const p=await context.newPage();bindings.set(p,()=>connect(p,enrolled,native.fixture));
+    const response=await p.goto(origin+'/',{waitUntil:'domcontentloaded',timeout:20000});
+    report.browserEntries.push({userId:enrolled.id,path:'/',status:response?.status()});save();
+    return p;
+  };
+  const h={config,page,newClient:page,pause,offline:(p,value)=>p.context().setOffline(value),
+    observe:(phase,measured)=>{row.phase=phase;(row.observations??=[]).push({phase,...measured});save();},
+    os:async p=>{const value=await bindings.get(p)();report.browserEntries.at(-1).proof=value.proof;save();return value;}};
+  Object.assign(row,await scenario.run(h));
   }
 } catch(error) {
-  report.error=error.message;
-  if(!report.scenarios.length)report.scenarios.push({id:scenario.id,status:'not_run',pass:false,acceptanceComplete:false,reason:error.message,
-    criteria:Object.fromEntries(Object.entries(scenario.criterion).map(([name,target])=>[name,{target,actual:null,status:'not_run(native-entry)'}]))});
+  // Generated fixture tokens and launch contexts are never included in reports.
+  const safe=String(error.message).replace(/(?:https?|wss?):\/\/\S+/g,'[endpoint]').slice(0,600);
+  report.error=safe;row.reason=safe;
 } finally {
+  if(row.status!=='measured') {
+    const reason=row.reason??row.error??report.error??'Native scenario control unavailable';
+    const category=reason.match(/not_run\(([^)]+)\)/)?.[1]??'native-browser-entry';
+    row.criteria=Object.fromEntries(Object.entries(scenario.criterion).map(([name,target])=>[name,{target,actual:null,status:'not_run('+category+')'}]));
+  }
   clearTimeout(deadline);
   for(const context of contexts)await context.close().catch(()=>{});
   await browser?.close().catch(()=>{});
-  try{await native.close();report.cleanup='owned groups absent';}catch(error){report.cleanup=error.message;}
+  try{await native.close();report.cleanup='owned groups absent';}catch{report.cleanup='owned group cleanup failed';}
+  for(const file of [config.fixturePrivate])if(file)fs.rmSync(file,{force:true});
   report.terminal=true;report.finishedAt=new Date().toISOString();
-  report.pass=report.scenarios.length===1&&report.scenarios.every(row=>row.status==='measured'&&row.pass&&row.acceptanceComplete)&&report.cleanup==='owned groups absent';
+  report.pass=row.status==='measured'&&row.pass&&row.acceptanceComplete&&report.cleanup==='owned groups absent';
   save();
 }
-console.log(config.scenario,report.scenarios[0]?.status,report.scenarios[0]?.reason??report.error??'');
+console.log(config.scenario,row.status,row.reason??row.error??report.error??'');
 process.exitCode=report.pass?0:1;

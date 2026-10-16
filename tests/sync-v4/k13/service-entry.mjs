@@ -1,6 +1,7 @@
 // Test-only adapter for #810's Native lifecycle. No product/harness file edits.
 import fs from 'node:fs';
 import {resolve} from 'node:path';
+import {spawnSync} from 'node:child_process';
 import {hashFile} from './build-receipt.mjs';
 
 export function installServiceEntry(Native) {
@@ -12,16 +13,35 @@ export function installServiceEntry(Native) {
     for(const path of ['Cargo.toml','src','contracts'])fs.symlinkSync(resolve(source,path),resolve(root,path));
     fs.mkdirSync(resolve(root,'bin'));
     fs.symlinkSync(this.config.binary,resolve(root,'bin/ctox'));
-    this.env.CTOX_BUSINESS_OS_WEB_ADDR='127.0.0.1:'+port;
-    // V3 preparation writes SQLite directly. The real service owns schema
-    // creation; native app/identity fixtures must use its authenticated control.
-    return {profile:this.config.profile,fixtureReady:false,synthetic:true,
-      reason:'Native scenario/control fixtures required; no legacy SQL seeding'};
+    for(const voter of [root+'.voter2',root+'.voter3']) {
+      if(fs.existsSync(voter))throw Error('Never reuse a P6 voter root');
+      fs.mkdirSync(resolve(voter,'runtime/home'),{recursive:true,mode:0o700});
+      for(const path of ['Cargo.toml','src','contracts'])fs.symlinkSync(resolve(source,path),resolve(voter,path));
+    }
+    delete this.env.CTOX_BUSINESS_OS_ENABLE_SMOKE_CONTROLS;
+    delete this.env.CTOX_BUSINESS_OS_SIGNALING_URLS;
+    if(!this.config.fixtureBinary || hashFile(this.config.fixtureBinary)!==this.config.fixtureBinarySha256)throw Error('Checksum-bound native fixture executable required');
+    const fixtureEnv={...process.env,CTOX_P6_FIXTURE_CONFIG:this.config.configPath};
+    delete fixtureEnv.CTOX_STATE_ROOT;delete fixtureEnv.CTOX_ROOT;
+    const result=spawnSync(this.config.fixtureBinary,['p6_prepare_enrolled_profiles','--ignored','--nocapture'],{
+      cwd:source,encoding:'utf8',timeout:90000,maxBuffer:1024*1024,
+      env:fixtureEnv,
+    });
+    fs.writeFileSync(resolve(this.config.output,'fixture.log'),result.stdout+result.stderr,{mode:0o600});
+    if(result.status!==0 || !/1 passed/.test(result.stdout))throw Error('not_run(native-enrollment): real foreground fixture failed');
+    this.fixture=JSON.parse(fs.readFileSync(this.config.fixturePrivate));
+    if(this.fixture.root!==root || this.fixture.revision!==revision || this.fixture.nativeVoters!==3)
+      throw Error('Native fixture source/root mismatch');
+    return {fixtureReady:true,nativeVoters:3,browserAdmission:'must be proven by E38 hello'};
   };
   Native.prototype.seed=function() {
     throw Error('Native scenario fixture/control is required; P6 never opens owner SQLite through the V3 seed helper');
   };
   Native.prototype.serve=function() {
+    for(const root of this.fixture.roots.slice(1)) {
+      this.start('voter-'+root.split('.').at(-1),this.config.binary,['service','--foreground','--root',root],
+        {...this.env,CTOX_ROOT:root,CTOX_STATE_ROOT:resolve(root,'runtime')});
+    }
     const args=['service','--foreground','--root',this.config.root];
     const actual=hashFile(this.config.binary);
     if(actual!==this.config.binarySha256)throw Error('P6 service binary changed after verification');

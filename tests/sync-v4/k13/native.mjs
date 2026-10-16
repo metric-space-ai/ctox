@@ -51,7 +51,7 @@ export async function control(page,operation,args = {}) {
   },{operation,args});
 }
 export async function participant(h, fixture, identity) {
-  const page = await h.newClient();
+  const page = await h.newClient(identity);
   const availability = await h.os(page);
   assert.equal(availability.available,true,'Every participant needs the real native OS bootstrap');
   const actual = await control(page,'authenticate',{userId:identity.id,deviceId:identity.deviceId});
