@@ -31,6 +31,8 @@ pub mod ingest;
 pub mod lock;
 #[path = "process.rs"]
 pub mod process;
+#[path = "process_defaults.rs"]
+pub mod process_defaults;
 #[path = "sandbox.rs"]
 pub mod sandbox;
 #[path = "secrets.rs"]
