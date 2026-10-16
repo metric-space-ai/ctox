@@ -25,7 +25,7 @@ cmd=['cargo','test','--manifest-path','tests/sync-v4/p6-e55/Cargo.toml','--test'
 try:
     if run('baseline',cmd)!=0: raise RuntimeError('baseline failed; no mutation evidence')
     mutants=[
-      ('foreign-app',r'rights\.resolve_app_collection\(\s*app,\s*&state.role,\s*&state.user,\s*&rule.collection,?\s*\)','rights.resolve_collection(&state.role, &state.user, &rule.collection)','foreign app collection entered grant'),
+      ('foreign-app',r'rights\s*\.resolve_app_collection\(\s*app,\s*&state.role,\s*&state.user,\s*&rule.collection,?\s*\)','rights.resolve_collection(&state.role, &state.user, &rule.collection)','foreign app collection entered grant'),
       ('expired',r'\|\| now >= claims.exp','|| false /* MUTATION: expiry omitted */','expired grant remained readable'),
       ('revoked',r'state\s*\.issued\s*\.remove\(app\)\s*\.map\(\|_\|\s*revoke_frame\(app\)\)','state.issued.get(app).map(|_| revoke_frame(app))','revoked app remained readable'),
     ]
