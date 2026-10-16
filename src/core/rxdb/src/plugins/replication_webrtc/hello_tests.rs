@@ -62,8 +62,9 @@ fn v4_hello_selects_api_codec_capabilities_and_bounded_frame() {
     assert_eq!(selected.app_api_ver, "4.1");
     assert_eq!(selected.transport.codec, Codec::Gzip);
     assert_eq!(selected.transport.frame_bytes, native_frame_limit());
-    let advertised = serde_json::to_value(hello().with_native_transport_limit()).unwrap();
-    assert_eq!(advertised["transport"]["max_frame_bytes"], native_frame_limit());
+    let advertised = serde_json::to_value(policy().transport).unwrap();
+    assert_eq!(MAX_FRAME_BYTES, native_frame_limit());
+    assert_eq!(advertised["max_frame_bytes"], native_frame_limit());
     assert_eq!(selected.capabilities, ["terminal", "worktree"]);
     let mut peer = hello();
     peer.bootstrap_ver = 3;

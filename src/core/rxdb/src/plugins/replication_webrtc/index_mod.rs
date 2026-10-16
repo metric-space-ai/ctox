@@ -6698,7 +6698,7 @@ pub mod v4_router {
                 }
             };
             if let Err(error) = handler
-                .send_v4_control(&peer, &HelloFrame::Hello(local.with_native_transport_limit()))
+                .send_v4_control(&peer, &HelloFrame::Hello(local))
                 .await
             {
                 handler.close_peer(&peer).await;
