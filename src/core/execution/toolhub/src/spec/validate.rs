@@ -110,6 +110,8 @@ pub enum Escape {
     BackslashQuote,
     /// JSON string-literal escaping (without the surrounding quotes).
     Json,
+    /// No escaping; the value must be `/`-separated id segments (e.g. a branch name).
+    Segments,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -178,6 +180,9 @@ pub enum Entry {
 pub enum PathEnc {
     /// ASCII digits only (numeric ids passed as strings).
     Digits,
+    /// `/`-separated segments, each checked like `Segment`, sent with literal `/`
+    /// (branch names, nested refs).
+    Segments,
     /// `application/x-www-form-urlencoded` byte encoding (space -> `+`), refusing `/ ? #`.
     Form,
     /// A namespaced id such as `group/project`: `[A-Za-z0-9._/-]{1,200}`, no `.`/`..`
@@ -223,6 +228,8 @@ pub enum Response {
     Body,
     Pick { pointer: String, required: bool, empty_error: String },
     List { pointer: String, key: String },
+    /// The array at `pointer` (`""` = whole body; missing -> `[]`), items optionally projected.
+    Array { pointer: String, each: Option<Vec<EachField>> },
     /// Fields, plus an optional `require`: (pointer that must be an object, error text).
     Object(Vec<(String, String, Option<Value>, FieldShape)>, Option<(String, String)>),
     MergeSuccess { pointer: String },
@@ -243,6 +250,8 @@ pub struct Action {
     pub body: Body,
     pub constraints: Vec<Constraint>,
     pub nonempty_body: Option<String>,
+    /// `validate_only`: args checked like any arg ref (required, segment, …) but not sent.
+    pub validate_only: Vec<Val>,
     pub response: Response,
 }
 
@@ -385,6 +394,7 @@ fn parse_val(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTreeS
                         None | Some("none") => Escape::None,
                         Some("backslash_quote") => Escape::BackslashQuote,
                         Some("json") => Escape::Json,
+                        Some("segments") => Escape::Segments,
                         Some(o) => bail!("{ctx}: unknown escape `{o}`"),
                     };
                     let forbid = v.get("forbid").and_then(|e| e.get(&name)).and_then(Value::as_str).unwrap_or("").to_string();
@@ -568,6 +578,7 @@ fn parse_path(raw: &str, props: &Map<String, Value>, enc: &Map<String, Value>, c
             Some("namespaced") => PathEnc::Namespaced(String::new()),
             Some("name") => PathEnc::Name,
             Some("digits") => PathEnc::Digits,
+            Some("segments") => PathEnc::Segments,
             Some("form") => PathEnc::Form,
             Some(o) => bail!("{ctx}: unknown path encoding `{o}`"),
             },
@@ -590,7 +601,7 @@ fn parse_path(raw: &str, props: &Map<String, Value>, enc: &Map<String, Value>, c
 
 fn parse_response(v: Option<&Value>, ctx: &str) -> Result<Response> {
     let Some(v) = v else { return Ok(Response::Body) };
-    known_keys(v, &["mode", "pointer", "required", "empty_error", "as", "fields", "value", "require"], ctx)?;
+    known_keys(v, &["mode", "pointer", "required", "empty_error", "as", "fields", "value", "require", "each"], ctx)?;
     let ptr = |v: &Value| -> Result<String> {
         let p = v.get("pointer").and_then(Value::as_str).unwrap_or("").to_string();
         if !(p.is_empty() || p.starts_with('/')) {
@@ -606,6 +617,13 @@ fn parse_response(v: Option<&Value>, ctx: &str) -> Result<Response> {
             empty_error: v.get("empty_error").and_then(Value::as_str).unwrap_or("the provider returned an empty response").into(),
         },
         "list" => Response::List { pointer: ptr(v)?, key: s(v, "as", ctx)?.into() },
+        "array" => Response::Array {
+            pointer: ptr(v)?,
+            each: match v.get("each") {
+                Some(e) => Some(parse_each(e, ctx)?),
+                None => None,
+            },
+        },
         "object" => {
             let f = v.get("fields").and_then(Value::as_object).ok_or_else(|| anyhow!("{ctx}: object mode needs `fields`"))?;
             let mut out = Vec::new();
@@ -665,7 +683,7 @@ fn parse_action(a: &Value, toolkit: &str, prefix: &str, auth_headers: &[String])
         o => bail!("{ctx}: risk must be read|write|destructive, got `{o}`"),
     };
     let req = a.get("request").ok_or_else(|| anyhow!("{ctx}: request is required"))?;
-    known_keys(req, &["method", "path", "paths", "path_encoding", "query", "headers", "body", "constraints", "nonempty_body", "read_only_post"], &ctx)?;
+    known_keys(req, &["method", "path", "paths", "path_encoding", "query", "headers", "body", "constraints", "nonempty_body", "read_only_post", "validate_only"], &ctx)?;
     let method = s(req, "method", &ctx)?.to_ascii_uppercase();
     if !["GET", "POST", "PUT", "PATCH", "DELETE"].contains(&method.as_str()) {
         bail!("{ctx}: unsupported method `{method}`");
@@ -797,6 +815,14 @@ fn parse_action(a: &Value, toolkit: &str, prefix: &str, auth_headers: &[String])
             message: s(c, "message", &ctx)?.into(),
         });
     }
+    // `validate_only`: inputs the provider call does not use but that are still checked.
+    let mut validate_only = Vec::new();
+    for x in req.get("validate_only").and_then(Value::as_array).into_iter().flatten() {
+        if x.get("arg").is_none() {
+            bail!("{ctx}: `validate_only` entries are arg refs");
+        }
+        validate_only.push(parse_val(x, &props, &format!("{ctx}.validate_only"), &mut used)?);
+    }
     for p in props.keys() {
         if !used.contains(p) {
             bail!("{ctx}: input property `{p}` is declared but never sent");
@@ -824,6 +850,7 @@ fn parse_action(a: &Value, toolkit: &str, prefix: &str, auth_headers: &[String])
             body,
             constraints,
             nonempty_body: req.get("nonempty_body").and_then(Value::as_str).map(String::from),
+            validate_only,
             response,
         },
         tool,

@@ -1,0 +1,1738 @@
+{
+  "actions": [
+    {
+      "description": {
+        "de": "Liest die Metadaten eines Repositorys, u. a. Default-Branch und Sichtbarkeit.",
+        "en": "Reads a repository's metadata, including its default branch and visibility."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "owner": {
+            "description": "Repository-Owner (Login eines Users oder einer Organisation)",
+            "type": "string"
+          },
+          "repo": {
+            "description": "Repository-Name ohne Owner-Präfix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "repo"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        },
+        "method": "GET",
+        "path": "/repos/{owner}/{repo}"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "id": {
+            "pointer": "/id"
+          },
+          "name": {
+            "pointer": "/name"
+          },
+          "full_name": {
+            "pointer": "/full_name"
+          },
+          "description": {
+            "pointer": "/description"
+          },
+          "private": {
+            "pointer": "/private"
+          },
+          "fork": {
+            "pointer": "/fork"
+          },
+          "archived": {
+            "pointer": "/archived"
+          },
+          "language": {
+            "pointer": "/language"
+          },
+          "default_branch": {
+            "pointer": "/default_branch"
+          },
+          "html_url": {
+            "pointer": "/html_url"
+          },
+          "topics": {
+            "pointer": "/topics"
+          },
+          "license": {
+            "pointer": "/license/spdx_id"
+          },
+          "stargazers_count": {
+            "pointer": "/stargazers_count"
+          },
+          "forks_count": {
+            "pointer": "/forks_count"
+          },
+          "open_issues_count": {
+            "pointer": "/open_issues_count"
+          },
+          "owner_login": {
+            "pointer": "/owner/login"
+          },
+          "created_at": {
+            "pointer": "/created_at"
+          },
+          "updated_at": {
+            "pointer": "/updated_at"
+          },
+          "pushed_at": {
+            "pointer": "/pushed_at"
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "repo"
+      ],
+      "slug": "GITHUB_GET_REPO",
+      "title": {
+        "de": "Repository lesen",
+        "en": "Get repository"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest das Profil hinter dem Token (Token aus OAuth oder Personal Access Token).",
+        "en": "Reads the profile behind the token (OAuth or personal access token)."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        },
+        "method": "GET",
+        "path": "/user"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "id": {
+            "pointer": "/id"
+          },
+          "login": {
+            "pointer": "/login"
+          },
+          "name": {
+            "pointer": "/name"
+          },
+          "email": {
+            "pointer": "/email"
+          },
+          "bio": {
+            "pointer": "/bio"
+          },
+          "company": {
+            "pointer": "/company"
+          },
+          "blog": {
+            "pointer": "/blog"
+          },
+          "location": {
+            "pointer": "/location"
+          },
+          "type": {
+            "pointer": "/type"
+          },
+          "site_admin": {
+            "pointer": "/site_admin"
+          },
+          "html_url": {
+            "pointer": "/html_url"
+          },
+          "avatar_url": {
+            "pointer": "/avatar_url"
+          },
+          "public_repos": {
+            "pointer": "/public_repos"
+          },
+          "public_gists": {
+            "pointer": "/public_gists"
+          },
+          "followers": {
+            "pointer": "/followers"
+          },
+          "following": {
+            "pointer": "/following"
+          },
+          "created_at": {
+            "pointer": "/created_at"
+          },
+          "updated_at": {
+            "pointer": "/updated_at"
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [],
+      "slug": "GITHUB_GET_AUTHENTICATED_USER",
+      "title": {
+        "de": "Angemeldeten Nutzer lesen",
+        "en": "Get authenticated user"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die Repositories, auf die die Verbindung zugreifen kann.",
+        "en": "Lists the repositories the connection can access."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl (1-basiert)",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 100,
+            "description": "Einträge pro Seite (1-100)",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        },
+        "method": "GET",
+        "path": "/user/repos",
+        "query": {
+          "page": {
+            "arg": "page",
+            "default": 1
+          },
+          "per_page": {
+            "arg": "per_page",
+            "default": 100
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "repo"
+      ],
+      "slug": "GITHUB_LIST_MY_REPOSITORIES",
+      "title": {
+        "de": "Meine Repositories auflisten",
+        "en": "List my repositories"
+      },
+      "response": {
+        "mode": "array",
+        "pointer": "",
+        "each": {
+          "id": "/id",
+          "name": "/name",
+          "full_name": "/full_name",
+          "description": "/description",
+          "private": "/private",
+          "fork": "/fork",
+          "archived": "/archived",
+          "language": "/language",
+          "default_branch": "/default_branch",
+          "html_url": "/html_url",
+          "topics": "/topics",
+          "license": "/license/spdx_id",
+          "stargazers_count": "/stargazers_count",
+          "forks_count": "/forks_count",
+          "open_issues_count": "/open_issues_count",
+          "owner_login": "/owner/login",
+          "created_at": "/created_at",
+          "updated_at": "/updated_at",
+          "pushed_at": "/pushed_at"
+        }
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die Branches eines Repositorys (Quelle der Branch-Auswahl in der Piece).",
+        "en": "Lists a repository's branches (the source of the piece's branch dropdown)."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "owner": {
+            "description": "Repository-Owner (Login eines Users oder einer Organisation)",
+            "type": "string"
+          },
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl (1-basiert)",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 100,
+            "description": "Einträge pro Seite (1-100)",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "repo": {
+            "description": "Repository-Name ohne Owner-Präfix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "repo"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        },
+        "method": "GET",
+        "path": "/repos/{owner}/{repo}/branches",
+        "query": {
+          "page": {
+            "arg": "page",
+            "default": 1
+          },
+          "per_page": {
+            "arg": "per_page",
+            "default": 100
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "repo"
+      ],
+      "slug": "GITHUB_LIST_BRANCHES",
+      "title": {
+        "de": "Branches auflisten",
+        "en": "List branches"
+      },
+      "response": {
+        "mode": "array",
+        "pointer": "",
+        "each": {
+          "name": "/name",
+          "commit_sha": "/commit/sha",
+          "commit_url": "/commit/url",
+          "protected": "/protected",
+          "protection_enabled": "/protection/enabled",
+          "required_status_checks": "/protection/required_status_checks/contexts"
+        }
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die Nutzer, denen in diesem Repository Issues zugewiesen werden können.",
+        "en": "Lists the users issues can be assigned to in this repository."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "owner": {
+            "description": "Repository-Owner (Login eines Users oder einer Organisation)",
+            "type": "string"
+          },
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl (1-basiert)",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 100,
+            "description": "Einträge pro Seite (1-100)",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "repo": {
+            "description": "Repository-Name ohne Owner-Präfix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "repo"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        },
+        "method": "GET",
+        "path": "/repos/{owner}/{repo}/assignees",
+        "query": {
+          "page": {
+            "arg": "page",
+            "default": 1
+          },
+          "per_page": {
+            "arg": "per_page",
+            "default": 100
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "repo"
+      ],
+      "slug": "GITHUB_LIST_ISSUE_ASSIGNEES",
+      "title": {
+        "de": "Zuweisbare Nutzer auflisten",
+        "en": "List issue assignees"
+      },
+      "response": {
+        "mode": "array",
+        "pointer": "",
+        "each": {
+          "id": "/id",
+          "login": "/login",
+          "type": "/type",
+          "html_url": "/html_url",
+          "avatar_url": "/avatar_url"
+        }
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die Labels eines Repositorys (Quelle der Label-Auswahl in der Piece).",
+        "en": "Lists a repository's labels (the source of the piece's label dropdown)."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "owner": {
+            "description": "Repository-Owner (Login eines Users oder einer Organisation)",
+            "type": "string"
+          },
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl (1-basiert)",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 100,
+            "description": "Einträge pro Seite (1-100)",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "repo": {
+            "description": "Repository-Name ohne Owner-Präfix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "repo"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        },
+        "method": "GET",
+        "path": "/repos/{owner}/{repo}/labels",
+        "query": {
+          "page": {
+            "arg": "page",
+            "default": 1
+          },
+          "per_page": {
+            "arg": "per_page",
+            "default": 100
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "repo"
+      ],
+      "slug": "GITHUB_LIST_REPOSITORY_LABELS",
+      "title": {
+        "de": "Labels auflisten",
+        "en": "List repository labels"
+      },
+      "response": {
+        "mode": "array",
+        "pointer": "",
+        "each": {
+          "id": "/id",
+          "name": "/name",
+          "color": "/color",
+          "description": "/description",
+          "default": "/default"
+        }
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die offenen Meilensteine eines Repositorys (Quelle der Meilenstein-Auswahl).",
+        "en": "Lists a repository's open milestones (the source of the milestone dropdown)."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "owner": {
+            "description": "Repository-Owner (Login eines Users oder einer Organisation)",
+            "type": "string"
+          },
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl (1-basiert)",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 100,
+            "description": "Einträge pro Seite (1-100)",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "repo": {
+            "description": "Repository-Name ohne Owner-Präfix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "repo"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        },
+        "method": "GET",
+        "path": "/repos/{owner}/{repo}/milestones",
+        "query": {
+          "page": {
+            "arg": "page",
+            "default": 1
+          },
+          "per_page": {
+            "arg": "per_page",
+            "default": 100
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "repo"
+      ],
+      "slug": "GITHUB_LIST_REPOSITORY_MILESTONES",
+      "title": {
+        "de": "Meilensteine auflisten",
+        "en": "List repository milestones"
+      },
+      "response": {
+        "mode": "array",
+        "pointer": "",
+        "each": {
+          "number": "/number",
+          "title": "/title",
+          "description": "/description",
+          "state": "/state",
+          "open_issues": "/open_issues",
+          "closed_issues": "/closed_issues",
+          "due_on": "/due_on",
+          "html_url": "/html_url",
+          "created_at": "/created_at",
+          "updated_at": "/updated_at"
+        }
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die Actions-Workflows eines Repositorys; nur workflow_dispatch-fähige können gestartet werden.",
+        "en": "Lists a repository's Actions workflows; only those with workflow_dispatch can run."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "owner": {
+            "description": "Repository-Owner (Login eines Users oder einer Organisation)",
+            "type": "string"
+          },
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl (1-basiert)",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 100,
+            "description": "Einträge pro Seite (1-100)",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "repo": {
+            "description": "Repository-Name ohne Owner-Präfix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "repo"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        },
+        "method": "GET",
+        "path": "/repos/{owner}/{repo}/actions/workflows",
+        "query": {
+          "page": {
+            "arg": "page",
+            "default": 1
+          },
+          "per_page": {
+            "arg": "per_page",
+            "default": 100
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "repo"
+      ],
+      "slug": "GITHUB_LIST_WORKFLOWS",
+      "title": {
+        "de": "Actions-Workflows auflisten",
+        "en": "List workflows"
+      },
+      "response": {
+        "mode": "array",
+        "pointer": "/workflows",
+        "each": {
+          "id": "/id",
+          "node_id": "/node_id",
+          "name": "/name",
+          "path": "/path",
+          "state": "/state"
+        }
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die Deployment-Environments eines Repositorys.",
+        "en": "Lists a repository's deployment environments."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "owner": {
+            "description": "Repository-Owner (Login eines Users oder einer Organisation)",
+            "type": "string"
+          },
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl (1-basiert)",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 100,
+            "description": "Einträge pro Seite (1-100)",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "repo": {
+            "description": "Repository-Name ohne Owner-Präfix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "repo"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        },
+        "method": "GET",
+        "path": "/repos/{owner}/{repo}/environments",
+        "query": {
+          "page": {
+            "arg": "page",
+            "default": 1
+          },
+          "per_page": {
+            "arg": "per_page",
+            "default": 100
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "repo"
+      ],
+      "slug": "GITHUB_LIST_ENVIRONMENTS",
+      "title": {
+        "de": "Environments auflisten",
+        "en": "List environments"
+      },
+      "response": {
+        "mode": "array",
+        "pointer": "/environments",
+        "each": {
+          "id": "/id",
+          "name": "/name",
+          "html_url": "/html_url",
+          "protection_rules": "/protection_rules",
+          "created_at": "/created_at",
+          "updated_at": "/updated_at"
+        }
+      }
+    },
+    {
+      "description": {
+        "de": "Liest einen Actions-Run mit Status und Ergebnis.",
+        "en": "Reads one Actions run including its status and conclusion."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "owner": {
+            "description": "Repository-Owner (Login eines Users oder einer Organisation)",
+            "type": "string"
+          },
+          "repo": {
+            "description": "Repository-Name ohne Owner-Präfix",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "ID des Runs, aus dem Dispatch oder der Run-Liste.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "owner",
+          "repo",
+          "run_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        },
+        "method": "GET",
+        "path": "/repos/{owner}/{repo}/actions/runs/{run_id}"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "id": {
+            "pointer": "/id"
+          },
+          "name": {
+            "pointer": "/name"
+          },
+          "event": {
+            "pointer": "/event"
+          },
+          "status": {
+            "pointer": "/status"
+          },
+          "conclusion": {
+            "pointer": "/conclusion"
+          },
+          "workflow_id": {
+            "pointer": "/workflow_id"
+          },
+          "run_number": {
+            "pointer": "/run_number"
+          },
+          "run_attempt": {
+            "pointer": "/run_attempt"
+          },
+          "head_branch": {
+            "pointer": "/head_branch"
+          },
+          "head_sha": {
+            "pointer": "/head_sha"
+          },
+          "html_url": {
+            "pointer": "/html_url"
+          },
+          "url": {
+            "pointer": "/url"
+          },
+          "created_at": {
+            "pointer": "/created_at"
+          },
+          "updated_at": {
+            "pointer": "/updated_at"
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "repo"
+      ],
+      "slug": "GITHUB_GET_WORKFLOW_RUN",
+      "title": {
+        "de": "Workflow-Run lesen",
+        "en": "Get workflow run"
+      }
+    },
+    {
+      "description": {
+        "de": "Hängt Labels an ein Issue und behält die vorhandenen; braucht --confirm.",
+        "en": "Adds labels to an issue and keeps the existing ones; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "issue_number": {
+            "description": "Die Nummer hinter # auf GitHub.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "labels": {
+            "description": "Label-Namen, die hinzukommen",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "owner": {
+            "description": "Repository-Owner (Login eines Users oder einer Organisation)",
+            "type": "string"
+          },
+          "repo": {
+            "description": "Repository-Name ohne Owner-Präfix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "repo",
+          "issue_number",
+          "labels"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "labels": {
+              "arg": "labels",
+              "required": true
+            }
+          }
+        },
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        },
+        "method": "POST",
+        "path": "/repos/{owner}/{repo}/issues/{issue_number}/labels"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "count": {
+            "pointer": "",
+            "count": true
+          },
+          "labels": {
+            "pointer": "",
+            "each": {
+              "id": "/id",
+              "name": "/name",
+              "color": "/color",
+              "description": "/description",
+              "default": "/default"
+            }
+          }
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "repo"
+      ],
+      "slug": "GITHUB_ADD_LABELS_TO_ISSUE",
+      "title": {
+        "de": "Labels zum Issue hinzufügen",
+        "en": "Add labels to issue"
+      }
+    },
+    {
+      "description": {
+        "de": "Schreibt einen Kommentar auf ein Issue oder einen Pull Request; braucht --confirm.",
+        "en": "Posts a comment on an issue or pull request; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "comment": {
+            "description": "Kommentartext; Markdown wird unterstützt.",
+            "type": "string"
+          },
+          "issue_number": {
+            "description": "Die Nummer hinter # auf GitHub.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "owner": {
+            "description": "Repository-Owner (Login eines Users oder einer Organisation)",
+            "type": "string"
+          },
+          "repo": {
+            "description": "Repository-Name ohne Owner-Präfix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "repo",
+          "issue_number",
+          "comment"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "body": {
+              "arg": "comment",
+              "required": true,
+              "trim": true
+            }
+          }
+        },
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        },
+        "method": "POST",
+        "path": "/repos/{owner}/{repo}/issues/{issue_number}/comments"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "id": {
+            "pointer": "/id"
+          },
+          "body": {
+            "pointer": "/body"
+          },
+          "path": {
+            "pointer": "/path"
+          },
+          "position": {
+            "pointer": "/position"
+          },
+          "html_url": {
+            "pointer": "/html_url"
+          },
+          "author": {
+            "pointer": "/user/login"
+          },
+          "commit_id": {
+            "pointer": "/commit_id"
+          },
+          "pull_request_review_id": {
+            "pointer": "/pull_request_review_id"
+          },
+          "in_reply_to_id": {
+            "pointer": "/in_reply_to_id"
+          },
+          "created_at": {
+            "pointer": "/created_at"
+          },
+          "updated_at": {
+            "pointer": "/updated_at"
+          }
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "repo"
+      ],
+      "slug": "GITHUB_CREATE_ISSUE_COMMENT",
+      "title": {
+        "de": "Kommentar zu einem Issue schreiben",
+        "en": "Create comment on issue"
+      }
+    },
+    {
+      "description": {
+        "de": "Legt einen Branch aus einer Commit-SHA an (die Piece liest die SHA vorher mit GITHUB_FIND_BRANCH); braucht --confirm.",
+        "en": "Creates a branch from a commit SHA (the piece reads the SHA first with GITHUB_FIND_BRANCH); requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "new_branch_name": {
+            "description": "Name des neuen Branches, z. B. feature/login",
+            "type": "string"
+          },
+          "owner": {
+            "description": "Repository-Owner (Login eines Users oder einer Organisation)",
+            "type": "string"
+          },
+          "repo": {
+            "description": "Repository-Name ohne Owner-Präfix",
+            "type": "string"
+          },
+          "source_sha": {
+            "description": "SHA des Quell-Branches, aus result.commit_sha von GITHUB_FIND_BRANCH",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "repo",
+          "source_sha",
+          "new_branch_name"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        },
+        "path": "/repos/{owner}/{repo}/git/refs",
+        "body": {
+          "json": {
+            "ref": {
+              "template": "refs/heads/{new_branch_name}",
+              "escape": {
+                "new_branch_name": "segments"
+              }
+            },
+            "sha": {
+              "arg": "source_sha",
+              "required": true,
+              "segment": true
+            }
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "ref": {
+            "pointer": "/ref"
+          },
+          "node_id": {
+            "pointer": "/node_id"
+          },
+          "url": {
+            "pointer": "/url"
+          },
+          "sha": {
+            "pointer": "/object/sha"
+          },
+          "object_type": {
+            "pointer": "/object/type"
+          }
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "repo"
+      ],
+      "slug": "GITHUB_CREATE_BRANCH",
+      "title": {
+        "de": "Branch erstellen",
+        "en": "Create branch"
+      }
+    },
+    {
+      "description": {
+        "de": "Löscht einen Branch; das Repository bleibt bestehen; braucht --confirm.",
+        "en": "Deletes a branch; the repository stays; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "branch": {
+            "description": "Branch-Name, z. B. main",
+            "type": "string"
+          },
+          "owner": {
+            "description": "Repository-Owner (Login eines Users oder einer Organisation)",
+            "type": "string"
+          },
+          "repo": {
+            "description": "Repository-Name ohne Owner-Präfix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "repo",
+          "branch"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        },
+        "method": "DELETE",
+        "path": "/repos/{owner}/{repo}/git/refs/heads/{branch}",
+        "path_encoding": {
+          "branch": "segments"
+        }
+      },
+      "response": {
+        "mode": "const",
+        "value": {
+          "deleted": true
+        }
+      },
+      "risk": "destructive",
+      "scopes": [
+        "repo"
+      ],
+      "slug": "GITHUB_DELETE_BRANCH",
+      "title": {
+        "de": "Branch löschen",
+        "en": "Delete branch"
+      }
+    },
+    {
+      "description": {
+        "de": "Sperrt ein Issue, sodass nur Mitwirkende kommentieren können; braucht --confirm.",
+        "en": "Locks an issue so only collaborators can comment; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "issue_number": {
+            "description": "Die Nummer hinter # auf GitHub.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "lock_reason": {
+            "description": "Wird in der Timeline des Issues angezeigt",
+            "enum": [
+              "off-topic",
+              "too heated",
+              "resolved",
+              "spam"
+            ],
+            "type": "string"
+          },
+          "owner": {
+            "description": "Repository-Owner (Login eines Users oder einer Organisation)",
+            "type": "string"
+          },
+          "repo": {
+            "description": "Repository-Name ohne Owner-Präfix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "repo",
+          "issue_number"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "lock_reason": {
+              "arg": "lock_reason",
+              "trim": true
+            }
+          }
+        },
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        },
+        "method": "PUT",
+        "path": "/repos/{owner}/{repo}/issues/{issue_number}/lock"
+      },
+      "response": {
+        "mode": "const",
+        "value": {
+          "locked": true
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "repo"
+      ],
+      "slug": "GITHUB_LOCK_ISSUE",
+      "title": {
+        "de": "Issue sperren",
+        "en": "Lock issue"
+      }
+    },
+    {
+      "description": {
+        "de": "Entsperrt ein Issue; braucht --confirm.",
+        "en": "Unlocks an issue; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "issue_number": {
+            "description": "Die Nummer hinter # auf GitHub.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "owner": {
+            "description": "Repository-Owner (Login eines Users oder einer Organisation)",
+            "type": "string"
+          },
+          "repo": {
+            "description": "Repository-Name ohne Owner-Präfix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "repo",
+          "issue_number"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        },
+        "method": "DELETE",
+        "path": "/repos/{owner}/{repo}/issues/{issue_number}/lock"
+      },
+      "response": {
+        "mode": "const",
+        "value": {
+          "locked": false
+        }
+      },
+      "risk": "destructive",
+      "scopes": [
+        "repo"
+      ],
+      "slug": "GITHUB_UNLOCK_ISSUE",
+      "title": {
+        "de": "Issue entsperren",
+        "en": "Unlock issue"
+      }
+    },
+    {
+      "description": {
+        "de": "Kommentiert einen Commit, optional auf eine Position in einem Diff; braucht --confirm.",
+        "en": "Comments on a commit, optionally on a position in a diff; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "description": "Kommentartext; Markdown wird unterstützt.",
+            "type": "string"
+          },
+          "owner": {
+            "description": "Repository-Owner (Login eines Users oder einer Organisation)",
+            "type": "string"
+          },
+          "path": {
+            "description": "Pfad relativ zur Repository-Wurzel.",
+            "type": "string"
+          },
+          "position": {
+            "description": "Zeilen ab dem ersten @@-Hunk-Header; braucht einen Pfad.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "repo": {
+            "description": "Repository-Name ohne Owner-Präfix",
+            "type": "string"
+          },
+          "sha": {
+            "description": "Vollständiger oder kurzer Commit-Hash.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "repo",
+          "sha",
+          "body"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "body": {
+              "arg": "body",
+              "required": true,
+              "trim": true
+            },
+            "path": {
+              "arg": "path",
+              "trim": true
+            },
+            "position": {
+              "arg": "position"
+            }
+          }
+        },
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        },
+        "method": "POST",
+        "path": "/repos/{owner}/{repo}/commits/{sha}/comments"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "id": {
+            "pointer": "/id"
+          },
+          "body": {
+            "pointer": "/body"
+          },
+          "path": {
+            "pointer": "/path"
+          },
+          "position": {
+            "pointer": "/position"
+          },
+          "html_url": {
+            "pointer": "/html_url"
+          },
+          "author": {
+            "pointer": "/user/login"
+          },
+          "commit_id": {
+            "pointer": "/commit_id"
+          },
+          "pull_request_review_id": {
+            "pointer": "/pull_request_review_id"
+          },
+          "in_reply_to_id": {
+            "pointer": "/in_reply_to_id"
+          },
+          "created_at": {
+            "pointer": "/created_at"
+          },
+          "updated_at": {
+            "pointer": "/updated_at"
+          }
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "repo"
+      ],
+      "slug": "GITHUB_CREATE_COMMIT_COMMENT",
+      "title": {
+        "de": "Commit-Kommentar erstellen",
+        "en": "Create commit comment"
+      }
+    },
+    {
+      "description": {
+        "de": "Kommentiert eine Stelle im Diff eines Pull Requests; braucht --confirm.",
+        "en": "Comments on a position in a pull request diff; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "description": "Kommentartext; Markdown wird unterstützt.",
+            "type": "string"
+          },
+          "commit_id": {
+            "description": "Commit-SHA; der letzte Commit des Pull Requests.",
+            "type": "string"
+          },
+          "owner": {
+            "description": "Repository-Owner (Login eines Users oder einer Organisation)",
+            "type": "string"
+          },
+          "path": {
+            "description": "Pfad relativ zur Repository-Wurzel.",
+            "type": "string"
+          },
+          "position": {
+            "description": "Zeilen ab dem ersten @@-Hunk-Header in dieser Datei.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "pull_number": {
+            "description": "Die Nummer des Pull Requests hinter # auf GitHub.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "repo": {
+            "description": "Repository-Name ohne Owner-Präfix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "repo",
+          "pull_number",
+          "commit_id",
+          "path",
+          "body",
+          "position"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "body": {
+              "arg": "body",
+              "required": true,
+              "trim": true
+            },
+            "commit_id": {
+              "arg": "commit_id",
+              "required": true,
+              "segment": true
+            },
+            "path": {
+              "arg": "path",
+              "required": true,
+              "trim": true
+            },
+            "position": {
+              "arg": "position",
+              "required": true
+            }
+          }
+        },
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        },
+        "method": "POST",
+        "path": "/repos/{owner}/{repo}/pulls/{pull_number}/comments"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "id": {
+            "pointer": "/id"
+          },
+          "body": {
+            "pointer": "/body"
+          },
+          "path": {
+            "pointer": "/path"
+          },
+          "position": {
+            "pointer": "/position"
+          },
+          "html_url": {
+            "pointer": "/html_url"
+          },
+          "author": {
+            "pointer": "/user/login"
+          },
+          "commit_id": {
+            "pointer": "/commit_id"
+          },
+          "pull_request_review_id": {
+            "pointer": "/pull_request_review_id"
+          },
+          "in_reply_to_id": {
+            "pointer": "/in_reply_to_id"
+          },
+          "created_at": {
+            "pointer": "/created_at"
+          },
+          "updated_at": {
+            "pointer": "/updated_at"
+          }
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "repo"
+      ],
+      "slug": "GITHUB_CREATE_PULL_REQUEST_REVIEW_COMMENT",
+      "title": {
+        "de": "Review-Kommentar erstellen",
+        "en": "Create pull request review comment"
+      }
+    },
+    {
+      "description": {
+        "de": "Schreibt einen Kommentar auf eine Diskussion; nutzt GITHUB_FIND_DISCUSSION für die ID; braucht --confirm.",
+        "en": "Posts a comment on a discussion; use GITHUB_FIND_DISCUSSION for the node ID; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "description": "Kommentartext; Markdown wird unterstützt.",
+            "type": "string"
+          },
+          "discussion_id": {
+            "description": "GraphQL-ID der Diskussion, aus GITHUB_FIND_DISCUSSION.",
+            "type": "string"
+          },
+          "owner": {
+            "description": "Repository-Owner (Login eines Users oder einer Organisation)",
+            "type": "string"
+          },
+          "repo": {
+            "description": "Repository-Name ohne Owner-Präfix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "repo",
+          "discussion_id",
+          "body"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        },
+        "path": "/graphql",
+        "validate_only": [
+          {
+            "arg": "owner",
+            "required": true,
+            "segment": true
+          },
+          {
+            "arg": "repo",
+            "required": true,
+            "segment": true
+          }
+        ],
+        "body": {
+          "json": {
+            "query": {
+              "const": "mutation($discussionId: ID!, $body: String!) {\n  addDiscussionComment(input: { discussionId: $discussionId, body: $body }) {\n    comment {\n      id\n      body\n      url\n    }\n  }\n}"
+            },
+            "variables": {
+              "discussionId": {
+                "arg": "discussion_id",
+                "required": true,
+                "segment": true
+              },
+              "body": {
+                "arg": "body",
+                "required": true
+              }
+            }
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "id": {
+            "pointer": "/data/addDiscussionComment/comment/id"
+          },
+          "body": {
+            "pointer": "/data/addDiscussionComment/comment/body"
+          },
+          "url": {
+            "pointer": "/data/addDiscussionComment/comment/url"
+          }
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "repo"
+      ],
+      "slug": "GITHUB_CREATE_DISCUSSION_COMMENT",
+      "title": {
+        "de": "Diskussionskommentar erstellen",
+        "en": "Create discussion comment"
+      }
+    },
+    {
+      "description": {
+        "de": "Startet einen Actions-Workflow auf einem Branch oder Tag; der Workflow braucht on: workflow_dispatch; gibt die Run-ID zurück (GITHUB_GET_WORKFLOW_RUN liest den Status); braucht --confirm.",
+        "en": "Starts an Actions workflow on a branch or tag; the workflow needs on: workflow_dispatch; returns the run ID (GITHUB_GET_WORKFLOW_RUN reads the status); requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "inputs": {
+            "description": "Werte für die Inputs, die der Workflow in der YAML deklariert.",
+            "type": "object"
+          },
+          "owner": {
+            "description": "Repository-Owner (Login eines Users oder einer Organisation)",
+            "type": "string"
+          },
+          "ref": {
+            "description": "Branch oder Tag, auf dem gestartet wird.",
+            "type": "string"
+          },
+          "repo": {
+            "description": "Repository-Name ohne Owner-Präfix",
+            "type": "string"
+          },
+          "workflow_id": {
+            "description": "ID des Workflows, aus GITHUB_LIST_WORKFLOWS.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "owner",
+          "repo",
+          "workflow_id",
+          "ref"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "inputs": {
+              "arg": "inputs"
+            },
+            "ref": {
+              "arg": "ref",
+              "required": true,
+              "trim": true
+            },
+            "return_run_details": {
+              "const": true
+            }
+          }
+        },
+        "headers": {
+          "x-github-api-version": "2022-11-28"
+        },
+        "method": "POST",
+        "path": "/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "dispatched": {
+            "pointer": "/__ctox_const__",
+            "default": true
+          },
+          "workflow_run_id": {
+            "pointer": "/workflow_run_id"
+          }
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "repo"
+      ],
+      "slug": "GITHUB_TRIGGER_WORKFLOW_DISPATCH",
+      "title": {
+        "de": "Workflow starten",
+        "en": "Trigger workflow dispatch"
+      }
+    }
+  ],
+  "allowed_hosts": [
+    "api.github.com"
+  ],
+  "api_base": "https://api.github.com",
+  "auth_schemes": [
+    {
+      "authorize_url": "https://github.com/login/oauth/authorize",
+      "default_scopes": [
+        "admin:repo_hook",
+        "admin:org",
+        "repo",
+        "gist"
+      ],
+      "extra_authorize_params": [],
+      "pkce": true,
+      "refreshable": true,
+      "scope_separator": " ",
+      "token_url": "https://github.com/login/oauth/access_token",
+      "type": "oauth2"
+    },
+    {
+      "type": "bearer"
+    }
+  ],
+  "connection_fields": [],
+  "description": {
+    "de": "GitHub: Repositories, Branches, Issues, Diskussionen, Gists und Actions-Workflows lesen und bearbeiten.",
+    "en": "GitHub: read and change repositories, branches, issues, discussions, gists and Actions workflows."
+  },
+  "name": "GitHub",
+  "notes": "Drafted by examples/spec_from_builtin.rs from the compiled adapter src/toolkits/github.rs; verified by the differential test.",
+  "replaces_builtin": true,
+  "schema": "ctox.adapter-spec/v1",
+  "slug": "github",
+  "version": "1.0.0",
+  "hybrid": {
+    "rust_actions": [
+      "GITHUB_GET_FILE_CONTENT",
+      "GITHUB_FIND_BRANCH",
+      "GITHUB_FIND_USER",
+      "GITHUB_FIND_DISCUSSION",
+      "GITHUB_FIND_ISSUE",
+      "GITHUB_GET_ISSUE",
+      "GITHUB_CREATE_ISSUE",
+      "GITHUB_UPDATE_ISSUE",
+      "GITHUB_LIST_ISSUES",
+      "GITHUB_CREATE_GIST"
+    ],
+    "reason": "GET_FILE_CONTENT decodes base64 file content; FIND_BRANCH/FIND_USER/FIND_DISCUSSION turn an HTTP 404 into `found: false` (status-dependent result); FIND_ISSUE computes `found` from `total_count`; the issue tools derive `is_pull_request` from key presence and join assignee/label names into strings; CREATE_GIST turns the `files` object map into a list. All are code, not request/response shape."
+  },
+  "docs": [
+    "https://docs.github.com/en/rest"
+  ]
+}

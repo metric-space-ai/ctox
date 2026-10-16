@@ -788,3 +788,37 @@ fn monday_format_features() {
     assert_eq!(serde_json::from_str::<Value>(v["columnValues"].as_str().unwrap()).unwrap(), json!({"name": "x \"y\"\nz"}));
     assert_eq!(a.rust_actions().len(), 14);
 }
+
+const GITHUB: &str = include_str!("../specs/github.json");
+
+#[test]
+fn github_spec_matches_compiled_adapter() {
+    let (n, d) = differential("github", GITHUB);
+    assert!(d.is_empty(), "{} of {n} differ:\n{}", d.len(), d.join("\n"));
+}
+
+/// `segments` path encoding + template escape, `validate_only`, response mode `array`.
+#[test]
+fn github_format_features() {
+    let a = SpecAdapter::from_json(GITHUB).unwrap();
+    let resp = |v: Value| HttpResponse { status: 200, session_id: None, body: v.to_string().into_bytes() };
+    // segments: slashes kept, each part encoded and checked
+    let r = a.build_request("GITHUB_DELETE_BRANCH", &json!({"owner": "o", "repo": "r", "branch": "grp/sub"})).unwrap();
+    assert!(r.url.ends_with("/git/refs/heads/grp/sub"), "{}", r.url);
+    assert!(a.build_request("GITHUB_DELETE_BRANCH", &json!({"owner": "o", "repo": "r", "branch": "grp/../x"})).is_err());
+    let r = a.build_request("GITHUB_CREATE_BRANCH", &json!({"owner": "o", "repo": "r", "new_branch_name": "f/x", "source_sha": "abc"})).unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(r.body.as_ref().unwrap()).unwrap()["ref"], json!("refs/heads/f/x"));
+    // validate_only: checked, never sent
+    let ok = json!({"owner": "o", "repo": "r", "discussion_id": "D_1", "body": "hi"});
+    let r = a.build_request("GITHUB_CREATE_DISCUSSION_COMMENT", &ok).unwrap();
+    assert!(!String::from_utf8_lossy(r.body.as_ref().unwrap()).contains("\"o\""));
+    let mut bad = ok.clone(); bad["owner"] = json!("a/b");
+    assert!(a.build_request("GITHUB_CREATE_DISCUSSION_COMMENT", &bad).is_err());
+    let mut miss = ok.clone(); miss.as_object_mut().unwrap().remove("repo");
+    assert!(a.build_request("GITHUB_CREATE_DISCUSSION_COMMENT", &miss).is_err());
+    // array mode: top-level list projected per item
+    let out = a.parse_response("GITHUB_LIST_MY_REPOSITORIES", &resp(json!([{"id": 1, "name": "x", "extra": 9}]))).unwrap();
+    assert_eq!(out[0]["name"], json!("x"));
+    assert!(out[0].get("extra").is_none());
+    assert_eq!(a.rust_actions().len(), 10);
+}

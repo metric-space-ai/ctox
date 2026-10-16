@@ -158,6 +158,12 @@ fn eval(v: &Val, args: &Value) -> Result<Option<Value>> {
                         match escape {
                             Escape::None => out.push_str(&raw),
                             Escape::BackslashQuote => out.push_str(&raw.replace('\\', "\\\\").replace('"', "\\\"")),
+                            Escape::Segments => {
+                                if raw.split('/').any(|seg| crate::toolkits::path_segment(&json!({ "v": seg }), "v").is_err()) {
+                                    bail!("invalid argument `{name}`");
+                                }
+                                out.push_str(&raw);
+                            }
                             Escape::Json => {
                                 let q = serde_json::to_string(&raw).unwrap_or_default();
                                 out.push_str(&q[1..q.len() - 1]);
@@ -488,6 +494,13 @@ fn path_value(args: &Value, name: &str, enc: &PathEnc) -> Result<String> {
             let v = v.strip_prefix(p.as_str()).unwrap_or(v);
             crate::toolkits::path_segment(&json!({ "v": v }), "v").map(str::to_string).map_err(|_| anyhow!("invalid argument `{name}`"))
         }
+        PathEnc::Segments => {
+            let v = args.get(name).and_then(Value::as_str).filter(|v| !v.trim().is_empty()).ok_or_else(|| anyhow!("missing argument `{name}`"))?;
+            for seg in v.split('/') {
+                crate::toolkits::path_segment(&json!({ "v": seg }), "v").map_err(|_| anyhow!("invalid argument `{name}`"))?;
+            }
+            Ok(v.to_string())
+        }
         PathEnc::Digits => {
             let v = match args.get(name) {
                 Some(Value::Number(n)) => n.to_string(),
@@ -551,6 +564,9 @@ impl ToolkitAdapter for SpecAdapter {
         let args = if args.is_null() { &empty } else { args };
         if !args.is_object() {
             bail!("arguments must be a JSON object");
+        }
+        for v in &a.validate_only {
+            eval(v, args)?;
         }
         for c in &a.constraints {
             if let Some((w, v)) = &c.when {
@@ -684,6 +700,13 @@ impl ToolkitAdapter for SpecAdapter {
             Response::List { pointer, key } => {
                 let items = body.pointer(pointer).and_then(Value::as_array).cloned().unwrap_or_default();
                 json!({ key.as_str(): items.clone(), "count": items.len() })
+            }
+            Response::Array { pointer, each } => {
+                let list = pointer_last(&body, pointer).and_then(Value::as_array).cloned().unwrap_or_default();
+                match each {
+                    Some(e) => project_list(&list, e),
+                    None => Value::Array(list),
+                }
             }
             Response::Object(fields, require) => {
                 if let Some((p, msg)) = require {

@@ -11,6 +11,18 @@ const R: &str = "ctox";
 #[test]
 #[ignore]
 fn live_all_read_actions() {
+    scenario();
+}
+
+/// Same scenario through the hot-plug hybrid spec `specs/github.json`.
+#[test]
+#[ignore]
+fn live_all_read_actions_via_spec() {
+    support::use_spec(include_str!("../specs/github.json"));
+    scenario();
+}
+
+fn scenario() {
     if std::env::var("CTOX_TOOLHUB_LIVE_GITHUB_TOKEN").is_err() { return; }
     let mut fails = vec![];
     let mut run = |tool: &str, args: Value| -> Value {

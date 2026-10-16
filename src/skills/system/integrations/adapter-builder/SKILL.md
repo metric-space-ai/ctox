@@ -115,6 +115,13 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
   via Rust; a throwaway group, text column and item are created and deleted.
   Not run live: CREATE_SUBITEM (leaves a permanent hidden subitems board),
   SEND_NOTIFICATION (notifies a person). 16/30 requests straight from the generator.
+- **GitHub (2026-10-15): converted Rust -> hybrid spec** (`specs/github.json`,
+  20 spec + 10 Rust actions). Parity: all recorded port cases identical, 0 of 642
+  differential cases differ. Live (`tests/live_github.rs`, read-only against
+  metric-space-ai/ctox, the only repo the earlier Rust live test used): 15 read
+  actions + the 404 error path PASS via spec and via Rust. No writes live-tested:
+  there is no GitHub test repo, and the real repo is not a scratch target.
+  26/30 requests straight from the generator.
 - **Trello (2026-10-15):** hot-plug only (`specs/trello.json`, 22 actions). All
   live-passed; a throwaway board is created and deleted. Needed auth scheme
   `oauth_header` (key+token in the Authorization header). Webhooks need a
@@ -324,6 +331,21 @@ ids stayed Rust. Added only shapes that recur in GraphQL APIs:
   escape `json` (a JSON value built from a string arg, e.g. `{"name": …}`)
 The generator still misses id checks on GraphQL variables (`segment: true`) and
 required flags on them; adversarial differential cases found every one.
+
+GitHub (REST) lessons: requests were nearly free (26/30 straight from the
+generator); the hybrid line again ran along *response computation*: base64
+file decoding, 404 -> `found: false`, `total_count` -> `found`, derived
+`is_pull_request` / joined assignee and label strings, and the gist `files` map
+turned into a list stay Rust. Added only:
+- path encoding / template escape `segments` (branch names like `grp/sub`: keep
+  slashes, check and encode each part; also inside `refs/heads/{branch}`)
+- response mode `array` (top-level JSON arrays, optional per-item `each`)
+- request `validate_only`: args the Rust adapter checks (required, segment) but
+  never sends (e.g. owner/repo on a GraphQL discussion comment). A plain
+  "ignored" list was wrong: adversarial `grp/sub` showed Rust rejects them.
+Hard-won detail: `commit_id` in a body still needs `segment: true`; the
+adversarial cases catch every missing id check, so run them before trusting a
+port pass.
 
 Ideas not yet automated: `segment`/required inference for GraphQL variables
 (probe `grp/sub` and absence per variable), `tristate` inference (enum `["true","false"]` sent as
