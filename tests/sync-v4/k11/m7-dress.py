@@ -16,6 +16,16 @@ import time
 
 OWNER = '01a087a0-169a-7e23-ba3d-71352256cbfb'
 HERE = Path(__file__).resolve().parent
+CRITERIA = {
+    'private-release-artifact': 'DevOps', 'frozen-welsch-coverage': 'ctox sync v4 / phase1',
+    'sqlite-snapshot': 'DevOps', 'foreground-restart-component': 'DevOps',
+    'supported-update-rollback': 'DevOps / gpu3 lane owner', 'base-import-daemon-attachment': 'phase1 / Architecture',
+    'cutover-coverage': 'phase1', 'instance-key-restart': 'Architecture CUTOVER-4',
+    'installed-get-root-p99': 'DevOps', 'app-hot-plug': 'Harness #868',
+    'kernel-transport': 'Kernel #820 / ctox sync v4', 'workjet-project-list': 'Shell v4 / Workjet',
+    'rights-authority': 'Architecture CUTOVER-5', 'signed-v4-slot': 'Shell v4',
+    'main-release-delivery': 'ctox sync v4',
+}
 
 
 def sha(path):
@@ -41,11 +51,17 @@ def main():
     assert allowed in out.parents and not out.exists(), 'New private output required'
     out.mkdir(mode=0o700, parents=True)
     result = dict(schema='ctox.m7.go-nogo.v1', owner=OWNER, startedAtMs=int(time.time()*1000),
-                  terminal=False, go=False, criteria=[], commands=[], processes=[])
+                  terminal=False, go=False, criteria=[dict(id=name,status='not_run',owner=owner,
+                  reason='Prerequisite phase not reached') for name,owner in CRITERIA.items()], commands=[], processes=[])
     def save():
         (out/'m7-go-nogo.json').write_text(json.dumps(result, indent=2)+'\n')
     def criterion(name, status, owner, **details):
-        result['criteria'].append(dict(id=name, status=status, owner=owner, **details))
+        row = dict(id=name, status=status, owner=owner, **details)
+        index = next((i for i,c in enumerate(result['criteria']) if c['id']==name),None)
+        if index is None:
+            result['criteria'].append(row)
+        else:
+            result['criteria'][index] = row
         save()
     def run(name, command, timeout=60):
         row = dict(name=name, command=[str(v) for v in command], startedAtMs=int(time.time()*1000))
@@ -113,7 +129,7 @@ def main():
         criterion('sqlite-snapshot', 'pass', 'DevOps', databases=len(manifest['databases']),
                   manifest=str(snapshot/'snapshot.json'), sha256=sha(snapshot/'snapshot.json'),
                   consistency='Per-file SQLite API snapshot of terminal owned fixture; no live customer copy')
-        # Start the real foreground twice on a new SQLite-API-restored copy.
+        # Start the real foreground twice as a fresh-state component control.
         # The public instance ID can be observed without opening encrypted data.
         # It is deliberately NOT called a public signing-key proof.
         component = out/'foreground-profile'
@@ -179,24 +195,24 @@ def main():
             criterion('supported-update-rollback', 'not_run', 'gpu3 lane owner',
                       reason='Private systemd namespace requires approved setup; sudo -n admission failed. No host service fallback.')
         else:
-            private = out/'upgrade-profile'
-            private.mkdir(mode=0o700)
-            (private/'.sync-v4-e2e.json').write_text(json.dumps(marker))
-            code = run('sqlite-api-restore', ['python3',HERE/'m7-backup.py','restore','--output',snapshot,'--destination',private/'runtime'],180)
-            assert code == 0, 'Snapshot restore failed'
-            transition = out/'transition'
-            code = run('supported-update-rollback', ['node',HERE/'upgrade-controller.mjs',args.before,args.release,private,transition,'yes'],660)
-            proof = transition/'installer.json'
+            # This fallback constructs the deterministic real V3 fixture through
+            # the old CLI, preserving its own full private file/key custody.
+            # Do not boot a SQLite-only clone with missing sealed-key assets.
+            transition = out/'install'
+            code = run('supported-update-rollback', ['node',HERE/'installer-smoke.mjs',args.before,args.release,transition,'yes'],660)
+            proof = transition/'upgrade/installer.json'
             details = json.loads(proof.read_text()) if proof.exists() else {}
             success = code == 0 and details.get('roundtripExecuted') and details.get('canonicalReleasePackage') and details.get('rollback',{}).get('dataReadback',{}).get('matchesBefore') and details.get('forward',{}).get('dataReadback',{}).get('matchesBefore')
             criterion('supported-update-rollback', 'pass' if success else 'fail', 'DevOps',
-                      evidence=str(proof), exit=code, dataReadback='full synthetic app row/schema match required; frozen WELSCH coverage remains separate')
+                      evidence=str(proof), exit=code, fixture='New deterministic real V3 fixture; not frozen WELSCH',
+                      dataReadback='full synthetic app row/schema match required; frozen WELSCH coverage remains separate')
         for name, owner, reason in [
             ('base-import-daemon-attachment','phase1 / Architecture','Library-only E21 witness is not a productive import attached to this installed daemon.'),
             ('cutover-coverage','phase1','No cutover-coverage.json custody supplied for frozen WELSCH data.'),
             ('instance-key-restart','Architecture CUTOVER-4','Requires installed foreground public-identity witness; unit/library evidence is not relabeled.'),
             ('installed-get-root-p99','DevOps','Requires the completed installed foreground and its actual signed slot.'),
             ('app-hot-plug','Harness #868','Requires installed V4 runtime and real browser binding; fake core is not acceptance.'),
+            ('kernel-transport','Kernel #820 / ctox sync v4','PR #820 is open; ordered browser transport is not in the frozen integration candidate.'),
             ('workjet-project-list','Shell v4 / Workjet','not_run(shell-slot): no signed V4 artifact from main supplied.'),
             ('rights-authority','Architecture CUTOVER-5','Final productive rights/fence attachment not qualified in this candidate.'),
             ('signed-v4-slot','Shell v4','No signed V4 slot artifact from main supplied; beta.106 is only a V3 mechanics reference.'),
