@@ -81,13 +81,16 @@ def main(a):
     try:
         assert sha(a.candidate) == CANDIDATE_SHA, 'Candidate bytes changed; request a new pin'
         with tarfile.open(a.candidate, 'r:gz') as archive:
-            names = sorted(m.name.removeprefix('./') for m in archive if m.isfile())
+            raw_names = sorted(m.name.removeprefix('./') for m in archive if m.isfile())
+        prefix = 'ctox-business-os-shell-0.2.0-beta.1/'
+        names = [name.removeprefix(prefix) for name in raw_names]
         result['candidate'] = dict(path=str(a.candidate), sha256=CANDIDATE_SHA,
             entryV4='v4/index.html' in names, bootV4='v4/boot.js' in names,
             swV4='v4/sw.js' in names, legacyBoot='v4/boot/index.html' in names,
             kernelModules=sum(n.startswith('kernel/') and n.endswith('.mjs') for n in names),
             signedEnvelope=any(n.endswith('.release.v2.json') for n in names), files=len(names),
-            entrySamples=names[:8], bootstrapSuffixMatches=[n for n in names if
+            packagingRoot=prefix if all(n.startswith(prefix) for n in raw_names) else None,
+            entrySamples=raw_names[:8], bootstrapSuffixMatches=[n for n in raw_names if
                 n.endswith(('/v4/index.html','/v4/boot.js','/v4/sw.js','/kernel/boot.mjs'))])
         run('before', ['status'])
         stage = run('stage', ['stage', '--version', '0.2.0-beta.1'])
