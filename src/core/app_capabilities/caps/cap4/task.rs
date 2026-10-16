@@ -1070,148 +1070,150 @@ mod cap4_tests {
     fn cap4_task_artifact_workspace_and_cancel_callback_contract() {
         let tmp = tempfile::tempdir().unwrap();
         let owner_root = tmp.path().to_path_buf();
-        let tmp = crate::app_capabilities::cap3::tests::run_with_core_owners(owner_root, move || {
-            let rt = Runtime::new(tmp.path());
-            let b = Backend::new(tmp.path(), &rt, &Fallback);
-            let c = ctx("a", "enqueue");
-            assert!(call(
-                &b,
-                &c,
-                "agent.task",
-                "enqueue",
-                json!({"title":"missing artifact", "template":"prompts/missing.md"})
-            )
-            .is_err());
-            let id = enqueue(&b, &c);
-            assert_eq!(enqueue(&b, &c), id);
-            let native_task = channels::load_queue_task(tmp.path(), &id).unwrap().unwrap();
-            assert!(native_task
-                .prompt
-                .contains("Use the app-owned sample skill"));
-            assert!(native_task.prompt.contains("Pinned app prompt template"));
-            let root = Path::new(native_task.workspace_root.as_deref().unwrap());
-            assert_eq!(
-                std::fs::read(root.join("app-artifact/skills/sample/references/data.bin")).unwrap(),
-                vec![0, 255, 7]
-            );
-            std::fs::write(root.join("answer.txt"), "a real answer").unwrap();
-            std::fs::write(root.join("binary"), [0, 255]).unwrap();
-            assert_eq!(
-                call(
+        let tmp =
+            crate::app_capabilities::cap3::tests::run_with_core_owners(owner_root, move || {
+                let rt = Runtime::new(tmp.path());
+                let b = Backend::new(tmp.path(), &rt, &Fallback);
+                let c = ctx("a", "enqueue");
+                assert!(call(
+                    &b,
+                    &c,
+                    "agent.task",
+                    "enqueue",
+                    json!({"title":"missing artifact", "template":"prompts/missing.md"})
+                )
+                .is_err());
+                let id = enqueue(&b, &c);
+                assert_eq!(enqueue(&b, &c), id);
+                let native_task = channels::load_queue_task(tmp.path(), &id).unwrap().unwrap();
+                assert!(native_task
+                    .prompt
+                    .contains("Use the app-owned sample skill"));
+                assert!(native_task.prompt.contains("Pinned app prompt template"));
+                let root = Path::new(native_task.workspace_root.as_deref().unwrap());
+                assert_eq!(
+                    std::fs::read(root.join("app-artifact/skills/sample/references/data.bin"))
+                        .unwrap(),
+                    vec![0, 255, 7]
+                );
+                std::fs::write(root.join("answer.txt"), "a real answer").unwrap();
+                std::fs::write(root.join("binary"), [0, 255]).unwrap();
+                assert_eq!(
+                    call(
+                        &b,
+                        &c,
+                        "agent.task",
+                        "workspace.read",
+                        json!({"task_id":id,"path":"answer.txt"})
+                    )
+                    .unwrap(),
+                    json!({"text":"a real answer"})
+                );
+                let file = call(
                     &b,
                     &c,
                     "agent.task",
                     "workspace.read",
-                    json!({"task_id":id,"path":"answer.txt"})
-                )
-                .unwrap(),
-                json!({"text":"a real answer"})
-            );
-            let file = call(
-                &b,
-                &c,
-                "agent.task",
-                "workspace.read",
-                json!({"task_id":id,"path":"binary"}),
-            )
-            .unwrap();
-            assert_eq!(file["size"], 2);
-            assert!(file.get("ref").is_some());
-            assert!(file.get("transfer_id").is_none());
-            assert!(file.get("data_base64").is_none());
-            assert!(call(
-                &b,
-                &ctx("b", "foreign"),
-                "agent.task",
-                "get",
-                json!({"task_id":id})
-            )
-            .is_err());
-            std::fs::write(root.parent().unwrap().join("outside.txt"), "outside").unwrap();
-            assert!(call(
-                &b,
-                &c,
-                "agent.task",
-                "workspace.read",
-                json!({"task_id":id,"path":"../outside.txt"})
-            )
-            .is_err());
-            #[cfg(unix)]
-            {
-                std::os::unix::fs::symlink(
-                    root.parent().unwrap().join("outside.txt"),
-                    root.join("link"),
+                    json!({"task_id":id,"path":"binary"}),
                 )
                 .unwrap();
+                assert_eq!(file["size"], 2);
+                assert!(file.get("ref").is_some());
+                assert!(file.get("transfer_id").is_none());
+                assert!(file.get("data_base64").is_none());
+                assert!(call(
+                    &b,
+                    &ctx("b", "foreign"),
+                    "agent.task",
+                    "get",
+                    json!({"task_id":id})
+                )
+                .is_err());
+                std::fs::write(root.parent().unwrap().join("outside.txt"), "outside").unwrap();
                 assert!(call(
                     &b,
                     &c,
                     "agent.task",
                     "workspace.read",
-                    json!({"task_id":id,"path":"link"})
+                    json!({"task_id":id,"path":"../outside.txt"})
                 )
                 .is_err());
-            }
-            rt.conn()
-                .execute(
-                    "UPDATE business_command_aggregates SET result_json=?1",
-                    [r#"{"answer":42}"#],
+                #[cfg(unix)]
+                {
+                    std::os::unix::fs::symlink(
+                        root.parent().unwrap().join("outside.txt"),
+                        root.join("link"),
+                    )
+                    .unwrap();
+                    assert!(call(
+                        &b,
+                        &c,
+                        "agent.task",
+                        "workspace.read",
+                        json!({"task_id":id,"path":"link"})
+                    )
+                    .is_err());
+                }
+                rt.conn()
+                    .execute(
+                        "UPDATE business_command_aggregates SET result_json=?1",
+                        [r#"{"answer":42}"#],
+                    )
+                    .unwrap();
+                channels::set_queue_task_metadata_value(
+                    tmp.path(),
+                    &id,
+                    "workspace_refs",
+                    json!(["answer.txt"]),
                 )
                 .unwrap();
-            channels::set_queue_task_metadata_value(
-                tmp.path(),
-                &id,
-                "workspace_refs",
-                json!(["answer.txt"]),
-            )
-            .unwrap();
-            call(
-                &b,
-                &ctx("a", "cancel"),
-                "agent.task",
-                "cancel",
-                json!({"task_id":id}),
-            )
-            .unwrap();
-            let reopened = Runtime::new(tmp.path());
-            let b = Backend::new(tmp.path(), &reopened, &Fallback);
-            call(
-                &b,
-                &ctx("a", "reconcile"),
-                "agent.task",
-                "get",
-                json!({"task_id":id}),
-            )
-            .unwrap();
-            let conn = reopened.conn();
-            let commands = conn
-                .prepare("SELECT body FROM cap4_test_commands")
-                .unwrap()
-                .query_map([], |r| r.get::<_, String>(0))
-                .unwrap()
-                .collect::<rusqlite::Result<Vec<_>>>()
+                call(
+                    &b,
+                    &ctx("a", "cancel"),
+                    "agent.task",
+                    "cancel",
+                    json!({"task_id":id}),
+                )
                 .unwrap();
-            assert_eq!(commands.len(), 1);
-            let command: AppCommand = serde_json::from_str(&commands[0]).unwrap();
-            assert_eq!(command.app_id, "a");
-            assert_eq!(command.command_type, "failed");
-            assert_eq!(command.payload["status"], "cancelled");
-            assert_eq!(command.payload["task_id"], id);
-            assert_eq!(command.payload["workspace_refs"], json!(["answer.txt"]));
-            assert_eq!(command.payload["result"], json!({"answer":42}));
-            let mut wrong = reopened.artifacts.borrow()["a"].clone();
-            wrong.version = "other".into();
-            reopened.artifacts.borrow_mut().insert("a".into(), wrong);
-            assert!(call(
-                &b,
-                &ctx("a", "changed"),
-                "agent.task",
-                "enqueue",
-                json!({"title":"new","instruction":"x"})
-            )
-            .is_err());
-            tmp
-        });
+                let reopened = Runtime::new(tmp.path());
+                let b = Backend::new(tmp.path(), &reopened, &Fallback);
+                call(
+                    &b,
+                    &ctx("a", "reconcile"),
+                    "agent.task",
+                    "get",
+                    json!({"task_id":id}),
+                )
+                .unwrap();
+                let conn = reopened.conn();
+                let commands = conn
+                    .prepare("SELECT body FROM cap4_test_commands")
+                    .unwrap()
+                    .query_map([], |r| r.get::<_, String>(0))
+                    .unwrap()
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .unwrap();
+                assert_eq!(commands.len(), 1);
+                let command: AppCommand = serde_json::from_str(&commands[0]).unwrap();
+                assert_eq!(command.app_id, "a");
+                assert_eq!(command.command_type, "failed");
+                assert_eq!(command.payload["status"], "cancelled");
+                assert_eq!(command.payload["task_id"], id);
+                assert_eq!(command.payload["workspace_refs"], json!(["answer.txt"]));
+                assert_eq!(command.payload["result"], json!({"answer":42}));
+                let mut wrong = reopened.artifacts.borrow()["a"].clone();
+                wrong.version = "other".into();
+                reopened.artifacts.borrow_mut().insert("a".into(), wrong);
+                assert!(call(
+                    &b,
+                    &ctx("a", "changed"),
+                    "agent.task",
+                    "enqueue",
+                    json!({"title":"new","instruction":"x"})
+                )
+                .is_err());
+                tmp
+            });
         drop(tmp);
     }
 
@@ -1219,131 +1221,134 @@ mod cap4_tests {
     fn cap4_queue_claim_filter_and_linked_command_rollback_contract() {
         let tmp = tempfile::tempdir().unwrap();
         let owner_root = tmp.path().to_path_buf();
-        let tmp = crate::app_capabilities::cap3::tests::run_with_core_owners(owner_root, move || {
-            let rt = Runtime::new(tmp.path());
-            let b = Backend::new(tmp.path(), &rt, &Fallback);
-            let c = ctx("a", "enqueue");
-            let id = enqueue(&b, &c);
-            assert!(call(
-                &b,
-                &c,
-                "agent.queue",
-                "task.claim",
-                json!({"task_id":id,"holder":"worker","route_status_in":["blocked"]})
-            )
-            .is_err());
-            assert_eq!(
-                channels::load_queue_task(tmp.path(), &id)
-                    .unwrap()
-                    .unwrap()
-                    .route_status,
-                "pending"
-            );
-            let conn = rt.conn();
-            conn.execute_batch("CREATE TRIGGER cap4_abort_cancel BEFORE UPDATE ON business_command_aggregates WHEN NEW.terminal_status='cancelled' BEGIN SELECT RAISE(ABORT,'injected rollback'); END").unwrap();
-            assert!(call(
-                &b,
-                &c,
-                "agent.queue",
-                "task.set_status",
-                json!({"task_id":id,"status":"cancelled"})
-            )
-            .is_err());
-            assert_eq!(
-                channels::load_queue_task(tmp.path(), &id)
-                    .unwrap()
-                    .unwrap()
-                    .route_status,
-                "pending"
-            );
-            conn.execute_batch("DROP TRIGGER cap4_abort_cancel")
-                .unwrap();
-            call(
-                &b,
-                &c,
-                "agent.queue",
-                "task.set_status",
-                json!({"task_id":id,"status":"cancelled"}),
-            )
-            .unwrap();
-            let status: String = conn
-                .query_row(
-                    "SELECT terminal_status FROM business_command_aggregates",
-                    [],
-                    |r| r.get(0),
+        let tmp = crate::app_capabilities::cap3::tests::run_with_core_owners(
+            owner_root,
+            move || {
+                let rt = Runtime::new(tmp.path());
+                let b = Backend::new(tmp.path(), &rt, &Fallback);
+                let c = ctx("a", "enqueue");
+                let id = enqueue(&b, &c);
+                assert!(call(
+                    &b,
+                    &c,
+                    "agent.queue",
+                    "task.claim",
+                    json!({"task_id":id,"holder":"worker","route_status_in":["blocked"]})
                 )
-                .unwrap();
-            assert_eq!(status, "cancelled");
-            // A failure after command cancellation must roll back the command,
-            // queue row AND both projection tombstones, including after restart.
-            let fresh = ctx("a", "delete-enqueue");
-            let delete_args = json!({"title":"delete work","instruction":"do it","idempotency_key":"delete-task","on_failed":"failed"});
-            let delete_id = call(&b, &fresh, "agent.task", "enqueue", delete_args.clone()).unwrap()
-                ["task_id"]
-                .as_str()
-                .unwrap()
-                .to_owned();
-            drop(crate::business_os::store::open_store(tmp.path()).unwrap());
-            conn.execute_batch("CREATE TRIGGER cap4_abort_delete BEFORE DELETE ON communication_messages BEGIN SELECT RAISE(ABORT,'delete rollback'); END").unwrap();
-            assert!(call(
-                &b,
-                &c,
-                "agent.queue",
-                "task.delete",
-                json!({"task_id":delete_id})
-            )
-            .is_err());
-            assert_eq!(
-                channels::load_queue_task(tmp.path(), &delete_id)
-                    .unwrap()
-                    .unwrap()
-                    .route_status,
-                "pending"
-            );
-            let store = crate::business_os::store::open_store(tmp.path()).unwrap();
-            let tombstones: i64 = store
-                .query_row(
-                    "SELECT COUNT(*) FROM business_records WHERE deleted=1",
-                    [],
-                    |r| r.get(0),
+                .is_err());
+                assert_eq!(
+                    channels::load_queue_task(tmp.path(), &id)
+                        .unwrap()
+                        .unwrap()
+                        .route_status,
+                    "pending"
+                );
+                let conn = rt.conn();
+                conn.execute_batch("CREATE TRIGGER cap4_abort_cancel BEFORE UPDATE ON business_command_aggregates WHEN NEW.terminal_status='cancelled' BEGIN SELECT RAISE(ABORT,'injected rollback'); END").unwrap();
+                assert!(call(
+                    &b,
+                    &c,
+                    "agent.queue",
+                    "task.set_status",
+                    json!({"task_id":id,"status":"cancelled"})
                 )
-                .unwrap();
-            assert_eq!(tombstones, 0);
-            conn.execute_batch("DROP TRIGGER cap4_abort_delete")
-                .unwrap();
-            assert_eq!(
+                .is_err());
+                assert_eq!(
+                    channels::load_queue_task(tmp.path(), &id)
+                        .unwrap()
+                        .unwrap()
+                        .route_status,
+                    "pending"
+                );
+                conn.execute_batch("DROP TRIGGER cap4_abort_cancel")
+                    .unwrap();
                 call(
+                    &b,
+                    &c,
+                    "agent.queue",
+                    "task.set_status",
+                    json!({"task_id":id,"status":"cancelled"}),
+                )
+                .unwrap();
+                let status: String = conn
+                    .query_row(
+                        "SELECT terminal_status FROM business_command_aggregates",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(status, "cancelled");
+                // A failure after command cancellation must roll back the command,
+                // queue row AND both projection tombstones, including after restart.
+                let fresh = ctx("a", "delete-enqueue");
+                let delete_args = json!({"title":"delete work","instruction":"do it","idempotency_key":"delete-task","on_failed":"failed"});
+                let delete_id = call(&b, &fresh, "agent.task", "enqueue", delete_args.clone())
+                    .unwrap()["task_id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+                drop(crate::business_os::store::open_store(tmp.path()).unwrap());
+                conn.execute_batch("CREATE TRIGGER cap4_abort_delete BEFORE DELETE ON communication_messages BEGIN SELECT RAISE(ABORT,'delete rollback'); END").unwrap();
+                assert!(call(
                     &b,
                     &c,
                     "agent.queue",
                     "task.delete",
                     json!({"task_id":delete_id})
                 )
-                .unwrap()["deleted"],
-                true
-            );
-            assert!(channels::load_queue_task(tmp.path(), &delete_id)
-                .unwrap()
-                .is_none());
-            let tombstones: i64 = store
-                .query_row(
-                    "SELECT COUNT(*) FROM business_records WHERE deleted=1",
-                    [],
-                    |r| r.get(0),
-                )
-                .unwrap();
-            assert_eq!(tombstones, 2);
-            // A pending cancellation outbox event must not resurrect a deletion.
-            crate::business_os::store::deliver_business_command_outbox(tmp.path(), 100).unwrap();
-            let deleted_rows = store
-                .prepare("SELECT collection,record_id FROM business_records WHERE deleted=1")
-                .unwrap()
-                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-                .unwrap()
-                .collect::<rusqlite::Result<Vec<_>>>()
-                .unwrap();
-            for (collection, record) in deleted_rows {
-                crate::business_os::store::upsert_projection_record(
+                .is_err());
+                assert_eq!(
+                    channels::load_queue_task(tmp.path(), &delete_id)
+                        .unwrap()
+                        .unwrap()
+                        .route_status,
+                    "pending"
+                );
+                let store = crate::business_os::store::open_store(tmp.path()).unwrap();
+                let tombstones: i64 = store
+                    .query_row(
+                        "SELECT COUNT(*) FROM business_records WHERE deleted=1",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(tombstones, 0);
+                conn.execute_batch("DROP TRIGGER cap4_abort_delete")
+                    .unwrap();
+                assert_eq!(
+                    call(
+                        &b,
+                        &c,
+                        "agent.queue",
+                        "task.delete",
+                        json!({"task_id":delete_id})
+                    )
+                    .unwrap()["deleted"],
+                    true
+                );
+                assert!(channels::load_queue_task(tmp.path(), &delete_id)
+                    .unwrap()
+                    .is_none());
+                let tombstones: i64 = store
+                    .query_row(
+                        "SELECT COUNT(*) FROM business_records WHERE deleted=1",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(tombstones, 2);
+                // A pending cancellation outbox event must not resurrect a deletion.
+                crate::business_os::store::deliver_business_command_outbox(tmp.path(), 100)
+                    .unwrap();
+                let deleted_rows = store
+                    .prepare("SELECT collection,record_id FROM business_records WHERE deleted=1")
+                    .unwrap()
+                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                    .unwrap()
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .unwrap();
+                for (collection, record) in deleted_rows {
+                    crate::business_os::store::upsert_projection_record(
                     tmp.path(),
                     &collection,
                     &record,
@@ -1351,47 +1356,48 @@ mod cap4_tests {
                     json!({"id":record,"projection_version":99999,"resurrect":"old outbox payload"}),
                 )
                 .unwrap();
-            }
-            let tombstones: i64 = store
-                .query_row(
-                    "SELECT COUNT(*) FROM business_records WHERE deleted=1",
-                    [],
-                    |r| r.get(0),
-                )
-                .unwrap();
-            assert_eq!(tombstones, 2);
-            // Retrying after reopening the runtime preserves the deletion receipt
-            // and retries the same callback ID, never a second callback.
-            let reopened = Runtime::new(tmp.path());
-            let retry = Backend::new(tmp.path(), &reopened, &Fallback);
-            assert_eq!(
-                call(
+                }
+                let tombstones: i64 = store
+                    .query_row(
+                        "SELECT COUNT(*) FROM business_records WHERE deleted=1",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(tombstones, 2);
+                // Retrying after reopening the runtime preserves the deletion receipt
+                // and retries the same callback ID, never a second callback.
+                let reopened = Runtime::new(tmp.path());
+                let retry = Backend::new(tmp.path(), &reopened, &Fallback);
+                assert_eq!(
+                    call(
+                        &retry,
+                        &c,
+                        "agent.queue",
+                        "task.delete",
+                        json!({"task_id":delete_id})
+                    )
+                    .unwrap()["deleted"],
+                    true
+                );
+                assert!(call(
                     &retry,
-                    &c,
+                    &ctx("b", "foreign-delete"),
                     "agent.queue",
                     "task.delete",
                     json!({"task_id":delete_id})
                 )
-                .unwrap()["deleted"],
-                true
-            );
-            assert!(call(
-                &retry,
-                &ctx("b", "foreign-delete"),
-                "agent.queue",
-                "task.delete",
-                json!({"task_id":delete_id})
-            )
-            .is_err());
-            // The retained admission receipt prevents resurrection by replay.
-            let delivered_callbacks: i64 = reopened
-                .conn()
-                .query_row("SELECT COUNT(*) FROM cap4_test_commands", [], |r| r.get(0))
-                .unwrap();
-            assert_eq!(delivered_callbacks, 2);
-            assert!(call(&b, &fresh, "agent.task", "enqueue", delete_args).is_err());
-            tmp
-        });
+                .is_err());
+                // The retained admission receipt prevents resurrection by replay.
+                let delivered_callbacks: i64 = reopened
+                    .conn()
+                    .query_row("SELECT COUNT(*) FROM cap4_test_commands", [], |r| r.get(0))
+                    .unwrap();
+                assert_eq!(delivered_callbacks, 2);
+                assert!(call(&b, &fresh, "agent.task", "enqueue", delete_args).is_err());
+                tmp
+            },
+        );
         drop(tmp);
     }
 
