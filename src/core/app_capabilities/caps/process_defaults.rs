@@ -170,7 +170,7 @@ mod tests {
                 root.path(),
                 Err(unavailable()),
                 &ctx,
-                &json!({"program":tool.name}),
+                &json!({"program":tool.name,"allowed_domains":["example.test"]}),
             )
         };
         assert_eq!(

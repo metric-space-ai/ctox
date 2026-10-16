@@ -126,8 +126,12 @@ pub(super) fn execute(
     ctx: &CapCallContext,
     args: &Value,
 ) -> Result<Value, CtoxError> {
+    let name = args
+        .get("program")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("$.program"))?;
+    let programs = super::process_defaults::allowlist(root, ctx, name)?;
     let request: Run = decode(args)?;
-    let programs = super::process_defaults::allowlist(root, ctx, &request.program)?;
     let (program, prefix_args, base_env) =
         programs
             .get(&request.program)
