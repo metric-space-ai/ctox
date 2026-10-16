@@ -300,6 +300,60 @@ impl Default for Association {
     }
 }
 
+#[cfg(test)]
+mod ctox_window_ack_contract {
+    use super::*;
+
+    #[test]
+    fn send_window_requests_sack_at_credit_boundary_and_tail_only() {
+        for (cwnd, expected) in [(2400, vec![false, true]), (4800, vec![false, false, true])] {
+            let mut association = Association {
+                cwnd,
+                rwnd: 100_000,
+                my_next_tsn: 1,
+                ..Default::default()
+            };
+            association.streams.insert(
+                13,
+                StreamState::new(Side::Client, 13, 1200, PayloadProtocolIdentifier::Binary),
+            );
+            for i in 0..3 {
+                association.pending_queue.push(ChunkPayloadData {
+                    stream_identifier: 13,
+                    user_data: bytes::Bytes::from(vec![23; 1200]),
+                    beginning_fragment: i == 0,
+                    ending_fragment: i == 2,
+                    ..Default::default()
+                });
+            }
+            let (chunks, _) = association.pop_pending_data_chunks_to_send(Instant::now());
+            let wire: Vec<_> = chunks
+                .iter()
+                .map(|chunk| ChunkPayloadData::unmarshal(&chunk.marshal().unwrap()).unwrap())
+                .collect();
+            assert_eq!(
+                wire.iter()
+                    .map(|chunk| chunk.immediate_sack)
+                    .collect::<Vec<_>>(),
+                expected,
+                "only credit boundary or queue tail should request SACK"
+            );
+            assert!(
+                association
+                    .inflight_queue
+                    .get(chunks.last().unwrap().tsn)
+                    .unwrap()
+                    .immediate_sack,
+                "retransmission must retain the window SACK request"
+            );
+            assert!(
+                wire.iter()
+                    .all(|chunk| chunk.user_data == bytes::Bytes::from(vec![23; 1200]))
+            );
+        }
+    }
+}
+
 impl Association {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -2613,6 +2667,28 @@ impl Association {
         now: Instant,
     ) -> Option<ChunkPayloadData> {
         if let Some(mut c) = self.pending_queue.pop(beginning_fragment, unordered) {
+            // A delayed SACK at a full send window can exceed the interactive
+            // RTO floor. Ask once at the window boundary or pending-queue tail,
+            // not for every bulk fragment (RFC 7053 section 4.2).
+            // ref: webrtc-rs/rtc@b808b74f712ed379312a114b848ede133880d58a/rtc-sctp/src/association/mod.rs:2605.
+            let remaining = (self.cwnd as usize).saturating_sub(
+                self.inflight_queue
+                    .get_num_bytes()
+                    .saturating_add(c.user_data.len()),
+            );
+            let window_end = self.pending_queue.peek().is_none_or(|next| {
+                next.user_data.is_empty()
+                    || next.user_data.len() > remaining
+                    || next.user_data.len() > self.rwnd as usize
+            });
+            if window_end
+                && self
+                    .streams
+                    .get(&c.stream_identifier)
+                    .is_some_and(|s| s.reliability_type == ReliabilityType::Reliable)
+            {
+                c.immediate_sack = true;
+            }
             // Mark all fragements are in-flight now
             if c.ending_fragment {
                 c.set_all_inflight();
@@ -2623,7 +2699,7 @@ impl Association {
 
             c.since = Some(now); // use to calculate RTT and also for maxPacketLifeTime
             c.nsent = 1; // being sent for the first time
-            trace!(target: "ctox_sctp_timeline", "event=transmit side={} sid={} tsn={} ssn={} nsent=1 rto_ms={} len={}", self.side, c.stream_identifier, c.tsn, c.stream_sequence_number, self.rto_mgr.get_rto(), c.user_data.len());
+            trace!(target: "ctox_sctp_timeline", "event=transmit side={} sid={} tsn={} ssn={} nsent=1 rto_ms={} len={} i={}", self.side, c.stream_identifier, c.tsn, c.stream_sequence_number, self.rto_mgr.get_rto(), c.user_data.len(), c.immediate_sack);
 
             Association::check_partial_reliability_status(
                 &mut c,

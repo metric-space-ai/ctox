@@ -183,6 +183,9 @@ impl Stream<'_> {
         };
 
         let (p, _) = source.pop_chunk(self.association.max_message_size() as usize);
+        // Metadata only: separates scheduler admission from SCTP pending-queue delay.
+        trace!(target: "ctox_sctp_timeline", "event=queued side={} sid={} len={}",
+            self.association.side, self.stream_identifier, p.len());
 
         if let Some(s) = self.association.streams.get_mut(&self.stream_identifier) {
             let (is_buffered_amount_high, chunks) = s.packetize(&p, ppi);
@@ -459,6 +462,13 @@ impl StreamState {
         //   All Data Channel Establishment Protocol messages MUST be sent using
         //   ordered delivery and reliable transmission.
         let unordered = ppi != PayloadProtocolIdentifier::Dcep && self.unordered;
+        // Small reliable messages must not inflate the RTT estimator with the
+        // delayed-SACK interval. Request an immediate SACK (RFC 7053); leave
+        // fragmented bulk and partial-reliability traffic on the original policy.
+        // ref: webrtc-rs/rtc@b808b74f712ed379312a114b848ede133880d58a/rtc-sctp/src/association/stream.rs:480 (upstream immediate_sack=false).
+        let request_immediate_sack = self.reliability_type == ReliabilityType::Reliable
+            && raw.len() <= 1024
+            && raw.len() <= self.max_payload_size as usize;
 
         let mut chunks = vec![];
 
@@ -477,7 +487,7 @@ impl StreamState {
                 unordered,
                 beginning_fragment: i == 0,
                 ending_fragment: remaining - fragment_size == 0,
-                immediate_sack: false,
+                immediate_sack: request_immediate_sack,
                 payload_type: ppi,
                 stream_sequence_number: self.sequence_number,
                 abandoned: head_abandoned, // all fragmented chunks use the same abandoned
@@ -547,5 +557,49 @@ impl StreamState {
     pub(crate) fn get_num_bytes_in_reassembly_queue(&self) -> usize {
         // No lock is required as it reads the size with atomic load function.
         self.reassembly_queue.get_num_bytes()
+    }
+}
+
+#[cfg(test)]
+mod ctox_ack_contract {
+    use super::*;
+    use crate::chunk::Chunk;
+
+    #[test]
+    fn small_reliable_wire_requests_sack_without_tagging_bulk_or_realtime() {
+        let mut stream = StreamState::new(Side::Client, 3, 1200, PayloadProtocolIdentifier::Binary);
+        let control = Bytes::from(vec![7; 49]);
+        let (_, chunks) = stream.packetize(&control, PayloadProtocolIdentifier::Binary);
+        let decoded = ChunkPayloadData::unmarshal(&chunks[0].marshal().unwrap()).unwrap();
+        assert!(
+            decoded.immediate_sack,
+            "control wire must request immediate SACK"
+        );
+        assert_eq!(decoded.user_data, control);
+        assert!(decoded.beginning_fragment && decoded.ending_fragment);
+
+        let bulk = Bytes::from(vec![19; 16_037]);
+        let (_, chunks) = stream.packetize(&bulk, PayloadProtocolIdentifier::Binary);
+        let decoded: Vec<_> = chunks
+            .iter()
+            .map(|chunk| ChunkPayloadData::unmarshal(&chunk.marshal().unwrap()).unwrap())
+            .collect();
+        assert!(
+            decoded.iter().all(|chunk| !chunk.immediate_sack),
+            "bulk must keep delayed ACK policy"
+        );
+        assert_eq!(
+            decoded
+                .iter()
+                .flat_map(|chunk| chunk.user_data.iter().copied())
+                .collect::<Vec<_>>(),
+            bulk.to_vec()
+        );
+        stream.reliability_type = ReliabilityType::Rexmit;
+        let (_, chunks) = stream.packetize(&control, PayloadProtocolIdentifier::Binary);
+        assert!(
+            !chunks[0].immediate_sack,
+            "realtime must keep its original ACK policy"
+        );
     }
 }

@@ -1049,9 +1049,12 @@ async fn z3_p4_turn_loss_rtt() {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let _ = log::set_logger(&Z3_SCTP_LOGGER);
     log::set_max_level(log::LevelFilter::Trace);
-    tokio::time::timeout(Duration::from_secs(180), async {
-        let rtt_ms = std::env::var("Z3_RTT_MS").unwrap_or_else(|_| "150".into()).parse::<u64>().unwrap();
-        assert!([20,150,600].contains(&rtt_ms));
+    let rtt_ms = std::env::var("Z3_RTT_MS").unwrap_or_else(|_| "150".into()).parse::<u64>().unwrap();
+    assert!([20,150,600].contains(&rtt_ms));
+    // This benchmark serializes three application roundtrips per probe. A
+    // 600-ms bulk path needs a longer observation window, not a runtime timeout.
+    let observation_seconds = if rtt_ms == 600 { 600 } else { 180 };
+    tokio::time::timeout(Duration::from_secs(observation_seconds), async {
         let bulk_enabled = std::env::var("Z3_TURN_BULK").as_deref() == Ok("1");
         let server: std::net::SocketAddr = std::env::var("Z3_TURN_LISTENER").unwrap().parse().unwrap();
         let a = Z3UdpShape::start(server,rtt_ms).await; let b = Z3UdpShape::start(server,rtt_ms).await;
