@@ -1283,6 +1283,9 @@
     ],
     "coding_turns": [
       "read"
+    ],
+    "app_drafts": [
+      "read"
     ]
   },
   "foreign_collections": {},
@@ -1299,6 +1302,13 @@
   ],
   "row_filters": {
     "app_user_preferences": {
+      "op": "eq",
+      "path": "/user_id",
+      "value": {
+        "kind": "actor_id"
+      }
+    },
+    "app_drafts": {
       "op": "eq",
       "path": "/user_id",
       "value": {
