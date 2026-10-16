@@ -299,7 +299,7 @@ fn is_static_asset_request(method: &Method, url: &str) -> bool {
     )
 }
 
-fn resolve_business_os_app_root(root: &Path) -> anyhow::Result<PathBuf> {
+pub(crate) fn resolve_business_os_app_root(root: &Path) -> anyhow::Result<PathBuf> {
     // A selected release is authoritative. Verification failure must not boot
     // an unrelated source tree under the same instance URL.
     if let Some(active) = super::shell_update::active_shell_root(root)

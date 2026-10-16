@@ -801,12 +801,7 @@ pub fn business_os_status_text(root: &Path) -> String {
 
 fn serve_native_business_os(root: &Path, args: &[String]) -> anyhow::Result<()> {
     let addr = flag_value(args, "--addr").unwrap_or("127.0.0.1:8765");
-    crate::business_os::serve_business_os(
-        root,
-        crate::business_os::BusinessOsServeOptions {
-            addr: addr.to_string(),
-        },
-    )
+    super::store_http::serve(root, addr)
 }
 
 fn handle_business_os_peer(root: &Path, args: &[String]) -> anyhow::Result<()> {

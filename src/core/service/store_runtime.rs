@@ -78,6 +78,7 @@ struct Inspect {
     runtime: Handle,
     closing: Arc<AtomicBool>,
     queue: Arc<Mutex<Option<Arc<super::queue_store::QueueStore>>>>,
+    http: Arc<Mutex<Option<Arc<super::store_http::HttpSurface>>>>,
 }
 impl Dispatcher for Inspect {
     fn dispatch(
@@ -87,6 +88,15 @@ impl Dispatcher for Inspect {
     ) -> Result<JobHandle<Vec<u8>>, StoreError> {
         if self.closing.load(Ordering::Acquire) {
             return Err(StoreError::Closed);
+        }
+        if request.method == "http.listen" {
+            return self
+                .http
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+                .ok_or(StoreError::Closed)?
+                .dispatch(request, options);
         }
         if request.kind == JobKind::Read && request.method == "sync.identity" {
             if !request.payload.is_empty() {
@@ -189,6 +199,7 @@ pub(crate) struct DaemonStores {
     queue: Arc<Mutex<Option<Arc<super::queue_store::QueueStore>>>>,
     runtime: Handle,
     inputs: Option<super::store_inputs::InputRegistration>,
+    http: Arc<Mutex<Option<Arc<super::store_http::HttpSurface>>>>,
 }
 impl DaemonStores {
     /// Acquire process/lifecycle ownership BEFORE opening a database file.
@@ -197,6 +208,7 @@ impl DaemonStores {
         let databases = Arc::new(Mutex::new(HashMap::new()));
         let closing = Arc::new(AtomicBool::new(false));
         let queue = Arc::new(Mutex::new(None));
+        let http = Arc::new(Mutex::new(None));
         let ipc = DaemonIpc::start(
             endpoint,
             Arc::new(Inspect {
@@ -205,6 +217,7 @@ impl DaemonStores {
                 runtime: runtime.clone(),
                 closing: closing.clone(),
                 queue: queue.clone(),
+                http: http.clone(),
             }),
         )?;
         Ok(Self {
@@ -217,7 +230,20 @@ impl DaemonStores {
             queue,
             runtime,
             inputs: None,
+            http,
         })
+    }
+
+    pub(crate) fn install_http(
+        &self,
+        http: Arc<super::store_http::HttpSurface>,
+    ) -> Result<(), StoreError> {
+        let mut slot = self.http.lock().unwrap_or_else(|p| p.into_inner());
+        if slot.is_some() {
+            return Err(StoreError::AlreadyOwned);
+        }
+        *slot = Some(http);
+        Ok(())
     }
 
     /// Called serially by the daemon's composition root. A single pool is kept
@@ -415,6 +441,10 @@ impl DaemonStores {
     /// Retry after the bounded outstanding job completes; never release the
     /// lifecycle lock and advertise offline maintenance while it is running.
     pub async fn shutdown(&mut self) -> Result<(), StoreError> {
+        let http = self.http.lock().unwrap_or_else(|p| p.into_inner()).take();
+        if let Some(http) = http {
+            http.shutdown().await?;
+        }
         // Retire lookup/admission first. Existing jobs are then drained by the
         // pools/writers; retain the daemon lock until all file owners stop.
         self.closing.store(true, Ordering::Release);

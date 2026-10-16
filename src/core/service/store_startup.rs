@@ -144,7 +144,7 @@ impl NativeOwners {
         )
         .await
         .map_err(|_| StoreError::Invalid("Store policy authority attachment failed".into()))?;
-        let policy = crate::business_os::policy::bind_policy_authority(rights)
+        let policy = crate::business_os::policy::bind_policy_authority(rights.clone())
             .map_err(|_| StoreError::Invalid("Store policy authority binding failed".into()))?;
         let signer_active = Arc::new(AtomicBool::new(true));
         let signer: Arc<dyn ctox_store::change_log::subscription::protocol::InstanceSigner> =
@@ -166,6 +166,10 @@ impl NativeOwners {
             session: None,
         };
         inputs.publish_instance_signer(signer.clone())?;
+        inputs
+            .verifier
+            .set(super::store_verifier::CoreVerifier::new(inputs, rights)?)
+            .map_err(|_| StoreError::AlreadyOwned)?;
         #[cfg(unix)]
         {
             native.session = super::store_native::NativeSessionOwner::start(
@@ -274,6 +278,9 @@ impl Foreground {
                 return Err(error);
             }
         }
+        owner
+            .stores
+            .install_http(super::store_http::HttpSurface::new(owner.inputs.clone()))?;
         let app_engine =
             crate::business_os::app_platform::runtime_host::attach_native(owner.inputs.clone())
                 .await; // APP-PLATFORM-4 attach
@@ -380,6 +387,44 @@ pub(crate) async fn run(root: PathBuf) -> anyhow::Result<()> {
     #[cfg(unix)]
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut owner = Foreground::start(root.clone(), Handle::current()).await?;
+    // E36: the ordinary daemon owns HTTP too. Read the established typed
+    // runtime-store settings through its existing reader, never a CLI opener.
+    let http_start = async {
+        let runtime_db = owner
+            .inputs
+            .databases
+            .get("runtime")
+            .ok_or(StoreError::Closed)?;
+        let settings = runtime_db
+            .readers
+            .read(|tx| {
+                use rusqlite::OptionalExtension;
+                let read = |key: &str| {
+                    tx.query_row(
+                        "SELECT env_value FROM runtime_env_kv WHERE env_key=?1",
+                        [key],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .optional()
+                };
+                Ok((
+                    read("CTOX_BUSINESS_OS_WEB_AUTOSTART")?,
+                    read("CTOX_BUSINESS_OS_WEB_ADDR")?,
+                ))
+            })
+            .await?;
+        if !matches!(settings.0.as_deref(), Some("0" | "false" | "off")) {
+            let addr = settings.1.unwrap_or_else(|| "127.0.0.1:8765".into());
+            let root = root.clone();
+            tokio::task::spawn_blocking(move || super::store_http::serve(&root, &addr)).await??;
+        }
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    if let Err(error) = http_start {
+        owner.drain().await?;
+        return Err(error);
+    }
     // Publish process metadata only after acquiring the daemon/file custody.
     // A rejected second start must not overwrite the running owner's PID.
     let pid_root = root.clone();
