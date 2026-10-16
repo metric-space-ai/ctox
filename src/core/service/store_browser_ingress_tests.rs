@@ -327,3 +327,30 @@ async fn browser_write_checks_actual_before_after_inside_the_owner_job() -> anyh
     fg.shutdown().await?;
     Ok(())
 }
+
+#[test]
+fn startup_failure_retains_typed_cause_without_logging_parameters() {
+    let original = new_rx_error(
+        "SQLITE_OWNER",
+        Some(
+            serde_json::json!({"token":"do-not-log-this","url":"ws://private.invalid?credential=hidden"}),
+        ),
+    );
+    let failure = StartupFailure::at("database", original);
+    assert_eq!(
+        failure
+            .cause
+            .downcast_ref::<rxdb::rx_error::RxError>()
+            .unwrap()
+            .code(),
+        "SQLITE_OWNER"
+    );
+    let public = format!("{}", std::io::Error::other(failure));
+    assert!(public.contains("stage=database") && public.contains("RxError(SQLITE_OWNER)"));
+    assert!(
+        !public.contains("do-not-log-this")
+            && !public.contains("private.invalid")
+            && !public.contains("hidden"),
+        "startup diagnostic leaked credential-bearing parameters"
+    );
+}
