@@ -2470,6 +2470,7 @@ dependencies = [
  "ctox-rxdb",
  "ctox-sqlserver-adapter",
  "ctox-sync",
+ "ctox-toolhub",
  "ctox-transfers",
  "ctox-utils-absolute-path",
  "ctox-voxtral-4b-tts-2603",

@@ -73,6 +73,29 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
 9. **Rollback** if a new version misbehaves: `SpecStore::rollback(slug, actor)`
    (or `deactivate`). Report what happened.
 
+## Werkzeuge / Tools (ctox toolhub, since 2026-10-16)
+
+Harness tools `ctox_toolhub_*` (config `tools.ctox_toolhub`) and the CLI
+`ctox toolhub --as <role> ...` are the same thing. The role is set by the
+session, never by you. Rules per role: `ctox toolhub --as <role> rules`.
+
+| Step | Tool / CLI | Who |
+|---|---|---|
+| Find existing | `ctox_toolhub_search` (`include_catalog=true`) | all |
+| Queue a builder mission | `ctox_toolhub_request_adapter` / `request-adapter <service>` | supervisor, worker |
+| Draft | `ctox_toolhub_draft_spec` (`spec_json` or `from_catalog`) | all except MCP |
+| Validate | `ctox_toolhub_validate <slug> <version>` | all except MCP |
+| Live test + review proof | `ctox_toolhub_live_test` with `probes_json` `[{tool,args,cleanup[]}]` | reads: all; write probes: supervisor; destructive: never |
+| Submit | `ctox_toolhub_submit_for_approval` → `approval-gate` work item | supervisor, worker |
+| User decision | `ctox_toolhub_approve gate decision=approve|read_only|reject user_quote="<user's words>"` | supervisor only, after asking the user |
+| Activate / deactivate / rollback | `ctox_toolhub_activate` etc. | supervisor only |
+| Use | `ctox_toolhub_execute` (destructive: first `approval_required` + gate, then again with `approval_gate`) | per role rules |
+
+Hard checks in code: activation needs a passing review younger than 24 h, a
+recorded user decision bound to the spec sha256 and a closed gate; any spec
+change after approval blocks activation. Every step lands in
+`runtime/toolhub/adapter-specs/<slug>/history.jsonl` (argument hashes only).
+
 ## Stand / Status (2026-10-15)
 
 - Done in the toolhub crate (draft PR, stacked on #776): spec format v1, validator,
@@ -135,8 +158,12 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
   live-passed; a throwaway board is created and deleted. Needed auth scheme
   `oauth_header` (key+token in the Authorization header). Webhooks need a
   URL that answers HEAD 200 (https://example.com/ works; a path that 404s does not).
-- **Not wired yet:** the toolhub is not part of the `ctox` binary on main, so there
-  is no `ctox toolhub spec …` command, no MCP tool and no activation card yet.
+- **Wired (2026-10-16, branch feat/toolhub-adapter-builder):** `ctox toolhub` CLI,
+  harness tools `ctox_toolhub_*`, read-only MCP tools `business_os.toolhub_*`,
+  builder mission `request-adapter`. Approval runs through the supervisor chat
+  until the S2 card exists. Older note:
+- **Not wired yet (before 2026-10-16):** the toolhub was not part of the `ctox` binary on main, so there
+  was no `ctox toolhub spec …` command, no MCP tool and no activation card yet.
   Until then steps 4 to 9 run only in tests. The user-facing parts (cards,
   catalog view) need a sync collection with a profile and typed commands, which
   is ctox sync v3 stage S2 work (label `sync-v3:S2` from the sync owner).

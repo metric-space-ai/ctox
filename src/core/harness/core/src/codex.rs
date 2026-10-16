@@ -976,6 +976,7 @@ impl TurnContext {
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_ctox_web_stack_enabled(self.tools_config.ctox_web_stack_enabled)
         .with_ctox_doc_stack_enabled(self.tools_config.ctox_doc_stack_enabled)
+        .with_ctox_toolhub_role(self.tools_config.ctox_toolhub_role.clone())
         .with_lean_tool_surface(self.tools_config.lean_tool_surface)
         .with_no_tools_surface(config.disable_active_tools)
         .with_allow_login_shell(self.tools_config.allow_login_shell)
@@ -1425,6 +1426,7 @@ impl Session {
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_ctox_web_stack_enabled(per_turn_config.ctox_web_stack_enabled)
         .with_ctox_doc_stack_enabled(per_turn_config.ctox_doc_stack_enabled)
+        .with_ctox_toolhub_role(per_turn_config.ctox_toolhub_role.clone())
         .with_lean_tool_surface(per_turn_config.disable_mcp_servers)
         .with_no_tools_surface(per_turn_config.disable_active_tools)
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
@@ -3656,6 +3658,11 @@ impl Session {
         }
         if turn_context.apps_enabled() {
             developer_sections.push(render_apps_section());
+        }
+        if let Some(role) = turn_context.tools_config.ctox_toolhub_role.as_deref() {
+            developer_sections.push(crate::tools::handlers::ctox_toolhub_role_rules(
+                crate::tools::handlers::ToolhubRole::resolve(Some(role)),
+            ));
         }
         let implicit_skills = turn_context
             .turn_skills

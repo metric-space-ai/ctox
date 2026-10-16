@@ -52,6 +52,8 @@ mod project_crew_request;
 mod remote_worker;
 #[path = "mcp_workjet_calendar.rs"]
 mod workjet_calendar;
+#[path = "mcp_toolhub.rs"]
+mod toolhub;
 pub(super) use workjet_calendar::read_webrtc as read_workjet_calendar_webrtc;
 pub(super) use workjet_calendar::WEBRTC_METHOD as WORKJET_CALENDAR_READ_METHOD;
 #[path = "mcp_workjet_confirmed_plan.rs"]
@@ -1676,6 +1678,9 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         workjet_kpis::descriptor(),
         workjet_calendar::descriptors().remove(0),
         workjet_calendar::descriptors().remove(1),
+        toolhub::descriptors().remove(0),
+        toolhub::descriptors().remove(1),
+        toolhub::descriptors().remove(2),
         read_tool(
             "business_os.list_crew_executions",
             "List current external Crew offers for an owned command and executor. Returns exact attempt identifiers and state, never credentials or prompts.",
@@ -3440,6 +3445,9 @@ fn call_tool_inner(
     enforce_argument_scope_policy(root, &context, tool_name, &arguments)?;
     enforce_rate_limit(root, &context)?;
     let result = match tool_name {
+        toolhub::SEARCH_TOOL | toolhub::SCHEMA_TOOL | toolhub::LIST_TOOL => {
+            toolhub::execute(root, &context, tool_name, &arguments)?
+        }
         metadata_read::TOOL => metadata_read::read(root, trusted_gateway_context, &arguments)?,
         remote_worker::TOOL => remote_worker::execute(root, &context, &arguments)?,
         workjet_worker_dispatch::TOOL => {
