@@ -292,8 +292,12 @@ async fn native_daemon_hotplug_roundtrip_and_change() -> Result<()> {
         let active=database.readers.read_job(ReadJob::new(Default::default(),|db|document(db,"business_apps","hot-app"))).await?.context("active app missing")?;
         let removed=submit(database,"hot-remove","ctox-platform","ctox.app.remove",json!({"app_id":"hot-app","base_app_ver":active["active_ver"]})).await?;
         anyhow::ensure!(removed["status"]=="done","native remove failed: {removed}");
-        let denied=submit(database,"after-remove","hot-app","hot.echo",json!({"n":-1})).await?;
-        anyhow::ensure!(denied["status"]=="failed","removed app still admitted command: {denied}");
+        // E27 now rejects an unknown post-removal type at the writer, before
+        // a queued document or process exists; do not expect delivery failure.
+        let denied=database.writer.submit(WriteJob::new(Default::default(),|tx|store_command(tx,&json!({"id":"after-remove","app_id":"hot-app","type":"hot.echo","actor_id":"owner","created_at":chrono::Utc::now().to_rfc3339(),"payload":{"n":-1},"status":"queued"}))))?.await;
+        anyhow::ensure!(matches!(&denied,Err(StoreError::Invalid(reason)) if error_code(reason)=="unknown_command"),"removed app must reject unknown command at write: {denied:?}");
+        let absent=database.readers.read_job(ReadJob::new(Default::default(),|db|Ok(document(db,"business_commands","after-remove")?.is_none()))).await?;
+        anyhow::ensure!(absent,"removed app persisted a rejected command");
         Ok(json!({"publish_us":publish_us,"command_roundtrip_p99_us":samples[98],"samples":samples.len(),"native_quorum":true,"published":true,"change":true,"removed":true,"post_remove_denied":true,"e23_core_delivered":true,"e23_client_forbidden_audited":true,"slow_source_recovered":true}))
     }.await;
     if let Err(error) = &proof {

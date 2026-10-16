@@ -67,7 +67,7 @@ impl Fixture {
             )
             .unwrap();
         }
-        let manifest = json!({"app_id":"app","app_ver":"v1","author":"owner","files":{},"handlers":{"run":"handlers/run.js"},"collections":{"rows":schema_json()},"command_rights":{"run":{"roles":["admin"]}}});
+        let manifest = json!({"app_id":"app","app_ver":"v1","author":"owner","files":{},"handlers":{"run":"handlers/run.js","restricted":"handlers/restricted.js"},"collections":{"rows":schema_json()},"command_rights":{"run":{"roles":["admin"]}}});
         let bytes = serde_json::to_vec(&manifest).unwrap();
         let signature =
             super::super::commands::sign_manifest(codec.signer.as_ref(), &bytes).unwrap();
