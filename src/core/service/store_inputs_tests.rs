@@ -45,6 +45,19 @@ async fn installed_inputs_keep_owner_generation_and_capture_commits_during_activ
         owned_read(root, false, |_| Ok(())).is_err(),
         "runtime worker entered synchronous store bridge"
     );
+    // Tokio blocking workers retain a runtime Handle. Only the existing private,
+    // bounded Core compatibility admission may use the synchronous facade there.
+    let bridge_root = root.to_owned();
+    let value = crate::persistence::run_core_sync(move || {
+        owned_read(&bridge_root, false, |db| {
+            Ok(db.query_row("SELECT 42", [], |r| r.get::<_, i64>(0))?)
+        })
+    })
+    .await?;
+    assert_eq!(
+        value, 42,
+        "admitted Core worker could not use its real reader pool"
+    );
     let callback_root = root.to_owned();
     core.writer
         .submit(WriteJob::new(Default::default(), move |_| {

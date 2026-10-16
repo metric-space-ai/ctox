@@ -22,6 +22,7 @@ pub(crate) struct StoreInputs {
     pub core: Database,
     pub sync: Database,
     pub runtime: Handle,
+    pub databases: HashMap<String, Database>,
     closing: Arc<AtomicBool>,
     retired: AtomicBool,
     sync_reads: Arc<tokio::sync::Semaphore>,
@@ -38,6 +39,7 @@ impl InputRegistration {
         sync: Database,
         runtime: Handle,
         closing: Arc<AtomicBool>,
+        databases: HashMap<String, Database>,
     ) -> Result<Self, StoreError> {
         let key = crate::paths::runtime_dir(root);
         if core.writer.db_id() == sync.writer.db_id() {
@@ -50,6 +52,7 @@ impl InputRegistration {
             core,
             sync,
             runtime,
+            databases,
             closing,
             retired: AtomicBool::new(false),
             sync_reads: Arc::new(tokio::sync::Semaphore::new(64)),
@@ -108,7 +111,7 @@ impl StoreInputs {
         if self.retired.load(Ordering::Acquire) || self.closing.load(Ordering::Acquire) {
             return Err(StoreError::Closed);
         }
-        for db in [&self.core, &self.sync] {
+        for db in self.databases.values() {
             if db.writer.lifecycle() != Lifecycle::Ready {
                 return Err(StoreError::Closed);
             }
@@ -158,7 +161,7 @@ pub(crate) fn owned_read<T: Send + 'static>(
     sync: bool,
     read: impl FnOnce(&rusqlite::Connection) -> anyhow::Result<T> + Send + 'static,
 ) -> anyhow::Result<T> {
-    anyhow::ensure!(Handle::try_current().is_err(),"owned synchronous read requires a service OS thread; runtime callers must await the read pool");
+    anyhow::ensure!(Handle::try_current().is_err() || crate::persistence::require_sync_owner_context().is_ok(),"owned synchronous read requires an admitted Core compatibility worker or service OS thread; runtime callers must await the read pool");
     anyhow::ensure!(
         !std::thread::current()
             .name()

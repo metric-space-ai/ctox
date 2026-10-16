@@ -1779,6 +1779,18 @@ fn ensure_secret_schema(conn: &Connection) -> Result<()> {
             return Ok(());
         }
     }
+    initialize_owned_secret_schema(conn)?;
+    if let Some(path) = conn_path {
+        initialized_secret_paths()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(path);
+    }
+    Ok(())
+}
+
+/// Composition-root initializer: no path cache may outlive an owner generation.
+pub(crate) fn initialize_owned_secret_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS ctox_secret_records (
@@ -1803,12 +1815,6 @@ fn ensure_secret_schema(conn: &Connection) -> Result<()> {
         );
         "#,
     )?;
-    if let Some(path) = conn_path {
-        initialized_secret_paths()
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .insert(path);
-    }
     Ok(())
 }
 

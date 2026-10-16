@@ -47,6 +47,40 @@ async fn foreground_owns_real_files_and_drains_engine_before_store() -> anyhow::
     let root = fixture.path();
     bind_engine(Arc::new(FixtureFactory))?;
     let mut foreground = Foreground::start(root.to_owned(), Handle::current()).await?;
+    // The normal composition root, not the fixture, installs these weak routes.
+    // Removing NativeOwners::attach must fail here before any fake executor runs.
+    crate::persistence::store_text_value_owned(root, "foreground-owner-probe", Some("retained"))
+        .await?;
+    assert_eq!(
+        crate::persistence::load_text_value_owned(root, "foreground-owner-probe")
+            .await?
+            .as_deref(),
+        Some("retained")
+    );
+    let native_root = root.to_owned();
+    crate::persistence::run_core_sync(move || {
+        crate::runtime_env::set_runtime_env_value(&native_root, "CTOX_FIXTURE_THEME", "owned")?;
+        assert_eq!(
+            crate::runtime_env::get_runtime_env_value(&native_root, "CTOX_FIXTURE_THEME")
+                .as_deref(),
+            Some("owned")
+        );
+        assert!(crate::secrets::list_secret_records(&native_root, None)?.is_empty());
+        Ok(())
+    })
+    .await?;
+    for name in ["runtime", "secrets"] {
+        let db = foreground
+            .inputs
+            .databases
+            .get(name)
+            .expect("native file missing");
+        assert_eq!(db.readers.generation(), db.writer.generation().0);
+        assert!(matches!(
+            ctox_store::registry::Registry.open(db.writer.db_id().clone(), Default::default()),
+            Err(StoreError::AlreadyOwned)
+        ));
+    }
     let core = foreground.inputs.core.clone();
     let sync = foreground.inputs.sync.clone();
     assert!(matches!(
@@ -146,7 +180,12 @@ async fn foreground_owns_real_files_and_drains_engine_before_store() -> anyhow::
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
             let destination = std::path::PathBuf::from(destination).join("runtime");
             std::fs::create_dir_all(&destination)?;
-            for source in [crate::paths::core_db(&root), crate::paths::sync_db(&root)] {
+            for source in [
+                crate::paths::core_db(&root),
+                crate::paths::sync_db(&root),
+                crate::paths::runtime_config_db(&root),
+                crate::paths::secrets_db(&root),
+            ] {
                 let _offline = ipc::MaintenanceOwner::acquire(
                     &queue_store::endpoint(&root),
                     DbId::new(&source)?,
@@ -162,6 +201,74 @@ async fn foreground_owns_real_files_and_drains_engine_before_store() -> anyhow::
         })
         .await??;
     }
+
+    // Normal boot must not replay obsolete Core configuration into the canonical
+    // Runtime/Secrets owners. Migration is an explicit, separately owned step.
+    let legacy_scratch = tempfile::tempdir()?;
+    let injected = std::env::var_os("CTOX_CUTOVER_LEGACY_PROFILE");
+    let legacy_profile = if let Some(path) = &injected {
+        let path = std::fs::canonicalize(path)?;
+        let export = std::env::var_os("CTOX_CUTOVER_FIXTURE_EXPORT")
+            .ok_or_else(|| anyhow::anyhow!("injected fixture requires export scope"))?;
+        let scope = std::path::PathBuf::from(export)
+            .parent()
+            .unwrap()
+            .canonicalize()?;
+        anyhow::ensure!(
+            path.starts_with(&scope) && path != scope,
+            "injected profile is outside this run"
+        );
+        path
+    } else {
+        legacy_scratch.path().to_owned()
+    };
+    if injected.is_none() {
+        std::fs::create_dir_all(crate::paths::runtime_dir(&legacy_profile))?;
+        let legacy_writer = ctox_store::registry::Registry.open(
+            DbId::new(crate::paths::core_db(&legacy_profile))?,
+            Default::default(),
+        )?;
+        legacy_writer.ready().await?;
+        legacy_writer.submit(WriteJob::new(Default::default(),|tx| {
+            tx.execute_batch("CREATE TABLE runtime_env_kv(env_key TEXT PRIMARY KEY,env_value TEXT NOT NULL);INSERT INTO runtime_env_kv VALUES('CTOX_FIXTURE_THEME','obsolete-core-value');")?;
+            Ok(())
+        }))?.await?;
+        legacy_writer.shutdown().await?;
+        if let Some(export) = std::env::var_os("CTOX_CUTOVER_FIXTURE_EXPORT") {
+            let source = legacy_profile.clone();
+            tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                let target = std::path::PathBuf::from(export)
+                    .parent()
+                    .unwrap()
+                    .join("legacy-source/runtime");
+                std::fs::create_dir_all(&target)?;
+                let file = crate::paths::core_db(&source);
+                let _offline = ipc::MaintenanceOwner::acquire(
+                    &queue_store::endpoint(&source),
+                    DbId::new(&file)?,
+                )?;
+                let wal = std::path::PathBuf::from(format!("{}-wal", file.display()));
+                anyhow::ensure!(
+                    !wal.exists() || wal.metadata()?.len() == 0,
+                    "legacy fixture retains WAL"
+                );
+                std::fs::copy(file, target.join("ctox.sqlite3"))?;
+                Ok(())
+            })
+            .await??;
+        }
+    }
+    let mut restarted = Foreground::start(legacy_profile.clone(), Handle::current()).await?;
+    let read_root = legacy_profile.clone();
+    let value = crate::persistence::run_core_sync(move || {
+        Ok(crate::runtime_env::get_runtime_env_value(
+            &read_root,
+            "CTOX_FIXTURE_THEME",
+        ))
+    })
+    .await?;
+    assert_eq!(value, None, "normal boot replayed legacy configuration");
+    restarted.shutdown().await?;
 
     Ok(())
 }

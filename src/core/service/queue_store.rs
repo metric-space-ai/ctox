@@ -10,7 +10,7 @@ use ctox_store::{
         Rejection, RetryPolicy,
     },
     writer::Lifecycle,
-    JobHandle, JobOptions, ReadJob, StoreError, WriteJob,
+    JobHandle, JobOptions, StoreError, WriteJob,
 };
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
@@ -196,7 +196,9 @@ impl CurrentAuthority for QueueAuthority {
             || self.core.writer.lifecycle() != Lifecycle::Ready
             || self.sync.writer.lifecycle() != Lifecycle::Ready
         {
-            return Err(AuthorityError::Rejected(Rejection::Revoked));
+            // Local drain/restart is not a policy revocation. Preserve the
+            // durable intent for the next owner instead of dead-lettering it.
+            return Err(AuthorityError::Unavailable);
         }
         if publication.target != "sync.queue"
             || publication.kind != "queue.projection.v4"
@@ -391,7 +393,7 @@ impl QueueStore {
                     }
                     if closing.load(Ordering::Acquire){return;}
                 }
-                let due=core.readers.read_job(ReadJob::new(options(),|conn|Ok(conn.query_row("SELECT MIN(CASE state WHEN 'pending' THEN next_attempt_ms ELSE lease_until_ms END) FROM _publication_outbox WHERE target='sync.queue' AND kind='queue.projection.v4' AND state IN ('pending','inflight')",[],|r|r.get::<_,Option<i64>>(0))?))).await;
+                let due=super::store_runtime::read_snapshot(&core,"queue.outbox.schedule",options(),|conn|Ok(conn.query_row("SELECT MIN(CASE state WHEN 'pending' THEN next_attempt_ms ELSE lease_until_ms END) FROM _publication_outbox WHERE target='sync.queue' AND kind='queue.projection.v4' AND state IN ('pending','inflight')",[],|r|r.get::<_,Option<i64>>(0))?)).await;
                 let due=match due {Ok(due)=>due,Err(StoreError::Busy|StoreError::DeadlineExceeded) if !closing.load(Ordering::Acquire)=>{tokio::select!{_=wake.notified()=>{},_=tokio::time::sleep(Duration::from_millis(10))=>{}};continue;},Err(_)=>{if !closing.load(Ordering::Acquire){eprintln!("ctox queue publication stopped: outbox scheduling read failed");}return}};
                 if closing.load(Ordering::Acquire){break;}
                 match due {
