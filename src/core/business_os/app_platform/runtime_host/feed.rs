@@ -29,7 +29,7 @@ impl RuntimeBinding {
         let commits = database.writer.subscribe_commits();
         let (host, authority) = tokio::task::spawn_blocking(move || super::host(&owners)).await??;
         let codec = host.codec.clone();
-        let (active,initial,epoch)=database.readers.read_job(ReadJob::new(JobOptions::default(),move|db|{
+        let (active,initial,epoch)=observed_read(database.readers.clone(), "activation_snapshot", ReadJob::new(JobOptions::default(),move|db|{
             let c=collection(db,"business_apps")?;
             let rows=db.prepare(&format!("SELECT data FROM {} WHERE deleted=0 AND json_extract(data,'$.state')='active' ORDER BY id",quote(&c.table)))?.query_map([],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
             let mut active=Vec::new();for raw in rows {let app:Value=serde_json::from_str(&raw).map_err(sql_error)?;let id=text(&app,"id").map_err(sql_error)?;let m=codec.active_manifest(db,id)?;active.push((id.into(),text(&m,"app_ver").map_err(sql_error)?.into()));}
@@ -105,7 +105,7 @@ async fn drive(
     mut stop: watch::Receiver<bool>,
 ) -> Result<()> {
     // Recover pending commands once. Running/uncertain effects are never replayed.
-    let startup=database.readers.read_job(ReadJob::new(JobOptions::default(),|db|{
+    let startup=observed_read(database.readers.clone(), "startup_commands", ReadJob::new(JobOptions::default(),|db|{
         let c=collection(db,"business_commands")?;
         db.prepare(&format!("SELECT data FROM {} WHERE deleted=0 AND json_extract(data,'$.status') IN ('pending','accepted','queued') ORDER BY id",quote(&c.table)))?.query_map([],|r|r.get::<_,String>(0))?.map(|r|r.map_err(Into::into).and_then(|s|serde_json::from_str::<Value>(&s).map_err(sql_error))).collect::<Result<Vec<_>,StoreError>>()
     })).await?;
@@ -129,7 +129,7 @@ async fn drive(
         // Drain retained heads before awaiting the next coalesced wakeup.
         loop {
             let after = cursor;
-            let page=database.readers.read_job(ReadJob::new(JobOptions::default(),move|db|{
+            let page=observed_read(database.readers.clone(), "change_page", ReadJob::new(JobOptions::default(),move|db|{
                 let mut statement=db.prepare("SELECT c.collection,c.id,c.seq,c.op,c.gen FROM _changes c JOIN _collections r ON r.name=c.collection AND r.gen=c.gen AND r.state='active' WHERE c.seq>?1 ORDER BY c.seq LIMIT 256")?;
                 let rows=statement.query_map([after],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,u64>(2)?,r.get::<_,u8>(3)?,r.get::<_,u64>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
                 rows.into_iter().map(|(collection,id,seq,op,gen)|{
@@ -139,18 +139,23 @@ async fn drive(
                 }).collect::<Result<Vec<_>,StoreError>>()
             })).await?;
             if page.is_empty() {
-                authority.finish_events(true).await?;
+                authority
+                    .finish_events(true)
+                    .await
+                    .context("native idle event finalization")?;
                 break;
             }
             for (collection, id, seq, op, doc) in page {
                 if collection == "business_apps" {
                     match &doc {
-                        Some(app) if app["state"] == "active" => {
-                            ingress
-                                .published(id.clone(), text(app, "active_ver")?.into())
-                                .await?
-                        }
-                        _ => ingress.removed(id.clone()).await?,
+                        Some(app) if app["state"] == "active" => ingress
+                            .published(id.clone(), text(app, "active_ver")?.into())
+                            .await
+                            .with_context(|| format!("native published seq={seq} app={id}"))?,
+                        _ => ingress
+                            .removed(id.clone())
+                            .await
+                            .with_context(|| format!("native removed seq={seq} app={id}"))?,
                     }
                 } else if collection == "business_commands" {
                     if let Some(doc) = doc {
@@ -169,9 +174,11 @@ async fn drive(
                                 }
                                 Some(
                                     "done" | "failed" | "cancelled" | "completed" | "rejected",
-                                ) => {
-                                    deliver_completion(&database, &authority, &ingress, doc).await?
-                                }
+                                ) => deliver_completion(&database, &authority, &ingress, doc)
+                                    .await
+                                    .with_context(|| {
+                                        format!("native terminal seq={seq} id={id}")
+                                    })?,
                                 _ => (),
                             }
                         }
@@ -185,7 +192,14 @@ async fn drive(
                         record_id: id.clone(),
                     })
                     .await;
-                authority.finish_events(changed.is_ok()).await?;
+                authority
+                    .finish_events(changed.is_ok())
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "native change finalization seq={seq} collection={collection} id={id}"
+                        )
+                    })?;
                 changed.with_context(|| {
                     format!("native change seq={seq} collection={collection} id={id}")
                 })?;
@@ -258,7 +272,14 @@ async fn dispatch_committed(
         }
     };
     if native {
-        return dispatch_platform(database, authority, platform, policy_owner, &binding).await;
+        return dispatch_platform(database, authority, platform, policy_owner, &binding)
+            .await
+            .with_context(|| {
+                format!(
+                    "native platform id={} type={}",
+                    binding["command"]["id"], binding["command"]["type"]
+                )
+            });
     }
     let command = binding["command"].clone();
     let fence = binding["fence"].clone();
@@ -277,7 +298,12 @@ async fn dispatch_committed(
                 .downcast_ref::<ctox_app_runtime::HandlerError>()
                 .map_or(true, |e| e.uncertain);
             if uncertain {
-                return Err(error);
+                return Err(error).with_context(|| {
+                    format!(
+                        "native handler id={} type={}",
+                        binding["command"]["id"], binding["command"]["type"]
+                    )
+                });
             }
             json!({"status":"failed","error":{"status":"failed","code":error_code(&error.to_string()),"reason":"handler_failed"}})
         }
@@ -294,7 +320,10 @@ async fn dispatch_committed(
         let (rev,seq):(String,u64)=tx.query_row("SELECT rev,seq FROM _changes WHERE collection='business_commands' AND gen=?1 AND id=?2",params![c.gen,id],|r|Ok((r.get(0)?,r.get(1)?)))?;
         write_contract::project_command(tx,&id,c.gen,&rev,seq,&doc)?;Ok(())
     }))?.await?;
-    authority.release(&binding).await?;
+    authority
+        .release(&binding)
+        .await
+        .with_context(|| format!("native release id={}", binding["command"]["id"]))?;
     Ok(())
 }
 
@@ -328,7 +357,10 @@ async fn deliver_completion(
         authority
             .finish_event_record(&binding, if result.is_ok() { "done" } else { "failed" })
             .await?;
-        authority.release(&binding).await?;
+        authority
+            .release(&binding)
+            .await
+            .with_context(|| format!("native release id={}", binding["command"]["id"]))?;
         result?;
     }
     Ok(())
@@ -426,10 +458,10 @@ impl crate::service::store_startup::RunningEngine for RuntimeBinding {
 
 async fn is_native_event(database: &Database, doc: &Value) -> Result<bool> {
     let doc = doc.clone();
-    Ok(database
-        .readers
-        .read_job(ReadJob::new(Default::default(), move |db| {
-            origin::native_event(db, &doc)
-        }))
-        .await?)
+    Ok(observed_read(
+        database.readers.clone(),
+        "native_event_receipt",
+        ReadJob::new(Default::default(), move |db| origin::native_event(db, &doc)),
+    )
+    .await?)
 }

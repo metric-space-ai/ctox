@@ -78,17 +78,17 @@ async fn terminal(database: &Database, name: &str, id: &str) -> Result<Value> {
     let mut commits = database.writer.subscribe_commits();
     let name = name.to_owned();
     let id = id.to_owned();
+    let started = Instant::now();
+    let mut observed = json!({"present":false});
     tokio::time::timeout(Duration::from_secs(25), async {
         loop {
             let n = name.clone();
             let i = id.clone();
-            let doc = database
-                .readers
-                .read_job(ReadJob::new(Default::default(), move |db| {
-                    document(db, &n, &i)
-                }))
-                .await?;
+            let doc = observed_read(database.readers.clone(), "proof_terminal", ReadJob::new(Default::default(), move |db| {
+                document(db, &n, &i)
+            })).await.with_context(|| format!("native terminal read {name}/{id}"))?;
             if let Some(doc) = doc {
+                observed = json!({"present":true,"status":doc["status"],"error_code":doc["error"]["code"]});
                 if name != "business_commands"
                     || matches!(
                         doc["status"].as_str(),
@@ -102,7 +102,7 @@ async fn terminal(database: &Database, name: &str, id: &str) -> Result<Value> {
         }
     })
     .await
-    .with_context(|| format!("native daemon did not deliver {name}/{id}"))?
+    .with_context(|| format!("native daemon did not deliver {name}/{id}; elapsed_ms={} last={observed}", started.elapsed().as_millis()))?
 }
 async fn submit(
     database: &Database,

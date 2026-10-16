@@ -51,12 +51,12 @@ impl RuntimeAuthority {
     }
     fn query<T: Send + 'static>(
         &self,
+        stage: &'static str,
         read: impl FnOnce(&Connection) -> Result<T, StoreError> + Send + 'static,
     ) -> Result<T> {
         let pool = self.database.readers.clone();
         wait(&self.runtime, async move {
-            pool.read_job(ReadJob::new(JobOptions::default(), read))
-                .await
+            observed_read(pool, stage, ReadJob::new(JobOptions::default(), read)).await
         })
     }
     pub(super) fn binding(
@@ -352,7 +352,7 @@ impl CoreAuthority for RuntimeAuthority {
         let codec = self.codec.clone();
         let b = binding.clone();
         let expected = manifest.clone();
-        self.query(move |db| {
+        self.query("authority.admit", move |db| {
             let a = codec.check(db, &b)?;
             let current = if b["command"]["runtime_completion"] == true {
                 codec.version(
@@ -376,7 +376,7 @@ impl CoreAuthority for RuntimeAuthority {
         let claimed = claimed.clone();
         let op = operation.clone();
         let codec = self.codec.clone();
-        self.query(move |db| {
+        self.query("authority.authorize", move |db| {
             let a = actor(db, text(&claimed, "id").map_err(sql_error)?)?;
             if actor_json(&a) != claimed {
                 return Err(invalid("revoked: actor changed"));
@@ -413,7 +413,7 @@ impl CoreAuthority for RuntimeAuthority {
         let name = name.to_owned();
         let operation = operation.to_owned();
         let codec = self.codec.clone();
-        self.query(move |db| {
+        self.query("authority.exported", move |db| {
             let c = collection(db, &name)?;
             if c.owner != owner {
                 return Ok(false);
@@ -469,7 +469,7 @@ impl CoreAuthority for RuntimeAuthority {
         let app = app.to_owned();
         let version = version.to_owned();
         let codec = self.codec.clone();
-        self.query(move |db| {
+        self.query("authority.grants", move |db| {
             let m = codec.version(db, &app, &version)?["manifest"].clone();
             let record = document(db, "business_apps", &app)?
                 .ok_or_else(|| invalid("revoked: app removed"))?;
@@ -687,7 +687,7 @@ impl RuntimeAuthority {
         let id = id.to_owned();
         let task = format!("command:{id}");
         let codec = self.codec.clone();
-        let saved=self.query(move|db|{
+        let saved=self.query("authority.completion_binding", move |db| {
             let row:Option<(String,String,String,Option<String>,Option<String>)>=db.query_row("SELECT app_id,app_ver,actor_id,on_complete,on_failed FROM _app_runtime_completions WHERE task_id=?1 AND state='pending'",[task],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
             let Some((app,ver,actor_id,complete,failed))=row else{return Ok(None)};
             let target=document(db,"business_commands",&id)?.ok_or_else(||invalid("not_found: completed command"))?;
