@@ -2472,6 +2472,9 @@
         "app_catalog": [
           "read"
         ],
+        "app_drafts": [
+          "read"
+        ],
         "business_app_versions": [
           "read"
         ],
@@ -2509,10 +2512,13 @@
           "write"
         ]
       },
-      "source": "~/.local/state/ctox-sync-v4/docs/v4-manifests/ctox-platform.manifest.json",
+      "source": "/Volumes/tmp/ctox-sync-v4/clones/integration3/src/core/business_os/v4/ctox-platform.manifest.json",
       "used_by": {
         "app_activations": [],
         "app_catalog": [
+          "app-store"
+        ],
+        "app_drafts": [
           "app-store"
         ],
         "business_app_versions": [

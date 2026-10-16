@@ -16,7 +16,7 @@
 // schema.js ist optional und dient nur noch dem Drift-Bericht.
 // Eigentum: OWNER_RESOLUTIONS (Plattform, OLG) vor ownership-baseline.json (eingefroren) vor Definierer/Präfix.
 // Plattform-Collections gehören 'ctox-platform'; Apps deklarieren sie nur gemäß deren exports
-// (~/.local/state/ctox-sync-v4/docs/v4-manifests/ctox-platform.manifest.json).
+// (src/core/business_os/v4/ctox-platform.manifest.json, E48).
 //
 // Aufruf:
 //   node gen-manifest.mjs                 schreibt ../../manifests/<app_id>.manifest.json (+ lib-<name>), out/* und REPORT-M2.md
@@ -45,7 +45,9 @@ export const DEFAULT_OUT = path.resolve(HERE, '../../manifests');
 export const DEFAULT_REPORT_OUT = path.resolve(HERE, 'out');
 export const DEFAULT_TOOL_OUT = HERE;
 export const DEFAULT_ANALYSIS = path.join(os.homedir(), '.local/state/shell-v4/analysis');
-export const DEFAULT_PLATFORM_MANIFEST = path.join(os.homedir(), '.local/state/ctox-sync-v4/docs/v4-manifests/ctox-platform.manifest.json');
+// E48: einzige Quelle ist das Kern-Manifest im Repo (#904), nicht die frühere Kopie unter ~/.local/state/ctox-sync-v4/docs –
+// die veraltete still (16.10.: app_drafts-Export und app_user_preferences fehlten dort) und gibt es in CI nicht.
+export const PLATFORM_MANIFEST_FILE = 'src/core/business_os/v4/ctox-platform.manifest.json';
 export const DEFAULT_BASELINE = path.join(HERE, 'ownership-baseline.json');
 export const BASE_RELEASE = 'main@4794af03d';
 export const MIN_APP_API = '4.0';
@@ -1494,7 +1496,7 @@ export async function generate(options = {}) {
   const contract = fs.existsSync(contractFile) ? readJson(contractFile) : {};
   const baselineFile = options.baseline === undefined ? DEFAULT_BASELINE : options.baseline;
   const baseline = baselineFile && fs.existsSync(baselineFile) ? readJson(baselineFile).owners || {} : {};
-  const platform = loadPlatform(options.platformManifest === undefined ? DEFAULT_PLATFORM_MANIFEST : options.platformManifest);
+  const platform = loadPlatform(options.platformManifest === undefined ? path.join(repo, PLATFORM_MANIFEST_FILE) : options.platformManifest);
   const demandOnly = loadDemandOnly(repo);
   const analysis = loadAnalysisSections(analysisDir);
 
