@@ -26,13 +26,22 @@ jobs:
         working-directory: src/apps/business-os
       - name: Mail model and UI contracts
         run: node src/apps/business-os/modules/mail/tests/mail.test.mjs
+      # Line selection (E37): V2 mail QA on release/v2, its v4 counterpart on every other line.
       - name: Mail browser behavior
+        if: (github.base_ref || github.ref_name) == 'release/v2'
         env:
           CTOX_MAIL_QA_SCREENSHOT: ${{ runner.temp }}/mail-qa.png
           CTOX_MAIL_QA_INBOX_SCREENSHOT: ${{ runner.temp }}/mail-inbox.png
           CTOX_MAIL_QA_SENT_SCREENSHOT: ${{ runner.temp }}/mail-sent.png
           CTOX_MAIL_QA_TRACE: ${{ runner.temp }}/mail-qa-trace.zip
         run: node src/apps/business-os/modules/mail/tests/mail-browser-qa.mjs
+      - name: Mail browser behavior (v4 line)
+        if: (github.base_ref || github.ref_name) != 'release/v2'
+        env:
+          # In-repo App-API stub (pin 68b83a3); the script's default is an out-of-repo stub pin under $HOME.
+          CTOX_APP_API_STUB: ${{ github.workspace }}/src/apps/business-os/modules/ctox/tests/fixtures/app-api-stub
+          CTOX_EVIDENCE_DIR: ${{ runner.temp }}/mail-qa-v4
+        run: node src/apps/business-os/modules/mail/tests/mail-browser-qa.v4.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
@@ -42,4 +51,5 @@ jobs:
             ${{ runner.temp }}/mail-inbox.png
             ${{ runner.temp }}/mail-sent.png
             ${{ runner.temp }}/mail-qa-trace.zip
+            ${{ runner.temp }}/mail-qa-v4
           if-no-files-found: ignore

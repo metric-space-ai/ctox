@@ -1304,50 +1304,52 @@ fn outbound_registry_target_list(answer: &Value) -> anyhow::Result<Vec<Value>> {
 /// Legacy stores can lack the optional state table. An unreadable store or
 /// malformed row is an error, never evidence that no account is inactive.
 fn outbound_registry_account_states(root: &Path) -> anyhow::Result<BTreeMap<String, Value>> {
-    let mut out = BTreeMap::new();
-    let conn = Connection::open_with_flags(
-        crate::paths::core_db(root),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )?;
-    let has_table: bool = conn.query_row(
+    crate::lcm::with_lcm_read(
+        &crate::paths::core_db(root),
+        move |conn: &rusqlite::Connection| {
+            let mut out = BTreeMap::new();
+
+            let has_table: bool = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'scrape_account_state')",
         [],
         |row| row.get(0),
     )?;
-    if !has_table {
-        return Ok(out);
-    }
-    let mut statement = conn.prepare(
-        "SELECT target_id, reason, causal_run_id, last_probe_run_id, failed_probes,
+            if !has_table {
+                return Ok(out);
+            }
+            let mut statement = conn.prepare(
+                "SELECT target_id, reason, causal_run_id, last_probe_run_id, failed_probes,
                 next_probe_at_ms, probe_lease_owner, probe_lease_until_ms, updated_at_ms
          FROM scrape_account_state",
-    )?;
-    let now = chrono::Utc::now().timestamp_millis();
-    let rows = statement.query_map([], |row| {
-        let next_probe_at_ms: i64 = row.get(5)?;
-        let lease_owner: Option<String> = row.get(6)?;
-        let lease_until_ms: i64 = row.get(7)?;
-        Ok((
-            row.get::<_, String>(0)?,
-            serde_json::json!({
-                "status": "provider_account_inactive",
-                "reason": row.get::<_, String>(1)?.chars().take(300).collect::<String>(),
-                "causal_run_id": row.get::<_, String>(2)?,
-                "last_probe_run_id": row.get::<_, String>(3)?,
-                "failed_probes": row.get::<_, i64>(4)?,
-                "next_probe_at_ms": next_probe_at_ms,
-                "next_probe_at": chrono::DateTime::from_timestamp_millis(next_probe_at_ms)
-                    .map(|at| at.to_rfc3339()),
-                "probe_in_progress": lease_owner.is_some() && lease_until_ms > now,
-                "updated_at_ms": row.get::<_, i64>(8)?,
-            }),
-        ))
-    });
-    for row in rows? {
-        let (target_id, state) = row?;
-        out.insert(target_id, state);
-    }
-    Ok(out)
+            )?;
+            let now = chrono::Utc::now().timestamp_millis();
+            let rows = statement.query_map([], |row| {
+                let next_probe_at_ms: i64 = row.get(5)?;
+                let lease_owner: Option<String> = row.get(6)?;
+                let lease_until_ms: i64 = row.get(7)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    serde_json::json!({
+                        "status": "provider_account_inactive",
+                        "reason": row.get::<_, String>(1)?.chars().take(300).collect::<String>(),
+                        "causal_run_id": row.get::<_, String>(2)?,
+                        "last_probe_run_id": row.get::<_, String>(3)?,
+                        "failed_probes": row.get::<_, i64>(4)?,
+                        "next_probe_at_ms": next_probe_at_ms,
+                        "next_probe_at": chrono::DateTime::from_timestamp_millis(next_probe_at_ms)
+                            .map(|at| at.to_rfc3339()),
+                        "probe_in_progress": lease_owner.is_some() && lease_until_ms > now,
+                        "updated_at_ms": row.get::<_, i64>(8)?,
+                    }),
+                ))
+            });
+            for row in rows? {
+                let (target_id, state) = row?;
+                out.insert(target_id, state);
+            }
+            Ok(out)
+        },
+    )
 }
 
 /// Last run and last successful run per scrape target. The app list showed
@@ -1357,59 +1359,60 @@ fn outbound_registry_account_states(root: &Path) -> anyhow::Result<BTreeMap<Stri
 fn outbound_registry_last_runs(
     root: &Path,
 ) -> anyhow::Result<BTreeMap<String, (Value, Option<Value>)>> {
-    let conn = Connection::open_with_flags(
-        crate::paths::core_db(root),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )?;
-    // failure_mode and detail travel with the run: without them the app
-    // could not tell "account inactive at the provider" (Bright Data "Customer
-    // is not active", 77 of 80 LinkedIn runs on 27.09.2026) from a network
-    // hiccup or a missing credential.
-    let run = |row: &rusqlite::Row<'_>| -> rusqlite::Result<(String, Value)> {
-        let result = row
-            .get::<_, Option<String>>(5)?
-            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-            .unwrap_or(Value::Null);
-        let text = |key: &str| {
-            result
-                .get(key)
-                .and_then(Value::as_str)
-                .map(|value| value.chars().take(300).collect::<String>())
-        };
-        Ok((
-            row.get::<_, String>(0)?,
-            serde_json::json!({
-                "run_id": row.get::<_, String>(1)?,
-                "status": row.get::<_, String>(2)?,
-                "started_at": row.get::<_, Option<String>>(3)?,
-                "finished_at": row.get::<_, Option<String>>(4)?,
-                "failure_mode": text("failure_mode"),
-                "detail": text("detail"),
-            }),
-        ))
-    };
-    let mut out: BTreeMap<String, (Value, Option<Value>)> = BTreeMap::new();
-    let mut last = conn.prepare(
+    crate::lcm::with_lcm_read(
+        &crate::paths::core_db(root),
+        move |conn: &rusqlite::Connection| {
+            // failure_mode and detail travel with the run: without them the app
+            // could not tell "account inactive at the provider" (Bright Data "Customer
+            // is not active", 77 of 80 LinkedIn runs on 27.09.2026) from a network
+            // hiccup or a missing credential.
+            let run = |row: &rusqlite::Row<'_>| -> rusqlite::Result<(String, Value)> {
+                let result = row
+                    .get::<_, Option<String>>(5)?
+                    .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+                    .unwrap_or(Value::Null);
+                let text = |key: &str| {
+                    result
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .map(|value| value.chars().take(300).collect::<String>())
+                };
+                Ok((
+                    row.get::<_, String>(0)?,
+                    serde_json::json!({
+                        "run_id": row.get::<_, String>(1)?,
+                        "status": row.get::<_, String>(2)?,
+                        "started_at": row.get::<_, Option<String>>(3)?,
+                        "finished_at": row.get::<_, Option<String>>(4)?,
+                        "failure_mode": text("failure_mode"),
+                        "detail": text("detail"),
+                    }),
+                ))
+            };
+            let mut out: BTreeMap<String, (Value, Option<Value>)> = BTreeMap::new();
+            let mut last = conn.prepare(
         "SELECT r.target_id, r.run_id, r.status, r.started_at, r.finished_at, r.result_json FROM scrape_run r
          WHERE r.started_at = (SELECT MAX(started_at) FROM scrape_run WHERE target_id = r.target_id)",
     )?;
-    for entry in last.query_map([], run)? {
-        let (target_id, value) = entry?;
-        out.insert(target_id, (value, None));
-    }
-    let mut ok = conn.prepare(
+            for entry in last.query_map([], run)? {
+                let (target_id, value) = entry?;
+                out.insert(target_id, (value, None));
+            }
+            let mut ok = conn.prepare(
         "SELECT r.target_id, r.run_id, r.status, r.started_at, r.finished_at, r.result_json FROM scrape_run r
          WHERE r.status IN ('succeeded', 'completed_empty')
            AND r.started_at = (SELECT MAX(started_at) FROM scrape_run
                                WHERE target_id = r.target_id AND status IN ('succeeded', 'completed_empty'))",
     )?;
-    for entry in ok.query_map([], run)? {
-        let (target_id, value) = entry?;
-        if let Some(slot) = out.get_mut(&target_id) {
-            slot.1 = Some(value);
-        }
-    }
-    Ok(out)
+            for entry in ok.query_map([], run)? {
+                let (target_id, value) = entry?;
+                if let Some(slot) = out.get_mut(&target_id) {
+                    slot.1 = Some(value);
+                }
+            }
+            Ok(out)
+        },
+    )
 }
 
 /// Latest registered script of one scrape target, for the Outbound app's
@@ -14276,3 +14279,7 @@ mod registry_last_run_detail_tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "core_snapshot_tests.rs"]
+mod core_snapshot_tests;

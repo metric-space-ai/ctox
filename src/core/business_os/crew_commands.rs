@@ -54,32 +54,13 @@ fn audit_payload(payload: &Value) -> Value {
     }
     out
 }
-pub(super) fn control(
-    root: &Path,
-    command: &BusinessCommand,
-    session: &BusinessOsSession,
-) -> Result<Value> {
-    crate::service::harness_flow::record_harness_flow_event(
-        root,
-        crate::service::harness_flow::RecordHarnessFlowEventRequest {
-            event_kind: "crew.control",
-            title: &command.command_type,
-            body_text: "",
-            message_key: None,
-            work_id: None,
-            ticket_key: None,
-            attempt_index: None,
-            metadata: json!({"actor":session_user_id(session),"command_type":command.command_type,"stage":"requested","payload":audit_payload(&command.payload)}),
-        },
-    )?;
-    // Central authorization and command receipts precede this core transaction.
-    let outcome = (|| -> Result<Value> {
-        let conn = Connection::open(crate::paths::core_db(root))?;
-        conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
-        let tx = conn.unchecked_transaction()?;
-        let p = &command.payload;
+fn apply_control_core(root: &Path, command_type: &str, payload: &Value) -> Result<Value> {
+    let command_type = command_type.to_owned();
+    let payload = payload.clone();
+    crate::lcm::with_lcm_write_session(&crate::paths::core_db(root), move |tx, engine| {
+        let p = &payload;
         let now = chrono::Utc::now().to_rfc3339();
-        let result = match command.command_type.as_str() {
+        let result = match command_type.as_str() {
             "ctox.crew.member.create" => {
                 let name = text(p, "name")?;
                 ensure!(crew::safe_prose(name, 60), "invalid member name");
@@ -137,25 +118,16 @@ pub(super) fn control(
                 // The owner curates a member's memory through the same LCM
                 // continuity documents the harness reads and refreshes.
                 let id = text(p, "member_id")?;
-                // The LCM engine commits the memory on its own connection. A
-                // read on `tx` before that pinned a WAL snapshot, and the member
-                // touch below then failed with "database is locked" although the
-                // memory was already written (thesen, 11.09.2026). The check runs
-                // on a separate connection so `tx` starts with the touch.
-                let check = Connection::open(crate::paths::core_db(root))?;
-                check.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
                 ensure!(
-                    crew::members(&check)?.iter().any(|m| m.id == id),
+                    crew::members(tx)?.iter().any(|m| m.id == id),
                     "member not found"
                 );
-                drop(check);
                 let kind_label = text(p, "kind")?;
                 let kind = match kind_label {
                     "anchors" => crate::lcm::ContinuityKind::Anchors,
                     "narrative" => crate::lcm::ContinuityKind::Narrative,
                     _ => anyhow::bail!("kind must be anchors or narrative"),
                 };
-                let engine = crew::open_engine(root)?;
                 let conversation = crew::member_conversation_id(id);
                 engine.continuity_init_documents(conversation)?;
                 // Not `text()`: its 200-character cap made the 8 000 here
@@ -209,7 +181,7 @@ pub(super) fn control(
                     )
                     .optional()?;
                 ensure!(member.is_some(), "learning not found");
-                match command.command_type.as_str() {
+                match command_type.as_str() {
                     "ctox.crew.learning.confirm" => {
                         tx.execute(
                             "UPDATE crew_member_learnings SET confirmed_by_owner=1 WHERE id=?1",
@@ -241,7 +213,33 @@ pub(super) fn control(
             }
             _ => anyhow::bail!("unsupported crew command"),
         };
-        tx.commit()?;
+        Ok(result)
+    })
+}
+
+pub(super) fn control(
+    root: &Path,
+    command: &BusinessCommand,
+    session: &BusinessOsSession,
+) -> Result<Value> {
+    crate::service::harness_flow::record_harness_flow_event(
+        root,
+        crate::service::harness_flow::RecordHarnessFlowEventRequest {
+            event_kind: "crew.control",
+            title: &command.command_type,
+            body_text: "",
+            message_key: None,
+            work_id: None,
+            ticket_key: None,
+            attempt_index: None,
+            metadata: json!({"actor":session_user_id(session),"command_type":command.command_type,"stage":"requested","payload":audit_payload(&command.payload)}),
+        },
+    )?;
+    // Central authorization and command receipts precede this core transaction.
+    let outcome = (|| -> Result<Value> {
+        let result = apply_control_core(root, &command.command_type, &command.payload)?;
+        let p = &command.payload;
+
         if command.command_type == "ctox.crew.assign" {
             crate::mission::channels::refresh_queue_assignment_projection(
                 root,
@@ -292,3 +290,7 @@ mod tests {
         assert_eq!(audit, json!({"member_id":"crew-milo"}));
     }
 }
+
+#[cfg(test)]
+#[path = "crew_control_owner_tests.rs"]
+mod crew_control_owner_tests;

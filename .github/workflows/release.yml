@@ -129,8 +129,6 @@ jobs:
           node --check src/apps/business-os/scripts/assert-production-release-docs.mjs
           node --check src/apps/business-os/scripts/assert-security-privacy-signoff.mjs
           node --check src/apps/business-os/scripts/audit-business-os-content.mjs
-          node src/apps/business-os/scripts/assert-rxdb-only.mjs
-          node src/apps/business-os/scripts/assert-module-conformance.mjs
           node src/core/rxdb/tools/assert_sync_production_readiness_95.js
           node src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js --self-test
           node src/core/rxdb/tools/build_sync_production_readiness_95_artifact.js --self-test
@@ -152,6 +150,39 @@ jobs:
           node src/apps/business-os/rxdb/tests/run-all.mjs --require-wire-daemon
           cargo test --locked --bin ctox business_os --quiet
           cargo test --locked --manifest-path src/core/rxdb/Cargo.toml --quiet
+
+      # Line selection (E37): V2 checks for the release/v2 line, their v4 counterparts for every other line.
+      # A tag run has no branch in github.ref_name; the line is the branch the tagged commit belongs to.
+      - name: Select CI line
+        id: line
+        shell: bash
+        env:
+          REF_LINE: ${{ github.base_ref || github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          line="$REF_LINE"
+          if [[ "$REF_TYPE" == "tag" ]]; then
+            git fetch --no-tags --quiet origin '+refs/heads/release/v2:refs/remotes/origin/release/v2' || true
+            if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then git fetch --no-tags --quiet --unshallow origin; fi
+            if git rev-parse --verify --quiet refs/remotes/origin/release/v2 > /dev/null \
+              && git merge-base --is-ancestor HEAD refs/remotes/origin/release/v2; then line=release/v2; else line=main; fi
+          fi
+          echo "line=$line" >> "$GITHUB_OUTPUT"
+
+      - name: Business OS production contract checks (V2 line)
+        if: steps.line.outputs.line == 'release/v2'
+        run: |
+          node src/apps/business-os/scripts/assert-rxdb-only.mjs
+          node src/apps/business-os/scripts/assert-module-conformance.mjs
+
+      - name: Business OS production contract checks (v4 line)
+        if: steps.line.outputs.line != 'release/v2'
+        run: |
+          node --check src/apps/business-os/scripts/assert-rxdb-only.v4.mjs
+          node --check src/apps/business-os/scripts/assert-module-conformance.v4.mjs
+          node src/apps/business-os/scripts/assert-rxdb-only.v4.mjs
+          node src/apps/business-os/scripts/assert-module-conformance.v4.mjs
 
       - name: Business OS production browser gate
         run: |

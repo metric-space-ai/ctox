@@ -7,6 +7,8 @@
 // zeichnet sie mit crew-renderer.js. Der v4-Kernel liefert dem Rahmen nichts davon; die Leiste zeigt deshalb das, was da
 // ist: die Crew-Apps mit ihrem App-Bild als Avatar. Der Kalender-Navigator hält den gewählten Tag (heute ± n); einen
 // Verbraucher dafür (Chats eines Tages) gibt es im v4-Kernel noch nicht.
+// CHAT4: Ist die Chatleiste der Shell-V2 montiert (v4/shell/chat, Crew-Pool und Kalender dort), tritt diese Leiste ab
+// (handOver(true)) – unten links steht immer genau eine Leiste. handOver(false) holt sie zurück.
 
 const PREV_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>';
 const NEXT_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>';
@@ -83,6 +85,9 @@ export function createCrewBar({ host, t, lang = 'de', iconFor, onMember, onCrew 
 
   // ---------- Mitglieder ----------
   const slots = new Map(); // app_id -> slot
+  let handedOver = false;
+  let memberCount = 0;
+  const applyHidden = () => { el.hidden = handedOver || memberCount === 0; };
   fab.addEventListener('click', (event) => {
     const slot = event.target.closest('[data-v4-crew]');
     if (slot && membersEl.contains(slot)) onMember?.(slot.dataset.v4Crew, { anchor: slot, event });
@@ -109,12 +114,22 @@ export function createCrewBar({ host, t, lang = 'de', iconFor, onMember, onCrew 
       if (membersEl.children[i] !== slot) membersEl.insertBefore(slot, membersEl.children[i] || null);
     });
     membersEl.classList.toggle('is-members', members.length > 0);
-    el.hidden = members.length === 0;
+    memberCount = members.length;
+    applyHidden();
+  }
+
+  function handOver(active) {
+    handedOver = !!active;
+    if (handedOver) el.dataset.v4CrewHandedOver = 'chat';
+    else delete el.dataset.v4CrewHandedOver;
+    applyHidden();
   }
 
   return {
     element: el,
     setMembers,
+    handOver,
+    get handedOver() { return handedOver; },
     get day() { return dateInput.value; },
     destroy() { el.remove(); },
   };

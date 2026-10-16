@@ -7,11 +7,14 @@ import { CtoxError } from './values.mjs';
 export class KernelTransport {
   async connect(_identity, _events) {}
   async subscribe(_subscription) {} // offline: retain subscription intent without manufacturing pages
+  // entry.client_seq is a positive decimal string durably reserved under
+  // leader_gen; retry/reload keeps it together with op_id. E14 session IDs
+  // identify associations, not a replacement for this identity's ordering.
   async write(_entry) { throw new CtoxError('unavailable', 'No transport configured'); }
   async appActivation(_report) {}
   priority(_hint) {}
   async artifact(_hash) { throw new CtoxError('unavailable', 'No artifact transport'); }
-  async blob(_ref) { throw new CtoxError('unavailable', 'No file transport'); }
+  async blob(_ref, _range) { throw new CtoxError('unavailable', 'No file transport'); }
   async upload(_ref, _blob) { throw new CtoxError('unavailable', 'No file transport'); }
   close() {}
 }

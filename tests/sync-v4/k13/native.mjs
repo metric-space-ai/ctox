@@ -35,6 +35,7 @@ export async function connect(h, id) {
   },{contract:CONTROL_CONTRACT,id});
   if (!proof.available) return {result:notRun('Native fixture/identity control seam is not bound',proof)};
   const fixture = await control(page,'prepare',{scenario:id});
+  if(fixture.available===false)return {result:notRun(fixture.reason,{ownerBacked:fixture.ownerBacked})};
   assert.equal(fixture.scenario,id);
   assert.equal(fixture.isolated,true,'Only the runner-owned synthetic tenant may be modified');
   assert.equal(fixture.revision,h.config.revision,'Fixture must use the checksum-bound daemon revision');
@@ -51,13 +52,16 @@ export async function control(page,operation,args = {}) {
   },{operation,args});
 }
 export async function participant(h, fixture, identity) {
-  const page = await h.newClient();
+  const page = await h.newClient(identity);
   const availability = await h.os(page);
   assert.equal(availability.available,true,'Every participant needs the real native OS bootstrap');
   const actual = await control(page,'authenticate',{userId:identity.id,deviceId:identity.deviceId});
   assert.equal(actual.userId,identity.id,'Server-authenticated identity mismatch');
   assert.equal(actual.role,identity.role,'Role must come from the Core, never a browser override');
   assert.equal(actual.instanceId,fixture.instanceId);
+  assert.ok(actual.deviceId,'Actual E38 device binding required');
+  if(identity.deviceId==null)identity.deviceId=actual.deviceId;
+  assert.equal(identity.deviceId,actual.deviceId,'Fixture device must match the admitted browser');
   const binding=await page.evaluate(()=>({userId:globalThis.__e2eOS.kernel.userId,
     shellUserId:globalThis.__e2eOS.shell.identity.user_id,
     transportUserId:globalThis.__e2eOS.transport?.identity?.userId}));

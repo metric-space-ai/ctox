@@ -236,16 +236,29 @@ pub(super) fn resolve_sender(
     ctx: &CapCallContext,
     requested: &str,
 ) -> Result<Sender, CtoxError> {
+    let work = root.to_owned();
+    let actor = ctx.actor.id.clone();
+    let requested = requested.to_owned();
+    crate::persistence::run_core_blocking_at(root, move || {
+        resolve_sender_admitted(&work, &actor, &requested).map_err(anyhow::Error::new)
+    })
+    .map_err(|error| match error.downcast::<CtoxError>() {
+        Ok(error) => error,
+        Err(error) => native_error(error),
+    })
+}
+
+fn resolve_sender_admitted(root: &Path, actor: &str, requested: &str) -> Result<Sender, CtoxError> {
     if let Some(account) = crate::communication::email_accounts::load_accounts(root)
         .map_err(native_error)?
         .into_iter()
         .find(|a| a.address.eq_ignore_ascii_case(requested))
     {
-        if account.owner_user_id != ctx.actor.id
+        if account.owner_user_id != actor
             && !account
                 .shared_user_ids
                 .as_ref()
-                .is_some_and(|ids| ids.contains(&ctx.actor.id))
+                .is_some_and(|ids| ids.iter().any(|id| id == actor))
         {
             return Err(CtoxError::new(
                 ErrorCode::Forbidden,
@@ -258,15 +271,11 @@ pub(super) fn resolve_sender(
             display_name: Some(account.display_name),
         });
     }
-    let runtime = crate::communication::gateway::runtime_settings_from_root(
-        root,
-        crate::communication::gateway::CommunicationAdapterKind::Email,
-    );
-    let instance = runtime
-        .get("CTO_EMAIL_ADDRESS")
-        .map(String::as_str)
-        .unwrap_or("")
-        .trim();
+    let instance =
+        crate::inference::runtime_env::try_get_runtime_env_value(root, "CTO_EMAIL_ADDRESS")
+            .map_err(native_error)?
+            .unwrap_or_default();
+    let instance = instance.trim();
     if instance.is_empty() || !instance.eq_ignore_ascii_case(requested) {
         return Err(CtoxError::new(
             ErrorCode::NotFound,
@@ -275,7 +284,11 @@ pub(super) fn resolve_sender(
     }
     Ok(Sender {
         address: instance.to_owned(),
-        provider: runtime.get("CTO_EMAIL_PROVIDER").cloned(),
+        provider: crate::inference::runtime_env::try_get_runtime_env_value(
+            root,
+            "CTO_EMAIL_PROVIDER",
+        )
+        .map_err(native_error)?,
         display_name: None,
     })
 }

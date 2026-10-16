@@ -196,7 +196,94 @@ export const SHELL_FOREIGN = {
   ctox_bug_reports: { owner_app: 'ctox', ops: ['read', 'write'], sources: ['v4/shell/report.js REPORT_COLLECTIONS.bugs (FR6b Meldeschleife, api.put)'] },
   // LOOP Runde 2: Melder-Name im Reiter „Meldungen“ aus der Nutzerliste der Instanz (nur lesen).
   business_users: { owner_app: 'ctox', ops: ['read'], sources: ['v4/source/reports-tab.js USERS_COLLECTION (Melder-Name, Rückfall „Teammitglied“)'] },
+  // E30/K-WJ-1: die Workjet-Brücke liest als App 'shell'. Ohne Deklaration verweigert der Kern das Lesen (files.get → forbidden).
+  workjet_projects: { owner_app: 'ctox', ops: ['read'], sources: ['v4/shell/workjet/actions/project.js (project.list, startCollection workjet_projects)'] },
+  workjet_working_copies: { owner_app: 'ctox', ops: ['read'], sources: ['v4/shell/workjet/actions/project.js (project.list, Arbeitskopien)'] },
+  workjet_computers: { owner_app: 'ctox', ops: ['read'], sources: ['v4/shell/workjet/actions/computer.js (computer.list, E32 lokales Lesen)'] },
+  workjet_sessions: { owner_app: 'ctox', ops: ['read'], sources: ['v4/shell/workjet/actions/session.js (session.list, E32 lokales Lesen)'] },
+  workjet_session_transfers: { owner_app: 'ctox', ops: ['read'], sources: ['v4/shell/workjet/actions/session.js (Sitzungsübergabe)'] },
+  desktop_files: { owner_app: 'desktop', ops: ['read'], sources: ['v4/shell/workjet/actions/project.js presentation.content.read, actions/meeting.js narration.read (files.get über desktop_files-Zeile, E30)'] },
+  // CHAT4: die V2-Chatleiste (shared/business-chat.js über v4/shell/chat, App 'shell') liest und schreibt die eigenen Verläufe
+  // und liest Befehls-, Queue- und Crew-Zustand (Inventar v4/shell/chat/CHAT4.md).
+  business_chats: { owner_app: 'ctox', ops: ['read', 'write'], sources: ['v4/shell/chat/index.js CHAT_WRITABLE (shared/business-chat.js hydrateChatsFromRxDb, persistChatDocsRemote, deleteChat)'] },
+  business_commands: { owner_app: PLATFORM_OWNER, ops: ['read'], sources: ['v4/shell/chat/index.js CHAT_COLLECTIONS (shared/business-chat.js waitForSubmittedTaskId, syncTrackedMessages)'] },
+  ctox_queue_tasks: { owner_app: PLATFORM_OWNER, ops: ['read'], sources: ['v4/shell/chat/index.js CHAT_COLLECTIONS (shared/business-chat.js syncTrackedMessages, loadCrewAppTasks)'] },
+  ctox_crew_members: { owner_app: 'ctox', ops: ['read'], sources: ['v4/shell/chat/index.js CHAT_COLLECTIONS (shared/business-chat.js loadCrewMembers, Crew-Pool der Leiste)'] },
+  ctox_harness_status: { owner_app: 'ctox', ops: ['read'], sources: ['v4/shell/chat/index.js CHAT_COLLECTIONS (shared/business-chat.js loadCrewHarnessStatus, Arbeiterwahrheit)'] },
+  ctox_harness_events: { owner_app: 'ctox', ops: ['read'], sources: ['v4/shell/chat/index.js CHAT_COLLECTIONS (shared/business-chat.js crewSelectionReason)'] },
 };
+
+// ROUTE (Kernentscheidung E39, Präzisierung §16.40): Befehle der Shell an fremde Apps. Der Chat der Shell
+// (v4/shell/chat → shared/business-chat.js, commandBus.dispatch) sendet business_os.chat.task, „CTOX fragen…“
+// (v4/shell/app-host.js Menüpunkt ctox.ask → Eingabeblatt) den Standardbefehl ctox.chat.task. Empfänger ist ctox.
+export const SHELL_COMMANDS_OUT = [
+  { app: 'ctox', type: 'business_os.chat.task', sources: ['v4/shell/chat/index.js (commandBus.dispatch → api.command; shared/business-chat.js Standardtyp business_os.chat.task, CHAT4.md)'] },
+  { app: 'ctox', type: 'ctox.chat.task', sources: ['v4/shell/app-host.js:500 (Menüpunkt ctox.ask „CTOX fragen…“ → Eingabeblatt → Standardbefehl ctox.chat.task)'] },
+];
+
+// Kernentscheidung E40/E42: Plattformrouten brauchen weder commands_out noch Handler. Maßgeblich ist die Inventur des
+// Kerns (exact_control_types, predicate_control_types, control_prefixes, browser_runtime_types, browser_literal_types)
+// plus Chat-Befehle und die Registry-Routen aus E25/E27.6 (PLATFORM_COMMANDS in kernel/fake-core-runtime.mjs).
+export const COMMAND_INVENTORY_FILE = 'src/core/business_os/business_command_inventory.json';
+// E42: Chat-Befehle führt der Kern über den Chat-Pfad aus (store_projections.rs is_business_chat_command).
+export const PLATFORM_CHAT_ROUTES = ['business_os.chat.task', 'business_os.context.ask', 'business_os.data.modify'];
+export const PLATFORM_REGISTRY_ROUTES = [
+  'ctox.app.publish', 'ctox.app.release', 'ctox.app.remove', 'ctox.app.rollback', 'ctox.app.update',
+  'ctox.coding.cancel', 'ctox.coding.turn',
+];
+// E40/E42: Registry-Routen, die noch nicht auf v4/integration liegen (E25 von Transfer); bis dahin nicht rot. Jeder Eintrag erscheint im Bericht; ein Typ außerhalb dieser Tabelle ohne Route bleibt rot.
+export const PLATFORM_ROUTES_PENDING = {
+  'browser.http_auth.respond': 'V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)',
+  'browser.observer.grant': 'V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)',
+  'browser.observer.revoke': 'V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)',
+  'browser.upload.select': 'V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)',
+  'browser.webauthn.respond': 'V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)',
+  'ctox.plan.step.retry': 'E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen',
+  'ctox.workjet.calendar.connect.v1': 'E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen',
+  'ctox.workjet.calendar.read.v1': 'E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen',
+  'ctox.workjet.device.v1': 'E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen',
+  'ctox.workjet.grok.v1': 'E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen',
+  'ctox.workjet.jour_fixe.speech.v1': 'E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen',
+  'ctox.workjet.speech.dictation.v1': 'E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen',
+  'ctox.workjet.speech.settings.v1': 'E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen',
+};
+
+export function loadPlatformRoutes(repo) {
+  const file = path.join(repo, COMMAND_INVENTORY_FILE);
+  const inv = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+  return {
+    source: fs.existsSync(file) ? COMMAND_INVENTORY_FILE : null,
+    // E42: alle Klassen der Inventur (Literal-Typen ohne nativen Handler führt der Kern als CTOX-Queue-Task aus).
+    exact: new Set([
+      ...(inv.exact_control_types || []), ...(inv.predicate_control_types || []),
+      ...(inv.browser_runtime_types || []), ...(inv.browser_literal_types || []),
+      ...PLATFORM_CHAT_ROUTES, ...PLATFORM_REGISTRY_ROUTES,
+    ]),
+    prefixes: [...(inv.control_prefixes || [])],
+  };
+}
+
+// Umschließendes Objektliteral von pos (Klammerzählung, Strings grob übersprungen) auf `dispatch: false` prüfen.
+export function enclosingObjectHasDispatchFalse(text, pos) {
+  let depth = 0, start = -1;
+  for (let i = pos; i >= 0; i -= 1) {
+    const c = text[i];
+    if (c === '}') depth += 1;
+    else if (c === '{') { if (depth === 0) { start = i; break; } depth -= 1; }
+  }
+  if (start < 0) return false;
+  depth = 0;
+  for (let i = start; i < text.length; i += 1) {
+    const c = text[i];
+    if (c === '{') depth += 1;
+    else if (c === '}') { depth -= 1; if (depth === 0) return /\bdispatch\s*:\s*false\b/.test(text.slice(start, i + 1)); }
+  }
+  return false;
+}
+
+export function isPlatformRoute(type, routes) {
+  return routes.exact.has(type) || routes.prefixes.some((p) => type.startsWith(p));
+}
 
 // AGENT (§16.44): die Code-Ansicht der Shell sendet ctox.coding.turn / ctox.coding.cancel (v4/source/agent-panel.js).
 // OS-Katalog: Präfix agent.coding. unter agent.turn (v4/os-primitives/catalog.mjs).
@@ -215,13 +302,15 @@ export const ICON_SELECTION_SOURCES = [
 ];
 export const ICON_PACKAGE_BASENAME = 'assets/icon';
 
-// Relative Importe (statisch `from '…'`, `import '…'`, dynamisch `import('…')`) der Shell-Dateien, transitiv, innerhalb
+// Relative Importe (statisch `from '…'`, `import '…'`, dynamisch `import('…')`, `new URL('…', import.meta.url)`) der Shell-Dateien, transitiv, innerhalb
 // von src/apps/business-os. Cache-Buster (?v=) wird abgeschnitten; nur vorhandene .js/.mjs/.css/.json-Dateien zählen.
 export function shellImportClosure(appsRoot, seeds) {
   const seen = new Set(seeds);
   const out = [];
   const queue = seeds.filter((r) => /\.(m?js)$/.test(r));
-  const re = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)(['"])(\.{1,2}\/[^'"?#]+)(?:[?#][^'"]*)?\1/g;
+  // BOOTR OPEN-4: auch new URL('./x.css', import.meta.url) – so lädt der Rahmen sein CSS (frame/index.js cssLinks),
+  // ebenso Code-Ansicht und Chat. Ohne diese Dateien im Manifest liefert der SW 404 und der Rahmen steht ungestylt.
+  const re = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\bnew\s+URL\s*\(\s*)(['"])(\.{1,2}\/[^'"?#]+)(?:[?#][^'"]*)?\1/g;
   while (queue.length) {
     const rel = queue.shift();
     let text;
@@ -855,6 +944,275 @@ export function scanUiCommands(appDir, appId, files, chat, handlerTypesByApp) {
   return out;
 }
 
+// ROUTE (E39, Präzisierung §16.40): Befehlstypen aus dem UI-Code, die über api.command gehen.
+// Kommentare werden durch Leerzeichen ersetzt (Offsets und Zeilen bleiben), Strings/Template-Literale/Regex-Literale
+// bleiben unangetastet.
+export function blankComments(text) {
+  const out = text.split('');
+  let quote = null;
+  let prevSig = '';
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (quote) {
+      if (c === '\\') { i += 1; continue; }
+      if (quote === '/' && c === '[') { quote = ']'; continue; }
+      if (quote === ']' && c === ']') { quote = '/'; continue; }
+      if (c === quote || (quote !== '`' && quote !== '/' && quote !== ']' && c === '\n')) { quote = null; prevSig = 'x'; }
+      continue;
+    }
+    if (c === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') { out[i] = ' '; i += 1; }
+      continue;
+    }
+    if (c === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2);
+      const stop = end < 0 ? text.length : end + 2;
+      for (; i < stop; i += 1) if (text[i] !== '\n') out[i] = ' ';
+      i -= 1;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') { quote = c; continue; }
+    if (c === '/' && (!prevSig || /[(,=:[!&|?{};+\-*%<>~^]/.test(prevSig) || /\breturn$/.test(text.slice(Math.max(0, i - 8), i).trimEnd()))) { quote = '/'; continue; }
+    if (!/\s/.test(c)) prevSig = c;
+  }
+  return out.join('');
+}
+
+export const COMMAND_TYPE_RE = /^[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+)+$/;
+const API_COMMAND_RE = /(?<![\w$])(?:[\w$]+\??\.)*[\w$]*[aA]pi\??\.command\s*\(/g;
+const NOT_WRAPPER = new Set(['if', 'for', 'while', 'switch', 'catch', 'function', 'return', 'typeof', 'await', 'new', 'constructor']);
+
+// Funktionsdefinitionen einer Datei: function f(…){…}, const f = (…) => {…}, const f = function (…){…}, Methode f(…){…}.
+// Ergebnis: [{name, index, params:[…], body}].
+function functionDefs(text) {
+  const defs = [];
+  const res = [
+    /\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)\s*\(/g,
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:function\b[^(]*)?\(/g,
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?([A-Za-z_$][\w$]*)\s*=>/g,
+    /(?:^|[\n;{},])[ \t]*(?:async\s+)?([A-Za-z_$][\w$]*)\s*\((?=[^)]*\)\s*\{)/g,
+  ];
+  for (const [ri, re] of res.entries()) {
+    for (const m of text.matchAll(re)) {
+      const name = m[1];
+      if (NOT_WRAPPER.has(name)) continue;
+      let i = m.index + m[0].length;
+      let params;
+      if (ri === 2) params = [m[2]];
+      else {
+        params = splitTopLevel(text, i - 1).parts.map((x) => String(x).trim().replace(/\s*=[\s\S]*$/, '').replace(/^\.\.\./, ''));
+        i = matchEnd(text, i - 1) + 1;
+      }
+      const rest = /^\s*(?:=>\s*)?/.exec(text.slice(i))[0];
+      const arrow = ri === 2 || /=>/.test(rest);
+      i += rest.length;
+      if (text[i] !== '{') {
+        if (!arrow) continue;
+        // Ausdruckskörper: bis zum Zeilenende.
+        const nl = text.indexOf('\n', i);
+        defs.push({ name, index: m.index, params, body: text.slice(i, nl < 0 ? text.length : nl) });
+        continue;
+      }
+      if (ri === 3 && arrow) continue;
+      defs.push({ name, index: m.index, params, body: text.slice(i, matchEnd(text, i) + 1) });
+    }
+  }
+  return defs;
+}
+
+// Literale eines Ausdrucks (Strings in '…' oder "…"), die die Form eines Befehlstyps haben.
+// Schlüssel eines Objektliterals (`{ 'a.b': … }`, `, 'a.b': …`) zählen nicht (Abbildungstabellen `{…}[action]`).
+function typeLiterals(expr) {
+  const e = String(expr);
+  return [...e.matchAll(/(['"])([^'"\n]*)\1/g)]
+    .filter((m) => COMMAND_TYPE_RE.test(m[2]))
+    .filter((m) => !(/[{,]\s*$/.test(e.slice(0, m.index)) && /^\s*:/.test(e.slice(m.index + m[0].length))))
+    .map((m) => ({ value: m[2], offset: m.index }));
+}
+
+function escapeRe(s) {
+  return s.replace(/[$]/g, '\\$');
+}
+
+// Ausdruck einer Zuweisung `const|let|var <id> = …` bis zum Anweisungsende (oberste Ebene).
+function assignedExpr(text, id, before) {
+  const decl = [...text.slice(0, before).matchAll(new RegExp(`\\b(?:const|let|var)\\s+${escapeRe(id)}\\s*=(?!=)`, 'g'))].pop();
+  if (!decl) return null;
+  const start = decl.index + decl[0].length;
+  let end = start;
+  for (let depth = 0, q = null; end < text.length; end += 1) {
+    const c = text[end];
+    if (q) { if (c === '\\') end += 1; else if (c === q) q = null; continue; }
+    if (c === '"' || c === "'" || c === '`') { q = c; continue; }
+    if ('([{'.includes(c)) depth += 1;
+    else if (')]}'.includes(c)) { if (depth === 0) break; depth -= 1; }
+    else if (depth === 0 && (c === ';' || (c === '\n' && !/[?:,&|+=]\s*$/.test(text.slice(start, end)) && !/^\s*[?:&|+.]/.test(text.slice(end + 1, end + 40))))) break;
+  }
+  return { start, expr: text.slice(start, end) };
+}
+
+const TYPE_FIELDS = ['type', 'command_type', 'commandType'];
+
+// UI-Befehle einer App (alle Code-Dateien außer handlers/, Tests, vendor/, dist/; bei der Shell die Shell-Bäume).
+// Typ-Position = erstes Argument von api.command(…) bzw. das Argument (oder Feld type/command_type/commandType bzw. ein
+// destrukturiertes Feld eines Arguments) einer app-lokalen Hüllfunktion, das (transitiv, über alle Dateien der App)
+// unverändert in die Typ-Position von api.command fließt. Der Ausdruck an der Typ-Position zählt mit allen Literalen
+// (auch `a ? 'x' : 'y'`); ein bloßer Bezeichner wird über die letzte `const|let|var <id> = …` derselben Datei vor dem
+// Aufruf bzw. eine eindeutige Konstante der App aufgelöst. Dazu `command_type:`/`commandType:` mit Literal.
+// Ergebnis: [{type, file, line}] (eindeutig je type+Fundstelle).
+export function scanUiCommandTypes(rootDir, rels) {
+  const texts = {};
+  for (const rel of rels) texts[rel] = blankComments(fs.readFileSync(path.join(rootDir, rel), 'utf8'));
+  const defs = Object.fromEntries(Object.entries(texts).map(([rel, t]) => [rel, functionDefs(t)]));
+  const specs = new Map(); // Hüllfunktion → {k, field}
+  const argAt = (text, open, spec) => {
+    const part = String(splitTopLevel(text, open).parts[spec.k] ?? '').trim();
+    if (!spec.field) return part;
+    const hit = topLevelProps(part).find(([key]) => (spec.field === '*' ? TYPE_FIELDS.includes(key) : key === spec.field));
+    return hit ? hit[1] : (spec.field !== '*' || !part.startsWith('{') ? '' : '');
+  };
+  const callRe = (name) => new RegExp(`(?<![\\w$])(?:[\\w$]+\\??\\.)?${escapeRe(name)}\\s*\\(`, 'g');
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const list of Object.values(defs)) {
+      for (const d of list) {
+        if (specs.has(d.name)) continue;
+        const inner = [...d.body.matchAll(new RegExp(API_COMMAND_RE.source, 'g'))].map((m) => argAt(d.body, m.index + m[0].length - 1, { k: 0 }));
+        for (const [w, spec] of specs) {
+          if (w === d.name) continue;
+          for (const m of d.body.matchAll(callRe(w))) inner.push(argAt(d.body, m.index + m[0].length - 1, spec));
+        }
+        let spec = null;
+        d.params.forEach((p, k) => {
+          if (spec || !p) return;
+          if (/^[A-Za-z_$][\w$]*$/.test(p)) {
+            if (inner.includes(p)) spec = { k, field: null };
+            else if (inner.some((e) => new RegExp(`^${escapeRe(p)}\\??\\.(?:${TYPE_FIELDS.join('|')})$`).test(e))) spec = { k, field: '*' };
+          } else if (p.startsWith('{')) {
+            const names = topLevelProps(p).map(([key, v]) => [key, v.replace(/\s*=[\s\S]*$/, '').trim()]);
+            const hit = names.find(([, local]) => inner.includes(local));
+            if (hit) spec = { k, field: hit[0] };
+          }
+        });
+        if (spec) { specs.set(d.name, spec); changed = true; }
+      }
+    }
+  }
+  const appConsts = new Map();
+  for (const t of Object.values(texts)) {
+    for (const m of t.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(['"])([^'"\n]*)\2/g)) {
+      if (!appConsts.has(m[1])) appConsts.set(m[1], new Set());
+      appConsts.get(m[1]).add(m[3]);
+    }
+  }
+  const hits = new Map();
+  const add = (type, rel, text, index) => {
+    const line = lineOf(text, index);
+    hits.set(`${type} ${rel}:${line}`, { type, file: rel, line });
+  };
+  // Literale eines Ausdrucks an der Typ-Position; bloßer Bezeichner → Zuweisung davor bzw. Konstante der App.
+  const collect = (rel, text, expr, at, before, field) => {
+    let e = String(expr || '').trim();
+    if (!e) return;
+    if (field) {
+      if (/^[A-Za-z_$][\w$]*$/.test(e)) {
+        const a = assignedExpr(text, e, before);
+        if (!a) return;
+        e = a.expr.trim();
+        at = a.start;
+      }
+      const hit = topLevelProps(e).find(([key]) => (field === '*' ? TYPE_FIELDS.includes(key) : key === field));
+      if (!hit) return;
+      e = hit[1];
+    }
+    const start = Math.max(0, text.indexOf(e, at));
+    for (const lit of typeLiterals(e)) add(lit.value, rel, text, start + lit.offset);
+    if (!/^[A-Za-z_$][\w$]*$/.test(e)) return;
+    const a = assignedExpr(text, e, before);
+    if (a) {
+      for (const lit of typeLiterals(a.expr)) add(lit.value, rel, text, a.start + lit.offset);
+    } else if (appConsts.get(e)?.size === 1) {
+      const v = [...appConsts.get(e)][0];
+      if (COMMAND_TYPE_RE.test(v)) add(v, rel, text, before);
+    }
+  };
+  const wrapperRe = specs.size
+    ? new RegExp(`(?<![\\w$])(?:[\\w$]+\\??\\.)?(${[...specs.keys()].map(escapeRe).join('|')})\\s*\\(`, 'g')
+    : null;
+  for (const [rel, text] of Object.entries(texts)) {
+    const defIndex = defs[rel].map((d) => d.index);
+    const sites = [...text.matchAll(new RegExp(API_COMMAND_RE.source, 'g'))].map((m) => ({ m, spec: { k: 0, field: null } }));
+    if (wrapperRe) {
+      for (const m of text.matchAll(wrapperRe)) {
+        if (/\bfunction\s*\*?\s*$/.test(text.slice(Math.max(0, m.index - 12), m.index))) continue;
+        // Definition `name(…) {` bzw. `const name = (…) =>` statt Aufruf.
+        const after = text.slice(matchEnd(text, m.index + m[0].length - 1) + 1);
+        if (defIndex.some((s) => s <= m.index && m.index - s <= 24 && !/[;()]/.test(text.slice(s + 1, m.index))) && /^\s*(?:\{|=>)/.test(after)) continue;
+        sites.push({ m, spec: specs.get(m[1]) });
+      }
+    }
+    for (const { m, spec } of sites) {
+      const open = m.index + m[0].length - 1;
+      const part = String(splitTopLevel(text, open).parts[spec.k] ?? '');
+      collect(rel, text, part, open, m.index, spec.field);
+    }
+    for (const m of text.matchAll(/\b(?:command_type|commandType)\s*:\s*(['"])([^'"\n]*)\1/g)) {
+      // E42: ein Konfigurationsobjekt mit dispatch:false sendet den Typ nicht (z. B. universal-importer in OLG).
+      if (COMMAND_TYPE_RE.test(m[2]) && !enclosingObjectHasDispatchFalse(text, m.index)) add(m[2], rel, text, m.index);
+    }
+  }
+  return [...hits.values()].sort((a, b) => a.type.localeCompare(b.type) || a.file.localeCompare(b.file) || a.line - b.line);
+}
+
+// E39/E40: UI-Befehlstypen je Absender einordnen. Eigener Handler → eigene Route; Plattformroute → nichts zu
+// deklarieren; genau eine fremde App mit Handler → commands_out (+ commands_in beim Ziel); mehrere → mehrdeutig (rot);
+// keine → PLATFORM_ROUTES_PENDING (Bericht) bzw. commands_unrouted (rot). out[].evidence = <datei>:<zeile> relativ zur
+// sendenden App (wie _commands_out_evidence), out[].source und Drift-Fundstellen = <app-rel>/<datei>:<zeile>.
+export function routeUiCommands({ senders, handlerTypesByApp, routes, pending = PLATFORM_ROUTES_PENDING }) {
+  const out = [];
+  const group = new Map();
+  const push = (bucket, key, base, ev) => {
+    if (!group.has(bucket)) group.set(bucket, new Map());
+    const g = group.get(bucket);
+    if (!g.has(key)) g.set(key, { ...base, evidence: [] });
+    g.get(key).evidence.push(ev);
+  };
+  for (const s of senders) {
+    for (const h of s.hits) {
+      const ev = `${s.rel ? `${s.rel}/` : ''}${h.file}:${h.line}`;
+      if (handlerTypesByApp[s.id]?.has(h.type)) continue;
+      // E40/E42: Plattformroute vor fremdem Handler – der Kern führt diese Typen nativ aus, ohne Deklaration.
+      if (isPlatformRoute(h.type, routes)) continue;
+      const owners = Object.keys(handlerTypesByApp).filter((id) => id !== s.id && handlerTypesByApp[id].has(h.type)).sort();
+      if (owners.length === 1) out.push({ from: s.id, app: owners[0], type: h.type, evidence: `${h.file}:${h.line}`, source: ev });
+      else if (owners.length > 1) push('ambiguous', `${s.id} ${h.type}`, { app: s.id, type: h.type, handlers: owners }, ev);
+      else if (pending[h.type]) push('pending', `${s.id} ${h.type}`, { app: s.id, type: h.type, basis: pending[h.type] }, ev);
+      else push('unrouted', `${s.id} ${h.type}`, { app: s.id, type: h.type }, ev);
+    }
+  }
+  const list = (bucket) => [...(group.get(bucket)?.values() || [])].map((d) => ({ ...d, evidence: sortedUnique(d.evidence) }))
+    .sort((a, b) => a.app.localeCompare(b.app) || a.type.localeCompare(b.type));
+  // Jeder Eintrag der Tabelle erscheint im Bericht, auch ohne Fundstelle im Scan.
+  const pendingList = list('pending');
+  for (const [type, basis] of Object.entries(pending)) {
+    if (!pendingList.some((d) => d.type === type)) pendingList.push({ app: null, type, basis, evidence: [] });
+  }
+  pendingList.sort((a, b) => a.type.localeCompare(b.type) || String(a.app).localeCompare(String(b.app)));
+  out.sort((a, b) => a.from.localeCompare(b.from) || a.app.localeCompare(b.app) || a.type.localeCompare(b.type) || a.evidence.localeCompare(b.evidence));
+  return { out, ambiguous: list('ambiguous'), unrouted: list('unrouted'), pending: pendingList };
+}
+
+// UI-Code der Shell (§16.15: v4/frame, v4/shell, v4/source) aus der Dateiliste des Shell-Manifests, ohne Tests/Labore.
+export function shellUiFiles(files) {
+  return Object.keys(files).sort().filter((rel) => SHELL_TREES.some((t) => rel.startsWith(`${t}/`)) && CODE_EXT_RE.test(rel)
+    && !isTestPath(rel) && !/(^|\/)(lab|tests?|vendor|dist|node_modules)\//.test(rel));
+}
+
+// UI-Code-Dateien einer App (wie scanUiCommands).
+export function uiCodeFiles(files) {
+  return Object.keys(files).sort().filter((rel) => CODE_EXT_RE.test(rel) && !rel.startsWith('handlers/') && !isTestPath(rel) && !/(^|\/)(vendor|dist|node_modules)\//.test(rel));
+}
+
 // Kontext-Chat-Konstanten aus shared/context-chat.js (Quelle des Bausteins, nicht abgeschrieben).
 export function loadContextChat(appsRoot) {
   const file = path.join(appsRoot, 'shared/context-chat.js');
@@ -1153,6 +1511,7 @@ export async function generate(options = {}) {
     const calls = scanCommandCalls(app.dir, app.id, app.handlers, app.consts);
     app.commandsOutCode = [...calls.out, ...scanUiCommands(app.dir, app.id, app.files, contextChat, handlerTypesByApp)];
     app.commandsOutUnresolved = calls.unresolved;
+    app.uiCommandTypes = scanUiCommandTypes(app.dir, uiCodeFiles(app.files));
     // Trigger: Code-Export vor Deklaration; gleiche (handler, on|every) nur einmal.
     const seen = new Set();
     app.triggers = [];
@@ -1636,6 +1995,14 @@ export async function generate(options = {}) {
     delete manifests[SHELL_APP_ID].foreign_collections[name];
     manifests[SHELL_APP_ID]._todo.push(`foreign ${name}: Collection fehlt im Baum (Eigentümer ${f.owner_app}).`);
   }
+  // SHELL_COMMANDS_OUT an Apps, die es in diesem Baum nicht gibt (Mini-Repos), entfallen ebenso mit _todo.
+  for (const c of SHELL_COMMANDS_OUT) {
+    if (apps[c.app]) continue;
+    const sm = manifests[SHELL_APP_ID];
+    sm.commands_out = sm.commands_out.filter((x) => !(x.app === c.app && x.type === c.type));
+    delete sm._commands_out_evidence[`${c.app} ${c.type}`];
+    sm._todo.push(`commands_out ${c.app} ${c.type}: Ziel-App fehlt im Baum.`);
+  }
   const libs = buildLibManifests(appsRoot, baseRelease);
 
   // ---- Prüfungen
@@ -1656,11 +2023,37 @@ export async function generate(options = {}) {
   drift.commands_unmatched = [];
   drift.commands_out_unresolved = [];
   drift.commands_in_without_handler = [];
+  // ROUTE (E39/E40): jeder Typ, den eine App (oder die Shell) über api.command sendet, ist Plattformroute ODER geht per
+  // commands_out an genau die App mit dem Handler (deren commands_in nimmt den konkreten Absender an, nie '*').
+  // Sonst drift.commands_unrouted (rot), außer der Typ steht in PLATFORM_ROUTES_PENDING (gemeldet, Bericht).
+  const routes = loadPlatformRoutes(repo);
+  const uiRoute = routeUiCommands({
+    senders: [
+      ...Object.values(apps).map((a) => ({ id: a.id, rel: a.rel, hits: a.uiCommandTypes })),
+      { id: SHELL_APP_ID, rel: '', hits: scanUiCommandTypes(appsRoot, shellUiFiles(manifests[SHELL_APP_ID].files)) },
+    ],
+    handlerTypesByApp,
+    routes,
+  });
+  drift.commands_out_ambiguous = uiRoute.ambiguous;
+  drift.commands_unrouted = uiRoute.unrouted;
+  drift.commands_routes_pending = uiRoute.pending;
+  drift.commands_in_derived = [];
+  const uiOutBy = {};
+  for (const o of uiRoute.out) (uiOutBy[o.from] ||= []).push(o);
+  for (const o of uiRoute.out.filter((x) => x.from === SHELL_APP_ID)) {
+    const sm = manifests[SHELL_APP_ID];
+    if (!sm.commands_out.some((c) => c.app === o.app && c.type === o.type)) sm.commands_out.push({ app: o.app, type: o.type });
+    sm.commands_out.sort((a, b) => a.app.localeCompare(b.app) || a.type.localeCompare(b.type));
+    const key = `${o.app} ${o.type}`;
+    sm._commands_out_evidence[key] = sortedUnique([...(sm._commands_out_evidence[key] || []), o.evidence]);
+  }
   for (const app of Object.values(apps)) {
     const m = manifests[app.id];
     const evidence = {};
     const addOut = (target, type, ev) => { (evidence[`${target} ${type}`] ||= new Set()).add(ev); };
     for (const c of app.commandsOutCode) addOut(c.app, c.type, c.evidence);
+    for (const c of uiOutBy[app.id] || []) addOut(c.app, c.type, c.evidence);
     for (const c of app.decl.commands_out || []) addOut(c.app, c.type, `${DECLARATION_FILE}${app.decl._basis?.commands_out ? `; ${app.decl._basis.commands_out}` : ''}`);
     m.commands_out = Object.keys(evidence).sort().map((k) => { const [target, type] = k.split(' '); return { app: target, type }; });
     if (m.commands_out.length) m._commands_out_evidence = Object.fromEntries(Object.entries(evidence).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, [...v].sort()]));
@@ -1678,6 +2071,23 @@ export async function generate(options = {}) {
       }
     }
   }
+  // commands_in aus der gemessenen UI-Nutzung: je konkretem Absender, nie '*'; vorhandene '*'-Einträge decken ab.
+  for (const o of uiRoute.out) {
+    const tm = manifests[o.app];
+    if (!tm) continue;
+    const key = `${o.from} ${o.type}`;
+    const prev = drift.commands_in_derived.find((d) => d.app === o.app && d.from === o.from && d.type === o.type);
+    if (prev) { prev.evidence = sortedUnique([...prev.evidence, o.source]); }
+    const entry = tm.commands_in.find((c) => c.type === o.type);
+    if (entry && (entry.from === '*' || (entry.from.includes(o.from) && !tm._commands_in_evidence?.[key]))) continue;
+    if (!prev) drift.commands_in_derived.push({ app: o.app, from: o.from, type: o.type, evidence: [o.source] });
+    if (!entry) tm.commands_in.push({ type: o.type, from: [o.from] });
+    else if (!entry.from.includes(o.from)) entry.from = sortedUnique([...entry.from, o.from]);
+    tm.commands_in.sort((a, b) => a.type.localeCompare(b.type));
+    tm._commands_in_evidence ||= {};
+    tm._commands_in_evidence[key] = sortedUnique([...(tm._commands_in_evidence[key] || []), o.source]);
+  }
+  drift.commands_in_derived.sort((a, b) => a.app.localeCompare(b.app) || a.from.localeCompare(b.from) || a.type.localeCompare(b.type));
   for (const [id, m] of Object.entries(manifests)) {
     for (const c of m.commands_out || []) {
       const target = manifests[c.app];
@@ -1744,6 +2154,10 @@ export async function generate(options = {}) {
     commands_out_total: appManifests.reduce((s, m) => s + m.commands_out.length, 0),
     commands_in_total: appManifests.reduce((s, m) => s + m.commands_in.length, 0),
     commands_unmatched: drift.commands_unmatched.length,
+    commands_unrouted: drift.commands_unrouted.length,
+    commands_out_ambiguous: drift.commands_out_ambiguous.length,
+    commands_routes_pending: drift.commands_routes_pending.length,
+    commands_in_derived: drift.commands_in_derived.length,
     commands_out_unresolved: drift.commands_out_unresolved.length,
     commands_in_without_handler: drift.commands_in_without_handler.length,
     exports_beyond_declaration: drift.exports_beyond_declaration.length,
@@ -1760,7 +2174,14 @@ export async function generate(options = {}) {
   const skillCheck = { violations: Object.values(apps).flatMap((a) => a.agent.violations) };
   // Deklarationsdateien: Form-/Schlüsselfehler und nicht auswertbare Trigger-Exporte (main() endet mit Exit 1).
   const declarationCheck = { violations: [...Object.values(apps).flatMap((a) => a.declErrors), ...shellErrors, ...iconSync.problems] };
-  return { manifests, libs, ownership, platform: platformOut, drift, stats, capabilities: allCaps, skill_check: skillCheck, declaration_check: declarationCheck, icons_copied: iconSync.copied };
+  // E40: nicht routbare und mehrdeutige UI-Befehle (main() endet mit Exit 1).
+  const routeCheck = {
+    violations: [
+      ...drift.commands_unrouted.map((d) => ({ app: d.app, kind: 'commands_unrouted', detail: `${d.type} (${d.evidence.join(', ')})` })),
+      ...drift.commands_out_ambiguous.map((d) => ({ app: d.app, kind: 'commands_out_ambiguous', detail: `${d.type} → ${d.handlers.join('|')} (${d.evidence.join(', ')})` })),
+    ],
+  };
+  return { manifests, libs, ownership, platform: platformOut, drift, stats, capabilities: allCaps, skill_check: skillCheck, declaration_check: declarationCheck, route_check: routeCheck, icons_copied: iconSync.copied };
 }
 
 // ---------------------------------------------------------------- Shell-Manifest
@@ -2049,6 +2470,8 @@ export function buildShellManifest(appsRoot, baseRelease) {
     handlers: {},
     triggers: [],
     command_rights: {},
+    commands_out: SHELL_COMMANDS_OUT.map((c) => ({ app: c.app, type: c.type })).sort((a, b) => a.app.localeCompare(b.app) || a.type.localeCompare(b.type)),
+    _commands_out_evidence: Object.fromEntries(SHELL_COMMANDS_OUT.map((c) => [`${c.app} ${c.type}`, [...c.sources]]).sort(([a], [b]) => a.localeCompare(b))),
     capabilities_required: Object.keys(SHELL_CAPABILITIES).sort(),
     _capability_evidence: Object.fromEntries(Object.entries(SHELL_CAPABILITIES).sort(([x], [y]) => x.localeCompare(y)).map(([k, v]) => [k, [...v]])),
     legacy: [],
@@ -2252,6 +2675,8 @@ export function renderReportM2(result) {
   out.push(`| commands_out / commands_in | ${stats.commands_out_total} / ${stats.commands_in_total} |`);
   out.push(`| **commands ohne Gegenstück (Soll 0)** | **${stats.commands_unmatched}** |`);
   out.push(`| ctx.command mit nicht auflösbarem Ziel | ${stats.commands_out_unresolved} |`);
+  out.push(`| **UI-Befehle ohne Route (E40, Soll 0)** / mehrdeutig | **${stats.commands_unrouted}** / ${stats.commands_out_ambiguous} |`);
+  out.push(`| Plattformroute gemeldet (PLATFORM_ROUTES_PENDING) / commands_in aus UI abgeleitet | ${stats.commands_routes_pending} / ${stats.commands_in_derived} |`);
   out.push(`| net.ingest-Anmeldungen | ${stats.net_ingest_total} |`);
   out.push(`| Apps mit multi_instance:false | ${stats.multi_instance_false} |`);
   out.push(`| Icons: Rasterbild im Paket / nur SVG / generiert (MAN2) | ${stats.icon_raster} / ${stats.icon_svg} / ${stats.icon_generated.length}${stats.icon_generated.length ? ` (${stats.icon_generated.join(', ')})` : ''} |`, '');
@@ -2276,6 +2701,22 @@ export function renderReportM2(result) {
   for (const d of drift.commands_unmatched) out.push(`- ${d.from} → ${d.app} \`${d.type}\`: ${d.reason}`);
   out.push('', `Nicht auflösbares Ziel (${drift.commands_out_unresolved.length}):`);
   for (const d of drift.commands_out_unresolved) out.push(`- ${d.app} ${d.file}:${d.line} type=\`${d.type_expr}\` module=\`${d.module_expr}\``);
+  const shellM = manifests[SHELL_APP_ID];
+  if (shellM?.commands_out?.length) {
+    out.push('', 'Shell (SHELL_COMMANDS_OUT + UI-Scan v4/frame, v4/shell, v4/source):');
+    for (const c of shellM.commands_out) out.push(`- shell → ${c.app} \`${c.type}\`: ${(shellM._commands_out_evidence?.[`${c.app} ${c.type}`] || []).join('; ')}`);
+  }
+  out.push('', `### commands_in aus der UI-Nutzung abgeleitet (E40, je Absender, nie '*') (${drift.commands_in_derived.length})`, '');
+  for (const d of drift.commands_in_derived) out.push(`- ${d.app} ← ${d.from} \`${d.type}\`: ${d.evidence.join(', ')}`);
+  if (!drift.commands_in_derived.length) out.push('keine');
+  out.push('', `### UI-Befehle ohne Route: weder Plattformroute (${COMMAND_INVENTORY_FILE} + Registry) noch Handler (E40, ${drift.commands_unrouted.length}, Soll 0, rot)`, '');
+  for (const d of drift.commands_unrouted) out.push(`- ${d.app} \`${d.type}\`: ${d.evidence.join(', ')}`);
+  if (!drift.commands_unrouted.length) out.push('keine');
+  out.push('', `### Mehrdeutig: Handler in mehreren Apps (${drift.commands_out_ambiguous.length}, Soll 0, rot)`, '');
+  for (const d of drift.commands_out_ambiguous) out.push(`- ${d.app} \`${d.type}\` → ${d.handlers.join(' | ')}: ${d.evidence.join(', ')}`);
+  if (!drift.commands_out_ambiguous.length) out.push('keine');
+  out.push('', `### An den Kern gemeldet, noch keine Plattformroute (PLATFORM_ROUTES_PENDING, ${drift.commands_routes_pending.length})`, '');
+  for (const d of drift.commands_routes_pending) out.push(`- \`${d.type}\` (${d.basis}): ${d.app ? `${d.app} ${d.evidence.join(', ')}` : 'im UI-Scan keine Fundstelle als Befehlstyp'}`);
   out.push('', `## foreign ohne passendes exports (${drift.foreign_without_export.length}, Soll 0)`, '');
   for (const d of drift.foreign_without_export) out.push(`- ${d.app}: ${d.collection} (${d.owner}) fehlt ${d.missing.join(',')}`);
   if (!drift.foreign_without_export.length) out.push('keine');
@@ -2301,7 +2742,8 @@ export function renderReportM2(result) {
     '4. handlers = vorhandene handlers/*.js ohne _-Präfix; capabilities_required = im Handler-Code aufgerufene ctx.cap-Pfade (ohne Präfix „ctx.cap.“, wie in den V4-HANDLERS-Vorschlägen) plus `legacy.<typ>` je Legacy-Typ; Handler-Dateien mit „test“ im Befehlstyp sind keine Testdateien.',
     '5. Shell-Manifest: v4/{frame,shell,source}/** + v4/sw.js + Shell-Dateien laut Dateigrenze; lab/-Prüfstände, Tests und .md ausgenommen.',
     '6. styles (§16.19 Nr. 6) = index.css der App (+ styles der Deklaration); write_guard (§16.21) nur, wo ein Rust-Schreibwächter belegt ist (OLG-Leads, outbound_field_review.rs:88).',
-    '7. commands_out (§16.40) aus ctx.command im Handler-Code (Literal/Konstante, module-Option, Weiterleitung command.type) und aus UI-Code (shared/context-chat.js; payload.module mit Handler-Typ der Ziel-App); commands_in nur aus v4-manifest.json; jede Seite ohne Gegenstück ist ein Befund.',
+    '7. commands_out (§16.40) aus ctx.command im Handler-Code (Literal/Konstante, module-Option, Weiterleitung command.type) und aus UI-Code (shared/context-chat.js; payload.module mit Handler-Typ der Ziel-App); commands_in aus v4-manifest.json plus je konkretem Absender aus der UI-Nutzung (E39/E40, nie \'*\'); jede Seite ohne Gegenstück ist ein Befund.',
+    '7a. UI-Befehle (E39/E40): Typ-Position von api.command bzw. app-lokaler Hüllfunktionen (transitiv); eigener Handler → eigene Route, Plattformroute (Inventur exact_control_types/control_prefixes + Registry ctox.app.*, ctox.coding.*) → keine Deklaration, genau eine fremde Handler-App → commands_out/commands_in, sonst rot (commands_unrouted/commands_out_ambiguous) außer PLATFORM_ROUTES_PENDING.',
     '8. Trigger aus `export const triggers` im Handler oder v4-manifest.json; on-Trigger nur auf eigene oder foreign-watch-Collections. net.ingest-Zustelltypen bekommen command_rights {roles: []} (nur Core-Zustellung).',
     '');
   return out.join('\n');
@@ -2417,8 +2859,9 @@ async function main() {
   for (const file of mismatches) console.error(`abweichend: ${file}`);
   for (const v of result.skill_check.violations) console.error(`skill: ${v.app} ${v.kind} ${v.ref ?? v.path}${v.file ? ` ${v.file}:${v.line}` : ''}`);
   for (const v of result.declaration_check.violations) console.error(`deklaration: ${v.app} ${v.kind} ${v.detail}`);
+  for (const v of result.route_check.violations) console.error(`route: ${v.app} ${v.kind} ${v.detail}`);
   console.log(JSON.stringify(result.stats));
-  if ((args.check && mismatches.length) || result.skill_check.violations.length || result.declaration_check.violations.length) process.exit(1);
+  if ((args.check && mismatches.length) || result.skill_check.violations.length || result.declaration_check.violations.length || result.route_check.violations.length) process.exit(1);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

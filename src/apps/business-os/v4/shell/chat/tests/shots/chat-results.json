@@ -1,0 +1,72 @@
+[
+  {
+    "name": "(a) 1280: Chatleiste unten links",
+    "ok": true,
+    "detail": "{\"chat\":{\"left\":18,\"bottom\":782,\"width\":310,\"height\":54},\"crew\":false,\"count\":1,\"vw\":1280,\"vh\":800}"
+  },
+  {
+    "name": "(a) 1280: genau eine Leiste unten links (Crew-Leiste abgetreten)",
+    "ok": true,
+    "detail": "{\"chat\":{\"left\":18,\"bottom\":782,\"width\":310,\"height\":54},\"crew\":false,\"count\":1,\"vw\":1280,\"vh\":800}"
+  },
+  {
+    "name": "(c) gesäter Chat aus business_chats steht in der Leiste",
+    "ok": true,
+    "detail": "{\"chip\":true,\"title\":\"Crew · Angebot Müller prüfen · 1 Eintrag\",\"text\":\"\"}"
+  },
+  {
+    "name": "(b) genau ein Befehl business_os.chat.task geschrieben und behandelt",
+    "ok": true,
+    "detail": "{\"handled\":1,\"docs\":[{\"id\":\"2a32e02b-23c7-8dde-b25f-f96e53e82b55\",\"type\":\"business_os.chat.task\",\"app_id\":\"shell\",\"record_id\":\"chat_seed_chat4\",\"status\":\"done\"}]}"
+  },
+  {
+    "name": "(b) Nutzlast: prompt/instruction = getippter Text, chat_id = Chat, Kanal business_os.llm.chat → business_os_chat",
+    "ok": true,
+    "detail": "{\"prompt\":\"Bitte die offenen Rechnungen von heute zusammenfassen.\",\"chat_id\":\"chat_seed_chat4\",\"inbound\":\"business_os.llm.chat\",\"outbound\":\"business_os_chat\",\"thread\":\"business-os/chat/chat_seed_chat4\"}"
+  },
+  {
+    "name": "(b) Absender App shell, Datensatzbezug = Chat",
+    "ok": true,
+    "detail": "{\"id\":\"2a32e02b-23c7-8dde-b25f-f96e53e82b55\",\"type\":\"business_os.chat.task\",\"app_id\":\"shell\",\"record_id\":\"chat_seed_chat4\",\"status\":\"done\"}"
+  },
+  {
+    "name": "(b) Verlauf zeigt die Nachricht und die Annahme der Crew",
+    "ok": true,
+    "detail": "{\"typed\":true,\"accepted\":true}"
+  },
+  {
+    "name": "(b) Verlauf in business_chats gespeichert (api.put)",
+    "ok": true,
+    "detail": "{\"found\":true,\"typed\":true,\"owner\":\"owner\"}"
+  },
+  {
+    "name": "(a) 420: Chatleiste unten links",
+    "ok": true,
+    "detail": "{\"chat\":{\"left\":8,\"bottom\":792,\"width\":384,\"height\":56},\"crew\":false,\"count\":1,\"vw\":420,\"vh\":800}"
+  },
+  {
+    "name": "(a) 420: genau eine Leiste unten links",
+    "ok": true,
+    "detail": "{\"chat\":{\"left\":8,\"bottom\":792,\"width\":384,\"height\":56},\"crew\":false,\"count\":1,\"vw\":420,\"vh\":800}"
+  },
+  {
+    "name": "(a) 420: kein waagerechtes Überlaufen der Seite",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Shell-Tausch: genau eine Chatleiste, Crew-Leiste weiter abgetreten, Verlauf da",
+    "ok": true,
+    "detail": "{\"swapped\":true,\"error\":null,\"roots\":1,\"hulls\":1,\"crewBars\":0,\"chip\":true}"
+  },
+  {
+    "name": "ohne ctox-App: keine Chatleiste, Crew-Leiste wieder da",
+    "ok": true,
+    "detail": "{\"chat\":null,\"crew\":true,\"count\":1,\"vw\":1280,\"vh\":800}"
+  },
+  {
+    "name": "keine Seitenfehler",
+    "ok": true,
+    "detail": ""
+  }
+]

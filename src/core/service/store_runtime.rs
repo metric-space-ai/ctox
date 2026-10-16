@@ -73,10 +73,12 @@ pub(super) async fn read_snapshot<T: Send + 'static>(
 
 /// Names and paths are resolved by native code, never accepted over IPC.
 struct Inspect {
+    native_root: Arc<Mutex<Option<std::path::PathBuf>>>,
     databases: Arc<Mutex<HashMap<String, Database>>>,
     runtime: Handle,
     closing: Arc<AtomicBool>,
     queue: Arc<Mutex<Option<Arc<super::queue_store::QueueStore>>>>,
+    http: Arc<Mutex<Option<Arc<super::store_http::HttpSurface>>>>,
 }
 impl Dispatcher for Inspect {
     fn dispatch(
@@ -86,6 +88,41 @@ impl Dispatcher for Inspect {
     ) -> Result<JobHandle<Vec<u8>>, StoreError> {
         if self.closing.load(Ordering::Acquire) {
             return Err(StoreError::Closed);
+        }
+        if request.method == "http.listen" {
+            return self
+                .http
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+                .ok_or(StoreError::Closed)?
+                .dispatch(request, options);
+        }
+        if request.kind == JobKind::Read && request.method == "sync.identity" {
+            if !request.payload.is_empty() {
+                return Err(StoreError::Invalid(
+                    "identity request accepts no payload".into(),
+                ));
+            }
+            let root = self
+                .native_root
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+                .ok_or(StoreError::Closed)?;
+            let (reply, receive) = tokio::sync::oneshot::channel();
+            self.runtime.spawn(async move {
+                let result = crate::persistence::run_core_sync(move || {
+                    let identity = crate::sync_host::signing_identity(&root)?;
+                    Ok(serde_json::to_vec(
+                        &serde_json::json!({"identity":identity.public_identity()}),
+                    )?)
+                })
+                .await
+                .map_err(|_| StoreError::Invalid("native identity unavailable".into()));
+                let _ = reply.send(result);
+            });
+            return Ok(JobHandle::from_receiver(receive));
         }
         if request.method == "queue.ack" {
             let queue = self
@@ -153,6 +190,7 @@ impl Dispatcher for Inspect {
 }
 
 pub(crate) struct DaemonStores {
+    native_root: Arc<Mutex<Option<std::path::PathBuf>>>,
     registry: Registry,
     databases: Arc<Mutex<HashMap<String, Database>>>,
     ipc: Option<DaemonIpc>,
@@ -161,23 +199,29 @@ pub(crate) struct DaemonStores {
     queue: Arc<Mutex<Option<Arc<super::queue_store::QueueStore>>>>,
     runtime: Handle,
     inputs: Option<super::store_inputs::InputRegistration>,
+    http: Arc<Mutex<Option<Arc<super::store_http::HttpSurface>>>>,
 }
 impl DaemonStores {
     /// Acquire process/lifecycle ownership BEFORE opening a database file.
     pub fn start(endpoint: StoreEndpoint, runtime: Handle) -> Result<Self, StoreError> {
+        let native_root = Arc::new(Mutex::new(None));
         let databases = Arc::new(Mutex::new(HashMap::new()));
         let closing = Arc::new(AtomicBool::new(false));
         let queue = Arc::new(Mutex::new(None));
+        let http = Arc::new(Mutex::new(None));
         let ipc = DaemonIpc::start(
             endpoint,
             Arc::new(Inspect {
+                native_root: native_root.clone(),
                 databases: databases.clone(),
                 runtime: runtime.clone(),
                 closing: closing.clone(),
                 queue: queue.clone(),
+                http: http.clone(),
             }),
         )?;
         Ok(Self {
+            native_root,
             registry: Registry,
             databases,
             ipc: Some(ipc),
@@ -186,7 +230,20 @@ impl DaemonStores {
             queue,
             runtime,
             inputs: None,
+            http,
         })
+    }
+
+    pub(crate) fn install_http(
+        &self,
+        http: Arc<super::store_http::HttpSurface>,
+    ) -> Result<(), StoreError> {
+        let mut slot = self.http.lock().unwrap_or_else(|p| p.into_inner());
+        if slot.is_some() {
+            return Err(StoreError::AlreadyOwned);
+        }
+        *slot = Some(http);
+        Ok(())
     }
 
     /// Called serially by the daemon's composition root. A single pool is kept
@@ -332,7 +389,15 @@ impl DaemonStores {
             self.closing.clone(),
             databases.clone(),
         )?);
+        *self.native_root.lock().unwrap_or_else(|p| p.into_inner()) = Some(root.to_owned());
         Ok(())
+    }
+
+    /// A standalone foreground surface retains the same Core/Secrets owners
+    /// without a Sync engine. Its same-user public identity reader still needs
+    /// the trusted root; IPC clients never supply a root or key reference.
+    pub(crate) fn expose_identity_root(&mut self, root: &std::path::Path) {
+        *self.native_root.lock().unwrap_or_else(|p| p.into_inner()) = Some(root.to_owned());
     }
 
     pub fn retire_inputs(&mut self) {
@@ -376,9 +441,17 @@ impl DaemonStores {
     /// Retry after the bounded outstanding job completes; never release the
     /// lifecycle lock and advertise offline maintenance while it is running.
     pub async fn shutdown(&mut self) -> Result<(), StoreError> {
+        let http = self.http.lock().unwrap_or_else(|p| p.into_inner()).take();
+        if let Some(http) = http {
+            http.shutdown().await?;
+        }
         // Retire lookup/admission first. Existing jobs are then drained by the
         // pools/writers; retain the daemon lock until all file owners stop.
         self.closing.store(true, Ordering::Release);
+        self.native_root
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
         self.inputs.take();
         self.native_stores.clear();
         let databases = self

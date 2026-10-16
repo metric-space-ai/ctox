@@ -12,6 +12,8 @@ use std::sync::Arc;
 
 #[path = "command_contract.rs"]
 mod command;
+#[path = "command_routes.rs"]
+pub mod routes;
 pub use command::{
     activate_command_projections, backfill_command_projections, command_document_schema,
     project_command, read_command_projection, validate_migrated_command, CommandProjection,
@@ -44,6 +46,20 @@ pub struct OrderedWriter {
     writer: WriterHandle,
     authority: Arc<dyn WriteAuthority>,
 }
+/// Core adapters already running on this writer use the SAME ordered ingress,
+/// rather than submitting back to the writer (deadlock) or writing tables
+/// directly (bypassing admission/history/dedup). No connection is opened here.
+/// A completion publisher must require its own accepted result in the batch;
+/// buffering/rejection is not a successfully published command completion.
+pub fn submit_in_transaction(
+    tx: &Transaction<'_>,
+    participant: &str,
+    write: &OrderedWrite,
+    now_ms: u64,
+    authority: &dyn WriteAuthority,
+) -> rusqlite::Result<WriteBatch> {
+    ingest(tx, participant, write, now_ms, authority)
+}
 impl OrderedWriter {
     pub fn new(writer: WriterHandle, authority: Arc<dyn WriteAuthority>) -> Self {
         Self { writer, authority }
@@ -58,7 +74,8 @@ impl OrderedWriter {
         let authority = self.authority.clone();
         self.writer
             .submit(WriteJob::new(JobOptions::default(), move |tx| {
-                ingest(tx, &participant, &write, now_ms, authority.as_ref()).map_err(Into::into)
+                submit_in_transaction(tx, &participant, &write, now_ms, authority.as_ref())
+                    .map_err(Into::into)
             }))?
             .await
     }
@@ -303,30 +320,46 @@ fn ingest(
             let (count,bytes):(usize,usize)=tx.query_row(
                 "SELECT COUNT(*),COALESCE(SUM(byte_len),0) FROM _write_pending WHERE participant=?1",[participant],|r|Ok((r.get(0)?,r.get(1)?)))?;
             let issued = operation_time(&request.op_id);
-            let reason =
-                if request.id.is_empty() || request.collection.is_empty() || request.gen == 0 {
-                    Some("invalid_input")
-                } else if issued.is_err() {
-                    Some("invalid_op_id")
-                } else if issued
+            let reason = if request.collection == "business_commands"
+                && request
+                    .body
                     .as_ref()
-                    .is_ok_and(|t| *t > now.saturating_add(300_000))
-                {
-                    Some("invalid_time")
-                } else if issued
+                    .is_some_and(|body| routes::validate_persisted_input(body).is_err())
+            {
+                // terminal()/remember() retain only request identity (no
+                // body) and the typed rejection. Never enqueue these bytes.
+                Some("credential_ref_required")
+            } else if request.collection == "business_commands"
+                && request
+                    .body
                     .as_ref()
-                    .is_ok_and(|t| now.saturating_sub(*t) > OP_HORIZON_MS)
-                {
-                    Some("expired")
-                } else if json.len() > MAX_REQUEST_BYTES
-                    || (seq > next
-                        && (count >= MAX_WAITING
-                            || bytes.saturating_add(json.len()) > MAX_WAITING_BYTES))
-                {
-                    Some("expired")
-                } else {
-                    None
-                };
+                    .and_then(|body| body["type"].as_str())
+                    .is_some_and(|kind| routes::owns_type(kind) && routes::resolve(kind).is_err())
+            {
+                Some("unknown_command")
+            } else if request.id.is_empty() || request.collection.is_empty() || request.gen == 0 {
+                Some("invalid_input")
+            } else if issued.is_err() {
+                Some("invalid_op_id")
+            } else if issued
+                .as_ref()
+                .is_ok_and(|t| *t > now.saturating_add(300_000))
+            {
+                Some("invalid_time")
+            } else if issued
+                .as_ref()
+                .is_ok_and(|t| now.saturating_sub(*t) > OP_HORIZON_MS)
+            {
+                Some("expired")
+            } else if json.len() > MAX_REQUEST_BYTES
+                || (seq > next
+                    && (count >= MAX_WAITING
+                        || bytes.saturating_add(json.len()) > MAX_WAITING_BYTES))
+            {
+                Some("expired")
+            } else {
+                None
+            };
             if let Some(reason) = reason {
                 let result = terminal(tx, participant, request, reason, now)?;
                 record(tx, participant, seq, &result, now)?;

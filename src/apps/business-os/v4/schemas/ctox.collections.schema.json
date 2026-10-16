@@ -80,6 +80,10 @@
       "source": "(neu, E29 Kern-Cutover)",
       "basis": "Kern E29 (16.10.2026): Archiv für Daten ohne v4-Manifest beim Cutover; flache Form wie E28; nur Kern-Import schreibt"
     },
+    "planned_steps": {
+      "source": "(neu, E23.2 Harness-Projektion)",
+      "basis": "Kern-Übergabe docs/evidence/harness-13-20261016/planned-steps-schema-handoff.json (16.10.2026): flach ohne oneOf/const, nur lesen; Owner-, Projekt- und Goal-Revision; Kern-Teil #894"
+    },
     "workjet_computers": {
       "source": "modules/ctox/collections.schema.json",
       "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
@@ -1413,6 +1417,98 @@
           "source_table"
         ],
         "record_id"
+      ]
+    },
+    "planned_steps": {
+      "version": 0,
+      "primaryKey": "id",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "goal_id",
+        "goal_revision",
+        "goal_status",
+        "step_id",
+        "status",
+        "project_id",
+        "owner",
+        "owner_user_id",
+        "title",
+        "failed_step_id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "goal_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "goal_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "goal_status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "blocked",
+            "failed",
+            "completed"
+          ]
+        },
+        "step_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "queued",
+            "blocked",
+            "failed",
+            "completed"
+          ]
+        },
+        "project_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "owner": {
+          "type": "string"
+        },
+        "owner_user_id": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "title": {
+          "type": "string"
+        },
+        "failed_step_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256
+        },
+        "updated_at_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "completed_at_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "indexes": [
+        "project_id",
+        "goal_id"
       ]
     },
     "workjet_computers": {

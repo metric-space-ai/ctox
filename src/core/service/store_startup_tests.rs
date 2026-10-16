@@ -5,6 +5,271 @@ use ctox_store::{
 };
 
 struct FixtureFactory;
+
+#[test]
+fn policy_bindings_keep_parallel_runtime_grants_separate() -> anyhow::Result<()> {
+    use crate::business_os::policy::{
+        self, BusinessOsActor, BusinessOsPermission, BusinessOsScope,
+    };
+    anyhow::ensure!(std::env::var_os("CTOX_STATE_ROOT").is_none());
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let mut threads = Vec::new();
+    for grant in [true, false] {
+        let barrier = barrier.clone();
+        threads.push(std::thread::spawn(move || -> anyhow::Result<()> {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(async move {
+                    let root = tempfile::Builder::new().prefix("c6r-").tempdir_in("/tmp")?;
+                    let fixture = ctox_store::testkit::StoreFixture::open(DbId::new(
+                        root.path().join("sync.sqlite3"),
+                    )?)
+                    .await?;
+                    let (writer, readers) = fixture.into_parts();
+                    let authority = policy::sync_rights::StoreRightsAuthority::attach(
+                        writer.clone(),
+                        "isolated-runtime".into(),
+                    )
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                    let rules = if grant {
+                        policy::base_release_rights(&[])
+                    } else {
+                        vec![]
+                    };
+                    authority
+                        .replace(rules, vec![])
+                        .await
+                        .map_err(anyhow::Error::msg)?;
+                    let admin = BusinessOsActor::new(Some("admin".into()), "admin");
+                    let scope = BusinessOsScope::workspace();
+                    assert!(
+                        !policy::evaluate(&admin, BusinessOsPermission::UsersManage, &scope)
+                            .allowed,
+                        "unbound runtime borrowed another runtime's rights"
+                    );
+                    tokio::time::timeout(std::time::Duration::from_secs(10), barrier.wait())
+                        .await?;
+                    let binding = policy::bind_policy_authority(authority.clone())
+                        .map_err(anyhow::Error::msg)?;
+                    tokio::time::timeout(std::time::Duration::from_secs(10), barrier.wait())
+                        .await?;
+                    assert_eq!(
+                        policy::evaluate(&admin, BusinessOsPermission::UsersManage, &scope).allowed,
+                        grant,
+                        "parallel runtime evaluated another Store's grants"
+                    );
+                    assert_eq!(
+                        tokio::task::spawn_blocking(move || policy::evaluate(
+                            &admin,
+                            BusinessOsPermission::UsersManage,
+                            &scope
+                        )
+                        .allowed)
+                        .await?,
+                        grant,
+                        "blocking Core caller lost its runtime context"
+                    );
+                    tokio::time::timeout(std::time::Duration::from_secs(10), barrier.wait())
+                        .await?;
+                    drop(binding);
+                    assert!(
+                        !policy::evaluate(
+                            &BusinessOsActor::new(Some("admin".into()), "admin"),
+                            BusinessOsPermission::UsersManage,
+                            &BusinessOsScope::workspace()
+                        )
+                        .allowed
+                    );
+                    readers.shutdown().await?;
+                    writer.shutdown().await?;
+                    Ok(())
+                })
+        }));
+    }
+    for thread in threads {
+        thread
+            .join()
+            .map_err(|_| anyhow::anyhow!("policy context thread panicked"))??;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn foreground_binds_current_store_policy_and_retires_it() -> anyhow::Result<()> {
+    use crate::business_os::policy::{
+        self, BusinessOsActor, BusinessOsPermission, BusinessOsScope,
+    };
+    let _scope = isolate_test_roots().await;
+    anyhow::ensure!(std::env::var_os("CTOX_STATE_ROOT").is_none());
+    let root = tempfile::Builder::new().prefix("c6p-").tempdir_in("/tmp")?;
+    let mut foreground = Foreground::start(root.path().to_owned(), Handle::current()).await?;
+    let identity = foreground.inputs.instance_signer()?;
+    let verifier = foreground.inputs.instance_verifier()?;
+    use ctox_store::change_log::subscription::protocol::InstanceVerifier;
+    let canonical = b"ctox.sync.v4.stream\0{\"proof\":\"foreground verifier\"}";
+    let signature = identity.sign(canonical).map_err(anyhow::Error::msg)?;
+    verifier
+        .verify(
+            identity.instance_id(),
+            identity.key_id(),
+            canonical,
+            &signature,
+        )
+        .map_err(anyhow::Error::msg)?;
+    let mut corrupted = signature.clone();
+    corrupted[0] ^= 1;
+    assert!(
+        verifier
+            .verify(
+                identity.instance_id(),
+                identity.key_id(),
+                canonical,
+                &corrupted
+            )
+            .is_err(),
+        "Core verifier accepted a corrupt instance signature"
+    );
+    assert!(verifier
+        .verify("foreign", identity.key_id(), canonical, &signature)
+        .is_err());
+    let rights = policy::sync_rights::StoreRightsAuthority::attach(
+        foreground.inputs.sync.writer.clone(),
+        identity.instance_id().into(),
+    )
+    .await
+    .map_err(anyhow::Error::msg)?;
+    // Import the base release through the real owner. Startup itself must not
+    // seed grants or widen an empty/custom rights table.
+    rights
+        .replace(
+            policy::base_release_rights(&["business_commands".into()]),
+            vec![],
+        )
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let scope = BusinessOsScope::workspace();
+    let admin = BusinessOsActor::new(Some("admin".into()), "admin");
+    let foreign = BusinessOsActor::new(Some("foreign".into()), "user");
+    // The positive token uses the SAME encrypted synthetic-profile identity,
+    // borrowed inside the official SecretStore callback; no fixture signer.
+    let resolved = rights
+        .router
+        .with_current_rights(|r| r.resolve_collection("admin", "admin", "business_commands"))
+        .map_err(anyhow::Error::msg)?;
+    let instance = identity.instance_id().to_owned();
+    let key = crate::sync_host::SIGNING_IDENTITY_SECRET_KEY;
+    let token = foreground
+        .native_owners
+        .as_ref()
+        .unwrap()
+        ._secrets
+        .with_current_values(vec![(key.0.into(), key.1.into())], move |values, _| {
+            use base64::Engine as _;
+            struct BorrowedKey<'a>(&'a [u8]);
+            impl policy::sync_rights::scope::InstanceSigningKeyStore for BorrowedKey<'_> {
+                fn with_instance_signing_key<T>(
+                    &self,
+                    f: impl FnOnce(&[u8]) -> Result<T, String>,
+                ) -> Result<T, String> {
+                    f(self.0)
+                }
+            }
+            let record: serde_json::Value = serde_json::from_slice(values[0])?;
+            let bytes = zeroize::Zeroizing::new(
+                base64::engine::general_purpose::STANDARD.decode(
+                    record["pkcs8"]
+                        .as_str()
+                        .ok_or_else(|| anyhow::anyhow!("synthetic identity encoding"))?,
+                )?,
+            );
+            policy::sync_rights::scope::SignedScope::issue(
+                &BorrowedKey(&bytes),
+                &instance,
+                "browser",
+                &resolved,
+                100,
+            )
+            .map_err(anyhow::Error::msg)
+        })
+        .await?;
+    verifier
+        .verify_scope(&admin, "browser", "business_commands", &token, 100)
+        .map_err(anyhow::Error::msg)?;
+    assert!(
+        verifier
+            .verify_scope(&admin, "other-device", "business_commands", &token, 100)
+            .is_err(),
+        "Core verifier accepted a scope for a foreign device"
+    );
+    assert!(
+        verifier
+            .verify_scope(&admin, "browser", "business_commands", &token, 400)
+            .is_err(),
+        "Core verifier accepted an expired scope"
+    );
+    assert!(
+        policy::evaluate(&admin, BusinessOsPermission::UsersManage, &scope).allowed,
+        "foreground did not bind its Store policy authority"
+    );
+    assert!(
+        !policy::evaluate(&foreign, BusinessOsPermission::UsersManage, &scope).allowed,
+        "foreign actor inherited the administrator's grant"
+    );
+    let denied_actor = admin.clone();
+    let writer = rights.writer().clone();
+    rights
+        .replace(vec![], vec![])
+        .await
+        .map_err(anyhow::Error::msg)?;
+    assert!(
+        !policy::evaluate(&admin, BusinessOsPermission::UsersManage, &scope).allowed,
+        "foreground kept an admission-time rights snapshot"
+    );
+    assert!(
+        verifier
+            .verify_scope(&admin, "browser", "business_commands", &token, 100)
+            .is_err(),
+        "Core verifier kept revoked scope authority"
+    );
+    rights
+        .replace(policy::base_release_rights(&[]), vec![])
+        .await
+        .map_err(anyhow::Error::msg)?;
+    assert!(
+        writer
+            .submit(WriteJob::new(Default::default(), move |tx| Ok(
+                policy::evaluate_in_store(
+                    tx,
+                    &denied_actor,
+                    BusinessOsPermission::UsersManage,
+                    &BusinessOsScope::workspace()
+                )
+                .allowed
+            )))?
+            .await?,
+        "writer callback lost its exact bound Store context"
+    );
+    foreground.shutdown().await?;
+    assert!(
+        !policy::evaluate(&admin, BusinessOsPermission::UsersManage, &scope).allowed,
+        "shutdown left policy authority usable"
+    );
+    assert!(
+        verifier
+            .verify(
+                identity.instance_id(),
+                identity.key_id(),
+                canonical,
+                &signature
+            )
+            .is_err(),
+        "retired Core verifier remained usable"
+    );
+    Ok(())
+}
+
 struct FixtureEngine(ctox_store::writer::WriterHandle);
 impl EngineFactory for FixtureFactory {
     fn name(&self) -> &'static str {
@@ -207,7 +472,7 @@ async fn foreground_owns_real_files_and_drains_engine_before_store() -> anyhow::
         "instance identity changed after restart"
     );
     assert_eq!(second_signer.instance_id(), first_signer.instance_id());
-    let message = b"canonical instance restart proof";
+    let message = b"ctox.sync.v4.stream\0{\"proof\":\"instance restart\"}";
     let signature = second_signer.sign(message).map_err(anyhow::Error::msg)?;
     let hex = second_signer.key_id().strip_prefix("ed25519:").unwrap();
     let public: Vec<u8> = hex

@@ -1,6 +1,7 @@
 import { openUniversalImporter } from 'ctox:shared/universal-importer.js';
 import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
 import { buildContextChatCommand } from 'ctox:shared/context-chat.js';
+import { getActionIcon } from 'ctox:shared/icons.js';
 import { createMailContentEditor } from './editor/mail-content-editor.mjs';
 import { mountMailBody } from './lib/mail-body-renderer.mjs';
 import {
@@ -1348,6 +1349,7 @@ export async function mount(host, api, { restored } = {}) {
     refs.saveContent.disabled = false;
     view.contentEditor = await createMailContentEditor({
       api,
+      getActionIcon,
       host: refs.contentHost,
       commandHost: refs.contentControls,
       locale: currentLocale(),

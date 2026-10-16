@@ -425,6 +425,29 @@ pub async fn publish(
     Ok(activated)
 }
 
+/// Shared with E29: retain the already-supported conversation natural keys.
+pub(crate) fn migrated_identity(
+    collection: &str,
+    source_id: &str,
+    mut body: Value,
+) -> Result<(String, Value)> {
+    if !body.is_object() {
+        return Err(invalid("legacy_document_object"));
+    }
+    let key = match collection {
+        "communication_accounts" => "account_key",
+        "communication_threads" => "thread_key",
+        "communication_messages" => "message_key",
+        _ => "id",
+    };
+    let id = body[key]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(source_id)
+        .to_owned();
+    body["id"] = id.clone().into();
+    Ok((id, body))
+}
 pub struct LegacyPage {
     pub documents: Vec<Document>,
     pub cursor: String,
@@ -485,18 +508,7 @@ pub fn legacy_page(
         if let Some(specification) = plan.migrations.get(collection) {
             body = evaluator.migrate(collection, specification, body)?;
         }
-        let key = match collection {
-            "communication_accounts" => "account_key",
-            "communication_threads" => "thread_key",
-            "communication_messages" => "message_key",
-            _ => "id",
-        };
-        let id = body[key]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .unwrap_or(&source_id)
-            .to_owned();
-        body["id"] = id.clone().into();
+        let (id, body) = migrated_identity(collection, &source_id, body)?;
         docs.push(Document {
             revision,
             collection: collection.into(),

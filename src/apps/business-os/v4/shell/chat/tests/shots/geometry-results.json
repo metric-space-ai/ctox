@@ -1,0 +1,152 @@
+[
+  {
+    "name": "1280: Leiste eingeklappt gleich",
+    "ok": true,
+    "detail": "{\"v4\":[18,728,310,54],\"v2\":[18,728,310,54]}"
+  },
+  {
+    "name": "1280: dock offen gleich",
+    "ok": true,
+    "detail": "{\"v4\":[18,726,363,56],\"v2\":[18,726,363,56]}"
+  },
+  {
+    "name": "1280: chip offen gleich",
+    "ok": true,
+    "detail": "{\"v4\":[232,731,46,42],\"v2\":[232,731,46,42]}"
+  },
+  {
+    "name": "1280: window offen gleich",
+    "ok": true,
+    "detail": "{\"v4\":[32,128,460,580],\"v2\":[32,128,460,580]}"
+  },
+  {
+    "name": "1280: messages offen gleich",
+    "ok": true,
+    "detail": "{\"v4\":[33,221,458,430],\"v2\":[33,221,458,430]}"
+  },
+  {
+    "name": "1280: textarea offen gleich",
+    "ok": true,
+    "detail": "{\"v4\":[87,660,350,40],\"v2\":[87,660,350,40]}"
+  },
+  {
+    "name": "1280: send offen gleich",
+    "ok": true,
+    "detail": "{\"v4\":[445,662,36,36],\"v2\":[445,662,36,36]}"
+  },
+  {
+    "name": "1280: window nach dem Senden gleich",
+    "ok": true,
+    "detail": "{\"v4\":[32,128,460,580],\"v2\":[32,128,460,580]}"
+  },
+  {
+    "name": "1280: messages nach dem Senden gleich",
+    "ok": true,
+    "detail": "{\"v4\":[33,221,594,430],\"v2\":[33,221,594,430]}"
+  },
+  {
+    "name": "1280: textarea nach dem Senden gleich",
+    "ok": true,
+    "detail": "{\"v4\":[87,660,486,40],\"v2\":[87,660,486,40]}"
+  },
+  {
+    "name": "1280: send nach dem Senden gleich",
+    "ok": true,
+    "detail": "{\"v4\":[581,662,36,36],\"v2\":[581,662,36,36]}"
+  },
+  {
+    "name": "1280: Verlauf nach dem Senden ohne waagerechten Überlauf wie V2",
+    "ok": true,
+    "detail": "{\"v4\":0,\"v2\":0}"
+  },
+  {
+    "name": "1280: Schrift der Pille gleich",
+    "ok": true,
+    "detail": "{\"v4\":\"-apple-system, \\\"system-ui\\\", \\\"Segoe UI\\\", system-ui, sans-serif\",\"v2\":\"-apple-system, \\\"system-ui\\\", \\\"Segoe UI\\\", system-ui, sans-serif\"}"
+  },
+  {
+    "name": "1280: Fensterfarbe gleich",
+    "ok": true,
+    "detail": "{\"v4\":\"rgb(255, 255, 255)\",\"v2\":\"rgb(255, 255, 255)\"}"
+  },
+  {
+    "name": "1280: Verlauf ohne waagerechten Überlauf wie V2",
+    "ok": true,
+    "detail": "{\"v4\":0,\"v2\":0}"
+  },
+  {
+    "name": "420: Leiste eingeklappt gleich",
+    "ok": true,
+    "detail": "{\"v4\":[8,736,220,56],\"v2\":[8,736,220,56]}"
+  },
+  {
+    "name": "420: dock offen gleich",
+    "ok": true,
+    "detail": "{\"v4\":[8,736,384,56],\"v2\":[8,736,384,56]}"
+  },
+  {
+    "name": "420: chip offen gleich",
+    "ok": true,
+    "detail": "{\"v4\":[228,741,46,42],\"v2\":[228,741,46,42]}"
+  },
+  {
+    "name": "420: window offen gleich",
+    "ok": true,
+    "detail": "{\"v4\":[0,136,404,580],\"v2\":[0,136,404,580]}"
+  },
+  {
+    "name": "420: messages offen gleich",
+    "ok": true,
+    "detail": "{\"v4\":[1,229,402,430],\"v2\":[1,229,402,430]}"
+  },
+  {
+    "name": "420: textarea offen gleich",
+    "ok": true,
+    "detail": "{\"v4\":[55,668,294,40],\"v2\":[55,668,294,40]}"
+  },
+  {
+    "name": "420: send offen gleich",
+    "ok": true,
+    "detail": "{\"v4\":[357,670,36,36],\"v2\":[357,670,36,36]}"
+  },
+  {
+    "name": "420: window nach dem Senden gleich",
+    "ok": true,
+    "detail": "{\"v4\":[0,136,404,580],\"v2\":[0,136,404,580]}"
+  },
+  {
+    "name": "420: messages nach dem Senden gleich",
+    "ok": true,
+    "detail": "{\"v4\":[1,229,594,430],\"v2\":[1,229,594,430]}"
+  },
+  {
+    "name": "420: textarea nach dem Senden gleich",
+    "ok": true,
+    "detail": "{\"v4\":[55,668,486,40],\"v2\":[55,668,486,40]}"
+  },
+  {
+    "name": "420: send nach dem Senden gleich",
+    "ok": true,
+    "detail": "{\"v4\":[549,670,36,36],\"v2\":[549,670,36,36]}"
+  },
+  {
+    "name": "420: Verlauf nach dem Senden ohne waagerechten Überlauf wie V2",
+    "ok": true,
+    "detail": "{\"v4\":0,\"v2\":0}"
+  },
+  {
+    "name": "420: Schrift der Pille gleich",
+    "ok": true,
+    "detail": "{\"v4\":\"-apple-system, \\\"system-ui\\\", \\\"Segoe UI\\\", system-ui, sans-serif\",\"v2\":\"-apple-system, \\\"system-ui\\\", \\\"Segoe UI\\\", system-ui, sans-serif\"}"
+  },
+  {
+    "name": "420: Fensterfarbe gleich",
+    "ok": true,
+    "detail": "{\"v4\":\"rgb(255, 255, 255)\",\"v2\":\"rgb(255, 255, 255)\"}"
+  },
+  {
+    "name": "420: Verlauf ohne waagerechten Überlauf wie V2",
+    "ok": true,
+    "detail": "{\"v4\":0,\"v2\":0}"
+  }
+]

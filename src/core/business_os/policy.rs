@@ -562,51 +562,139 @@ pub fn base_release_rights(collections: &[String]) -> Vec<sync_rights::Right> {
     rows
 }
 
-static POLICY_AUTHORITY: std::sync::RwLock<
-    Option<std::sync::Weak<sync_rights::StoreRightsAuthority>>,
-> = std::sync::RwLock::new(None);
+#[derive(Clone, PartialEq, Eq)]
+enum PolicyContext {
+    #[cfg(not(test))]
+    Daemon,
+    #[cfg(test)]
+    Runtime(tokio::runtime::Id),
+    #[cfg(test)]
+    Thread(std::thread::ThreadId),
+}
+fn policy_context() -> PolicyContext {
+    #[cfg(not(test))]
+    {
+        PolicyContext::Daemon
+    }
+    #[cfg(test)]
+    {
+        tokio::runtime::Handle::try_current()
+            .map(|h| PolicyContext::Runtime(h.id()))
+            .unwrap_or_else(|_| PolicyContext::Thread(std::thread::current().id()))
+    }
+}
+struct PolicyBinding {
+    context: PolicyContext,
+    authority: std::sync::Weak<sync_rights::StoreRightsAuthority>,
+}
+static POLICY_AUTHORITY: std::sync::RwLock<Vec<PolicyBinding>> = std::sync::RwLock::new(Vec::new());
 /// Retain for the daemon lifetime. Drop removes only this exact registration.
 /// No credential, Store connection or duplicate rights snapshot is retained.
-pub struct PolicyAuthorityRegistration(std::sync::Arc<sync_rights::StoreRightsAuthority>);
+pub struct PolicyAuthorityRegistration {
+    context: PolicyContext,
+    authority: std::sync::Arc<sync_rights::StoreRightsAuthority>,
+}
 pub fn bind_policy_authority(
     authority: std::sync::Arc<sync_rights::StoreRightsAuthority>,
 ) -> sync_rights::scope::Result<PolicyAuthorityRegistration> {
     let mut current = POLICY_AUTHORITY
         .write()
         .map_err(|_| "policy authority poisoned")?;
-    if current
-        .as_ref()
-        .and_then(std::sync::Weak::upgrade)
-        .is_some()
-    {
+    authority.router.with_current_rights(|_| Ok(()))?;
+    let context = policy_context();
+    current.retain(|b| b.authority.strong_count() > 0);
+    if current.iter().any(|b| {
+        b.context == context
+            && b.authority.upgrade().is_some_and(|a| {
+                // A production process has exactly one daemon. Tests may compose
+                // several distinct profile owners in one runtime; an unqualified
+                // evaluate then denies ambiguity rather than choosing another Store.
+                #[cfg(not(test))]
+                {
+                    let _ = a;
+                    true
+                }
+                #[cfg(test)]
+                {
+                    a.writer().db_id() == authority.writer().db_id()
+                }
+            })
+    }) {
         return Err("policy authority already bound".into());
     }
-    *current = Some(std::sync::Arc::downgrade(&authority));
-    Ok(PolicyAuthorityRegistration(authority))
+    current.push(PolicyBinding {
+        context: context.clone(),
+        authority: std::sync::Arc::downgrade(&authority),
+    });
+    Ok(PolicyAuthorityRegistration { context, authority })
 }
 impl Drop for PolicyAuthorityRegistration {
     fn drop(&mut self) {
         if let Ok(mut current) = POLICY_AUTHORITY.write() {
-            if current
-                .as_ref()
-                .and_then(std::sync::Weak::upgrade)
-                .is_some_and(|a| std::sync::Arc::ptr_eq(&a, &self.0))
-            {
-                *current = None;
-            }
+            current.retain(|b| {
+                b.context != self.context
+                    || !b
+                        .authority
+                        .ptr_eq(&std::sync::Arc::downgrade(&self.authority))
+            });
         }
     }
 }
 fn with_policy_rights<T>(
     f: impl FnOnce(&sync_rights::RightsSnapshot) -> sync_rights::scope::Result<T>,
 ) -> sync_rights::scope::Result<T> {
-    let authority = POLICY_AUTHORITY
+    let context = policy_context();
+    let current = POLICY_AUTHORITY
         .read()
-        .map_err(|_| "policy authority poisoned")?
-        .as_ref()
-        .and_then(std::sync::Weak::upgrade)
-        .ok_or("policy authority unavailable")?;
+        .map_err(|_| "policy authority poisoned")?;
+    let mut matching = current
+        .iter()
+        .filter(|b| b.context == context)
+        .filter_map(|b| b.authority.upgrade());
+    let authority = matching.next().ok_or("policy authority unavailable")?;
+    if matching.next().is_some() {
+        return Err("ambiguous policy authority".into());
+    }
+    drop(current);
     authority.router.with_current_rights(f)
+}
+
+/// Writer callbacks have no ambient Tokio context. Resolve their already-open
+/// canonical Store file without filesystem I/O; never borrow another test's
+/// grants or construct an authority on demand. The live owner fence still
+/// applies before the transaction's own rights are read by the caller.
+pub(crate) fn evaluate_in_store(
+    tx: &rusqlite::Transaction<'_>,
+    actor: &BusinessOsActor,
+    permission: BusinessOsPermission,
+    scope: &BusinessOsScope,
+) -> PolicyDecision {
+    let result = (|| {
+        let path = tx.path().ok_or("Store path unavailable")?;
+        let current = POLICY_AUTHORITY
+            .read()
+            .map_err(|_| "policy authority poisoned")?;
+        let mut matching = current
+            .iter()
+            .filter_map(|b| b.authority.upgrade())
+            .filter(|a| a.writer().db_id().path() == std::path::Path::new(path));
+        let authority = matching.next().ok_or("policy authority unavailable")?;
+        if matching.any(|a| !std::sync::Arc::ptr_eq(&a, &authority)) {
+            return Err("ambiguous policy authority".into());
+        }
+        drop(current);
+        authority.router.with_current_rights(|rights| {
+            Ok(evaluate_with_rights(rights, actor, permission, scope))
+        })
+    })();
+    result.unwrap_or_else(|_: String| {
+        PolicyDecision::deny(
+            permission,
+            scope,
+            "rights_unavailable",
+            "Current Store rights are unavailable.",
+        )
+    })
 }
 pub fn role_may_read_collection(role: BusinessOsRole, collection: &str) -> bool {
     with_policy_rights(|rights| {
@@ -1000,6 +1088,10 @@ pub enum NativeWriteAdmission<T> {
 /// Adapter for P8's single cursor reader and owning write transaction. Identity
 /// comes from Core authentication. ReadAuthority delegates to authorize_snapshot
 /// and project_change; WriteAuthority uses admit_write on the final document.
+#[path = "rxdb_peer_v4_files.rs"]
+mod v4_files;
+pub(crate) use v4_files::NativeFileAccess;
+
 #[derive(Clone)]
 pub struct NativeStorePolicy {
     authority: std::sync::Arc<sync_rights::StoreRightsAuthority>,

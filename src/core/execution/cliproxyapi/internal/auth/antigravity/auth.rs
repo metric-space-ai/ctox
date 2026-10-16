@@ -735,6 +735,47 @@ impl AntigravityStoredCredentials {
 }
 
 pub trait AntigravitySecretStore: Send + Sync {
+    /// Async host boundary. Native stores override this to admit the job on
+    /// their existing file owners; the portable default performs no Core IO.
+    fn load_credentials_async(
+        self: std::sync::Arc<Self>,
+        handles: AntigravityCredentialHandles,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<AntigravityStoredCredentials, AntigravityTokenError>,
+                > + Send,
+        >,
+    >
+    where
+        Self: 'static,
+    {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || self.load_credentials(&handles))
+                .await
+                .map_err(|_| AntigravityTokenError::Read)?
+        })
+    }
+
+    /// Async host boundary. Native stores override this to admit the job on
+    /// their existing file owners; the portable default performs no Core IO.
+    fn store_credentials_async(
+        self: std::sync::Arc<Self>,
+        handles: AntigravityCredentialHandles,
+        credentials: AntigravityStoredCredentials,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), AntigravityTokenError>> + Send>,
+    >
+    where
+        Self: 'static,
+    {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || self.store_credentials(&handles, &credentials))
+                .await
+                .map_err(|_| AntigravityTokenError::Write)?
+        })
+    }
+
     fn load_credentials(
         &self,
         handles: &AntigravityCredentialHandles,

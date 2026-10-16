@@ -149,14 +149,26 @@ struct SubscriptionAuthStartRequest {
 }
 
 pub fn serve_business_os(root: &Path, options: BusinessOsServeOptions) -> anyhow::Result<()> {
-    let app_root = resolve_business_os_app_root(root)?;
-    if !app_root.join("index.html").is_file() {
+    let work = root.to_owned();
+    crate::persistence::with_cli_owners(root, move || serve_owned_business_os(&work, options))
+        .context("Business OS foreground owner execution failed")
+}
+
+fn serve_owned_business_os(root: &Path, options: BusinessOsServeOptions) -> anyhow::Result<()> {
+    let work = root.to_owned();
+    let app_root = crate::persistence::run_core_blocking_at(root, move || {
+        resolve_business_os_app_root(&work)
+    })?;
+    if !app_root.join(business_os_entry_document(&app_root, None)).is_file() {
         anyhow::bail!(
             "native Business OS app is missing at {}",
             app_root.display()
         );
     }
-    let reconciled = store::reconcile_release_managed_module_shadows(root)?;
+    let work = root.to_owned();
+    let reconciled = crate::persistence::run_core_blocking_at(root, move || {
+        store::reconcile_release_managed_module_shadows(&work)
+    })?;
     if reconciled
         .get("updated")
         .and_then(Value::as_array)
@@ -166,7 +178,10 @@ pub fn serve_business_os(root: &Path, options: BusinessOsServeOptions) -> anyhow
     }
     // Prepare the generation-bound bootstrap catalog before accepting its
     // first document request. Later installs are detected by the same reader.
-    if let Err(err) = store::cached_module_catalog_for_bootstrap(root) {
+    let work = root.to_owned();
+    if let Err(err) = crate::persistence::run_core_blocking_at(root, move || {
+        store::cached_module_catalog_for_bootstrap(&work)
+    }) {
         eprintln!("[business-os] bootstrap catalog admission failed: {err:#}");
     }
     // Claim the HTTP surface before opening the store or starting the native
@@ -187,19 +202,26 @@ pub fn serve_business_os(root: &Path, options: BusinessOsServeOptions) -> anyhow
         thread::Builder::new()
             .name("business-os-store-warmup".to_string())
             .spawn(move || {
-                if let Err(err) = store::open_store(&root) {
-                    eprintln!("[business-os] store warm-up failed: {err:#}");
-                }
-                match super::rxdb_peer::ensure_native_peer(&root) {
-                    Ok(()) => {}
-                    Err(err) => {
-                        eprintln!("[business-os] native rxdb peer config failed: {err:#}")
+                let work = root.clone();
+                if let Err(err) = crate::persistence::run_core_blocking_at(&root, move || {
+                    let root = work;
+                    if let Err(err) = store::open_store(&root) {
+                        eprintln!("[business-os] store warm-up failed: {err:#}");
                     }
-                }
-                if let Err(err) = store::write_module_catalog_projection_to_rxdb(&root) {
-                    eprintln!(
-                        "[business-os] module catalog refresh failed at serve start: {err:#}"
-                    );
+                    match super::rxdb_peer::ensure_native_peer(&root) {
+                        Ok(()) => {}
+                        Err(err) => {
+                            eprintln!("[business-os] native rxdb peer config failed: {err:#}")
+                        }
+                    }
+                    if let Err(err) = store::write_module_catalog_projection_to_rxdb(&root) {
+                        eprintln!(
+                            "[business-os] module catalog refresh failed at serve start: {err:#}"
+                        );
+                    }
+                    Ok(())
+                }) {
+                    eprintln!("[business-os] warm-up owner admission failed: {err:#}");
                 }
             })
             .expect("failed to start Business OS store warm-up thread");
@@ -277,7 +299,7 @@ fn is_static_asset_request(method: &Method, url: &str) -> bool {
     )
 }
 
-fn resolve_business_os_app_root(root: &Path) -> anyhow::Result<PathBuf> {
+pub(crate) fn resolve_business_os_app_root(root: &Path) -> anyhow::Result<PathBuf> {
     // A selected release is authoritative. Verification failure must not boot
     // an unrelated source tree under the same instance URL.
     if let Some(active) = super::shell_update::active_shell_root(root)
@@ -287,7 +309,7 @@ fn resolve_business_os_app_root(root: &Path) -> anyhow::Result<PathBuf> {
     }
     [root.join("business-os"), root.join("src/apps/business-os")]
         .into_iter()
-        .find(|candidate| candidate.join("index.html").is_file())
+        .find(|candidate| candidate.join(business_os_entry_document(candidate, None)).is_file())
         .context("no Business OS shell is installed")
 }
 
@@ -310,7 +332,45 @@ fn resolve_business_os_installed_app_root(root: &Path) -> PathBuf {
     root.join("business-os")
 }
 
-fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow::Result<()> {
+fn handle_request(root: &Path, app_root: &Path, request: Request) -> anyhow::Result<()> {
+    let work = root.to_owned();
+    let app = app_root.to_owned();
+    // Keep custody until admission actually starts the handler. Dropping an
+    // unadmitted tiny_http request would manufacture an unexplained HTTP500.
+    let pending = Arc::new(Mutex::new(Some(request)));
+    let admitted = Arc::clone(&pending);
+    let result = crate::persistence::run_core_blocking_at(root, move || {
+        let request = admitted
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+            .context("HTTP request already consumed")?;
+        handle_admitted_request(&work, &app, request)
+    })
+    .context("Business OS HTTP owner admission/request failed");
+    if let Err(error) = result {
+        let request = pending.lock().unwrap_or_else(|p| p.into_inner()).take();
+        if let Some(request) = request {
+            let reason = if matches!(
+                error.downcast_ref::<ctox_store::StoreError>(),
+                Some(ctox_store::StoreError::Busy)
+            ) {
+                "Core owner admission busy"
+            } else {
+                "Core owner admission unavailable"
+            };
+            respond_status(request, 503, reason).context("failed to send owner admission error")?;
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn handle_admitted_request(
+    root: &Path,
+    app_root: &Path,
+    mut request: Request,
+) -> anyhow::Result<()> {
     let method = request.method().clone();
     let url = request.url().to_string();
     let path = url.split('?').next().unwrap_or("/");
@@ -320,8 +380,21 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
     }
     // net.ingest (§16.38): cookie-less generic ingress; it never reads a
     // session, so it is answered before session/cross-origin handling.
-    if crate::app_capabilities::cap3::ingest::serves(root, path) {
-        return respond_ingest(root, request, &url);
+    if crate::app_capabilities::cap3::ingest::may_serve(path) {
+        let work = root.to_owned();
+        let ingest_path = path.to_owned();
+        let serves = crate::persistence::run_core_blocking_at(root, move || {
+            crate::app_capabilities::cap3::ingest::serves(&work, &ingest_path)
+                .map_err(anyhow::Error::new)
+        });
+        match serves {
+            Ok(true) => return respond_ingest(root, request, &url),
+            Ok(false) => {}
+            Err(error) => {
+                respond_status(request, 503, "native ingress unavailable")?;
+                return Err(error.context("Business OS ingress route lookup failed"));
+            }
+        }
     }
     if rejects_cross_origin_browser_mutation(
         &method,
@@ -389,7 +462,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             respond_json(request, &store::status(root)?)?;
         }
         (Method::Get, "/api/business-os/launch-context") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             respond_json_value_no_store(request, launch_context_value(root, &session)?)?;
         }
         (Method::Post, "/api/business-os/auth/capability") => {
@@ -398,7 +471,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             // caller-supplied input). The browser attaches the returned token to
             // every command so native authorization stops trusting the
             // browser-asserted client_context.actor.
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -424,7 +497,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Get, "/api/business-os/mcp/connect-info") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -435,7 +508,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Get, "/api/business-os/design-templates") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_workspace_branding(root, &session)? {
@@ -445,7 +518,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/design-templates") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_workspace_branding(root, &session)? {
@@ -460,7 +533,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/design-templates/delete") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_workspace_branding(root, &session)? {
@@ -479,7 +552,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/ctox/subscription-auth/start") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -505,7 +578,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Get, "/api/business-os/ctox/subscription-auth/status") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -522,7 +595,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             handle_subscription_auth_callback(request, root, &url_raw)?;
         }
         (Method::Get, "/api/business-os/ctox/maintenance") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -536,7 +609,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Get, "/api/business-os/ctox/update/check") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -549,7 +622,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/ctox/update/apply") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -562,7 +635,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Get, "/api/business-os/shell/update/status") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -573,7 +646,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/shell/update/check") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -584,7 +657,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/shell/update/stage") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -595,7 +668,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/shell/update/activate") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -606,7 +679,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/shell/update/rollback") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -617,7 +690,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/ctox/tasks/update") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -629,7 +702,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/ctox/tasks/delete") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -641,7 +714,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Get, "/api/business-os/session") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             respond_json(request, &session)?;
         }
         (Method::Post, "/login") => {
@@ -656,7 +729,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             respond_redirect_with_cookie(request, "/", "", 0)?;
         }
         (Method::Get, "/api/business-os/users") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -664,7 +737,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/users") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !session
@@ -681,7 +754,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Get, "/api/business-os/modules") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             let installed_app_root = resolve_business_os_installed_app_root(root);
             respond_json(
                 request,
@@ -693,7 +766,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             )?;
         }
         (Method::Get, "/api/business-os/module-governance") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -701,7 +774,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/modules") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -770,7 +843,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             respond_status(request, 404, "unknown Business OS knowledge endpoint")?;
         }
         (Method::Post, "/api/business-os/modules/install-template") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -790,7 +863,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/modules/delete") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -810,7 +883,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/modules/assign-founder") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -823,7 +896,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/reports") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -833,7 +906,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Get, "/api/business-os/sync/config") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if let Some(turn_session) = authenticated_sync_config_session_id(&session) {
@@ -859,7 +932,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         // old channel-account record listing is deliberately absent here; its
         // path is rejected with 410 by the data-plane gate above.
         (Method::Get, "/api/business-os/mail/accounts") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -884,7 +957,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/mail/accounts") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -985,7 +1058,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/mail/accounts/delete") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -1022,7 +1095,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/channels/test") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -1045,7 +1118,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/channels/sync") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -1060,7 +1133,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/channels/settings") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -1078,7 +1151,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/channels/disconnect") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -1099,7 +1172,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/channels/pair/start") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -1114,7 +1187,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Get, "/api/business-os/channels/pair/state") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -1125,7 +1198,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/channels/jami/export") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -1136,7 +1209,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             }
         }
         (Method::Post, "/api/business-os/channels/jami/create") => {
-            let session = request_session(root, &request);
+            let session = request_session(root, &request)?;
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else if !store::session_can_manage_all(&session) {
@@ -1262,14 +1335,14 @@ fn start_business_os_update_apply(root: &Path) -> anyhow::Result<Value> {
     }))
 }
 
-fn request_session(root: &Path, request: &Request) -> store::BusinessOsSession {
+fn request_session(root: &Path, request: &Request) -> anyhow::Result<store::BusinessOsSession> {
     // 1. Browser shell session: an opaque cookie token resolved against the
     //    server-side session store. The cookie never carries credentials, so a
     //    successful lookup IS the authentication; the live actor role/active
     //    state is then refreshed by session_with_persisted_user.
     if let Some(token) = business_os_session_cookie_value(request) {
-        if let Ok(Some(session)) = store::session_from_cookie_token(root, &token) {
-            return store::session_with_persisted_user(root, session.clone()).unwrap_or(session);
+        if let Some(session) = store::session_from_cookie_token(root, &token)? {
+            return store::session_with_persisted_user(root, session);
         }
     }
     // 2. Header-based auth for API/MCP clients (Authorization Bearer/Basic,
@@ -1281,7 +1354,7 @@ fn request_session(root: &Path, request: &Request) -> store::BusinessOsSession {
     // optional local-dev session; otherwise loopback could replace the actual
     // managed user with local-dev/admin on instances without explicit login.
     if let Some(session) = session_from_capability_bearer(root, auth_header.as_deref()) {
-        return session;
+        return Ok(session);
     }
     let session_header = header_value(request, "X-CTOX-Business-OS-Session");
     let session = store::session_for_request(
@@ -1289,14 +1362,7 @@ fn request_session(root: &Path, request: &Request) -> store::BusinessOsSession {
         session_header.as_deref(),
         request_allows_local_dev_session(request),
     );
-    let session = store::session_with_persisted_user(root, session).unwrap_or_else(|_| {
-        store::session_for_request(
-            auth_header.as_deref(),
-            session_header.as_deref(),
-            request_allows_local_dev_session(request),
-        )
-    });
-    session
+    store::session_with_persisted_user(root, session)
 }
 
 fn authenticated_sync_config_session_id(session: &store::BusinessOsSession) -> Option<String> {
@@ -2027,6 +2093,19 @@ fn exchange_chatgpt_authorization_code(
 }
 
 fn persist_chatgpt_subscription_auth(
+    root: &Path,
+    codex_home: &Path,
+    tokens: ChatgptTokenExchangeResponse,
+) -> anyhow::Result<()> {
+    let work = root.to_owned();
+    let home_path = codex_home.to_owned();
+    crate::persistence::run_core_blocking_at(root, move || {
+        persist_admitted_chatgpt_subscription_auth(&work, &home_path, tokens)
+    })
+    .context("subscription callback owner execution failed")
+}
+
+fn persist_admitted_chatgpt_subscription_auth(
     root: &Path,
     codex_home: &Path,
     tokens: ChatgptTokenExchangeResponse,
@@ -3436,6 +3515,20 @@ fn file_modified_label(path: &Path) -> String {
         .unwrap_or_default()
 }
 
+fn business_os_entry_document(app_root: &Path, version: Option<&str>) -> &'static str {
+    // E38 supersedes E31: V4 never silently boots the legacy V2 shell. A missing
+    // loader is a broken package, even when it still contains index.html.
+    if version.map_or_else(
+        || app_root.join("v4").is_dir(),
+        |version| version.starts_with("0.2."),
+    )
+    {
+        "v4/index.html"
+    } else {
+        "index.html"
+    }
+}
+
 fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> anyhow::Result<()> {
     let raw_rel = if matches!(path, "/" | "/business-os" | "/business-os/") {
         "index.html"
@@ -3466,7 +3559,7 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
                 return respond_status(request, 503, "requested shell release failed verification")
             }
         },
-        None if rel == "index.html" => {
+        None if rel == "index.html" || rel == "v4/index.html" => {
             super::shell_update::verified_release_for_root(root, app_root)?
         }
         None => None,
@@ -3486,6 +3579,11 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
             None => return respond_shell_generation_mismatch(request, &requested, &active),
         }
     }
+    let rel = if rel == "index.html" {
+        business_os_entry_document(&selected_app_root, release.as_ref().map(|value| value.version.as_str()))
+    } else {
+        rel
+    };
     if !runtime_module_static_authorized(root, &selected_app_root, rel, release.as_deref()) {
         // Do not reveal whether a customer package exists on this instance.
         return respond_status(request, 404, "not found");
@@ -3530,8 +3628,8 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
         fs::read(&target)?
     };
     let mime = mime_for(&target);
-    let is_index = target == selected_app_root.join("index.html");
-    if is_index {
+    let is_index = rel == "index.html" || rel == "v4/index.html";
+    if is_index && rel == "index.html" {
         // The launch context is injected server-side, exactly as it was before
         // the client-first attempt. That attempt shipped a hard cutover: the
         // shell fetched /api/business-os/launch-context and refused to boot
@@ -3541,7 +3639,7 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
         // fehlgeschlagen". A separate bootstrap request must never be the only
         // way the shell can start; the document that carries the shell must
         // also be able to carry its context.
-        let session = request_session(root, &request);
+        let session = request_session(root, &request)?;
         let capability_token = verified_unbound_capability_bearer_token(
             root,
             header_value(&request, "Authorization").as_deref(),
@@ -3880,7 +3978,8 @@ fn launch_config_value(
     sync_config: &store::BusinessOsSyncConfig,
 ) -> anyhow::Result<Value> {
     let mut value = serde_json::to_value(sync_config)?;
-    if let Ok(catalog) = store::cached_module_catalog_for_bootstrap(root) {
+    let catalog = store::cached_module_catalog_for_bootstrap(root)?;
+    {
         if let Some(object) = value.as_object_mut() {
             object.insert("module_catalog_snapshot".to_owned(), catalog);
             object.insert(
@@ -4067,12 +4166,25 @@ fn respond_ingest(root: &Path, mut request: Request, url: &str) -> anyhow::Resul
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0),
     };
-    let answer = ingest::handle_ingress(
-        root,
-        &ingest::CoreIngestRuntime { root },
-        &incoming,
-        ingest::RESPONSE_WAIT,
-    );
+    let work = root.to_owned();
+    let answer = match crate::persistence::run_core_blocking_at(root, move || {
+        ingest::handle_ingress(
+            &work,
+            &ingest::CoreIngestRuntime { root: &work },
+            &incoming,
+            ingest::RESPONSE_WAIT,
+        )
+        .map_err(anyhow::Error::new)
+    }) {
+        Ok(answer) => answer,
+        Err(error) => {
+            let status = error
+                .downcast_ref::<crate::app_capabilities::CtoxError>()
+                .map_or(503, ingest::error_status);
+            respond_status(request, status, "native ingress unavailable")?;
+            return Err(error.context("Business OS ingress dispatch failed"));
+        }
+    };
     let mut response = Response::from_data(answer.body).with_status_code(answer.status);
     for (name, value) in &answer.headers {
         if let Ok(header) = Header::from_bytes(name.as_bytes(), value.as_bytes()) {
@@ -4306,6 +4418,198 @@ fn mime_for(path: &PathBuf) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn guard_prod_http_missing_owner_is_visible_service_unavailable() -> anyhow::Result<()> {
+        use anyhow::Context as _;
+        use std::io::{Read as _, Write as _};
+        let root = tempfile::tempdir()?;
+        let server = tiny_http::Server::http("127.0.0.1:0")
+            .map_err(|error| anyhow::anyhow!("isolated HTTP listener: {error}"))?;
+        let address = server.server_addr().to_ip().context("loopback address")?;
+        let worker = std::thread::spawn(move || -> anyhow::Result<()> {
+            let request = server.recv()?;
+            super::handle_request(root.path(), root.path(), request)
+        });
+        let mut stream = std::net::TcpStream::connect(address)?;
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+        stream.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")?;
+        let mut response = String::new();
+        stream.read_to_string(&mut response)?;
+        let error = worker
+            .join()
+            .expect("HTTP worker joins")
+            .expect_err("missing Core owner remains an error");
+        assert!(response.starts_with("HTTP/1.1 503"), "{response}");
+        assert!(
+            response.contains("Core owner admission unavailable"),
+            "{response}"
+        );
+        assert!(error.to_string().contains("owner admission"), "{error:#}");
+        Ok(())
+    }
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn v4_bootstrap_entry_never_falls_back_to_v2() -> anyhow::Result<()> {
+        use crate::service::store_startup::{Foreground, isolate_test_roots};
+        let _scope = isolate_test_roots().await;
+        let fixture = tempfile::Builder::new().prefix("e31-").tempdir_in("/tmp")?;
+        let root = fixture.path().to_owned();
+        let app = root.join("business-os");
+        fs::create_dir_all(app.join("v4"))?;
+        fs::write(app.join("index.html"), "legacy V2 must not be served")?;
+        let loader = "<!doctype html><html><head></head><body>real-v4-loader-fixture</body></html>";
+        fs::write(app.join("v4/index.html"), loader)?;
+        let mut foreground = Foreground::start(root.clone(), tokio::runtime::Handle::current()).await?;
+        // Exercise E36's real foreground-owned listener, not the retired
+        // standalone HTTP handler. IPC can request a listener, never own a store.
+        let reply = ctox_store::ipc::request(
+            crate::service::queue_store::endpoint(&root),
+            ctox_store::ipc::Request {
+                request_id: 31,
+                kind: ctox_store::ipc::JobKind::Read,
+                method: "http.listen".into(),
+                payload: serde_json::to_vec(&serde_json::json!({"addr":"127.0.0.1:0"}))?,
+            },
+            Default::default(),
+        )?.await?;
+        let listener: serde_json::Value = serde_json::from_slice(&reply)?;
+        let address = listener["addr"].as_str().context("foreground HTTP address")?.to_owned();
+        let observed = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let client = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(5)).build();
+            let mut times = Vec::new();
+            for _ in 0..20 {
+                let start = std::time::Instant::now();
+                let response = client.get(&format!("http://{address}/")).call()?;
+                let status = response.status();
+                let body = response.into_string()?;
+                let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                eprintln!("E31_HTTP_RESPONSE {}", serde_json::json!({
+                    "status": status, "elapsed_ms": elapsed_ms, "body_bytes": body.len(),
+                    "is_expected_loader": body == loader,
+                    "is_legacy_fixture": body.contains("legacy V2 must not be served")
+                }));
+                anyhow::ensure!(status == 200, "V4 root failed with {status}");
+                anyhow::ensure!(body == loader, "GET / served V2 or legacy launch context");
+                times.push(elapsed_ms);
+            }
+            fs::remove_file(app.join("v4/index.html"))?;
+            let missing = client.get(&format!("http://{address}/")).call();
+            anyhow::ensure!(matches!(missing, Err(ureq::Error::Status(404, _))), "missing V4 loader fell back to V2");
+            times.sort_by(f64::total_cmp);
+            eprintln!("E31_HTTP_RECEIPT {}", serde_json::json!({"p99_ms": times[19], "missingLoaderStatus": 404}));
+            anyhow::ensure!(times[19] < 500.0, "GET / p99 >=500ms");
+            Ok(())
+        }).await?;
+        foreground.shutdown().await?;
+        observed?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn guard_prod_foreground_http_bootstrap_and_restart_identity() -> anyhow::Result<()> {
+        use crate::service::store_startup::{isolate_test_roots, Foreground};
+        let _scope = isolate_test_roots().await;
+        anyhow::ensure!(
+            std::env::var_os("CTOX_STATE_ROOT").is_none(),
+            "isolated state required"
+        );
+        let fixture = tempfile::Builder::new()
+            .prefix("gprod-")
+            .tempdir_in("/tmp")?;
+        let root = fixture.path().to_owned();
+        let app = root.join("business-os");
+        fs::create_dir_all(&app)?;
+        fs::write(
+            app.join("index.html"),
+            "<!doctype html><html><head></head><body>foreground owner probe</body></html>",
+        )?;
+        let mut foreground =
+            Foreground::start(root.clone(), tokio::runtime::Handle::current()).await?;
+        // Use the normal shell startup path before invoking HTTP handlers. It
+        // initializes/verifies the persisted shell state used by the catalog.
+        let bootstrap_root = root.clone();
+        let app = crate::persistence::run_core_sync(move || {
+            resolve_business_os_app_root(&bootstrap_root)
+        })
+        .await?;
+        let first_root = root.clone();
+        let first = crate::persistence::run_core_sync(move || {
+            Ok(crate::sync_host::signing_identity(&first_root)?.public_identity())
+        })
+        .await?;
+        let server =
+            Server::http("127.0.0.1:0").map_err(|e| anyhow::anyhow!("HTTP fixture bind: {e}"))?;
+        let address = server.server_addr().to_ip().context("loopback address")?;
+        let worker_root = root.clone();
+        let worker = std::thread::spawn(move || -> anyhow::Result<()> {
+            for _ in 0..20 {
+                let request = server
+                    .recv_timeout(std::time::Duration::from_secs(15))?
+                    .context("bounded HTTP request")?;
+                handle_request(&worker_root, &app, request)?;
+            }
+            Ok(())
+        });
+        let observed = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<f64>> {
+            use std::io::{Read, Write};
+            let mut latencies = Vec::new();
+            for _ in 0..20 {
+                let started = std::time::Instant::now();
+                let mut stream = std::net::TcpStream::connect(address)?;
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(15)))?;
+                stream.set_write_timeout(Some(std::time::Duration::from_secs(15)))?;
+                stream
+                    .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")?;
+                let mut response = String::new();
+                stream.read_to_string(&mut response)?;
+                let (headers, body) = response
+                    .split_once("\r\n\r\n")
+                    .context("HTTP response framing")?;
+                let status = headers
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1));
+                anyhow::ensure!(status == Some("200"), "GET / returned {status:?}: {body}");
+                anyhow::ensure!(
+                    body.contains("foreground owner probe"),
+                    "bootstrap document missing"
+                );
+                latencies.push(started.elapsed().as_secs_f64() * 1000.0);
+            }
+            Ok(latencies)
+        })
+        .await?;
+        let served = worker.join().expect("bounded HTTP worker joined");
+        served?;
+        let mut latencies = observed?;
+        latencies.sort_by(f64::total_cmp);
+        eprintln!(
+            "GUARD_PROD_HTTP_RECEIPT {}",
+            serde_json::json!({"requests":20,"status":200,"p99_ms":latencies[19]})
+        );
+        foreground.shutdown().await?;
+        let offline_root = root.clone();
+        let offline = std::thread::spawn(move || {
+            let work = offline_root.clone();
+            crate::persistence::run_cli_owned(&offline_root, move || {
+                Ok(crate::sync_host::signing_identity(&work)?.public_identity())
+            })
+        })
+        .join()
+        .expect("offline identity joined")?;
+        assert_eq!(first, offline, "offline CLI rotated public identity");
+        let mut restarted =
+            Foreground::start(root.clone(), tokio::runtime::Handle::current()).await?;
+        let work = root.clone();
+        let after = crate::persistence::run_core_sync(move || {
+            Ok(crate::sync_host::signing_identity(&work)?.public_identity())
+        })
+        .await?;
+        assert_eq!(first, after, "foreground restart rotated public identity");
+        restarted.shutdown().await?;
+        Ok(())
+    }
+
     use super::*;
 
     #[test]

@@ -79,12 +79,19 @@ fn wait<T: Send + 'static>(
         .context("unavailable: owner operation requires reconciliation")?
         .map_err(Into::into)
 }
-// Observe callback wall/CPU intervals without changing admission, deadlines or errors.
+// Ordinary reads retain the store owner's admission and execution guards.
 async fn observed_read<T: Send + 'static>(
     pool: ctox_store::read_pool::ReadPool,
     stage: &'static str,
     job: ReadJob<T>,
 ) -> Result<T, StoreError> {
+    measured_read(pool, stage, job).await.0
+}
+async fn measured_read<T: Send + 'static>(
+    pool: ctox_store::read_pool::ReadPool,
+    stage: &'static str,
+    job: ReadJob<T>,
+) -> (Result<T, StoreError>, Option<u64>) {
     use std::sync::atomic::{AtomicU64, Ordering};
     let started = std::time::Instant::now();
     let cpu = Arc::new(AtomicU64::new(u64::MAX));
@@ -108,7 +115,8 @@ async fn observed_read<T: Send + 'static>(
     if let Err(error) = &result {
         eprintln!("native app store read failed stage={stage} elapsed_us={} entered_us={} finished_us={} callback_cpu_us={} error={error:?}", started.elapsed().as_micros(), entered.load(Ordering::Relaxed), finished.load(Ordering::Relaxed), cpu.load(Ordering::Relaxed));
     }
-    result
+    let cost = cpu.load(Ordering::Relaxed);
+    (result, (cost != u64::MAX).then_some(cost))
 }
 // CLOCK_THREAD_CPUTIME_ID excludes time when this blocking reader is descheduled.
 #[cfg(target_os = "linux")]
@@ -241,8 +249,17 @@ fn permit(
     a: &BusinessOsActor,
     kind: &str,
 ) -> Result<sync_rights::manifest_rules::CommandPermit, StoreError> {
+    permit_with_rights(db, &rights(db)?, app, a, kind)
+}
+fn permit_with_rights(
+    db: &Connection,
+    snapshot: &sync_rights::RightsSnapshot,
+    app: &str,
+    a: &BusinessOsActor,
+    kind: &str,
+) -> Result<sync_rights::manifest_rules::CommandPermit, StoreError> {
     let id = a.id.as_deref().ok_or_else(|| invalid("forbidden: actor"))?;
-    rights(db)?
+    snapshot
         .authorize_command(app, id, a.role.as_str(), kind, assigned(db, app, id)?)
         .map_err(sql_error)
 }

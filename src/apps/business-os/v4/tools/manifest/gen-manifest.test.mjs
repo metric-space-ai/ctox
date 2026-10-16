@@ -12,6 +12,8 @@ import {
   packageAssetPath, packageSrcset, ICON_ASSET_KEYS,
   DECLARATION_FILE, DECLARATION_FORMAT, validateDeclaration, triggerShapeError, collectConstants, resolveString,
   topLevelProps, scanCommandCalls, scanTriggerExports,
+  scanUiCommandTypes, blankComments, SHELL_COMMANDS_OUT, PLATFORM_ROUTES_PENDING, PLATFORM_REGISTRY_ROUTES, COMMAND_INVENTORY_FILE,
+  isPlatformRoute, loadPlatformRoutes, enclosingObjectHasDispatchFalse,
 } from './gen-manifest.mjs';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
@@ -885,13 +887,15 @@ test('MAN: commands_out aus Code (Literal, Objekt-Konstante, Weiterleitung, UI) 
     assert.ok(!s.commands_out.some((c) => c.type === 'sender.self'), 'Befehl ohne module bleibt in der eigenen App');
     assert.equal(s._commands_out_unresolved.length, 1, 'dynamisches Ziel wird gemeldet');
     assert.equal(s._commands_out_unresolved[0].file, 'handlers/sender.ping.js');
-    assert.deepEqual(r.manifests.recv.commands_in, [{ type: 'recv.job.run', from: '*' }, { type: 'recv.ping', from: ['sender'] }]);
+    // ROUTE (E39/E40): recv.ui.open geht über api.command an die Handler-App recv → commands_in je Absender abgeleitet.
+    assert.deepEqual(r.manifests.recv.commands_in, [{ type: 'recv.job.run', from: '*' }, { type: 'recv.ping', from: ['sender'] }, { type: 'recv.ui.open', from: ['sender'] }]);
+    assert.deepEqual(r.manifests.recv._commands_in_evidence, { 'sender recv.ui.open': ['modules/sender/index.js:2'] });
+    assert.deepEqual(r.drift.commands_in_derived, [{ app: 'recv', from: 'sender', type: 'recv.ui.open', evidence: ['modules/sender/index.js:2'] }]);
     assert.deepEqual(r.manifests.chat.commands_in.map((c) => c.from), ['*', '*']);
-    // genau ein Befund: recv nimmt recv.ui.open nicht an
-    assert.deepEqual(r.drift.commands_unmatched, [{ from: 'sender', app: 'recv', type: 'recv.ui.open', reason: 'Ziel-App nimmt den Typ von dieser App nicht an (commands_in)' }]);
-    assert.equal(r.stats.commands_unmatched, 1);
-    assert.ok(s._todo.some((t) => t.includes('recv.ui.open')));
+    assert.deepEqual(r.drift.commands_unmatched, []);
+    assert.equal(r.stats.commands_unmatched, 0);
     assert.deepEqual(r.declaration_check.violations, []);
+    assert.deepEqual(r.route_check.violations, []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -901,7 +905,8 @@ test('MAN: ohne commands_in der Ziel-App ist jeder Befehl ein Befund (Gegenprobe
   const root = manRepo({ withInDecl: false });
   try {
     const r = await generate({ repo: root, analysis: path.join(root, 'none'), baseline: null, platformManifest: null });
-    assert.deepEqual(r.drift.commands_unmatched.filter((d) => d.app === 'recv').map((d) => d.type).sort(), ['recv.job.run', 'recv.ping', 'recv.ui.open']);
+    // recv.ui.open (UI, api.command) bekommt sein commands_in aus der Nutzung; die Handler-Befehle bleiben Befunde.
+    assert.deepEqual(r.drift.commands_unmatched.filter((d) => d.app === 'recv').map((d) => d.type).sort(), ['recv.job.run', 'recv.ping']);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -1046,4 +1051,188 @@ test('Shell-Manifest enthält den Abschluss relativer Importe (Workjet-Brücke �
   const shell = JSON.parse(fsMod.readFileSync(pathMod.join(bos, 'v4/manifests/shell.manifest.json'), 'utf8'));
   const seeds = Object.keys(shell.files).filter((r) => r.startsWith('v4/shell/workjet/'));
   for (const rel of shellImportClosure(bos, seeds)) assert.ok(shell.files[rel], `${rel} fehlt im Shell-Manifest`);
+});
+
+// ---------------------------------------------------------------- ROUTE (E39/E40): UI-Befehle → commands_out/commands_in
+
+function routeRepo() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gen-manifest-route-'));
+  const put = (rel, text) => {
+    const p = path.join(root, rel.startsWith('src/') ? rel : path.join('src/apps/business-os', rel));
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, typeof text === 'string' ? text : JSON.stringify(text, null, 2));
+  };
+  put(COMMAND_INVENTORY_FILE, { exact_control_types: ['plat.native.do'], control_prefixes: ['plat.prefix.'] });
+  put('v4/sw.js', '//\n');
+  put('v4/frame/index.js', "export function startShell(api) { api.command('ctox.plan.step.retry', {}); api.command('ctox.coding.turn', {}); }\n");
+  // mail: Hüllkette dispatchOutbound → dispatchCommand → sendCommand → api.command (wie modules/mail/index.js)
+  put('modules/mail/module.json', { id: 'mail', title: 'M' });
+  put('modules/mail/index.js', [
+    'export function mount(root, api) {',
+    "  dispatchOutbound('outbound.message.compose', 'c1', {});",
+    "  const commandType = root.x ? 'outbound.message.approve' : 'outbound.message.send_approved';",
+    "  dispatchOutbound(commandType, 'm1', {});",
+    "  // api.command('outbound.commented.out', {});",
+    "  report('mail.notice', 'kein Befehl');",
+    "  sendCommand('nobody.handles.this', {});",
+    "  sendCommand('plat.native.do', {}); sendCommand('plat.prefix.anything', {}); sendCommand('mail.own', {});",
+    "  sendCommand('dup.type', {});",
+    '  function dispatchOutbound(commandType, recordId, payload) { return dispatchCommand(\'outbound\', commandType, recordId, payload); }',
+    '  function dispatchCommand(module, commandType, recordId, payload) { return sendCommand(commandType, { ...payload, record_id: recordId }); }',
+    '  function sendCommand(commandType, payload) { return api.command(commandType, payload); }',
+    '  function report(code, text) { return [code, text]; }',
+    '}',
+    '',
+  ].join('\n'));
+  put('modules/mail/handlers/mail.own.js', 'export default async function handle() {}\n');
+  put('modules/outbound/module.json', { id: 'outbound', title: 'O' });
+  put('modules/outbound/index.js', 'export function mount() {}\n');
+  for (const t of ['outbound.message.compose', 'outbound.message.approve', 'outbound.message.send_approved', 'outbound.commented.out', 'mail.notice']) put(`modules/outbound/handlers/${t}.js`, 'export default async function handle() {}\n');
+  for (const id of ['dup1', 'dup2']) {
+    put(`modules/${id}/module.json`, { id, title: id });
+    put(`modules/${id}/index.js`, 'export function mount() {}\n');
+    put(`modules/${id}/handlers/dup.type.js`, 'export default async function handle() {}\n');
+  }
+  put('modules/ctox/module.json', { id: 'ctox', title: 'C' });
+  put('modules/ctox/index.js', 'export function mount() {}\n');
+  for (const t of ['business_os.chat.task', 'ctox.chat.task']) put(`modules/ctox/handlers/${t}.js`, 'export default async function handle() {}\n');
+  put(`modules/ctox/${DECLARATION_FILE}`, { _format: DECLARATION_FORMAT, commands_in: [{ type: 'business_os.chat.task', from: '*' }, { type: 'ctox.chat.task', from: '*' }] });
+  return root;
+}
+
+test('ROUTE: Fixture mail → outbound – commands_out beim Absender und commands_in beim Ziel, je mit Fundstelle', async () => {
+  const root = routeRepo();
+  try {
+    const r = await generate({ repo: root, analysis: path.join(root, 'none'), baseline: null, platformManifest: null });
+    const mail = r.manifests.mail;
+    assert.deepEqual(mail.commands_out, [
+      { app: 'outbound', type: 'outbound.message.approve' },
+      { app: 'outbound', type: 'outbound.message.compose' },
+      { app: 'outbound', type: 'outbound.message.send_approved' },
+    ]);
+    assert.deepEqual(mail._commands_out_evidence['outbound outbound.message.compose'], ['index.js:2']);
+    assert.deepEqual(mail._commands_out_evidence['outbound outbound.message.approve'], ['index.js:3']);
+    const ob = r.manifests.outbound;
+    assert.deepEqual(ob.commands_in, [
+      { type: 'outbound.message.approve', from: ['mail'] },
+      { type: 'outbound.message.compose', from: ['mail'] },
+      { type: 'outbound.message.send_approved', from: ['mail'] },
+    ]);
+    assert.deepEqual(ob._commands_in_evidence['mail outbound.message.compose'], ['modules/mail/index.js:2']);
+    assert.ok(ob.commands_in.every((c) => c.from !== '*'), 'abgeleitete commands_in nie *');
+    assert.equal(r.drift.commands_in_derived.length, 3);
+    assert.ok(!r.drift.commands_unmatched.some((d) => d.from === 'mail'));
+    // Kommentar und Statuscode an Nicht-Typ-Position zählen nicht, obwohl outbound Handler dafür hat.
+    assert.ok(!mail.commands_out.some((c) => c.type === 'outbound.commented.out' || c.type === 'mail.notice'));
+    // Plattformrouten (Inventur exakt/Präfix) und eigene Handler brauchen keine Deklaration.
+    assert.ok(!mail.commands_out.some((c) => c.type.startsWith('plat.') || c.type === 'mail.own'));
+    assert.ok(![...r.drift.commands_unrouted, ...r.drift.commands_out_ambiguous].some((d) => d.type.startsWith('plat.') || d.type === 'mail.own'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ROUTE: Typ ohne Handler und ohne Plattformroute → commands_unrouted (rot), nicht in commands_out', async () => {
+  const root = routeRepo();
+  try {
+    const r = await generate({ repo: root, analysis: path.join(root, 'none'), baseline: null, platformManifest: null });
+    assert.deepEqual(r.drift.commands_unrouted, [{ app: 'mail', type: 'nobody.handles.this', evidence: ['modules/mail/index.js:7'] }]);
+    assert.ok(!Object.values(r.manifests).some((m) => (m.commands_out || []).some((c) => c.type === 'nobody.handles.this')));
+    assert.ok(r.route_check.violations.some((v) => v.kind === 'commands_unrouted' && v.app === 'mail' && v.detail.startsWith('nobody.handles.this')));
+    assert.equal(r.stats.commands_unrouted, 1);
+    // PLATFORM_ROUTES_PENDING: gemeldet, im Bericht, nicht rot; Registry-Route ctox.coding.turn ist Plattformroute.
+    assert.ok(PLATFORM_REGISTRY_ROUTES.includes('ctox.coding.turn'));
+    const pending = r.drift.commands_routes_pending.find((d) => d.type === 'ctox.plan.step.retry');
+    assert.deepEqual(pending.evidence, ['v4/frame/index.js:1']);
+    assert.equal(pending.app, SHELL_APP_ID);
+    assert.deepEqual(r.drift.commands_routes_pending.map((d) => d.type).sort(), Object.keys(PLATFORM_ROUTES_PENDING).sort());
+    assert.ok(!r.route_check.violations.some((v) => /ctox\.plan\.step\.retry|ctox\.coding\.turn/.test(v.detail)));
+    assert.match(renderOutputs(r)['tool/REPORT-M2.md'], /nobody\.handles\.this`: modules\/mail\/index\.js:7/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ROUTE: Typ mit Handlern in mehreren Apps → commands_out_ambiguous (rot)', async () => {
+  const root = routeRepo();
+  try {
+    const r = await generate({ repo: root, analysis: path.join(root, 'none'), baseline: null, platformManifest: null });
+    assert.deepEqual(r.drift.commands_out_ambiguous, [{ app: 'mail', type: 'dup.type', handlers: ['dup1', 'dup2'], evidence: ['modules/mail/index.js:9'] }]);
+    assert.ok(r.route_check.violations.some((v) => v.kind === 'commands_out_ambiguous' && v.detail.startsWith('dup.type')));
+    assert.ok(!r.manifests.mail.commands_out.some((c) => c.type === 'dup.type'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ROUTE: Shell trägt commands_out {ctox, business_os.chat.task} und {ctox, ctox.chat.task}; ctox nimmt sie von * an', () => {
+  const expected = [{ app: 'ctox', type: 'business_os.chat.task' }, { app: 'ctox', type: 'ctox.chat.task' }];
+  assert.deepEqual(SHELL_COMMANDS_OUT.map((c) => ({ app: c.app, type: c.type })), expected);
+  const sh = first.manifests[SHELL_APP_ID];
+  assert.deepEqual(sh.commands_out, expected);
+  for (const c of expected) assert.ok(sh._commands_out_evidence[`${c.app} ${c.type}`].length);
+  const ctox = first.manifests.ctox;
+  for (const c of expected) {
+    assert.ok(c.type in ctox.handlers, `ctox hat Handler ${c.type}`);
+    assert.ok(ctox.commands_in.some((x) => x.type === c.type && x.from === '*'), `ctox nimmt ${c.type} von * an`);
+  }
+  assert.ok(!first.drift.commands_unmatched.some((d) => d.from === SHELL_APP_ID));
+});
+
+test('ROUTE heutiger Baum: mail → outbound beidseitig deklariert (FIX9a), abgeleitete commands_in nie *', () => {
+  const mail = first.manifests.mail;
+  const ob = first.manifests.outbound;
+  // E42: request_approval/approve/send_approved/provider.reconcile/campaign.status.set sind Plattformrouten (Inventur);
+  // outbound.message.compose nicht – dafür trägt mail commands_out und outbound commands_in {from:['mail']}.
+  assert.ok(mail.commands_out.some((c) => c.app === 'outbound' && c.type === 'outbound.message.compose'), 'mail commands_out compose');
+  assert.ok(ob.commands_in.some((c) => c.type === 'outbound.message.compose' && Array.isArray(c.from) && c.from.includes('mail')), 'outbound commands_in compose von mail');
+  for (const t of ['outbound.message.request_approval', 'outbound.message.approve', 'outbound.message.send_approved', 'outbound.provider.reconcile', 'outbound.campaign.status.set']) {
+    assert.ok(isPlatformRoute(t, loadPlatformRoutes(DEFAULT_REPO)), `${t} ist Plattformroute (E42)`);
+    assert.ok(!mail.commands_out.some((c) => c.type === t), `${t}: Plattformroute ohne commands_out`);
+  }
+  assert.ok(first.drift.commands_in_derived.length > 0);
+  for (const d of first.drift.commands_in_derived) assert.ok(d.evidence.every((e) => /:\d+$/.test(e)), `${d.app} ← ${d.from} ${d.type} Fundstelle`);
+  assert.deepEqual(first.drift.commands_out_ambiguous, []);
+});
+
+test('ROUTE: scanUiCommandTypes – Schlüssel von Abbildungstabellen und Kommentare zählen nicht, Feld type eines Umschlags schon', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gen-manifest-uiscan-'));
+  try {
+    fs.writeFileSync(path.join(root, 'a.js'), [
+      'function send(envelope) { return api.command(envelope.type, envelope.payload); }',
+      "function go(action) { return api.command({ 'map.key.one': 'map.value.one' }[action], {}); }",
+      "send({ type: 'env.type.one', payload: {} }); /* api.command('blk.comment.x') */",
+      "const url = 'http://x.y/z'; // api.command('line.comment.x')",
+      '',
+    ].join('\n'));
+    const types = scanUiCommandTypes(root, ['a.js']).map((h) => h.type);
+    assert.deepEqual(types, ['env.type.one', 'map.value.one']);
+    assert.equal(blankComments("a // b\nc").length, 'a // b\nc'.length);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('BOOTR OPEN-4: Shell-Abschluss enthält per new URL(…, import.meta.url) geladenes CSS des Rahmens', async () => {
+  const { shellImportClosure } = await import('./gen-manifest.mjs');
+  const appsRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..');
+  const files = shellImportClosure(appsRoot, ['v4/frame/index.js']);
+  for (const css of ['shared/shell-v2-chrome.css', 'shared/shell-v2-topbar.css', 'v4/frame/frame.css', 'v4/frame/theme/theme.css', 'shared/base.css']) {
+    assert.ok(files.includes(css), css);
+  }
+});
+
+test('E42: Inventurklassen und Chat-Befehle sind Plattformrouten; commandType mit dispatch:false sendet nicht', () => {
+  const routes = loadPlatformRoutes(DEFAULT_REPO);
+  for (const t of ['browser.capture.extract', 'outbound.message.approve', 'business_os.chat.task', 'business_os.data.modify', 'ctox.app.publish', 'ctox.workjet.project.list']) {
+    assert.ok(isPlatformRoute(t, routes), t);
+  }
+  for (const t of ['outbound.message.compose', 'gibt.es.nicht']) assert.ok(!isPlatformRoute(t, routes), t);
+  const withFalse = "openImporter({ moduleId: 'x', commandType: 'x.import', dispatch: false })";
+  assert.equal(enclosingObjectHasDispatchFalse(withFalse, withFalse.indexOf('commandType')), true);
+  const sending = "openImporter({ moduleId: 'x', commandType: 'x.import' })";
+  assert.equal(enclosingObjectHasDispatchFalse(sending, sending.indexOf('commandType')), false);
+  // PENDING: nur noch die E25-Registry-Typen und die fünf gemessen fehlenden browser.*-Literale
+  assert.ok(Object.keys(PLATFORM_ROUTES_PENDING).every((t) => /^ctox\.workjet\.[a-z_.]+\.v1$|^ctox\.plan\.step\.retry$|^browser\./.test(t)));
+  assert.ok(!('outbound-lead-generation.import' in PLATFORM_ROUTES_PENDING), 'OLG-Import ist Fehlalarm (dispatch:false)');
 });

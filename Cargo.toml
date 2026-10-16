@@ -94,6 +94,9 @@ tiny_http = "0.12"
 # `tls` ist ureqs rustls-Rueckwand; `native-tls` wuerde OpenSSL hereinziehen.
 ureq = { version = "2.12", features = ["tls"] }
 url = "2.5"
+# Reuse the existing Google Calendar adapter from the pending Toolhub strand.
+# Build-time source pin only; no GitHub requests at runtime.
+ctox-toolhub = { git = "https://github.com/metric-space-ai/ctox", rev = "1b84900ce0b6a63e568d1ba3255d1ce651d343ec", default-features = false }
 uuid = { version = "1", features = ["v4"] }
 zeroize = "1.8"
 zbus = "5.14"
