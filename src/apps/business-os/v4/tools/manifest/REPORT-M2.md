@@ -17,7 +17,7 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | Capabilities gesamt (verschieden, ohne legacy) | 41 |
 | Trigger | 10 |
 | command_rights-Einträge | 42 |
-| foreign-Deklarationen (davon write / nur Code-Scan) | 295 (32 / 94) |
+| foreign-Deklarationen (davon write / nur Code-Scan) | 297 (32 / 94) |
 | **foreign ohne passendes exports (Soll 0)** | **0** |
 | Plattformzugriffe auf exports beschränkt | 0 |
 | Befehlstypen mit Handlern in mehreren Apps | 0 |

@@ -100,6 +100,9 @@ function mergePatch(target, patch) {
 }
 
 export async function openSourceMode({ root, appRecord, kernel, api, zone, editor: prefer = 'auto', agentOpen = true, sheet = null, focus = null }) {
+  // Agent-Seitenleiste (unten belegt). Früh deklariert: syncButtons() läuft schon während des Aufbaus, ein späteres `let`
+  // wirft dort ReferenceError (TDZ, „Cannot access 'agent' before initialization“).
+  let agent = null;
   linkCss();
   const appId = appRecord.id;
   const src = kernel.source(appId);
@@ -859,7 +862,6 @@ export async function openSourceMode({ root, appRecord, kernel, api, zone, edito
   // (Name shellAppApi, nicht shellApi: der Stub-Kernel hat eine gleichnamige Funktion kernel.shellApi().)
   const coding = typeof kernel.shellAppApi?.query === 'function' && typeof kernel.shellAppApi?.command === 'function'
     ? createCodingPort(kernel.shellAppApi, kernel.source) : null;
-  let agent = null;
   if (coding) {
     agent = createAgentPanel({
       appId, appTitle: appRecord.title || appId, coding, source: src, zone: sink,

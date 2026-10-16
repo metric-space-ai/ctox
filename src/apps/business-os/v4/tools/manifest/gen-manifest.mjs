@@ -65,14 +65,22 @@ export const PLATFORM_COLLECTIONS = [
   'business_module_catalog', 'ctox_queue_tasks', 'ctox_runtime_settings', 'files', 'shell_preferences',
 ];
 // Rückfall, falls das Plattformmanifest nicht lesbar ist (Stand ctox-platform.manifest.json 15.10. 13:11).
+// Rückfall ohne Plattform-Manifest-Datei (Mini-Repo-Tests); muss den exports von src/core/business_os/v4/ctox-platform.manifest.json
+// gleichen – gen-manifest.test.mjs prüft das.
 export const PLATFORM_FALLBACK_EXPORTS = {
   app_activations: ['read', 'write'],
+  app_catalog: ['read'],
+  app_drafts: ['read'],
   business_app_versions: ['read'],
   business_apps: ['read'],
   business_commands: ['read', 'write'],
+  coding_turns: ['read'],
   ctox_queue_tasks: ['read'],
   ctox_runtime_settings: ['read'],
+  devices: ['read'],
   files: ['read', 'write'],
+  machine_enrollments: ['read'],
+  mail_server_state: ['read'],
   shell_preferences: ['read', 'write'],
 };
 // business_module_catalog entfällt (§16.14/§16.17): Zugriff stattdessen auf business_apps/business_app_versions.
@@ -193,6 +201,10 @@ export const SHELL_SHARED_PATTERNS = [
 // Eigentumszuordnung; generate() prüft sie und trägt die ops in die exports der Eigentümer-App ein.
 export const SHELL_FOREIGN = {
   shell_preferences: { owner_app: PLATFORM_OWNER, ops: ['read', 'write'], sources: ['§16.19 Nr. 3 (Pins, Launcher-Reihenfolge über api.put)'] },
+  // AGENT (§16.44): die Code-Ansicht der Shell liest Coding-Läufe und die Patch-Datei (v4/source/coding-port.js).
+  // Ohne Deklaration verweigert der Kern seit E48 das Lesen; die Code-Ansicht zeigte „Quelltext nicht ladbar“.
+  coding_turns: { owner_app: PLATFORM_OWNER, ops: ['read'], sources: ['v4/source/coding-port.js:27 (turns: api.query coding_turns)'] },
+  files: { owner_app: PLATFORM_OWNER, ops: ['read'], sources: ['v4/source/coding-port.js:42 (readPatch: api.get files → ref)'] },
   // MAN2: Meldeschleife FR6b (v4/shell/report.js, REPORT_COLLECTIONS) speichert Meldungen wie „Bugs & Features“.
   business_module_reports: { owner_app: 'ctox', ops: ['read', 'write'], sources: ['v4/shell/report.js REPORT_COLLECTIONS.reports (FR6b Meldeschleife, api.put)'] },
   ctox_bug_reports: { owner_app: 'ctox', ops: ['read', 'write'], sources: ['v4/shell/report.js REPORT_COLLECTIONS.bugs (FR6b Meldeschleife, api.put)'] },

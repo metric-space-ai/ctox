@@ -19,7 +19,7 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | capabilities_distinct | 41 |
 | triggers_total | 10 |
 | command_rights_entries | 42 |
-| foreign_declarations | 295 |
+| foreign_declarations | 297 |
 | foreign_write_declarations | 32 |
 | foreign_code_only | 94 |
 | foreign_without_export | 0 |
