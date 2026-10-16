@@ -296,87 +296,90 @@
       "version": 0
     },
     "calendar_events": {
-      "additionalProperties": true,
-      "primaryKey": "id",
-      "properties": {
-        "all_day": {
-          "type": "boolean"
-        },
-        "attendees": {
-          "items": {
+      "conflictStrategy": "field-merge",
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "all_day": {
+            "type": "boolean"
+          },
+          "attendees": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "booking_id": {
+            "type": "string"
+          },
+          "calendar_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "description": {
+            "type": "string"
+          },
+          "end_time": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "meeting_url": {
+            "type": "string"
+          },
+          "payload": {
             "additionalProperties": true,
             "type": "object"
           },
-          "type": "array"
-        },
-        "booking_id": {
-          "type": "string"
-        },
-        "calendar_id": {
-          "type": "string"
-        },
-        "created_at_ms": {
-          "type": "number"
-        },
-        "description": {
-          "type": "string"
-        },
-        "end_time": {
-          "type": "number"
-        },
-        "id": {
-          "maxLength": 128,
-          "type": "string"
-        },
-        "location": {
-          "type": "string"
-        },
-        "meeting_url": {
-          "type": "string"
-        },
-        "payload": {
-          "additionalProperties": true,
-          "type": "object"
-        },
-        "recurrence_exdates": {
-          "items": {
+          "recurrence_exdates": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "recurrence_rule": {
+            "type": "string"
+          },
+          "source_ref": {
+            "type": "string"
+          },
+          "start_time": {
             "type": "number"
           },
-          "type": "array"
+          "status": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
         },
-        "recurrence_rule": {
-          "type": "string"
-        },
-        "source_ref": {
-          "type": "string"
-        },
-        "start_time": {
-          "type": "number"
-        },
-        "status": {
-          "type": "string"
-        },
-        "timezone": {
-          "type": "string"
-        },
-        "title": {
-          "type": "string"
-        },
-        "updated_at_ms": {
-          "type": "number"
-        }
-      },
-      "required": [
-        "id",
-        "calendar_id",
-        "title",
-        "start_time",
-        "end_time",
-        "created_at_ms",
-        "updated_at_ms"
-      ],
-      "type": "object",
-      "version": 0
+        "required": [
+          "id",
+          "calendar_id",
+          "title",
+          "start_time",
+          "end_time",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
     },
     "calendar_sources": {
       "additionalProperties": true,

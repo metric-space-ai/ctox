@@ -24,7 +24,7 @@ import { V2_PIN } from './v2-oracle.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: HERE, encoding: 'utf8' }).trim();
 const APP_V2 = execFileSync('git', ['show', `${V2_PIN}:src/apps/business-os/app.js`], { cwd: REPO, encoding: 'utf8', maxBuffer: 64 << 20 });
-const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/637caf6');
+const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/b6624eb');
 const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR, 'ctox-app-api-stub.mjs')).href);
 const OWNER = 'owner-1';
 const BUDGET_MS = 50;

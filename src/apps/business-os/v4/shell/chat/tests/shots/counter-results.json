@@ -1,0 +1,72 @@
+[
+  {
+    "name": "(a) 1280: Chatleiste unten links",
+    "ok": false,
+    "detail": "{\"chat\":null,\"crew\":true,\"count\":1,\"vw\":1280,\"vh\":800}"
+  },
+  {
+    "name": "(a) 1280: genau eine Leiste unten links (Crew-Leiste abgetreten)",
+    "ok": false,
+    "detail": "{\"chat\":null,\"crew\":true,\"count\":1,\"vw\":1280,\"vh\":800}"
+  },
+  {
+    "name": "(c) gesäter Chat aus business_chats steht in der Leiste",
+    "ok": false,
+    "detail": "{\"chip\":false,\"title\":\"\",\"text\":\"\"}"
+  },
+  {
+    "name": "(b) genau ein Befehl business_os.chat.task geschrieben und behandelt",
+    "ok": false,
+    "detail": "{\"handled\":0,\"docs\":[]}"
+  },
+  {
+    "name": "(b) Nutzlast: prompt/instruction = getippter Text, chat_id = Chat, Kanal business_os.llm.chat → business_os_chat",
+    "ok": false,
+    "detail": "{}"
+  },
+  {
+    "name": "(b) Absender App shell, Datensatzbezug = Chat",
+    "ok": false,
+    "detail": "null"
+  },
+  {
+    "name": "(b) Verlauf zeigt die Nachricht und die Annahme der Crew",
+    "ok": false,
+    "detail": "{\"typed\":false,\"accepted\":false}"
+  },
+  {
+    "name": "(b) Verlauf in business_chats gespeichert (api.put)",
+    "ok": false,
+    "detail": "{\"found\":true,\"typed\":false,\"owner\":\"owner\"}"
+  },
+  {
+    "name": "(a) 420: Chatleiste unten links",
+    "ok": false,
+    "detail": "{\"chat\":null,\"crew\":true,\"count\":1,\"vw\":420,\"vh\":800}"
+  },
+  {
+    "name": "(a) 420: genau eine Leiste unten links",
+    "ok": false,
+    "detail": "{\"chat\":null,\"crew\":true,\"count\":1,\"vw\":420,\"vh\":800}"
+  },
+  {
+    "name": "(a) 420: kein waagerechtes Überlaufen der Seite",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Shell-Tausch: genau eine Chatleiste, Crew-Leiste weiter abgetreten, Verlauf da",
+    "ok": false,
+    "detail": "{\"swapped\":true,\"error\":null,\"roots\":0,\"hulls\":0,\"crewBars\":1,\"chip\":false}"
+  },
+  {
+    "name": "ohne ctox-App: keine Chatleiste, Crew-Leiste wieder da",
+    "ok": true,
+    "detail": "{\"chat\":null,\"crew\":true,\"count\":1,\"vw\":1280,\"vh\":800}"
+  },
+  {
+    "name": "keine Seitenfehler",
+    "ok": true,
+    "detail": ""
+  }
+]

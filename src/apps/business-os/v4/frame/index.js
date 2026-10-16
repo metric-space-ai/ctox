@@ -52,6 +52,7 @@ export const FRAME_SNAPSHOT_VERSION = 1;
 const SHELL_STATE_KEY = 'shell'; // kernel.windowState: je Tab und Nutzer (§16.19 Nr. 3)
 const OWNER_PREFIX = 'v4app:';
 const RETIRE_EVENT = 'v4:retire';
+const CHAT_APP_ID = 'ctox'; // CHAT4: Eigentümer von business_chats und Empfänger von business_os.chat.task
 // Längstens so lange steht der alte Rahmen, während der neue montiert. Muss unter der Startfrist des Loaders
 // (shellStartTimeoutMs 9 s, §16.19 Nr. 4) bleiben, sonst fällt der Loader auf die alte Shell zurück.
 const SWITCH_DEADLINE_MS = 8500;
@@ -550,7 +551,10 @@ export async function startShell(loaderKernel, options = {}) {
       headerSlot: rec.handle.element.querySelector('[data-window-actions]'),
       // Eigene Dateien über die Bindung des laufenden Mounts (gleiche Wurzel wie der geladene Code), sonst Kernel-URL.
       assetUrl: (path) => rec.host?.assetUrl?.(path) ?? artifactUrl(rec.appId, rec.host?.ver || rec.ver, path),
-      navigate: (appId, params) => navigateTo(appId, params, rec.appId),
+      navigate: (appId, params) => navigateTo(appId, params, rec.appId, rec),
+      // RCH2: Vorabprüfung ohne Zoneneintrag (navigate → false meldet der Host in die Zone). Für chat_draft: steht die
+      // Chatleiste? Sonst: gibt es das Ziel?
+      canNavigate: (appId, params) => canNavigateTo(appId, params),
       // api.shell.openSource(appId?): Quelltext-Ansicht der App (Standard: die eigene). false → Zone (app-host.js).
       // options {tab, reportId} (geprüft in app-host.js sourceFocusOf) → Reiter/Meldung der Code-Ansicht (Strang LOOP).
       openSource: (appId, focus) => !!openSourceView(appId ?? rec.appId, { focus }),
@@ -569,11 +573,62 @@ export async function startShell(loaderKernel, options = {}) {
     };
   }
 
+  // ---------- RCH2 (E37, E39 Nr. 4): navigate('ctox', {chat_draft, command_type, payload, …}) ----------
+  // Der Rahmen fängt den Aufruf ab und öffnet die Chatleiste (CHAT4) mit dem Entwurf im Eingabefeld; gesendet wird
+  // erst durch den Bediener. source_module/source_title kommen aus dem rufenden Fenster, nie aus params. command_type
+  // (mit payload) gilt nur, wenn die rufende App ihn senden darf: eigener Handler oder commands_out ihres Manifests;
+  // sonst bleibt der Entwurf ein normaler Chatauftrag. Ohne Leiste → false (wie ein fehlendes Ziel).
+  const chatText = (v) => (typeof v === 'string' ? v.trim() : '');
+  function isChatDraft(appId, params) {
+    return appId === CHAT_APP_ID && !!params && typeof params === 'object' && typeof params.chat_draft === 'string';
+  }
+  function chatDockReady() {
+    return !!state.chat?.active && typeof state.chat.openDraft === 'function';
+  }
+  function canNavigateTo(appId, params) {
+    if (state.stopped) return false;
+    if (isChatDraft(appId, params)) return chatDockReady();
+    return !!state.appById.get(appId)?.ver;
+  }
+  async function appMaySend(appId, type) {
+    const ver = state.appById.get(appId)?.ver;
+    if (!ver || !kernel.artifacts?.manifest) return false;
+    try {
+      const m = await kernel.artifacts.manifest(appId, ver);
+      const own = m?.handlers && typeof m.handlers === 'object' && Object.prototype.hasOwnProperty.call(m.handlers, type);
+      const out = Array.isArray(m?.commands_out) && m.commands_out.some((c) => c?.type === type);
+      return !!(own || out);
+    } catch { return false; }
+  }
+  function openChatDraft(params, from, fromRec) {
+    if (state.stopped || !chatDockReady() || !from || from === 'shell') return false;
+    let p;
+    try { p = structuredClone(params); } catch { return false; }
+    const chat = state.chat;
+    const base = {
+      draft: p.chat_draft,
+      source_module: from,
+      source_title: fromRec?.title || state.appById.get(from)?.title || from,
+      ...(chatText(p.record_id) ? { record_id: chatText(p.record_id) } : {}),
+      ...(chatText(p.title) ? { title: chatText(p.title) } : {}),
+    };
+    const type = chatText(p.command_type);
+    if (!type) return chat.openDraft(base);
+    appMaySend(from, type).then((ok) => {
+      if (state.stopped || state.chat !== chat) return;
+      if (!ok) console.warn(`[v4 frame] chat_draft: ${from} darf ${type} nicht senden – Entwurf ohne Befehlstyp`);
+      const payload = p.payload && typeof p.payload === 'object' && !Array.isArray(p.payload) ? p.payload : null;
+      chat.openDraft(ok ? { ...base, command_type: type, ...(payload ? { payload } : {}) } : base);
+    });
+    return true;
+  }
+
   // api.shell.navigate(appId, params): generische Standardschnittstelle ohne App-Sonderfälle. Die Parameter gehen
   // unverändert (als Kopie, damit Fenster sich nichts teilen) als RouteEvent {from, to, params} an onRoute der
   // Ziel-App (z. B. desktop: navigate('ctox', {chat})). Ziel offen → fokussieren + route, sonst neues Fenster,
   // route nach mount. Unbekanntes Ziel → false (der Host meldet es in die Zone).
-  function navigateTo(appId, params, from = 'shell') {
+  function navigateTo(appId, params, from = 'shell', fromRec = null) {
+    if (isChatDraft(appId, params)) return openChatDraft(params, from, fromRec);
     if (!state.appById.get(appId)?.ver) return false;
     let p = params ?? null;
     if (p) { try { p = structuredClone(p); } catch { p = { ...p }; } }
@@ -1049,6 +1104,34 @@ export async function startShell(loaderKernel, options = {}) {
   // Beim Abtreten (Doppelpuffer) bleibt alles sichtbar stehen, bis der Rahmen entfernt wird; nur Menü und Beobachter enden.
   state.unsubs.push(() => { launcher.close({ restore: false }); desktop.disconnect(); });
 
+  // ---------- CHAT4: Chatleiste der Shell-V2 (shared/business-chat.js unverändert, v4/shell/chat) ----------
+  // Steht, solange die ctox-App aktiv ist: ihr gehören business_chats und der Befehl business_os.chat.task; ohne sie
+  // hätte die Leiste weder Verläufe noch einen Empfänger. Montiert tritt die Crew-Leiste ab (eine Leiste unten links).
+  // Ein neuer Rahmen (Doppelpuffer) übernimmt die Leiste im selben Schritt; die alte endet erst mit ihrem Rahmen.
+  // getActiveModule = das fokussierte Fenster (Quelle des Auftrags, wie state.activeModule der Shell-V2).
+  let chatLoading = null;
+  const chatModule = () => {
+    const rec = focusedRec();
+    return rec && !rec.view ? { id: rec.appId, title: rec.title, name: rec.title } : null;
+  };
+  function syncBusinessChat() {
+    const wanted = state.appById.has(CHAT_APP_ID);
+    if (wanted && !state.chat && !chatLoading) {
+      chatLoading = import('../shell/chat/index.js').then((m) => {
+        chatLoading = null;
+        if (state.stopped || state.chat || !state.appById.has(CHAT_APP_ID)) return;
+        const chat = m.mountBusinessChat({ kernel, shellVer, getActiveModule: chatModule });
+        if (!chat) return;
+        state.chat = chat;
+        crewBar.handOver(true);
+      }).catch((e) => { chatLoading = null; console.warn('[v4 frame] business chat', e); });
+    } else if (!wanted && state.chat) {
+      state.chat.unmount();
+      state.chat = null;
+      crewBar.handOver(false);
+    }
+  }
+
   // ---------- „Neue App“ (Quelltext-Modus, neuer Entwurf mit base_app_ver = null) ----------
   // Rechte-Spiegel aus der Shell-App-API; ohne kernel.source(appId) gibt es keinen Einstieg.
   const sourceFn = typeof shellKernel.source === 'function' ? shellKernel.source.bind(shellKernel)
@@ -1220,6 +1303,7 @@ export async function startShell(loaderKernel, options = {}) {
     launcher.setApps(state.apps);
     desktop.setApps(state.apps);
     crewBar.setMembers(crewApps());
+    syncBusinessChat();
     for (const rec of [...state.windows.values()]) {
       if (rec.view) continue; // Shell-Ansicht, keine App
       const app = state.appById.get(rec.appId);
@@ -1363,6 +1447,7 @@ export async function stopShell() {
   root.style.pointerEvents = 'none';
   root.addEventListener(RETIRE_EVENT, () => {
     root.remove();
+    state.chat?.unmount(); // CHAT4: nur, wenn kein neuer Rahmen die Leiste übernommen hat
     for (const rec of recs) Promise.resolve(rec.host?.destroy?.({ keepState: true })).catch(() => {});
   }, { once: true });
   return snapshot;

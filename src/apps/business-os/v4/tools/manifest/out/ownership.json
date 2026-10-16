@@ -1325,7 +1325,7 @@
     },
     "knowledge_table_rows": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "knowledge"
       ],
@@ -1355,7 +1355,7 @@
     },
     "knowledge_views": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "knowledge"
       ],
@@ -1865,6 +1865,16 @@
         "placements"
       ],
       "owner": "placements",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "planned_steps": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": false,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
       "proposal": false,
       "schema_js_definers": []
     },
@@ -2542,6 +2552,7 @@
           "placements",
           "reports",
           "research",
+          "shell",
           "shiftflow",
           "spreadsheets",
           "submissions",
@@ -2559,6 +2570,7 @@
           "outbound",
           "reports",
           "research",
+          "shell",
           "support",
           "threads",
           "tickets"
