@@ -6,6 +6,9 @@
 // Teil 1 – App-API (an jede App übergeben, app_api_ver = 4.0)
 // ============================================================================================================
 
+/** E47: read-only local view metadata; confirmed opaque revision (same token as expected_revision), null for local-only rows. */
+export type ReadDocument<T> = T & {readonly _rev: string | null; readonly _pending: boolean};
+
 /** Live-Ergebnis einer Abfrage. Ergebnisse sortiert, Gleichstände nach `id`; ohne Zeilendeckel. */
 export interface LiveQuery<T> {
   get(): T[];
@@ -222,8 +225,8 @@ export interface CtoxAppApi {
   version: '4.0';
   app: { id: string; ver: string };
   // Lesen – nur lokal, nie Netzwerk, keine Lesesperre
-  query<T = any>(collection: string, q: Query): LiveQuery<T>;
-  get<T = any>(collection: string, id: string): LiveDoc<T | null>;
+  query<T = any>(collection: string, q: Query): LiveQuery<ReadDocument<T>>;
+  get<T = any>(collection: string, id: string): LiveDoc<ReadDocument<T> | null>;
   // Schreiben – lokal sofort, Outbox
   put<T>(collection: string, doc: T & { id: string }): WriteHandle;
   /** E35: Core writer transaction compares expected_revision; mismatch resolves result as rejected/code revision_conflict. */

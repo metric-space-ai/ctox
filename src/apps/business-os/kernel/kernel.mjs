@@ -244,6 +244,7 @@ export function createKernel(opts = {}) {
   // ---- Spiegel ----
   function mirrorGet(ns, id) { return mirror.get(ns)?.get(id) ?? null; }
   function visible(rec) { return rec && rec.data != null && !rec.deleted ? rec.data : null; }
+  function readDocument(rec, data = visible(rec)) { return data == null ? null : {...cloneValue(data), _rev:rec?.base?.rev ?? null, _pending:!!rec?.pending}; }
   function mirrorPut(rec) {
     if (!rec) return false;
     if(rec.cache_evicted)evicted.add(rec.collection);
@@ -617,6 +618,7 @@ export function createKernel(opts = {}) {
         clean = normalizeJson(body, '');
         if (!isPlainObject(clean)) throw new CtoxError('invalid', 'Dokument muss ein Objekt sein', { path: '' });
       } else if (op === 'patch') clean = normalizeJsonPatch(body);
+      if (clean && Object.keys(clean).some(key=>key.startsWith('_'))) throw new CtoxError('invalid','Underscore document fields are reserved',{path:Object.keys(clean).find(key=>key.startsWith('_'))});
       const cur = mirrorGet(ns, id);
       const st = applyOp(cur ? { data: cur.data, deleted: cur.deleted } : { data: null, deleted: false }, { op, body: clean, id });
       if (st.data) validateSchema(st.data, schemaFor(app, collection), ''); // lokale Schemaprüfung am Ergebnisdokument
@@ -1638,7 +1640,7 @@ export function createKernel(opts = {}) {
           const m = mirror.get(ns);
           if (!m) return [];
           const docs = [];
-          for (const r of m.values()) if (r.data != null && !r.deleted && ownRowOk(ns, r.id)) docs.push(withDefaults(app,collection,r.data));
+          for (const r of m.values()) if (r.data != null && !r.deleted && ownRowOk(ns, r.id)) docs.push(readDocument(r,withDefaults(app,collection,r.data)));
           return runCompiledQuery(docs, cq);
         }, []);
       },
@@ -1647,7 +1649,7 @@ export function createKernel(opts = {}) {
         const ns = resolveNs(app, collection);
         lastUsed.set(ns,Date.now());
         if(evicted.has(ns)){if(isLeader)track(subscribeCollection(ns,'P1'));else post({type:'subscribe',collection:ns});}
-        return readableLive(collection, [`c:${ns}`, 'actor'], () => ownRowOk(ns,id) ? withDefaults(app,collection,visible(mirrorGet(ns,id))) : null, null);
+        return readableLive(collection, [`c:${ns}`, 'actor'], () => ownRowOk(ns,id) ? readDocument(mirrorGet(ns,id),withDefaults(app,collection,visible(mirrorGet(ns,id)))) : null, null);
       },
       put(collection, doc) { return localWrite(app, 'put', collection, doc?.id, doc); },
       patch(collection, id, patch, options = {}) { return localWrite(app, 'patch', collection, id, patch, false, {expected_revision:options.expected_revision}); },
