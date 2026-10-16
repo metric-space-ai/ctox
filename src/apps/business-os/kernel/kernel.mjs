@@ -672,6 +672,9 @@ export function createKernel(opts = {}) {
         }
         await enqueueWrite(t, entry); // preserve E26 reuse plus durable enqueue/client order
         const r = recompute(ns, id, stored?.base ?? emptyBase(), await t.outboxFor(ns, id));
+        // Preserve the complete locally acknowledged version, not merely a patch.
+        entry.local_version={data:cloneValue(r.data),deleted:r.deleted};
+        await t.put('outbox',entry);
         await putDoc(t, r);
         return r;
       });
@@ -741,6 +744,7 @@ export function createKernel(opts = {}) {
     }
     const res = waiters.get(info.op_id);
     if (res) { waiters.delete(info.op_id); res(cloneValue(result)); }
+    if (result.local_archived_ref && result.status !== 'rejected') zoneReport(info.app_id,{level:'warn',code:`write.reconciled:${info.op_id}`,text:'Lokale Version wurde vom Kern geändert; Eingabe im lokalen Journal gesichert',ref:result.local_archived_ref},'kernel');
     if (result.status === 'rejected' && result.reason !== 'cancelled') {
       zoneReport(info.app_id, { level: 'error', code: `write.rejected:${info.op_id}`, text: `Änderung abgelehnt: ${result.reason}`, ref: result.archived_ref }, 'kernel');
       if (info.collection === 'business_commands') { cmdRejected.set(info.id, result.reason); notify('commands'); }
@@ -926,6 +930,13 @@ export function createKernel(opts = {}) {
     return !!base && !!result.seq && (result.gen===undefined || base.gen===result.gen) && !seqGreater(result.seq,base.seq??'0');
   }
   async function settleWrite(t,e,base,res) {
+    const local=e.local_version ?? {data:applyOp((await t.get('docs',[e.collection,e.id]))?.base??emptyBase(),e).data,deleted:e.op==='delete'};
+    const changed=e.collection!=='business_commands' && (!jsonEq(local.data,base.data)||!!local.deleted!==!!base.deleted);
+    if(res.status==='rejected' || changed){
+      res.local_archived_ref=`archive_local:${e.op_id}`;
+      if(res.status==='rejected')res.archived_ref=res.local_archived_ref;
+      await t.put('archive_local',{...e,ref:res.local_archived_ref,local_version:local,canonical_version:cloneValue(base),reason:res.code??res.reason??'canonical_changed',rejected_at:Date.now()});
+    }
     await t.del('outbox',e.op_id);
     const rec=recompute(e.collection,e.id,base,await t.outboxFor(e.collection,e.id));
     if (e.file_upload && (res.status === 'rejected' || (await t.get('meta',`upload_result:${e.file_upload_op}`))?.status === 'rejected') && !rec.pending) { rec.data={...e.body,state:'rejected'};rec.deleted=false;rec.local_file_rejection=true; }
@@ -961,10 +972,7 @@ export function createKernel(opts = {}) {
           return {replay:true,res};
         }
       }
-      if(res.status==='rejected'){
-        res.archived_ref=`archive_local:${e.op_id}`;
-        await t.put('archive_local',{...e,ref:res.archived_ref,reason:res.reason,rejected_at:Date.now()});
-      } else if(!canonical && !seqGreater(base.seq??'0',result.seq??'0')) {
+      if(res.status!=='rejected' && !canonical && !seqGreater(base.seq??'0',result.seq??'0')) {
         const state=result.doc!==undefined ? {data:result.doc,deleted:!!result.deleted} : applyOp(base,e);
         base={...state,rev:res.rev,seq:decimalSeq(res.seq),gen:e.gen};
       }

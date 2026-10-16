@@ -62,6 +62,8 @@ export interface FieldOperators {
 }
 
 export type WriteResult = {
+  /** Full locally acknowledged version and canonical replacement retained atomically in archive_local. */
+  local_archived_ref?: string;
   status: 'accepted' | 'merged' | 'rejected' | 'migrated';
   code?: CtoxErrorCode;
   gen?: number;
