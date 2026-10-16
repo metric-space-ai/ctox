@@ -12,8 +12,8 @@ const SHELL_COLLECTIONS=COLLECTIONS.filter(c=>c!=='notes');
 const b64url=bytes=>Buffer.from(bytes).toString('base64url');
 function instanceKey(){const {privateKey,publicKey}=generateKeyPairSync('ed25519');return {privateKey,publicKey:publicKey.export({format:'jwk'}).x};}
 const KEY=instanceKey(),FOREIGN=instanceKey();
-function scopeToken(collection,{key=KEY,instance='instance',device='test-device',exp=Math.floor(Date.now()/1000)+600,user='alice',rightsVer='1',collections=collection==='shell'?SHELL_COLLECTIONS:collection==='notes'?['notes']:[]}={}){
- const claims={instance_id:instance,user_id:user,app_id:collection,scope_hash:`scope:${collection}`,rights_ver:rightsVer,device_id:device,exp,collections:collections.map(c=>({collection:c,gen:1,rights:['read','write'],field_mask_digest:'fixture:all'}))};
+function scopeToken(collection,{key=KEY,instance='instance',device='test-device',exp=Math.floor(Date.now()/1000)+600,user='alice',rightsVer='1',scopeHash=`scope:${collection}`,collections=collection==='shell'?SHELL_COLLECTIONS:collection==='notes'?['notes']:[]}={}){
+ const claims={instance_id:instance,user_id:user,app_id:collection,scope_hash:scopeHash,rights_ver:rightsVer,device_id:device,exp,collections:collections.map(c=>({collection:c,gen:1,rights:['read','write'],field_mask_digest:'fixture:all'}))};
  return b64url(Buffer.from(canonicalJson({claims,signature:b64url(sign(null,Buffer.from(SCOPE_DOMAIN+canonicalJson(claims)),key.privateKey))})));
 }
 function context({instanceId='instance',userId='alice',nonce='B',capabilities=[]}={}){
@@ -215,4 +215,53 @@ test('E55 app grants reject wrong identity/signature and a signed app revocation
   await boot.transport.apply({...revoke,sig:[...sign(null,Buffer.from(STREAM_DOMAIN+canonicalJson(revoke)),KEY.privateKey)]},0);
   await assert.rejects(boot.transport.scope('notes'),e=>e.code==='forbidden'&&e.message==='Collection grant missing');
  }finally{await boot.loader.close();for(const p of h.peers)p.close();}
+});
+
+
+test('E55 live owner grants renew before expiry and stop on signed revocation and close',async()=>{
+ let now=Date.now();const timers=new Map();
+ const grantClock={now:()=>now,setTimeout(fn,delay){const id={};timers.set(id,{fn,at:now+delay});return id;},clearTimeout:id=>timers.delete(id)};
+ const advance=ms=>{now+=ms;for(const [id,timer]of [...timers])if(timer.at<=now){timers.delete(id);timer.fn();}};
+ const {createLoader}=await import('../loader.mjs');
+ const h=harness({tokenFor:appId=>scopeToken(appId,{exp:Math.floor(now/1000)+240})});
+ const boot=await bootV4({fetchImpl:fetchFake([context()]).impl,createPeer:h.createPeer,loaderOptions,loaderFactory:options=>{options.transport.grantClock=grantClock;return createLoader(options);}});
+ try{
+  await boot.transport.grantApp('notes');const count=()=>h.peers[0].messages.filter(m=>m.type==='scope.grant.request'&&m.app_id==='notes').length;
+  const before=count();advance(210000);
+  const deadline=Date.now()+1500;while(count()===before&&Date.now()<deadline)await new Promise(r=>setImmediate(r));
+  assert.equal(count(),before+1,'an active app must renew its P6 lease without reload');
+  const settle=Date.now()+1500;while((boot.transport.grantRequests.has('notes')||!boot.transport.grantRenewals.has('notes'))&&Date.now()<settle)await new Promise(r=>setImmediate(r));
+  assert.ok(boot.transport.grantRenewals.has('notes'));
+  const revoke={type:'scope_revoke',instance_id:'instance',key_id:'instance-key-1',participant:'alice',app_id:'notes',rights_ver:'1'};
+  await boot.transport.apply({...revoke,sig:[...sign(null,Buffer.from(STREAM_DOMAIN+canonicalJson(revoke)),KEY.privateKey)]},0);
+  assert.equal(boot.transport.grantRenewals.has('notes'),false,'revocation cannot be undone by a scheduled renewal');
+  const after=count();advance(210000);await new Promise(r=>setImmediate(r));assert.equal(count(),after);
+  await boot.loader.close();assert.equal(boot.transport.grantRenewals.size,0,'close retires all grant timers');assert.equal(timers.size,0);
+ }finally{await boot.loader.close();for(const p of h.peers)p.close();}
+});
+
+
+test('E55 renewed Shell grant replaces the Hello token and its old scope hash',async()=>{
+ let issued=0;const h=harness({tokenFor:appId=>scopeToken(appId,{scopeHash:appId==='shell'&&++issued>1?'scope:shell-renewed':`scope:${appId}`})});
+ const boot=await bootV4({fetchImpl:fetchFake([context()]).impl,createPeer:h.createPeer,loaderOptions});
+ try{
+  assert.equal((await boot.transport.scope('business_apps')).scope_hash,'scope:shell');
+  await boot.transport.grantApp('shell');
+  assert.equal((await boot.transport.scope('business_apps')).scope_hash,'scope:shell-renewed');
+  assert.equal(boot.transport.options.authSession.tokens().length,1,'only the current grant for the same app is retained');
+ }finally{await boot.loader.close();for(const p of h.peers)p.close();}
+});
+
+
+test('E55 grant acquisition stays coalesced while the signature verifier is pending',async()=>{
+ const subtle=globalThis.crypto.subtle;let enter,release,held=false;
+ const entered=new Promise(r=>enter=r),gate=new Promise(r=>release=r);
+ const delayed={importKey:(...args)=>subtle.importKey(...args),verify:async(...args)=>{if(!held&&new TextDecoder().decode(args[3]).includes('"app_id":"notes"')){held=true;enter();await gate;}return subtle.verify(...args);}};
+ const h=harness(),boot=await bootV4({fetchImpl:fetchFake([context()]).impl,createPeer:h.createPeer,loaderOptions,subtle:delayed});
+ try{
+  const a=boot.transport.grantApp('notes');await entered;
+  const b=boot.transport.grantApp('notes');await new Promise(r=>setImmediate(r));
+  assert.equal(h.peers[0].messages.filter(m=>m.type==='scope.grant.request'&&m.app_id==='notes').length,1,'verification is part of one acquisition');
+  release();await Promise.all([a,b]);
+ }finally{release();await boot.loader.close();for(const p of h.peers)p.close();}
 });

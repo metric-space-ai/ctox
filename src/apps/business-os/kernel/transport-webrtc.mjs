@@ -119,7 +119,7 @@ export class NativeWire {
  * HTTP records nor V3 query/replication fallbacks exist in this adapter.
  */
 export class WebRTCKernelTransport extends KernelTransport {
- constructor(options){super();this.options=options.authSession?{...options,hello:(...args)=>options.authSession.hello(...args)}:options;this.reliable=new ReliableClientSession();this.now=options.now??clock;this.readyState=deferred();this.ready=this.readyState.promise;this.listeners=[];this.pending=new Map();this.grantRequests=new Map();this.requestedApps=new Set();this.closed=false;this.scopes=new Map();this.samples=0;this.offset=null;}
+ constructor(options){super();this.options=options.authSession?{...options,hello:(...args)=>options.authSession.hello(...args)}:options;this.reliable=new ReliableClientSession();this.now=options.now??clock;this.readyState=deferred();this.ready=this.readyState.promise;this.listeners=[];this.pending=new Map();this.grantRequests=new Map();this.requestedApps=new Set();this.grantRenewals=new Map();this.grantClock=options.grantClock??{now:clock,setTimeout:(fn,ms)=>setTimeout(fn,ms),clearTimeout:timer=>clearTimeout(timer)};this.closed=false;this.scopes=new Map();this.samples=0;this.offset=null;}
  async connect(identity,events){
   if(this.events)throw new CtoxError('conflict','Transport already bound');this.identity={...identity};this.events=events;this.started=this.now();
   try {
@@ -182,6 +182,7 @@ export class WebRTCKernelTransport extends KernelTransport {
    if(this.options.wireFormat!=='k2-fixture'){this.reliable.attach({session_id,resume_from});this.scheduler.generation=this.reliable.generation;}
    await this.options.authSession?.acceptHello(selected);
    this.boundDeviceId=this.offeredDeviceId;
+   for(const token of selected.scope_tokens){const appId=decodeAppGrant(token)?.claims.app_id;if(appId){this.requestedApps.add(appId);this.armGrantRefresh(appId,token);}}
    this.session=selected;this.scheduler.configure(selected.transport);this.ingress.codec=selected.transport.codec;this.ingress.frameBytes=selected.transport.frame_bytes;
    if(core_time_ms!==undefined){if(!Number.isFinite(core_time_ms)||core_time_ms<0)throw new CtoxError('invalid','Invalid Core clock');this.offset=core_time_ms-(this.started+this.now())/2;}
    this.rtt=this.now()-this.started;this.events.session?.({epoch:selected.epoch,head_seq:selected.head_seq,rights_ver:selected.rights_ver});this.hello.activate();
@@ -214,12 +215,12 @@ export class WebRTCKernelTransport extends KernelTransport {
    case 'scope.grant':case 'forbidden': {
     if(lane!==0)throw new CtoxError('forbidden','App grant outside control lane');
     const appId=message.type==='scope.grant'?decodeAppGrant(message.token)?.claims.app_id:message.app_id;
-    const pending=this.grantRequests.get(appId);if(!pending){if(!this.requestedApps.has(appId))throw new CtoxError('forbidden','Unsolicited app grant');if(message.type==='scope.grant')await this.options.authSession?.acceptAppGrant(appId,message.token);else this.events.status?.(appId,{level:'error',code:'forbidden',text:'Collection grant missing'});return;}
-    this.grantRequests.delete(appId);clearTimeout(pending.timer);
-    try{if(message.type==='forbidden')throw new CtoxError('forbidden','Collection grant missing',{app_id:appId,reason:message.reason});if(!this.options.authSession?.acceptAppGrant)throw new CtoxError('forbidden','App grant verifier required');await this.options.authSession.acceptAppGrant(appId,message.token);pending.resolve(message.token);}catch(error){pending.reject(error);}
+    const pending=this.grantRequests.get(appId);if(!pending){if(!this.requestedApps.has(appId))throw new CtoxError('forbidden','Unsolicited app grant');if(message.type==='scope.grant'){await this.options.authSession?.acceptAppGrant(appId,message.token);this.armGrantRefresh(appId,message.token);}else{this.cancelGrantRefresh(appId);this.events.status?.(appId,{level:'error',code:'forbidden',text:'Collection grant missing'});}return;}
+    clearTimeout(pending.timer);
+    try{if(message.type==='forbidden'){this.cancelGrantRefresh(appId);throw new CtoxError('forbidden','Collection grant missing',{app_id:appId,reason:message.reason});}if(!this.options.authSession?.acceptAppGrant)throw new CtoxError('forbidden','App grant verifier required');await this.options.authSession.acceptAppGrant(appId,message.token);this.armGrantRefresh(appId,message.token);pending.resolve(message.token);}catch(error){pending.reject(error);}finally{if(this.grantRequests.get(appId)===pending)this.grantRequests.delete(appId);}
     return;
    }
-   case 'scope_revoke':if(!await this.options.verifyPackage(message,this.session))throw new CtoxError('forbidden','Revocation signature invalid');{const token=this.options.authSession?.revokeApp?.(message.app_id,message.rights_ver),collections=[...new Set([...(message.collections??[]),...(decodeAppGrant(token)?.claims.collections.map(c=>c.collection)??[])])];for(const c of collections)this.scopes.delete(c);await this.events.revoke?.({...message,collections});}return;
+   case 'scope_revoke':if(!await this.options.verifyPackage(message,this.session))throw new CtoxError('forbidden','Revocation signature invalid');{this.cancelGrantRefresh(message.app_id);this.requestedApps.delete(message.app_id);const pending=this.grantRequests.get(message.app_id);if(pending){this.grantRequests.delete(message.app_id);clearTimeout(pending.timer);pending.reject(new CtoxError('forbidden','Collection grant missing'));}const token=this.options.authSession?.revokeApp?.(message.app_id,message.rights_ver),collections=[...new Set([...(message.collections??[]),...(decodeAppGrant(token)?.claims.collections.map(c=>c.collection)??[])])];for(const c of collections)this.scopes.delete(c);await this.events.revoke?.({...message,collections});}return;
    case 'write_result':
     if(typeof message.op_id!=='string'||!['accepted','rejected','migrated','merged'].includes(message.status))throw new CtoxError('invalid','Invalid write result');
     if(message.status!=='rejected')decimalSeq(message.seq);await this.events.write_result(message);return;
@@ -232,6 +233,15 @@ export class WebRTCKernelTransport extends KernelTransport {
    case 'status':this.events.status?.(message.app_id,message.item);return;
    default:throw new CtoxError('invalid',`Unknown V4 message ${message.type}`);
   }
+ }
+ cancelGrantRefresh(app_id){const timer=this.grantRenewals.get(app_id);if(timer!==undefined)this.grantClock.clearTimeout(timer);this.grantRenewals.delete(app_id);}
+ armGrantRefresh(app_id,token){this.cancelGrantRefresh(app_id);
+  const claims=decodeAppGrant(token)?.claims;if(!claims||this.closed)return;
+  // P6's 240-second leases must renew while the owner remains active. One
+  // timer per app, retired on revoke/close; no retry storm after a denial.
+  const delay=Math.max(1000,Math.min(2147483647,claims.exp*1000-this.grantClock.now()-30000));
+  const timer=this.grantClock.setTimeout(()=>{this.grantRenewals.delete(app_id);if(!this.closed)this.grantApp(app_id).catch(error=>this.events?.status?.(app_id,{level:'error',code:error.code??'unavailable',text:'Collection grant missing'}));},delay);
+  timer.unref?.();this.grantRenewals.set(app_id,timer);
  }
  async grantApp(app_id){
   await this.ready;if(!this.options.authSession?.acceptAppGrant)throw new CtoxError('forbidden','Collection grant missing');
@@ -308,6 +318,7 @@ export class WebRTCKernelTransport extends KernelTransport {
  close(){
   if(this.closed)return;this.closed=true;this.options.authSession?.close();this.hello?.close();this.scheduler?.close();this.ingress?.close();
   for(const [t,n,f]of this.listeners)t.removeEventListener(n,f);this.listeners=[];
+  for(const appId of this.grantRenewals.keys())this.cancelGrantRefresh(appId);
   for(const p of this.grantRequests.values()){clearTimeout(p.timer);p.reject(new CtoxError('unavailable','Transport closed'));}this.grantRequests.clear();
   for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(new CtoxError('unavailable','Transport closed'));}this.pending.clear();
   this.readyState.reject(new CtoxError('unavailable','Transport closed'));

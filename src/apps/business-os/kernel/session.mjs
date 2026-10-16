@@ -188,6 +188,7 @@ export function createKernelSession({instanceId,userId,hello,verifyScopeToken,re
     },
     async acceptAppGrant(appId,token) {
       if(!selected || !await verifyScopeToken(token,{instanceId,userId,epoch:selected.epoch,rights_ver:selected.rights_ver,appId}))throw new CtoxError('forbidden','Collection grant missing',{app_id:appId});
+      selected={...selected,scope_tokens:selected.scope_tokens.filter(t=>decodeAppGrant(t)?.claims.app_id!==appId)};
       appTokens.set(appId,token);return token;
     },
     revokeApp(appId,rightsVer){if(typeof appId!=='string')return;const token=appTokens.get(appId)??selected?.scope_tokens.find(t=>decodeAppGrant(t)?.claims.app_id===appId);appTokens.delete(appId);if(selected)selected={...selected,scope_tokens:selected.scope_tokens.filter(t=>decodeAppGrant(t)?.claims.app_id!==appId),...(rightsVer===undefined?{}:{rights_ver:String(rightsVer)})};return token;},
@@ -197,7 +198,7 @@ export function createKernelSession({instanceId,userId,hello,verifyScopeToken,re
       if(!scope?.scope_hash || !Number.isSafeInteger(scope.gen))throw new CtoxError('forbidden','Collection grant missing');
       return {...scope,collection,epoch:selected.epoch};
     },
-    tokens(){if(!selected)throw new CtoxError('forbidden','No authenticated session');return [...selected.scope_tokens];},
+    tokens(){if(!selected)throw new CtoxError('forbidden','No authenticated session');return [...selected.scope_tokens,...appTokens.values()];},
     close(){selected=null;appTokens.clear();},
   });
 }

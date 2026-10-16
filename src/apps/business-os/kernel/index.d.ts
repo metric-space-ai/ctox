@@ -762,6 +762,8 @@ export interface WebRTCTransportOptions {
   handshakeTimeoutMs?:number;
   transferTimeoutMs?:number;
   grantTimeoutMs?:number;
+  /** Host/test clock seam for lease renewal only; handshake, delivery and close keep their own timers. */
+  grantClock?:{now():number;setTimeout(callback:()=>void,delay:number):any;clearTimeout(timer:any):void};
   now?:()=>number;
 }
 export declare class WebRTCKernelTransport extends KernelTransport {
