@@ -137,7 +137,8 @@ test('4b §16.26 + Befund B4: kein manifest.json im Entwurf, fehlende Verweise �
 
 test('5 §16.19 Nr. 3: shell_preferences ist Plattform-Collection (Schema ctox-platform), nur die eigene Zeile', async (t) => {
   const k = await mk(t);
-  await k.sim.publishAppVersion('shell', '1', { files: { 'index.js': MOUNT } });
+  await k.sim.publishAppVersion('ctox-platform','1',{collections:{shell_preferences:{schema:{primaryKey:'id',type:'object',additionalProperties:false,required:['id'],indexes:['user_id'],properties:{id:{type:'string',maxLength:180},user_id:{type:'string'},pins:{type:'array',items:{type:'string'}},launcher_order:{type:'array',items:{type:'string'}},settings:{type:'object',additionalProperties:true},updated_at_ms:{type:'number'}}}}},manifestExtra:{exports:{shell_preferences:['read','write']}}});
+  await k.sim.publishAppVersion('shell', '1', { files: { 'index.js': MOUNT }, manifestExtra:{foreign_collections:{shell_preferences:{owner_app:'ctox-platform',ops:['read','write']}}} });
   const api = k.appApi('shell', '1');
   const own = await api.put('shell_preferences', { id: 'u1', user_id: 'u1', pins: ['crm'], launcher_order: ['crm', 'notes'] }).result;
   assert.equal(own.status, 'accepted', JSON.stringify(own));

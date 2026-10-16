@@ -99,7 +99,7 @@ export interface CommandHandle {
   cancel(): boolean;
 }
 
-export type CtoxErrorCode = 'invalid' | 'forbidden' | 'not_found' | 'conflict' | 'revoked' | 'expired' | 'quota' | 'unavailable' | 'stale_base' | 'migration_required' | 'locally_modified' | 'token_expired' | 'token_used';
+export type CtoxErrorCode = 'revision_conflict' | 'invalid' | 'forbidden' | 'not_found' | 'conflict' | 'revoked' | 'expired' | 'quota' | 'unavailable' | 'stale_base' | 'migration_required' | 'locally_modified' | 'token_expired' | 'token_used';
 export declare class CtoxError extends Error {
   readonly name: 'CtoxError';
   readonly code: CtoxErrorCode;
@@ -153,6 +153,8 @@ export interface ShellApi {
   /** §16.19 Nr. 5: App rendert ihr Kopfzeilen-Element, die Shell setzt es in den Kopf-Slot. null entfernt es. */
   registerHeader(el: HTMLElement | null): void;
   /** Unbekanntes Ziel → Fehler in der Zustandszone, `false`, nie stiller Fallback. */
+  /** Read-only: no navigation or status entry is emitted. */
+  canNavigate(appId: string, params?: Record<string, unknown>): boolean;
   navigate(appId: string, params?: Record<string, unknown>): boolean;
   onRoute(cb: (ev: RouteEvent) => void): () => void;
   locale: LiveDoc<string>;
@@ -177,10 +179,12 @@ export interface Actor {
   permissions: LiveDoc<string[]>;
 }
 
-export type FileMeta = { id: string; name: string; mime: string; size: number; ref: string; owner_app: string };
+export type FileMeta = { id: string; name: string; mime: string; size: number; ref: string; owner_app: string; state?: 'rejected' };
 export interface FileUploadHandle extends WriteHandle<{ ref: string }> {
   /** sha256 des Inhalts (hex). */
   ref: Promise<string>;
+  /** Resolves on Core acceptance + upload; rejects with CtoxError {code,reason}; rejected file metadata remains locally. */
+  done: Promise<WriteResult & { ref: string }>;
   upload: { progress: LiveDoc<{ sent: number; total: number }> };
 }
 /** §10.2a Nr. 4 + §16.10. Metadaten = Dokumente der Collection `files`. */
@@ -195,7 +199,7 @@ export interface FilesApi {
   /** @deprecated Altform (K-1): Blob aus dem Cache bzw. über Spur 4. */
   get(ref: string): Promise<Blob>;
   /** CAP-3b: put(bytes | {text}, {name, mime}) → {id, ref} nach lokalem Commit; Upload über Spur 4. */
-  put(content: Uint8Array | ArrayBuffer | { text: string }, meta?: { id?: string; name?: string; mime?: string }): Promise<{ id: string; ref: string }>;
+  put(content: Uint8Array | ArrayBuffer | { text: string }, meta?: { id?: string; name?: string; mime?: string }): Promise<{ id: string; ref: string; done: FileUploadHandle['done'] }>;
   /** @deprecated Altform (K-1): Blob mit Upload-Handle. */
   put(blob: Blob, meta?: { id?: string; name?: string; mime?: string }): FileUploadHandle;
   list(): Promise<{ files: FileInfo[] }>;
@@ -220,7 +224,8 @@ export interface CtoxAppApi {
   get<T = any>(collection: string, id: string): LiveDoc<T | null>;
   // Schreiben – lokal sofort, Outbox
   put<T>(collection: string, doc: T & { id: string }): WriteHandle;
-  patch(collection: string, id: string, patch: object): WriteHandle;
+  /** E35: Core writer transaction compares expected_revision; mismatch resolves result as rejected/code revision_conflict. */
+  patch(collection: string, id: string, patch: object, options?: { expected_revision?: string }): WriteHandle;
   remove(collection: string, id: string): WriteHandle;
   // Befehle – Dokument mit gepushtem Status
   /** opts.record_id (§16.19 Nr. 8): optionaler Bezug des Befehls auf einen Datensatz. */
@@ -228,7 +233,7 @@ export interface CtoxAppApi {
   /** opts.on_complete/on_failed: Rückruf-Befehlstypen der eigenen App (§16.39 Nr. 3), als Felder am Befehlsdokument.
    *  §16.44: ctox.coding.turn {app_id, draft_id, base_draft_rev, prompt, model?, turn_id?}, ctox.coding.cancel {turn_id};
    *  Ablehnung im write_result {status:'rejected', code, reason}. */
-  command(type: string, payload: object, opts?: { record_id?: string; on_complete?: string; on_failed?: string; idempotency_key?: string }): CommandHandle;
+  command(type: string, payload: object, opts?: { record_id?: string; on_complete?: string; on_failed?: string; idempotency_key?: string; target_app?: string }): CommandHandle;
   // Priorität (E1) – reiner Hinweis
   setVisible(collections: string[]): void;
   // Zustand – nur an die Zustandszone der Shell (Anf. 27)
@@ -549,7 +554,9 @@ export interface PublishOptions {
 
 export interface StubSim {
   /** Nächster bestätigter Write wird abgelehnt. */
-  rejectNext(reason?: string): Promise<void>;
+  rejectNext(reason?: string | {code: CtoxErrorCode; reason: string}): Promise<void>;
+  /** Test Core: terminal CAS rejection, independent of the metadata write receipt. */
+  rejectNextUpload(reason?: {code: CtoxErrorCode; reason: string}): Promise<void>;
   /** Nächster bestätigter Write wird `migrated`; `dropFields` wandern ins Core-Archiv. */
   migrateNext(opts?: { dropFields?: string[] }): Promise<void>;
   /** Nächster Befehl dieses Typs endet `failed`. */
