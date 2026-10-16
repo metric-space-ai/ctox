@@ -128,7 +128,7 @@ pub(super) fn after_native_write(
     }
     Ok(())
 }
-fn core_only(
+pub(super) fn core_only(
     snapshot: &sync_rights::RightsSnapshot,
     app: &str,
     kind: &str,
