@@ -100,7 +100,7 @@ try:
     prefix, marker, rest=text.partition('fn answer(')
     body, boundary, suffix=rest.partition('\npub(crate) fn serve(')
     assert marker and boundary, 'E36 answer function boundary changed'
-    old='"v4/boot/index.html"'
+    old='"v4/index.html"'
     assert body.count(old)==1, 'Pin the current E31 entry expression before mutation'
     source.write_text(prefix+marker+body.replace(old,'"index.html"')+boundary+suffix)
     run('mutant-legacy-entry',101)

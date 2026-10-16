@@ -3516,14 +3516,14 @@ fn file_modified_label(path: &Path) -> String {
 }
 
 fn business_os_entry_document(app_root: &Path, version: Option<&str>) -> &'static str {
-    // E31: a V4 slot never silently boots the legacy V2 shell. A missing
+    // E38 supersedes E31: V4 never silently boots the legacy V2 shell. A missing
     // loader is a broken package, even when it still contains index.html.
     if version.map_or_else(
         || app_root.join("v4").is_dir(),
         |version| version.starts_with("0.2."),
     )
     {
-        "v4/boot/index.html"
+        "v4/index.html"
     } else {
         "index.html"
     }
@@ -3559,7 +3559,7 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
                 return respond_status(request, 503, "requested shell release failed verification")
             }
         },
-        None if rel == "index.html" || rel == "v4/boot/index.html" => {
+        None if rel == "index.html" || rel == "v4/index.html" => {
             super::shell_update::verified_release_for_root(root, app_root)?
         }
         None => None,
@@ -3628,7 +3628,7 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
         fs::read(&target)?
     };
     let mime = mime_for(&target);
-    let is_index = rel == "index.html" || rel == "v4/boot/index.html";
+    let is_index = rel == "index.html" || rel == "v4/index.html";
     if is_index && rel == "index.html" {
         // The launch context is injected server-side, exactly as it was before
         // the client-first attempt. That attempt shipped a hard cutover: the
@@ -4455,10 +4455,10 @@ mod tests {
         let fixture = tempfile::Builder::new().prefix("e31-").tempdir_in("/tmp")?;
         let root = fixture.path().to_owned();
         let app = root.join("business-os");
-        fs::create_dir_all(app.join("v4/boot"))?;
+        fs::create_dir_all(app.join("v4"))?;
         fs::write(app.join("index.html"), "legacy V2 must not be served")?;
         let loader = "<!doctype html><html><head></head><body>real-v4-loader-fixture</body></html>";
-        fs::write(app.join("v4/boot/index.html"), loader)?;
+        fs::write(app.join("v4/index.html"), loader)?;
         let mut foreground = Foreground::start(root.clone(), tokio::runtime::Handle::current()).await?;
         // Exercise E36's real foreground-owned listener, not the retired
         // standalone HTTP handler. IPC can request a listener, never own a store.
@@ -4492,7 +4492,7 @@ mod tests {
                 anyhow::ensure!(body == loader, "GET / served V2 or legacy launch context");
                 times.push(elapsed_ms);
             }
-            fs::remove_file(app.join("v4/boot/index.html"))?;
+            fs::remove_file(app.join("v4/index.html"))?;
             let missing = client.get(&format!("http://{address}/")).call();
             anyhow::ensure!(matches!(missing, Err(ureq::Error::Status(404, _))), "missing V4 loader fell back to V2");
             times.sort_by(f64::total_cmp);

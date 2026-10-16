@@ -6,6 +6,7 @@ Only a usable real target can be handed to Shell; otherwise all children retire.
 """
 import argparse
 import http.client
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -68,17 +69,42 @@ def main(a):
             try:
                 with socket.create_connection(('127.0.0.1',port),timeout=.1): break
             except OSError: time.sleep(.1)
-        at = time.monotonic()
-        connection = http.client.HTTPConnection('127.0.0.1',port,timeout=5)
-        try:
-            connection.request('GET','/')
-            response = connection.getresponse()
-            result['httpRoot'] = dict(status=response.status,durationMs=(time.monotonic()-at)*1000)
-            response.read()
-        except Exception as error:
-            result['httpRoot'] = dict(error=str(error),durationMs=(time.monotonic()-at)*1000)
-        finally: connection.close()
-        result['v4ShellSourcePresent'] = (current/'src/apps/business-os/v4/boot/boot.js').is_file()
+        # Measure actual installed E36/E38 HTTP, not an older V3 reference.
+        # This source fallback component remains separate from signed-slot and
+        # authenticated browser acceptance when slot staging is unavailable.
+        expected = current/'src/apps/business-os/v4/index.html'
+        expected_sha = adapter.digest(expected) if expected.is_file() else None
+        rows = []
+        result['httpRoot'] = dict(rows=rows,expectedSourceSha256=expected_sha,
+            limit='Installed source entry component; not signed-slot or browser authority acceptance')
+        for _ in range(20):
+            at = time.monotonic()
+            connection = http.client.HTTPConnection('127.0.0.1',port,timeout=5)
+            try:
+                connection.request('GET','/')
+                response = connection.getresponse()
+                body = response.read()
+                rows.append(dict(status=response.status,durationMs=(time.monotonic()-at)*1000,
+                    bytes=len(body),sha256=hashlib.sha256(body).hexdigest(),
+                    isExpectedSource=hashlib.sha256(body).hexdigest()==expected_sha))
+            except Exception as error:
+                rows.append(dict(error=str(error),durationMs=(time.monotonic()-at)*1000))
+                break
+            finally: connection.close()
+        complete = len(rows)==20 and all(r.get('status')==200 and r.get('isExpectedSource') for r in rows)
+        result['httpRoot'].update(complete=complete,
+            p99Ms=max(r['durationMs'] for r in rows) if complete else None,
+            status='pass' if complete and max(r['durationMs'] for r in rows)<500 else 'fail')
+        result['bootstrapRoutes'] = []
+        for path in ('/sw.js','/business-os/v4/boot.js','/kernel/boot.mjs','/api/business-os/launch-context'):
+            connection = http.client.HTTPConnection('127.0.0.1',port,timeout=5)
+            try:
+                connection.request('GET',path)
+                response = connection.getresponse()
+                body = response.read()
+                result['bootstrapRoutes'].append(dict(path=path,status=response.status,bytes=len(body)))
+            finally: connection.close()
+        result['v4ShellSourcePresent'] = (current/'src/apps/business-os/v4/boot.js').is_file()
         result['coreRead'] = dict(status='not_run',owner='phase1 / Architecture')
         os.environ['K24_QUERY'] = 'core-view'
         try:
