@@ -1,0 +1,23 @@
+[package]
+name = "ctox-sync-v4-m8"
+version = "0.1.0"
+edition = "2021"
+publish = false
+[workspace]
+[dependencies]
+rxdb = { package = "ctox-rxdb", path = "../../src/core/rxdb" }
+ctox-store = { path = "../../src/core/store" }
+webrtc = "=0.20.0-alpha.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
+async-trait = "0.1"
+serde_json = "1"
+sha2 = "0.10"
+rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
+tempfile = "3"
+uuid = { version = "1", features = ["v4"] }
+ring = "0.17"
+rustls = { version = "0.23", features = ["ring"] }
+[patch.crates-io]
+rtc-ice = { path = "../../src/core/rxdb/patches/rtc-ice" }
+rtc = { path = "../../src/core/rxdb/patches/rtc" }
+webrtc = { path = "../../src/core/rxdb/patches/webrtc" }
