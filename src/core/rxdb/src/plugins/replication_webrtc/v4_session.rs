@@ -170,7 +170,8 @@ impl V4Session {
                                 let task = tokio::spawn(async move {
                                     while let Some(packet) = stream.next().await {
                                         let Ok(packet) = packet else {
-                                            sender.close_now();
+                                            // A revoked cursor stops publishing immediately.
+                                            // Keep control alive for the signed scope_revoke.
                                             break;
                                         };
                                         let lane = if packet["type"] == "live" {
@@ -183,7 +184,6 @@ impl V4Session {
                                             break;
                                         };
                                         let Ok(guard) = source.publication(&peer, &packet) else {
-                                            sender.close_now();
                                             break;
                                         };
                                         if sender
