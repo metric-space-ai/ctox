@@ -121,8 +121,8 @@ fn selected(
     }
     Ok(value)
 }
-/// Same process executor and E20 gate as configured tools. A pre-E20 handler
-/// cannot deserialize untrusted_code and therefore fails closed as unavailable.
+/// Resolved policies use the same mandatory OS sandbox as configured tools.
+/// Missing immutable host artifacts or an unavailable E20 runtime fail closed.
 pub(super) fn allowlist(
     root: &Path,
     ctx: &CapCallContext,
@@ -158,79 +158,85 @@ mod tests {
     fn check_tool(name: &str) {
         let tool = DEFAULT_TOOLS.iter().find(|t| t.name == name).unwrap();
         let root = tempfile::tempdir().unwrap();
-        let ctx = context(tool.app_id);
-        let run = || {
-            process::execute(
-                root.path(),
-                Err(unavailable()),
-                &ctx,
-                &json!({"program":tool.name,"allowed_domains":["example.test"]}),
-            )
-        };
-        assert_eq!(
-            run().unwrap_err().code,
-            ErrorCode::Unavailable,
-            "{} unbound",
-            tool.name
-        );
-        assert!(
-            !process::workspace(root.path(), &ctx).exists(),
-            "no workspace/effect before admission"
-        );
-        for shape in [
-            json!({"interpreter":"/bin/sh","script":"/core/host.mjs","untrusted_code":true}),
-            json!({"interpreter":"/usr/bin/node","untrusted_code":true}),
-            json!({"program":"/usr/bin/node","untrusted_code":true}),
-            json!({"interpreter":"/usr/bin/node","script":"/core/host.mjs","untrusted_code":false}),
-        ] {
+        let owner_root = root.path().to_path_buf();
+        let root = super::super::tests::run_with_core_owners(owner_root, move || {
+            let ctx = context(tool.app_id);
+            let run = || {
+                process::execute(
+                    root.path(),
+                    Err(unavailable()),
+                    &ctx,
+                    &json!({"program":tool.name}),
+                )
+            };
+            assert_eq!(
+                run().unwrap_err().code,
+                ErrorCode::Unavailable,
+                "{} unbound",
+                tool.name
+            );
+            assert!(
+                !process::workspace(root.path(), &ctx).exists(),
+                "no workspace/effect before admission"
+            );
+            for shape in [
+                json!({"interpreter":"/bin/sh","script":"/core/host.mjs","untrusted_code":true}),
+                json!({"interpreter":"/usr/bin/node","untrusted_code":true}),
+                json!({"program":"/usr/bin/node","untrusted_code":true}),
+                json!({"interpreter":"/usr/bin/node","script":"/core/host.mjs","untrusted_code":false}),
+            ] {
+                crate::inference::runtime_env::set_runtime_env_value(
+                    root.path(),
+                    process::ALLOWLIST_KEY,
+                    &json!({tool.name:shape}).to_string(),
+                )
+                .unwrap();
+                assert_eq!(
+                    selected(root.path(), &ctx, tool.name, None)
+                        .unwrap_err()
+                        .code,
+                    ErrorCode::Forbidden,
+                    "{} must refuse the policy before dispatch",
+                    tool.name
+                );
+                assert_eq!(
+                    run().unwrap_err().code,
+                    ErrorCode::Forbidden,
+                    "{} refused shape",
+                    tool.name
+                );
+            }
+            crate::inference::runtime_env::set_runtime_env_value(root.path(), process::ALLOWLIST_KEY,
+                    &json!({tool.name:{"interpreter":"/usr/bin/node","script":"/core/host.mjs","untrusted_code":true}}).to_string()).unwrap();
+            assert_eq!(
+                run().unwrap_err().code,
+                ErrorCode::Unavailable,
+                "{} needs installed host artifacts and E20",
+                tool.name
+            );
+            assert_eq!(
+                allowlist(root.path(), &context("other-app"), tool.name)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::Forbidden
+            );
             crate::inference::runtime_env::set_runtime_env_value(
                 root.path(),
                 process::ALLOWLIST_KEY,
-                &json!({tool.name:shape}).to_string(),
+                &json!({tool.name:null}).to_string(),
             )
             .unwrap();
             assert_eq!(
-                selected(root.path(), &ctx, tool.name, None)
-                    .unwrap_err()
-                    .code,
-                ErrorCode::Forbidden,
-                "{} must refuse the policy before dispatch",
-                tool.name
-            );
-            assert_eq!(
                 run().unwrap_err().code,
                 ErrorCode::Forbidden,
-                "{} refused shape",
+                "{} disabled",
                 tool.name
             );
-        }
-        crate::inference::runtime_env::set_runtime_env_value(root.path(), process::ALLOWLIST_KEY,
-                &json!({tool.name:{"interpreter":"/usr/bin/node","script":"/core/host.mjs","untrusted_code":true}}).to_string()).unwrap();
-        assert_eq!(
-            run().unwrap_err().code,
-            ErrorCode::Unavailable,
-            "{} needs E20",
-            tool.name
-        );
-        assert_eq!(
-            allowlist(root.path(), &context("other-app"), tool.name)
-                .unwrap_err()
-                .code,
-            ErrorCode::Forbidden
-        );
-        crate::inference::runtime_env::set_runtime_env_value(
-            root.path(),
-            process::ALLOWLIST_KEY,
-            &json!({tool.name:null}).to_string(),
-        )
-        .unwrap();
-        assert_eq!(
-            run().unwrap_err().code,
-            ErrorCode::Forbidden,
-            "{} disabled",
-            tool.name
-        );
+            root
+        });
+        drop(root);
     }
+
     #[test]
     fn app_capabilities_cap7_olg_js_policy() {
         check_tool("olg-scrape-js");

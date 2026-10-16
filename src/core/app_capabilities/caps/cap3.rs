@@ -33,6 +33,8 @@ pub mod lock;
 pub mod process;
 #[path = "process_defaults.rs"]
 pub mod process_defaults;
+#[path = "sandbox.rs"]
+pub mod sandbox;
 #[path = "secrets.rs"]
 pub mod secrets;
 #[cfg(test)]
@@ -275,7 +277,7 @@ pub static ROUTES: &[NativeRoute] = &[
         "process",
         "run",
         "cap.process.run",
-        "std::process::Command (allowlist, env_clear, app workspace)",
+        "std::process::Command in the E20 sandbox (bwrap/sandbox-exec, allowlist, env_clear, app workspace)",
         "src/core/app_capabilities/caps/process.rs",
     ),
     route(
@@ -679,7 +681,7 @@ pub fn contract() -> Value {
         ),
         (
             "process.run",
-            json!({"required":["program"],"properties":{"program":{"description":"name in platform allowlist business_os.process_allowlist"},"args":{"type":"array","maxItems":128},"cwd_ref":{"description":"relative path inside the app workspace"},"stdin":{"type":"string"},"stdin_ref":{"properties":{"ref":{"description":"files.ref of the calling app"}}},"program_note":{"description":"allowlist entry: program or interpreter+script, plus platform base env (PATH, CTOX_BIN, LANG)"},"env":{"type":"object","maxProperties":32,"description":"the complete child environment; nothing inherited"},"timeout_ms":{"type":"integer","minimum":1,"maximum":process::MAX_TIMEOUT_MS}}}),
+            json!({"required":["program"],"properties":{"program":{"description":"name in platform allowlist business_os.process_allowlist"},"args":{"type":"array","maxItems":128},"cwd_ref":{"description":"relative path inside the app workspace"},"stdin":{"type":"string"},"stdin_ref":{"properties":{"ref":{"description":"files.ref of the calling app"}}},"program_note":{"description":"allowlist entry: program or interpreter+script, plus platform base env (PATH, CTOX_BIN, LANG)"},"env":{"type":"object","maxProperties":32,"description":"the complete child environment; nothing inherited"},"timeout_ms":{"type":"integer","minimum":1,"maximum":process::MAX_TIMEOUT_MS},"net_domains":{"type":"array","maxItems":16,"description":"egress target host names; only for entries with net_from_call (E20 sandbox has no domain-filtered egress yet: unavailable)"}}}),
             json!({"exit":"integer|null","timed_out":"boolean","duration_ms":"integer","stdout":"string","stdout_truncated":"boolean","stderr":"string","stderr_truncated":"boolean"}),
             vec!["invalid", "forbidden", "not_found", "unavailable"],
         ),
