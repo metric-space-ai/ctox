@@ -386,13 +386,19 @@ impl PairFixture {
                     });
                 accepted[index] = Some(channel);
             }
-            NativeSendScheduler::from_channels_session(
+            let target = NativeSendScheduler::from_channels_session(
                 accepted.into_iter().map(Option::unwrap).collect(),
                 Framer::new(transport.clone()).unwrap(),
                 Some(bb),
             )
             .await
-            .unwrap()
+            .unwrap();
+            // This fixture owns both native endpoints. Resume the accepted
+            // endpoint too; create_resumed already does this for the opener.
+            target.replay_pending(&|_, _, _| {
+                Ok(Arc::new(Authorized) as Arc<dyn WebRTCPublicationGuard>)
+            }).await.unwrap();
+            target
         };
         let create = async {
             let result =
@@ -760,4 +766,69 @@ async fn lane4_dynamic_browser_channel_opens_after_handshake_within_one_second()
 mod e25_range_tests {
     use super::*;
     include!("../v4_session_tests.rs");
+}
+
+// Z3 uses the existing real SCTP pair, not a second mock transport.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn z3_p4_twenty_reconnects_preserve_every_application_delivery() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    tokio::time::timeout(Duration::from_secs(120), async {
+        let sa = ReliableSession::new("z3-reconnect".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
+        let sb = ReliableSession::new("z3-reconnect".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
+        let mut pair = PairFixture::connect(sa.clone(), sb.clone()).await;
+        let mut effects_a = Vec::new();
+        let mut effects_b = Vec::new();
+        let mut explicit_results = 0usize;
+        let mut replayed = 0usize;
+        let mut at = pair.source.take_incoming(Some(Lane::Commands)).unwrap();
+        let mut bt = pair.target.take_incoming(Some(Lane::Commands)).unwrap();
+        for cycle in 0..20u64 {
+            let mut uncommitted = Vec::new();
+            for index in 0..16u64 {
+                let id = cycle * 16 + index;
+                pair.source.send(Lane::Commands, WireSeq(id), &id.to_be_bytes(), Some(Arc::new(Authorized))).await.expect("explicit A send result");
+                pair.target.send(Lane::Commands, WireSeq(id), &id.to_be_bytes(), Some(Arc::new(Authorized))).await.expect("explicit B send result");
+                explicit_results += 2;
+                for (incoming, effects) in [(&mut at, &mut effects_a), (&mut bt, &mut effects_b)] {
+                    let Some(Incoming::Reliable { bytes, delivery: Some(token), .. }) = incoming.recv().await else { panic!("application message missing"); };
+                    assert_eq!(bytes, id.to_be_bytes());
+                    if index == 15 {
+                        // Channel loss before the application commits: no ACK.
+                        uncommitted.push(token);
+                    } else {
+                        effects.push(id);
+                        token.acknowledge().unwrap();
+                    }
+                }
+            }
+            pair.close().await;
+            drop(uncommitted);
+            pair = PairFixture::connect(sa.clone(), sb.clone()).await;
+            at = pair.source.take_incoming(Some(Lane::Commands)).unwrap();
+            bt = pair.target.take_incoming(Some(Lane::Commands)).unwrap();
+            let expected = cycle * 16 + 15;
+            for (incoming, effects) in [(&mut at, &mut effects_a), (&mut bt, &mut effects_b)] {
+                let replay = tokio::time::timeout(Duration::from_secs(2), incoming.recv()).await.expect("unacknowledged application message must replay after reconnect");
+                let Some(Incoming::Reliable { bytes, delivery: Some(token), .. }) = replay else { panic!("replay missing"); };
+                assert_eq!(bytes, expected.to_be_bytes());
+                effects.push(expected);
+                token.acknowledge().unwrap();
+                replayed += 1;
+            }
+            // ACK retirement is the delivery witness, separate from send admission.
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    let ga = pair.source.session.as_ref().unwrap().generation;
+                    let gb = pair.target.session.as_ref().unwrap().generation;
+                    if sa.replay(ga, Lane::Commands).unwrap().is_empty() && sb.replay(gb, Lane::Commands).unwrap().is_empty() { break; }
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            }).await.expect("every admitted send needs cumulative delivery acknowledgement");
+        }
+        let expected: Vec<_> = (0..320u64).collect();
+        assert_eq!(effects_a, expected, "A application lost/duplicated delivery");
+        assert_eq!(effects_b, expected, "B application lost/duplicated delivery");
+        pair.close().await;
+        eprintln!("Z3_P4_RECONNECT {}", serde_json::json!({"scenario":1,"forced_loss_reconnects":20,"additional_clean_rebinds":0,"sent":640,"explicit_send_results":explicit_results,"delivery_acknowledged":640,"replayed_after_loss":replayed,"lost":0,"duplicated":0,"transport":"native-native real WebRTC"}));
+    }).await.expect("twenty reconnects must finish within fixture deadline");
 }
