@@ -136,7 +136,8 @@ def main():
         # This does not replace the installed-profile/signature witness.
         component = out/'foreground-profile'
         component.mkdir(mode=0o700)
-        (component/'.sync-v4-e2e.json').write_text(json.dumps(marker))
+        (component/'.sync-v4-e2e.json').write_text(json.dumps(dict(owner=OWNER,synthetic=True,
+            source=release['revision'],purpose='fresh empty-state restart control')))
         # Fresh empty state is only a startup control. SQLite-only clones do
         # not include the product's sealed-key/file custody and must never be
         # presented as a valid frozen-profile restoration.
