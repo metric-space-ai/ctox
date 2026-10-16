@@ -59,7 +59,12 @@ export interface FieldOperators {
 }
 
 export type WriteResult = {
-  status: 'accepted' | 'rejected' | 'migrated';
+  status: 'accepted' | 'merged' | 'rejected' | 'migrated';
+  code?: CtoxErrorCode;
+  gen?: number;
+  client_seq?: string;
+  /** Receipt alone cannot clear the outbox; wait for the canonical page. */
+  requires_page?: boolean;
   rev?: string;
   reason?: string;
   archived_ref?: string;
@@ -79,7 +84,7 @@ export interface WriteHandle<Extra = {}> {
 }
 
 export type CommandState = {
-  status: 'queued' | 'accepted' | 'running' | 'done' | 'failed';
+  status: 'queued' | 'accepted' | 'running' | 'done' | 'failed' | 'cancelled' | 'rejected';
   progress?: number;
   result?: unknown;
   error?: string;
@@ -94,12 +99,14 @@ export interface CommandHandle {
   cancel(): boolean;
 }
 
-export type CtoxErrorCode = 'invalid' | 'forbidden' | 'not_found' | 'conflict' | 'revoked' | 'expired' | 'quota' | 'unavailable';
+export type CtoxErrorCode = 'invalid' | 'forbidden' | 'not_found' | 'conflict' | 'revoked' | 'expired' | 'quota' | 'unavailable' | 'stale_base' | 'migration_required' | 'locally_modified' | 'token_expired' | 'token_used';
 export declare class CtoxError extends Error {
   readonly name: 'CtoxError';
   readonly code: CtoxErrorCode;
   readonly path?: string;
-  constructor(code: CtoxErrorCode, message?: string, extra?: { path?: string });
+  readonly reason?: string;
+  readonly detail?: string;
+  constructor(code: CtoxErrorCode, message?: string, extra?: { path?: string; reason?: string; detail?: string });
 }
 
 export type StatusItem = { level: 'info' | 'warn' | 'error'; code: string; text: string; ref?: string };
@@ -165,10 +172,30 @@ export interface FileUploadHandle extends WriteHandle<{ ref: string }> {
   upload: { progress: LiveDoc<{ sent: number; total: number }> };
 }
 /** §10.2a Nr. 4 + §16.10. Metadaten = Dokumente der Collection `files`. */
+export type FileInfo = { id: string; ref: string; name: string | null; mime: string; size: number };
+/** CAP-3b (#844): Ergebnis von files.get – Text nur für UTF-8 ≤ 512 KiB, sonst Bytes; nie Base64. */
+export type FileGetResult = ({ found: true } & FileInfo & ({ text: string } | { bytes: Uint8Array })) | { found: false; ref: string | null; id?: string };
 export interface FilesApi {
-  /** Lokaler Blob-Cache, sonst Spur 4 (Prüfung beim Empfang). Fehler: not_found | unavailable | revoked. */
+  /** CAP-3b: nur Dateien der eigenen App; Datei einer anderen App → forbidden. */
+  get(sel: { ref: string } | { id: string }): Promise<FileGetResult>;
+  /** @deprecated Altform (K-1): Blob aus dem Cache bzw. über Spur 4. */
   get(ref: string): Promise<Blob>;
+  /** CAP-3b: put(bytes | {text}, {name, mime}) → {id, ref} nach lokalem Commit; Upload über Spur 4. */
+  put(content: Uint8Array | ArrayBuffer | { text: string }, meta?: { id?: string; name?: string; mime?: string }): Promise<{ id: string; ref: string }>;
+  /** @deprecated Altform (K-1): Blob mit Upload-Handle. */
   put(blob: Blob, meta?: { id?: string; name?: string; mime?: string }): FileUploadHandle;
+  list(): Promise<{ files: FileInfo[] }>;
+  delete(sel: { ref: string } | { id: string }): Promise<{ deleted: boolean; id?: string }>;
+}
+/** #830 / CATALOG §6: Responses-förmige Antwort von model.run. */
+export type ModelResponse = {
+  id: string; object: 'response'; model: string; status: 'completed' | 'failed';
+  output: Array<{ type: 'message'; role: 'assistant'; content: Array<{ type: 'output_text'; text: string }> }>;
+  output_text: string; usage?: { input_tokens: number; output_tokens: number };
+};
+export interface ModelApi {
+  /** Nur mit `model` in capabilities_required; Fake-Core deterministisch, echter Weg über die App-Laufzeit (#830). */
+  run(req: { model?: string; input?: string | Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>; prompt?: string; [k: string]: unknown }): Promise<ModelResponse>;
 }
 
 export interface CtoxAppApi {
@@ -199,6 +226,7 @@ export interface CtoxAppApi {
   shell: ShellApi;
   actor: Actor;
   files: FilesApi;
+  model: ModelApi;
 }
 
 /** §10.2a Nr. 1 – jede App exportiert mount(). */
@@ -303,7 +331,11 @@ export type CollectionDiff = {
   migration: { from_ver: string; migrate_fn?: string; steps?: MigrationStep[] } | null;
 };
 /** §16.22 A4. files: Pfad → Text, null = im Entwurf gelöscht. */
-export type DraftInfo = { base_app_ver: string | null; files: Record<string, string | Uint8Array | null>; manifest: Record<string, unknown>; updated_at: number ; /** Revision der app_drafts-Zeile im Core = base_draft_rev für ctox.coding.turn (§16.44). */ rev: string | null };
+export interface DraftWriteHandle extends Promise<void> {
+  local: Promise<void>;
+  result: Promise<{ status: 'accepted'; rev: string } | { status: 'rejected'; code: string; reason?: string }>;
+}
+export type DraftInfo = { base_app_ver: string | null; files: Record<string, string | Uint8Array | null>; manifest: Record<string, unknown>; updated_at: number ; /** Bestätigte Revision der app_drafts-Zeile (= base_draft_rev für ctox.coding.turn, §16.44); null, solange Änderungen ausstehen oder der Entwurf neu und noch unbestätigt ist. */ rev: string | null };
 /** §16.44: Plattform-Collection coding_turns/<turn_id> (schreibt nur der Core; messages/tool_events erst am Turn-Ende). */
 export type CodingTurn = {
   id: string; app_id: string; draft_id: string; user_id: string; command_id: string; origin_app: string; base_draft_rev: string;
@@ -328,7 +360,9 @@ export interface SourceApi {
     /** A4 – null, wenn kein eigener Entwurf. */
     info(): Promise<DraftInfo | null>;
     /** Recht apps.source.edit (gilt für alle schreibenden Entwurfsaufrufe). `manifest.json` → invalid (§16.26). */
-    write(path: string, content: ArtifactContent): Promise<void>;
+    /** §16.44-Ergänzung (3): {local, result}; result = vom Core bestätigte Revision {status:'accepted', rev} bzw. rejected{code};
+     *  awaitbar wie bisher (wartet auf den lokalen Commit). */
+    write(path: string, content: ArtifactContent): DraftWriteHandle;
     /** A7 – not_found, wenn die Datei nicht existiert. */
     remove(path: string): Promise<void>;
     /** A7 – not_found (Quelle fehlt), conflict (Ziel existiert). Verweise im Manifest (entry, handlers, styles) wandern mit (§16.26). */
@@ -390,7 +424,10 @@ export interface ShellKernelApi {
   };
   /** §16.39 Nr. 2: SW-Nachrichten; im Browser automatisch an navigator.serviceWorker gebunden. */
   libs: {
-    onSwMessage(data: { type: 'ctox:lib-miss'; lib: string; major: string; path: string; ver: string; sha?: string | null; reason?: string } | { type: 'ctox:lib-hit'; hits: Array<{ lib: string; major: string; ver: string; path: string; sha?: string; n?: number; last_ms?: number }> }, port?: { postMessage(m: unknown): void }): Promise<unknown>;
+    /** §16.50: bedient lib-miss unabhängig vom auslösenden Client (Fenster/Worker). Antwort über den Port:
+     *  {type:'ctox:lib-ready', lib, ver, path, sha, mime, size, body: ArrayBuffer} (sha256-geprüft) oder {type:'ctox:lib-abort', reason}
+     *  (hash_mismatch | not_found | manifest | invalid | artifact_missing | timeout – vor den 15 s des SW). */
+    onSwMessage(data: { type: 'ctox:lib-miss'; lib: string; major: string; path: string; ver: string; sha?: string | null; reason?: string; client_id?: string; client_type?: string } | { type: 'ctox:lib-hit'; hits: Array<{ lib: string; major: string; ver: string; path: string; sha?: string; n?: number; last_ms?: number }> }, port?: { postMessage(m: unknown): void }): Promise<unknown>;
     resolve(name: string, major: string | number): string | null;
     enforceBudget(): Promise<string[]>;
     readonly byteBudget: number;
@@ -616,13 +653,13 @@ export interface Subscription {
 }
 export interface KernelPage {
   epoch: string; collection: string; scope_hash: string; gen: number;
-  cursor_to: string; head_seq?: string; complete: boolean; backlog?: number;
-  package_id?:string; seq_from?:string; seq_to?:string; sig?:string; core_sent_at_ms?:number;
-  docs: Array<{collection?:string; id:string; data?:unknown; doc?:unknown;
-    deleted?:boolean; op?:'put'|'delete'|'unproject'; seq:string; rev:string}>;
+  type?: 'page'|'live'; cursor_to?: string; head_seq?: string; complete: boolean; backlog?: number;
+  package_id?:string; seq_from?:string; seq_to?:string; sig?:string|number[]; core_sent_at_ms?:number;
+  docs: Array<{collection?:string; id:string; data?:unknown; doc?:unknown; body?:unknown;
+    deleted?:boolean; op?:'put'|'upsert'|'delete'|'unproject'; seq:string; rev:string}>;
 }
 export interface KernelWrite {
-  op_id:string; prev_op_id?:string|null; collection:string; id:string;
+  op_id:string; prev_op_id?:string|null; client_seq?:string; collection:string; id:string;
   base_rev:string|null; base_seq:string; gen:number; schema_ver:number; app_ver:string;
   app_id:string; op:'put'|'patch'|'delete'; body:unknown;
 }
@@ -703,4 +740,6 @@ export interface ArtifactBinding {
   readonly libs: Readonly<Record<string, string>>;
   readonly root: string;
   url(path: string): string;
+  /** §16.50: gleich-ursprüngliche Worker-URL unter der gebundenen Lib-Wurzel `/~a/lib:<name>@<M.m>[~lib:…]/<path>` (nie data:/blob:); nicht gebunden → not_found. */
+  workerUrl(lib: string, path: string): string;
 }

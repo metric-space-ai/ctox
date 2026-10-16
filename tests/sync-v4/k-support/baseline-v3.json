@@ -1,0 +1,15 @@
+{
+  "revision": "4794af03db8cbf28babee0369af9c416f755019d",
+  "binarySha256": "c903325e48424ab624b6de1182d80e120ec2c875c6bd4443575c49b42ca5a00f",
+  "harness": "1d955487cfb8dc6583153e28599a08cb3d373af1",
+  "immutableReference": true,
+  "scenarios": {
+    "K01": {"value": {"overwrittenNewerFields": 10}, "targetValue": {"overwrittenNewerFields": 0}, "verdict": "red", "evidence": "e2e-k-1792083692556/K01/result.json"},
+    "K07": {"value": {"dispatchP99Ms": 1312, "browserP99Ms": 2622.8, "queryFetchRpcs": 91}, "targetValue": {"dispatchP99Ms": "RTT+100", "queryFetchRpcs": 0}, "verdict": "red", "evidence": "e2e-k-1792083692556/K07/result.json"},
+    "K11": {"value": null, "targetValue": "verified installer + real migration; no lost writes or read-only interval", "verdict": "not_run", "evidence": "e2e-k-1792083692556/K11/result.json"},
+    "K15": {"value": {"durationMs": 1816146, "nativeBusy517": 0, "externalCommits": 535157, "fullCatalog": false}, "targetValue": "30 min full workload; no BUSY/517; command p99 <= RTT+100", "verdict": "not_run", "evidence": "e2e-k15-sustained-b-20261015/classified-summary.json"},
+    "K02": {"value": {"smallVisibleMs": 582, "largeVisibleMs": 1478, "largeRows": 850, "missing": 0}, "targetValue": {"visibleMs": 1000, "missing": 0}, "verdict": "red", "evidence": "e2e-k-large-reload-20261015/result.json"},
+    "K08": {"value": {"visibleMs": 1189, "actionableRows": 40}, "targetValue": {"visibleMs": 1000}, "verdict": "red", "evidence": "e2e-k08-visible-demand-20261015/result.json"},
+    "K24": {"value": {"kernelHttpStatus": 404}, "targetValue": "upstream K24 criteria all PASS on native", "verdict": "red", "evidence": "e2e-k-1792083692556/K24/result.json"}
+  }
+}

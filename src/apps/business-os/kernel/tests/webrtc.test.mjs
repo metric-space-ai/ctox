@@ -11,11 +11,11 @@ test('P4 hello and exact V4 subscribe/write/result/activation/priority wire',asy
   await transport.connect({instanceId:'instance',userId:'alice'},{link(){},page:async p=>pages.push(p),write_result:async r=>results.push(r),timing:t=>timings.push(t)});
   const scope=await transport.scope('notes');await transport.subscribe({...scope,collection:'notes',checkpoint_seq:'9007199254740998',priority:'P0'});
   await peer.page('notes',[{id:'a',data:{id:'a'},seq:peer.head,rev:'r'}]);
-  await transport.write({op_id:'op1',prev_op_id:'prior',collection:'notes',id:'a',op:'patch',body:{title:'x'},base_rev:'op:prior',base_seq:'9007199254740998',gen:1,schema_ver:1,app_id:'notes',app_ver:'1'});
+  await transport.write({client_seq:'1',op_id:'op1',prev_op_id:'prior',collection:'notes',id:'a',op:'patch',body:{title:'x'},base_rev:'op:prior',base_seq:'9007199254740998',gen:1,schema_ver:1,app_id:'notes',app_ver:'1'});
   await transport.appActivation({app_id:'notes',app_ver:'1',state:'activated',at_seq:peer.head});transport.priority({app_id:'notes',collections:['notes']});
   for(let i=0;i<20&&(!results.length||!timings.length||!peer.messages.some(m=>m.type==='priority'));i++)await tick();
   assert.equal(pages[0].cursor_to,'9007199254740999');assert.equal(results[0].seq,'9007199254741000');
-  assert.equal(peer.messages.find(m=>m.type==='subscribe').checkpoint_seq,'9007199254740998');assert.equal(peer.messages.find(m=>m.type==='write').prev_op_id,'prior');
+  assert.equal(peer.messages.find(m=>m.type==='subscribe').checkpoint.seq,'9007199254740998');assert.equal(peer.messages.find(m=>m.type==='write').prev_op_id,'prior');
   assert.ok(peer.messages.some(m=>m.type==='app_activation'));assert.ok(timings[0].push_latency_ms>=0);assert.ok(Math.abs(timings[0].clock_offset_ms-5000)<50);assert.deepEqual(peer.errors,[]);
  }finally{transport.close();peer.close();}
 });

@@ -1,3 +1,6 @@
+// P9 contract tests use the real WAL Store writer, not a simulated executor ledger.
+#[path = "command_contract_tests.rs"]
+mod command_tests;
 use super::*;
 use crate::change_log::{
     self,
@@ -16,6 +19,26 @@ use std::{process::Command, sync::Arc, time::Duration};
 const NOW: u64 = 1_800_000_000_000;
 struct Policy;
 impl WriteAuthority for Policy {
+    fn authorize_command_intent(
+        &self,
+        _: &Transaction<'_>,
+        _: &str,
+        _: &Value,
+    ) -> rusqlite::Result<super::super::WritePermission> {
+        Ok(super::super::WritePermission::Permit)
+    }
+    fn authorize_command_executor(
+        &self,
+        _: &Transaction<'_>,
+        participant: &str,
+        _: &Value,
+    ) -> rusqlite::Result<super::super::WritePermission> {
+        Ok(if participant.starts_with("executor-") {
+            super::super::WritePermission::Permit
+        } else {
+            super::super::WritePermission::Reject("forbidden".into())
+        })
+    }
     fn authorize(
         &self,
         _: &Transaction<'_>,
@@ -176,6 +199,15 @@ async fn participant_order_precedes_command_effect_and_duplicate_seq_is_a_receip
         serde_json::from_str::<ClientMessage>(&wire).unwrap(),
         ClientMessage::Write(command.clone())
     );
+    let mut caller_metadata = serde_json::from_str::<Value>(&wire).unwrap();
+    caller_metadata["app_id"] = json!("forged-native-context");
+    assert!(serde_json::from_value::<ClientMessage>(caller_metadata).is_err());
+    let ambiguous = wire.replacen(
+        "\"client_seq\":\"2\"",
+        "\"client_seq\":\"2\",\"client_seq\":\"9\"",
+        1,
+    );
+    assert!(serde_json::from_str::<ClientMessage>(&ambiguous).is_err());
     let waiting = ingress
         .submit("alice".into(), command.clone(), NOW)
         .await

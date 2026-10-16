@@ -24,7 +24,7 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-fn ensure_table(conn: &rusqlite::Connection) -> anyhow::Result<()> {
+pub(super) fn ensure_table(conn: &rusqlite::Connection) -> anyhow::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS business_mobile_invites (
             invite_id_hash TEXT PRIMARY KEY,
@@ -51,6 +51,9 @@ fn ensure_table(conn: &rusqlite::Connection) -> anyhow::Result<()> {
         ("device_id", "TEXT"),
         ("proof_key_thumbprint", "TEXT"),
         ("created_by_user_id", "TEXT"),
+        // §16.43: self-declared device type of the bound device (fixed list).
+        ("device_kind", "TEXT"),
+        ("device_platform", "TEXT"),
     ] {
         if !table_has_column(conn, column)? {
             conn.execute(
@@ -438,11 +441,63 @@ fn retained_inviter_owner(root: &Path, inviter: &str) -> anyhow::Result<Option<S
 /// controls reconnects; revocation and the signed capability epoch do. This is
 /// deliberately native/store local: Cloudflare signaling never sees or stores
 /// the durable Device-to-Instance edge.
+/// Device type a client declares in its first-binding device proof
+/// (`peerSession.deviceProof.kind/platform`, §16.43). Descriptive only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DeviceDescriptor {
+    pub kind: String,
+    pub platform: Option<String>,
+}
+
+pub(crate) const DEVICE_KINDS: [&str; 3] = ["mobile", "desktop", "browser"];
+
+/// `Ok(None)`: legacy client without a declaration. `Err`: invalid value
+/// (unknown kind or malformed platform) – the handshake is rejected.
+pub(crate) fn device_descriptor(proof: &Value) -> Result<Option<DeviceDescriptor>, ()> {
+    let Some(kind) = proof.get("kind") else {
+        return Ok(None);
+    };
+    let kind = kind.as_str().ok_or(())?;
+    if !DEVICE_KINDS.contains(&kind) {
+        return Err(());
+    }
+    let platform = match proof.get("platform") {
+        None | Some(Value::Null) => None,
+        Some(value) => {
+            let platform = value.as_str().ok_or(())?;
+            if platform.is_empty()
+                || platform.len() > 64
+                || !platform
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b))
+            {
+                return Err(());
+            }
+            Some(platform.to_owned())
+        }
+    };
+    Ok(Some(DeviceDescriptor {
+        kind: kind.to_owned(),
+        platform,
+    }))
+}
+
+#[cfg(test)]
 pub(super) fn authorize_or_bind_device_proof(
     root: &Path,
     user_id: &str,
     proof_key_thumbprint: &str,
     at_ms: i64,
+) -> bool {
+    authorize_or_bind_device_proof_with(root, user_id, proof_key_thumbprint, at_ms, None)
+}
+
+pub(super) fn authorize_or_bind_device_proof_with(
+    root: &Path,
+    user_id: &str,
+    proof_key_thumbprint: &str,
+    at_ms: i64,
+    descriptor: Option<&DeviceDescriptor>,
 ) -> bool {
     let Ok(binding) = device_binding(
         Some(proof_key_thumbprint),
@@ -530,7 +585,9 @@ pub(super) fn authorize_or_bind_device_proof(
          SET redeemed_at_ms=?2,
              device_pairing_id=?3,
              device_id=?4,
-             proof_key_thumbprint=?5
+             proof_key_thumbprint=?5,
+             device_kind=?6,
+             device_platform=?7
          WHERE user_id=?1
            AND revoked_at_ms IS NULL
            AND proof_key_thumbprint IS NULL
@@ -541,6 +598,8 @@ pub(super) fn authorize_or_bind_device_proof(
             binding.device_pairing_id,
             binding.device_id,
             binding.proof_key_thumbprint,
+            descriptor.map(|d| d.kind.as_str()),
+            descriptor.and_then(|d| d.platform.as_deref()),
         ],
     ) else {
         return false;

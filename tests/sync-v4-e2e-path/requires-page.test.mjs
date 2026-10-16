@@ -14,13 +14,13 @@ test('merged results retain durable outbox until the canonical page, including r
   const result={op_id:handle.op_id,client_seq:'1',status:'merged',requires_page:true,rev:'r5',seq:'5'};
   let resolved=false;handle.result.then(()=>resolved=true);
   await deliver(transport,result);await Promise.resolve();assert.equal(resolved,false,'result must wait for its authoritative page');
-  assert.equal((await kernel.sim.outbox())[0].awaiting_page.seq,'5');
+  assert.equal((await kernel.sim.outbox())[0].pending_result.seq,'5');
   await kernel.receivePage(page('5','server wins'));assert.equal((await handle.result).status,'accepted');
   assert.equal(kernel.appApi('notes','1').get('notes','a').get().title,'server wins');assert.deepEqual(await kernel.sim.outbox(),[]);
   const next=kernel.appApi('notes','1').patch('notes','a',{title:'second optimistic'});await next.local;await until(()=>transport.sent.length===2);
   await deliver(transport,{op_id:next.op_id,client_seq:'2',status:'migrated',requires_page:true,rev:'r6',seq:'6'});
   await kernel.close();transport=new Capture();kernel=createKernel({...options,transport});await kernel.ready;
-  assert.equal((await kernel.sim.outbox())[0].awaiting_page.seq,'6');
+  assert.equal((await kernel.sim.outbox())[0].pending_result.seq,'6');
   await kernel.receivePage(page('6','canonical after reload'));assert.equal(kernel.appApi('notes','1').get('notes','a').get().title,'canonical after reload');assert.deepEqual(await kernel.sim.outbox(),[]);
   const third=kernel.appApi('notes','1').patch('notes','a',{title:'must not overwrite canonical'});await third.local;await until(()=>transport.sent.some(e=>e.op_id===third.op_id));
   await kernel.receivePage(page('7','page arrived first'));

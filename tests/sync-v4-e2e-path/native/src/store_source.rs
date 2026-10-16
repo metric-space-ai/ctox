@@ -123,6 +123,11 @@ impl ReadAuthority for Policy {
     }
 }
 impl WriteAuthority for Policy {
+    fn authorize_command_intent(&self, _: &Transaction<'_>, participant: &str, command: &Value) -> rusqlite::Result<subscription::WritePermission> {
+        Ok(if participant == "alice" && command["app_id"] == "notes" && command["type"] == "bench.noop" {
+            subscription::WritePermission::Permit
+        } else { subscription::WritePermission::Reject("forbidden".into()) })
+    }
     fn authorize(&self, _: &Transaction<'_>, actor: &str, r: &Write) -> rusqlite::Result<subscription::WritePermission> {
         if actor != "alice" || resolved().projection(&r.collection).is_none() {
             return Err(rusqlite::Error::InvalidQuery);

@@ -21,6 +21,16 @@ pub trait SecretIntake {
     fn take(&self, ctx: &CapCallContext, field: &str) -> Option<String>;
 }
 
+/// Production intake: the value the native intake detached from the command
+/// being executed (store::detach_secret_intake_value / replicated sanitizer),
+/// keyed by the Core-bound ctx.command_id. Consumed on take.
+pub struct CoreSecretIntake;
+impl SecretIntake for CoreSecretIntake {
+    fn take(&self, ctx: &CapCallContext, field: &str) -> Option<String> {
+        crate::business_os::store::take_detached_secret_intake(&ctx.command_id, field)
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Args {

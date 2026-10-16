@@ -1,5 +1,5 @@
 // The native host and its two standalone test crates must exercise the same
-// WebRTC implementation, including the local ICE patch. Previously Sync tests
+// WebRTC implementation, including every declared local transport patch. Previously Sync tests
 // passed with 0.20.5 while the shipped daemon used 0.20.0-alpha.1.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -14,7 +14,19 @@ const transport = name => name === 'webrtc' || name === 'rtc' || name?.startsWit
 const locks = roots.map(base => {
   const manifest = read(base ? base + '/Cargo.toml' : 'Cargo.toml');
   const patch = manifest.split(/^\[patch\.crates-io\]\s*$/m)[1]?.split(/^\[/m)[0];
-  const icePath = patch?.match(/^rtc-ice = \{[^\n]*path = "([^"]+)"/m)?.[1];
+  const localPatches = new Map();
+  for (const entry of (patch ?? "").matchAll(/^([\w-]+)\s*=\s*\{([^}\n]*)\}/gm)) {
+    const path = entry[2].match(/\bpath\s*=\s*"([^"]+)"/)?.[1];
+    if (!path) continue;
+    const name = entry[2].match(/\bpackage\s*=\s*"([^"]+)"/)?.[1] ?? entry[1];
+    if (!transport(name)) continue;
+    const source = resolve(root, base, path);
+    const packageManifest = readFileSync(resolve(source, "Cargo.toml"), "utf8")
+      .split(/^\[package\]\s*$/m)[1]?.split(/^\[/m)[0] ?? "";
+    assert.equal(value(packageManifest, "name"), name, base + ": patch package identity mismatch");
+    assert.ok(!localPatches.has(name), base + ": duplicate local patch package");
+    localPatches.set(name, { source, version: value(packageManifest, "version") });
+  }
   const packages = read(base ? base + '/Cargo.lock' : 'Cargo.lock')
     .split(/^\[\[package\]\]\s*$/m).slice(1)
     .filter(block => transport(value(block, 'name')))
@@ -23,9 +35,10 @@ const locks = roots.map(base => {
       const version = value(block, 'version');
       let source = value(block, 'source');
       if (!source) {
-        assert.equal(name, 'rtc-ice', 'unrecognized local transport package');
-        assert.ok(icePath, base + ': local ICE package has no declared patch');
-        source = resolve(root, base, icePath);
+        const declared = localPatches.get(name);
+        assert.ok(declared, base + ': undeclared local transport package: ' + name);
+        assert.equal(version, declared.version, base + ': local transport patch version mismatch: ' + name);
+        source = declared.source;
       }
       return [name, { version, source, checksum: value(block, 'checksum') ?? null }];
     }).sort(([a], [b]) => a.localeCompare(b));

@@ -139,8 +139,8 @@ impl Controller {
         )
     }
 }
-fn saved_check(root: &Path) -> anyhow::Result<Value> {
-    let saved: Option<Value> = crate::persistence::load_json_payload(root, CHECK_KEY)?;
+async fn saved_check(root: &Path) -> anyhow::Result<Value> {
+    let saved: Option<Value> = crate::persistence::load_json_payload_owned(root, CHECK_KEY).await?;
     let binding = xai::credential_binding(root)?;
     Ok(saved
         .filter(|s| {
@@ -235,7 +235,7 @@ async fn handle(
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut models = Vec::new();
     let mut catalog_error = None;
-    let mut returned_check = saved_check(&authority.root)?;
+    let mut returned_check = saved_check(&authority.root).await?;
     if matches!(
         request.action.as_str(),
         "instance.grok.read" | "instance.grok.check" | "instance.grok.poll"
@@ -322,7 +322,12 @@ async fn handle(
                 .retained
                 .lock()
                 .map_err(|_| anyhow::anyhow!("unavailable"))? = None;
-            crate::persistence::store_json_payload(&authority.root, CHECK_KEY, None::<&Value>)?;
+            crate::persistence::store_json_payload_owned(
+                &authority.root,
+                CHECK_KEY,
+                None::<&Value>,
+            )
+            .await?;
             returned_check = Value::Null;
         }
         "instance.grok.check" => {
@@ -350,11 +355,12 @@ async fn handle(
             // post-route version, never a renderer-supplied fingerprint.
             ensure!(after.is_some() || before.is_none(), "credential_changed");
             let check = json!({"modelId":model,"status":if result.is_ok(){"ok"}else{"error"},"checkedAt":chrono::Utc::now().timestamp_millis(),"latencyMs":if result.is_ok(){Some(started.elapsed().as_millis() as u64)}else{None},"errorCode":result.err()});
-            crate::persistence::store_json_payload(
+            crate::persistence::store_json_payload_owned(
                 &authority.root,
                 CHECK_KEY,
                 Some(&json!({"binding":after,"check":check})),
-            )?;
+            )
+            .await?;
             returned_check = check;
         }
         _ => {}
@@ -363,7 +369,7 @@ async fn handle(
     // Discovery can refresh the credential; never publish a cached green check
     // bound to the version that existed before that request.
     if request.action != "instance.grok.check" || returned_check["status"] == "ok" {
-        returned_check = saved_check(&authority.root)?;
+        returned_check = saved_check(&authority.root).await?;
     }
     Ok(GuardedAuxiliaryResponse {
         result: json!({"version":1,"action":request.action,"operationId":request.operation_id,"installed":xai::subscription_installed(&authority.root),"accountLabel":"Grok Build subscription","login":controller.public_login(&authority)?,"models":models,"check":returned_check}),
@@ -415,6 +421,29 @@ pub(super) fn register(
 #[cfg(test)]
 mod tests {
     use super::*;
+    async fn install_fixture_core(
+        root: &Path,
+    ) -> anyhow::Result<Arc<crate::persistence::CorePersistence>> {
+        let path = crate::persistence::sqlite_path(root);
+        anyhow::ensure!(
+            path.starts_with(root),
+            "fixture requires an isolated state root"
+        );
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        let writer = ctox_store::registry::Registry.open(
+            ctox_store::DbId::new(path)?,
+            ctox_store::writer::WriterOptions::default(),
+        )?;
+        writer.ready().await?;
+        let readers = ctox_store::read_pool::ReadPool::for_database(
+            writer.db_id(),
+            writer.generation(),
+            Default::default(),
+            Default::default(),
+        )
+        .await?;
+        crate::persistence::install_core_owner(root, writer, readers).await
+    }
     #[tokio::test]
     async fn shared_route_requires_real_text_and_reset_invalidates_check() -> anyhow::Result<()> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -430,6 +459,7 @@ mod tests {
             ),
         ] {
             let root = tempfile::tempdir()?;
+            let _core = install_fixture_core(root.path()).await?;
             let record = json!({"access":"private-fixture","refresh":null,"identity":null,"expires_at":chrono::Utc::now().timestamp()+3600,"token_endpoint":"https://auth.x.ai/token"});
             crate::secrets::write_secret_record(
                 root.path(),
@@ -479,7 +509,7 @@ mod tests {
                 if expected.is_null() { "ok" } else { "error" }
             );
             assert!(!response.to_string().contains("private-fixture"));
-            assert!(!saved_check(root.path())?.is_null());
+            assert!(!saved_check(root.path()).await?.is_null());
             crate::secrets::write_secret_record(
                 root.path(),
                 "provider-subscriptions",
@@ -488,7 +518,7 @@ mod tests {
                 None,
                 json!({}),
             )?;
-            assert!(saved_check(root.path())?.is_null());
+            assert!(saved_check(root.path()).await?.is_null());
         }
         Ok(())
     }
@@ -497,6 +527,7 @@ mod tests {
     ) -> anyhow::Result<()> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let root = tempfile::tempdir()?;
+        let _core = install_fixture_core(root.path()).await?;
         let authority = auth(root.path(), "chef", Arc::new(|| true))?;
         let record = json!({"access":"private-before","refresh":null,"identity":null,"expires_at":chrono::Utc::now().timestamp()+3600,"token_endpoint":"https://auth.x.ai/token"});
         crate::secrets::write_secret_record(
@@ -507,11 +538,12 @@ mod tests {
             None,
             json!({}),
         )?;
-        crate::persistence::store_json_payload(
+        crate::persistence::store_json_payload_owned(
             root.path(),
             CHECK_KEY,
             Some(&json!({"binding":xai::credential_binding(root.path())?,"check":{"status":"ok"}})),
-        )?;
+        )
+        .await?;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         xai::test_endpoint(
             root.path(),
@@ -605,6 +637,7 @@ mod tests {
     #[tokio::test]
     async fn read_rejects_member_and_retired_owner() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
+        let _core = install_fixture_core(root.path()).await?;
         let controller = Arc::new(Controller::new(root.path())?);
         for (role, current) in [("user", true), ("chef", false)] {
             assert!(handle(
@@ -630,6 +663,7 @@ mod tests {
     #[tokio::test]
     async fn timeout_and_retirement_drop_work() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
+        let _core = install_fixture_core(root.path()).await?;
         let current = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let c = current.clone();
         let auth = auth(
