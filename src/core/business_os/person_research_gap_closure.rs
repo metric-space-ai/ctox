@@ -9,9 +9,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use super::person_research_command::{
-    independent_research_evidence_count, merge_json_object_values,
+    contact_exclusion_identity, contact_matches_exclusion, contact_reference_matches,
+    excluded_contact_identities, independent_research_evidence_count, merge_json_object_values,
     outbound_lead_generation_research_outcome_patch, parse_requested_fields,
-    ActiveResearchCommandGuard,
+    research_exclusion_candidates, without_retired_research_fields, ActiveResearchCommandGuard,
 };
 use super::store::{self, BusinessCommand};
 use crate::mission::channels;
@@ -36,7 +37,8 @@ struct ResearchWritebackRequest {
     /// by the harness worker.
     #[serde(default)]
     gap_task_id: String,
-    #[serde(deserialize_with = "lenient_field_status")]
+    /// May be empty when the writeback only carries `result.excluded`.
+    #[serde(default, deserialize_with = "lenient_field_status")]
     field_status: BTreeMap<String, FieldStatus>,
     #[serde(default)]
     result: ResearchWritebackResult,
@@ -122,6 +124,7 @@ fn hoist_top_level_field_entries(mut payload: Value) -> Value {
         "person_records",
         "evidence",
         "person_field_status",
+        "excluded",
     ] {
         if let Some(value) = object.remove(key) {
             result.entry(key.to_string()).or_insert(value);
@@ -138,6 +141,7 @@ fn hoist_top_level_field_entries(mut payload: Value) -> Value {
                 "person_records",
                 "evidence",
                 "person_field_status",
+                "excluded",
             ]
             .contains(&key.as_str())
         })
@@ -576,6 +580,62 @@ struct ResearchWritebackResult {
     /// `field_status`: `{key: {value, sources: [{url, quote}], reason}}`.
     #[serde(default, deserialize_with = "lenient_object")]
     custom_fields: Value,
+    /// Stored data the tenant's research instructions forbid ("Prokura wird
+    /// nicht recherchiert"): the skill used to demand it, the review then
+    /// demanded its removal, and no writeback could delete a contact or clear
+    /// a field (customer tenant, 400-lead stress test 15./16.10.2026: 5-9
+    /// rework rounds per lead, then terminal failure).
+    #[serde(default)]
+    excluded: Option<ResearchExclusion>,
+}
+
+/// `result.excluded`: `{fields: [key], contacts: [contact id | person_key],
+/// reason: "<the research instruction>"}`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResearchExclusion {
+    #[serde(default, deserialize_with = "lenient_string_list")]
+    fields: Vec<String>,
+    #[serde(default, deserialize_with = "lenient_string_list")]
+    contacts: Vec<String>,
+    #[serde(default, deserialize_with = "lenient_string")]
+    reason: String,
+}
+
+/// A list of names: `"a"`, `["a", "b"]`, numbers, or objects naming their
+/// `person_key`/`id`/`field`.
+fn lenient_string_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error as _;
+    let raw = match Value::deserialize(deserializer)? {
+        Value::String(text) if text.trim().starts_with('[') => {
+            serde_json::from_str(text.trim()).map_err(D::Error::custom)?
+        }
+        other => other,
+    };
+    let items = match raw {
+        Value::Null => Vec::new(),
+        Value::Array(items) => items,
+        other => vec![other],
+    };
+    items
+        .into_iter()
+        .map(|item| match item {
+            Value::String(text) => Ok(text.trim().to_string()),
+            Value::Number(number) => Ok(number.to_string()),
+            Value::Object(object) => ["person_key", "id", "field", "key"]
+                .iter()
+                .find_map(|key| object.get(*key).and_then(Value::as_str))
+                .map(|text| text.trim().to_string())
+                .ok_or_else(|| D::Error::custom("expected a name, a contact id or a person_key")),
+            other => Err(D::Error::custom(format!(
+                "expected a name, a contact id or a person_key, got {other}"
+            ))),
+        })
+        .filter(|item| !matches!(item, Ok(text) if text.is_empty()))
+        .collect()
 }
 
 /// Live workers send `evidence`/`person_records` as `""` or as one object;
@@ -733,7 +793,7 @@ Phase-A-Kommando: {research_command_id}
 - Halte den fortlaufenden Sammelstand nach jedem Versuch in `gap_closure/field_status.json` fest. Diese Datei ist der Checkpoint für einen Folgeturn.
 - Terminale Feldstatus sind ausschließlich `verified`, `no_match`, `unsupported` und `action_required`.
 - `verified` verlangt einen Wert und Belege mit source_id, URL und wörtlichem Belegtext.
-- Zwei unabhängige Hosts sind Pflicht für Angaben, die Dritte prüfen können: Firmenname, Anschrift, PLZ, Ort, Land, Aktivitätsstatus, frühere Namen, Geschäftstätigkeit, Geschäftsführung, Prokura, WZ-Code, Umsatz, Mitarbeiter.
+- Zwei unabhängige Hosts sind Pflicht für Angaben, die Dritte prüfen können: Firmenname, Anschrift, PLZ, Ort, Land, Aktivitätsstatus, frühere Namen, Geschäftstätigkeit, Geschäftsführung, WZ-Code, Umsatz, Mitarbeiter.
 - EIN Beleg genügt bei Selbstauskünften, für die es keine zweite unabhängige Quelle geben kann: firma_domain, firma_email, firma_telefon, firma_fax, firma_postfach, firma_besucheranschrift, firma_postanschrift, firma_homepage_fact_sheet sowie alle person_-Felder. Belege sie von der Unternehmensseite bzw. dem Profil selbst und trage den Wert ein, statt ihn als no_match zu verwerfen.
 - Listen sind reine JSON-Listen: `"sources": [ {{...}}, {{...}} ]`. NIEMALS ein Traegerobjekt wie `{{"item": [...]}}`, weder bei `sources` und `attempts` noch bei `result.person_records` und `result.evidence`.
 - E-Mail-Pruefung (`person_email_validation`) uebernimmt der Daemon selbst: nach jedem Rueckschreiben prueft er jede gelieferte Kontaktadresse ueber experte.de und haengt das Ergebnis dem Kontakt an. Liefere die Adresse als `person_email` mit Beleg und dem `person_key` der Person. Setze `person_email_validation` NICHT auf `no_match`, nur weil du die Pruefung nicht selbst ausfuehren kannst.
@@ -1027,12 +1087,13 @@ fn merge_field_status(existing: Option<&Value>, incoming: Value) -> Value {
         for (field, status) in incoming {
             if is_filler_field_status(status) {
                 let previous_is_informative = merged.get(field).is_some_and(|previous| {
-                    !previous
-                        .get("status")
-                        .and_then(Value::as_str)
-                        .unwrap_or("unsupported")
-                        .trim()
-                        .eq_ignore_ascii_case("unsupported")
+                    is_excluded_field_status(previous)
+                        || !previous
+                            .get("status")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unsupported")
+                            .trim()
+                            .eq_ignore_ascii_case("unsupported")
                 });
                 if previous_is_informative {
                     continue;
@@ -1052,6 +1113,13 @@ fn merge_field_status(existing: Option<&Value>, incoming: Value) -> Value {
             // ohne diese Ausnahme lehnte der Speicher jede belegte Korrektur
             // ab, der Review verlangte sie weiter, sechs Laeufe erschoepften ihr
             // Budget.
+            // An exclusion by the research instructions is an owner rule, not
+            // a finding: only a new verified value (the rule changed) lifts it.
+            if merged.get(field).is_some_and(is_excluded_field_status)
+                && !is_verified_status(status)
+            {
+                continue;
+            }
             if let Some(previous) = merged.get_mut(field) {
                 if is_unrefuted_verified(previous)
                     && !is_verified_status(status)
@@ -1067,6 +1135,17 @@ fn merge_field_status(existing: Option<&Value>, incoming: Value) -> Value {
         }
     }
     Value::Object(merged)
+}
+
+/// Set only by `apply_research_exclusion_to_fields`; incoming statuses lose the
+/// marker in `strip_exclusion_markers`, so a worker cannot forge one.
+const EXCLUSION_MARKER: &str = "excluded_by_research_instructions";
+
+fn is_excluded_field_status(status: &Value) -> bool {
+    status
+        .get(EXCLUSION_MARKER)
+        .and_then(Value::as_str)
+        .is_some_and(|reason| !reason.trim().is_empty())
 }
 
 fn is_verified_status(status: &Value) -> bool {
@@ -1607,6 +1686,10 @@ fn open_persons_for_field(lead: &Value, field: &str) -> Option<Vec<String>> {
 /// question is still open, whether the worker never delivered the field or the
 /// evidence gate rejected what it delivered.
 fn research_field_is_answered(status: &Value) -> bool {
+    // Excluded by the research instructions: nothing left to research.
+    if is_excluded_field_status(status) {
+        return true;
+    }
     if super::outbound_field_review::is_refuted_no_match(status) {
         return false;
     }
@@ -1810,11 +1893,185 @@ fn reject_evidence_free_writeback(request: &ResearchWritebackRequest) -> anyhow:
                 .is_some_and(|list| !list.is_empty())
         })
     });
+    // Removing data the research instructions forbid is a result of its own.
+    let excludes = request.result.excluded.is_some();
     anyhow::ensure!(
-        any_verified || any_evidence || any_person_verified || any_person_evidence,
+        any_verified || any_evidence || any_person_verified || any_person_evidence || excludes,
         "evidence-free research writeback rejected: no field is verified and no field carries a source or a documented attempt; a `no_match` needs the documented search and page reads that led to it"
     );
     Ok(())
+}
+
+/// A validated `result.excluded`.
+struct ResolvedExclusion {
+    fields: Vec<String>,
+    /// The contacts (stored or Sellify-known) the references named.
+    contacts: Vec<Value>,
+    reason: String,
+}
+
+fn strip_exclusion_markers(request: &mut ResearchWritebackRequest) {
+    for status in request.field_status.values_mut() {
+        status.extra.remove(EXCLUSION_MARKER);
+    }
+    if let Some(people) = request.result.person_field_status.as_object_mut() {
+        for fields in people.values_mut().filter_map(Value::as_object_mut) {
+            for status in fields.values_mut().filter_map(Value::as_object_mut) {
+                status.remove(EXCLUSION_MARKER);
+            }
+        }
+    }
+}
+
+fn resolve_research_exclusion(
+    exclusion: Option<ResearchExclusion>,
+    lead: &Value,
+    known_person_records: &Value,
+) -> anyhow::Result<Option<ResolvedExclusion>> {
+    let Some(exclusion) = exclusion else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        !exclusion.fields.is_empty() || !exclusion.contacts.is_empty(),
+        "result.excluded names neither fields nor contacts; send {{\"fields\": [\"<field>\"], \"contacts\": [\"<person_key or contact id>\"], \"reason\": \"<research instruction>\"}} or leave it out"
+    );
+    let reason = exclusion.reason.trim().to_string();
+    anyhow::ensure!(
+        !reason.is_empty(),
+        "result.excluded.reason is empty: name the research instruction that excludes this data"
+    );
+    let mut fields = Vec::new();
+    for field in exclusion.fields {
+        anyhow::ensure!(
+            parse_requested_fields(std::slice::from_ref(&field)).is_ok(),
+            "result.excluded.fields: `{field}` is not a research field"
+        );
+        anyhow::ensure!(
+            !field.starts_with("person_"),
+            "result.excluded.fields: `{field}` is a person field; exclude the person through result.excluded.contacts"
+        );
+        if !fields.contains(&field) {
+            fields.push(field);
+        }
+    }
+    let candidates = research_exclusion_candidates(lead, known_person_records);
+    let mut contacts: Vec<Value> = Vec::new();
+    for reference in exclusion.contacts {
+        let hits = candidates
+            .iter()
+            .filter(|contact| contact_reference_matches(contact, &reference))
+            .collect::<Vec<_>>();
+        anyhow::ensure!(
+            !hits.is_empty(),
+            "result.excluded.contacts: `{reference}` names no contact of this lead; use the contact's `person_key` or `id` as business_os.get_record shows it"
+        );
+        for hit in hits {
+            if !contacts.contains(hit) {
+                contacts.push(hit.clone());
+            }
+        }
+    }
+    Ok(Some(ResolvedExclusion {
+        fields,
+        contacts,
+        reason,
+    }))
+}
+
+/// Persists the exclusion on the lead and removes the excluded contacts with
+/// their person statuses and evidence. Runs before the outcome patch, which
+/// keeps them out (`excluded_contact_identities`).
+fn record_research_exclusion(lead: &mut Value, exclusion: &ResolvedExclusion, now: i64) {
+    if !lead["payload"].is_object() {
+        lead["payload"] = serde_json::json!({});
+    }
+    let record = &mut lead["payload"]["research_exclusions"];
+    if !record.is_object() {
+        *record = serde_json::json!({});
+    }
+    for field in &exclusion.fields {
+        record["fields"][field.as_str()] =
+            serde_json::json!({"reason": exclusion.reason, "excluded_at_ms": now});
+    }
+    let mut identities = excluded_contact_identities(lead);
+    let mut removed_keys = BTreeSet::new();
+    for contact in &exclusion.contacts {
+        removed_keys.extend(contact_person_keys(contact));
+        let mut identity = contact_exclusion_identity(contact);
+        if !identities
+            .iter()
+            .any(|known| contact_matches_exclusion(&identity, known))
+        {
+            identity["reason"] = Value::String(exclusion.reason.clone());
+            identity["excluded_at_ms"] = Value::from(now);
+            identities.push(identity);
+        }
+    }
+    if !exclusion.contacts.is_empty() {
+        lead["payload"]["research_exclusions"]["contacts"] = Value::Array(identities.clone());
+    }
+    if let Some(contacts) = lead.get_mut("contacts").and_then(Value::as_array_mut) {
+        contacts.retain(|contact| {
+            let excluded = identities
+                .iter()
+                .any(|identity| contact_matches_exclusion(contact, identity));
+            if excluded {
+                removed_keys.extend(contact_person_keys(contact));
+            }
+            !excluded
+        });
+    }
+    if let Some(statuses) = lead
+        .get_mut("person_field_status")
+        .and_then(Value::as_object_mut)
+    {
+        statuses.retain(|person_key, _| !removed_keys.contains(person_key));
+    }
+    if let Some(evidence) = lead.get_mut("evidence").and_then(Value::as_array_mut) {
+        evidence.retain(|entry| {
+            let text = |key: &str| entry.get(key).and_then(Value::as_str).map(str::trim);
+            !text("field_key").is_some_and(|field| exclusion.fields.iter().any(|f| f == field))
+                && !text("person_key").is_some_and(|person| removed_keys.contains(person))
+        });
+    }
+}
+
+/// An excluded field loses its value and gets a terminal status that names the
+/// instruction. It deliberately replaces a verified status: the owner's rule
+/// is not a weaker finding (merge_field_status protects it the same way).
+fn apply_research_exclusion_to_fields(
+    lead: &mut Value,
+    exclusion: &ResolvedExclusion,
+    revision: &Value,
+) {
+    for field in &exclusion.fields {
+        if let Some(data) = lead.get_mut("data").and_then(Value::as_object_mut) {
+            data.remove(field);
+        }
+        if !lead["field_status"].is_object() {
+            lead["field_status"] = serde_json::json!({});
+        }
+        let mut status = serde_json::json!({
+            "status": "unsupported",
+            "value": Value::Null,
+            "sources": [],
+            "attempts": [],
+            "reason": format!("excluded by research instructions: {}", exclusion.reason),
+            "revision": revision,
+            "review": Value::Null,
+        });
+        status[EXCLUSION_MARKER] = Value::String(exclusion.reason.clone());
+        lead["field_status"][field.as_str()] = status;
+        for list in [
+            "researched_field_keys",
+            "verified_field_keys",
+            "unverified_field_keys",
+        ] {
+            if let Some(keys) = lead["payload"].get_mut(list).and_then(Value::as_array_mut) {
+                keys.retain(|key| key.as_str() != Some(field.as_str()));
+            }
+        }
+    }
 }
 
 pub(super) fn handle_research_writeback(
@@ -1890,6 +2147,9 @@ pub(super) fn handle_research_writeback(
         None => research_command_requested_fields(root, &request.research_command_id)?
             .unwrap_or_else(|| request.field_status.keys().cloned().collect::<Vec<_>>()),
     };
+    // Retired fields are no longer researched, even when an older command or
+    // gap task still lists them.
+    let requested_fields = without_retired_research_fields(requested_fields);
     anyhow::ensure!(
         !requested_fields.is_empty(),
         "research writeback field_status must not be empty"
@@ -1937,6 +2197,11 @@ pub(super) fn handle_research_writeback(
                 .cloned()
         })
         .unwrap_or_else(|| Value::Array(Vec::new()));
+    // Validated before anything is stored: an exclusion naming an unknown
+    // field or contact fails the call with a message the worker can act on.
+    strip_exclusion_markers(&mut request);
+    let exclusion =
+        resolve_research_exclusion(request.result.excluded.take(), &lead, &known_person_records)?;
     // Provenance belongs to this native writeback, never to worker-supplied
     // extra metadata. Stamp before moving result fields into the projection.
     let now = super::person_research_command::now_ms();
@@ -1968,6 +2233,9 @@ pub(super) fn handle_research_writeback(
         "known_person_records": known_person_records,
     });
     add_field_status_evidence(&mut projection_result, &request.field_status)?;
+    if let Some(exclusion) = &exclusion {
+        record_research_exclusion(&mut lead, exclusion, now);
+    }
     let previous_keys = previous_research_keys(&lead);
     let previous_person_statuses = lead
         .get("person_field_status")
@@ -1982,6 +2250,9 @@ pub(super) fn handle_research_writeback(
         serde_json::to_value(&request.field_status)?,
     );
     lead["field_status"] = merged_field_status;
+    if let Some(exclusion) = &exclusion {
+        apply_research_exclusion_to_fields(&mut lead, exclusion, &serde_json::to_value(&revision)?);
+    }
     rejections.extend(apply_custom_field_results(
         &mut lead,
         &request.result.custom_fields,
@@ -2136,6 +2407,9 @@ pub(super) fn handle_research_writeback(
         .keys()
         .map(|field| ("lead".to_string(), String::new(), field.clone()))
         .collect::<BTreeSet<_>>();
+    for field in exclusion.iter().flat_map(|exclusion| &exclusion.fields) {
+        issued_keys.insert(("lead".to_string(), String::new(), field.clone()));
+    }
     for (person, fields) in request
         .result
         .person_field_status
@@ -2184,6 +2458,16 @@ pub(super) fn handle_research_writeback(
         // Der Agent erfaehrt genau, was verworfen wurde, und kann im selben
         // Auftrag nachliefern statt die ganze Firma neu zu recherchieren.
         "rejections": rejections,
+        // What `result.excluded` removed: fields and the contact ids that left
+        // the lead (they are not re-added by later writebacks).
+        "excluded": exclusion.as_ref().map(|exclusion| serde_json::json!({
+            "fields": exclusion.fields,
+            "contacts": exclusion
+                .contacts
+                .iter()
+                .filter_map(|contact| contact.get("id").cloned())
+                .collect::<Vec<_>>(),
+        })).unwrap_or(Value::Null),
         "summary": format!(
             "{} Feld(er) gespeichert, {} Beleg(e) verworfen, {} Feld(er) noch offen. Ein Feld gilt erst als beantwortet, wenn es verifiziert ist (eine passende externe Quelle, deren Zitat den Wert nennt; Sellify allein belegt nichts; widersprechen sich Quellen, bleibt das Feld action_required) oder als no_match belegt wurde. Offene Felder sind keine Ablehnung: hole die fehlende externe Quelle bzw. den Wert und sende sie gesammelt in einem weiteren Aufruf; gespeicherte Felder nicht erneut senden.",
             accepted_count,
@@ -3918,6 +4202,7 @@ fn canonical_requested_fields(
     } else {
         fields
     };
+    let fields = without_retired_research_fields(fields);
     parse_requested_fields(&fields)?;
     Ok(fields)
 }
@@ -4079,7 +4364,6 @@ fn field_definition(field: &str) -> &'static str {
         "firma_geschaeftstaetigkeit" => "sachliche Beschreibung der Geschäftstätigkeit",
         "firma_homepage_fact_sheet" => "strukturierte Kernaussagen der offiziellen Homepage",
         "firma_geschaeftsfuehrung" => "aktuell belegte Geschäftsführung",
-        "firma_prokura" => "aktuell belegte Prokuristinnen und Prokuristen",
         "wz_code" => "belegter Wirtschaftszweig-/WZ-Code",
         "umsatz" => "aktuellster belegbarer Umsatz mit Zeitraum und Einheit",
         "mitarbeiter" => "aktuellste belegbare Mitarbeiterzahl mit Zeitraum",
@@ -4405,11 +4689,17 @@ mod tests {
         ] {
             assert!(metadata.get(key).is_some(), "missing metadata key {key}");
         }
+        // 32 canonical fields minus the retired `firma_prokura` (owner
+        // 15.10.2026: "Prokura gibt es nicht mehr").
         assert_eq!(
             metadata["requested_fields"].as_array().map(Vec::len),
-            Some(32)
+            Some(31)
         );
-        assert_eq!(metadata["open_fields"].as_array().map(Vec::len), Some(24));
+        assert!(!metadata["requested_fields"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("firma_prokura")));
+        assert_eq!(metadata["open_fields"].as_array().map(Vec::len), Some(23));
         assert_eq!(
             metadata["terminal_fields"].as_object().map(Map::len),
             Some(8)
@@ -4696,6 +4986,7 @@ mod tests {
                 person_field_status: Default::default(),
                 evidence: Vec::new(),
                 custom_fields: Default::default(),
+                excluded: None,
             },
         }
     }
@@ -6280,7 +6571,7 @@ mod tests {
             temp.path(),
             research_command_id,
             record_id,
-            &["firma_telefon", "firma_prokura"],
+            &["firma_telefon", "firma_fruehere_namen"],
         )?;
         let unissued = serde_json::json!({
             "status":"no_match", "value":null, "reason":"Documented prior negative",
@@ -6299,7 +6590,7 @@ mod tests {
         let mut prior =
             store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
                 .context("fixture lead")?;
-        prior["field_status"] = serde_json::json!({"firma_prokura":unissued});
+        prior["field_status"] = serde_json::json!({"firma_fruehere_namen":unissued});
         store::upsert_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id, 1, prior)?;
         let command = writeback_command(
             record_id,
@@ -6318,16 +6609,16 @@ mod tests {
         assert!(result["accepted_fields"]
             .as_array()
             .unwrap()
-            .contains(&serde_json::json!("firma_prokura")));
+            .contains(&serde_json::json!("firma_fruehere_namen")));
         let saved = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
             .context("persisted native writeback")?;
         assert_eq!(
-            saved["field_status"]["firma_prokura"], unissued,
+            saved["field_status"]["firma_fruehere_namen"], unissued,
             "no historical record correction or invented receipt"
         );
         let conn = rusqlite::Connection::open(store::rxdb_store_path(temp.path()))?;
         let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM outbound_native_field_status_witnesses WHERE record_id=?1 AND field='firma_prokura'",
+            "SELECT COUNT(*) FROM outbound_native_field_status_witnesses WHERE record_id=?1 AND field='firma_fruehere_namen'",
             [record_id], |row| row.get(0))?;
         assert_eq!(
             count, 0,
@@ -7445,5 +7736,362 @@ mod tests {
         assert_eq!(lead["field_status"]["firma_telefon"]["status"], "verified");
         assert_eq!(lead["data"]["firma_telefon"], "+49 2621 12-0");
         Ok(())
+    }
+
+    const EXCLUSION_REASON: &str =
+        "Prokura wird nicht recherchiert, weder als Feld noch als Ansprechpartner.";
+
+    fn create_exclusion_fixture(
+        root: &Path,
+        research_command_id: &str,
+        record_id: &str,
+        known_person_records: Value,
+        mut lead: Value,
+    ) -> anyhow::Result<()> {
+        drop(store::open_store(root)?);
+        seed_rxdb_collection_table_for_tests(root, LEAD_COLLECTION)?;
+        // The app still lists the retired field; the native path drops it.
+        let payload = serde_json::json!({
+            "company": "Example GmbH",
+            "lead_id": record_id,
+            "fields": ["firma_telefon", "firma_prokura"],
+            "research_instructions": EXCLUSION_REASON,
+            "known_person_records": known_person_records,
+        });
+        let conn = store::open_store(root)?;
+        conn.execute(
+            "INSERT INTO business_commands
+                (command_id, module, command_type, record_id, status, payload_json, client_context_json, observed_at_ms)
+             VALUES (?1, 'outbound-lead-generation', 'business_os.chat.task', ?2, 'running', ?3, '{}', 1)",
+            rusqlite::params![research_command_id, record_id, serde_json::to_string(&payload)?],
+        )?;
+        drop(conn);
+        lead["id"] = serde_json::json!(record_id);
+        lead["research_status"] = serde_json::json!("running");
+        lead["payload"] = serde_json::json!({"last_research_command_id": research_command_id});
+        for (key, empty) in [
+            ("data", serde_json::json!({})),
+            ("contacts", serde_json::json!([])),
+            ("evidence", serde_json::json!([])),
+        ] {
+            if lead.get(key).is_none() {
+                lead[key] = empty;
+            }
+        }
+        store::upsert_rxdb_collection_record(root, LEAD_COLLECTION, record_id, 1, lead)?;
+        Ok(())
+    }
+
+    fn exclusion_writeback(
+        record_id: &str,
+        research_command_id: &str,
+        step: usize,
+        excluded: Option<Value>,
+    ) -> BusinessCommand {
+        let mut result = serde_json::json!({"person_records": [], "evidence": []});
+        if let Some(excluded) = excluded {
+            result["excluded"] = excluded;
+        }
+        let mut command = writeback_command(
+            record_id,
+            serde_json::json!({
+                "record_id": record_id, "module": "outbound-lead-generation",
+                "research_command_id": research_command_id, "gap_task_id": "",
+                "field_status": {"firma_telefon": {"status": "verified", "value": "+4930123456",
+                    "sources": [{"source_id": "example.de", "url": "https://www.example.de/impressum",
+                        "quote": "+4930123456"}]}},
+                "result": result
+            }),
+        );
+        command.id = Some(format!("writeback-{record_id}-{step}"));
+        command
+    }
+
+    fn contact_keys(lead: &Value) -> Vec<String> {
+        lead["contacts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|contact| contact["person_key"].as_str().map(str::to_string))
+            .collect()
+    }
+
+    #[test]
+    fn research_writeback_exclusion_clears_a_verified_field_and_survives_later_fillers(
+    ) -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let (record_id, command_id) = ("lead-exclude-field", "research-exclude-field");
+        create_exclusion_fixture(
+            temp.path(),
+            command_id,
+            record_id,
+            serde_json::json!([]),
+            serde_json::json!({
+                "data": {"firma_name": "Example GmbH", "firma_prokura": "Paula Prokur"},
+                "field_status": {"firma_prokura": {"status": "verified", "value": "Paula Prokur",
+                    "sources": [{"source_id": "northdata.de", "url": "https://www.northdata.de/example",
+                        "quote": "Prokura: Paula Prokur"}]}},
+                "evidence": [{"field_key": "firma_prokura", "source_id": "northdata.de",
+                    "source_url": "https://www.northdata.de/example", "quote": "Prokura: Paula Prokur"}]
+            }),
+        )?;
+        let result = handle_research_writeback(
+            temp.path(),
+            &exclusion_writeback(
+                record_id,
+                command_id,
+                1,
+                Some(serde_json::json!({"fields": ["firma_prokura"], "reason": EXCLUSION_REASON})),
+            ),
+        )?;
+        assert_eq!(result["ok"], true, "{result}");
+        assert_eq!(
+            result["excluded"]["fields"],
+            serde_json::json!(["firma_prokura"])
+        );
+        assert_eq!(result["open_fields"], serde_json::json!([]), "{result}");
+        assert_eq!(result["rejections"], serde_json::json!([]), "{result}");
+        assert_eq!(result["research_status"], "completed", "{result}");
+        let saved = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("saved lead")?;
+        assert!(saved["data"].get("firma_prokura").is_none(), "{saved}");
+        assert_eq!(saved["data"]["firma_name"], "Example GmbH");
+        let status = &saved["field_status"]["firma_prokura"];
+        assert_eq!(status["status"], "unsupported");
+        assert!(status["value"].is_null());
+        assert_eq!(
+            status["reason"],
+            format!("excluded by research instructions: {EXCLUSION_REASON}")
+        );
+        assert!(research_field_is_answered(status));
+        assert!(!saved["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["field_key"] == "firma_prokura"));
+        assert_eq!(
+            saved["payload"]["research_exclusions"]["fields"]["firma_prokura"]["reason"],
+            EXCLUSION_REASON
+        );
+
+        // A later writeback without the exclusion, whose own status tries to
+        // forge the marker, neither reopens the field nor stores the marker.
+        let mut later = exclusion_writeback(record_id, command_id, 2, None);
+        later.payload["field_status"]["firma_telefon"][EXCLUSION_MARKER] =
+            serde_json::json!("forged");
+        let result = handle_research_writeback(temp.path(), &later)?;
+        assert_eq!(result["ok"], true, "{result}");
+        let saved = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("saved lead")?;
+        assert!(is_excluded_field_status(
+            &saved["field_status"]["firma_prokura"]
+        ));
+        assert!(saved["field_status"]["firma_telefon"]
+            .get(EXCLUSION_MARKER)
+            .is_none());
+        assert!(saved["data"].get("firma_prokura").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn research_writeback_exclusion_removes_a_sellify_prokurist_for_good() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let (record_id, command_id) = ("lead-exclude-sellify", "research-exclude-sellify");
+        create_exclusion_fixture(
+            temp.path(),
+            command_id,
+            record_id,
+            serde_json::json!([
+                {"sellify_person_id": "sellify-person-77", "person_vorname": "Paula",
+                    "person_nachname": "Prokur", "person_funktion": "Prokura"},
+                {"sellify_person_id": "sellify-person-78", "person_vorname": "Gerd",
+                    "person_nachname": "Chef", "person_funktion": "Geschäftsführer"}
+            ]),
+            serde_json::json!({}),
+        )?;
+        handle_research_writeback(
+            temp.path(),
+            &exclusion_writeback(record_id, command_id, 1, None),
+        )?;
+        let saved = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("saved lead")?;
+        let keys = contact_keys(&saved);
+        assert!(keys.contains(&"sellify-person-77".to_string()), "{saved}");
+        assert!(keys.contains(&"sellify-person-78".to_string()), "{saved}");
+
+        let result = handle_research_writeback(
+            temp.path(),
+            &exclusion_writeback(
+                record_id,
+                command_id,
+                2,
+                Some(
+                    serde_json::json!({"contacts": ["sellify-person-77"], "reason": EXCLUSION_REASON}),
+                ),
+            ),
+        )?;
+        assert_eq!(result["ok"], true, "{result}");
+        assert_eq!(
+            result["excluded"]["contacts"],
+            serde_json::json!(["contact_sellify_sellify-person-77"])
+        );
+        let saved = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("saved lead")?;
+        assert_eq!(contact_keys(&saved), vec!["sellify-person-78".to_string()]);
+        assert_eq!(
+            saved["payload"]["research_exclusions"]["contacts"][0]["person_key"],
+            "sellify-person-77"
+        );
+
+        // Sellify still lists the person; a later writeback without the
+        // exclusion must not bring the contact back.
+        handle_research_writeback(
+            temp.path(),
+            &exclusion_writeback(record_id, command_id, 3, None),
+        )?;
+        let saved = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("saved lead")?;
+        assert_eq!(contact_keys(&saved), vec!["sellify-person-78".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn research_writeback_exclusion_drops_an_excluded_primary_contact_from_the_selection(
+    ) -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let (record_id, command_id) = ("lead-exclude-primary", "research-exclude-primary");
+        create_exclusion_fixture(
+            temp.path(),
+            command_id,
+            record_id,
+            serde_json::json!([]),
+            serde_json::json!({
+                "contacts": [
+                    {"id": "contact-p", "person_key": "p-prokur-paula", "person_vorname": "Paula",
+                        "person_nachname": "Prokur", "person_funktion": "Prokura"},
+                    {"id": "contact-g", "person_key": "p-chef-gerd", "person_vorname": "Gerd",
+                        "person_nachname": "Chef", "person_funktion": "Geschäftsführer"}
+                ],
+                "selected_contact_ids": ["contact-p", "contact-g"],
+                "person_field_status": {
+                    "p-prokur-paula": {"person_funktion": {"status": "verified", "value": "Prokura"}},
+                    "p-chef-gerd": {"person_funktion": {"status": "verified", "value": "Geschäftsführer"}}
+                }
+            }),
+        )?;
+        let result = handle_research_writeback(
+            temp.path(),
+            &exclusion_writeback(
+                record_id,
+                command_id,
+                1,
+                Some(serde_json::json!({"contacts": ["contact-p"], "reason": EXCLUSION_REASON})),
+            ),
+        )?;
+        assert_eq!(result["ok"], true, "{result}");
+        let saved = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("saved lead")?;
+        assert_eq!(
+            saved["selected_contact_ids"],
+            serde_json::json!(["contact-g"])
+        );
+        assert_eq!(contact_keys(&saved), vec!["p-chef-gerd".to_string()]);
+        assert!(saved["person_field_status"].get("p-prokur-paula").is_none());
+        assert!(saved["person_field_status"].get("p-chef-gerd").is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn research_writeback_exclusion_rejects_unknown_fields_contacts_and_an_empty_reason(
+    ) -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let (record_id, command_id) = ("lead-exclude-invalid", "research-exclude-invalid");
+        create_exclusion_fixture(
+            temp.path(),
+            command_id,
+            record_id,
+            serde_json::json!([]),
+            serde_json::json!({"contacts": [{"id": "contact-g", "person_key": "p-chef-gerd",
+                "person_vorname": "Gerd", "person_nachname": "Chef"}]}),
+        )?;
+        for (step, excluded, expected) in [
+            (
+                1,
+                serde_json::json!({"fields": ["firma_bogus"], "reason": EXCLUSION_REASON}),
+                "`firma_bogus` is not a research field",
+            ),
+            (
+                2,
+                serde_json::json!({"fields": ["person_email"], "reason": EXCLUSION_REASON}),
+                "is a person field",
+            ),
+            (
+                3,
+                serde_json::json!({"contacts": ["p-nobody"], "reason": EXCLUSION_REASON}),
+                "`p-nobody` names no contact of this lead",
+            ),
+            (
+                4,
+                serde_json::json!({"fields": ["firma_prokura"], "reason": "  "}),
+                "result.excluded.reason is empty",
+            ),
+            (
+                5,
+                serde_json::json!({"reason": EXCLUSION_REASON}),
+                "names neither fields nor contacts",
+            ),
+        ] {
+            let error = handle_research_writeback(
+                temp.path(),
+                &exclusion_writeback(record_id, command_id, step, Some(excluded)),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains(expected), "step {step}: {error}");
+        }
+        let saved = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("saved lead")?;
+        assert_eq!(contact_keys(&saved), vec!["p-chef-gerd".to_string()]);
+        assert!(saved.get("field_status").is_none_or(Value::is_null));
+        Ok(())
+    }
+
+    #[test]
+    fn person_research_merge_field_status_keeps_exclusions_and_still_protects_verified_values() {
+        let excluded = serde_json::json!({"status": "unsupported", "value": null,
+            "reason": "excluded by research instructions: x",
+            "excluded_by_research_instructions": "x"});
+        let verified = serde_json::json!({"status": "verified", "value": "+4930123456",
+            "sources": [{"source_id": "example.de", "url": "https://www.example.de", "quote": "+4930123456"}]});
+        let existing = serde_json::json!({"firma_prokura": excluded, "firma_telefon": verified});
+        let filler = serde_json::json!({"status": "unsupported", "reason": "Vom Rueckschreiben nicht geliefert"});
+        let no_match = serde_json::json!({"status": "no_match", "reason": "nicht gefunden",
+            "attempts": [{"kind": "web_read", "query_or_url": "https://a.test", "result": "leer"}]});
+        let merged = merge_field_status(
+            Some(&existing),
+            serde_json::json!({"firma_prokura": filler, "firma_telefon": no_match.clone()}),
+        );
+        assert_eq!(
+            merged["firma_prokura"], excluded,
+            "a filler keeps the exclusion"
+        );
+        assert_eq!(merged["firma_telefon"]["status"], "verified");
+        assert_eq!(merged["firma_telefon"]["challenge"], no_match);
+        let merged = merge_field_status(
+            Some(&existing),
+            serde_json::json!({"firma_prokura": no_match}),
+        );
+        assert_eq!(
+            merged["firma_prokura"], excluded,
+            "a negative keeps the exclusion"
+        );
+        let merged = merge_field_status(
+            Some(&existing),
+            serde_json::json!({"firma_prokura": {"status": "verified", "value": "Paula Prokur",
+                "sources": [{"source_id": "northdata.de", "url": "https://www.northdata.de/x", "quote": "Paula Prokur"}]}}),
+        );
+        assert_eq!(
+            merged["firma_prokura"]["status"], "verified",
+            "a new verified value lifts it"
+        );
     }
 }

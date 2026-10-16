@@ -19,7 +19,7 @@ The task text carries the command id, `record_id` (= `lead_id`) and the payload;
 - `lead_snapshot`, `sellify_company`, `known_person_records`, `crm_knowledge`: known data; complete it, never re-guess it.
 - `research_instructions`: operator procedure (steps 0..x), binding order of work; `person_priorities`; `include_private`; `source_policy.sources[]` (`id`, `target_key`, `field_keys`).
 
-**Precedence.** `research_instructions` decides order and which source serves which field; it never overrides §3–§7. Login steps are covered by the adapters' own login handoff (§4); never wait for a human. No procedure: register → website/address → figures → persons.
+**Precedence.** The tenant research instructions decide what is researched; this skill only decides how. `research_instructions`, `fields` and `person_priorities` set the fields, the person categories and their order, the order of work and which source serves which field; they never override the technique in §3–§7. A field or person category the instructions exclude is neither researched nor stored; data the lead already holds for it (value, contacts in that role, also from Sellify) you remove with `result.excluded` (§7). Login steps are covered by the adapters' own login handoff (§4); never wait for a human.
 
 ## 3. Tools — closed list
 
@@ -45,7 +45,7 @@ Find as many sources as possible; the limit only prevents repeats and loops. In 
 - No repeat after `authorization_required`, `blocked`, `temporary_unreachable`, `provider_account_inactive`. Single exception: `authorization_required` with `auto_reauthorization.ok: true` → rerun exactly once. A failed login is handed to the owner by the run itself; don't request another or wait.
 - `portal_drift`, `invalid_input`, a parse error, or fields the source visibly has but the records lack → §4a, not a plain rerun.
 - A failed source proves nothing, neither value nor absence; note its status, go on.
-- D&B and Leadfeeder deliver `wz_code`, `umsatz`, `mitarbeiter`; a login is no reason to skip them. Find `firma_domain` early.
+- A login is no reason to skip a source the research instructions name. Find `firma_domain` early (`impressum` needs it).
 
 ## 4a. Adapter maintenance — you own the extraction scripts
 
@@ -63,7 +63,7 @@ Budget: one repair cycle (≤ 3 `test` runs) per source and attempt; still faili
 ## 5. Evidence and field_status
 
 - **Quality before quantity — aim for two independent sources per field.** Count providers, not hosts; each source needs `source_id`, absolute `url`, verbatim `quote` naming the value; a range proves no single value. Ask the remaining relevant sources until a second provider confirms. **One source is the emergency case only**: every relevant source was asked and no other holds the value (typical for facts only the company site states). Still `verified`, with `reason` `single source: <sources asked without the value>`.
-- **Register fields need their second source asked before the writeback**: firma_name, firma_anschrift, firma_plz, firma_ort, firma_aktivitaetsstatus, firma_fruehere_namen, firma_geschaeftsfuehrung, firma_prokura, firma_geschaeftstaetigkeit, umsatz, mitarbeiter, wz_code. Take the second provider from the source list for that field in the research instructions (e.g. Northdata + Handelsregister/Bundesanzeiger; Impressum + Northdata/Maps; D&B + Leadfeeder/Bundesanzeiger). Self-reported fields (domain, phone, e-mail, fax, fact sheet, person fields) may rest on the company site alone.
+- **Fields the research instructions mark as independently checkable need their second source asked before the writeback.** Take the second provider from the source list the instructions give for that field. Fields they mark as self-reported may rest on the company site alone.
 - **Sellify alone proves nothing.** Equal to Sellify plus one external source → `verified` (may add `sellify://company/<contact_id>` / `sellify://person/<id>`). An external source contradicting Sellify wins; name the Sellify value in `reason`.
 - The company's own site (Impressum, Kontakt, Team) proves self-reported fields. Keep the source's spelling (umlauts, ß; Swiss ss).
 - `verified`: value + source. `no_match`: only after every source relevant to the field was asked and none holds the value; one-line `reason` plus `attempts` `[{"kind": "scrape|web_search|web_read", "query_or_url": "…", "result": "…"}]`. `action_required`: a source failed (reason names source and status), or **conflict** between two external sources (no value, reason `conflict: <a> vs <b>`, both in `sources`). `unsupported`: field does not apply to this country.
@@ -74,8 +74,8 @@ Budget: one repair cycle (≤ 3 `test` runs) per source and attempt; still faili
 
 Person fields: `person_geschlecht`, `person_titel`, `person_vorname`, `person_nachname`, `person_funktion`, `person_position`, `person_email`, `person_email_validation`, `person_telefon`, `person_linkedin`, `person_xing`.
 
-- One person per category, in order: Geschäftsführung/Gesamtverantwortung, Prokura, Leitung Finanzen, Einkauf, Supply Chain Management, Operations, Technik, Entwicklung. Every `firma_prokura` name is also a person with `person_funktion` "Prokura". Others: company website and LinkedIn/XING name search via adapters, never clicked search hits.
-- **Only current officers.** `firma_geschaeftsfuehrung`, `firma_prokura` and register persons take only people the source lists as current; anyone marked "nicht mehr", "ehemals", "ausgeschieden", "former" or with an end date is not a value (mention them in `reason` if relevant). The quote must show the current role.
+- Person categories and their order come from `person_priorities` and the research instructions. Find persons on the company website and by LinkedIn/XING name search via adapters, never clicked search hits.
+- **Only current officers.** `firma_geschaeftsfuehrung` and register persons take only people the source lists as current; anyone marked "nicht mehr", "ehemals", "ausgeschieden", "former" or with an end date is not a value (mention them in `reason` if relevant). The quote must show the current role.
 - `person_key`: Sellify persons keep their `sellify_person_id`; new ones get a stable key (`p-<nachname>-<vorname>`), never a URL; same name, different profile → two keys.
 - Sellify person who left: keep the key, function "… (ausgeschieden)", add the successor.
 - **E-mail**: published verbatim on the company site → verified by that page; else derive from the demonstrable pattern (a published or Sellify address of the domain); no pattern → `no_match`. A derived address the validator does not confirm (catch-all, unknown, validator blocked) is still entered as the best variant: `person_email` `action_required` with the address as `value`, the pattern source in `sources`, `reason` naming the verdict (research instructions step 4b).
@@ -85,7 +85,7 @@ Person fields: `person_geschlecht`, `person_titel`, `person_vorname`, `person_na
 
 At most **3 calls per attempt**, each sent once when its block is done (only requested fields):
 - **A** `firma_name`, `firma_fruehere_namen`, `firma_aktivitaetsstatus`, `firma_anschrift`, `firma_besucheranschrift`, `firma_postanschrift`, `firma_postfach`, `firma_plz`, `firma_ort`, `firma_land`.
-- **B** `firma_email`, `firma_domain`, `firma_telefon`, `firma_fax`, `firma_geschaeftstaetigkeit`, `firma_homepage_fact_sheet`, `firma_geschaeftsfuehrung`, `firma_prokura`, `wz_code`, `umsatz`, `mitarbeiter`.
+- **B** `firma_email`, `firma_domain`, `firma_telefon`, `firma_fax`, `firma_geschaeftstaetigkeit`, `firma_homepage_fact_sheet`, `firma_geschaeftsfuehrung`, `wz_code`, `umsatz`, `mitarbeiter`.
 - **C** the 11 `person_*` fields + `result.person_records` + `result.person_field_status`.
 
 `business_os.execute_writeback({"record_id": "<lead_id>", "payload": "<payload as ONE JSON string>"})`, payload:
@@ -100,7 +100,8 @@ At most **3 calls per attempt**, each sent once when its block is done (only req
   "person_field_status": {"sellify-person-5249": {"person_email": {"status": "verified", "value": "…", "sources": […]}}}}}
 ```
 
-- **Parts merge**: an absent field keeps its stored status; never resend a full map or an accepted field. **Every part carries `field_status`**; one with nothing verified and no `sources`/`attempts` is rejected.
+- **Parts merge**: an absent field keeps its stored status; never resend a full map or an accepted field. **Every part carries `field_status`**; one with nothing verified and no `sources`/`attempts` is rejected (a part with only `result.excluded` is fine).
+- **Exclusion** — stored data the research instructions forbid: `"result": {"excluded": {"fields": ["<field>"], "contacts": ["<person_key or contact id from get_record>"], "reason": "<the instruction, quoted>"}}`. The field loses its value and becomes `unsupported` with that reason (counts as answered); the contacts leave the lead and the contact selection and are not re-added from Sellify. Never send a status or person record for excluded data.
 - `value` only on `verified`. Omit `result.fields`/`result.evidence`; the server derives them.
 - Plain arrays, never `{"item": […]}`; URLs `http(s)://` or `sellify://`.
 - `person_key` on lead-level `person_*` entries (first priority person), every `person_records` entry, and as key of `person_field_status`.
@@ -109,7 +110,7 @@ At most **3 calls per attempt**, each sent once when its block is done (only req
 
 ## 8. Follow-up attempts
 
-A follow-up is `attempt` > 1, a prompt "Fortsetzen", "Setze … fort", "Lücken schließen", or a lead with stored `field_status`. First `business_os.get_record` for the lead; work only fields not `verified`/`no_match` (or the fields the prompt names). Sources that failed last time get one call; sources that delivered are not rerun. Write back only those fields (parts A/B/C, skip empty ones). After a confirmed login, run that source's adapter once.
+A follow-up is `attempt` > 1, a prompt "Fortsetzen", "Setze … fort", "Lücken schließen", or a lead with stored `field_status`. First `business_os.get_record` for the lead; remove data the research instructions exclude with `result.excluded` in your first writeback; work only fields not `verified`/`no_match` (or the fields the prompt names). Sources that failed last time get one call; sources that delivered are not rerun. Write back only those fields (parts A/B/C, skip empty ones). After a confirmed login, run that source's adapter once.
 
 ## 9. Finishing the task (each rule failed a live run)
 
