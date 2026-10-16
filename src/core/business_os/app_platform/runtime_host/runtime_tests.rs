@@ -90,7 +90,7 @@ impl Fixture {
             (
                 "business_commands",
                 "cmd",
-                json!({"id":"cmd","app_id":"app","actor_id":"owner","type":"run","payload":{},"status":"pending","created_at":now().to_string()}),
+                json!({"id":"cmd","app_id":"app","actor_id":"owner","type":"run","payload":{},"status":"queued","created_at":chrono::Utc::now().to_rfc3339()}),
             ),
         ] {
             super::super::commands::put(&tx, name, id, &doc).unwrap();

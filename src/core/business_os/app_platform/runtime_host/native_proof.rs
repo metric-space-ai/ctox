@@ -111,7 +111,7 @@ async fn submit(
     kind: &str,
     payload: Value,
 ) -> Result<Value> {
-    let doc = json!({"id":id,"app_id":app,"type":kind,"actor_id":"owner","created_at":chrono::Utc::now().to_rfc3339(),"payload":payload,"status":"pending"});
+    let doc = json!({"id":id,"app_id":app,"type":kind,"actor_id":"owner","created_at":chrono::Utc::now().to_rfc3339(),"payload":payload,"status":"queued"});
     database
         .writer
         .submit(WriteJob::new(Default::default(), move |tx| {

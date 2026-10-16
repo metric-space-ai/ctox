@@ -589,7 +589,7 @@ impl RuntimeAuthority {
             let kind=expected_callback.as_ref().and_then(|c|c["type"].as_str()).unwrap_or("$runtime.trigger");
             permit(tx,&app,&a,kind)?;
             let payload=if event["kind"]=="trigger"{event["event"].clone()}else{event.clone()};
-            let doc=json!({"id":command_id,"app_id":app,"type":kind,"actor_id":a.id,"status":"pending","payload":payload,"client_context":{"trigger_id":event["trigger_id"]},"created_at":chrono::Utc::now().to_rfc3339(),"runtime_event":true,"runtime_completion":expected_callback.is_some(),"native_version":version});
+            let doc=json!({"id":command_id,"app_id":app,"type":kind,"actor_id":a.id,"status":"queued","payload":payload,"client_context":{"trigger_id":event["trigger_id"]},"created_at":chrono::Utc::now().to_rfc3339(),"runtime_event":true,"runtime_completion":expected_callback.is_some(),"native_version":version});
             if document(tx,"business_commands",&command_id)?.is_some(){return Err(invalid("conflict: native event already admitted; reconcile"));}
             super::super::commands::put(tx,"business_commands",&command_id,&doc)?;Ok(doc)
         }))?;
@@ -701,7 +701,7 @@ impl RuntimeAuthority {
             let a=actor(db,&actor_id)?;permit(db,&app,&a,&kind)?;
             let _=codec.version(db,&app,&ver)?;
             let payload=json!({"command_id":id,"status":status,"result":target["result"],"error":target["error"]});
-            let callback=json!({"id":format!("command-callback:{id}"),"app_id":app,"app_ver":ver,"type":kind,"actor":actor_json(&a),"actor_id":actor_id,"status":"pending","payload":payload});
+            let callback=json!({"id":format!("command-callback:{id}"),"app_id":app,"app_ver":ver,"type":kind,"actor":actor_json(&a),"actor_id":actor_id,"status":"queued","payload":payload});
             Ok(Some((app,ver,callback)))
         })?;
         let Some((app, ver, callback)) = saved else {

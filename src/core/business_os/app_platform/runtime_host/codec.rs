@@ -347,7 +347,7 @@ impl StoreCodec for RuntimeCodec {
         if document(tx, "business_commands", &id)?.is_some() {
             return Err(invalid("conflict: command id already exists"));
         }
-        let doc = json!({"id":id,"app_id":app,"source_app":source,"type":kind,"payload":args["payload"],"actor_id":a.id,"status":"pending","created_at":chrono::Utc::now().to_rfc3339(),"source_command_id":binding["command"]["id"],"record_id":args["options"]["record_id"],"client_context":args["options"]["client_context"]});
+        let doc = json!({"id":id,"app_id":app,"source_app":source,"type":kind,"payload":args["payload"],"actor_id":a.id,"status":"queued","created_at":chrono::Utc::now().to_rfc3339(),"source_command_id":binding["command"]["id"],"record_id":args["options"]["record_id"],"client_context":args["options"]["client_context"]});
         super::super::commands::put(tx, "business_commands", &id, &doc)?;
         let c = collection(tx, "business_commands")?;
         let (rev,seq):(String,u64)=tx.query_row("SELECT rev,seq FROM _changes WHERE collection='business_commands' AND gen=?1 AND id=?2",params![c.gen,id],|r|Ok((r.get(0)?,r.get(1)?)))?;
