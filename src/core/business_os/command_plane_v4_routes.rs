@@ -59,9 +59,17 @@ fn dispatch(root: &Path, native: &NativeCommand, capability: &str) -> Result<Val
     if session_user_id(&session) != Some(native.actor_id.as_str()) {
         return Err(routes::error("forbidden", "native_actor_mismatch"));
     }
+    dispatch_authorized(root, native, &command, &session)
+}
+fn dispatch_authorized(
+    root: &Path,
+    native: &NativeCommand,
+    command: &BusinessCommand,
+    session: &BusinessOsSession,
+) -> Result<Value, CommandError> {
     if let Some(requirement) = CentralCommandPolicyRequirement::for_command(&command) {
         let requirement = requirement
-            .resolve(root, &command, &session)
+            .resolve(root, command, session)
             .map_err(|_| routes::error("forbidden", "native_policy_unavailable"))?;
         use super::super::store_policy::{
             module_policy_decision, scoped_policy_decision, workspace_policy_decision,
@@ -70,12 +78,12 @@ fn dispatch(root: &Path, native: &NativeCommand, capability: &str) -> Result<Val
             CommandPolicyRequirement::Module {
                 permission,
                 module_id,
-            } => module_policy_decision(root, &session, permission, &module_id),
+            } => module_policy_decision(root, session, permission, &module_id),
             CommandPolicyRequirement::Workspace { permission } => {
-                workspace_policy_decision(root, &session, permission)
+                workspace_policy_decision(root, session, permission)
             }
             CommandPolicyRequirement::Scoped { permission, scope } => {
-                scoped_policy_decision(root, &session, permission, scope)
+                scoped_policy_decision(root, session, permission, scope)
             }
         }
         .map_err(|_| routes::error("forbidden", "native_policy_unavailable"))?;
@@ -83,7 +91,7 @@ fn dispatch(root: &Path, native: &NativeCommand, capability: &str) -> Result<Val
             return Err(routes::error("forbidden", "native_permission_denied"));
         }
     }
-    let mut prepared = PreparedBusinessCommand::from_command(&command)
+    let mut prepared = PreparedBusinessCommand::from_command(command)
         .map_err(|_| routes::error("invalid", "native_payload_invalid"))?;
     if domain_effect::supports_command(&command.command_type) {
         // Admission is minted only INSIDE the retained real P9 execution guard.
@@ -98,7 +106,7 @@ fn dispatch(root: &Path, native: &NativeCommand, capability: &str) -> Result<Val
                 .map_err(|_| routes::error("invalid", "native_domain_identity"))?,
         );
     }
-    match dispatch_business_command(root, &native.command_id, &command, prepared, Some(&session))
+    match dispatch_business_command(root, &native.command_id, command, prepared, Some(session))
         .map_err(|_| routes::error("unavailable", "native_handler_failed"))?
     {
         BusinessCommandDispatchOutcome::Returned(value) => Ok(value),
@@ -107,6 +115,90 @@ fn dispatch(root: &Path, native: &NativeCommand, capability: &str) -> Result<Val
             Err(routes::native_error(&error.to_string()))
         }
     }
+}
+
+/// Productive Core feed adapter. The authority is the already-retained native
+/// invocation, not a grant deserialized from the binding. No legacy token is
+/// minted, copied from payload or substituted with a service user.
+pub(crate) fn execute_core(
+    root: &Path,
+    binding: &Value,
+    authority: &dyn ctox_app_runtime::core_host::CoreAuthority,
+) -> anyhow::Result<Value> {
+    let doc = &binding["command"];
+    let text = |k: &str| {
+        doc[k]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("invalid: native command {k}"))
+    };
+    let native = NativeCommand {
+        command_id: text("id")?,
+        kind: text("type")?,
+        app_id: text("app_id")?,
+        actor_id: text("actor_id")?,
+        payload: doc["payload"].clone(),
+    };
+    anyhow::ensure!(
+        routes::is_command_bus(
+            native
+                .validate()
+                .map_err(|e| anyhow::anyhow!("{}: {}", e.code, e.reason))?
+        ),
+        "unknown_command: native Core route"
+    );
+    // admit checks canonical running row, original actor, current manifest/rights
+    // and retained invocation. with_fence excludes teardown during the effect.
+    authority.admit(&binding["manifest"], binding)?;
+    authority.with_fence(binding, &mut || {
+        let actor = &doc["actor"];
+        anyhow::ensure!(
+            actor["id"] == native.actor_id && doc["status"] == "running",
+            "forbidden: native actor binding"
+        );
+        let role = actor["role"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("forbidden: native role"))?;
+        anyhow::ensure!(
+            ["admin", "chef", "founder", "user"].contains(&role),
+            "forbidden: native role"
+        );
+        let session = BusinessOsSession {
+            ok: true,
+            authenticated: true,
+            auth_required: false,
+            user: Some(super::super::session::BusinessOsSessionUser {
+                id: native.actor_id.clone(),
+                display_name: native.actor_id.clone(),
+                role: role.into(),
+                is_admin: role == "admin",
+            }),
+            login_url: None,
+            reason: None,
+        };
+        let command = BusinessCommand {
+            id: Some(native.command_id.clone()),
+            module: "ctox".into(),
+            command_type: native.kind.clone(),
+            record_id: ["record_id", "project_id", "session_id", "id"]
+                .iter()
+                .find_map(|k| native.payload[*k].as_str())
+                .map(str::to_owned),
+            payload: native.payload.clone(),
+            client_context: serde_json::json!({}),
+            origin: CommandOrigin::ReplicatedPeer,
+        };
+        dispatch_authorized(root, &native, &command, &session).map_err(|e| {
+            ctox_app_runtime::HandlerError {
+                uncertain: e.code == "unavailable",
+                code: e.code,
+                message: e.reason,
+                path: None,
+            }
+            .into()
+        })
+    })
 }
 
 #[cfg(test)]

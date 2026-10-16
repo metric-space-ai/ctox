@@ -50,6 +50,7 @@ impl RuntimeBinding {
             runtime: runtime.clone(),
             active,
         };
+        let native_root = root.clone();
         let registration =
             tokio::task::spawn_blocking(move || AppRuntimeRegistration::start(root, inputs))
                 .await??;
@@ -58,6 +59,7 @@ impl RuntimeBinding {
         let feed_ingress = ingress.clone();
         let task = runtime.spawn(async move {
             let result = drive(
+                native_root,
                 database,
                 authority,
                 platform,
@@ -95,6 +97,7 @@ impl Drop for RuntimeBinding {
 }
 
 async fn drive(
+    native_root: std::path::PathBuf,
     database: Database,
     authority: Arc<RuntimeAuthority>,
     platform: super::super::Platform,
@@ -112,6 +115,7 @@ async fn drive(
     for doc in startup {
         if !is_native_event(&database, &doc).await? {
             dispatch_committed(
+                &native_root,
                 &database,
                 &authority,
                 &platform,
@@ -163,6 +167,7 @@ async fn drive(
                             match doc["status"].as_str() {
                                 Some("pending" | "accepted" | "queued") => {
                                     dispatch_committed(
+                                        &native_root,
                                         &database,
                                         &authority,
                                         &platform,
@@ -222,6 +227,7 @@ async fn drive(
 }
 
 async fn dispatch_committed(
+    native_root: &std::path::Path,
     database: &Database,
     authority: &Arc<RuntimeAuthority>,
     platform: &super::super::Platform,
@@ -283,7 +289,25 @@ async fn dispatch_committed(
     }
     let command = binding["command"].clone();
     let fence = binding["fence"].clone();
-    let call = ingress.command(command, fence);
+    let e25_core = write_contract::routes::resolve(text(&command, "type")?)
+        .is_ok_and(write_contract::routes::is_command_bus);
+    let native_root = native_root.to_path_buf();
+    let retained = authority.clone();
+    let native_binding = binding.clone();
+    let call = async {
+        if e25_core {
+            tokio::task::spawn_blocking(move || {
+                crate::business_os::command_plane::execute_v4_core_registered_command(
+                    &native_root,
+                    &native_binding,
+                    &*retained,
+                )
+            })
+            .await?
+        } else {
+            ingress.command(command, fence).await
+        }
+    };
     tokio::pin!(call);
     let mut renew = tokio::time::interval(Duration::from_secs(10));
     renew.tick().await;
