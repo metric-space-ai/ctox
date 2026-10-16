@@ -675,7 +675,11 @@ pub(crate) fn apply_write(
                         .ok_or_else(|| invalid("patch base unavailable"))?;
                     serde_json::from_str(prior).map_err(|e| invalid(e.to_string()))?
                 };
-                merge_patch(&mut doc, &input);
+                if request.collection == "business_commands" {
+                    write_contract::apply_command_patch(&mut doc, &input);
+                } else {
+                    merge_patch(&mut doc, &input);
+                }
                 doc
             } else {
                 input
