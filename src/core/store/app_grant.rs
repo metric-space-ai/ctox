@@ -131,7 +131,7 @@ fn resolve(tx: &Transaction<'_>, rights: &RightsSnapshot, state: &State, app: &s
         if projection.row_filter == scope::RowFilter::None { continue; }
         let Some(active) = ctox_store::schema::active_collection(tx, &rule.collection)
             .map_err(|_| "grant registry unavailable")? else { continue; };
-        let wire = format!("{}@g{}", rule.collection, active.gen);
+        let wire = if active.gen == 1 { rule.collection.clone() } else { format!("{}@g{}", rule.collection, active.gen) };
         let mut operations = vec!["read".to_owned()];
         if rule.ops.contains(&Operation::Write)
             && manifest.authorize_collection(&rights.manifests, &rule.collection, AppOperation::Write).is_ok() {
@@ -292,6 +292,7 @@ impl AppGrantSession {
 fn logical_collection(claims: &AppGrantClaims, wire: &str, operation: &str) -> scope::Result<String> {
     let entry = claims.collections.iter().find(|c| c.collection == wire && c.rights.iter().any(|r| r == operation))
         .ok_or("forbidden")?;
+    if entry.gen == 1 { return Ok(wire.to_owned()); }
     wire.strip_suffix(&format!("@g{}", entry.gen)).map(str::to_owned).ok_or("invalid collection".into())
 }
 fn revoke_frame(app: &str) -> ScopeRevoke {

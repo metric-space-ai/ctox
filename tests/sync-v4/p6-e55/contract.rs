@@ -87,14 +87,14 @@ async fn p6_e55_foreign_app_collections_never_enter_the_grant() {
     let token = f.session.issue("a", 1000).await.unwrap();
     let c = claims(&token);
     assert_eq!(c["collections"].as_array().unwrap().len(), 1, "foreign app collection entered grant");
-    assert_eq!(c["collections"][0]["collection"], "alpha@g1");
+    assert_eq!(c["collections"][0]["collection"], "alpha");
     assert_eq!(c["collections"][0]["rights"], json!(["read", "write"]));
     assert!(c["rights_ver"].is_string());
-    assert_eq!(f.read(&token, "alpha@g1", 1001).await.unwrap(), json!({"owner":"alice", "name":"visible"}));
-    assert!(f.read(&token, "beta@g1", 1001).await.is_err());
+    assert_eq!(f.read(&token, "alpha", 1001).await.unwrap(), json!({"owner":"alice", "name":"visible"}));
+    assert!(f.read(&token, "beta", 1001).await.is_err());
     // A second app gets its own token, not an aggregate grant.
     let b = f.session.issue("b",1000).await.unwrap();
-    assert_eq!(claims(&b)["collections"][0]["collection"], "beta@g1");
+    assert_eq!(claims(&b)["collections"][0]["collection"], "beta");
     let no_right = AppGrantSession::new(f.auth.clone(), f.key.clone(), Arc::new(CurrentPeer), "alice".into(), "unknown".into(), "device".into()).unwrap();
     assert!(no_right.issue("a",1000).await.is_err());
     let reply = no_right.handle_request(GrantRequest::Request{app_id:"a".into()}, 1000).await;
@@ -102,7 +102,7 @@ async fn p6_e55_foreign_app_collections_never_enter_the_grant() {
     let mut forged: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(&token).unwrap()).unwrap();
     forged["claims"]["app_id"] = json!("b");
     let forged = URL_SAFE_NO_PAD.encode(canonical_json(&forged).unwrap());
-    assert!(f.read(&forged, "beta@g1",1001).await.is_err(), "signature bypass");
+    assert!(f.read(&forged, "beta",1001).await.is_err(), "signature bypass");
     f.close().await;
 }
 #[tokio::test]
@@ -110,9 +110,9 @@ async fn p6_e55_expiry_is_closed_at_the_exact_boundary() {
     let f = Fixture::new().await;
     let token = f.session.issue("a", 1000).await.unwrap();
     let exp = claims(&token)["exp"].as_u64().unwrap();
-    assert!(f.read(&token, "alpha@g1", exp-1).await.is_ok());
-    assert!(f.read(&token, "alpha@g1", exp).await.is_err(), "expired grant remained readable");
-    assert!(f.read(&token, "alpha@g1", exp+1).await.is_err());
+    assert!(f.read(&token, "alpha", exp-1).await.is_ok());
+    assert!(f.read(&token, "alpha", exp).await.is_err(), "expired grant remained readable");
+    assert!(f.read(&token, "alpha", exp+1).await.is_err());
     f.close().await;
 }
 #[tokio::test]
@@ -120,20 +120,20 @@ async fn p6_e55_revoked_app_is_unreadable_before_reauthentication() {
     let f = Fixture::new().await;
     let token = f.session.issue("a", 1000).await.unwrap();
     let b = f.session.issue("b",1000).await.unwrap();
-    assert!(f.read(&token, "alpha@g1",1001).await.is_ok());
+    assert!(f.read(&token, "alpha",1001).await.is_ok());
     let frames = f.session.rebind("alice".into(), "other".into(), "device".into()).unwrap();
     assert_eq!(frames.iter().map(|v|v.app_id.as_str()).collect::<Vec<_>>(), vec!["a","b"]);
     assert_eq!(serde_json::to_value(&frames[0]).unwrap(), json!({"type":"scope_revoke", "app_id":"a", "reason":"revoked"}));
-    assert!(f.read(&token, "alpha@g1",1001).await.is_err(), "revoked app remained readable");
-    assert!(f.read(&b, "beta@g1",1001).await.is_err());
+    assert!(f.read(&token, "alpha",1001).await.is_err(), "revoked app remained readable");
+    assert!(f.read(&b, "beta",1001).await.is_err());
     f.session.rebind("alice".into(),"user".into(),"device".into()).unwrap();
-    assert!(f.read(&token,"alpha@g1",1001).await.is_err(), "identity round trip revived old grant");
+    assert!(f.read(&token,"alpha",1001).await.is_err(), "identity round trip revived old grant");
     let renewed = f.session.issue("a",1000).await.unwrap();
     assert_ne!(renewed, token, "same-second reauthentication revived old token");
-    assert!(f.read(&token,"alpha@g1",1001).await.is_err());
-    assert!(f.read(&renewed,"alpha@g1",1001).await.is_ok());
+    assert!(f.read(&token,"alpha",1001).await.is_err());
+    assert!(f.read(&renewed,"alpha",1001).await.is_ok());
     f.session.revoke_app("a").unwrap();
-    assert!(f.read(&renewed,"alpha@g1",1001).await.is_err(), "revoked app remained readable");
+    assert!(f.read(&renewed,"alpha",1001).await.is_err(), "revoked app remained readable");
     let token = f.session.issue("a",1001).await.unwrap();
     // A principal change is fenced even before the transport has rebound the
     // cached peer. The mandatory adapter check runs in this actual writer TX.
@@ -141,7 +141,7 @@ async fn p6_e55_revoked_app_is_unreadable_before_reauthentication() {
         tx.execute("UPDATE c_business_users SET data=json_set(data,'$.active',0) WHERE id='alice'",[])?;
         Ok(())
     })).unwrap().await.unwrap();
-    assert!(f.read(&token,"alpha@g1",1002).await.is_err(), "changed principal retained grant");
+    assert!(f.read(&token,"alpha",1002).await.is_err(), "changed principal retained grant");
     assert!(f.session.issue("a",1002).await.is_err(), "changed principal obtained grant");
     f.store.writer().submit(WriteJob::new(Default::default(), |tx| {
         tx.execute("UPDATE c_business_users SET data=json_set(data,'$.active',1) WHERE id='alice'",[])?;
@@ -150,7 +150,7 @@ async fn p6_e55_revoked_app_is_unreadable_before_reauthentication() {
     // Publish policy through the same real writer. Old grants must fail even
     // before the commit-driven control notification has been consumed.
     f.auth.replace(vec![], manifests()).await.unwrap();
-    assert!(f.read(&token,"alpha@g1",1002).await.is_err());
+    assert!(f.read(&token,"alpha",1002).await.is_err());
     let owner=f.session.clone();
     let revoked=f.store.writer().submit(WriteJob::new(Default::default(), move |tx| {
         owner.revocations_in_transaction(tx,1002).map_err(StoreError::Invalid)
@@ -159,7 +159,7 @@ async fn p6_e55_revoked_app_is_unreadable_before_reauthentication() {
     let fresh = Fixture::new().await;
     let token = fresh.session.issue("a",1000).await.unwrap();
     fresh.key.active.store(false,Ordering::Release);
-    assert!(fresh.read(&token,"alpha@g1",1001).await.is_err(), "retired signer remained usable");
+    assert!(fresh.read(&token,"alpha",1001).await.is_err(), "retired signer remained usable");
     fresh.close().await;
     f.close().await;
 }
