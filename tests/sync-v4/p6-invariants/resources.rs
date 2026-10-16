@@ -4,7 +4,7 @@ use super::*;
 #[test]
 fn p6_process_cpu_budget_kills_only_the_app_and_allows_replacement() {
     let h = Harness::new(Duration::from_millis(150), IDLE_LIMIT);
-    h.register("export default input=>{if(input.loop){while(true){}}return input;}");
+    h.register("export default input=>{if(input.loop){const end=Date.now()+1200;while(Date.now()<end){}}return input;}");
     assert_eq!(
         h.invoke(json!({"loop":false})).unwrap(),
         json!({"loop":false})

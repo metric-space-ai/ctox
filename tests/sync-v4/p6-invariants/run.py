@@ -67,6 +67,8 @@ def run(name, args, timeout=1200, expected=0):
         'p6_core_only_handler_has_native_origin_and_rejects_ui':'native core-origin event denied by E23.1 core-only rights',
         'mutation-policy-red':'writer used policy from before the transaction',
         'mutation-signature-red':'invalidly signed manifest authorized an applied document',
+        'mutation-cpu-red':'unbounded CPU handler completed without quota failure',
+        'mutation-result-red':'oversized app result passed IPC budget',
         'mutation-heap-red':'320 MiB old-space allocation succeeded beyond the configured 256 MiB heap limit',
         'mutation-identity-red':'identity arbitration returned an uncommitted key',
         'mutation-key-errors-red':'key input leaked through signing import error',
@@ -140,7 +142,7 @@ source_paths = [
     'sources':{p:hashlib.sha256((ROOT/p).read_bytes()).hexdigest() for p in source_paths}
 },indent=2)+'\n')
 try:
-    node_candidates=[TARGET/'app-runtime-test-node/bin/node',Path('/mnt/nvme1/build-lane/target/v4-v4-app-runtime-bind/app-runtime-test-node/bin/node')]
+    node_candidates=[TARGET/'app-runtime-test-node/bin/node']
     node=next((p for p in node_candidates if p.is_file()),None)
     if node is None:
         raise RuntimeError('lane-owned pinned Node bundle unavailable')
@@ -181,6 +183,36 @@ try:
         run(test,[appbinary,test,'--nocapture','--test-threads=1'],60)
     run('p6_process_old_space_heap_limit_is_enforced',[appbinary,'p6_process_old_space_heap_limit_is_enforced','--nocapture','--test-threads=1'],60)
     cargo=['cargo','test','--locked','--jobs','2','-p','ctox','--bin','ctox','--features','app-runtime-node','--no-run','--message-format=json']
+
+    if options.mutations:
+        process=ROOT/'src/core/app_runtime/lib.rs'
+        process_baseline=process.read_text()
+        worker=ROOT/'src/core/app_runtime/worker.mjs'
+        worker_baseline=worker.read_bytes()
+        old='--max-old-space-size=256'
+        assert process_baseline.count(old)==1
+        change('src/core/app_runtime/lib.rs',old,'--max-old-space-size=512','heap-budget')
+        try:
+            # The worker independently attests the exact heap flag. Raise both
+            # guards so this mutation reaches allocation, rather than failing setup.
+            change('src/core/app_runtime/worker.mjs',old,'--max-old-space-size=512','heap-attestation')
+            change('src/core/app_runtime/lib.rs','value.saturating_sub(baseline) >= cpu_limit.as_millis() as u64','value.saturating_sub(baseline) >= 60_000','cpu-budget')
+            change('src/core/app_runtime/lib.rs','const RESULT_LIMIT: usize = 1024 * 1024;','const RESULT_LIMIT: usize = 2 * 1024 * 1024;','result-budget')
+            if run('mutation-heap-build',appcargo)==0:
+                mutated=binary_from_log('mutation-heap-build','ctox_app_runtime')
+                run('mutation-cpu-red',[mutated,'p6_process_cpu_budget_kills_only_the_app_and_allows_replacement','--nocapture','--test-threads=1'],60,101)
+                run('mutation-result-red',[mutated,'p6_process_result_budget_rejects_oversized_message','--nocapture','--test-threads=1'],60,101)
+                run('mutation-heap-red',[mutated,'p6_process_old_space_heap_limit_is_enforced','--nocapture','--test-threads=1'],60,101)
+        finally:
+            process.write_text(process_baseline)
+            worker.write_bytes(worker_baseline)
+        if run('restored-heap-build',appcargo)==0:
+            restored=binary_from_log('restored-heap-build','ctox_app_runtime')
+            for test in ['p6_process_cpu_budget_kills_only_the_app_and_allows_replacement','p6_process_result_budget_rejects_oversized_message']:
+                run('restored-'+test,[restored,test,'--nocapture','--test-threads=1'],60)
+            run('restored-heap',[restored,'p6_process_old_space_heap_limit_is_enforced','--nocapture','--test-threads=1'],60)
+        if options.skip_root:
+            raise SystemExit(1 if any(r['exit']!=r['expected'] for r in RECORDS) else 0)
     if not options.skip_root:
         if run('root-build',cargo):
             raise RuntimeError('root test build unverified')
@@ -199,30 +231,7 @@ try:
             ('foreground_retains_real_native_authority_after_sixty_seconds_idle',0,180),
         ]:
             run(test,[binary,test,'--nocapture','--test-threads=1'],timeout,expected)
-
-    if options.mutations:
-        process=ROOT/'src/core/app_runtime/lib.rs'
-        process_baseline=process.read_text()
-        worker=ROOT/'src/core/app_runtime/worker.mjs'
-        worker_baseline=worker.read_bytes()
-        old='--max-old-space-size=256'
-        assert process_baseline.count(old)==1
-        change('src/core/app_runtime/lib.rs',old,'--max-old-space-size=512','heap-budget')
-        try:
-            # The worker independently attests the exact heap flag. Raise both
-            # guards so this mutation reaches allocation, rather than failing setup.
-            change('src/core/app_runtime/worker.mjs',old,'--max-old-space-size=512','heap-attestation')
-            if run('mutation-heap-build',appcargo)==0:
-                mutated=binary_from_log('mutation-heap-build','ctox_app_runtime')
-                run('mutation-heap-red',[mutated,'p6_process_old_space_heap_limit_is_enforced','--nocapture','--test-threads=1'],60,101)
-        finally:
-            process.write_text(process_baseline)
-            worker.write_bytes(worker_baseline)
-        if run('restored-heap-build',appcargo)==0:
-            restored=binary_from_log('restored-heap-build','ctox_app_runtime')
-            run('restored-heap',[restored,'p6_process_old_space_heap_limit_is_enforced','--nocapture','--test-threads=1'],60)
-        if options.skip_root:
-            raise SystemExit(1 if any(r['exit']!=r['expected'] for r in RECORDS) else 0)
+    if options.mutations and not options.skip_root:
         codec='src/core/business_os/app_platform/runtime_host/codec.rs'
         secrets='src/core/secrets.rs'
         auth='src/core/sync/src/authority/auth.rs'
