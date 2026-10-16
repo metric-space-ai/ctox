@@ -65,7 +65,6 @@ export default async function handle(command, ctx) {
       status: 'confirmed',
       created_at_ms: now,
       updated_at_ms: now,
-      _deleted: false,
     });
     const invoice = atsCanonicalInvoice(invId, 'sale_out', clientAccountId,
       [atsInvoiceLine(1, 'Vermittlungshonorar', fee, 0.19)], now, 'source_placement_id', id);

@@ -22,7 +22,6 @@ export default async function handle(command, ctx) {
     received_at_ms: now,
     created_at_ms: now,
     updated_at_ms: now,
-    _deleted: false,
   });
   await recordAtsGovernanceEvent(ctx, command, atsActorValue(command), 'business_os.ats.intake_captured', {
     application_id: id, channel, dedupe_key: dedupeKey, has_email: email !== '',

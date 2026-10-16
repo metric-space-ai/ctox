@@ -100,7 +100,7 @@
     "assets/icon@512.jpg": "e8a24e140ab451199d3382aca2a754580d981db13fe1817c7b3eb0c4cecb1c23",
     "collections.schema.json": "b63b7b8f6eabc03982a0fc0c8c60826e2bb39334715605904d8aa2872abf3c54",
     "core/consent.js": "c217279d29156d67c34ff1a5db2cb27aa4bb22e251b663493eccd1959e4d8db8",
-    "handlers/_ats.js": "9b61f67b398d511d68dcbca570b5c3a5c8056f5c9e147bca835c6274f4ba8c46",
+    "handlers/_ats.js": "106c6da0358fb3fad8885549b272cd91b6f6113ad1db0416a61c8791c3229988",
     "handlers/ats.consent.check.js": "176113cfcd77782365a4446131175b5d53f1b5af5c5dc1c890bbff7b93d45d6b",
     "handlers/ats.retention.due.js": "9c3e5b550c1af510578f379ae5daab1129aade4f998fbfd5dc3c54b9aa290f80",
     "handlers/ats.retention.purge.js": "8cf12d242b71e15c8d8a3a7b50c25595f50618b5047a8cbe870b54078dd0850e",
@@ -368,7 +368,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "32b1d7f8b5a87dd409c22bcde4e0528ec8f9e4f1e124daab0fc3d12a126bcd9f",
+    "base_hash": "10336ba54ec57619369d2265e35ce75b65baf25422dcaa846152b359055dd0b0",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

@@ -20,7 +20,6 @@ export function envelope(uiName, doc, nowMs, extra = {}) {
     status: doc.status || 'active',
     created_at_ms: nowMs,
     updated_at_ms: nowMs,
-    _deleted: false,
   };
 }
 
