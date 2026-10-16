@@ -1,0 +1,24 @@
+[package]
+name = "p6-e55-contract"
+version = "0.0.0"
+edition = "2021"
+publish = false
+[workspace]
+[lib]
+path = "lib.rs"
+test = false
+doctest = false
+[[test]]
+name = "contract"
+path = "contract.rs"
+[dependencies]
+ctox-store = { path = "../../../src/core/store" }
+base64 = "0.22"
+ring = "0.17"
+sha2 = "0.10"
+rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
+[dev-dependencies]
+tempfile = "3"
