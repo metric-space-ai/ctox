@@ -126,8 +126,14 @@ impl TimerTable {
     }
 }
 
-const RTO_INITIAL: u64 = 3000; // msec
-const RTO_MIN: u64 = 1000; // msec
+// CTOX's interactive DataChannels share the association with bulk. Keep the
+// sampled SRTT + 4*RTTVAR estimator and exponential backoff; this is a floor,
+// not a fixed deadline on paths whose measured RTT is longer.
+// ref: webrtc-rs/rtc@b808b74f712ed379312a114b848ede133880d58a/rtc-sctp/src/association/timer.rs:129 (upstream 3000 ms).
+const RTO_INITIAL: u64 = 1000; // msec, CTOX interactive profile
+// ref: webrtc-rs/rtc@b808b74f712ed379312a114b848ede133880d58a/rtc-sctp/src/association/timer.rs:130 (upstream 1000 ms).
+const RTO_MIN: u64 = 200; // msec, CTOX interactive profile
+// ref: webrtc-rs/rtc@b808b74f712ed379312a114b848ede133880d58a/rtc-sctp/src/association/timer.rs:131; RFC 4960 section 15, unchanged.
 const RTO_MAX: u64 = 60000; // msec
 const RTO_ALPHA: u64 = 1;
 const RTO_BETA: u64 = 2;
@@ -208,5 +214,36 @@ fn calculate_next_timeout(rto: u64, n_rtos: usize) -> u64 {
         std::cmp::min(rto << n_rtos, RTO_MAX)
     } else {
         RTO_MAX
+    }
+}
+
+#[cfg(test)]
+mod ctox_latency_contract {
+    use super::*;
+
+    #[test]
+    fn sampled_rto_tracks_long_paths_and_backoff_stays_bounded() {
+        for rtt in [20, 150, 600] {
+            let mut manager = RtoManager::new();
+            for _ in 0..64 {
+                manager.set_new_rtt(rtt);
+            }
+            let deadline = manager.get_rto();
+            assert!(
+                deadline >= rtt,
+                "interactive floor became a fixed short RTO"
+            );
+            assert!(
+                deadline <= rtt.max(200),
+                "stable short path kept the one-second floor"
+            );
+            assert!(calculate_next_timeout(deadline, 1) > deadline);
+            assert_eq!(calculate_next_timeout(deadline, usize::MAX), 60_000);
+        }
+        let mut manager = RtoManager::new();
+        manager.set_new_rtt(60_000);
+        assert_eq!(manager.get_rto(), 60_000);
+        manager.reset();
+        assert_eq!(manager.get_rto(), 1000);
     }
 }

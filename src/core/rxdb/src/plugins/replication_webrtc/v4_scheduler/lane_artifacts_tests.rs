@@ -102,6 +102,12 @@ struct Events {
 }
 #[async_trait]
 impl PeerConnectionEventHandler for Events {
+    async fn on_ice_connection_state_change(&self, state: webrtc::peer_connection::RTCIceConnectionState) {
+        eprintln!("Z3_ICE_STATE {}",serde_json::json!({"state":format!("{state:?}"),"ms":z3_elapsed_ms()}));
+    }
+    async fn on_connection_state_change(&self, state: webrtc::peer_connection::RTCPeerConnectionState) {
+        eprintln!("Z3_PC_STATE {}",serde_json::json!({"state":format!("{state:?}"),"ms":z3_elapsed_ms()}));
+    }
     async fn on_ice_candidate(&self, event: RTCPeerConnectionIceEvent) {
         if let Ok(candidate) = event.candidate.to_json() {
             let _ = self.candidates.send(candidate);
@@ -1024,10 +1030,11 @@ fn z3_app_timeline(id: u64, event: &str) {
 struct Z3SctpLogger;
 static Z3_SCTP_LOGGER: Z3SctpLogger = Z3SctpLogger;
 impl log::Log for Z3SctpLogger {
-    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {metadata.target()=="ctox_sctp_timeline"}
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {metadata.target()=="ctox_sctp_timeline" || metadata.level()<=log::Level::Warn}
     fn log(&self, record: &log::Record<'_>) {
         if self.enabled(record.metadata()) {
-            eprintln!("SCTP_TIMELINE {}",serde_json::json!({"ms":z3_elapsed_ms(),"message":record.args().to_string()}));
+            let prefix = if record.target()=="ctox_sctp_timeline" {"SCTP_TIMELINE"} else {"TURN_TRANSPORT_WARNING"};
+            eprintln!("{prefix} {}",serde_json::json!({"ms":z3_elapsed_ms(),"target":record.target(),"message":record.args().to_string()}));
         }
     }
     fn flush(&self) {}
