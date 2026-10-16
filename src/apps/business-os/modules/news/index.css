@@ -516,3 +516,8 @@
 /* Instant save: one undo bar under the drawer form (8 s). */
 .news-drawer .news-undo[data-drawer-undo] { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 14px 10px; padding: 8px 10px; border: 1px solid var(--news-line); border-radius: 8px; }
 .news-drawer .news-undo[data-drawer-undo][hidden] { display: none; }
+.news-digest { border: 0; margin: 14px 0 0; padding: 12px 0 0; border-top: 1px solid var(--ctox-border, rgba(127, 127, 127, 0.25)); }
+.news-digest[hidden], .news-digest [hidden] { display: none; }
+.news-digest .news-check { margin-top: 0; }
+.news-digest-hint { margin: 4px 0 8px; font-size: 12px; opacity: 0.72; }
+.news-undo { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: var(--ctox-surface-2, rgba(127, 127, 127, 0.12)); font-size: 13px; }
