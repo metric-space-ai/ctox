@@ -15,7 +15,7 @@
 //   Kontaktprüfung: App-Befehl outbound.contacts.email_validate (_lib/contact-email-validation.js, Strang OLG3;
 //   vorher Core-Fähigkeit mail.validate_contacts = spawn_contact_email_validation)
 //
-// OWNER-REGEL (THESEN): Belegregeln unverändert aus dem Rust-Stand (required_independent_sources = 1 je Feld).
+// OWNER-REGEL (Kundeninstanz): Belegregeln unverändert aus dem Rust-Stand (required_independent_sources = 1 je Feld).
 import { fail, has, isObject } from './olg.js';
 import { cmpStr, LEAD_COLLECTION } from './update-digest.js';
 import { jsonEqual } from './research-source-adapter.js';

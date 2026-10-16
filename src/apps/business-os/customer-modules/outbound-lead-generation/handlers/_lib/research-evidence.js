@@ -11,7 +11,7 @@
 //      :2981 quote_backs_value, :2991 person_name_quote_backs, :3019 email_quote_backs,
 //      :3030 normalized_email_text, :3040 quantity_quote_backs, :3170 CRM_SOURCE_SCHEME
 //
-// OWNER-REGEL (Kundensystem THESEN): übernommen exakt wie im Rust-Stand 4794af03d —
+// OWNER-REGEL (Kundeninstanz): übernommen exakt wie im Rust-Stand 4794af03d —
 // `required_independent_sources` liefert für JEDES Feld 1 (Owner-Regel 23.09.2026 laut
 // Rust-Kommentar). Nicht erweitert, nicht ausgelegt. Siehe V4-PORT.md §15 zur Abweichung
 // gegenüber der Formulierung „Ziel 2 Quellen je Feld, 1 nur im Notfall“.

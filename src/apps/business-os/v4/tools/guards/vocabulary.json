@@ -42,7 +42,7 @@
       "lang": "de",
       "pattern": "nicht\\s+rechtzeitig",
       "flags": "i",
-      "comment": "„… nicht rechtzeitig geladen“ (THESEN 15.10., Negativ-Abnahme 2)"
+      "comment": "„… nicht rechtzeitig geladen“ (Kundeninstanz 15.10., Negativ-Abnahme 2)"
     },
     {
       "id": "de-unbestaetigt",
