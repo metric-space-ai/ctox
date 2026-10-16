@@ -25,27 +25,31 @@ async fn create_owned(
     settings: &RxStorageSqliteSettings,
     params: RxStorageInstanceCreationParams,
 ) -> RxResult<Arc<RxStorageInstanceSqlite>> {
-    let table = table_name(
-        &params.database_name,
-        &params.collection_name,
-        params.schema.version,
-    );
-    let ddl_table = table.clone();
     let schema = params.schema.clone();
     let collection = params.collection_name.clone();
+    let legacy = table_name(&params.database_name, &collection, schema.version);
     let log = owner.clone();
     let ticket = owner.write(Box::new(move |conn| {
-        ensure_owned_collection_table(conn, &ddl_table)?;
-        ensure_collection_schema_indexes(
-            conn,
-            &ddl_table,
-            &schema,
-            &crate::rx_schema_helper::get_primary_field_of_primary_key(&schema.primary_key),
-        )?;
-        log.install_change_log(conn, &ddl_table, &collection, schema.version)?;
-        Ok(Box::new(()) as super::types::SqliteJobValue)
+        let table = log.collection_table(conn, &collection, schema.version)?;
+        ensure_owned_collection_table(conn, &table)?;
+        log.install_change_log(conn, &table, &collection, schema.version)?;
+        Ok(Box::new(table) as super::types::SqliteJobValue)
     }))?;
-    owner_result::<()>(ticket).await?;
+    let table: String = owner_result(ticket).await?;
+    // Every bounded import page commits through the same writer. Until the
+    // durable import receipt says complete no instance is exposed to callers.
+    loop {
+        let target = table.clone();
+        let source = legacy.clone();
+        let version = params.schema.version;
+        let ticket = owner.write(Box::new(move |tx| {
+            super::sql::migrate_legacy_page(tx, &source, &target, version)
+                .map(|done| Box::new(done) as super::types::SqliteJobValue)
+        }))?;
+        if owner_result::<bool>(ticket).await? {
+            break;
+        }
+    }
     let mut after: Option<String> = None;
     loop {
         let table = table.clone();

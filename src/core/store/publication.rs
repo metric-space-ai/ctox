@@ -178,17 +178,42 @@ pub async fn stage(
     now_ms: i64,
     mutate: impl FnOnce(&Transaction<'_>) -> Result<(), StoreError> + Send + 'static,
 ) -> Result<Stage, StoreError> {
+    // Preserve rejection before queue admission for malformed envelopes.
     publication.validate()?;
-    source.submit(WriteJob::new(options, move |tx| {
-        let existing = tx.query_row("SELECT target,kind,subject,payload FROM _publication_outbox WHERE op_id=?", [&publication.op_id], read_publication(&publication.op_id)).optional()?;
-        if let Some(existing) = existing {
-            return if existing == publication { Ok(Stage::Existing) } else { Err(StoreError::Invalid("publication op_id conflict".into())) };
-        }
-        mutate(tx)?;
-        tx.execute("INSERT INTO _publication_outbox(op_id,target,kind,subject,payload,created_at_ms,state,next_attempt_ms) VALUES(?,?,?,?,?,?,'pending',?)",
-            params![publication.op_id,publication.target,publication.kind,publication.subject,publication.payload,now_ms,now_ms])?;
-        Ok(Stage::Inserted)
-    }))?.await
+    source
+        .submit(WriteJob::new(options, move |tx| {
+            stage_in_transaction(tx, publication, now_ms, mutate)
+        }))?
+        .await
+}
+
+/// The same publication operation when the caller already owns A's transaction.
+/// No connection, queue wait or independently committed domain mutation escapes.
+pub fn stage_in_transaction(
+    tx: &Transaction<'_>,
+    publication: Publication,
+    now_ms: i64,
+    mutate: impl FnOnce(&Transaction<'_>) -> Result<(), StoreError>,
+) -> Result<Stage, StoreError> {
+    publication.validate()?;
+    let existing = tx
+        .query_row(
+            "SELECT target,kind,subject,payload FROM _publication_outbox WHERE op_id=?",
+            [&publication.op_id],
+            read_publication(&publication.op_id),
+        )
+        .optional()?;
+    if let Some(existing) = existing {
+        return if existing == publication {
+            Ok(Stage::Existing)
+        } else {
+            Err(StoreError::Invalid("publication op_id conflict".into()))
+        };
+    }
+    mutate(tx)?;
+    tx.execute("INSERT INTO _publication_outbox(op_id,target,kind,subject,payload,created_at_ms,state,next_attempt_ms) VALUES(?,?,?,?,?,?,'pending',?)",
+        params![publication.op_id,publication.target,publication.kind,publication.subject,publication.payload,now_ms,now_ms])?;
+    Ok(Stage::Inserted)
 }
 
 fn read_publication(

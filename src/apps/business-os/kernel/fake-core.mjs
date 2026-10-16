@@ -44,7 +44,13 @@ function coreFor(namespace) {
 async function runCommand(core, doc, depth, via) {
   const latency = via?.latencyMs ?? 5;
   const sleep = () => new Promise((r) => setTimeout(r, latency));
-  const update = async (patch) => { const current = core.docs.get(JSON.stringify(['business_commands', doc.id]))?.data ?? doc; await core.commit('business_commands', [mergePatch(current, patch)]); };
+  // result ist ein Wert, kein Merge-Patch: null-Felder (z. B. exit_code bei Zeitüberschreitung) bleiben erhalten
+  const update = async (patch) => {
+    const current = core.docs.get(JSON.stringify(['business_commands', doc.id]))?.data ?? doc;
+    const next = mergePatch(current, patch);
+    if (Object.prototype.hasOwnProperty.call(patch, 'result')) next.result = cloneValue(patch.result);
+    await core.commit('business_commands', [next]);
+  };
   await sleep(); await update({ status: 'accepted' }); await sleep(); await update({ status: 'running', progress: 0.5 });
   const user = core.users.get(doc.actor_id) ?? null;
   let final;
@@ -102,7 +108,12 @@ export class MemoryCoreTransport extends KernelTransport {
     const rows = [...this.core.docs.values()].filter(d => d.collection === collection && BigInt(d.seq) > BigInt(sub.checkpoint_seq ?? '0')).sort((a,b) => BigInt(a.seq) < BigInt(b.seq) ? -1 : 1)
       .map((r) => (this.core.runtime.canRead(user, r) ? r : { ...r, data: null, deleted: true }));
     const page = { ...sub, epoch: '1', docs: cloneValue(rows), cursor_to: this.head, head_seq: this.head, backlog: 0, complete: true };
-    await this.events.page(page); sub.checkpoint_seq = page.cursor_to;
+    // K-BF1: Checkpoint VOR der Übergabe vorziehen. Der Leiter meldet seinen Rückstand (this.backlog) noch während
+    // events.page an die Folger; mit dem alten Checkpoint trug diese letzte Meldung N > 0, und nichts korrigierte sie.
+    // Scheitert die Annahme, wird der Checkpoint zurückgesetzt, solange keine spätere Seite ihn weitergeschoben hat.
+    const previous = sub.checkpoint_seq; sub.checkpoint_seq = page.cursor_to;
+    try { await this.events.page(page); }
+    catch (error) { if (sub.checkpoint_seq === page.cursor_to) sub.checkpoint_seq = previous; throw error; }
   }
   async push(collection, docs) { return this.core.commit(collection, docs); }
   async write(entry) {

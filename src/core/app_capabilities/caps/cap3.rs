@@ -35,7 +35,7 @@ pub mod process;
 pub mod secrets;
 #[cfg(test)]
 #[path = "cap3_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 fn invalid(path: &str) -> CtoxError {
     CtoxError::invalid(path)
@@ -226,6 +226,14 @@ pub static ROUTES: &[NativeRoute] = &[
         "src/core/app_capabilities/caps/ingest.rs",
     ),
     // ---- CAP-3b
+    // §16.44 cancel lives in the CAP-3 set; the CAP-1 route list stays exact.
+    route(
+        "agent.coding",
+        "cancel",
+        "ctox.coding.cancel",
+        "coding_agents::draft_turn::CodingPanel::execute (§16.44, #848)",
+        "src/core/coding_agents/draft_turn.rs",
+    ),
     route(
         "browser.automation",
         "run",
@@ -346,12 +354,12 @@ fn wire_args(name: String, function: String, args: Value) -> (String, String, Va
         .chain(cap2::mail::ROUTES)
         .chain(ROUTES)
         .any(|r| r.capability == route.capability && r.function == route.function);
-    let args = if flat {
+    let args = if route.capability == "agent.coding" {
+        crate::app_capabilities::caps::coding_flat_envelope(route.function, args)
+    } else if flat {
         // `ctx.cap.secret.scope()` and `mail.server.config.get()` carry no args.
         let args = if args.is_null() { json!({}) } else { args };
         json!({ "payload": args })
-    } else if route.capability == "agent.coding" {
-        crate::app_capabilities::caps::coding_flat_envelope(route.function, args)
     } else {
         args
     };
@@ -398,6 +406,28 @@ pub fn handle(
     registry().handle(host, backend, message)
 }
 
+/// §16.44 routing interface: `agent.coding.turn/cancel` go to the same
+/// draft_turn engine as the platform command `ctox.coding.turn` (#848,
+/// `CodingPanel::execute`). Bound once by the composition root; no engine copy
+/// here. Unbound = unavailable.
+pub trait CodingTurns: Send + Sync {
+    /// `command_type` is `ctox.coding.turn` or `ctox.coding.cancel`; the
+    /// calling app, actor and command id come from the Core-bound ctx.
+    fn execute(
+        &self,
+        ctx: &CapCallContext,
+        command_type: &str,
+        payload: &Value,
+    ) -> Result<Value, CtoxError>;
+}
+static CODING_TURNS: std::sync::OnceLock<std::sync::Arc<dyn CodingTurns>> =
+    std::sync::OnceLock::new();
+pub fn bind_coding_turns(engine: std::sync::Arc<dyn CodingTurns>) -> Result<(), CtoxError> {
+    CODING_TURNS
+        .set(engine)
+        .map_err(|_| CtoxError::new(ErrorCode::Conflict, "coding turns already bound"))
+}
+
 /// Instantiate on the Core blocking executor. Every trait object is a
 /// Core-owned authority (no wire constructor, no permissive default); the
 /// registry has already authorized the Core-bound ctx and holds the fence.
@@ -442,6 +472,12 @@ impl CapabilityBackend for Cap3Backend<'_> {
                 (self.now_ms)(),
             ),
             "mail.server" => cap2::mail::server(self.root, self.intake, ctx, call),
+            "agent.coding" if function == "turn" || function == "cancel" => CODING_TURNS
+                .get()
+                .ok_or_else(|| {
+                    CtoxError::new(ErrorCode::Unavailable, "coding draft engine not bound")
+                })?
+                .execute(ctx, call.route().command_type(), payload),
             "files" => files::execute(self.file_store()?, ctx, function, payload),
             "process" => process::execute(self.root, self.file_store(), ctx, payload),
             "browser.auth_assist" => browser::auth_assist_request(self.root, ctx, payload),
@@ -594,9 +630,20 @@ pub fn contract() -> Value {
         ),
         (
             "agent.coding.turn",
-            json!({"required":["module_id"],"properties":{"module_id":s("128"),"prompt":s("65536"),"faux":{"type":"boolean"},"preset_id":s("128")},"not":{"required":["model"]}}),
-            json!({"type":"object","description":"pi-sidecar turn summary"}),
-            vec!["invalid", "forbidden", "unavailable"],
+            json!({"required":["app_id","draft_id","base_draft_rev","prompt"],"additionalProperties":false,"properties":{"app_id":s("256"),"draft_id":s("256"),"base_draft_rev":s("256"),"prompt":s("65536"),"model":s("256"),"turn_id":s("256")},"description":"§16.44: only the caller's own app_drafts draft; right apps.source.edit; V3 module_id/faux/preset_id shape is invalid"}),
+            json!({"turn_id":"string","state":"queued|running","description":"progress in coding_turns/<turn_id>; result also as callback command (§16.39)"}),
+            vec![
+                "invalid",
+                "forbidden",
+                "conflict(turn_running)",
+                "unavailable",
+            ],
+        ),
+        (
+            "agent.coding.cancel",
+            json!({"required":["turn_id"],"additionalProperties":false,"properties":{"turn_id":s("256")}}),
+            json!({"turn_id":"string","state":"cancelled|done|failed|conflict"}),
+            vec!["invalid", "forbidden", "not_found", "unavailable"],
         ),
         (
             "files.put",

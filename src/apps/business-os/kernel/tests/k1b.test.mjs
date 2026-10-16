@@ -238,7 +238,7 @@ test('K-1c 2 §16.39 Nr. 2 + LIBS2: Lib-Bindung aus dem Shell-Manifest in der In
   await lib('b.js');
   await lib('fehlt.js');
   await lib('a.js', null);
-  assert.deepEqual(replies, [{ type: 'ctox:lib-ready' }, { type: 'ctox:lib-ready' }, { type: 'ctox:lib-abort', reason: 'not_found' }, { type: 'ctox:lib-abort', reason: 'invalid' }]);
+  assert.deepEqual(replies.map((m) => [m.type, m.reason ?? null]), [['ctox:lib-ready', null], ['ctox:lib-ready', null], ['ctox:lib-abort', 'not_found'], ['ctox:lib-abort', 'invalid']]);
   const libRows = async () => (await k.sim.artifactRows()).filter((r) => r.app_id === 'lib:monaco').map((r) => r.path).sort();
   assert.deepEqual(await libRows(), ['a.js', 'b.js']);
   // a.js wird getroffen (SW bündelt), danach c.js: Budget 25 Bytes → b.js (am längsten ungenutzt) fliegt

@@ -312,6 +312,16 @@ fn spawn_sidecar(
     transport: &LocalTransport,
     faux: bool,
 ) -> anyhow::Result<SidecarDaemon> {
+    let child = sidecar_command(dist, transport, faux)?
+        .spawn()
+        .context("spawn pi-sidecar daemon (is `node` on PATH?)")?;
+    Ok(SidecarDaemon {
+        child,
+        unix_socket_path: transport.unix_socket_path().map(Path::to_path_buf),
+    })
+}
+
+fn sidecar_command(dist: &Path, transport: &LocalTransport, faux: bool) -> anyhow::Result<Command> {
     anyhow::ensure!(
         dist.exists(),
         "pi-sidecar bundle is not built: {} (run `npm run build` in pi-sidecar)",
@@ -334,13 +344,7 @@ fn spawn_sidecar(
     if faux {
         command.env("CTOX_PI_SIDECAR_FAUX", "1");
     }
-    let child = command
-        .spawn()
-        .context("spawn pi-sidecar daemon (is `node` on PATH?)")?;
-    Ok(SidecarDaemon {
-        child,
-        unix_socket_path: transport.unix_socket_path().map(Path::to_path_buf),
-    })
+    Ok(command)
 }
 
 fn connect_with_retry(
@@ -388,13 +392,50 @@ fn read_line(stream: &mut LocalStream, max_bytes: usize) -> anyhow::Result<Vec<u
 /// (a `CtoxTurnRequest` JSON), return the `CtoxTurnResponse` JSON. `faux` runs
 /// the sidecar's offline no-model mode (owner integration tests).
 pub fn run_pi_turn(dist: &Path, request: &Value, faux: bool) -> anyhow::Result<Value> {
+    let transport = fresh_transport();
+    let _daemon = spawn_sidecar(dist, &transport, faux)?;
+    exchange_turn(&transport, request)
+}
+
+fn fresh_transport() -> LocalTransport {
     let endpoint_id = Uuid::new_v4();
-    let transport = LocalTransport::ipc_for_host(
+    LocalTransport::ipc_for_host(
         std::env::temp_dir().join(format!("ctox-pi-{endpoint_id}.sock")),
         format!("ctox-pi-{endpoint_id}"),
-    );
-    let _daemon = spawn_sidecar(dist, &transport, faux)?;
-    let mut stream = connect_with_retry(&transport, Duration::from_secs(10))?;
+    )
+}
+
+/// §16.44 variant of [`run_pi_turn`]: the fresh daemon is owned by `control`,
+/// so `ctox.coding.cancel` kills it (the blocked read then fails) and every
+/// exit path reaps it. Same bounded protocol, limits and sandboxed env.
+#[allow(dead_code)] // constructed by the store owner's CodingPanel wiring
+pub(crate) fn run_pi_turn_controlled(
+    dist: &Path,
+    request: &Value,
+    faux: bool,
+    control: &super::draft_turn::TurnControl,
+) -> anyhow::Result<Value> {
+    struct SocketCleanup(Option<PathBuf>);
+    impl Drop for SocketCleanup {
+        fn drop(&mut self) {
+            if let Some(path) = &self.0 {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+    let transport = fresh_transport();
+    let _socket = SocketCleanup(transport.unix_socket_path().map(Path::to_path_buf));
+    let child = sidecar_command(dist, &transport, faux)?
+        .spawn()
+        .context("spawn pi-sidecar daemon (is `node` on PATH?)")?;
+    let _daemon = control
+        .attach(child)
+        .map_err(|failure| anyhow::anyhow!("pi coding turn {}", failure.reason))?;
+    exchange_turn(&transport, request)
+}
+
+fn exchange_turn(transport: &LocalTransport, request: &Value) -> anyhow::Result<Value> {
+    let mut stream = connect_with_retry(transport, Duration::from_secs(10))?;
     stream
         .set_write_timeout(Some(Duration::from_secs(30)))
         .context("set pi-sidecar write timeout")?;
@@ -980,6 +1021,60 @@ pub(crate) fn run_coding_preset_smoke_with_subscription_proxy_for_test(
 /// `coding_plan_upstream_override` unset. Tests use a controlled loopback
 /// upstream so the complete preset -> account -> bridge -> Pi route can be
 /// proven without adding an ambient runtime toggle or contacting a provider.
+/// §16.44 production runner: one fresh pi-sidecar daemon per draft turn over
+/// LocalTransport. `model` from the command is an opaque preset id published by
+/// `ctox.coding.models`; raw model JSON never crosses the command boundary.
+#[allow(dead_code)] // constructed by the store owner's CodingPanel wiring
+pub(crate) struct PiSidecarRunner {
+    pub root: PathBuf,
+}
+
+impl super::draft_turn::SidecarRunner for PiSidecarRunner {
+    fn run(
+        &self,
+        input: &super::draft_turn::SidecarTurnInput,
+        control: &super::draft_turn::TurnControl,
+        progress: &dyn Fn(),
+    ) -> Result<Value, super::draft_turn::TurnFailure> {
+        use super::draft_turn::TurnFailure;
+        let dist = resolve_sidecar_dist(&self.root).map_err(|error| {
+            TurnFailure::new("unavailable", "sidecar_bundle_missing").detail(error.to_string())
+        })?;
+        let preset = input.model_preset.as_deref().unwrap_or("ctox");
+        let model_override = resolve_coding_model_preset(&self.root, preset).map_err(|error| {
+            TurnFailure::new("invalid", "model_preset_unknown").detail(error.to_string())
+        })?;
+        let prepared = prepare_coding_turn_model(&self.root, model_override, None, false).map_err(
+            |error| {
+                TurnFailure::new("unavailable", "model_route_unavailable").detail(error.to_string())
+            },
+        )?;
+        let request = serde_json::json!({
+            "id": input.turn_id,
+            "prompt": input.prompt,
+            "files": input.files,
+            "maxAssistantTurns": 8,
+            "systemPrompt": business_os_system_prompt(),
+            "model": prepared.model,
+        });
+        progress();
+        let response = run_pi_turn_controlled(&dist, &request, false, control);
+        drop(prepared.coding_plan_bridge);
+        let response = response.map_err(|error| {
+            if control.is_cancelled() {
+                TurnFailure::new("conflict", "cancelled")
+            } else {
+                TurnFailure::new("unavailable", "sidecar_transport").detail(error.to_string())
+            }
+        })?;
+        if response.get("ok").and_then(Value::as_bool) != Some(true) {
+            return Err(TurnFailure::new("unavailable", "sidecar_turn_failed")
+                .detail(pi_turn_failure_detail(&response)));
+        }
+        Ok(response)
+    }
+}
+
 fn run_module_coding_turn_inner(
     root: &Path,
     dist: &Path,

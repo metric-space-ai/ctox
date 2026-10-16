@@ -85,7 +85,7 @@ test('Kernel: Zustellung eines Rückschritts wird verworfen – Terminalzustand 
   assert.ok(k.status.forApp('kernel').get().some((e) => e.code === 'command.invalid_transition'));
 });
 
-// zu shared/command-bus.test.mjs „duplicate command id rejects a changed immutable payload without regressing state“ (KEEP-CRITICAL)
+// KEEP-CRITICAL: doppelte Befehls-ID darf keine geänderte Absicht oder Terminal-Regression zulassen.
 test('Core: doppelte Befehls-id mit geänderter Absicht → idempotency_conflict, gleiche Absicht → kein Rückschritt', async (t) => {
   const k = await mk(t);
   k.sim.onCommand('crm.do', async () => ({ ok: true }));

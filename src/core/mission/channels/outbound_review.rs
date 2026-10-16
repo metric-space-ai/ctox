@@ -3834,11 +3834,25 @@ pub(super) fn empty_business_os_projection(collection: &str) -> Value {
 }
 
 pub(super) fn ensure_schema(conn: &Connection) -> Result<()> {
-    let busy_timeout_ms = crate::persistence::sqlite_busy_timeout_millis();
+    ensure_schema_with_setup(
+        conn,
+        &format!(
+            "PRAGMA journal_mode=WAL; PRAGMA busy_timeout={};",
+            crate::persistence::sqlite_busy_timeout_millis()
+        ),
+    )
+}
+
+/// The daemon owner already applied ConnectionConfig. Domain DDL must not
+/// replace its busy_timeout/checkpoint policy with legacy opener pragmas.
+pub(crate) fn ensure_owned_schema(conn: &Connection) -> Result<()> {
+    ensure_schema_with_setup(conn, "")
+}
+
+fn ensure_schema_with_setup(conn: &Connection, setup: &str) -> Result<()> {
     conn.execute_batch(&format!(
         r#"
-        PRAGMA journal_mode=WAL;
-        PRAGMA busy_timeout={busy_timeout_ms};
+        {setup}
 
         CREATE TABLE IF NOT EXISTS communication_accounts (
             account_key TEXT PRIMARY KEY,

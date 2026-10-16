@@ -790,6 +790,11 @@ fn write_output(
             if rev.is_empty() || !body.is_object() {
                 return Err(invalid("invalid migrated document"));
             }
+            if target.definition.name == "business_commands" && target.definition.schema_ver == 3 {
+                crate::change_log::subscription::write_contract::validate_migrated_command(
+                    body, &source.id,
+                )?;
+            }
             archive(tx, target, source, "generation migration", now)?;
             tx.execute(
                 &format!(
@@ -1753,7 +1758,15 @@ pub fn purge_online_index_page(
 pub struct BaseReleaseInput {
     pub ownership: Value,
     pub manifests: Vec<Value>,
+    #[serde(default)]
+    pub libs: Vec<BaseReleaseLibrary>,
     pub schemas: std::collections::BTreeMap<String, Value>,
+}
+/// Immutable platform artifact, kept out of app schema publication.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BaseReleaseLibrary {
+    pub artifact_id: String,
+    pub manifest: Value,
 }
 #[derive(Debug, Clone)]
 pub struct BaseReleaseDefaults {
@@ -1770,6 +1783,57 @@ pub struct BaseReleaseReport {
     pub legacy_catalog_replaced: bool,
     pub missing_addenda_definitions: Vec<String>,
 }
+/// The Core owns the platform command wire contract. Bind it before artifact
+/// signing and registry publication so both describe the exact same schema.
+/// Only release input changes; incompatible stores still need normal migration.
+pub fn bind_platform_command_schema(input: &mut BaseReleaseInput) -> Result<()> {
+    let platform = input
+        .manifests
+        .iter_mut()
+        .find(|m| m["app_id"] == "ctox-platform")
+        .ok_or_else(|| invalid("platform manifest missing"))?;
+    let metadata = platform
+        .get_mut("collections")
+        .and_then(Value::as_object_mut)
+        .and_then(|c| c.get_mut("business_commands"))
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| invalid("platform command metadata missing"))?;
+    let schema = crate::change_log::subscription::write_contract::command_document_schema();
+    // Never downgrade an unknown future contract or reuse a published version
+    // for different bytes. Legacy v2 is the explicit incompatible base.
+    let corrected_schema = input
+        .schemas
+        .get("ctox-platform")
+        .and_then(|s| s["collections"].get("business_commands"))
+        .map(|entry| entry.get("schema").unwrap_or(entry));
+    for supplied in [corrected_schema, metadata.get("schema")]
+        .into_iter()
+        .flatten()
+    {
+        if supplied["version"].as_u64().unwrap_or(0) >= 3 && supplied != &schema {
+            return Err(invalid("platform command schema version collision"));
+        }
+    }
+    metadata.insert("schema".into(), schema.clone());
+    let corrected = input
+        .schemas
+        .entry("ctox-platform".into())
+        .or_insert_with(|| serde_json::json!({"_base_release":"main@4794af03d","collections":{}}));
+    let collections = corrected
+        .get_mut("collections")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| invalid("platform schema collections missing"))?;
+    let entry = collections
+        .entry("business_commands")
+        .or_insert_with(|| serde_json::json!({}));
+    if entry.get("schema").is_some() {
+        entry["schema"] = schema;
+    } else {
+        *entry = serde_json::json!({"schema":schema});
+    }
+    Ok(())
+}
+
 /// Read immutable release inputs outside the Store writer. No ambient paths/config.
 pub fn load_base_release(
     v4_root: &std::path::Path,
@@ -1787,13 +1851,61 @@ pub fn load_base_release(
         .map_err(|e| invalid(e.to_string()))?;
     files.sort();
     let mut manifests = Vec::new();
+    let mut libs = Vec::new();
     for path in files {
         if path
             .file_name()
             .and_then(|n| n.to_str())
             .is_some_and(|n| n.ends_with(".manifest.json"))
         {
-            manifests.push(json(&path)?);
+            let manifest = json(&path)?;
+            let is_library = manifest["kind"] == "lib"
+                || path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("lib-"));
+            if is_library {
+                if manifest.get("collections").is_some() {
+                    return Err(invalid("lib_with_collections"));
+                }
+                let name = manifest["app_id"]
+                    .as_str()
+                    .and_then(|id| id.strip_prefix("lib:"))
+                    .filter(|name| {
+                        !name.is_empty()
+                            && name
+                                .bytes()
+                                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                    })
+                    .ok_or_else(|| invalid("lib_identity"))?;
+                let version = manifest["version"]
+                    .as_str()
+                    .ok_or_else(|| invalid("lib_version"))?;
+                let parts: Vec<_> = version.split('.').collect();
+                if parts.len() != 2
+                    || parts.iter().any(|p| {
+                        p.is_empty()
+                            || !p.bytes().all(|b| b.is_ascii_digit())
+                            || p.parse::<u32>().is_err()
+                            || (p.len() > 1 && p.starts_with('0'))
+                    })
+                {
+                    return Err(invalid("lib_version"));
+                }
+                let artifact_id = format!("lib:{name}@{version}");
+                if libs
+                    .iter()
+                    .any(|lib: &BaseReleaseLibrary| lib.artifact_id == artifact_id)
+                {
+                    return Err(invalid("duplicate_lib_artifact"));
+                }
+                libs.push(BaseReleaseLibrary {
+                    artifact_id,
+                    manifest,
+                });
+            } else {
+                manifests.push(manifest);
+            }
         }
     }
     manifests.retain(|m| m.get("app_id").and_then(Value::as_str) != Some("ctox-platform"));
@@ -1807,6 +1919,9 @@ pub fn load_base_release(
         if app.contains('/') || app.contains('\\') || app == "." || app == ".." {
             return Err(invalid("invalid manifest app_id path"));
         }
+        if !manifest["collections"].is_object() {
+            return Err(invalid("manifest_collections"));
+        }
         let path = v4_root
             .join("schemas")
             .join(format!("{app}.collections.schema.json"));
@@ -1814,11 +1929,14 @@ pub fn load_base_release(
             schemas.insert(app.to_owned(), json(&path)?);
         }
     }
-    Ok(BaseReleaseInput {
+    let mut input = BaseReleaseInput {
         ownership,
         manifests,
+        libs,
         schemas,
-    })
+    };
+    bind_platform_command_schema(&mut input)?;
+    Ok(input)
 }
 const OLG_COLLECTIONS: [&str; 5] = [
     "outbound_lead_generation_adapters",
@@ -1927,8 +2045,10 @@ pub fn import_base_release(
                 .and_then(|v| v.get(&name));
             let schema = corrected
                 .or_else(|| metadata.get("schema"))
-                .ok_or_else(|| invalid(format!("schema missing: {name}")))?
-                .clone();
+                .ok_or_else(|| invalid(format!("schema missing: {name}")))?;
+            // Corrected Shell schema files carry collection metadata around
+            // `schema`; older release fixtures contain the schema directly.
+            let schema = schema.get("schema").unwrap_or(schema).clone();
             let version = schema.get("version").and_then(Value::as_u64).unwrap_or(0);
             let def = CollectionDefinition {
                 name: name.clone(),

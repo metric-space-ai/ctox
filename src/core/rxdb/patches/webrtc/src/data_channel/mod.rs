@@ -27,6 +27,11 @@ pub trait DataChannel: Send + Sync + 'static {
     async fn negotiated(&self) -> Result<bool>;
     fn id(&self) -> RTCDataChannelId;
     async fn ready_state(&self) -> Result<RTCDataChannelState>;
+    /// Exact native stream occupancy. Implementations without this accounting
+    /// fail closed when used by the V4 scheduler.
+    async fn buffered_amount(&self) -> Result<usize> {
+        Err(Error::ErrDataChannelClosed)
+    }
     async fn buffered_amount_high_threshold(&self) -> Result<u32>;
     async fn set_buffered_amount_high_threshold(&self, threshold: u32) -> Result<()>;
     async fn buffered_amount_low_threshold(&self) -> Result<u32>;
@@ -138,6 +143,13 @@ where
             .ok_or(Error::ErrDataChannelClosed)?
             .label()
             .to_owned())
+    }
+
+    async fn buffered_amount(&self) -> Result<usize> {
+        let mut core = self.inner.core.lock().await;
+        core.data_channel(self.id)
+            .ok_or(Error::ErrDataChannelClosed)?
+            .buffered_amount()
     }
 
     /// Ordered returns true if the DataChannel is ordered, and false if

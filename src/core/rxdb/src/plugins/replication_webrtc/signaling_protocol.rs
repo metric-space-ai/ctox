@@ -11,6 +11,7 @@
 //! - Client → server: `join { room }`, `signal { senderPeerId,
 //!   receiverPeerId, room, data }`, `ping`.
 
+use super::signaling_ice::SignalingIceServers;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -83,6 +84,11 @@ pub enum ServerToClient {
         code: String,
         #[serde(default)]
         reason: String,
+    },
+    /// Authenticated control-plane ICE configuration, delivered before joined.
+    CtoxIceServers {
+        #[serde(rename = "iceServers")]
+        ice_servers: SignalingIceServers,
     },
     /// Catch-all so unknown frames don't tear down the connection.
     #[serde(other)]
