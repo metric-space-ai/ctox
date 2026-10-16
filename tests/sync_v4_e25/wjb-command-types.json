@@ -616,12 +616,14 @@
   {
     "bridge": "computer",
     "action": "computer.list",
-    "command_types": [
-      "ctox.workjet.computer.list"
-    ],
-    "via": "dispatch",
+    "command_types": [],
+    "via": "query (E32, lokale Kernel-Abfrage workjet_computers)",
     "source": "measured",
-    "evidence": "ctox.workjet.computer.list @ actions/computer.js:64"
+    "evidence": "E32 workjet_computers @ actions/computer.js:87; actions/computer.js:417 (entfallen: ctox.workjet.computer.list)",
+    "e32": {
+      "query": "workjet_computers",
+      "dropped_command_type": "ctox.workjet.computer.list"
+    }
   },
   {
     "bridge": "computer",
@@ -631,7 +633,7 @@
     ],
     "via": "dispatch",
     "source": "measured",
-    "evidence": "ctox.workjet.computer.assign @ actions/computer.js:137",
+    "evidence": "ctox.workjet.computer.assign @ actions/computer.js:155",
     "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): TIMEOUT 5000 ms"
   },
   {
@@ -642,7 +644,7 @@
     ],
     "via": "dispatch",
     "source": "measured",
-    "evidence": "ctox.workjet.computer.unassign @ actions/computer.js:255",
+    "evidence": "ctox.workjet.computer.unassign @ actions/computer.js:273",
     "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): TIMEOUT 5000 ms"
   },
   {
@@ -653,7 +655,7 @@
     ],
     "via": "dispatch",
     "source": "measured",
-    "evidence": "ctox.workjet.computer.endpoint.upsert @ actions/computer.js:188",
+    "evidence": "ctox.workjet.computer.endpoint.upsert @ actions/computer.js:206",
     "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): Workjet connection change was not confirmed."
   },
   {
@@ -664,7 +666,7 @@
     ],
     "via": "dispatch",
     "source": "measured",
-    "evidence": "ctox.workjet.computer.endpoint.disable @ actions/computer.js:189",
+    "evidence": "ctox.workjet.computer.endpoint.disable @ actions/computer.js:207",
     "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): Workjet connection change was not confirmed."
   },
   {
@@ -675,18 +677,20 @@
     ],
     "via": "dispatch",
     "source": "measured",
-    "evidence": "ctox.workjet.computer.ssh_key.ensure @ actions/computer.js:214",
+    "evidence": "ctox.workjet.computer.ssh_key.ensure @ actions/computer.js:232",
     "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): Workjet computer SSH key was not confirmed."
   },
   {
     "bridge": "session",
     "action": "session.list",
-    "command_types": [
-      "ctox.workjet.session.list"
-    ],
-    "via": "dispatch",
+    "command_types": [],
+    "via": "query (E32, lokale Kernel-Abfrage workjet_sessions)",
     "source": "measured",
-    "evidence": "ctox.workjet.session.list @ actions/session.js:213"
+    "evidence": "E32 workjet_sessions @ actions/session.js:215; actions/session.js:400 (entfallen: ctox.workjet.session.list)",
+    "e32": {
+      "query": "workjet_sessions",
+      "dropped_command_type": "ctox.workjet.session.list"
+    }
   },
   {
     "bridge": "session",
@@ -696,7 +700,7 @@
     ],
     "via": "dispatch",
     "source": "measured",
-    "evidence": "ctox.workjet.session.create @ actions/session.js:240",
+    "evidence": "ctox.workjet.session.create @ actions/session.js:242",
     "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): TIMEOUT 5000 ms"
   },
   {
@@ -707,7 +711,7 @@
     ],
     "via": "dispatch",
     "source": "measured",
-    "evidence": "ctox.workjet.session.transfer.start @ actions/session.js:270"
+    "evidence": "ctox.workjet.session.transfer.start @ actions/session.js:272"
   },
   {
     "bridge": "session",
@@ -717,7 +721,7 @@
     ],
     "via": "dispatch",
     "source": "measured",
-    "evidence": "ctox.workjet.session.transfer.status @ actions/session.js:333"
+    "evidence": "ctox.workjet.session.transfer.status @ actions/session.js:335"
   },
   {
     "bridge": "session",
@@ -727,7 +731,7 @@
     ],
     "via": "dispatch",
     "source": "measured",
-    "evidence": "ctox.workjet.session.transfer.abort @ actions/session.js:352"
+    "evidence": "ctox.workjet.session.transfer.abort @ actions/session.js:354"
   },
   {
     "bridge": "session",
@@ -737,7 +741,7 @@
     ],
     "via": "dispatch",
     "source": "measured",
-    "evidence": "ctox.workjet.session.transfer.pause_ack @ actions/session.js:302"
+    "evidence": "ctox.workjet.session.transfer.pause_ack @ actions/session.js:304"
   },
   {
     "bridge": "device",
