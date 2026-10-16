@@ -214,9 +214,9 @@ fn answer(
     };
     // E38.2 excludes test-only kernel fixtures even through the slot alias.
     if relative.starts_with("kernel/")
-        && relative
-            .split('/')
-            .any(|part| matches!(part, "tests" | "testkit") || part.starts_with("fake-core"))
+        && relative.split('/').any(|part| {
+            matches!(part, "tests" | "testkit" | "testkit.mjs") || part.starts_with("fake-core")
+        })
     {
         return Ok((404, "text/plain", Vec::new()));
     }
@@ -314,6 +314,8 @@ mod tests {
             ("kernel/boot.mjs", "// kernel boot"),
             ("kernel/vendor/hello.mjs", "// kernel vendor"),
             ("kernel/tests/private.mjs", "// forbidden fixture"),
+            ("kernel/testkit.mjs", "// forbidden testkit"),
+            ("kernel/fake-core.mjs", "// forbidden core fixture"),
             ("assets/ctox-app-icon.png", "icon fixture"),
         ] {
             std::fs::write(app.join(path), body)?;
@@ -420,6 +422,18 @@ mod tests {
                 "/business-os/%2e%2e%2findex.html",
             ] {
                 assert_eq!(get(url)?.status(), 404, "bootstrap path escape: {url}");
+            }
+            for url in [
+                "/kernel/testkit.mjs",
+                "/business-os/kernel/testkit.mjs",
+                "/kernel/fake-core.mjs",
+                "/business-os/kernel/fake-core.mjs",
+            ] {
+                assert_eq!(
+                    get(url)?.status(),
+                    404,
+                    "test-only kernel module served: {url}"
+                );
             }
             let bootstrap: serde_json::Value = get("/api/business-os/bootstrap")?.into_json()?;
             assert_eq!(bootstrap["instance_id"], expected.0);
