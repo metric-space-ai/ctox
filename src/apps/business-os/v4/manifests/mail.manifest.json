@@ -33,29 +33,11 @@
     "ctox ctox.chat.task": [
       "index.js:2561"
     ],
-    "outbound outbound.campaign.status.set": [
-      "index.js:1131"
-    ],
-    "outbound outbound.message.approve": [
-      "index.js:1144"
-    ],
     "outbound outbound.message.compose": [
       "index.js:1258"
     ],
-    "outbound outbound.message.request_approval": [
-      "index.js:1142",
-      "index.js:1951"
-    ],
-    "outbound outbound.message.send_approved": [
-      "index.js:1146",
-      "index.js:1951"
-    ],
-    "outbound outbound.provider.reconcile": [
-      "index.js:1123"
-    ],
     "support support.conversation.open_from_thread": [
-      "index.js:2515",
-      "index.js:2516"
+      "index.js:2515"
     ]
   },
   "_declaration": "modules/mail/v4-manifest.json",
@@ -95,27 +77,7 @@
     },
     {
       "app": "outbound",
-      "type": "outbound.campaign.status.set"
-    },
-    {
-      "app": "outbound",
-      "type": "outbound.message.approve"
-    },
-    {
-      "app": "outbound",
       "type": "outbound.message.compose"
-    },
-    {
-      "app": "outbound",
-      "type": "outbound.message.request_approval"
-    },
-    {
-      "app": "outbound",
-      "type": "outbound.message.send_approved"
-    },
-    {
-      "app": "outbound",
-      "type": "outbound.provider.reconcile"
     },
     {
       "app": "support",

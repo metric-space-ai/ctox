@@ -625,8 +625,17 @@ export function createWindowHost({ root, appRecord, api = {}, restored = null })
         navigate(target, params) {
           if (disposed) return false;
           const ok = !!frame.navigate?.(target, params);
-          if (!ok) zone.report({ level: 'error', code: 'shell.navigate', text: `Ziel „${target}“ ist nicht vorhanden`, source: 'shell' });
+          // RCH2: ein Chat-Entwurf (params.chat_draft, E39 Nr. 4) ist ein Angebot mit eigenem Rückfallweg der App
+          // (false = keine Chatleiste); das ist kein fehlendes Ziel und kein Zonenfehler.
+          const chatDraft = !!params && typeof params === 'object' && typeof params.chat_draft === 'string';
+          if (!ok && !chatDraft) zone.report({ level: 'error', code: 'shell.navigate', text: `Ziel „${target}“ ist nicht vorhanden`, source: 'shell' });
           return ok;
+        },
+        // RCH2: canNavigate(target, params) → boolean, ohne Zoneneintrag und ohne Wirkung (z. B. steht die Chatleiste
+        // für navigate('ctox', {chat_draft})?). Rahmen ohne Prüfung → false.
+        canNavigate(target, params) {
+          if (disposed) return false;
+          try { return !!frame.canNavigate?.(target, params); } catch { return false; }
         },
         // api.shell.openSource(appId?) → boolean: Quelltext-Ansicht einer App (Standard: die eigene) als Fenster des
         // Rahmens. Generisch für alle Apps; nur mit apps.source.view und kernel.source (entschieden im Rahmen/Kern).

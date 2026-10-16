@@ -13,6 +13,7 @@ import {
   DECLARATION_FILE, DECLARATION_FORMAT, validateDeclaration, triggerShapeError, collectConstants, resolveString,
   topLevelProps, scanCommandCalls, scanTriggerExports,
   scanUiCommandTypes, blankComments, SHELL_COMMANDS_OUT, PLATFORM_ROUTES_PENDING, PLATFORM_REGISTRY_ROUTES, COMMAND_INVENTORY_FILE,
+  isPlatformRoute, loadPlatformRoutes, enclosingObjectHasDispatchFalse,
 } from './gen-manifest.mjs';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
@@ -1181,9 +1182,13 @@ test('ROUTE: Shell trägt commands_out {ctox, business_os.chat.task} und {ctox, 
 test('ROUTE heutiger Baum: mail → outbound beidseitig deklariert (FIX9a), abgeleitete commands_in nie *', () => {
   const mail = first.manifests.mail;
   const ob = first.manifests.outbound;
-  for (const t of ['outbound.message.compose', 'outbound.message.request_approval', 'outbound.message.approve', 'outbound.message.send_approved', 'outbound.provider.reconcile', 'outbound.campaign.status.set']) {
-    assert.ok(mail.commands_out.some((c) => c.app === 'outbound' && c.type === t), `mail commands_out ${t}`);
-    assert.ok(ob.commands_in.some((c) => c.type === t && Array.isArray(c.from) && c.from.includes('mail')), `outbound commands_in ${t} von mail`);
+  // E42: request_approval/approve/send_approved/provider.reconcile/campaign.status.set sind Plattformrouten (Inventur);
+  // outbound.message.compose nicht – dafür trägt mail commands_out und outbound commands_in {from:['mail']}.
+  assert.ok(mail.commands_out.some((c) => c.app === 'outbound' && c.type === 'outbound.message.compose'), 'mail commands_out compose');
+  assert.ok(ob.commands_in.some((c) => c.type === 'outbound.message.compose' && Array.isArray(c.from) && c.from.includes('mail')), 'outbound commands_in compose von mail');
+  for (const t of ['outbound.message.request_approval', 'outbound.message.approve', 'outbound.message.send_approved', 'outbound.provider.reconcile', 'outbound.campaign.status.set']) {
+    assert.ok(isPlatformRoute(t, loadPlatformRoutes(DEFAULT_REPO)), `${t} ist Plattformroute (E42)`);
+    assert.ok(!mail.commands_out.some((c) => c.type === t), `${t}: Plattformroute ohne commands_out`);
   }
   assert.ok(first.drift.commands_in_derived.length > 0);
   for (const d of first.drift.commands_in_derived) assert.ok(d.evidence.every((e) => /:\d+$/.test(e)), `${d.app} ← ${d.from} ${d.type} Fundstelle`);
@@ -1206,4 +1211,28 @@ test('ROUTE: scanUiCommandTypes – Schlüssel von Abbildungstabellen und Kommen
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('BOOTR OPEN-4: Shell-Abschluss enthält per new URL(…, import.meta.url) geladenes CSS des Rahmens', async () => {
+  const { shellImportClosure } = await import('./gen-manifest.mjs');
+  const appsRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..');
+  const files = shellImportClosure(appsRoot, ['v4/frame/index.js']);
+  for (const css of ['shared/shell-v2-chrome.css', 'shared/shell-v2-topbar.css', 'v4/frame/frame.css', 'v4/frame/theme/theme.css', 'shared/base.css']) {
+    assert.ok(files.includes(css), css);
+  }
+});
+
+test('E42: Inventurklassen und Chat-Befehle sind Plattformrouten; commandType mit dispatch:false sendet nicht', () => {
+  const routes = loadPlatformRoutes(DEFAULT_REPO);
+  for (const t of ['browser.capture.extract', 'outbound.message.approve', 'business_os.chat.task', 'business_os.data.modify', 'ctox.app.publish', 'ctox.workjet.project.list']) {
+    assert.ok(isPlatformRoute(t, routes), t);
+  }
+  for (const t of ['outbound.message.compose', 'gibt.es.nicht']) assert.ok(!isPlatformRoute(t, routes), t);
+  const withFalse = "openImporter({ moduleId: 'x', commandType: 'x.import', dispatch: false })";
+  assert.equal(enclosingObjectHasDispatchFalse(withFalse, withFalse.indexOf('commandType')), true);
+  const sending = "openImporter({ moduleId: 'x', commandType: 'x.import' })";
+  assert.equal(enclosingObjectHasDispatchFalse(sending, sending.indexOf('commandType')), false);
+  // PENDING: nur noch die E25-Registry-Typen und die fünf gemessen fehlenden browser.*-Literale
+  assert.ok(Object.keys(PLATFORM_ROUTES_PENDING).every((t) => /^ctox\.workjet\.[a-z_.]+\.v1$|^ctox\.plan\.step\.retry$|^browser\./.test(t)));
+  assert.ok(!('outbound-lead-generation.import' in PLATFORM_ROUTES_PENDING), 'OLG-Import ist Fehlalarm (dispatch:false)');
 });

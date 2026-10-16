@@ -86,10 +86,39 @@ export function mountBusinessChat({ kernel, shellVer = 'dev', getActiveModule = 
   hull.dataset.shellStyle = 'ctox';
   doc.body.appendChild(hull);
   hull.appendChild(root);
+  const view = doc.defaultView || globalThis;
   const handle = {
     root,
     compat,
+    lastDraft: null,
     get active() { return mounted === handle; },
+    // RCH2 (E39 Nr. 4): Entwurf einer App in der Leiste öffnen, nicht senden. Der Rahmen ruft das aus
+    // api.shell.navigate('ctox', {chat_draft, command_type, payload, …}) und setzt source_module/source_title aus dem
+    // rufenden Fenster. Weg wie V2 openBusinessChat: Ereignis ctox-business-os-chat-open an business-chat.js; der
+    // Chat merkt sich command_type/payload (contextMeta) und schickt beim Senden genau diesen Befehl.
+    openDraft(spec = {}) {
+      if (mounted !== handle) return false;
+      const source = String(spec.source_module || '').trim();
+      if (!source) return false;
+      const payload = spec.payload && typeof spec.payload === 'object' && !Array.isArray(spec.payload) ? spec.payload : null;
+      const title = String(spec.title || '').trim();
+      const detail = {
+        module: source,
+        source_module: source,
+        source_title: String(spec.source_title || source),
+        action: 'context-chat',
+        reuseActive: false,
+        draft: String(spec.draft ?? ''),
+        ...(spec.command_type ? { command_type: String(spec.command_type) } : {}),
+        ...(payload ? { payload } : {}),
+        ...(payload?.thread_key ? { thread_key: String(payload.thread_key) } : {}),
+        ...(spec.record_id ? { record_id: String(spec.record_id) } : {}),
+        ...(title ? { title, command_title: title } : {}),
+      };
+      handle.lastDraft = Object.freeze(JSON.parse(JSON.stringify(detail)));
+      view.dispatchEvent(new view.CustomEvent('ctox-business-os-chat-open', { detail }));
+      return true;
+    },
     unmount() {
       if (mounted !== handle) return;
       mounted = null;

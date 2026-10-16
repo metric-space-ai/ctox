@@ -3,84 +3,10 @@
     {
       "app": "outbound",
       "evidence": [
-        "modules/conversations/index.js:1929"
-      ],
-      "from": "conversations",
-      "type": "outbound.message.approve"
-    },
-    {
-      "app": "outbound",
-      "evidence": [
-        "modules/conversations/index.js:1935"
-      ],
-      "from": "conversations",
-      "type": "outbound.message.reject"
-    },
-    {
-      "app": "outbound",
-      "evidence": [
-        "modules/conversations/index.js:1944"
-      ],
-      "from": "conversations",
-      "type": "outbound.reply.classify"
-    },
-    {
-      "app": "outbound",
-      "evidence": [
-        "modules/conversations/index.js:1959"
-      ],
-      "from": "conversations",
-      "type": "outbound.reply.match"
-    },
-    {
-      "app": "outbound",
-      "evidence": [
-        "modules/mail/index.js:1131"
-      ],
-      "from": "mail",
-      "type": "outbound.campaign.status.set"
-    },
-    {
-      "app": "outbound",
-      "evidence": [
-        "modules/mail/index.js:1144"
-      ],
-      "from": "mail",
-      "type": "outbound.message.approve"
-    },
-    {
-      "app": "outbound",
-      "evidence": [
         "modules/mail/index.js:1258"
       ],
       "from": "mail",
       "type": "outbound.message.compose"
-    },
-    {
-      "app": "outbound",
-      "evidence": [
-        "modules/mail/index.js:1142",
-        "modules/mail/index.js:1951"
-      ],
-      "from": "mail",
-      "type": "outbound.message.request_approval"
-    },
-    {
-      "app": "outbound",
-      "evidence": [
-        "modules/mail/index.js:1146",
-        "modules/mail/index.js:1951"
-      ],
-      "from": "mail",
-      "type": "outbound.message.send_approved"
-    },
-    {
-      "app": "outbound",
-      "evidence": [
-        "modules/mail/index.js:1123"
-      ],
-      "from": "mail",
-      "type": "outbound.provider.reconcile"
     }
   ],
   "commands_in_without_handler": [],
@@ -89,15 +15,7 @@
   "commands_routes_pending": [
     {
       "app": "browser",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
-      "evidence": [
-        "modules/browser/index.js:1424"
-      ],
-      "type": "browser.capture.extract"
-    },
-    {
-      "app": "browser",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
+      "basis": "E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)",
       "evidence": [
         "modules/browser/index.js:627"
       ],
@@ -105,7 +23,7 @@
     },
     {
       "app": "browser",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
+      "basis": "E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)",
       "evidence": [
         "modules/browser/index.js:587"
       ],
@@ -113,7 +31,7 @@
     },
     {
       "app": "browser",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
+      "basis": "E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)",
       "evidence": [
         "modules/browser/index.js:592"
       ],
@@ -121,7 +39,7 @@
     },
     {
       "app": "browser",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
+      "basis": "E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)",
       "evidence": [
         "modules/browser/index.js:555"
       ],
@@ -129,85 +47,21 @@
     },
     {
       "app": "browser",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
+      "basis": "E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)",
       "evidence": [
         "modules/browser/index.js:636"
       ],
       "type": "browser.webauthn.respond"
     },
     {
-      "app": "buchhaltung",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
-      "evidence": [
-        "modules/buchhaltung/index.js:814"
-      ],
-      "type": "business_os.data.modify"
-    },
-    {
-      "app": "research",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
-      "evidence": [
-        "modules/research/index.js:4898"
-      ],
-      "type": "business_os.data.modify"
-    },
-    {
-      "app": "matching",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
-      "evidence": [
-        "modules/matching/ui/businessOsControls.js:789"
-      ],
-      "type": "business_os.i18n.translate"
-    },
-    {
-      "app": "browser",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
-      "evidence": [
-        "modules/browser/index.js:1369"
-      ],
-      "type": "ctox.browser_context.capture"
-    },
-    {
-      "app": "creator",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
-      "evidence": [
-        "modules/creator/index.js:1025"
-      ],
-      "type": "ctox.business_os.app.create"
-    },
-    {
-      "app": "desktop",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
-      "evidence": [
-        "modules/desktop/appCommands.js:28"
-      ],
-      "type": "ctox.business_os.app.create"
-    },
-    {
-      "app": "importer",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
-      "evidence": [
-        "modules/importer/index.js:173"
-      ],
-      "type": "ctox.business_os.app.create"
-    },
-    {
-      "app": "documents",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
-      "evidence": [
-        "modules/documents/index.js:3332"
-      ],
-      "type": "ctox.knowledge.runbooks.manage"
-    },
-    {
       "app": null,
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
+      "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
       "evidence": [],
       "type": "ctox.plan.step.retry"
     },
     {
       "app": "shell",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
+      "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
       "evidence": [
         "v4/shell/workjet/actions/calendar-connect.js:11"
       ],
@@ -215,7 +69,7 @@
     },
     {
       "app": "shell",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
+      "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
       "evidence": [
         "v4/shell/workjet/actions/meeting.js:150"
       ],
@@ -223,7 +77,7 @@
     },
     {
       "app": "shell",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
+      "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
       "evidence": [
         "v4/shell/workjet/actions/device.js:45"
       ],
@@ -231,7 +85,7 @@
     },
     {
       "app": "shell",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
+      "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
       "evidence": [
         "v4/shell/workjet/actions/instance.js:18"
       ],
@@ -239,7 +93,7 @@
     },
     {
       "app": "shell",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
+      "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
       "evidence": [
         "v4/shell/workjet/actions/meeting.js:204"
       ],
@@ -247,7 +101,7 @@
     },
     {
       "app": "shell",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
+      "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
       "evidence": [
         "v4/shell/workjet/actions/meeting.js:28"
       ],
@@ -255,43 +109,11 @@
     },
     {
       "app": "shell",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
+      "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
       "evidence": [
         "v4/shell/workjet/actions/meeting.js:105"
       ],
       "type": "ctox.workjet.speech.settings.v1"
-    },
-    {
-      "app": "outbound-lead-generation",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
-      "evidence": [
-        "customer-modules/outbound-lead-generation/index.js:10766"
-      ],
-      "type": "external_sql.write"
-    },
-    {
-      "app": "mail",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
-      "evidence": [
-        "modules/mail/index.js:2044"
-      ],
-      "type": "mail.series_email.import"
-    },
-    {
-      "app": "outbound-lead-generation",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
-      "evidence": [
-        "customer-modules/outbound-lead-generation/index.js:8486"
-      ],
-      "type": "outbound-lead-generation.import"
-    },
-    {
-      "app": "ctox",
-      "basis": "an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40",
-      "evidence": [
-        "modules/ctox/index.js:4906"
-      ],
-      "type": "web_stack.auth_assist.request"
     }
   ],
   "commands_unmatched": [],

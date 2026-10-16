@@ -551,7 +551,10 @@ export async function startShell(loaderKernel, options = {}) {
       headerSlot: rec.handle.element.querySelector('[data-window-actions]'),
       // Eigene Dateien über die Bindung des laufenden Mounts (gleiche Wurzel wie der geladene Code), sonst Kernel-URL.
       assetUrl: (path) => rec.host?.assetUrl?.(path) ?? artifactUrl(rec.appId, rec.host?.ver || rec.ver, path),
-      navigate: (appId, params) => navigateTo(appId, params, rec.appId),
+      navigate: (appId, params) => navigateTo(appId, params, rec.appId, rec),
+      // RCH2: Vorabprüfung ohne Zoneneintrag (navigate → false meldet der Host in die Zone). Für chat_draft: steht die
+      // Chatleiste? Sonst: gibt es das Ziel?
+      canNavigate: (appId, params) => canNavigateTo(appId, params),
       // api.shell.openSource(appId?): Quelltext-Ansicht der App (Standard: die eigene). false → Zone (app-host.js).
       // options {tab, reportId} (geprüft in app-host.js sourceFocusOf) → Reiter/Meldung der Code-Ansicht (Strang LOOP).
       openSource: (appId, focus) => !!openSourceView(appId ?? rec.appId, { focus }),
@@ -570,11 +573,62 @@ export async function startShell(loaderKernel, options = {}) {
     };
   }
 
+  // ---------- RCH2 (E37, E39 Nr. 4): navigate('ctox', {chat_draft, command_type, payload, …}) ----------
+  // Der Rahmen fängt den Aufruf ab und öffnet die Chatleiste (CHAT4) mit dem Entwurf im Eingabefeld; gesendet wird
+  // erst durch den Bediener. source_module/source_title kommen aus dem rufenden Fenster, nie aus params. command_type
+  // (mit payload) gilt nur, wenn die rufende App ihn senden darf: eigener Handler oder commands_out ihres Manifests;
+  // sonst bleibt der Entwurf ein normaler Chatauftrag. Ohne Leiste → false (wie ein fehlendes Ziel).
+  const chatText = (v) => (typeof v === 'string' ? v.trim() : '');
+  function isChatDraft(appId, params) {
+    return appId === CHAT_APP_ID && !!params && typeof params === 'object' && typeof params.chat_draft === 'string';
+  }
+  function chatDockReady() {
+    return !!state.chat?.active && typeof state.chat.openDraft === 'function';
+  }
+  function canNavigateTo(appId, params) {
+    if (state.stopped) return false;
+    if (isChatDraft(appId, params)) return chatDockReady();
+    return !!state.appById.get(appId)?.ver;
+  }
+  async function appMaySend(appId, type) {
+    const ver = state.appById.get(appId)?.ver;
+    if (!ver || !kernel.artifacts?.manifest) return false;
+    try {
+      const m = await kernel.artifacts.manifest(appId, ver);
+      const own = m?.handlers && typeof m.handlers === 'object' && Object.prototype.hasOwnProperty.call(m.handlers, type);
+      const out = Array.isArray(m?.commands_out) && m.commands_out.some((c) => c?.type === type);
+      return !!(own || out);
+    } catch { return false; }
+  }
+  function openChatDraft(params, from, fromRec) {
+    if (state.stopped || !chatDockReady() || !from || from === 'shell') return false;
+    let p;
+    try { p = structuredClone(params); } catch { return false; }
+    const chat = state.chat;
+    const base = {
+      draft: p.chat_draft,
+      source_module: from,
+      source_title: fromRec?.title || state.appById.get(from)?.title || from,
+      ...(chatText(p.record_id) ? { record_id: chatText(p.record_id) } : {}),
+      ...(chatText(p.title) ? { title: chatText(p.title) } : {}),
+    };
+    const type = chatText(p.command_type);
+    if (!type) return chat.openDraft(base);
+    appMaySend(from, type).then((ok) => {
+      if (state.stopped || state.chat !== chat) return;
+      if (!ok) console.warn(`[v4 frame] chat_draft: ${from} darf ${type} nicht senden – Entwurf ohne Befehlstyp`);
+      const payload = p.payload && typeof p.payload === 'object' && !Array.isArray(p.payload) ? p.payload : null;
+      chat.openDraft(ok ? { ...base, command_type: type, ...(payload ? { payload } : {}) } : base);
+    });
+    return true;
+  }
+
   // api.shell.navigate(appId, params): generische Standardschnittstelle ohne App-Sonderfälle. Die Parameter gehen
   // unverändert (als Kopie, damit Fenster sich nichts teilen) als RouteEvent {from, to, params} an onRoute der
   // Ziel-App (z. B. desktop: navigate('ctox', {chat})). Ziel offen → fokussieren + route, sonst neues Fenster,
   // route nach mount. Unbekanntes Ziel → false (der Host meldet es in die Zone).
-  function navigateTo(appId, params, from = 'shell') {
+  function navigateTo(appId, params, from = 'shell', fromRec = null) {
+    if (isChatDraft(appId, params)) return openChatDraft(params, from, fromRec);
     if (!state.appById.get(appId)?.ver) return false;
     let p = params ?? null;
     if (p) { try { p = structuredClone(p); } catch { p = { ...p }; } }

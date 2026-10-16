@@ -23,15 +23,15 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | Befehlstypen mit Handlern in mehreren Apps | 8 |
 | eigene Collections ohne Schema | 0 |
 | schema.js noch vorhanden / nicht ladbar | 3 / 0 |
-| Shell-Dateien | 123 |
+| Shell-Dateien | 125 |
 | Apps mit styles / write_guard-Collections | 41 / 1 |
 | offene _todo gesamt | 149 |
 | Deklarationsdateien v4-manifest.json | 40 |
-| commands_out / commands_in | 34 / 21 |
+| commands_out / commands_in | 25 / 13 |
 | **commands ohne Gegenstück (Soll 0)** | **0** |
 | ctx.command mit nicht auflösbarem Ziel | 0 |
 | **UI-Befehle ohne Route (E40, Soll 0)** / mehrdeutig | **0** / 0 |
-| Plattformroute gemeldet (PLATFORM_ROUTES_PENDING) / commands_in aus UI abgeleitet | 26 / 10 |
+| Plattformroute gemeldet (PLATFORM_ROUTES_PENDING) / commands_in aus UI abgeleitet | 13 / 1 |
 | net.ingest-Anmeldungen | 2 |
 | Apps mit multi_instance:false | 40 |
 | Icons: Rasterbild im Paket / nur SVG / generiert (MAN2) | 40 / 1 / 0 |
@@ -183,10 +183,6 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 |---|---|---|---|
 | buchhaltung | ctox | `ctox.app.modify.request` | index.js:4373 |
 | buchhaltung | ctox | `ctox.chat.task` | index.js:4373 |
-| conversations | outbound | `outbound.message.approve` | index.js:1929 |
-| conversations | outbound | `outbound.message.reject` | index.js:1935 |
-| conversations | outbound | `outbound.reply.classify` | index.js:1944 |
-| conversations | outbound | `outbound.reply.match` | index.js:1959 |
 | desktop | ctox | `ctox.app.modify.request` | index.js:469 |
 | desktop | ctox | `ctox.chat.task` | index.js:469 |
 | documents | ctox | `ctox.app.modify.request` | index.js:658 |
@@ -194,13 +190,8 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | knowledge | ctox | `ctox.app.modify.request` | index.js:2857 |
 | knowledge | ctox | `ctox.chat.task` | index.js:2857 |
 | mail | ctox | `ctox.chat.task` | index.js:2561 |
-| mail | outbound | `outbound.campaign.status.set` | index.js:1131 |
-| mail | outbound | `outbound.message.approve` | index.js:1144 |
 | mail | outbound | `outbound.message.compose` | index.js:1258 |
-| mail | outbound | `outbound.message.request_approval` | index.js:1142, index.js:1951 |
-| mail | outbound | `outbound.message.send_approved` | index.js:1146, index.js:1951 |
-| mail | outbound | `outbound.provider.reconcile` | index.js:1123 |
-| mail | support | `support.conversation.open_from_thread` | index.js:2515, index.js:2516 |
+| mail | support | `support.conversation.open_from_thread` | index.js:2515 |
 | matching | ctox | `ctox.app.modify.request` | ui/businessOsControls.js:1175 |
 | matching | ctox | `ctox.chat.task` | ui/businessOsControls.js:1175 |
 | outbound | outbound-lead-generation | `outbound.research_source.reprobe` | handlers/_lib/owner-app.js:22 |
@@ -208,9 +199,9 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | outbound | outbound-lead-generation | `outbound.scrape.script.read` | handlers/_lib/olg-registry.js:167, v4-manifest.json; handlers/_lib/olg-registry.js requestLatestScript/requestTargetUpsert; customer-modules/outbound-lead-generation/OLG725.md (§16.40, §16.47 Nr. 4) |
 | outbound | outbound-lead-generation | `outbound.scrape.target.upsert` | handlers/_lib/olg-registry.js:73, v4-manifest.json; handlers/_lib/olg-registry.js requestLatestScript/requestTargetUpsert; customer-modules/outbound-lead-generation/OLG725.md (§16.40, §16.47 Nr. 4) |
 | outbound | outbound-lead-generation | `outbound.update_digest.send_now` | handlers/_lib/owner-app.js:22 |
-| research | ctox | `ctox.app.modify.request` | index.js:4884 |
-| research | ctox | `ctox.chat.task` | index.js:4884 |
-| research | documents | `research.systematic.report.create` | index.js:2550, index.js:2551 |
+| research | ctox | `ctox.app.modify.request` | index.js:4916 |
+| research | ctox | `ctox.chat.task` | index.js:4916 |
+| research | documents | `research.systematic.report.create` | index.js:2552 |
 | research | knowledge | `knowledge.book.ingest` | handlers/_lib/callback.js:212 |
 | spreadsheets | ctox | `ctox.app.modify.request` | index.js:2225 |
 | spreadsheets | ctox | `ctox.chat.task` | index.js:2225 |
@@ -223,15 +214,7 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | ctox | `ctox.chat.task` | * |
 | documents | `research.systematic.report.create` | research |
 | knowledge | `knowledge.book.ingest` | research |
-| outbound | `outbound.campaign.status.set` | mail |
-| outbound | `outbound.message.approve` | conversations, mail |
 | outbound | `outbound.message.compose` | mail |
-| outbound | `outbound.message.reject` | conversations |
-| outbound | `outbound.message.request_approval` | mail |
-| outbound | `outbound.message.send_approved` | mail |
-| outbound | `outbound.provider.reconcile` | mail |
-| outbound | `outbound.reply.classify` | conversations |
-| outbound | `outbound.reply.match` | conversations |
 | outbound-lead-generation | `outbound.research_source.reprobe` | outbound |
 | outbound-lead-generation | `outbound.research_source.test` | outbound |
 | outbound-lead-generation | `outbound.scrape.script.read` | outbound |
@@ -248,18 +231,9 @@ Shell (SHELL_COMMANDS_OUT + UI-Scan v4/frame, v4/shell, v4/source):
 - shell → ctox `business_os.chat.task`: v4/shell/chat/index.js (commandBus.dispatch → api.command; shared/business-chat.js Standardtyp business_os.chat.task, CHAT4.md)
 - shell → ctox `ctox.chat.task`: v4/shell/app-host.js:500 (Menüpunkt ctox.ask „CTOX fragen…“ → Eingabeblatt → Standardbefehl ctox.chat.task)
 
-### commands_in aus der UI-Nutzung abgeleitet (E40, je Absender, nie '*') (10)
+### commands_in aus der UI-Nutzung abgeleitet (E40, je Absender, nie '*') (1)
 
-- outbound ← conversations `outbound.message.approve`: modules/conversations/index.js:1929
-- outbound ← conversations `outbound.message.reject`: modules/conversations/index.js:1935
-- outbound ← conversations `outbound.reply.classify`: modules/conversations/index.js:1944
-- outbound ← conversations `outbound.reply.match`: modules/conversations/index.js:1959
-- outbound ← mail `outbound.campaign.status.set`: modules/mail/index.js:1131
-- outbound ← mail `outbound.message.approve`: modules/mail/index.js:1144
 - outbound ← mail `outbound.message.compose`: modules/mail/index.js:1258
-- outbound ← mail `outbound.message.request_approval`: modules/mail/index.js:1142, modules/mail/index.js:1951
-- outbound ← mail `outbound.message.send_approved`: modules/mail/index.js:1146, modules/mail/index.js:1951
-- outbound ← mail `outbound.provider.reconcile`: modules/mail/index.js:1123
 
 ### UI-Befehle ohne Route: weder Plattformroute (src/core/business_os/business_command_inventory.json + Registry) noch Handler (E40, 0, Soll 0, rot)
 
@@ -269,34 +243,21 @@ keine
 
 keine
 
-### An den Kern gemeldet, noch keine Plattformroute (PLATFORM_ROUTES_PENDING, 26)
+### An den Kern gemeldet, noch keine Plattformroute (PLATFORM_ROUTES_PENDING, 13)
 
-- `browser.capture.extract` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): browser modules/browser/index.js:1424
-- `browser.http_auth.respond` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): browser modules/browser/index.js:627
-- `browser.observer.grant` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): browser modules/browser/index.js:587
-- `browser.observer.revoke` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): browser modules/browser/index.js:592
-- `browser.upload.select` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): browser modules/browser/index.js:555
-- `browser.webauthn.respond` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): browser modules/browser/index.js:636
-- `business_os.data.modify` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): buchhaltung modules/buchhaltung/index.js:814
-- `business_os.data.modify` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): research modules/research/index.js:4898
-- `business_os.i18n.translate` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): matching modules/matching/ui/businessOsControls.js:789
-- `ctox.browser_context.capture` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): browser modules/browser/index.js:1369
-- `ctox.business_os.app.create` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): creator modules/creator/index.js:1025
-- `ctox.business_os.app.create` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): desktop modules/desktop/appCommands.js:28
-- `ctox.business_os.app.create` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): importer modules/importer/index.js:173
-- `ctox.knowledge.runbooks.manage` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): documents modules/documents/index.js:3332
-- `ctox.plan.step.retry` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): im UI-Scan keine Fundstelle als Befehlstyp
-- `ctox.workjet.calendar.connect.v1` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): shell v4/shell/workjet/actions/calendar-connect.js:11
-- `ctox.workjet.calendar.read.v1` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): shell v4/shell/workjet/actions/meeting.js:150
-- `ctox.workjet.device.v1` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): shell v4/shell/workjet/actions/device.js:45
-- `ctox.workjet.grok.v1` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): shell v4/shell/workjet/actions/instance.js:18
-- `ctox.workjet.jour_fixe.speech.v1` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): shell v4/shell/workjet/actions/meeting.js:204
-- `ctox.workjet.speech.dictation.v1` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): shell v4/shell/workjet/actions/meeting.js:28
-- `ctox.workjet.speech.settings.v1` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): shell v4/shell/workjet/actions/meeting.js:105
-- `external_sql.write` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): outbound-lead-generation customer-modules/outbound-lead-generation/index.js:10766
-- `mail.series_email.import` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): mail modules/mail/index.js:2044
-- `outbound-lead-generation.import` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): outbound-lead-generation customer-modules/outbound-lead-generation/index.js:8486
-- `web_stack.auth_assist.request` (an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40): ctox modules/ctox/index.js:4906
+- `browser.http_auth.respond` (E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)): browser modules/browser/index.js:627
+- `browser.observer.grant` (E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)): browser modules/browser/index.js:587
+- `browser.observer.revoke` (E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)): browser modules/browser/index.js:592
+- `browser.upload.select` (E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)): browser modules/browser/index.js:555
+- `browser.webauthn.respond` (E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)): browser modules/browser/index.js:636
+- `ctox.plan.step.retry` (E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen): im UI-Scan keine Fundstelle als Befehlstyp
+- `ctox.workjet.calendar.connect.v1` (E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen): shell v4/shell/workjet/actions/calendar-connect.js:11
+- `ctox.workjet.calendar.read.v1` (E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen): shell v4/shell/workjet/actions/meeting.js:150
+- `ctox.workjet.device.v1` (E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen): shell v4/shell/workjet/actions/device.js:45
+- `ctox.workjet.grok.v1` (E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen): shell v4/shell/workjet/actions/instance.js:18
+- `ctox.workjet.jour_fixe.speech.v1` (E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen): shell v4/shell/workjet/actions/meeting.js:204
+- `ctox.workjet.speech.dictation.v1` (E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen): shell v4/shell/workjet/actions/meeting.js:28
+- `ctox.workjet.speech.settings.v1` (E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen): shell v4/shell/workjet/actions/meeting.js:105
 
 ## foreign ohne passendes exports (0, Soll 0)
 

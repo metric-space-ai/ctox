@@ -221,40 +221,31 @@ export const SHELL_COMMANDS_OUT = [
   { app: 'ctox', type: 'ctox.chat.task', sources: ['v4/shell/app-host.js:500 (Menüpunkt ctox.ask „CTOX fragen…“ → Eingabeblatt → Standardbefehl ctox.chat.task)'] },
 ];
 
-// Kernentscheidung E40: Plattformrouten brauchen weder commands_out noch Handler. Maßgeblich ist die Inventur des
-// Kerns (exact_control_types + control_prefixes) plus die Registry-Routen aus E25/E27.6 (PLATFORM_COMMANDS in
-// kernel/fake-core-runtime.mjs).
+// Kernentscheidung E40/E42: Plattformrouten brauchen weder commands_out noch Handler. Maßgeblich ist die Inventur des
+// Kerns (exact_control_types, predicate_control_types, control_prefixes, browser_runtime_types, browser_literal_types)
+// plus Chat-Befehle und die Registry-Routen aus E25/E27.6 (PLATFORM_COMMANDS in kernel/fake-core-runtime.mjs).
 export const COMMAND_INVENTORY_FILE = 'src/core/business_os/business_command_inventory.json';
+// E42: Chat-Befehle führt der Kern über den Chat-Pfad aus (store_projections.rs is_business_chat_command).
+export const PLATFORM_CHAT_ROUTES = ['business_os.chat.task', 'business_os.context.ask', 'business_os.data.modify'];
 export const PLATFORM_REGISTRY_ROUTES = [
   'ctox.app.publish', 'ctox.app.release', 'ctox.app.remove', 'ctox.app.rollback', 'ctox.app.update',
   'ctox.coding.cancel', 'ctox.coding.turn',
 ];
-// E40: Typen, die weder Plattformroute sind noch einen Handler haben, aber dem Kern gemeldet sind (bis der Kern sie
-// aufnimmt, nicht rot). Jeder Eintrag erscheint im Bericht; ein Typ außerhalb dieser Tabelle ohne Route bleibt rot.
+// E40/E42: Registry-Routen, die noch nicht auf v4/integration liegen (E25 von Transfer); bis dahin nicht rot. Jeder Eintrag erscheint im Bericht; ein Typ außerhalb dieser Tabelle ohne Route bleibt rot.
 export const PLATFORM_ROUTES_PENDING = {
-  'browser.capture.extract': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'browser.http_auth.respond': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'browser.observer.grant': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'browser.observer.revoke': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'browser.upload.select': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'browser.webauthn.respond': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'business_os.data.modify': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'business_os.i18n.translate': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'ctox.browser_context.capture': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'ctox.business_os.app.create': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'ctox.knowledge.runbooks.manage': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'ctox.plan.step.retry': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'ctox.workjet.calendar.connect.v1': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'ctox.workjet.calendar.read.v1': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'ctox.workjet.device.v1': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'ctox.workjet.grok.v1': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'ctox.workjet.jour_fixe.speech.v1': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'ctox.workjet.speech.dictation.v1': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'ctox.workjet.speech.settings.v1': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'external_sql.write': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'mail.series_email.import': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'outbound-lead-generation.import': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
-  'web_stack.auth_assist.request': 'an den Kern gemeldet 16.10.2026, Übergabe-Abnahmeliste E40',
+  'browser.http_auth.respond': 'E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)',
+  'browser.observer.grant': 'E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)',
+  'browser.observer.revoke': 'E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)',
+  'browser.upload.select': 'E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)',
+  'browser.webauthn.respond': 'E42: laut Kern Literal-Route, in business_command_inventory.json nicht enthalten (gemessen 16.10.2026, gemeldet)',
+  'ctox.plan.step.retry': 'E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen',
+  'ctox.workjet.calendar.connect.v1': 'E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen',
+  'ctox.workjet.calendar.read.v1': 'E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen',
+  'ctox.workjet.device.v1': 'E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen',
+  'ctox.workjet.grok.v1': 'E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen',
+  'ctox.workjet.jour_fixe.speech.v1': 'E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen',
+  'ctox.workjet.speech.dictation.v1': 'E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen',
+  'ctox.workjet.speech.settings.v1': 'E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen',
 };
 
 export function loadPlatformRoutes(repo) {
@@ -262,9 +253,32 @@ export function loadPlatformRoutes(repo) {
   const inv = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
   return {
     source: fs.existsSync(file) ? COMMAND_INVENTORY_FILE : null,
-    exact: new Set([...(inv.exact_control_types || []), ...PLATFORM_REGISTRY_ROUTES]),
+    // E42: alle Klassen der Inventur (Literal-Typen ohne nativen Handler führt der Kern als CTOX-Queue-Task aus).
+    exact: new Set([
+      ...(inv.exact_control_types || []), ...(inv.predicate_control_types || []),
+      ...(inv.browser_runtime_types || []), ...(inv.browser_literal_types || []),
+      ...PLATFORM_CHAT_ROUTES, ...PLATFORM_REGISTRY_ROUTES,
+    ]),
     prefixes: [...(inv.control_prefixes || [])],
   };
+}
+
+// Umschließendes Objektliteral von pos (Klammerzählung, Strings grob übersprungen) auf `dispatch: false` prüfen.
+export function enclosingObjectHasDispatchFalse(text, pos) {
+  let depth = 0, start = -1;
+  for (let i = pos; i >= 0; i -= 1) {
+    const c = text[i];
+    if (c === '}') depth += 1;
+    else if (c === '{') { if (depth === 0) { start = i; break; } depth -= 1; }
+  }
+  if (start < 0) return false;
+  depth = 0;
+  for (let i = start; i < text.length; i += 1) {
+    const c = text[i];
+    if (c === '{') depth += 1;
+    else if (c === '}') { depth -= 1; if (depth === 0) return /\bdispatch\s*:\s*false\b/.test(text.slice(start, i + 1)); }
+  }
+  return false;
 }
 
 export function isPlatformRoute(type, routes) {
@@ -288,13 +302,15 @@ export const ICON_SELECTION_SOURCES = [
 ];
 export const ICON_PACKAGE_BASENAME = 'assets/icon';
 
-// Relative Importe (statisch `from '…'`, `import '…'`, dynamisch `import('…')`) der Shell-Dateien, transitiv, innerhalb
+// Relative Importe (statisch `from '…'`, `import '…'`, dynamisch `import('…')`, `new URL('…', import.meta.url)`) der Shell-Dateien, transitiv, innerhalb
 // von src/apps/business-os. Cache-Buster (?v=) wird abgeschnitten; nur vorhandene .js/.mjs/.css/.json-Dateien zählen.
 export function shellImportClosure(appsRoot, seeds) {
   const seen = new Set(seeds);
   const out = [];
   const queue = seeds.filter((r) => /\.(m?js)$/.test(r));
-  const re = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)(['"])(\.{1,2}\/[^'"?#]+)(?:[?#][^'"]*)?\1/g;
+  // BOOTR OPEN-4: auch new URL('./x.css', import.meta.url) – so lädt der Rahmen sein CSS (frame/index.js cssLinks),
+  // ebenso Code-Ansicht und Chat. Ohne diese Dateien im Manifest liefert der SW 404 und der Rahmen steht ungestylt.
+  const re = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\bnew\s+URL\s*\(\s*)(['"])(\.{1,2}\/[^'"?#]+)(?:[?#][^'"]*)?\1/g;
   while (queue.length) {
     const rel = queue.shift();
     let text;
@@ -1141,7 +1157,8 @@ export function scanUiCommandTypes(rootDir, rels) {
       collect(rel, text, part, open, m.index, spec.field);
     }
     for (const m of text.matchAll(/\b(?:command_type|commandType)\s*:\s*(['"])([^'"\n]*)\1/g)) {
-      if (COMMAND_TYPE_RE.test(m[2])) add(m[2], rel, text, m.index);
+      // E42: ein Konfigurationsobjekt mit dispatch:false sendet den Typ nicht (z. B. universal-importer in OLG).
+      if (COMMAND_TYPE_RE.test(m[2]) && !enclosingObjectHasDispatchFalse(text, m.index)) add(m[2], rel, text, m.index);
     }
   }
   return [...hits.values()].sort((a, b) => a.type.localeCompare(b.type) || a.file.localeCompare(b.file) || a.line - b.line);
@@ -1164,6 +1181,7 @@ export function routeUiCommands({ senders, handlerTypesByApp, routes, pending = 
     for (const h of s.hits) {
       const ev = `${s.rel ? `${s.rel}/` : ''}${h.file}:${h.line}`;
       if (handlerTypesByApp[s.id]?.has(h.type)) continue;
+      // E40/E42: Plattformroute vor fremdem Handler – der Kern führt diese Typen nativ aus, ohne Deklaration.
       if (isPlatformRoute(h.type, routes)) continue;
       const owners = Object.keys(handlerTypesByApp).filter((id) => id !== s.id && handlerTypesByApp[id].has(h.type)).sort();
       if (owners.length === 1) out.push({ from: s.id, app: owners[0], type: h.type, evidence: `${h.file}:${h.line}`, source: ev });
