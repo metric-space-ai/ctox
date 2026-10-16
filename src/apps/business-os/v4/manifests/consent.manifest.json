@@ -109,7 +109,7 @@
     "icon.svg": "6fda2d77c0dd25d1adcb16387289ded7f925d164b9537d2a9318eb13946620b7",
     "index.css": "86287249d3dcca793d0e9d95f77fc5fb69844d2a8e054e0bfdbe84fde7f6e4e2",
     "index.html": "744fa161e4964575fbcd2b05fabfdf91095bd7711c2302103640fd36607e43da",
-    "index.js": "b84d7a4073aa9d7eca6cd9beafcc8eff91a8087ecedc9eac8e9c48db877e5824",
+    "index.js": "424650efd1cdd31c5e07f24c6db0cfdf0d569a64fb97d9ce5e4d0937b6b61d3f",
     "locales/de.json": "13da7735525e0f33e96f0d1383111015f49e1b661fa87586987c386c60c9f06e",
     "locales/en.json": "288874f738a53eb8fefdf8f50c8f51bb86bd5e689520e89ec4f0c17d121eb616",
     "module.json": "63844a7b1fcecdcff91bc2467e6295ac50a1b85bbd51bafcc37431a35f061ed4",
@@ -368,7 +368,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "2935c76295a47bb6e39dde829b1a061c7d30fae266a6cde3fe3a781cf4e3c5bf",
+    "base_hash": "32b1d7f8b5a87dd409c22bcde4e0528ec8f9e4f1e124daab0fc3d12a126bcd9f",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },
