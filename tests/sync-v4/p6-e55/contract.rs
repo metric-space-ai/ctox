@@ -127,6 +127,7 @@ async fn p6_e55_revoked_app_is_unreadable_before_reauthentication() {
     assert!(f.read(&token, "alpha@g1",1001).await.is_err(), "revoked app remained readable");
     assert!(f.read(&b, "beta@g1",1001).await.is_err());
     f.session.rebind("alice".into(),"user".into(),"device".into()).unwrap();
+    assert!(f.read(&token,"alpha@g1",1001).await.is_err(), "identity round trip revived old grant");
     let renewed = f.session.issue("a",1000).await.unwrap();
     assert_ne!(renewed, token, "same-second reauthentication revived old token");
     assert!(f.read(&token,"alpha@g1",1001).await.is_err());
