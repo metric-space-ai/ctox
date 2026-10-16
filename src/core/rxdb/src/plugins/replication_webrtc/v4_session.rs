@@ -53,10 +53,10 @@ fn invalid() -> crate::rx_error::RxError {
 
 /// Association lifetime owns every lane and subscription task. Dropping it
 /// aborts pending reads; source cursors resume only from committed checkpoints.
-struct SubscriptionTask(tokio::task::JoinHandle<()>);
+struct SubscriptionTask { task: tokio::task::JoinHandle<()>, scope_hash: String }
 impl Drop for SubscriptionTask {
     fn drop(&mut self) {
-        self.0.abort();
+        self.task.abort();
     }
 }
 pub struct V4Session {
@@ -90,7 +90,7 @@ impl V4Session {
         let mut results = source.write_results(&peer)?;
         let mut controls = source.control_events(&peer)?;
         let subscriptions = Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
-            (String, String),
+            String,
             SubscriptionTask,
         >::new()));
         let mut tasks = Vec::new();
@@ -140,7 +140,7 @@ impl V4Session {
                     control_subscriptions
                         .lock()
                         .map_err(|_| invalid())?
-                        .retain(|(_, scope), _| scope != revoked);
+                        .retain(|_, task| task.scope_hash != revoked);
                     let guard = control_source.publication(&control_peer, &frame)?;
                     control_sender
                         .send(
@@ -193,7 +193,7 @@ impl V4Session {
                                 subscriptions
                                     .lock()
                                     .map_err(|_| invalid())?
-                                    .remove(&(collection.clone(), scope_hash.clone()));
+                                    .remove(&collection);
                                 let (sender, seq, source, peer) =
                                     (sender.clone(), seq.clone(), source.clone(), peer.clone());
                                 let task = tokio::spawn(async move {
@@ -232,7 +232,7 @@ impl V4Session {
                                 subscriptions
                                     .lock()
                                     .map_err(|_| invalid())?
-                                    .insert((collection, scope_hash), SubscriptionTask(task));
+                                    .insert(collection, SubscriptionTask { task, scope_hash });
                             }
                             Some("write") if lane == Lane::Commands => {
                                 source.write(&peer, message).await?;
@@ -261,7 +261,7 @@ impl V4Session {
                 }
                 if let Ok(mut tasks) = subscriptions.lock() {
                     tasks.clear();
-                }
+                };
             }));
         }
         Ok(Self { tasks })
