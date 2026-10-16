@@ -1,16 +1,18 @@
 // Playwright-Abnahme des Shell-Rahmens v4 gegen die Kernel-Attrappe.
 // Lauf: node src/apps/business-os/v4/frame/lab/frame.test.mjs [mock|stub]
 //   mock = eigene Kernel-Attrappe (lab/index.html), stub = Kern-Stub createStubKernel (lab/stub-lab.html),
-//   Stub-Stand 67229d2 (Standard in serve.mjs, sonst CTOX_APP_API_STUB).
+//   Stub-Stand 8265bd7 (Standard hier, sonst CTOX_APP_API_STUB).
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { startServer } from './serve.mjs';
-import { chatCss } from './extract-desktop-css.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+// Stub-Pin 8265bd7 (abweichend per CTOX_APP_API_STUB); vor dem Laden von serve.mjs, das den Pfad beim Import liest.
+process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
+const { startServer } = await import('./serve.mjs');
+const { chatCss } = await import('./extract-desktop-css.mjs');
 const require = createRequire(path.join(os.homedir(), 'Documents/ctox/src/apps/business-os/package.json'));
 const { chromium } = require('playwright');
 const exe = path.join(os.homedir(), 'Library/Caches/ms-playwright/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell');
@@ -2816,8 +2818,9 @@ try {
   check('Shell-Tausch: fokussiertes Fenster erhalten', Object.keys(before).find((k) => before[k].focused) === Object.keys(after).find((k) => after[k].focused));
   check('Shell-Tausch: App-Snapshot (Formular) erhalten', (await page.inputValue('.shell-window[data-window-app="notes"] [data-lab-input]')) === 'halb ausgefuellt');
   check('Shell-Tausch: Pin erhalten', !!(await page.$('[data-v4-pin="notes"]')));
+  // E48: shell_preferences liest nur eine Shell-Version mit veröffentlichter Deklaration – shell@dev (stub-lab.html).
   const prefRow = await page.evaluate((stub) => (stub
-    ? window.__lab.kernel.appApi('shell', 'test').get('shell_preferences', 'owner').get()
+    ? window.__lab.kernel.appApi('shell', 'dev').get('shell_preferences', 'owner').get()
     : window.__lab.kernel.sim.prefs.get('shell_preferences')), STUB);
   check('Pin steht in shell_preferences (eine Zeile, id = Nutzer)', prefRow?.id === 'owner' && prefRow?.taskbar_pins?.pins?.includes('notes'), JSON.stringify(prefRow));
   check('Shell-Tausch: genau ein Rahmen, ein Satz Shell-CSS (Theme, base, Shell-V2-Chrome, Rahmen, Shell-V2-Kopfleiste, Shell-V2-Desktop/Startmenü/Crew)', (await page.$$('[data-v4-frame]')).length === 1 && (await page.$$('link[data-v4-frame-css]')).length === 6);
@@ -3610,7 +3613,7 @@ try {
     const order1 = await arbeit();
     await F.evaluate(() => window.__lab.frame.shellHandle().preferencesWritten());
     const prefOrder = await F.evaluate((stub) => (stub
-      ? window.__lab.kernel.appApi('shell', 'test').get('shell_preferences', 'owner').get()?.launcher_order
+      ? window.__lab.kernel.appApi('shell', 'dev').get('shell_preferences', 'owner').get()?.launcher_order
       : window.__lab.kernel.sim.prefs.get('shell_preferences')?.launcher_order), STUB);
     await startOpen(F);
     await F.focus('[data-v4-app="notes"] [data-v4-open]');
@@ -3676,7 +3679,7 @@ try {
     await P2.waitForFunction(() => document.querySelectorAll('[data-module-tabs] [data-v4-pin]').length === 2, null, { timeout: 10000 }).catch(() => {});
     const p2 = await P2.evaluate(async () => ({
       windowState: await window.__lab.kernel.windowState.get('shell'),
-      row: window.__lab.kernel.appApi('shell', 'test').get('shell_preferences', 'owner').get(),
+      row: window.__lab.kernel.appApi('shell', 'dev').get('shell_preferences', 'owner').get(),
       isLeader: window.__lab.kernel.isLeader,
     }));
     const p2View = { pins: await pinsOf(P2), order: await arbeit(P2) };
