@@ -152,8 +152,8 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 |---|---|---|---|
 | buchhaltung | ctox | `ctox.app.modify.request` | index.js:4415 |
 | buchhaltung | ctox | `ctox.chat.task` | index.js:4415 |
-| desktop | ctox | `ctox.app.modify.request` | index.js:469 |
-| desktop | ctox | `ctox.chat.task` | index.js:469 |
+| desktop | ctox | `ctox.app.modify.request` | index.js:521 |
+| desktop | ctox | `ctox.chat.task` | index.js:521 |
 | documents | ctox | `ctox.app.modify.request` | index.js:658 |
 | documents | ctox | `ctox.chat.task` | index.js:658 |
 | knowledge | ctox | `ctox.app.modify.request` | index.js:2857 |
