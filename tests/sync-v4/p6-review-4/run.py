@@ -238,6 +238,7 @@ rusqlite={{version="=0.32.1",features=["bundled","hooks"]}}
 serde={{version="=1.0.228",features=["derive"]}}
 serde_json={{version="=1.0.151",features=["preserve_order"]}}
 sha2="=0.10.9"
+similar="=2.7.0"
 uuid={{version="=1.23.0",features=["v4"]}}
 tempfile="=3.27.0"
 anyhow="=1.0.102"
