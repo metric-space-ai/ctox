@@ -6,6 +6,7 @@ import http from 'node:http';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const output = process.argv[process.argv.indexOf('--output-dir') + 1];
@@ -20,7 +21,10 @@ const countArg = process.argv.indexOf('--catalogue-size');
 const catalogueSize = countArg < 0 ? 3 : Number(process.argv[countArg + 1]);
 assert.ok(Number.isInteger(catalogueSize) && catalogueSize >= 3 && catalogueSize <= 48, 'catalogue-size must be 3..48');
 // v4: Kern-Stub (gepinnt, CTOX_APP_API_STUB) unter /__stub/; ctox:shared/ wird wie vom Service Worker umgeschrieben.
-const stubDir = path.resolve(process.env.CTOX_APP_API_STUB || path.join(process.env.HOME || '', '.local/state/shell-v4/stub-pins/68b83a3'));
+const stubDir = path.resolve(process.env.CTOX_APP_API_STUB || path.join(process.env.HOME || '', '.local/state/shell-v4/stub-pins/8265bd7'));
+// PIN-ALL (E48): echte Routen/Fremd-Collections aus v4/manifests/app-store.manifest.json; ohne aktive app-store-Version
+// liefert der Kern business_apps/business_app_versions nicht an die App.
+const routes = realManifestRoutes('app-store');
 const html = `<!doctype html><html lang="de" data-theme="dark" data-shell-style="ctox">
 <meta charset="utf-8"><link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/shared/base.css">
 <link rel="stylesheet" href="/modules/app-store/index.css">
@@ -42,9 +46,13 @@ while (apps.length < ${catalogueSize}) {
 }
 const kernel = createStubKernel({ storage:'memory', latencyMs:5, multiTab:false, actor:{ role:'owner' } });
 await kernel.ready;
+// Zeilen nach den Plattform-Schemas (business_app_versions ohne Zusatzfelder, business_apps.migrated_at_seq als string).
 await kernel.sim.push('business_app_versions', apps.map((app) => ({ id: app.id + '@1', app_id: app.id, app_ver: '1',
-  manifest: { version: app.version, description: app.description, layout: { category: app.category }, provenance: {} }, migrated_at_seq: 0 })));
-await kernel.sim.push('business_apps', apps.map((app) => ({ id: app.id, title: app.title, active_ver: '1', migrated_at_seq: 0 })));
+  manifest: { version: app.version, description: app.description, layout: { category: app.category }, provenance: {} } })));
+await kernel.sim.push('business_apps', apps.map((app) => ({ id: app.id, title: app.title, active_ver: '1', migrated_at_seq: '0' })));
+const routes = ${JSON.stringify(routes)};
+for (const o of routes._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+await kernel.sim.publishAppVersion('app-store', '1', { title: 'App Store', manifestExtra: routes });
 await kernel.sim.settle();
 const api = kernel.appApi('app-store', '1');
 let handle, frame;
