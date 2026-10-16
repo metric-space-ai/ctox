@@ -1,3 +1,4 @@
+import {createPreferencesApi,preferenceError,PREFERENCE_COLLECTION} from './preferences.mjs';
 import {PLATFORM_MANIFEST} from './platform-manifest.generated.mjs';
 import {commandTarget} from './command-routing.mjs';
 import { createCommandTimings } from './command-timings.mjs';
@@ -456,7 +457,7 @@ export function createKernel(opts = {}) {
         revoke:receiveRevoke,
       })).then(async()=>{
         if(closed||!isLeader)return;
-        for(const collection of new Set(['business_apps','business_app_versions','business_commands','files','shell_preferences','app_drafts',...mirror.keys()]))await subscribeCollection(collection);
+        for(const collection of new Set(['business_apps','business_app_versions','business_commands','files','shell_preferences','app_user_preferences','app_drafts',...mirror.keys()]))await subscribeCollection(collection);
         await deliver();schedulePump();
       }).catch(error=>{if(!closed){link={...link,state:'offline'};netChanged();zoneReport('kernel',{level:'error',code:'transport.connect',text:error.message},'kernel');}});
   }
@@ -607,6 +608,7 @@ export function createKernel(opts = {}) {
     const prepare = () => {
       guardAlive();
       if (options.expected_revision !== undefined && (typeof options.expected_revision !== 'string' || !options.expected_revision)) throw new CtoxError('invalid','expected_revision must be a nonempty revision',{path:'expected_revision'});
+      if (collection === PREFERENCE_COLLECTION && options.preference !== true) throw new CtoxError('forbidden','Use api.prefs',{path:'collection'});
       if (typeof collection !== 'string' || !collection) throw new CtoxError('invalid', 'collection fehlt', { path: 'collection' });
       if(collection==='shell_preferences' && id!==userId)throw new CtoxError('forbidden','Only own shell preferences are writable',{path:'id'});
       if (typeof id !== 'string' || !id) throw new CtoxError('invalid', 'id (string) fehlt', { path: 'id' });
@@ -621,6 +623,11 @@ export function createKernel(opts = {}) {
       if (clean && Object.keys(clean).some(key=>key.startsWith('_'))) throw new CtoxError('invalid','Underscore document fields are reserved',{path:Object.keys(clean).find(key=>key.startsWith('_'))});
       const cur = mirrorGet(ns, id);
       const st = applyOp(cur ? { data: cur.data, deleted: cur.deleted } : { data: null, deleted: false }, { op, body: clean, id });
+      if (collection===PREFERENCE_COLLECTION) {
+        const rows=[...(mirror.get(ns)?.values()??[])].map(visible).filter(Boolean);
+        const error=preferenceError(app.id,userId,id,st.deleted?null:st.data,rows);
+        if(error)throw new CtoxError(error,'Preference rejected',{path:'key'});
+      }
       if (st.data) validateSchema(st.data, schemaFor(app, collection), ''); // lokale Schemaprüfung am Ergebnisdokument
       entry = {
         op_id, prev_op_id: cur?.pending && cur.rev?.startsWith('op:') ? cur.rev.slice(3) : null,
@@ -646,6 +653,11 @@ export function createKernel(opts = {}) {
       const rec = await db.tx(async (t) => {
         if(isLeader)await assertGen(t);
         const stored = await t.get('docs', [ns, id]);
+        if (ns === PREFERENCE_COLLECTION) {
+          const rows=(await t.all('docs')).filter(r=>r.collection===ns&&!r.deleted&&r.data).map(r=>r.data);
+          const error=preferenceError(app.id,userId,id,entry.body,rows);
+          if(error)throw new CtoxError(error,'Preference rejected',{path:'key'});
+        }
         // E26: the IDB transaction arbitrates concurrent tabs and reloads.
         // Reuse the original operation/result, never enqueue another command.
         if (createOnly && visible(stored)) {
@@ -1409,6 +1421,7 @@ export function createKernel(opts = {}) {
     // manifest arrives. Only manifest-less contract/bootstrap names are local.
     function assertReadableCollection(collection) {
       const c = collection.replace(/@g[1-9][0-9]*$/, '');
+      if (c === PREFERENCE_COLLECTION) throw new CtoxError('forbidden','Use api.prefs',{path:'collection'});
       const callerManifest = readManifest(appId,app.ver);
       const foreign = callerManifest?.foreign_collections?.[c];
       const owners = [...(mirror.get('business_app_versions')?.values() ?? [])]
@@ -1631,6 +1644,7 @@ export function createKernel(opts = {}) {
     return Object.freeze({
       version: APP_API_VERSION,
       app,
+      prefs: createPreferencesApi({appId,userId,read:id=>visible(mirrorGet(PREFERENCE_COLLECTION,id)),write:(op,id,body)=>localWrite(app,op,PREFERENCE_COLLECTION,id,body,false,{preference:true})}),
       query(collection, q = {}) {
         assertReadableCollection(collection);
         const cq = compileQuery(q);
@@ -2343,7 +2357,7 @@ export function createKernel(opts = {}) {
       link = { ...link, state: 'offline' }; inflight.clear(); inflightOps.clear(); netChanged();
       if (typeof transport.reconnect === 'function') {
         await transport.reconnect();
-        for (const c of new Set(['business_apps', 'business_app_versions', 'business_commands', 'files', 'shell_preferences', 'app_drafts', ...mirror.keys()])) await subscribeCollection(c);
+        for (const c of new Set(['business_apps', 'business_app_versions', 'business_commands', 'files', 'shell_preferences', 'app_user_preferences', 'app_drafts', ...mirror.keys()])) await subscribeCollection(c);
         await deliver(); schedulePump();
       } else {
         try { transport.close(); } catch { /* egal */ }

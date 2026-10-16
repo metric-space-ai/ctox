@@ -13,6 +13,7 @@ import { SCHEMA_FILE, parseCollectionsFile, classifyCollections, manifestCollect
 export const FAKE_CORE_CAPABILITIES = Object.freeze(['audit.event', 'agent.task.enqueue', 'agent.task.get', 'agent.task.find', 'agent.task.cancel', 'model', 'model.run', 'files', 'files.put', 'files.get', 'files.list', 'files.delete', 'process', 'process.run']);
 // Zeilenrechte der Plattform-Collections (docs/v4-manifests/ctox-platform.manifest.json, Auszug).
 const PLATFORM_RIGHTS = Object.freeze({
+  app_user_preferences: { read: 'own', write: 'own' },
   shell_preferences: { read: 'own', write: 'own' },
   app_drafts: { read: 'own+apps.source.view', write: 'own+apps.source.edit' },
   business_apps: { read: 'all', write: 'core' },

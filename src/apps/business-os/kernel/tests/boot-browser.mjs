@@ -13,7 +13,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE??'playwright');
 const app=resolve('src/apps/business-os'),kernel=resolve(app,'kernel');
 const {privateKey,publicKey}=generateKeyPairSync('ed25519');
 const signingJwk=privateKey.export({format:'jwk'}),publicRaw=publicKey.export({format:'jwk'}).x;
-const COLLECTIONS=['business_apps','business_app_versions','business_commands','files','shell_preferences','app_drafts','notes'];
+const COLLECTIONS=['business_apps','business_app_versions','business_commands','files','shell_preferences','app_user_preferences','app_drafts','notes'];
 const requests=[];let contextFetches=0;
 function launchContext(){
  const nonce=Buffer.from(String(++contextFetches).padStart(32,'0')).toString('base64url').slice(0,43);
