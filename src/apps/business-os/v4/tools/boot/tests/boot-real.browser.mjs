@@ -129,9 +129,9 @@ for (const id of OWNER_IDS) {
 const INSTANCE = 'boot-real', USER = 'alice';
 const { privateKey, publicKey } = generateKeyPairSync('ed25519');
 const signingJwk = privateKey.export({ format: 'jwk' }), publicRaw = publicKey.export({ format: 'jwk' }).x;
-// Der Kern abonniert immer business_apps, business_app_versions, business_commands, files, shell_preferences, app_drafts
+// Der Kern abonniert immer business_apps, business_app_versions, business_commands, files, shell_preferences, app_user_preferences (E51), app_drafts
 // (kernel.mjs:450, 2116); dazu die foreign_collections des Shell-Manifests.
-const COLLECTIONS = [...new Set(['business_apps', 'business_app_versions', 'business_commands', 'files', 'shell_preferences', 'app_drafts', ...Object.keys(manifestFile.foreign_collections ?? {})])];
+const COLLECTIONS = [...new Set(['business_apps', 'business_app_versions', 'business_commands', 'files', 'shell_preferences', 'app_user_preferences', 'app_drafts', ...Object.keys(manifestFile.foreign_collections ?? {})])];
 let contextFetches = 0;
 function launchContext() {
   const nonce = Buffer.from(String(++contextFetches).padStart(32, '0')).toString('base64url').slice(0, 43);
