@@ -478,8 +478,14 @@ async fn kernel_component(e25: bool) {
                 let mut doc = write.write.body.clone().unwrap();
                 let id = write.write.id.clone();
                 let completion_lane = if e25 {
-                    Some(routes::resolve(doc["type"].as_str().unwrap()).expect("E25 route must resolve instead of unknown_command").lane)
-                } else { None };
+                    Some(
+                        routes::resolve(doc["type"].as_str().unwrap())
+                            .expect("E25 route must resolve instead of unknown_command")
+                            .lane,
+                    )
+                } else {
+                    None
+                };
                 let result = ingress.submit("alice".into(), write, now).await.unwrap();
                 assert_eq!(result.results.len(), 1);
                 let receipt = result.results[0].clone();
@@ -532,12 +538,19 @@ async fn kernel_component(e25: bool) {
                         },
                     };
                     let done = if e25 {
-                        writer.submit(WriteJob::new(JobOptions::default(), move |tx| {
-                            submit_in_transaction(tx, "executor-a", &terminal, now, &Policy)
-                                .map_err(Into::into)
-                        })).unwrap().await.unwrap()
+                        writer
+                            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+                                submit_in_transaction(tx, "executor-a", &terminal, now, &Policy)
+                                    .map_err(Into::into)
+                            }))
+                            .unwrap()
+                            .await
+                            .unwrap()
                     } else {
-                        ingress.submit("executor-a".into(), terminal, now).await.unwrap()
+                        ingress
+                            .submit("executor-a".into(), terminal, now)
+                            .await
+                            .unwrap()
                     };
                     assert_eq!(done.results[0].result.status, WriteStatus::Accepted);
                     if first.is_none() {
@@ -596,13 +609,13 @@ async fn kernel_component(e25: bool) {
             "first_command" => first.clone().unwrap(),
             _ => panic!("unknown component request"),
         };
-        writeln!(
+        if let Err(error) = writeln!(
             input,
             "{}",
             json!({"request":request["request"],"value":value})
-        )
-        .unwrap();
-        input.flush().unwrap();
+        ).and_then(|_| input.flush()) {
+            panic!("Kernel component child closed input: {error}; exit={:?}", child.0.wait());
+        }
     }
     drop(input);
     assert!(

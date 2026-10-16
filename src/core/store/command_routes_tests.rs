@@ -78,7 +78,12 @@ fn e25_large_and_audio_results_require_verified_files_ref_in_same_transaction() 
             json!({"audioBase64":"AQID"}),
             json!({"state":"open","events":[{"partial":"x".repeat(INLINE_RESULT_LIMIT)}]}),
         ] {
-            command.kind=if value.get("state").is_some(){"ctox.workjet.speech.dictation.v1"}else{"ctox.workjet.speech.settings.v1"}.into();
+            command.kind = if value.get("state").is_some() {
+                "ctox.workjet.speech.dictation.v1"
+            } else {
+                "ctox.workjet.speech.settings.v1"
+            }
+            .into();
             assert_eq!(
                 completion(&tx, &command, value.clone(), None)
                     .unwrap_err()
@@ -89,10 +94,15 @@ fn e25_large_and_audio_results_require_verified_files_ref_in_same_transaction() 
                 .unwrap()
                 .result
                 .unwrap();
-            let result=if command.kind=="ctox.workjet.speech.dictation.v1" {
-                assert!(result.get("partial").is_some(),"large partial lost its running envelope");
+            let result = if command.kind == "ctox.workjet.speech.dictation.v1" {
+                assert!(
+                    result.get("partial").is_some(),
+                    "large partial lost its running envelope"
+                );
                 result["partial"].clone()
-            } else {result};
+            } else {
+                result
+            };
             assert_eq!(result.as_object().unwrap().len(), 1);
             assert_eq!(result["ref"].as_str().unwrap().len(), 64);
             let exists: bool = tx
@@ -135,12 +145,22 @@ fn e25_stream_partials_keep_the_command_id_and_never_finish_on_open() {
             assert_eq!(result.status, "running");
             assert_eq!(result.result, Some(json!({"partial":native})));
         }
-        let mut chunk=command.clone();
-        chunk.command_id="chunk-control-command".into();chunk.payload=json!({"op":"write"});
-        let ack=completion(&tx,&chunk,json!({"state":"open","streamId":"active-stream"}),None).unwrap();
-        assert_eq!(ack.status,"done","chunk acknowledgement cannot own an endless stream");
-        assert_eq!(ack.command_id,"chunk-control-command");
-        assert_eq!(ack.result.unwrap()["state"],"open");
+        let mut chunk = command.clone();
+        chunk.command_id = "chunk-control-command".into();
+        chunk.payload = json!({"op":"write"});
+        let ack = completion(
+            &tx,
+            &chunk,
+            json!({"state":"open","streamId":"active-stream"}),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            ack.status, "done",
+            "chunk acknowledgement cannot own an endless stream"
+        );
+        assert_eq!(ack.command_id, "chunk-control-command");
+        assert_eq!(ack.result.unwrap()["state"], "open");
         assert_eq!(
             completion(
                 &tx,

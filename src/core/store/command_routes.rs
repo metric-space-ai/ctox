@@ -270,7 +270,11 @@ pub fn prepare_completion(
     // Only the opening command owns the ongoing stream. Chunk/read/finish/
     // cancel commands acknowledge their own operation; their snapshots must
     // not leave a separate permanently running command for every audio chunk.
-    let owns_stream=route.streaming && matches!(command.payload.get("op").and_then(Value::as_str),None|Some("open"));
+    let owns_stream = route.streaming
+        && matches!(
+            command.payload.get("op").and_then(Value::as_str),
+            None | Some("open")
+        );
     let (status, value) = if owns_stream {
         match native["state"].as_str() {
             Some("finished" | "committed") => ("done", native),
@@ -294,8 +298,12 @@ pub fn prepare_completion(
         error: None,
     })
 }
-fn file_payload<'a>(status:&str,value:&'a Value)->&'a Value {
-    if status=="running" { value.get("partial").unwrap_or(value) } else { value }
+fn file_payload<'a>(status: &str, value: &'a Value) -> &'a Value {
+    if status == "running" {
+        value.get("partial").unwrap_or(value)
+    } else {
+        value
+    }
 }
 /// Stage these exact JSON DTO bytes in Transfer-CAS OUTSIDE the writer. The
 /// returned ResultFiles adapter only attaches the verified files row inside it.
@@ -307,8 +315,8 @@ pub fn result_file_bytes(
     let Some(value) = prepared.result else {
         return Ok(None);
     };
-    let bytes =
-        serde_json::to_vec(file_payload(&prepared.status,&value)).map_err(|_| error("invalid", "native_result_encoding"))?;
+    let bytes = serde_json::to_vec(file_payload(&prepared.status, &value))
+        .map_err(|_| error("invalid", "native_result_encoding"))?;
     Ok((bytes.len() > INLINE_RESULT_LIMIT || contains_inline_audio(&value)).then_some(bytes))
 }
 /// Run under the retained native publication guard AND the P9 writer fence.
@@ -323,8 +331,8 @@ pub fn completion(
     let Some(value) = prepared.result.take() else {
         return Ok(prepared);
     };
-    let bytes =
-        serde_json::to_vec(file_payload(&prepared.status,&value)).map_err(|_| error("invalid", "native_result_encoding"))?;
+    let bytes = serde_json::to_vec(file_payload(&prepared.status, &value))
+        .map_err(|_| error("invalid", "native_result_encoding"))?;
     let value = if bytes.len() > INLINE_RESULT_LIMIT || contains_inline_audio(&value) {
         let sink = files.ok_or_else(|| error("unavailable", "files_sink_missing"))?;
         let reference = sink.put_json(tx, command, &bytes)?;
@@ -332,8 +340,13 @@ pub fn completion(
         if reference.r#ref != expected {
             return Err(error("invalid", "files_ref_digest"));
         }
-        let reference=serde_json::to_value(reference).map_err(|_| error("invalid", "files_ref_encoding"))?;
-        if prepared.status=="running" { json!({"partial":reference}) } else { reference }
+        let reference =
+            serde_json::to_value(reference).map_err(|_| error("invalid", "files_ref_encoding"))?;
+        if prepared.status == "running" {
+            json!({"partial":reference})
+        } else {
+            reference
+        }
     } else {
         value
     };
