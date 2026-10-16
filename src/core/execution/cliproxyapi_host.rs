@@ -4487,6 +4487,16 @@ mod tests {
         )
     }
 
+    fn with_owned_test_root(operation: impl FnOnce(&Path) + Send + 'static) {
+        let root = Arc::new(tempfile::tempdir().unwrap());
+        let work = Arc::clone(&root);
+        crate::persistence::run_cli_owned(root.path(), move || {
+            operation(work.path());
+            Ok(())
+        })
+        .unwrap();
+    }
+
     #[test]
     fn business_os_subscription_projection_tracks_installed_claude_account() {
         let root = tempfile::tempdir().unwrap();
@@ -4789,33 +4799,32 @@ mod tests {
 
     #[test]
     fn typed_proxy_config_store_is_revisioned_and_secret_free() {
-        let root = tempfile::tempdir().unwrap();
-        let first =
-            save_instance_proxy_config(root.path(), 0, "claude", stored_claude_runtime()).unwrap();
-        assert_eq!(first.revision, 1);
-        assert_eq!(
-            load_instance_proxy_config(root.path()).unwrap(),
-            Some(first.clone())
-        );
-        assert!(
-            save_instance_proxy_config(root.path(), 0, "claude", stored_claude_runtime(),).is_err()
-        );
+        with_owned_test_root(move |root| {
+            let first =
+                save_instance_proxy_config(root, 0, "claude", stored_claude_runtime()).unwrap();
+            assert_eq!(first.revision, 1);
+            assert_eq!(
+                load_instance_proxy_config(root).unwrap(),
+                Some(first.clone())
+            );
+            assert!(
+                save_instance_proxy_config(root, 0, "claude", stored_claude_runtime(),).is_err()
+            );
 
-        let conn = Connection::open(crate::inference::runtime_env::runtime_config_path(
-            root.path(),
-        ))
-        .unwrap();
-        let json: String = conn
-            .query_row(
-                &format!(
-                    "SELECT config_json FROM {INSTANCE_PROXY_CONFIG_TABLE} WHERE config_id = 1"
-                ),
-                [],
-                |row| row.get(0),
-            )
+            let json: String = with_instance_proxy_read(root, |conn| {
+                Ok(conn.query_row(
+                    &format!(
+                        "SELECT config_json FROM {INSTANCE_PROXY_CONFIG_TABLE} WHERE config_id = 1"
+                    ),
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .unwrap()
             .unwrap();
-        assert!(json.contains("persisted-claude-access"));
-        assert!(!json.contains("access-token-do-not-store"));
+            assert!(json.contains("persisted-claude-access"));
+            assert!(!json.contains("access-token-do-not-store"));
+        });
     }
 
     #[test]
@@ -6449,16 +6458,15 @@ mod tests {
 
     #[test]
     fn failed_refresh_write_rolls_back_both_credentials() {
-        let root = tempfile::tempdir().unwrap();
-        let store = CtoxClaudeSecretStore::new(root.path());
-        let handles = handles();
-        let initial = credentials("access-initial-do-not-leak", "refresh-initial-do-not-leak");
-        store.store_credentials(&handles, &initial).unwrap();
+        with_owned_test_root(move |root| {
+            let store = CtoxClaudeSecretStore::new(root);
+            let handles = handles();
+            let initial = credentials("access-initial-do-not-leak", "refresh-initial-do-not-leak");
+            store.store_credentials(&handles, &initial).unwrap();
 
-        let conn =
-            rusqlite::Connection::open(crate::secrets::secret_store_path(root.path())).unwrap();
-        conn.execute_batch(
-            r#"
+            crate::lcm::with_lcm_write(&crate::secrets::secret_store_path(root), |conn| {
+                conn.execute_batch(
+                    r#"
             CREATE TRIGGER reject_claude_refresh_rotation
             BEFORE UPDATE ON ctox_secret_records
             WHEN NEW.secret_name = 'claude-primary-refresh'
@@ -6466,24 +6474,26 @@ mod tests {
                 SELECT RAISE(ABORT, 'forced refresh rollback');
             END;
             "#,
-        )
-        .unwrap();
-        drop(conn);
+                )?;
+                Ok(())
+            })
+            .unwrap();
 
-        let rotated = credentials("access-rotated-do-not-leak", "refresh-rotated-do-not-leak");
-        assert_eq!(
-            store.store_credentials(&handles, &rotated),
-            Err(SecretStoreError::Write)
-        );
-        let retained = store.load_credentials(&handles).unwrap();
-        assert_eq!(
-            retained.access_token().expose_secret(),
-            "access-initial-do-not-leak"
-        );
-        assert_eq!(
-            retained.refresh_token().expose_secret(),
-            "refresh-initial-do-not-leak"
-        );
+            let rotated = credentials("access-rotated-do-not-leak", "refresh-rotated-do-not-leak");
+            assert_eq!(
+                store.store_credentials(&handles, &rotated),
+                Err(SecretStoreError::Write)
+            );
+            let retained = store.load_credentials(&handles).unwrap();
+            assert_eq!(
+                retained.access_token().expose_secret(),
+                "access-initial-do-not-leak"
+            );
+            assert_eq!(
+                retained.refresh_token().expose_secret(),
+                "refresh-initial-do-not-leak"
+            );
+        });
     }
 
     #[test]
@@ -6510,20 +6520,19 @@ mod tests {
 
     #[test]
     fn codex_store_rolls_back_all_three_credentials_when_refresh_write_fails() {
-        let root = tempfile::tempdir().unwrap();
-        let store = CtoxCodexSecretStore::new(root.path());
-        let handles = codex_handles();
-        let initial = codex_auth::CodexStoredCredentials::new(
-            codex_auth::SecretString::new("id-initial").unwrap(),
-            codex_auth::SecretString::new("access-initial").unwrap(),
-            codex_auth::SecretString::new("refresh-initial").unwrap(),
-        );
-        store.store_credentials(&handles, &initial).unwrap();
+        with_owned_test_root(move |root| {
+            let store = CtoxCodexSecretStore::new(root);
+            let handles = codex_handles();
+            let initial = codex_auth::CodexStoredCredentials::new(
+                codex_auth::SecretString::new("id-initial").unwrap(),
+                codex_auth::SecretString::new("access-initial").unwrap(),
+                codex_auth::SecretString::new("refresh-initial").unwrap(),
+            );
+            store.store_credentials(&handles, &initial).unwrap();
 
-        let conn =
-            rusqlite::Connection::open(crate::secrets::secret_store_path(root.path())).unwrap();
-        conn.execute_batch(
-            r#"
+            crate::lcm::with_lcm_write(&crate::secrets::secret_store_path(root), |conn| {
+                conn.execute_batch(
+                    r#"
             CREATE TRIGGER reject_codex_refresh_rotation
             BEFORE UPDATE ON ctox_secret_records
             WHEN NEW.secret_name = 'codex-primary-refresh'
@@ -6531,23 +6540,25 @@ mod tests {
                 SELECT RAISE(ABORT, 'forced Codex refresh rollback');
             END;
             "#,
-        )
-        .unwrap();
-        drop(conn);
+                )?;
+                Ok(())
+            })
+            .unwrap();
 
-        let rotated = codex_auth::CodexStoredCredentials::new(
-            codex_auth::SecretString::new("id-rotated").unwrap(),
-            codex_auth::SecretString::new("access-rotated").unwrap(),
-            codex_auth::SecretString::new("refresh-rotated").unwrap(),
-        );
-        assert_eq!(
-            store.store_credentials(&handles, &rotated),
-            Err(codex_auth::SecretStoreError::Write)
-        );
-        let retained = store.load_credentials(&handles).unwrap();
-        assert_eq!(retained.id_token().expose_secret(), "id-initial");
-        assert_eq!(retained.access_token().expose_secret(), "access-initial");
-        assert_eq!(retained.refresh_token().expose_secret(), "refresh-initial");
+            let rotated = codex_auth::CodexStoredCredentials::new(
+                codex_auth::SecretString::new("id-rotated").unwrap(),
+                codex_auth::SecretString::new("access-rotated").unwrap(),
+                codex_auth::SecretString::new("refresh-rotated").unwrap(),
+            );
+            assert_eq!(
+                store.store_credentials(&handles, &rotated),
+                Err(codex_auth::SecretStoreError::Write)
+            );
+            let retained = store.load_credentials(&handles).unwrap();
+            assert_eq!(retained.id_token().expose_secret(), "id-initial");
+            assert_eq!(retained.access_token().expose_secret(), "access-initial");
+            assert_eq!(retained.refresh_token().expose_secret(), "refresh-initial");
+        });
     }
 
     #[test]
@@ -6581,25 +6592,24 @@ mod tests {
 
     #[test]
     fn antigravity_store_rolls_back_all_records_when_state_write_fails() {
-        let root = tempfile::tempdir().unwrap();
-        let store = CtoxAntigravitySecretStore::new(root.path());
-        let handles = antigravity_handles();
-        let initial_expiry = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
-        store
-            .store_credentials(
-                &handles,
-                &antigravity_credentials(
-                    "access-initial",
-                    "refresh-initial",
-                    initial_expiry,
-                    "project-initial",
-                ),
-            )
-            .unwrap();
-        let conn =
-            rusqlite::Connection::open(crate::secrets::secret_store_path(root.path())).unwrap();
-        conn.execute_batch(
-            r#"
+        with_owned_test_root(move |root| {
+            let store = CtoxAntigravitySecretStore::new(root);
+            let handles = antigravity_handles();
+            let initial_expiry = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
+            store
+                .store_credentials(
+                    &handles,
+                    &antigravity_credentials(
+                        "access-initial",
+                        "refresh-initial",
+                        initial_expiry,
+                        "project-initial",
+                    ),
+                )
+                .unwrap();
+            crate::lcm::with_lcm_write(&crate::secrets::secret_store_path(root), |conn| {
+                conn.execute_batch(
+                    r#"
             CREATE TRIGGER reject_antigravity_state_rotation
             BEFORE UPDATE ON ctox_secret_records
             WHEN NEW.secret_name = 'antigravity-primary-state'
@@ -6607,24 +6617,26 @@ mod tests {
                 SELECT RAISE(ABORT, 'forced state rollback');
             END;
             "#,
-        )
-        .unwrap();
-        drop(conn);
-        let error = store.store_credentials(
-            &handles,
-            &antigravity_credentials(
-                "access-rotated",
-                "refresh-rotated",
-                initial_expiry + Duration::from_secs(3_600),
-                "project-rotated",
-            ),
-        );
-        assert_eq!(error, Err(antigravity_auth::AntigravityTokenError::Write));
-        let retained = store.load_credentials(&handles).unwrap();
-        assert_eq!(retained.access_token().expose_secret(), "access-initial");
-        assert_eq!(retained.refresh_token().expose_secret(), "refresh-initial");
-        assert_eq!(retained.project_id(), "project-initial");
-        assert_eq!(retained.expires_at(), initial_expiry);
+                )?;
+                Ok(())
+            })
+            .unwrap();
+            let error = store.store_credentials(
+                &handles,
+                &antigravity_credentials(
+                    "access-rotated",
+                    "refresh-rotated",
+                    initial_expiry + Duration::from_secs(3_600),
+                    "project-rotated",
+                ),
+            );
+            assert_eq!(error, Err(antigravity_auth::AntigravityTokenError::Write));
+            let retained = store.load_credentials(&handles).unwrap();
+            assert_eq!(retained.access_token().expose_secret(), "access-initial");
+            assert_eq!(retained.refresh_token().expose_secret(), "refresh-initial");
+            assert_eq!(retained.project_id(), "project-initial");
+            assert_eq!(retained.expires_at(), initial_expiry);
+        });
     }
 
     #[test]
@@ -6664,40 +6676,33 @@ mod tests {
 
     #[test]
     fn signature_store_persists_refreshes_expires_and_deletes_exact_keys() {
-        let root = tempfile::tempdir().unwrap();
-        let store = CtoxSignatureKvStore::new(root.path());
-        let key = "cpa:signature:claude:0123456789abcdef";
-        let value = b"provider-signature";
+        with_owned_test_root(move |root| {
+            let store = CtoxSignatureKvStore::new(root);
+            let key = "cpa:signature:claude:0123456789abcdef";
+            let value = b"provider-signature";
 
-        assert!(store.set(key, value, Duration::from_secs(60)).unwrap());
-        assert_eq!(store.get(key).unwrap(), Some(value.to_vec()));
-        assert!(store.expire(key, Duration::from_secs(120)).unwrap());
-        assert!(store.delete(key).unwrap());
-        assert_eq!(store.get(key).unwrap(), None);
+            assert!(store.set(key, value, Duration::from_secs(60)).unwrap());
+            assert_eq!(store.get(key).unwrap(), Some(value.to_vec()));
+            assert!(store.expire(key, Duration::from_secs(120)).unwrap());
+            assert!(store.delete(key).unwrap());
+            assert_eq!(store.get(key).unwrap(), None);
 
-        assert!(store.set(key, value, Duration::from_secs(60)).unwrap());
-        let conn = Connection::open(crate::inference::runtime_env::runtime_config_path(
-            root.path(),
-        ))
-        .unwrap();
-        conn.execute(
-            &format!(
-                "UPDATE {INSTANCE_SIGNATURE_CACHE_TABLE} SET expires_at_ms = 0 WHERE cache_key = ?1"
-            ),
-            [key],
-        )
-        .unwrap();
-        drop(conn);
-        assert_eq!(store.get(key).unwrap(), None);
+            assert!(store.set(key, value, Duration::from_secs(60)).unwrap());
+            with_instance_proxy_write(root, move |conn| {
+            conn.execute(&format!("UPDATE {INSTANCE_SIGNATURE_CACHE_TABLE} SET expires_at_ms = 0 WHERE cache_key = ?1"), [key])?;
+            Ok(())
+        }).unwrap();
+            assert_eq!(store.get(key).unwrap(), None);
 
-        assert_eq!(
-            store.set("", value, Duration::from_secs(60)),
-            Err(SignatureCacheStoreError::Write)
-        );
-        assert_eq!(
-            store.set(key, b"", Duration::from_secs(60)),
-            Err(SignatureCacheStoreError::Write)
-        );
+            assert_eq!(
+                store.set("", value, Duration::from_secs(60)),
+                Err(SignatureCacheStoreError::Write)
+            );
+            assert_eq!(
+                store.set(key, b"", Duration::from_secs(60)),
+                Err(SignatureCacheStoreError::Write)
+            );
+        });
     }
 
     struct UnusedRefreshTransport;

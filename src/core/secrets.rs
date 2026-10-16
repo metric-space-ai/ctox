@@ -2490,71 +2490,61 @@ mod tests {
 
     #[test]
     fn secret_store_encrypts_values_at_rest_and_round_trips() -> Result<()> {
-        let root = temp_root("roundtrip");
-        fs::create_dir_all(&root)?;
+        let fixture = std::sync::Arc::new(tempfile::tempdir()?);
+        let work = std::sync::Arc::clone(&fixture);
+        persistence::run_cli_owned(fixture.path(), move || {
+            let root = work.path().to_owned();
 
-        let record = put_secret(
-            &root,
-            "ticket:zammad",
-            "api-token",
-            "super-secret-token",
-            Some("Zammad API token".to_string()),
-            json!({"kind": "token"}),
-        )?;
-        assert_eq!(record.secret_name, "api-token");
-        assert!(secret_exists(&root, "ticket:zammad", "api-token")?);
+            let record = put_secret(
+                &root,
+                "ticket:zammad",
+                "api-token",
+                "super-secret-token",
+                Some("Zammad API token".to_string()),
+                json!({"kind": "token"}),
+            )?;
+            assert_eq!(record.secret_name, "api-token");
+            assert!(secret_exists(&root, "ticket:zammad", "api-token")?);
 
-        let plaintext = get_secret_value(&root, "ticket:zammad", "api-token")?;
-        assert_eq!(plaintext, "super-secret-token");
+            let plaintext = get_secret_value(&root, "ticket:zammad", "api-token")?;
+            assert_eq!(plaintext, "super-secret-token");
 
-        let db_path = resolve_db_path(&root);
-        let raw = fs::read(&db_path)?;
-        let raw_text = String::from_utf8_lossy(&raw);
-        assert!(!raw_text.contains("super-secret-token"));
-        let conn = Connection::open(&db_path)?;
-        let embedded_master_key = conn
-            .query_row(
-                &format!("SELECT value FROM {SECRET_KV_TABLE} WHERE key = ?1"),
-                [MASTER_KEY_STORAGE_KEY],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten();
-        assert!(embedded_master_key.is_none());
-        assert!(master_key_path(&root).is_file());
-        let raw_master_key = fs::read_to_string(master_key_path(&root))?;
-        conn.execute(
-            &format!(
-                "INSERT INTO {SECRET_KV_TABLE} (key, value) VALUES (?1, ?2) \
+            let db_path = resolve_db_path(&root);
+            let raw = fs::read(&db_path)?;
+            let raw_text = String::from_utf8_lossy(&raw);
+            assert!(!raw_text.contains("super-secret-token"));
+            let embedded_master_key = secret_key_row(&root)?;
+            assert!(embedded_master_key.is_none());
+            assert!(master_key_path(&root).is_file());
+            let raw_master_key = Zeroizing::new(fs::read_to_string(master_key_path(&root))?);
+            secret_owner(&root)?.write_blocking(move |conn| {
+                conn.execute(
+                    &format!(
+                        "INSERT INTO {SECRET_KV_TABLE} (key, value) VALUES (?1, ?2) \
                  ON CONFLICT(key) DO UPDATE SET value=excluded.value"
-            ),
-            params![MASTER_KEY_STORAGE_KEY, raw_master_key.trim()],
-        )?;
-        let _ = ensure_secret_master_key(&root)?;
-        let recovered_embedded_key = conn
-            .query_row(
-                &format!("SELECT value FROM {SECRET_KV_TABLE} WHERE key = ?1"),
-                [MASTER_KEY_STORAGE_KEY],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten();
-        assert!(recovered_embedded_key.is_none());
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            assert_eq!(fs::metadata(&db_path)?.permissions().mode() & 0o777, 0o600);
-            assert_eq!(
-                fs::metadata(master_key_path(&root))?.permissions().mode() & 0o777,
-                0o600
-            );
-        }
+                    ),
+                    params![MASTER_KEY_STORAGE_KEY, raw_master_key.trim()],
+                )?;
+                Ok(())
+            })?;
+            let _ = ensure_secret_master_key(&root)?;
+            let recovered_embedded_key = secret_key_row(&root)?;
+            assert!(recovered_embedded_key.is_none());
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                assert_eq!(fs::metadata(&db_path)?.permissions().mode() & 0o777, 0o600);
+                assert_eq!(
+                    fs::metadata(master_key_path(&root))?.permissions().mode() & 0o777,
+                    0o600
+                );
+            }
 
-        let records = list_secrets(&root, Some("ticket:zammad"))?;
-        assert_eq!(records.len(), 1);
+            let records = list_secrets(&root, Some("ticket:zammad"))?;
+            assert_eq!(records.len(), 1);
 
-        let _ = fs::remove_dir_all(&root);
-        Ok(())
+            Ok(())
+        })
     }
 
     #[test]
