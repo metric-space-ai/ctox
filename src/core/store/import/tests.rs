@@ -60,6 +60,7 @@ async fn publication_replay_and_core_import_are_seq_neutral_and_never_overwrite_
     let plan = ReleasePlan {
         version: "v4-base".into(),
         manifests: vec![],
+        libs: vec![],
         collections: BTreeMap::from([("conversations".into(), vec![def])]),
         migrations: BTreeMap::new(),
         removed_sync_settings: vec![],
