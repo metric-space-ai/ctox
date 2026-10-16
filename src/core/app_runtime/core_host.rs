@@ -688,6 +688,27 @@ impl RuntimeHost for CoreRuntimeHost {
         })?;
         Ok(())
     }
+    fn complete_bound(&self, binding: &Value) -> Result<()> {
+        // A retained native invocation alone is not the current P9 Store lease.
+        // Consume the existing codec in the canonical writer; do not publish or
+        // mutate a command here. Its durable completion rechecks atomically.
+        let codec = self.codec.clone();
+        let authority = self.authority.clone();
+        let binding = binding.clone();
+        let job = self
+            .writer
+            .submit(WriteJob::new(Self::options(), move |tx| {
+                authority
+                    .with_fence(&binding, &mut || {
+                        codec.check_fence(tx, &binding).map_err(store_failure)?;
+                        Ok(Value::Null)
+                    })
+                    .map_err(denied)
+            }))
+            .map_err(store_failure)?;
+        self.wait(job)?;
+        Ok(())
+    }
     fn finish(&self, binding: &Value) {
         if let Ok(mut pending) = self.transactions.lock() {
             pending.retain(|_, v| Some(v.invocation.as_str()) != binding["invocation_id"].as_str());
