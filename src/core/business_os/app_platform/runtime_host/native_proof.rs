@@ -14,6 +14,16 @@ use std::{
 };
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
+// A production peer has its own runtime and policy context. Keep test peers
+// equally isolated; P6 deliberately rejects multiple owners in one context.
+struct PeerRuntime(Option<tokio::runtime::Runtime>);
+impl Drop for PeerRuntime {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.0.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
 struct Signal(tokio::task::JoinHandle<()>, String);
 impl Drop for Signal {
     fn drop(&mut self) {
@@ -248,9 +258,28 @@ async fn run_native_proof(proof: Proof) -> Result<()> {
         .await?;
         owner.shutdown().await?;
     }
+    let mut peer_runtimes = Vec::new();
     let mut owners = Vec::new();
-    for root in &roots {
-        owners.push(Foreground::start(root.path().to_owned(), Handle::current()).await?);
+    for (index, root) in roots.iter().enumerate() {
+        if index == 0 {
+            owners.push(Foreground::start(root.path().to_owned(), Handle::current()).await?);
+        } else {
+            let peer = PeerRuntime(Some(
+                tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
+                    .enable_all()
+                    .build()?,
+            ));
+            let runtime = peer.0.as_ref().unwrap().handle().clone();
+            let owner_runtime = runtime.clone();
+            let path = root.path().to_owned();
+            owners.push(
+                runtime
+                    .spawn(async move { Foreground::start(path, owner_runtime).await })
+                    .await??,
+            );
+            peer_runtimes.push(peer);
+        }
     }
     let proof:Result<Value>=async {
         for owner in &owners {
