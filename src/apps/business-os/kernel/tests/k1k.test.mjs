@@ -26,12 +26,18 @@ function fakeSw() {
     listening: (type) => listeners.get(type)?.size ?? 0,
   };
 }
+// Node < 21 hat kein globalThis.navigator (Lane: Node 20) – für die Dauer der Kernel-Erzeugung ein leeres Objekt stellen.
 async function mk(t, fake, o = {}) {
-  const had = Object.getOwnPropertyDescriptor(globalThis.navigator, 'serviceWorker');
+  const ownNav = fake && globalThis.navigator === undefined;
+  if (ownNav) Object.defineProperty(globalThis, 'navigator', { configurable: true, writable: true, value: {} });
+  const had = globalThis.navigator ? Object.getOwnPropertyDescriptor(globalThis.navigator, 'serviceWorker') : undefined;
   if (fake) Object.defineProperty(globalThis.navigator, 'serviceWorker', { configurable: true, value: fake.sw });
   let k;
   try { k = createStubKernel({ locks: testLocks, instanceId: `k1k${process.pid}-${++n}`, userId: 'u1', latencyMs: 2, ...o }); }
-  finally { if (fake) { if (had) Object.defineProperty(globalThis.navigator, 'serviceWorker', had); else delete globalThis.navigator.serviceWorker; } }
+  finally {
+    if (fake) { if (had) Object.defineProperty(globalThis.navigator, 'serviceWorker', had); else delete globalThis.navigator.serviceWorker; }
+    if (ownNav) delete globalThis.navigator;
+  }
   t.after(() => k.close());
   await k.ready;
   return k;
