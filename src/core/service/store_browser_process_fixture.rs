@@ -31,6 +31,11 @@ async fn export_installed_browser_fixture() -> anyhow::Result<()> {
             &config_root,
             "CTOX_BUSINESS_OS_ICE_SERVERS",
             r#"[{"urls":"stun:127.0.0.1:9"}]"#,
+        )?;
+        crate::inference::runtime_env::set_runtime_env_value(
+            &config_root,
+            "CTOX_BUSINESS_OS_WEB_AUTOSTART",
+            "0",
         )
     })
     .await?;
