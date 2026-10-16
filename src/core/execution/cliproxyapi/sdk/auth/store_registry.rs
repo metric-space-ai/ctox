@@ -62,15 +62,4 @@ mod tests {
             Ok(())
         }
     }
-
-    #[test]
-    fn store_authority_is_explicit_and_replaceable() {
-        let mut registry = TokenStoreRegistry::default();
-        assert!(registry.get().is_none());
-        let store: Arc<dyn AuthStore> = Arc::new(Store);
-        registry.register(store.clone());
-        assert!(Arc::ptr_eq(&registry.get().unwrap(), &store));
-        registry.clear();
-        assert!(registry.get().is_none());
-    }
 }

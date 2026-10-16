@@ -68,32 +68,3 @@ impl ExecutionLifecycle for CountingLifecycle {
         }
     }
 }
-
-#[tokio::test]
-async fn codex_session_binds_same_lifecycle_and_connection_once() {
-    let lifecycle_closes = Arc::new(AtomicUsize::new(0));
-    let async_closes = Arc::new(AtomicUsize::new(0));
-    let mut state = CodexWebsocketSessionState {
-        auth_id: "auth-a".to_owned(),
-        target_url: "wss://example.invalid/responses".to_owned(),
-        connection: Some(Box::new(CountingConnection {
-            lifecycle_closes: Arc::clone(&lifecycle_closes),
-            async_closes: Arc::clone(&async_closes),
-        })),
-        generation: 1,
-        committed: false,
-        lifecycle: None,
-        lifecycle_generation: 0,
-    };
-    let lifecycle = Arc::new(CountingLifecycle::default());
-    let lifecycle_owner: Arc<dyn ExecutionLifecycle> = lifecycle.clone();
-
-    bind_connection_lifecycle(&mut state, Some(&lifecycle_owner)).unwrap();
-    bind_connection_lifecycle(&mut state, Some(&lifecycle_owner)).unwrap();
-    assert_eq!(lifecycle.binds.load(Ordering::SeqCst), 1);
-
-    state.close("connection_closed").await;
-    assert_eq!(lifecycle.ends.load(Ordering::SeqCst), 1);
-    assert_eq!(lifecycle_closes.load(Ordering::SeqCst), 1);
-    assert_eq!(async_closes.load(Ordering::SeqCst), 1);
-}

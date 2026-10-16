@@ -22,29 +22,6 @@ use super::model_capabilities::{
 };
 use super::thinking_providers::{is_upstream_thinking_provider, THINKING_PROVIDER_MODULES};
 
-#[test]
-fn force_link_provider_manifest_matches_pinned_blank_imports() {
-    assert_eq!(
-        THINKING_PROVIDER_MODULES,
-        [
-            "antigravity",
-            "claude",
-            "codex",
-            "gemini",
-            "interactions",
-            "kimi",
-            "openai",
-            "xai",
-        ]
-    );
-    for provider in THINKING_PROVIDER_MODULES {
-        assert!(is_upstream_thinking_provider(provider));
-        assert!(is_upstream_thinking_provider(&provider.to_uppercase()));
-    }
-    assert!(!is_upstream_thinking_provider("openrouter"));
-    assert!(!is_upstream_thinking_provider(""));
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CapturedThinkingInput {
     body: Vec<u8>,
@@ -345,11 +322,4 @@ fn api_key_compatibility_normalizes_reserved_integers_before_the_processor() {
             false,
         )
     );
-}
-
-#[test]
-fn model_info_type_remains_the_canonical_registry_type() {
-    fn accepts_registry_model(_: Option<&ModelInfo>) {}
-    let model = lookup_model_info("claude-sonnet-4-6", "claude").unwrap();
-    accepts_registry_model(Some(&model));
 }

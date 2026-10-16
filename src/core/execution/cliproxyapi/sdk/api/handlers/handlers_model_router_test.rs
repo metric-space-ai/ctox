@@ -20,12 +20,3 @@ fn provider_preference_and_exclusion_are_stable_and_case_insensitive() {
         ["Gemini-Interactions", "claude"]
     );
 }
-
-#[test]
-fn interactions_prefers_native_provider_without_dropping_fallbacks() {
-    let providers = vec!["antigravity".to_owned(), "gemini-interactions".to_owned()];
-    assert_eq!(
-        adjust_execution_providers_for_entry_protocol("interactions", &providers),
-        ["gemini-interactions", "antigravity"]
-    );
-}

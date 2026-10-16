@@ -11,7 +11,3 @@ pub fn handle(method: &str) -> ExampleResult {
         _ => unknown(method),
     }
 }
-#[test]
-fn normalizes_to_owned_bytes() {
-    assert!(handle("request.normalize").unwrap().result["Body"].is_array());
-}

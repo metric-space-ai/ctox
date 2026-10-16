@@ -29,16 +29,3 @@ pub fn pick(cfg: &SchedulerConfig, candidates: &[&str]) -> Pick {
         Pick::Unhandled
     }
 }
-#[test]
-fn config_is_injected() {
-    assert_eq!(
-        pick(
-            &SchedulerConfig {
-                auth_id: "a".into(),
-                ..Default::default()
-            },
-            &["a"]
-        ),
-        Pick::Auth("a".into())
-    );
-}

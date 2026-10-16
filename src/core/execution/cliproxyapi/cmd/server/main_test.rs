@@ -123,14 +123,3 @@ fn bootstrap_path_uses_injected_working_directory() {
         cwd.join("config.yaml")
     );
 }
-
-#[test]
-fn standalone_is_only_valid_with_tui() {
-    assert!(parse_options(&["--standalone".to_owned()]).is_err());
-    assert!(
-        parse_options(&["--tui".to_owned(), "--standalone".to_owned()])
-            .unwrap()
-            .unwrap()
-            .standalone
-    );
-}

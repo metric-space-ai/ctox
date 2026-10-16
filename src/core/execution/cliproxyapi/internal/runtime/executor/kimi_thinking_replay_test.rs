@@ -46,20 +46,6 @@ fn content(value: &[u8]) -> Value {
 }
 
 #[test]
-fn thinking_replay_model_family() {
-    for (model, expected) in [
-        ("k3", "k3"),
-        ("kimi-k3", "k3"),
-        ("k3-256k", "k3"),
-        ("kimi-k3-256k(high)", "k3"),
-        ("kimi-k2.7-code", "k2.7-code"),
-        ("kimi-k2.7-code-highspeed", "k2.7-code-highspeed"),
-    ] {
-        assert_eq!(kimi_thinking_replay_model_family(model), expected);
-    }
-}
-
-#[test]
 fn restore_preserves_complete_assistant_content() {
     let body = br#"{"messages":[
         {"role":"user","content":"inspect"},

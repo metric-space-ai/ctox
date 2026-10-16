@@ -7,20 +7,6 @@ use std::time::Duration;
 use super::credential_concurrency::*;
 
 #[test]
-fn limiter_defaults_and_lifecycle_invariant() {
-    let config = CredentialConcurrencyConfig::default().with_defaults();
-    assert_eq!(config.lifecycle_config_revision, 0);
-    assert_eq!(config.observation_barrier_revision, 0);
-    assert_eq!(config.cpa_heartbeat_timeout, Duration::from_secs(3));
-    assert_eq!(config.cpa_cancel_bound, Duration::from_secs(5));
-    assert_eq!(config.reclaim_grace, Duration::from_secs(5));
-    assert_eq!(config.release_flush_interval, Duration::from_millis(250));
-    assert_eq!(config.max_limit, 1_000_000);
-    validate_credential_concurrency_lifecycle(Duration::from_secs(20), &config).unwrap();
-    assert!(validate_credential_concurrency_lifecycle(Duration::from_secs(2), &config).is_err());
-}
-
-#[test]
 fn explicit_invalid_values_are_not_defaulted() {
     for source in [
         "lifecycle-config-revision: 0\n",

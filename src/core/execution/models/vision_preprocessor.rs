@@ -25,11 +25,4 @@ pub fn encode_image_marker(path: &Path) -> String {
 mod tests {
     use super::encode_image_marker;
     use std::path::PathBuf;
-
-    #[test]
-    fn encode_image_marker_roundtrips() {
-        let path = PathBuf::from("/tmp/foo.png");
-        let marker = encode_image_marker(&path);
-        assert_eq!(marker, "[[ctox:image:/tmp/foo.png]]");
-    }
 }

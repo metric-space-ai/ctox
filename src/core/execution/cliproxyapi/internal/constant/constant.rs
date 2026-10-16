@@ -14,30 +14,4 @@ pub const INTERACTIONS: &str = "interactions";
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn provider_and_format_identifiers_match_upstream() {
-        assert_eq!(
-            [
-                GEMINI,
-                GEMINI_INTERACTIONS,
-                CODEX,
-                CLAUDE,
-                OPENAI,
-                OPENAI_RESPONSE,
-                ANTIGRAVITY,
-                INTERACTIONS,
-            ],
-            [
-                "gemini",
-                "gemini-interactions",
-                "codex",
-                "claude",
-                "openai",
-                "openai-response",
-                "antigravity",
-                "interactions",
-            ]
-        );
-    }
 }

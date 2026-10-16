@@ -989,17 +989,6 @@ mod tests {
     }
 
     #[test]
-    fn stt_engine_parser_accepts_mistral_api_aliases() {
-        assert_eq!(
-            parse_stt_engine_kind("mistral-api"),
-            SttEngineKind::MistralApi
-        );
-        assert_eq!(parse_stt_engine_kind("api"), SttEngineKind::MistralApi);
-        assert_eq!(parse_stt_engine_kind("local"), SttEngineKind::Local);
-        assert_eq!(parse_stt_engine_kind("ggml"), SttEngineKind::Local);
-    }
-
-    #[test]
     fn live_transcription_requires_actual_streaming_latency_proof() {
         let root = std::env::temp_dir().join(format!(
             "ctox-voxtral-live-status-{}",

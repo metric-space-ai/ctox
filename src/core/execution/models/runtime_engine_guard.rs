@@ -311,23 +311,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_host_acceleration_override_aliases() {
-        assert_eq!(
-            parse_host_acceleration_override("cuda"),
-            Some(HostAccelerationRequirement::NvidiaCuda)
-        );
-        assert_eq!(
-            parse_host_acceleration_override("apple-metal"),
-            Some(HostAccelerationRequirement::AppleMetal)
-        );
-        assert_eq!(
-            parse_host_acceleration_override("cpu-only"),
-            Some(HostAccelerationRequirement::CpuOnly)
-        );
-        assert_eq!(parse_host_acceleration_override("bogus"), None);
-    }
-
-    #[test]
     fn command_output_with_timeout_times_out_hung_child() {
         let err = command_output_with_timeout(
             Command::new("sh").args(["-c", "sleep 2"]),

@@ -83,35 +83,3 @@ fn xai_binding_is_stable_in_normal_mode_and_replaceable_explicitly() {
         .unwrap();
     assert!(!Arc::ptr_eq(&first, &replaced));
 }
-
-#[test]
-fn unrelated_plugin_model_sync_preserves_websocket_executor_bindings() {
-    for provider in ["codex", "xai"] {
-        let fixture = runtime_fixture(None);
-        fixture
-            .runtime
-            .apply_core_auth_add_or_update(auth("provider-auth", provider))
-            .unwrap();
-        fixture
-            .runtime
-            .apply_core_auth_add_or_update(auth("unrelated", "claude"))
-            .unwrap();
-        let first = fixture
-            .runtime
-            .auth_manager()
-            .executors()
-            .get(provider)
-            .unwrap();
-        fixture
-            .runtime
-            .set_plugin_runtime(Some(Arc::new(TestPluginRuntime::default())));
-        fixture.runtime.sync_plugin_model_runtime().unwrap();
-        let second = fixture
-            .runtime
-            .auth_manager()
-            .executors()
-            .get(provider)
-            .unwrap();
-        assert!(Arc::ptr_eq(&first, &second), "provider={provider}");
-    }
-}

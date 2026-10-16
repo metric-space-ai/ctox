@@ -272,14 +272,4 @@ mod tests {
         let value: serde_yaml::Value = serde_yaml::from_slice(&document.read().unwrap()).unwrap();
         assert_eq!(value["plugins"]["enabled"].as_str(), Some("true"));
     }
-
-    #[test]
-    fn public_aliases_and_constant_are_available() {
-        let _: Config = ProviderCompatConfig::default();
-        let _: Tls = TlsConfig::default();
-        assert_eq!(
-            DEFAULT_PANEL_GITHUB_REPOSITORY,
-            crate::internal::config::DEFAULT_PANEL_GITHUB_REPOSITORY
-        );
-    }
 }

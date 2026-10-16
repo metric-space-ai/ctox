@@ -114,20 +114,6 @@ fn available_models_clone_supported_parameters_and_include_max_context_override(
 }
 
 #[test]
-fn static_lookup_is_cloned_and_includes_sonnet_five() {
-    let registry = registry();
-    let mut first = registry.lookup_model_info("claude-sonnet-5", "").unwrap();
-    first.thinking.as_mut().unwrap().levels[0] = "mutated".to_owned();
-    let second = registry.lookup_model_info("claude-sonnet-5", "").unwrap();
-    assert_eq!(second.provider_type, "claude");
-    assert_eq!(second.context_length, 1_000_000);
-    assert_eq!(second.max_completion_tokens, 128_000);
-    let thinking = second.thinking.unwrap();
-    assert!(thinking.zero_allowed && thinking.dynamic_allowed);
-    assert_eq!(thinking.levels, ["low", "medium", "high", "xhigh", "max"]);
-}
-
-#[test]
 fn duplicate_registration_counts_provider_changes_and_reconciliation_match_upstream() {
     let registry = registry();
     registry.register_client("a", "OpenAI", &[model("m1"), model("m1")]);

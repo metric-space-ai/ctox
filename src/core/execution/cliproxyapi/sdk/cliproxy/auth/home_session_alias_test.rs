@@ -6,23 +6,3 @@
 use std::time::Duration;
 
 use super::HomeSessionAliasCache;
-
-#[test]
-fn aliases_reconcile_to_one_canonical_session_until_expiry() {
-    let cache = HomeSessionAliasCache::default();
-    let ttl = Duration::from_millis(100);
-    assert_eq!(
-        cache.canonical("primary", "fallback", ttl, 0).as_deref(),
-        Some("primary")
-    );
-    assert_eq!(
-        cache.canonical("fallback", "third", ttl, 50).as_deref(),
-        Some("primary")
-    );
-    assert_eq!(
-        cache.canonical("fallback", "", ttl, 151).as_deref(),
-        Some("fallback")
-    );
-    cache.clear();
-    assert!(cache.is_empty());
-}

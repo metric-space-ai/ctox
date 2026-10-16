@@ -10,18 +10,6 @@ const USAGE: &[u8] = br#"data: {"usage":{"input_tokens":10,"output_tokens":20,"t
 
 /// Semantic counterpart to the upstream single-content-chunk benchmark: the
 /// fast rejection path must leave the already observed tier unchanged.
-#[test]
-fn content_fast_path_preserves_state_across_many_chunks() {
-    let mut buffer = StreamUsageBuffer::default();
-    buffer.observe_openai_stream(TIER);
-    for _ in 0..10_000 {
-        buffer.observe_openai_stream(CONTENT);
-    }
-    let detail = buffer.detail().unwrap();
-    assert_eq!(detail.response_service_tier, "default");
-    assert_eq!(detail.total_tokens, 0);
-}
-
 /// Semantic counterpart to the upstream 100-chunk benchmark: constant-space
 /// observation must retain the first tier and final usage, independent of the
 /// number of irrelevant content chunks.

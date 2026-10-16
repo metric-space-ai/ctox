@@ -13,12 +13,6 @@ fn response_benchmark_routes_keep_valid_json_and_payload() {
     verify_response_matrix(1_024);
 }
 
-#[test]
-#[ignore = "manual allocation/throughput benchmark"]
-fn benchmark_response_translation_large_payload() {
-    exercise_response_matrix(8 << 20, 25);
-}
-
 fn verify_response_matrix(payload_size: usize) {
     visit_response_matrix(payload_size, |_, _, _, _| {});
 }

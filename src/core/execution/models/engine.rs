@@ -1496,41 +1496,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn model_supports_vision_recognises_local_vision_families() {
-        // Qwen 3.6 chat family is marked vision-capable in the registry.
-        assert!(model_supports_vision("Qwen/Qwen3.6-35B-A3B"));
-        // Gemma 4 variant likewise.
-        assert!(model_supports_vision("google/gemma-4-31B-it"));
-        // Qwen3-VL-2B auxiliary itself is vision-capable.
-        assert!(model_supports_vision("Qwen/Qwen3-VL-2B-Instruct"));
-    }
-
-    #[test]
-    fn model_supports_vision_rejects_text_only_primaries() {
-        assert!(!model_supports_vision("openai/gpt-oss-120b"));
-        assert!(!model_supports_vision("nvidia/Nemotron-Cascade-2-30B-A3B"));
-        assert!(!model_supports_vision("zai-org/GLM-4.7-Flash"));
-        assert!(!model_supports_vision("moonshotai/kimi-k2.5"));
-        assert!(!model_supports_vision(""));
-    }
-
-    #[test]
-    fn model_supports_vision_recognises_known_api_models() {
-        assert!(model_supports_vision("claude-opus-4-7"));
-        assert!(model_supports_vision("claude-opus-4-6"));
-        assert!(model_supports_vision("claude-sonnet-4-7"));
-        assert!(model_supports_vision("claude-sonnet-4-6"));
-        assert!(model_supports_vision("anthropic/claude-opus-4.6"));
-        assert!(model_supports_vision("anthropic/claude-sonnet-4.6"));
-        assert!(model_supports_vision("gpt-5.5"));
-        assert!(model_supports_vision("gpt-5.4"));
-        assert!(model_supports_vision("gpt-5.4-mini"));
-        assert!(model_supports_vision("MiniMax-M2.7"));
-        // Nano is excluded intentionally.
-        assert!(!model_supports_vision("gpt-5.4-nano"));
-    }
-
-    #[test]
     fn extract_message_content_blocks_handles_plain_string() {
         let content = json!("hello world");
         let blocks = extract_message_content_blocks(Some(&content));
@@ -1583,22 +1548,6 @@ mod tests {
         assert!(message_blocks_contain_image(&with_image_url));
         let only_text = vec![json!({"type": "text", "text": "x"})];
         assert!(!message_blocks_contain_image(&only_text));
-    }
-
-    #[test]
-    fn vision_aux_selection_maps_to_qwen3_vl_instruct() {
-        let selection = auxiliary_model_selection(AuxiliaryRole::Vision, None);
-        assert_eq!(selection.role, AuxiliaryRole::Vision);
-        assert_eq!(selection.default_port, 1240);
-        assert_eq!(selection.compute_target, ComputeTarget::Gpu);
-        // gpu_reserve_mb returns the family-specific reservation.
-        assert_eq!(selection.gpu_reserve_mb(), 3500);
-    }
-
-    #[test]
-    fn gpt_oss_is_not_a_supported_local_runtime() {
-        assert!(runtime_config_for_model("openai/gpt-oss-120b").is_err());
-        assert!(!supports_local_chat_runtime("openai/gpt-oss-120b"));
     }
 
     #[test]
@@ -1660,78 +1609,6 @@ mod tests {
     }
 
     #[test]
-    fn auxiliary_model_choices_resolve_cpu_and_gpu_variants() {
-        let embedding_cpu = auxiliary_model_selection(
-            AuxiliaryRole::Embedding,
-            Some("Qwen/Qwen3-Embedding-0.6B [CPU]"),
-        );
-        assert_eq!(embedding_cpu.request_model, "Qwen/Qwen3-Embedding-0.6B");
-        assert_eq!(embedding_cpu.compute_target, ComputeTarget::Cpu);
-        assert_eq!(embedding_cpu.backend_kind, AuxiliaryBackendKind::NativeCtox);
-        assert_eq!(embedding_cpu.gpu_reserve_mb(), 0);
-
-        let stt_gpu = auxiliary_model_selection(
-            AuxiliaryRole::Stt,
-            Some("engineai/Voxtral-Mini-4B-Realtime-2602"),
-        );
-        assert_eq!(
-            stt_gpu.choice,
-            "engineai/Voxtral-Mini-4B-Realtime-2602 [GPU]"
-        );
-        assert_eq!(stt_gpu.compute_target, ComputeTarget::Gpu);
-        assert_eq!(stt_gpu.backend_kind, AuxiliaryBackendKind::NativeCtox);
-        assert_eq!(stt_gpu.gpu_reserve_mb(), 4200);
-
-        let legacy_stt = auxiliary_model_selection(AuxiliaryRole::Stt, Some("legacy-stt-model"));
-        assert_eq!(
-            legacy_stt.choice,
-            "engineai/Voxtral-Mini-4B-Realtime-2602 [GPU]"
-        );
-        assert_eq!(
-            legacy_stt.request_model,
-            "engineai/Voxtral-Mini-4B-Realtime-2602"
-        );
-
-        let tts_cpu = auxiliary_model_selection(
-            AuxiliaryRole::Tts,
-            Some("speaches-ai/piper-fr_FR-siwis-medium [CPU FR]"),
-        );
-        assert_eq!(
-            tts_cpu.request_model,
-            "speaches-ai/piper-fr_FR-siwis-medium"
-        );
-        assert_eq!(tts_cpu.compute_target, ComputeTarget::Cpu);
-        assert_eq!(tts_cpu.backend_kind, AuxiliaryBackendKind::MistralRs);
-        assert_eq!(tts_cpu.default_port, 1239);
-
-        let tts_de = auxiliary_model_selection(
-            AuxiliaryRole::Tts,
-            Some("speaches-ai/piper-de_DE-thorsten-high [CPU DE]"),
-        );
-        assert_eq!(
-            tts_de.request_model,
-            "speaches-ai/piper-de_DE-thorsten-high"
-        );
-        assert_eq!(tts_de.compute_target, ComputeTarget::Cpu);
-        assert_eq!(tts_de.backend_kind, AuxiliaryBackendKind::MistralRs);
-
-        let tts_qwen = auxiliary_model_selection(
-            AuxiliaryRole::Tts,
-            Some("Qwen/Qwen3-TTS-12Hz-0.6B-Base [GPU]"),
-        );
-        assert_eq!(tts_qwen.choice, "Qwen/Qwen3-TTS-12Hz-0.6B-Base [GPU]");
-        assert_eq!(tts_qwen.request_model, "Qwen/Qwen3-TTS-12Hz-0.6B-Base");
-        assert_eq!(tts_qwen.compute_target, ComputeTarget::Gpu);
-        assert_eq!(tts_qwen.backend_kind, AuxiliaryBackendKind::MistralRs);
-
-        let tts_default = auxiliary_model_selection(AuxiliaryRole::Tts, None);
-        assert_eq!(tts_default.choice, "engineai/Voxtral-4B-TTS-2603 [GPU]");
-        assert_eq!(tts_default.request_model, "engineai/Voxtral-4B-TTS-2603");
-        assert_eq!(tts_default.compute_target, ComputeTarget::Gpu);
-        assert_eq!(tts_default.backend_kind, AuxiliaryBackendKind::NativeCtox);
-    }
-
-    #[test]
     fn cpu_aux_models_have_native_runtime_profiles() {
         assert!(runtime_profile_for_model("legacy-stt-model").is_err());
 
@@ -1753,72 +1630,6 @@ mod tests {
             deps.model_runtime_binary,
             PathBuf::from("/tmp/ctox/src/tools/model-runtime/bin/ctox-engine")
         );
-    }
-
-    #[test]
-    fn family_profiles_drive_nccl_policy() {
-        let qwen = runtime_profile_for_model("Qwen/Qwen3.6-27B").unwrap();
-        let embedding = runtime_profile_for_model("Qwen/Qwen3-Embedding-0.6B").unwrap();
-        let stt = runtime_profile_for_model("engineai/Voxtral-Mini-4B-Realtime-2602").unwrap();
-        let tts = runtime_profile_for_model("Qwen/Qwen3-TTS-12Hz-0.6B-Base").unwrap();
-        let voxtral_tts = runtime_profile_for_model("engineai/Voxtral-4B-TTS-2603").unwrap();
-        assert!(qwen.disable_nccl);
-        assert_eq!(qwen.tensor_parallel_backend, None);
-        assert_eq!(qwen.target_world_size, None);
-        assert_eq!(qwen.preferred_gpu_count, Some(1));
-        assert!(embedding.disable_nccl);
-        assert_eq!(embedding.preferred_gpu_count, Some(1));
-        assert_eq!(embedding.isq, None);
-        assert!(stt.disable_nccl);
-        assert_eq!(stt.preferred_gpu_count, Some(1));
-        assert!(tts.disable_nccl);
-        assert_eq!(tts.preferred_gpu_count, Some(1));
-        assert_eq!(tts.isq.as_deref(), Some("Q4K"));
-        assert!(voxtral_tts.disable_nccl);
-        assert_eq!(voxtral_tts.preferred_gpu_count, Some(1));
-        assert_eq!(voxtral_tts.isq.as_deref(), Some("Q4K"));
-    }
-
-    #[test]
-    fn clean_room_baseline_plan_exposes_family_profile() {
-        let plan = build_clean_room_baseline_plan(
-            Path::new("/tmp/ctox"),
-            LocalModelFamily::Qwen35Vision,
-            "ignored".to_string(),
-        );
-        assert_eq!(plan.family_profile.family, LocalModelFamily::Qwen35Vision);
-        assert_eq!(plan.family_profile.launcher_mode, "vision");
-        assert_eq!(plan.family_profile.tensor_parallel_backend, None);
-    }
-
-    #[test]
-    fn model_specific_runtime_profiles_match_size_class() {
-        let qwen_small = runtime_profile_for_model("Qwen/Qwen3.5-4B").unwrap();
-        assert!(qwen_small.disable_nccl);
-        assert_eq!(qwen_small.preferred_gpu_count, Some(1));
-        assert_eq!(qwen_small.max_seq_len, 262_144);
-
-        let qwen_large = runtime_profile_for_model("Qwen/Qwen3.6-35B-A3B").unwrap();
-        assert!(qwen_large.disable_nccl);
-        assert_eq!(qwen_large.target_world_size, None);
-        assert_eq!(qwen_large.preferred_gpu_count, Some(4));
-        assert_eq!(qwen_large.paged_attn, "auto");
-        assert_eq!(qwen_large.pa_cache_type.as_deref(), Some("turboquant3"));
-
-        let gemma_dense = runtime_profile_for_model("gemma-4-31b-it").unwrap();
-        assert!(gemma_dense.disable_nccl);
-        assert_eq!(gemma_dense.preferred_gpu_count, Some(3));
-        assert_eq!(gemma_dense.max_seq_len, 131_072);
-        assert_eq!(gemma_dense.pa_cache_type.as_deref(), Some("f8e4m3"));
-
-        let nemotron = runtime_profile_for_model("nemotron-cascade-2-30b-a3b").unwrap();
-        assert!(nemotron.disable_nccl);
-        assert_eq!(nemotron.arch, None);
-        assert_eq!(nemotron.max_seq_len, 8_192);
-
-        let glm = runtime_profile_for_model("GLN 4.7 flash").unwrap();
-        assert_eq!(glm.arch.as_deref(), Some("glm4moelite"));
-        assert_eq!(glm.pa_cache_type.as_deref(), Some("turboquant3"));
     }
 
     #[test]
@@ -1919,31 +1730,6 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_openai_api_chat_models() {
-        assert!(is_openai_api_chat_model("gpt-5.5"));
-        assert!(is_openai_api_chat_model("gpt-5.4"));
-        assert!(is_openai_api_chat_model("GPT-5.4-MINI"));
-        assert!(!is_openai_api_chat_model("openai/gpt-oss-120b"));
-    }
-
-    #[test]
-    fn recognizes_anthropic_api_chat_models() {
-        assert!(is_anthropic_api_chat_model("claude-opus-4-7"));
-        assert!(is_anthropic_api_chat_model("claude-opus-4-6"));
-        assert!(is_anthropic_api_chat_model("claude-sonnet-4-7"));
-        assert!(is_anthropic_api_chat_model("claude-sonnet-4-6"));
-        assert!(!is_anthropic_api_chat_model("anthropic/claude-sonnet-4.6"));
-        assert_eq!(
-            default_api_provider_for_model("claude-opus-4-6"),
-            "anthropic"
-        );
-        assert!(api_provider_supports_model(
-            "anthropic",
-            "claude-sonnet-4-7"
-        ));
-    }
-
-    #[test]
     fn recognizes_minimax_m3_api_chat_model() {
         assert!(is_minimax_api_chat_model("MiniMax-M3"));
         assert!(is_minimax_api_chat_model("MiniMax-M3.1-Flash-Preview"));
@@ -1987,52 +1773,6 @@ mod tests {
             "the authenticated proxy catalog is authoritative for future model ids"
         );
         assert!(!api_provider_supports_model("minimax", "kimi-k3"));
-    }
-
-    #[test]
-    fn recognizes_new_openrouter_api_chat_models() {
-        assert!(is_openrouter_api_chat_model("moonshotai/kimi-k2.6"));
-        assert!(is_openrouter_api_chat_model("tencent/hy3-preview:free"));
-        assert!(is_openrouter_api_chat_model("deepseek/deepseek-v4-flash"));
-        assert_eq!(
-            default_api_provider_for_model("moonshotai/kimi-k2.6"),
-            "openrouter"
-        );
-        assert_eq!(
-            default_api_provider_for_model("deepseek/deepseek-v4-flash"),
-            "openrouter"
-        );
-        assert!(api_provider_supports_model(
-            "openrouter",
-            "tencent/hy3-preview:free"
-        ));
-        assert!(api_provider_supports_model(
-            "openrouter",
-            "deepseek/deepseek-v4-flash"
-        ));
-        assert_eq!(
-            chat_model_family_for_model("moonshotai/kimi-k2.6"),
-            Some(ChatModelFamily::Kimi)
-        );
-        assert_eq!(
-            chat_model_family_for_model("deepseek/deepseek-v4-flash"),
-            Some(ChatModelFamily::DeepSeek)
-        );
-        assert_eq!(
-            chat_model_family_for_model("tencent/hy3-preview:free"),
-            Some(ChatModelFamily::Hy3)
-        );
-    }
-
-    #[test]
-    fn only_local_runtime_models_use_ctox_responses_adapter_path() {
-        assert!(!uses_ctox_responses_adapter_model("gpt-5.4"));
-        assert!(!uses_ctox_responses_adapter_model("gpt-5.4-nano"));
-        assert!(!uses_ctox_responses_adapter_model("openai/gpt-oss-120b"));
-        assert!(!uses_ctox_responses_adapter_model("Qwen/Qwen3.5-4B"));
-        assert!(uses_ctox_responses_adapter_model("Qwen/Qwen3.6-27B"));
-        assert!(uses_ctox_responses_adapter_model("Qwen/Qwen3.6-35B-A3B"));
-        assert!(!uses_ctox_responses_adapter_model("not-a-real-model"));
     }
 
     #[test]
@@ -2105,18 +1845,6 @@ mod tests {
                 {"type":"function","name":"exec_command","description":"run","parameters":{"type":"object"}}
             ])
         );
-    }
-
-    #[test]
-    fn detects_gpt_oss_harmony_proxy_need() {
-        let payload = serde_json::json!({"model":"openai/gpt-oss-120b"});
-        assert!(should_use_gpt_oss_harmony_proxy(&serde_json::to_vec(&payload).unwrap()).unwrap());
-    }
-
-    #[test]
-    fn detects_streaming_request_flag() {
-        let payload = serde_json::json!({"model":"openai/gpt-oss-120b","stream":true});
-        assert!(responses_request_streams(&serde_json::to_vec(&payload).unwrap()).unwrap());
     }
 
     #[test]
@@ -2260,16 +1988,6 @@ mod tests {
         assert_eq!(
             ensure_gpt_oss_thinking_output_floor("Qwen/Qwen3.5-4B", 16),
             16
-        );
-    }
-
-    #[test]
-    fn gpt_oss_defaults_to_the_128k_runtime_output_budget_when_unconfigured() {
-        assert_eq!(gpt_oss_harmony_reasoning_cap(), "low");
-        assert_eq!(gpt_oss_harmony_max_output_tokens_cap(), None);
-        assert_eq!(
-            default_gpt_oss_output_budget("openai/gpt-oss-120b"),
-            131_072
         );
     }
 

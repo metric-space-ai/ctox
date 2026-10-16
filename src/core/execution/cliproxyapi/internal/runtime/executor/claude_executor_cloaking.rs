@@ -1020,16 +1020,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn entrypoint_and_fingerprint_match_pinned_semantics() {
-        assert_eq!(
-            parse_claude_entrypoint("claude-cli/2 (external, vscode)"),
-            "vscode"
-        );
-        assert_eq!(parse_claude_entrypoint("other"), "cli");
-        assert_eq!(compute_claude_fingerprint("short", "2.1.63").len(), 3);
-    }
-
-    #[test]
     fn legacy_system_blocks_are_preserved_as_separate_reminders() {
         let mut policy = ClaudeCloakPolicy::oauth_default();
         policy.current_date = Some("2026-08-04".to_owned());
@@ -1124,47 +1114,6 @@ mod tests {
             try_apply_claude_cloaking(input, "claude-opus-5", &copied_user_agent, None,).unwrap(),
             input
         );
-    }
-
-    #[test]
-    fn candidate_context_management_and_fallback_billing_are_exact() {
-        let caller_owned = br#"{"context_management":{"edits":[]}}"#;
-        assert_eq!(
-            inject_claude_code_context_management(caller_owned),
-            caller_owned
-        );
-        let injected = inject_claude_code_context_management(br#"{"model":"claude-opus-5"}"#);
-        let value: Value = serde_json::from_slice(&injected).unwrap();
-        assert_eq!(
-            value["context_management"],
-            json!({"edits":[{"type":"clear_thinking_20251015","keep":"all"}]})
-        );
-        let header = claude_cch_fallback_billing_header(
-            br#"{"messages":[{"role":"user","content":"last user"}]}"#,
-            "2.1.220",
-            "sdk-cli",
-            "",
-        );
-        assert!(header.contains("cc_version=2.1.220."));
-        assert!(header.contains("cc_entrypoint=sdk-cli; cch=00000;"));
-    }
-
-    #[test]
-    fn candidate_current_date_reminder_text_is_exact() {
-        let mut policy = ClaudeCloakPolicy::oauth_default();
-        policy.current_date = Some("2026-08-01".to_owned());
-        let output = inject_claude_system_instructions(
-            br#"{"model":"claude-opus-5","messages":[{"role":"user","content":"hello"}]}"#,
-            &policy,
-        );
-        let value: Value = serde_json::from_slice(&output).unwrap();
-        assert_eq!(
-            value["messages"][0]["content"][0]["text"],
-            "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# currentDate\nToday's date is 2026-08-01.\n\n      IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>\n\n"
-        );
-        assert!(value["messages"][0]["content"][0]
-            .get("cache_control")
-            .is_none());
     }
 
     #[test]

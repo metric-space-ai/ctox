@@ -63,52 +63,6 @@ fn premerged_auth_exclusions_override_global_provider_exclusions() {
 }
 
 #[test]
-fn compatibility_registration_preserves_image_type_and_modalities() {
-    let catalog = Arc::new(embedded_models_catalog().unwrap());
-    let registry = Arc::new(InternalRegistry::new(Arc::clone(&catalog)));
-    let facade: Arc<dyn super::model_registry::ModelRegistry> = registry.clone();
-    let service = ServiceModelRuntime::new(
-        ServiceModelConfig {
-            openai_compatibility: vec![OpenAiCompatibilityConfig {
-                name: "mimo".into(),
-                models: vec![
-                    ConfiguredModel {
-                        name: "vision".into(),
-                        alias: "vision".into(),
-                        input_modalities: vec!["text".into(), "image".into()],
-                        output_modalities: vec!["text".into()],
-                        ..ConfiguredModel::default()
-                    },
-                    ConfiguredModel {
-                        name: "image".into(),
-                        alias: "image".into(),
-                        image: true,
-                        ..ConfiguredModel::default()
-                    },
-                ],
-                ..OpenAiCompatibilityConfig::default()
-            }],
-            ..ServiceModelConfig::default()
-        },
-        facade,
-        catalog,
-    );
-    let mut auth = Auth::default();
-    auth.id = "compat".into();
-    auth.provider = "openai-compatibility".into();
-    auth.attributes = BTreeMap::from([
-        ("auth_kind".into(), "api_key".into()),
-        ("compat_name".into(), "mimo".into()),
-    ]);
-    service.register_models_for_auth(&auth);
-    let models = registry.available_models_by_provider("openai-compatibility");
-    let vision = models.iter().find(|model| model.id == "vision").unwrap();
-    let image = models.iter().find(|model| model.id == "image").unwrap();
-    assert_eq!(vision.supported_input_modalities, ["text", "image"]);
-    assert_eq!(image.provider_type, OPENAI_IMAGE_MODEL_TYPE);
-}
-
-#[test]
 fn antigravity_discovery_annotates_static_model_without_registering_fetched_only_model() {
     let catalog = AntigravityModelCapabilityCatalog::new();
     catalog

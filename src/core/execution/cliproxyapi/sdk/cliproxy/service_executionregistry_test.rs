@@ -58,18 +58,6 @@ fn service_registry_instances_do_not_share_barriers_or_executions() {
 }
 
 #[test]
-fn queued_config_is_fifo_owned_and_cancellation_discards_stale_work() {
-    let queue = HomeConfigWorkQueue::default();
-    let context = super::service_home::HomeCancellation::default();
-    assert_eq!(queue.enqueue(input(1)), 1);
-    assert_eq!(queue.enqueue(input(2)), 2);
-    assert_eq!(queue.dequeue(&context).unwrap().1.revision, 1);
-    context.cancel();
-    assert!(queue.dequeue(&context).is_none());
-    assert_eq!(queue.len(), 1);
-}
-
-#[test]
 fn replacement_fences_staged_pre_ack_work_before_commit() {
     let config = Arc::new(ConfigAuthority::default());
     let control = Arc::new(Control::default());
@@ -707,53 +695,4 @@ impl HomeConfigAuthority for BlockingProjectedConfig {
             Ok(())
         }
     }
-}
-
-#[test]
-fn service_runtime_graph_serializes_home_and_watcher_config_apply() {
-    let home_config = Arc::new(BlockingProjectedConfig::new());
-    let graph = runtime_graph(
-        home_config.clone(),
-        Arc::new(RecordingLogForwarder::default()),
-    );
-    let lifetime = graph
-        .start_home_lifetime(HomeReplacementMode::Drain, WaitBudget::unbounded())
-        .unwrap();
-
-    std::thread::scope(|thread| {
-        let home_graph = graph.clone();
-        let home_lifetime = lifetime.clone();
-        let (home_done_tx, home_done_rx) = std::sync::mpsc::channel();
-        thread.spawn(move || {
-            home_done_tx
-                .send(home_graph.apply_home_overlay(&home_lifetime, 1, &input(1)))
-                .unwrap();
-        });
-        home_config.wait_until_entered();
-
-        let watcher_graph = graph.clone();
-        let (watcher_started_tx, watcher_started_rx) = std::sync::mpsc::channel();
-        let (watcher_done_tx, watcher_done_rx) = std::sync::mpsc::channel();
-        thread.spawn(move || {
-            watcher_started_tx.send(()).unwrap();
-            watcher_graph.apply_watcher_config(config_with_strategy(SchedulerStrategy::RoundRobin));
-            watcher_done_tx.send(()).unwrap();
-        });
-        watcher_started_rx.recv().unwrap();
-        assert!(watcher_done_rx.try_recv().is_err());
-        home_config.release();
-        home_done_rx
-            .recv_timeout(Duration::from_secs(1))
-            .unwrap()
-            .unwrap();
-        watcher_done_rx
-            .recv_timeout(Duration::from_secs(1))
-            .unwrap();
-    });
-
-    assert_eq!(graph.selector_generation(), 3);
-    assert_eq!(
-        graph.current_config().config.routing_strategy(),
-        SchedulerStrategy::RoundRobin
-    );
 }

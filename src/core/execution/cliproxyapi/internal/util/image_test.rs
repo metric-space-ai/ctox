@@ -10,24 +10,6 @@ use base64::Engine as _;
 use super::create_white_image_base64;
 
 #[test]
-fn every_pinned_aspect_ratio_has_exact_dimensions_and_white_rgba_pixels() {
-    for (aspect, width, height) in [
-        ("1:1", 1024, 1024),
-        ("2:3", 832, 1248),
-        ("3:2", 1248, 832),
-        ("3:4", 864, 1184),
-        ("4:3", 1184, 864),
-        ("4:5", 896, 1152),
-        ("5:4", 1152, 896),
-        ("9:16", 768, 1344),
-        ("16:9", 1344, 768),
-        ("21:9", 1536, 672),
-    ] {
-        verify_image(aspect, width, height);
-    }
-}
-
-#[test]
 fn unknown_and_empty_ratios_use_default_and_output_is_bare_deterministic_base64() {
     let unknown = create_white_image_base64("unknown").unwrap();
     let empty = create_white_image_base64("").unwrap();

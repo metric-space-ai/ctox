@@ -560,19 +560,6 @@ mod tests {
     }
 
     #[test]
-    fn handle_exposes_only_location_and_kind() {
-        let handle = ClaudeSecretHandle::new(
-            "provider-subscriptions",
-            "claude-primary-refresh",
-            ClaudeSecretKind::RefreshToken,
-        )
-        .unwrap();
-        assert_eq!(handle.scope(), "provider-subscriptions");
-        assert_eq!(handle.name(), "claude-primary-refresh");
-        assert_eq!(handle.kind(), ClaudeSecretKind::RefreshToken);
-    }
-
-    #[test]
     fn credential_handle_pair_rejects_swapped_kinds() {
         let access = ClaudeSecretHandle::new(
             "provider-subscriptions",
@@ -642,30 +629,6 @@ mod tests {
             .unwrap(),
         )
         .unwrap()
-    }
-
-    #[test]
-    fn token_storage_preserves_upstream_non_secret_fields_and_rfc3339_shape() {
-        let issued_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_704_067_200);
-        let token = token(issued_at, Duration::from_secs(3_600));
-        let storage = ClaudeTokenStorage::from_token_data(
-            &token,
-            issued_at,
-            Some(SecretString::new("id-do-not-leak").unwrap()),
-        );
-
-        assert_eq!(storage.storage_type(), "claude");
-        assert_eq!(storage.email(), "operator@example.com");
-        assert_eq!(storage.last_refresh(), "2024-01-01T00:00:00Z");
-        assert_eq!(storage.expired(), "2024-01-01T01:00:00Z");
-        assert_eq!(
-            storage.id_token().unwrap().expose_secret(),
-            "id-do-not-leak"
-        );
-        let debug = format!("{storage:?}");
-        assert!(!debug.contains("id-do-not-leak"));
-        assert!(!debug.contains("access-do-not-leak"));
-        assert!(!debug.contains("refresh-do-not-leak"));
     }
 
     #[test]

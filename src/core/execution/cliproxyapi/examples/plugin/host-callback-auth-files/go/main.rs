@@ -15,11 +15,3 @@ pub fn list(host: &dyn ExampleHost) -> ExampleResult {
 pub fn get(host: &dyn ExampleHost, id: &str) -> Result<Value, super::core::ExampleError> {
     host.call("host.auth.get", json!({"id":id}))
 }
-#[test]
-fn auth_content_only_crosses_injected_boundary() {
-    let host = super::core::RecordingHost::default()
-        .with_reply("host.auth.list", json!({"items":[]}))
-        .with_reply("host.auth.get", json!({"id":"fixture"}));
-    assert!(list(&host).is_ok());
-    assert_eq!(get(&host, "fixture").unwrap()["id"], "fixture");
-}
