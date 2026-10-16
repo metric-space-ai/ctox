@@ -402,18 +402,15 @@ pub(crate) fn run_core_blocking<T: Send + 'static>(
     let admission = sync_slots()
         .try_acquire_owned()
         .map_err(|_| ctox_store::StoreError::Busy)?;
-    // Keep the compatibility body on an ordinary OS thread: legacy CLI
-    // commands may drive async owner APIs themselves. Entering a Tokio worker
-    // here would make their block_on/runtime shutdown panic. SQLite still runs
-    // only on the handed-out writer/read pool, and these jobs share four slots.
-    std::thread::Builder::new()
-        .name("ctox-core-blocking".into())
-        .spawn(move || {
-            let _admission = admission;
-            with_core_sync_context(operation)
-        })?
-        .join()
-        .map_err(|_| CoreSyncError::WorkerClosed)?
+    // Reuse the handed-out runtime's blocking executor. Native adapters need
+    // its reactor context even while their caller is an ordinary HTTP/CLI thread.
+    let (reply, result) = std::sync::mpsc::sync_channel(1);
+    runtime.spawn_blocking(move || {
+        let _admission = admission;
+        let value = with_core_sync_context(operation);
+        let _ = reply.send(value);
+    });
+    result.recv().map_err(|_| CoreSyncError::WorkerClosed)?
 }
 
 /// Uses only the Core handle installed for this root. Missing/retired owners

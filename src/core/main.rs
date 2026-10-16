@@ -601,7 +601,9 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 | "source-status"
         )
     );
-    if owns_lifecycle || stateless {
+    let coding_models_ipc = matches!(command, Some("coding-agent" | "coding-agents"))
+        && coding_agents::coding_models_cli_args_are_valid(&args[1..]);
+    if owns_lifecycle || stateless || coding_models_ipc {
         return dispatch_owned_command(root, args);
     }
     let work = root.to_owned();

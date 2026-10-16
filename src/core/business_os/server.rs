@@ -4374,6 +4374,7 @@ fn mime_for(path: &PathBuf) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn guard_prod_foreground_http_bootstrap_and_restart_identity() -> anyhow::Result<()> {
         use crate::service::store_startup::{isolate_test_roots, Foreground};
@@ -4394,6 +4395,13 @@ mod tests {
         )?;
         let mut foreground =
             Foreground::start(root.clone(), tokio::runtime::Handle::current()).await?;
+        // Use the normal shell startup path before invoking HTTP handlers. It
+        // initializes/verifies the persisted shell state used by the catalog.
+        let bootstrap_root = root.clone();
+        let app = crate::persistence::run_core_sync(move || {
+            resolve_business_os_app_root(&bootstrap_root)
+        })
+        .await?;
         let first_root = root.clone();
         let first = crate::persistence::run_core_sync(move || {
             Ok(crate::sync_host::signing_identity(&first_root)?.public_identity())
