@@ -749,6 +749,7 @@ export function createKernel(opts = {}) {
     try {
       do {
         pumpAgain = false;
+        // E47/#905: push progress is the durable outbox/client_seq, independent of every pull cursor.
         const entries = await db.tx(async t => { await assertGen(t); return reserveWrites(t); });
         for (const e of entries) if (e.client_seq != null) reservedOps.add(e.op_id);
         // P8's bounded gap buffer holds 64 positions. A blocked document head
