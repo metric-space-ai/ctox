@@ -1082,6 +1082,13 @@ export function scanUiCommandTypes(rootDir, rels) {
           if (w === d.name) continue;
           for (const m of d.body.matchAll(callRe(w))) inner.push(argAt(d.body, m.index + m[0].length - 1, spec));
         }
+        // Lokaler Alias im Rumpf: const type = command.type || command.command_type; api.command(type, …)
+        // (z. B. knowledge dispatchKnowledgeCommand) – die Alternativen zählen wie direkte Feldzugriffe.
+        for (const e of [...inner]) {
+          if (!/^[A-Za-z_$][\w$]*$/.test(String(e))) continue;
+          const alias = d.body.match(new RegExp(`\\b(?:const|let|var)\\s+${escapeRe(e)}\\s*=\\s*([^;\\n]+)`));
+          if (alias) for (const alt of alias[1].split(/\|\||\?\?/)) inner.push(alt.trim());
+        }
         let spec = null;
         d.params.forEach((p, k) => {
           if (spec || !p) return;
