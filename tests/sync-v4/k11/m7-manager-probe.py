@@ -16,9 +16,9 @@ import time
 
 def setup(config, delegated=False):
     c = json.loads(Path(config).read_text())
-    assert os.getuid() == 0 and c['uid'] > 0
+    assert os.getuid() == 0 and (c['uid'] > 0 or c.get('mappedUser'))
     for kind, old in c['host'].items():
-        if kind == 'cgroup':
+        if kind == 'cgroup' or (kind == 'user' and not c.get('mappedUser')):
             continue
         assert os.readlink('/proc/self/ns/' + kind) != old
     run = lambda *args: subprocess.run(args, check=True)
@@ -52,6 +52,7 @@ def setup(config, delegated=False):
                 receipt.write_text(json.dumps(result, indent=2))
         return
     run('mount', '-t', 'tmpfs', '-o', 'mode=755,size=32m', 'tmpfs', '/run')
+    run('mount', '-t', 'tmpfs', '-o', 'mode=1777,size=256m', 'tmpfs', '/dev/shm')
     run('mount', '--bind', c['privateCgroup'], '/sys/fs/cgroup')
     run('ip', 'link', 'set', 'lo', 'up')
     assert Path('/proc/self/cgroup').read_text().strip() == '0::/'
@@ -70,9 +71,10 @@ def setup(config, delegated=False):
     nss = out / 'nss'
     nss.mkdir(mode=0o700)
     entries = {
-        'passwd': 'root:x:0:0:root:/nonexistent-m7-root:/usr/sbin/nologin\n'
-                  + f"m7-fixture:x:{c['uid']}:{c['gid']}:M7 fixture:{home}:/bin/sh\n",
-        'group': 'root:x:0:\n' + f"m7-fixture:x:{c['gid']}:m7-fixture\n",
+        'passwd': (f'root:x:0:0:M7 fixture:{home}:/bin/sh\n' if c.get('mappedUser') else
+                   'root:x:0:0:root:/nonexistent-m7-root:/usr/sbin/nologin\n'
+                   + f"m7-fixture:x:{c['uid']}:{c['gid']}:M7 fixture:{home}:/bin/sh\n"),
+        'group': 'root:x:0:\n' + ('' if c.get('mappedUser') else f"m7-fixture:x:{c['gid']}:m7-fixture\n"),
         'nsswitch.conf': 'passwd: files\ngroup: files\nshadow: files\nhosts: files dns\nnetworks: files\nservices: files\nprotocols: files\n',
     }
     for name, content in entries.items():
@@ -87,7 +89,7 @@ def setup(config, delegated=False):
            'XDG_CONFIG_HOME': str(home / '.config'), 'XDG_CACHE_HOME': str(home / '.cache'),
            'TMPDIR': c.get('tmpdir', '/run'), 'BUILD_LANE_BIN': c.get('laneBin', ''),
            'LANG': 'C.UTF-8'}
-    prefix = ['setpriv', '--reuid=' + str(c['uid']), '--regid=' + str(c['gid']), '--init-groups']
+    prefix = [] if c.get('mappedUser') else ['setpriv', '--reuid=' + str(c['uid']), '--regid=' + str(c['gid']), '--init-groups']
     children = []
     def spawn(name, command):
         with (out / (name + '.log')).open('w') as log:
@@ -117,7 +119,7 @@ def setup(config, delegated=False):
         if c.get('runner'):
             if not result['pass']:
                 raise RuntimeError('Real isolated user manager is unavailable')
-            c['proof'] = {'host': c['host'], 'runtimeMasked': True,
+            c['proof'] = {'host': c['host'], 'runtimeMasked': True, 'mappedUser': c.get('mappedUser', False),
                           'namespaces': {n: os.readlink('/proc/self/ns/' + n) for n in ('net', 'mnt', 'pid', 'cgroup')},
                           'serviceManager': {'runtime': str(runtime), 'bus': env['DBUS_SESSION_BUS_ADDRESS'],
                                              'privateCgroup': c['privateCgroup'], 'managerPid': manager.pid}}

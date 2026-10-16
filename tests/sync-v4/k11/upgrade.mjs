@@ -20,7 +20,7 @@ export function requireSandbox(proof){
  if(fs.existsSync('/run/user/'+process.getuid()+'/bus')){
   if(!proof.serviceManager||proof.namespaces.cgroup===proof.host.cgroup||proof.serviceManager.runtime!=='/run/user/'+process.getuid())throw Error('Only the real private service-manager bus is permitted');
  }
- if(process.getuid()===0)throw Error('Installer runs as the fixture owner, not root');
+ if(process.getuid()===0&&(!proof.mappedUser||!proof.host.user||proof.host.user===fs.readlinkSync('/proc/self/ns/user')))throw Error('Host root installer is forbidden; mapped own UID requires a private user namespace');
 }
 export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,roundtrip=false,resumeRolledBack=false}){
  requireSandbox(proof);if(!tmpdir||!fs.statSync(tmpdir).isDirectory())throw Error('Canonical lane TMPDIR required');const {before,after}=verifiedUpgrade(oldReceipt,newReceipt,root);

@@ -121,8 +121,10 @@ def main():
         assert allowed in profile.parents, 'Only the private lane fixture is permitted'
         marker = json.loads((profile/'.sync-v4-e2e.json').read_text())
         assert marker.get('owner') == OWNER and marker.get('synthetic') is True, 'No customer profile or protected files'
-        criterion('frozen-welsch-coverage', 'not_run', 'ctox sync v4 / phase1',
-                  reason='Provided profile is the owned synthetic V3 fixture, not a frozen WELSCH snapshot')
+        criterion('synthetic-v3-profile-custody', 'pass', 'DevOps',
+                  reason='Controller selected the owned synthetic V3 fixture for this rehearsal; the real E29 freeze remains in the Saturday window')
+        criterion('frozen-welsch-coverage', 'not_run', 'ctox sync v4 / Saturday freeze',
+                  reason='E29.7/E29.8 on WELSCH are planned for the authorized Saturday freeze, never fabricated from this synthetic fixture')
         snapshot = out/'snapshot-before'
         code = run('sqlite-api-snapshot', ['python3', HERE/'m7-backup.py', 'snapshot', '--root', profile, '--output', snapshot], 180)
         assert code == 0, 'Private snapshot failed'
@@ -172,6 +174,10 @@ def main():
                     identity = component/'runtime/business-os-instance-id'
                     start.update(ready=ready,readyMs=(time.monotonic()-at)*1000,
                                  instanceId=identity.read_text().strip() if identity.exists() else None)
+                    if ready:
+                        custody='open-databases-'+str(attempt)
+                        start['openDatabaseExit']=run(custody,['python3',HERE/'m7-freeze.py',
+                            '--pid',child.pid,'--root',component,'--output',out/(custody+'.json')],10,env)
                 finally:
                     try:
                         os.killpg(child.pid,signal.SIGTERM)
@@ -233,7 +239,7 @@ def main():
             ('cutover-coverage','phase1','No cutover-coverage.json custody supplied for frozen WELSCH data.'),
             ('instance-key-restart','Architecture CUTOVER-4','Requires installed foreground public-identity witness; unit/library evidence is not relabeled.'),
             ('installed-get-root-p99','DevOps','Requires the completed installed foreground and its actual signed slot.'),
-            ('app-hot-plug','Harness #868','Requires installed V4 runtime and real browser binding; fake core is not acceptance.'),
+            ('app-hot-plug','Architecture / Shell v4','#868 is in this candidate. The real native session and browser binding still require installed-profile qualification; fake core is not acceptance.'),
             ('kernel-transport','Kernel #820 / ctox sync v4','PR #820 is open; ordered browser transport is not in the frozen integration candidate.'),
             ('workjet-project-list','Shell v4 / Workjet','not_run(shell-slot): no signed V4 artifact from main supplied.'),
             ('rights-authority','Architecture CUTOVER-5','Final productive rights/fence attachment not qualified in this candidate.'),

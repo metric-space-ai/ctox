@@ -24,6 +24,12 @@ readback guard to reject that loss before restoring the copy.
 `upgrade-controller.mjs` creates a private PID/mount/network namespace and a
 real isolated user service manager. It never substitutes a successful
 `systemctl`, uses the host service bus, or bypasses failed namespace admission.
+The default entry is unprivileged `unshare --user --map-root-user` with private
+net/mount/PID namespaces. Mapped root is the caller's single host UID, not host
+root. `m7-namespace-qualify.py` separately measures isolation (including removing
+`--net` as a negative control) and real manager/cgroup admission. Only the
+explicitly authorized gpu4 installer step may select
+`M7_NAMESPACE_MODE=privileged`; an unavailable manager remains a failure.
 The current installed image executes recovery; the historical producer must
 not keep running the old rollback implementation after a release switch.
 
@@ -59,3 +65,20 @@ SQLite-only profile copy is not booted as a complete sealed-state restoration.
 An authorized frozen profile, productive import/coverage path, ordered V4
 transport and signed V4 slot must be supplied before the full rehearsal can
 pass. The production `upgrade --dev` path remains main-only.
+
+## Freeze custody and K24 readers
+
+`m7-freeze.py --pid PID --root ROOT --output JSON` captures the live private
+owner's open SQLite paths, PID/start ticks and only the three root configuration
+variables. After quiesce, `m7-backup.py snapshot` records every table's row count,
+schema hash and a content hash computed via SQLite on the snapshot (E29.7/8).
+Never hash/copy a live database file or dump the full environment.
+
+`../k24/core-adapter.py query --root ROOT --database DB` implements `K24_QUERY`
+`core-view|audit`, `K24_APP=k24-probe` and optional `K24_RECORD=cmd:...` using one
+read-only SQLite snapshot. Missing collection/audit bindings are errors, never
+browser or fake-core results. `fingerprint --root ROOT --pid PID --config JSON`
+fingerprints the actual running executable, enumerated private public config
+files and stable PID/start identity. No dynamic measurement timestamp is added;
+before/after can be compared bytewise. Protected app files and key stores are
+never opened. Criterion 8 remains `not_run(T4-welsch)`.
