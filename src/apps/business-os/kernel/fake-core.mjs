@@ -148,7 +148,8 @@ export class MemoryCoreTransport extends KernelTransport {
     if (!this.online || this.closed) throw new CtoxError('unavailable', 'Test core offline');
     const previous = this.core.ops.get(entry.op_id); if (previous) return cloneValue(previous);
     const old = this.core.docs.get(this.key(entry.collection,entry.id));
-    let result = this.reject.length ? { status:'rejected', reason:this.reject.shift() } : null;
+    const rejection = this.reject.shift();
+    let result = rejection === undefined ? null : {status:'rejected', ...(typeof rejection === 'object' ? rejection : {reason:rejection})};
     // K-WJ-B2 (E27.2): Befehlstyp ohne veröffentlichte Route → beim Schreiben abgelehnt, nie erst accepted und später failed
     if (!result && entry.collection === 'business_commands' && entry.op === 'put' && entry.body?.status === 'queued' && !(old?.data && !old.deleted) && !this.commandRouteKnown(entry.body)) {
       result = { status: 'rejected', code: 'unknown_command', reason: `unknown_command:${entry.body.type}` };
@@ -157,6 +158,7 @@ export class MemoryCoreTransport extends KernelTransport {
       const code = this.core.runtime.checkWrite(this.currentUser, entry, old);
       if (code) result = typeof code === 'object' ? { status: 'rejected', code: code.code, reason: code.reason } : { status: 'rejected', reason: code };
     }
+    if (!result && entry.expected_revision !== undefined && entry.expected_revision !== old?.rev) result={status:'rejected',code:'revision_conflict',reason:'Expected revision differs from current revision'};
     if (!result && entry.op === 'patch' && (!old || old.deleted)) result={status:'rejected',reason:'not_found'};
     // Doppelter Befehl (gleiche id, neue op): geänderte Absicht → idempotency_conflict; gleiche Absicht → angenommen ohne Rückschritt
     let duplicateCommand = false;

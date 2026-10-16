@@ -25,7 +25,7 @@ test('CAP-3b App-API: files.put(bytes|{text}, {name, mime}) → {id, ref}; get c
   await k.sim.publishAppVersion('hr', '1', { files: { 'index.js': MOUNT } });
   const crm = k.appApi('crm', '1'), hr = k.appApi('hr', '1');
   const a = await crm.files.put({ text: 'hallo' }, { name: 'a.txt', mime: 'text/plain' });
-  assert.deepEqual(Object.keys(a).sort(), ['id', 'ref']);
+  assert.deepEqual(Object.keys(a).sort(), ['done', 'id', 'ref']);
   assert.equal(a.ref, sha('hallo'));
   const bin = await crm.files.put(Uint8Array.from([0xff, 0xfe, 0x00]), { name: 'b.bin' });
   const ga = await crm.files.get({ ref: a.ref });
