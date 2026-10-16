@@ -1,3 +1,4 @@
+import { applyPaneIconLabels } from '../../shared/pane-icon-labels.js';
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { renderHtmlIfChanged } from '../../shared/stable-dom.js';
 import { collectUniquePages } from './paging.js';
@@ -9,6 +10,37 @@ import {
   buildThreadsCommand,
   splitUserIds,
 } from './commands.js';
+
+// Lesbare Betreffzeile statt roher IDs (workjet#801): UUIDs und Befehls-IDs wie
+// `cmd_ctox_queue_retry_f89eb202-…` sind keine Titel.
+const RAW_ID_TITLE = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(?:cmd|task|thread|thr|msg|req|apr)_[a-z0-9_]*[0-9a-f]{6,}[0-9a-f-]*)$/i;
+export function looksLikeRawId(value) {
+  return RAW_ID_TITLE.test(String(value || '').trim());
+}
+const RAW_ID_KIND_LABELS = {
+  de: { queue_retry: 'Erneuter Versuch eines Auftrags', approval: 'Freigabe', ctox: 'CTOX-Vorgang', default: 'Abstimmung' },
+  en: { queue_retry: 'Task retry', approval: 'Approval', ctox: 'CTOX item', default: 'Thread' },
+};
+function threadsLang() {
+  return state?.ctx?.locale === 'en' ? 'en' : 'de';
+}
+export function threadDisplayTitle(thread, lang = 'de') {
+  const title = String(thread?.title || '').trim();
+  if (title && !looksLikeRawId(title)) return title;
+  const label = String(thread?.source_label || '').trim();
+  if (label && !looksLikeRawId(label)) return label;
+  const words = RAW_ID_KIND_LABELS[lang === 'en' ? 'en' : 'de'];
+  const raw = `${title} ${thread?.kind || ''} ${thread?.source_module || ''}`.toLowerCase();
+  const kind = raw.includes('queue_retry') ? words.queue_retry
+    : raw.includes('approval') ? words.approval
+    : raw.includes('ctox') ? words.ctox
+    : words.default;
+  const at = Number(thread?.updated_at_ms || thread?.created_at_ms || 0);
+  if (!at) return kind;
+  const when = new Date(at).toLocaleString(lang === 'en' ? 'en-GB' : 'de-DE', { dateStyle: 'short', timeStyle: 'short' });
+  return `${kind} · ${when}`;
+}
+
 
 const THREAD_LIST_LIMIT = 200;
 const APPROVAL_LIST_LIMIT = 200;
@@ -103,6 +135,7 @@ export async function mount(ctx) {
 
   bindElements(ctx.host);
   applyLabels();
+  applyPaneIconLabels(ctx.host, ctx.locale === 'en' ? 'en' : 'de');
   wireUi();
   const onAppLaunch = (event) => {
     const args = event?.detail?.args || {};
@@ -1335,7 +1368,7 @@ function renderList(threads, { resetScroll = false } = {}) {
         data-thread-id="${escapeAttr(thread.id)}"
         data-context-record-id="${escapeAttr(thread.source_record_id || thread.id)}"
         data-context-record-type="thread"
-        data-context-label="${escapeAttr(thread.title || '')}"
+        data-context-label="${escapeAttr(threadDisplayTitle(thread, threadsLang()))}"
         aria-selected="false">
         <span class="threads-item-anchor" aria-hidden="true">
           <span class="threads-item-dot"></span>
@@ -1343,7 +1376,7 @@ function renderList(threads, { resetScroll = false } = {}) {
         </span>
         <span class="threads-item-main">
           <span class="threads-item-top">
-            <span class="threads-list-title" title="${escapeHtml(thread.title || thread.id)}">${escapeHtml(thread.title || thread.id)}</span>
+            <span class="threads-list-title" title="${escapeHtml(threadDisplayTitle(thread, threadsLang()))}">${escapeHtml(threadDisplayTitle(thread, threadsLang()))}</span>
             <time class="threads-item-time">${escapeHtml(relativeTime(thread.last_message_at_ms || thread.updated_at_ms))}</time>
           </span>
           <span class="threads-list-meta">${why ? `<b class="threads-attention">${escapeHtml(why)}</b>` : ''}${meta ? `<span class="threads-meta-facts">${escapeHtml(meta)}</span>` : ''}</span>
@@ -1416,7 +1449,7 @@ function renderDetail() {
     return;
   }
   if (els.messageBody) els.messageBody.disabled = false;
-  if (els.title) els.title.textContent = thread.title || thread.id;
+  if (els.title) els.title.textContent = threadDisplayTitle(thread, threadsLang());
   if (els.source) {
     els.source.textContent = contextLabel(thread);
     const sourceLink = sourceDeepLinkFor(thread);
@@ -1984,7 +2017,7 @@ function selectedSourceContext() {
     module: thread.source_module || 'threads',
     record_type: thread.source_record_type || 'thread',
     record_id: thread.source_record_id || thread.id,
-    label: thread.source_label || thread.title || thread.id,
+    label: threadDisplayTitle(thread, threadsLang()),
     deep_link: thread.source_deep_link || link?.deep_link || '',
   };
 }
