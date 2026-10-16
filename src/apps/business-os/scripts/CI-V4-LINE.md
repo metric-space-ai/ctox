@@ -69,3 +69,23 @@ removed; K-M8 non-ported stale desktop_app `ghost-app` in the inventory; K-M9 ti
 `ctox_crew_members` (R2).
 Note: `check-isolation.mjs` without `--rule` is red before and after this change (R1 6, R3 80, R4 149 findings) —
 those are v4-only rules without a V2 counterpart, not part of this gate.
+
+## 3. `assert-command-consumer-inventory.mjs` → `assert-command-consumer-inventory.v4.mjs`
+
+| # | V2 invariant | v4 |
+|---|---|---|
+| C1 | dispatch_consumers: exact inventory of files dispatching commands (`commandBus.dispatch`) | checked as two frozen inventories in the script: (a) V2 bus regex — 13 files (app.js, office bridge, shared/{app-actions,business-chat,react-settings,universal-importer}, v4/shell/workjet/* = v2-compat debt L-42); (b) v4 path `api.command(` — 43 files; every app file needs a v4 manifest |
+| C2 | projection_readers: exact inventory of `business_commands` readers | checked: V2 regex ∪ `api.query/get/subscribe/watch/find/findOne('business_commands')` — 20 files; every app reader must declare `business_commands` in its v4 manifest (collections or foreign_collections read) |
+| C3 | legacy_projection_waiters = [] | checked unchanged |
+| C4 | direct_intent_writers = [] | checked: V2 regex ∪ `api.put/insert/upsert('business_commands')` |
+
+Scan scope = V2 scope plus exclusions for test/tooling locations: `node_modules/`, `*/tests/`, `*/fixtures/`
+(e.g. `v4/tools/guards/fixtures/tree/**`, `modules/mail/tests/mail-browser-qa.v4.mjs`), `kernel/testkit/`, `v4/tools/`.
+4 invariants: 4 checked in v4, 0 NO_V4.
+Counter-checks (each → exit 1): K-C1a `commandBus.dispatch` added to news; K-C1b `api.command` added to
+shared/crew-presence.js; K-C1c tickets stops dispatching (missing); K-C2a news reads `business_commands`;
+K-C2b importer manifest no longer declares `business_commands`; K-C3 `function waitForCommandProjection(`;
+K-C4a `api.put('business_commands')` in news; K-C4b `db.business_commands.insert(` in shared.
+Observation (not a gate failure, same as V2 semantics): `modules/credentials/index.js:521` modifies an existing
+command document with `api.patch('business_commands', …)` (local redaction, V4-PORT OFFEN-2); declared in its manifest
+with ops read+write. V2 never treated modification as an intent write either.
