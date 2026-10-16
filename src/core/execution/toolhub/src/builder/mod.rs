@@ -162,6 +162,15 @@ pub fn risk_str(r: Risk) -> &'static str {
     }
 }
 
+/// File stem for a host gate id. Host ids look like `self-work:internal:<hex>`;
+/// `:` is not file-safe everywhere, so it becomes `__`.
+fn gate_stem(id: &str) -> Result<String> {
+    if id.is_empty() || id.len() > 120 || id.starts_with('.') || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.:".contains(&b)) {
+        bail!("invalid gate id `{id}`");
+    }
+    Ok(id.replace(':', "__"))
+}
+
 fn safe(v: &str) -> Result<&str> {
     if v.is_empty() || v.len() > 80 || !v.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b)) || v.starts_with('.') {
         bail!("invalid name `{v}`");
@@ -250,7 +259,7 @@ impl<'a> Builder<'a> {
     }
 
     fn gate_path(&self, id: &str) -> Result<PathBuf> {
-        Ok(self.root.join("runtime").join("toolhub").join("gates").join(format!("{}.json", safe(id)?)))
+        Ok(self.root.join("runtime").join("toolhub").join("gates").join(format!("{}.json", gate_stem(id)?)))
     }
 
     fn draft_path(&self, slug: &str, version: &str) -> Result<PathBuf> {
@@ -433,7 +442,7 @@ impl<'a> Builder<'a> {
                     if !matches!(rec.decision.as_ref().map(|d| d.decision), Some(Decision::Approve)) || self.gates.state(id)?.as_deref() != Some("closed") {
                         bail!("gate {id} is not approved");
                     }
-                    let used = self.root.join("runtime").join("toolhub").join("gates").join(format!("{id}.used"));
+                    let used = self.root.join("runtime").join("toolhub").join("gates").join(format!("{}.used", gate_stem(id)?));
                     if used.exists() {
                         bail!("gate {id} was already used");
                     }

@@ -50,7 +50,8 @@ fn cli_end_to_end_with_real_approval_gate_work_items() {
 #[test]
 fn business_os_policy_gates_activation() {
     let p = CtoxPolicy { actor: BusinessOsActor::new(Some("u".into()), "user") };
-    assert!(p.check(Permission::DataRead).is_ok());
+    // Workspace-wide data read is chef/admin only in Business OS policy.
+    assert!(p.check(Permission::DataRead).is_err());
     assert!(p.check(Permission::IntegrationsManage).unwrap_err().to_string().contains("policy_denied"));
     let chef = CtoxPolicy { actor: BusinessOsActor::new(Some("c".into()), "chef") };
     assert!(chef.check(Permission::IntegrationsManage).is_ok());

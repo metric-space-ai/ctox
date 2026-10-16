@@ -26,7 +26,7 @@ struct Gates {
 }
 impl ApprovalGates for Gates {
     fn open(&self, _r: &GateRequest) -> Result<String> {
-        let id = format!("gate-{}", self.states.borrow().len() + 1);
+        let id = format!("self-work:internal:{}", self.states.borrow().len() + 1);
         self.states.borrow_mut().insert(id.clone(), "open".into());
         Ok(id)
     }

@@ -3374,6 +3374,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn worker_toolhub_role_is_fixed_by_session_kind() {
+        let mut overrides = vec![("tools.ctox_toolhub_role".to_string(), toml::Value::String("supervisor".into()))];
+        configure_worker_toolhub(&mut overrides, false, false);
+        assert!(overrides.contains(&("tools.ctox_toolhub_role".to_string(), toml::Value::String("supervisor".into()))));
+        let mut overrides = Vec::new();
+        configure_worker_toolhub(&mut overrides, false, true);
+        assert!(overrides.contains(&("tools.ctox_toolhub".to_string(), toml::Value::Boolean(true))));
+        assert!(overrides.contains(&("tools.ctox_toolhub_role".to_string(), toml::Value::String("worker".into()))));
+        let mut overrides = Vec::new();
+        configure_worker_toolhub(&mut overrides, false, false);
+        assert!(overrides.contains(&("tools.ctox_toolhub_role".to_string(), toml::Value::String("oneshot".into()))));
+        let mut overrides = Vec::new();
+        configure_worker_toolhub(&mut overrides, true, true);
+        assert!(overrides.is_empty());
+    }
+
+
+    #[test]
     fn queue_cancel_terminal_witness_requires_exact_thread_and_turn() {
         let event = |thread: &str, turn: Option<&str>| {
             InProcessServerEvent::LegacyNotification(JSONRPCNotification {
@@ -4947,21 +4965,4 @@ impl ContextLogger {
 
 fn json_string(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"<invalid>\"".to_string())
-
-    #[test]
-    fn worker_toolhub_role_is_fixed_by_session_kind() {
-        let mut overrides = vec![("tools.ctox_toolhub_role".to_string(), toml::Value::String("supervisor".into()))];
-        configure_worker_toolhub(&mut overrides, false, false);
-        assert!(overrides.contains(&("tools.ctox_toolhub_role".to_string(), toml::Value::String("supervisor".into()))));
-        let mut overrides = Vec::new();
-        configure_worker_toolhub(&mut overrides, false, true);
-        assert!(overrides.contains(&("tools.ctox_toolhub".to_string(), toml::Value::Boolean(true))));
-        assert!(overrides.contains(&("tools.ctox_toolhub_role".to_string(), toml::Value::String("worker".into()))));
-        let mut overrides = Vec::new();
-        configure_worker_toolhub(&mut overrides, false, false);
-        assert!(overrides.contains(&("tools.ctox_toolhub_role".to_string(), toml::Value::String("oneshot".into()))));
-        let mut overrides = Vec::new();
-        configure_worker_toolhub(&mut overrides, true, true);
-        assert!(overrides.is_empty());
-    }
 }
