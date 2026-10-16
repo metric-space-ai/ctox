@@ -425,11 +425,7 @@ pub(crate) fn accounts(root: &Path) -> anyhow::Result<Vec<EmailAccountConfig>> {
         root.join("runtime/ctox.sqlite3"),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     )?;
-    let initialized: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='communication_accounts')",
-        [],
-        |row| row.get(0),
-    )?;
+    let initialized: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='communication_accounts')", [], |row| row.get(0))?;
     if !initialized {
         return Ok(Vec::new());
     }
