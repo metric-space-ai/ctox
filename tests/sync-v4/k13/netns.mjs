@@ -15,7 +15,7 @@ if(!Number.isInteger(c.uid) || c.uid<=0 || !Number.isInteger(c.gid) || c.gid<=0
 const proof={owner:c.owner,uidMap:uid,gidMap:gid,pid:process.pid,namespaces:Object.fromEntries(['user','net','mnt','pid'].map(k=>[k,ns(k)])),
   hostNamespaces:c.hostNamespaces,hostUid:c.uid,hostGid:c.gid,hostNetworkChanged:false,privilegedHostEntry:false};
 const run=(cmd,args)=>execFileSync(cmd,args,{stdio:['ignore','pipe','pipe'],encoding:'utf8'});
-run('mount',['-t','tmpfs','-o','mode=1777,size=256m','p6-private-tmp','/tmp']);
+run('mount',['-t','tmpfs','-o','mode=1777,size=1g','p6-private-tmp','/tmp']);
 run('ip',['link','set','lo','up']);
 run('ip',['link','add','bench0','type','dummy']);
 run('ip',['addr','add','192.0.2.1/32','dev','bench0']);

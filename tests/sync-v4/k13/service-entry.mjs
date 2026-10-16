@@ -17,15 +17,15 @@ export function installServiceEntry(Native) {
     const mounts=[];
     for(const [index,path] of [root,root+'.voter2',root+'.voter3'].entries()) {
       if(fs.existsSync(path))throw Error('Never reuse a P6 tenant root');
-      fs.mkdirSync(resolve(path,'runtime'),{recursive:true,mode:0o700});
+      fs.mkdirSync(path,{recursive:true,mode:0o700});
       // The socket-visible root stays short; large SQLite/managed Node data
       // uses this runner's SSD backing, mounted only inside the private netns.
       const backing=resolve(this.config.output,'tenant-runtime-'+index);
       fs.mkdirSync(backing,{mode:0o700});
-      execFileSync('mount',['--bind',backing,resolve(path,'runtime')]);
+      execFileSync('mount',['--bind',backing,path]);
       fs.mkdirSync(resolve(path,'runtime/home'),{recursive:true,mode:0o700});
       for(const item of ['Cargo.toml','src','contracts'])fs.symlinkSync(resolve(source,item),resolve(path,item));
-      mounts.push({root:path,runtimeBacking:backing,mountNamespace:fs.readlinkSync('/proc/self/ns/mnt')});
+      mounts.push({root:path,rootBacking:backing,mountNamespace:fs.readlinkSync('/proc/self/ns/mnt')});
     }
     fs.writeFileSync(resolve(this.config.output,'p6-root-mounts.json'),JSON.stringify(mounts,null,2));
     fs.writeFileSync(resolve(root,'.sync-v4-e2e.json'),JSON.stringify({owner,synthetic:true,source:revision}));

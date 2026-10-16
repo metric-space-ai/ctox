@@ -71,6 +71,8 @@ try {
     const category=reason.match(/not_run\(([^)]+)\)/)?.[1]??'native-browser-entry';
     row.criteria=Object.fromEntries(Object.entries(scenario.criterion).map(([name,target])=>[name,{target,actual:null,status:row.status==='failed'?'not_measured(scenario_failed)':'not_run('+category+')'}]));
   }
+  const space=path=>{const s=fs.statfsSync(path);return {capacityBytes:s.blocks*s.bsize,availableBytes:s.bavail*s.bsize};};
+  report.storage={privateTmp:space('/tmp'),fixtureRoot:fs.existsSync(config.root)?space(config.root):null};
   clearTimeout(deadline);
   for(const context of contexts)await context.close().catch(()=>{});
   await browser?.close().catch(()=>{});
