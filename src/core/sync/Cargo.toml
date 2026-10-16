@@ -44,6 +44,5 @@ tokio-tungstenite = "0.28"
 rtc-turn = { path = "../rxdb/patches/rtc-turn" }
 rtc-ice = { path = "../rxdb/patches/rtc-ice" }
 rtc-sctp = { path = "../rxdb/patches/rtc-sctp" }
-rtc-turn = { path = "../rxdb/patches/rtc-turn" }
 rtc = { path = "../rxdb/patches/rtc" }
 webrtc = { path = "../rxdb/patches/webrtc" }
