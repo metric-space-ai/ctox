@@ -16,9 +16,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { SEED, openDock } from './drive.mjs';
+import { realManifestRoutes } from '../../../tools/port/real-manifest.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/b6624eb');
+process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const { startServer } = await import('../../../frame/lab/serve.mjs');
 const require = createRequire(path.join(os.homedir(), 'Documents/ctox/src/apps/business-os/package.json'));
 const { chromium } = require('playwright');
@@ -91,7 +92,7 @@ const W = `[data-ctox-chat-root] [data-chat-id="${SEED.id}"]`;
 try {
   await P.goto(`${base}/v4/frame/lab/stub-lab.html?inst=chatatt-${Date.now().toString(36)}`);
   await P.waitForFunction(() => window.__labReady === true && document.querySelector('[data-v4-ready]'));
-  await P.evaluate(async (seed) => {
+  await P.evaluate(async ([seed, ctoxRoutes]) => {
     const { kernel } = window.__lab;
     window.__attCmds = [];
     kernel.sim.onCommand('business_os.chat.task', (payload, c) => {
@@ -104,11 +105,12 @@ try {
       open: true, minimized: true, messages: [{ id: 'msg_seed_1', role: 'user', text: seed.text, createdAt: now - 60_000 }],
     }]);
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#0f766e"/></svg>';
-    await kernel.sim.publishAppVersion('ctox', '1.0.0', { title: 'CTOX', layout: { category: 'Crew', icon_svg: svg }, styles: [],
-      collections: { business_chats: {}, ctox_crew_members: {}, ctox_harness_status: {}, ctox_harness_events: {} } });
+    // E48: Eigentümer der Shell-Fremdlesungen (business_chats, ctox_crew_members, …) mit echtem Manifest (collections +
+    // exports), sonst liest die Shell sie nicht.
+    await kernel.sim.publishAppVersion('ctox', '1.0.0', { title: 'CTOX', layout: { category: 'Crew', icon_svg: svg }, styles: [], manifestExtra: ctoxRoutes });
     // Gegenprobe für E30: eine App ohne business_chats darf die Datei nicht lesen.
     await kernel.sim.publishAppVersion('notes-x', '1.0.0', { title: 'Notizen', layout: { category: 'Büro', icon_svg: svg }, styles: [], collections: { notes_x_items: {} } });
-  }, SEED);
+  }, [SEED, realManifestRoutes('ctox')]);
   await P.waitForSelector('[data-v4-app="ctox"]', { state: 'attached' });
   await P.waitForSelector('[data-ctox-chat-root] [data-chat-dock]', { timeout: 8000 }).catch(() => {});
   await openDock(P);
