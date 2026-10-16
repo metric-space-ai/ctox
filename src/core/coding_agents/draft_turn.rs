@@ -403,14 +403,17 @@ fn may_edit_source(
     // Read the committed rights in this SAME writer transaction. Rights and
     // draft effects share one queue/file: revocation cannot commit between this
     // decision and the draft mutation. Do not cache the admission-time grant.
+    let scope = BusinessOsScope::module(app_id, assigned);
+    // Preserve the live authority availability/pending-update denial as well;
+    // durable rows alone must not revive an unbound or retired policy owner.
+    if !policy::evaluate(actor, BusinessOsPermission::AppsSourceEdit, &scope).allowed {
+        return Ok(false);
+    }
     let rights = policy::sync_rights::read(tx)?;
-    Ok(policy::evaluate_with_rights(
-        &rights,
-        actor,
-        BusinessOsPermission::AppsSourceEdit,
-        &BusinessOsScope::module(app_id, assigned),
+    Ok(
+        policy::evaluate_with_rights(&rights, actor, BusinessOsPermission::AppsSourceEdit, &scope)
+            .allowed,
     )
-    .allowed)
 }
 
 fn command_status(result: &Value) -> &'static str {
