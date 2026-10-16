@@ -126,6 +126,7 @@ export class WebRTCKernelTransport extends KernelTransport {
    const challenge=early?await early.challenge:undefined;
    const hello=typeof this.options.hello==='function'?await this.options.hello(identity,challenge):this.options.hello;
    if(hello?.instance_id!==identity.instanceId)throw new CtoxError('forbidden','Hello identity mismatch');
+   this.offeredDeviceId=hello.device_proof.device_id;
    if(typeof this.options.verifyPackage!=='function')throw new CtoxError('forbidden','Authenticated package verifier required');
    this.hello=new HelloConnection(hello,state=>{if(state.state==='closed'&&state.rejection)this.fail(new CtoxError('unavailable',`hello rejected: ${state.rejection.reason}`));},{handshakeTimeoutMs:this.options.handshakeTimeoutMs??10000});
    const endpoint=early??(this.options.channels?{channels:this.options.channels,peer:this.options.peer}:await Promise.race([this.options.createPeer(this.options.address,identity),this.ready.then(()=>{throw new CtoxError('unavailable','Handshake ended before connection setup');})]));
@@ -151,6 +152,7 @@ export class WebRTCKernelTransport extends KernelTransport {
   }catch(error){this.fail(error);throw error;}
  }
  /** E43.2: capabilities granted by the Core in hello_ok; null until the authenticated hello completed. */
+ deviceId(){return this.boundDeviceId??null;}
  get capabilities(){return this.session?[...this.session.capabilities??[]]:null;}
  attachChannel(channel){
   channel.binaryType='arraybuffer';this.listen(channel,'open',()=>this.channelsChanged?.());
@@ -178,6 +180,7 @@ export class WebRTCKernelTransport extends KernelTransport {
    if(selected.transport.codec==='zstd'&&!this.options.codecs?.zstd)throw new CtoxError('unavailable','Negotiated codec adapter unavailable');
    if(this.options.wireFormat!=='k2-fixture'){this.reliable.attach({session_id,resume_from});this.scheduler.generation=this.reliable.generation;}
    await this.options.authSession?.acceptHello(selected);
+   this.boundDeviceId=this.offeredDeviceId;
    this.session=selected;this.scheduler.configure(selected.transport);this.ingress.codec=selected.transport.codec;this.ingress.frameBytes=selected.transport.frame_bytes;
    if(core_time_ms!==undefined){if(!Number.isFinite(core_time_ms)||core_time_ms<0)throw new CtoxError('invalid','Invalid Core clock');this.offset=core_time_ms-(this.started+this.now())/2;}
    this.rtt=this.now()-this.started;this.events.session?.({epoch:selected.epoch,head_seq:selected.head_seq,rights_ver:selected.rights_ver});this.hello.activate();

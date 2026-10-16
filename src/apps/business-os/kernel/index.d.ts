@@ -6,6 +6,9 @@
 // Teil 1 – App-API (an jede App übergeben, app_api_ver = 4.0)
 // ============================================================================================================
 
+/** E47: read-only local view metadata; confirmed opaque revision (same token as expected_revision), null for local-only rows. */
+export type ReadDocument<T> = T & {readonly _rev: string | null; readonly _pending: boolean};
+
 /** Live-Ergebnis einer Abfrage. Ergebnisse sortiert, Gleichstände nach `id`; ohne Zeilendeckel. */
 export interface LiveQuery<T> {
   get(): T[];
@@ -59,6 +62,8 @@ export interface FieldOperators {
 }
 
 export type WriteResult = {
+  /** Full locally acknowledged version and canonical replacement retained atomically in archive_local. */
+  local_archived_ref?: string;
   status: 'accepted' | 'merged' | 'rejected' | 'migrated';
   code?: CtoxErrorCode;
   gen?: number;
@@ -155,6 +160,8 @@ export interface ShellApi {
   /** Unbekanntes Ziel → Fehler in der Zustandszone, `false`, nie stiller Fallback. */
   /** Read-only: no navigation or status entry is emitted. */
   canNavigate(appId: string, params?: Record<string, unknown>): boolean;
+  /** E48: ref grants one files.get to target, bound to this user/session for at most one hour; audited before routing. */
+  navigate(appId: string, params: Record<string, unknown> & {ref: string | {id?: string; ref?: string}}): Promise<boolean>;
   navigate(appId: string, params?: Record<string, unknown>): boolean;
   onRoute(cb: (ev: RouteEvent) => void): () => void;
   locale: LiveDoc<string>;
@@ -216,12 +223,18 @@ export interface ModelApi {
   run(req: { model?: string; input?: string | Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>; prompt?: string; [k: string]: unknown }): Promise<ModelResponse>;
 }
 
+/** E51: identity is bound to the caller. Limits: 64 keys, 16 KiB JSON, key [a-z0-9._-]{1,64}. */
+export interface PreferencesApi {
+  get<T = unknown>(key: string): T | null;
+  set(key: string, value: unknown): WriteHandle;
+  delete(key: string): WriteHandle;
+}
 export interface CtoxAppApi {
   version: '4.0';
   app: { id: string; ver: string };
   // Lesen – nur lokal, nie Netzwerk, keine Lesesperre
-  query<T = any>(collection: string, q: Query): LiveQuery<T>;
-  get<T = any>(collection: string, id: string): LiveDoc<T | null>;
+  query<T = any>(collection: string, q: Query): LiveQuery<ReadDocument<T>>;
+  get<T = any>(collection: string, id: string): LiveDoc<ReadDocument<T> | null>;
   // Schreiben – lokal sofort, Outbox
   put<T>(collection: string, doc: T & { id: string }): WriteHandle;
   /** E35: Core writer transaction compares expected_revision; mismatch resolves result as rejected/code revision_conflict. */
@@ -245,6 +258,7 @@ export interface CtoxAppApi {
   metrics: CommandMetrics;
   shell: ShellApi;
   actor: Actor;
+  prefs: PreferencesApi;
   files: FilesApi;
   model: ModelApi;
 }

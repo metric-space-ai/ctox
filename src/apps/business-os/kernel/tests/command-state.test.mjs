@@ -1,3 +1,4 @@
+import {installFixtureApp} from './platform-fixture.mjs';
 // K-1c Punkt 10: KEEP-CRITICAL-Invarianten von shared/command-lifecycle.js auf dem V4-Befehlsdokument.
 // Quelle der Wahrheit bleibt src/core/rxdb/tests/fixtures/business-command-lifecycle-v2.json (nur gelesen).
 import { testLocks } from './web-locks.mjs';
@@ -70,6 +71,7 @@ test('Kernel: Zustellung eines Rückschritts wird verworfen – Terminalzustand 
   const k = await mk(t);
   const api = k.appApi('crm', '1');
   const seen = [];
+  await installFixtureApp(k,'crm',{platform:['business_commands']});
   const live = api.get('business_commands', 'c1');
   live.subscribe((d) => { if (d) seen.push(d.status); });
   const page = (status, seq, extra = {}) => k.receivePage({ collection: 'business_commands', epoch: '1', scope_hash: 'local', gen: 1, cursor_to: String(seq), head_seq: String(seq), complete: true,
@@ -80,7 +82,7 @@ test('Kernel: Zustellung eines Rückschritts wird verworfen – Terminalzustand 
   await page('running', 1003); // Rückschritt mit neuerer seq
   await page('done', 1004, { result: { ok: false } }); // anderes Ergebnis nach Abschluss
   await tick(10);
-  assert.deepEqual(live.get(), cmd('done', { result: { ok: true } }));
+  assert.deepEqual(live.get(), {...cmd('done', { result: { ok: true } }),_rev:'1002-x',_pending:false});
   assert.deepEqual(seen.filter((s) => s === 'done').length, 1, 'genau ein Übergang nach done');
   assert.ok(k.status.forApp('kernel').get().some((e) => e.code === 'command.invalid_transition'));
 });

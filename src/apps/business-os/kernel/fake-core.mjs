@@ -1,6 +1,7 @@
 // Explicit in-memory test core. Never selected implicitly by createKernel().
 // K-1c: mehrere Nutzer je Instanz teilen einen Core (namespace), jeder Nutzer hat seine eigene Kernel-DB (§16.7);
 // Rechte, Handler-Laufzeit, Trigger, Katalog-Primitive und ctox.app.* liegen in fake-core-runtime.mjs.
+import {preferenceError,PREFERENCE_COLLECTION} from './preferences.mjs';
 import { KernelTransport, decimalSeq } from './transport.mjs';
 import { cloneValue, CtoxError, fnv1a, mergePatch } from './values.mjs';
 import { applyOp } from './outbox.mjs';
@@ -153,6 +154,7 @@ export class MemoryCoreTransport extends KernelTransport {
     const old = this.core.docs.get(this.key(entry.collection,entry.id));
     const rejection = this.reject.shift();
     let result = rejection === undefined ? null : {status:'rejected', ...(typeof rejection === 'object' ? rejection : {reason:rejection})};
+    if (!result && entry.body && Object.keys(entry.body).some(key=>key.startsWith('_'))) result={status:'rejected',code:'invalid',reason:'Underscore document fields are reserved'};
     // K-WJ-B2 (E27.2): Befehlstyp ohne veröffentlichte Route → beim Schreiben abgelehnt, nie erst accepted und später failed
     if (!result && entry.collection === 'business_commands' && entry.op === 'put' && entry.body?.status === 'queued' && !(old?.data && !old.deleted) && !this.commandRouteKnown(entry.body)) {
       result = { status: 'rejected', code: 'unknown_command', reason: `unknown_command:${entry.body.type}` };
@@ -160,6 +162,11 @@ export class MemoryCoreTransport extends KernelTransport {
     if (!result) {
       const code = this.core.runtime.checkWrite(this.currentUser, {...entry,test_route:this.handlers.has(entry.body?.type)||this.failures.has(entry.body?.type)}, old);
       if (code) result = typeof code === 'object' ? { status: 'rejected', code: code.code, reason: code.reason } : { status: 'rejected', reason: code };
+    }
+    if (!result && entry.collection===PREFERENCE_COLLECTION) {
+      const rows=[...this.core.docs.values()].filter(r=>r.collection===PREFERENCE_COLLECTION&&!r.deleted&&r.data).map(r=>r.data);
+      const code=preferenceError(entry.app_id,this.currentUser?.id??this.identity?.userId,entry.id,entry.op==='delete'?null:entry.body,rows);
+      if(code)result={status:'rejected',code,reason:code};
     }
     if (!result && entry.expected_revision !== undefined && entry.expected_revision !== old?.rev) result={status:'rejected',code:'revision_conflict',reason:'Expected revision differs from current revision'};
     if (!result && entry.op === 'patch' && (!old || old.deleted)) result={status:'rejected',reason:'not_found'};

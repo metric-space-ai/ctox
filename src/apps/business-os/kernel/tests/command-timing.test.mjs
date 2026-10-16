@@ -1,3 +1,4 @@
+import {installFixtureApp} from './platform-fixture.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createStubKernel } from '../testkit.mjs';
@@ -16,6 +17,7 @@ test('timings distinguish durable queue, dispatch, receipt and terminal completi
   t.after(() => finish());
   const events = [];
   const k = await setup(t, {diagnostics:{onCommandTiming(value){events.push(value); if (value.sent === null) return Promise.reject(Error('broken async observer')); throw Error('broken observer');}}});
+  await installFixtureApp(k,'notes',{platform:['business_commands']});
   await k.sim.setLink({state:'offline'});
   k.sim.onCommand('notes.timing', async () => {await gate; return {ok:true};});
   const api = k.appApi('notes','1');
@@ -42,7 +44,8 @@ test('timings distinguish durable queue, dispatch, receipt and terminal completi
   assert.ok(events.some(row => row.sent !== null) && events.some(row => row.acked !== null) && events.some(row => row.completed !== null));
   assert.ok(!JSON.stringify(events).includes('must not enter metrics'));
   await until(() => Date.now() > done.completed);
-  await k.sim.push('business_commands', [api.get('business_commands', command.id).get()]);
+  const {_rev,_pending,...canonical}=api.get('business_commands',command.id).get();
+  await k.sim.push('business_commands', [canonical]);
   await k.sim.settle();
   assert.deepEqual(k.metrics.commands.find(row => row.command_id === command.id),done,'replay must not retime a completed command');
 });
