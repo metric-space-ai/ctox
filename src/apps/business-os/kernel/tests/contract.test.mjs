@@ -478,7 +478,7 @@ test('Dateien: put (Blob + Outbox + files-Dokument), get aus Cache, nach Räumun
   assert.equal(await (await api.files.get(ref)).text(), 'Hallo Datei');
   assert.equal(await k.sim.evictBlobs(), 1);
   assert.equal(await (await api.files.get(ref)).text(), 'Hallo Datei');
-  await assert.rejects(api.files.get('0'.repeat(64)), (e) => e.code === 'not_found');
+  await assert.rejects(api.files.get('0'.repeat(64)), (e) => e.code === 'forbidden', 'E30: unreferenced hashes grant nothing');
   await k.close();
 });
 
