@@ -3,7 +3,7 @@
 // „Deutsche Telekom AG“, TEL-7816-12, wenn der Dateiname „telekom“ enthielt), und die Evidenzspalte zeichnete daraus
 // eine nachgebildete Rechnung (StNr DE814712499, Fallback INV-98172).
 //
-// Lauf:      CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/buchhaltung/tests/beleg-upload.test.mjs
+// Lauf:      CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/8265bd7 node --test src/apps/business-os/modules/buchhaltung/tests/beleg-upload.test.mjs
 // Gegenprobe: zusätzlich BUCH_OLD_DIR=<Ordner mit altem index.js/index.html/index.css> → muss rot sein.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,7 +15,7 @@ import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
 
 const APP = 'buchhaltung';
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const OLD = process.env.BUCH_OLD_DIR || '';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
