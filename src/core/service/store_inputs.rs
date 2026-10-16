@@ -17,12 +17,20 @@ use tokio::runtime::Handle;
 
 static INPUTS: OnceLock<Mutex<HashMap<PathBuf, Weak<StoreInputs>>>> = OnceLock::new();
 
+/// The composition root lends one retained native session. These are live
+/// native capabilities, never reconstructed from a policy or key fixture.
+pub(crate) struct NativeSessionInputs {
+    pub instance_signer: Arc<dyn rxdb::plugins::replication_webrtc::v4_stream::InstanceSigner>,
+    pub execution_authority: Arc<dyn ctox_sync::authority::client::ExecutionAuthority>,
+}
+
 pub(crate) struct StoreInputs {
     pub root: PathBuf,
     pub core: Database,
     pub sync: Database,
     pub runtime: Handle,
     pub databases: HashMap<String, Database>,
+    native_session: OnceLock<NativeSessionInputs>,
     closing: Arc<AtomicBool>,
     retired: AtomicBool,
     sync_reads: Arc<tokio::sync::Semaphore>,
@@ -53,6 +61,7 @@ impl InputRegistration {
             sync,
             runtime,
             databases,
+            native_session: OnceLock::new(),
             closing,
             retired: AtomicBool::new(false),
             sync_reads: Arc::new(tokio::sync::Semaphore::new(64)),
@@ -107,6 +116,23 @@ pub(crate) struct ActivationSnapshot<T> {
     pub commits: CommitReceiver,
 }
 impl StoreInputs {
+    /// Available only after the real native host has attached. A storage-only
+    /// daemon does not manufacture an execution authority for app activation.
+    pub(crate) fn native_session(&self) -> Result<&NativeSessionInputs, StoreError> {
+        self.check()?;
+        self.native_session.get().ok_or(StoreError::Closed)
+    }
+
+    pub(super) fn publish_native_session(
+        &self,
+        native: NativeSessionInputs,
+    ) -> Result<(), StoreError> {
+        self.check()?;
+        self.native_session
+            .set(native)
+            .map_err(|_| StoreError::AlreadyOwned)
+    }
+
     fn check(&self) -> Result<(), StoreError> {
         if self.retired.load(Ordering::Acquire) || self.closing.load(Ordering::Acquire) {
             return Err(StoreError::Closed);
