@@ -1125,6 +1125,29 @@ fn merge_field_status(existing: Option<&Value>, incoming: Value) -> Value {
                     && !is_verified_status(status)
                     && !status_carries_contradicting_source(status)
                 {
+                    // Geschuetzt wird nur, was die eigenen gespeicherten Belege
+                    // beweisen. Kundeninstanz 16.10.2026: "aktiv" ohne ein
+                    // Zitat, das einen Status nennt, eine Mitarbeiterzahl aus
+                    // dem Zitat einer anderen Firma, ein WZ-Code, den kein
+                    // Zitat enthaelt — der Review verlangte die Rueckstufung,
+                    // der Speicher legte sie als `challenge` ab, und der Lead
+                    // lief 5-10 Nacharbeitsrunden bis zum Abbruch. Ein solcher
+                    // Wert weicht einem begruendeten offenen Status; der alte
+                    // Eintrag bleibt als `superseded` sichtbar.
+                    if stored_quotes_name_value(field, previous) == Some(false)
+                        && is_reasoned_downgrade(status)
+                    {
+                        let mut superseded = previous.clone();
+                        if let Some(superseded) = superseded.as_object_mut() {
+                            superseded.remove("superseded");
+                        }
+                        let mut replacement = status.clone();
+                        if let Some(replacement) = replacement.as_object_mut() {
+                            replacement.insert("superseded".to_string(), superseded);
+                        }
+                        *previous = replacement;
+                        continue;
+                    }
                     if let Some(previous) = previous.as_object_mut() {
                         previous.insert("challenge".to_string(), status.clone());
                     }
@@ -1178,6 +1201,201 @@ fn is_unrefuted_verified(status: &Value) -> bool {
             .pointer("/review/verdict")
             .and_then(Value::as_str)
             .is_none_or(|verdict| !verdict.trim().eq_ignore_ascii_case("refuted"))
+}
+
+/// An open status that says why: `action_required`, `no_match` or
+/// `unsupported` with a non-empty reason. Only such a status may replace an
+/// unproven verified value; the sanitizer's fillers never get here.
+fn is_reasoned_downgrade(status: &Value) -> bool {
+    let kind = status
+        .get("status")
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    matches!(
+        kind.as_str(),
+        "action_required" | "no_match" | "unsupported"
+    ) && status
+        .get("reason")
+        .and_then(Value::as_str)
+        .is_some_and(|reason| !reason.trim().is_empty())
+}
+
+/// Fields whose stored value is derived or summarized rather than quoted
+/// (salutation-derived gender, the e-mail verdict, descriptions, fact
+/// sheets). Their quotes cannot name the value literally, so they are not
+/// judged here and keep their protection.
+const UNQUOTED_VALUE_FIELDS: &[&str] = &[
+    "person_geschlecht",
+    "person_email_validation",
+    "firma_geschaeftstaetigkeit",
+    "firma_homepage_fact_sheet",
+];
+
+const PHONE_FIELDS: &[&str] = &["firma_telefon", "firma_fax", "person_telefon"];
+
+/// Whether a stored status's own source quotes name its stored value.
+/// `Some(true)`: at least one quote names it (a list value: the joined value,
+/// or every element in some quote). `Some(false)`: quotes exist and none
+/// names it — the value is unproven. `None`: nothing to judge (no value, no
+/// quote, a derived/summarized field); protection stays as it was.
+fn stored_quotes_name_value(field: &str, status: &Value) -> Option<bool> {
+    if UNQUOTED_VALUE_FIELDS.contains(&field) {
+        return None;
+    }
+    let quotes = status
+        .get("sources")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|source| source.get("quote").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|quote| !quote.is_empty())
+        .collect::<Vec<_>>();
+    if quotes.is_empty() {
+        return None;
+    }
+    let scalar = |value: &Value| match value {
+        Value::String(text) => Some(text.trim().to_string()),
+        Value::Number(number) => Some(number.to_string()),
+        _ => None,
+    };
+    let mut elements = match status.get("value") {
+        Some(Value::Array(items)) => items.iter().filter_map(scalar).collect::<Vec<_>>(),
+        Some(value) => scalar(value).into_iter().collect(),
+        None => Vec::new(),
+    };
+    elements.retain(|element| !element.is_empty());
+    if elements.is_empty() {
+        return None;
+    }
+    let named = |value: &str| {
+        quotes
+            .iter()
+            .any(|quote| quote_names_value(field, value, quote))
+    };
+    let joined = elements.join(", ");
+    if named(&joined) || elements.iter().all(|element| named(element.as_str())) {
+        return Some(true);
+    }
+    // A list written as one string ("A; B", "A, B") is proven element-wise.
+    // Figures are never split: "50,87 Mio" is one number.
+    if elements.len() == 1 && !QUANTITY_FIELDS.contains(&field) {
+        let parts = elements[0]
+            .split([';', ',', '|', '\n'])
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>();
+        if parts.len() > 1 && parts.iter().all(|part| named(part)) {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
+
+/// Whether one quote names one value: figures by number
+/// ([`quantity_quote_backs`]), e-mail addresses by the (de-obfuscated)
+/// address, phone numbers by their digits, everything else as a whole-word
+/// sequence after case, umlaut/ß and digit-grouping normalization.
+fn quote_names_value(field: &str, value: &str, quote: &str) -> bool {
+    if QUANTITY_FIELDS.contains(&field) && !numbers_in(value).is_empty() {
+        return quantity_quote_backs(field, value, quote);
+    }
+    if field == "person_titel" && matches!(value.trim().to_lowercase().as_str(), "herr" | "frau") {
+        return true;
+    }
+    if value.contains('@') {
+        return normalized_email_text(quote).contains(&value.trim().to_lowercase());
+    }
+    if PHONE_FIELDS.contains(&field) {
+        let wanted = phone_digits(value);
+        if !wanted.is_empty() {
+            return phone_numbers_in(quote).iter().any(|found| *found == wanted);
+        }
+    }
+    let window = |wanted: Vec<String>, observed: Vec<String>| {
+        !wanted.is_empty()
+            && observed
+                .windows(wanted.len())
+                .any(|candidate| candidate == wanted.as_slice())
+    };
+    window(evidence_words(value), evidence_words(quote))
+        || window(
+            evidence_words(&collapse_digit_groups(value)),
+            evidence_words(&collapse_digit_groups(quote)),
+        )
+}
+
+/// Lower case, umlauts and ß spelled out (also a decomposed diaeresis),
+/// split into alphanumeric words; "-straße"/"-str." compare equal.
+fn evidence_words(text: &str) -> Vec<String> {
+    let mut folded = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            'ä' | 'Ä' => folded.push_str("ae"),
+            'ö' | 'Ö' => folded.push_str("oe"),
+            'ü' | 'Ü' => folded.push_str("ue"),
+            'ß' | 'ẞ' => folded.push_str("ss"),
+            '\u{0308}' => folded.push('e'),
+            other => folded.extend(other.to_lowercase()),
+        }
+    }
+    folded
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(|word| match word.strip_suffix("strasse") {
+            Some(stem) => format!("{stem}str"),
+            None => word.to_string(),
+        })
+        .collect()
+}
+
+/// Drops digit-group separators ("1.500", "1 500", "1'500") so a figure
+/// compares as one number.
+fn collapse_digit_groups(text: &str) -> String {
+    let characters = text.chars().collect::<Vec<_>>();
+    let mut out = String::with_capacity(text.len());
+    for (index, character) in characters.iter().enumerate() {
+        let separator = matches!(character, ' ' | '.' | ',' | '\'' | '\u{a0}' | '\u{202f}');
+        let between_digits = index > 0
+            && characters[index - 1].is_ascii_digit()
+            && characters
+                .get(index + 1)
+                .is_some_and(|next| next.is_ascii_digit());
+        if separator && between_digits {
+            continue;
+        }
+        out.push(*character);
+    }
+    out
+}
+
+/// A phone number's digits in national form: "+49 (0)30 123", "0049 30 123"
+/// and "030 123" all become "030123".
+fn phone_digits(text: &str) -> String {
+    let digits = text
+        .replace("(0)", "")
+        .chars()
+        .filter(char::is_ascii_digit)
+        .collect::<String>();
+    let trimmed = text.trim_start();
+    let international = trimmed.starts_with('+') || digits.starts_with("00");
+    let digits = digits.strip_prefix("00").unwrap_or(&digits).to_string();
+    match digits.strip_prefix("49") {
+        Some(rest) if international => format!("0{rest}"),
+        _ => digits,
+    }
+}
+
+/// Every phone-number-like run in a quote (digits joined by spaces, slashes,
+/// dashes, dots or parentheses), normalized like [`phone_digits`].
+fn phone_numbers_in(quote: &str) -> Vec<String> {
+    regex::Regex::new(r"\+?\d[\d\s/().\-]*\d")
+        .expect("phone pattern")
+        .find_iter(quote)
+        .map(|found| phone_digits(found.as_str()))
+        .filter(|digits| !digits.is_empty())
+        .collect()
 }
 
 /// Stores person-bound field statuses durably in `lead.person_field_status`
@@ -6176,6 +6394,219 @@ mod tests {
         let merged = merge_field_status(Some(&merged), corrected);
         assert_eq!(merged["umsatz"]["value"], "201.000.000 EUR (2024)");
         assert!(merged["umsatz"].get("challenge").is_none());
+    }
+
+    #[test]
+    fn a_verified_value_its_own_quotes_prove_stays_protected_against_a_reasoned_downgrade() {
+        let earlier = serde_json::json!({
+            "firma_aktivitaetsstatus": {"status": "verified", "value": "aktiv", "sources": [
+                {"source_id": "northdata.de", "url": "https://www.northdata.de/x", "quote": "Status: Aktiv seit 1998"},
+                {"source_id": "unternehmensregister.de", "url": "https://www.unternehmensregister.de/x", "quote": "HRB 1234 Duisburg"}
+            ]},
+            "mitarbeiter": {"status": "verified", "value": "116", "sources": [
+                {"source_id": "bundesanzeiger.de", "url": "https://www.bundesanzeiger.de/x", "quote": "Im Jahresdurchschnitt 116 Mitarbeiter"}
+            ]}
+        });
+        let later = serde_json::json!({
+            "firma_aktivitaetsstatus": {"status": "action_required", "value": null, "sources": [], "reason": "Review: Status nicht belegt"},
+            "mitarbeiter": {"status": "no_match", "value": null, "sources": [], "reason": "keine aktuelle Zahl gefunden"}
+        });
+        let merged = merge_field_status(Some(&earlier), later);
+        assert_eq!(merged["firma_aktivitaetsstatus"]["status"], "verified");
+        assert_eq!(merged["firma_aktivitaetsstatus"]["value"], "aktiv");
+        assert_eq!(
+            merged["firma_aktivitaetsstatus"]["challenge"]["status"],
+            "action_required"
+        );
+        assert_eq!(merged["mitarbeiter"]["status"], "verified");
+        assert_eq!(merged["mitarbeiter"]["value"], "116");
+        assert_eq!(merged["mitarbeiter"]["challenge"]["status"], "no_match");
+        assert!(merged["mitarbeiter"].get("superseded").is_none());
+    }
+
+    #[test]
+    fn a_verified_value_its_own_quotes_do_not_name_yields_to_a_reasoned_downgrade() {
+        // Kundeninstanz 16.10.2026: the review demanded the downgrade of values
+        // their stored quotes do not prove; the store kept them as challenges
+        // and the lead ran 5-10 rework rounds into terminal failure.
+        let earlier = serde_json::json!({
+            "firma_aktivitaetsstatus": {"status": "verified", "value": "aktiv", "sources": [
+                {"source_id": "northdata.de", "url": "https://www.northdata.de/x", "quote": "Beispiel GmbH, Duisburg, HRB 1234"},
+                {"source_id": "firmenwissen.de", "url": "https://www.firmenwissen.de/x", "quote": "Gegenstand: Herstellung von Klebstoffen"}
+            ]},
+            "mitarbeiter": {"status": "verified", "value": "116", "sources": [
+                {"source_id": "dnbhoovers.com", "url": "https://www.dnbhoovers.com/x", "quote": "Beispiel Ltd (UK): 105 Beschäftigte"}
+            ]},
+            "wz_code": {"status": "verified", "value": "20.52", "sources": [
+                {"source_id": "northdata.de", "url": "https://www.northdata.de/x", "quote": "Branche: Herstellung von Klebstoffen"}
+            ]}
+        });
+        let later = serde_json::json!({
+            "firma_aktivitaetsstatus": {"status": "action_required", "value": null, "sources": [], "reason": "kein Zitat nennt einen Status"},
+            "mitarbeiter": {"status": "no_match", "value": null, "sources": [], "reason": "Zitat gehoert zur britischen Gesellschaft"},
+            "wz_code": {"status": "unsupported", "value": null, "sources": [], "attempts": [{"kind": "scrape"}], "reason": "kein Zitat enthaelt den Code"}
+        });
+        let merged = merge_field_status(Some(&earlier), later);
+        assert_eq!(
+            merged["firma_aktivitaetsstatus"]["status"],
+            "action_required"
+        );
+        assert!(merged["firma_aktivitaetsstatus"].get("challenge").is_none());
+        assert_eq!(
+            merged["firma_aktivitaetsstatus"]["superseded"]["value"],
+            "aktiv"
+        );
+        assert_eq!(
+            merged["firma_aktivitaetsstatus"]["superseded"]["status"],
+            "verified"
+        );
+        assert_eq!(merged["mitarbeiter"]["status"], "no_match");
+        assert_eq!(merged["mitarbeiter"]["superseded"]["value"], "116");
+        assert_eq!(merged["wz_code"]["status"], "unsupported");
+        assert_eq!(merged["wz_code"]["superseded"]["value"], "20.52");
+
+        // Without a reason an open status is no finding: still a challenge.
+        let unreasoned = serde_json::json!({
+            "firma_aktivitaetsstatus": {"status": "action_required", "value": null, "sources": [], "attempts": [{"kind": "scrape"}]}
+        });
+        let merged = merge_field_status(Some(&earlier), unreasoned);
+        assert_eq!(merged["firma_aktivitaetsstatus"]["status"], "verified");
+        assert_eq!(
+            merged["firma_aktivitaetsstatus"]["challenge"]["status"],
+            "action_required"
+        );
+
+        // A refuted-free verified status without any stored quote cannot be
+        // judged and keeps its protection (legacy entries carry only ids).
+        let unquoted = serde_json::json!({
+            "wz_code": {"status": "verified", "value": "20.52", "sources": [{"source_id": "northdata.de"}]}
+        });
+        let merged = merge_field_status(
+            Some(&unquoted),
+            serde_json::json!({"wz_code": {"status": "action_required", "value": null, "reason": "kein Beleg"}}),
+        );
+        assert_eq!(merged["wz_code"]["status"], "verified");
+        assert_eq!(merged["wz_code"]["challenge"]["status"], "action_required");
+    }
+
+    #[test]
+    fn stored_quotes_name_value_normalizes_case_umlauts_digits_and_lists() {
+        let status = |field: &str, value: Value, quotes: &[&str]| {
+            let sources = quotes
+                .iter()
+                .map(|quote| serde_json::json!({"source_id": "s", "url": "https://s.test/", "quote": quote}))
+                .collect::<Vec<_>>();
+            stored_quotes_name_value(
+                field,
+                &serde_json::json!({"status": "verified", "value": value, "sources": sources}),
+            )
+        };
+        // Figures by number: "116" vs "116 Mitarbeiter" / "105 Beschäftigte".
+        assert_eq!(
+            status(
+                "mitarbeiter",
+                serde_json::json!("116"),
+                &["116 Mitarbeiter (2023)"]
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            status(
+                "mitarbeiter",
+                serde_json::json!("116"),
+                &["105 Beschäftigte"]
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            status(
+                "mitarbeiter",
+                serde_json::json!(1500),
+                &["rund 1.500 Beschäftigte"]
+            ),
+            Some(true)
+        );
+        // Case, whitespace, umlauts/ß, digit grouping, whole words only.
+        assert_eq!(
+            status(
+                "firma_aktivitaetsstatus",
+                serde_json::json!("aktiv"),
+                &["Status:  AKTIV"]
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            status(
+                "firma_aktivitaetsstatus",
+                serde_json::json!("aktiv"),
+                &["Status: inaktiv"]
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            status(
+                "firma_anschrift",
+                serde_json::json!("Müllerstraße 5, 47051 Duisburg"),
+                &["Anschrift: Muellerstr. 5 · 47051 Duisburg"]
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            status(
+                "wz_code",
+                serde_json::json!("20.52"),
+                &["WZ 2008: 20.52.0 Herstellung"]
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            status("wz_code", serde_json::json!("20.52"), &["WZ 2008: 20.59.0"]),
+            Some(false)
+        );
+        assert_eq!(
+            status(
+                "firma_telefon",
+                serde_json::json!("+49 203 123456"),
+                &["Tel. 0203 / 12 34 56"]
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            status(
+                "firma_email",
+                serde_json::json!("info@beispiel.de"),
+                &["info(at)beispiel.de"]
+            ),
+            Some(true)
+        );
+        // Lists: every element in some quote, or the joined value.
+        assert_eq!(
+            status(
+                "firma_geschaeftsfuehrung",
+                serde_json::json!(["Max Müller", "Erika Beispiel"]),
+                &["Geschäftsführer: Max Mueller", "Erika Beispiel (GF)"]
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            status(
+                "firma_geschaeftsfuehrung",
+                serde_json::json!("Max Müller; Erika Beispiel"),
+                &["Geschäftsführer: Max Müller"]
+            ),
+            Some(false)
+        );
+        // Nothing to judge: no quote, no value, a derived field.
+        assert_eq!(status("wz_code", serde_json::json!("20.52"), &[]), None);
+        assert_eq!(status("wz_code", Value::Null, &["20.52"]), None);
+        assert_eq!(
+            status(
+                "person_geschlecht",
+                serde_json::json!("männlich"),
+                &["Herr Max Müller"]
+            ),
+            None
+        );
     }
 
     #[test]
