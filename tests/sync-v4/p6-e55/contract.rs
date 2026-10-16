@@ -1,4 +1,4 @@
-use p6_e55_contract::rights::{self, app_grant::*, scope::*, manifest_rules::ManifestRules, Operation, Right, StoreRightsAuthority};
+use p6_e55_contract::rights::{self, app_grant::*, scope::{canonical_json, FieldMask, FilterValue, RowFilter}, manifest_rules::ManifestRules, Operation, Right, StoreRightsAuthority};
 use ctox_store::{testkit::StoreFixture, DbId, WriteJob, StoreError};
 use ctox_store::change_log::subscription::protocol::InstanceSigner;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
