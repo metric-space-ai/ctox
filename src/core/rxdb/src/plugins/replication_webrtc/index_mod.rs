@@ -21,12 +21,12 @@
 // V4 entry seams: consumers explicitly opt in; V3 is not silently negotiated.
 #[path = "connection_lifecycle.rs"]
 pub mod connection_lifecycle;
+#[path = "framing.rs"]
+pub mod framing;
 #[path = "hello.rs"]
 pub mod hello;
 #[path = "lanes.rs"]
 pub mod lanes;
-#[path = "framing.rs"]
-pub mod framing;
 #[path = "scheduler.rs"]
 pub mod scheduler;
 #[path = "v4_session.rs"]
@@ -6506,7 +6506,6 @@ mod tests {
 /// never creates device authority or scope tokens.
 pub mod v4_router {
     use super::{connection_lifecycle::*, hello::*};
-    use serde_json::Value;
     use crate::plugins::replication_webrtc::connection_handler_rs::{
         WebRTCRsConnection, WebRTCRsConnectionHandler,
     };
@@ -6514,6 +6513,7 @@ pub mod v4_router {
     use crate::rx_error::{new_rx_error, RxResult};
     use futures::future::BoxFuture;
     use parking_lot::Mutex;
+    use serde_json::Value;
     use std::{
         collections::HashMap,
         sync::{
@@ -6546,7 +6546,16 @@ pub mod v4_router {
         config: V4RouterConfig,
         registry: PeerLifecycleRegistry,
         sessions: Mutex<HashMap<WebRTCRsConnection, Arc<Session>>>,
-        reliable: Mutex<HashMap<String, Arc<super::scheduler::session_resume::ReliableSession<super::scheduler::SessionPayload>>>>,
+        reliable: Mutex<
+            HashMap<
+                String,
+                Arc<
+                    super::scheduler::session_resume::ReliableSession<
+                        super::scheduler::SessionPayload,
+                    >,
+                >,
+            >,
+        >,
     }
     impl V4ConnectionRouter {
         pub fn new(config: V4RouterConfig) -> RxResult<Self> {
@@ -6665,37 +6674,88 @@ pub mod v4_router {
                 .get(peer)
                 .cloned()
                 .ok_or_else(|| new_rx_error("ctox_v4_hello_required", None))?;
-            use super::scheduler::{SessionBinding, session_resume::{SessionHello, ReliableSession}};
+            use super::scheduler::{
+                session_resume::{ReliableSession, SessionHello},
+                SessionBinding,
+            };
             let extension = if self.config.application.is_some() {
-                Some(SessionHello::decode(bytes).map_err(|_| new_rx_error("ctox_v4_session_hello", None))?)
-            } else { None };
-            let device = extension.as_ref().and_then(|(frame, _)| match frame { HelloFrame::Hello(h) => Some(h.device_proof.device_id.clone()), _ => None });
-            let plain = extension.as_ref().map(|(frame, _)| frame.encode()).transpose().map_err(|_| new_rx_error("ctox_v4_session_hello", None))?;
-            let result = session.lifecycle.receive_frame(plain.as_deref().unwrap_or(bytes)).await;
+                Some(
+                    SessionHello::decode(bytes)
+                        .map_err(|_| new_rx_error("ctox_v4_session_hello", None))?,
+                )
+            } else {
+                None
+            };
+            let device = extension.as_ref().and_then(|(frame, _)| match frame {
+                HelloFrame::Hello(h) => Some(h.device_proof.device_id.clone()),
+                _ => None,
+            });
+            let plain = extension
+                .as_ref()
+                .map(|(frame, _)| frame.encode())
+                .transpose()
+                .map_err(|_| new_rx_error("ctox_v4_session_hello", None))?;
+            let result = session
+                .lifecycle
+                .receive_frame(plain.as_deref().unwrap_or(bytes))
+                .await;
             match result {
                 Ok(HelloFrame::HelloOk(ok)) => {
                     let transport = ok.transport.clone();
                     let binding = if let Some((_, remote)) = &extension {
                         // This point is AFTER current nonce/device/rights authentication.
-                        let key = serde_json::to_string(&(&ok.instance_id, device, &ok.epoch, ok.rights_ver, &remote.session_id)).unwrap();
+                        let key = serde_json::to_string(&(
+                            &ok.instance_id,
+                            device,
+                            &ok.epoch,
+                            ok.rights_ver,
+                            &remote.session_id,
+                        ))
+                        .unwrap();
                         let state = {
                             let mut states = self.reliable.lock();
-                            if !states.contains_key(&key) && states.len() >= 128 { return Err(new_rx_error("ctox_v4_session_capacity", None)); }
-                            states.entry(key).or_insert_with(|| ReliableSession::new(remote.session_id.clone(), [131072,1048576,131072,4194304,8388608,16777216]).expect("validated session limits")).clone()
+                            if !states.contains_key(&key) && states.len() >= 128 {
+                                return Err(new_rx_error("ctox_v4_session_capacity", None));
+                            }
+                            states
+                                .entry(key)
+                                .or_insert_with(|| {
+                                    ReliableSession::new(
+                                        remote.session_id.clone(),
+                                        [131072, 1048576, 131072, 4194304, 8388608, 16777216],
+                                    )
+                                    .expect("validated session limits")
+                                })
+                                .clone()
                         };
                         Some(SessionBinding::attach(state, remote)?)
-                    } else { None };
+                    } else {
+                        None
+                    };
                     let frame = HelloFrame::HelloOk(ok);
                     let response = if let Some(binding) = &binding {
-                        let bytes = binding.state.hello().encode(&frame).map_err(|_| new_rx_error("ctox_v4_session_hello", None))?;
-                        let mut value: Value = serde_json::from_slice(&bytes).map_err(|_| new_rx_error("ctox_v4_session_hello", None))?;
-                        value["core_time_ms"] = super::SystemTime::now().duration_since(super::UNIX_EPOCH).unwrap_or_default().as_millis().try_into().unwrap_or(u64::MAX).into();
-                        serde_json::to_vec(&value).map_err(|_| new_rx_error("ctox_v4_session_hello", None))?
-                    } else { frame.encode().map_err(|_| new_rx_error("ctox_v4_invalid_hello", None))? };
-                    if let Err(error) = handler
-                        .send_v4_bootstrap_bytes(peer, &response)
-                        .await
-                    {
+                        let bytes = binding
+                            .state
+                            .hello()
+                            .encode(&frame)
+                            .map_err(|_| new_rx_error("ctox_v4_session_hello", None))?;
+                        let mut value: Value = serde_json::from_slice(&bytes)
+                            .map_err(|_| new_rx_error("ctox_v4_session_hello", None))?;
+                        value["core_time_ms"] = super::SystemTime::now()
+                            .duration_since(super::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis()
+                            .try_into()
+                            .unwrap_or(u64::MAX)
+                            .into();
+                        serde_json::to_vec(&value)
+                            .map_err(|_| new_rx_error("ctox_v4_session_hello", None))?
+                    } else {
+                        frame
+                            .encode()
+                            .map_err(|_| new_rx_error("ctox_v4_invalid_hello", None))?
+                    };
+                    if let Err(error) = handler.send_v4_bootstrap_bytes(peer, &response).await {
                         handler.publish_v4_error(error.clone());
                         handler.close_peer(peer).await;
                         return Err(error);
@@ -6708,11 +6768,26 @@ pub mod v4_router {
                     if let Some(source) = &self.config.application {
                         let owner = source.clone();
                         let remote_peer = peer.to_string();
-                        let sender = handler.activate_v4_session_send_path(peer, transport, binding.ok_or_else(|| new_rx_error("ctox_v4_session_hello", None))?, Arc::new(move |_, _, bytes| {
-                            let packet: Value = serde_json::from_slice(bytes).map_err(|_| new_rx_error("ctox_v4_application_contract", None))?;
-                            owner.publication(&remote_peer, &packet)
-                        })).await?;
-                        *session.application.lock() = Some(super::v4_session::V4Session::start(peer.to_string(), sender, source.clone())?);
+                        let sender = handler
+                            .activate_v4_session_send_path(
+                                peer,
+                                transport,
+                                binding
+                                    .ok_or_else(|| new_rx_error("ctox_v4_session_hello", None))?,
+                                Arc::new(move |_, _, bytes| {
+                                    let packet: Value =
+                                        serde_json::from_slice(bytes).map_err(|_| {
+                                            new_rx_error("ctox_v4_application_contract", None)
+                                        })?;
+                                    owner.publication(&remote_peer, &packet)
+                                }),
+                            )
+                            .await?;
+                        *session.application.lock() = Some(super::v4_session::V4Session::start(
+                            peer.to_string(),
+                            sender,
+                            source.clone(),
+                        )?);
                     }
                     handler.publish_v4_connected(peer.clone());
                     Ok(())
@@ -6768,7 +6843,9 @@ pub mod v4_router {
         pub async fn drain(&self) {
             self.registry.drain_all().await;
             self.sessions.lock().clear();
-            for (_, state) in self.reliable.lock().drain() { state.retire(); }
+            for (_, state) in self.reliable.lock().drain() {
+                state.retire();
+            }
         }
     }
 
