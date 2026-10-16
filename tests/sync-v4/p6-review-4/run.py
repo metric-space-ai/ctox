@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""Run only in the assigned GPU lane. Default exits red for any regression.
+
+The root binary is built from the requested train before test-only wiring.
+Private modules are wired only in the lane checkout and restored in finally.
+R13 uses the pinned #827 authority because train7 does not yet include it;
+this explicit composition is recorded, never represented as train7 alone.
+"""
+import argparse, hashlib, json, os, re, shutil, subprocess, sys, time
+from pathlib import Path
+
+ROOT = Path.cwd()
+HERE = ROOT / 'tests/sync-v4/p6-review-4'
+TRAIN = '59849cee53a9919e657e3a2ed82c8fd1f75595fa'
+RIGHTS = "7f972f89b72aa4da7af19b5fae07d50f23c6a600"
+USE_CURRENT_RIGHTS = (ROOT / "src/core/store/rights.rs").is_file()
+if USE_CURRENT_RIGHTS:
+    RIGHTS = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--only', choices=['all', 'r10', 'r13', 'r14', 'scenarios'], default='all')
+parser.add_argument('--expect-red', action='store_true', help='qualify specifically reproduced assertion failures; default remains a red target')
+args = parser.parse_args()
+assert sys.platform == 'linux' and os.environ.get('BUILD_LANE_BIN') and os.environ.get('CARGO_TARGET_DIR'), 'canonical GPU lane required'
+TARGET = Path(os.environ['CARGO_TARGET_DIR'])
+OUT = TARGET / ('p6-review4-' + time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()))
+OUT.mkdir(parents=True)
+STEPS = []
+(OUT/"test-source-binding.json").write_text(json.dumps({str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in HERE.iterdir() if p.is_file()},indent=2))
+
+RESULTS = {}
+
+def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
+def save():
+    (OUT/'results.json').write_text(json.dumps(dict(train=TRAIN, rights_composition=RIGHTS,
+        source_head=subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip(),
+        steps=STEPS, results=RESULTS), indent=2)+'\n')
+def run(name, command, timeout=1200, **kwargs):
+    at=time.time()
+    p=subprocess.run([str(x) for x in command], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, timeout=timeout, **kwargs)
+    (OUT/(name+'.log')).write_text(p.stdout)
+    STEPS.append(dict(name=name, command=[str(x) for x in command], exit=p.returncode, seconds=time.time()-at))
+    save(); print(name, 'exit', p.returncode, flush=True)
+    if p.returncode: print(p.stdout[-10000:], flush=True)
+    return p
+
+def test_binary(name, command):
+    p=run(name, command+['--no-run','--message-format=json'], 1800)
+    assert p.returncode == 0, 'build unverified: '+name
+    bins=[]
+    for line in p.stdout.splitlines():
+        try: row=json.loads(line)
+        except ValueError: continue
+        if row.get('reason')=='compiler-artifact' and row.get('profile',{}).get('test') and row.get('executable'):
+            bins.append(row['executable'])
+    assert len(bins)==1, bins
+    return bins[0]
+
+def wire(path, source, name):
+    original=path.read_bytes()
+    path.write_bytes(original+f'\n#[cfg(test)]\n#[path = {json.dumps(str(source))}]\nmod {name};\n'.encode())
+    return original
+
+# Reflink only immutable-looking cargo outputs into this order's own new cache.
+# No build shares a writable target. Failure to reflink is not a copy fallback.
+if not (TARGET/'debug/deps').exists():
+    seed=Path('/mnt/sata8t/lane/target/v4-train')
+    if seed.exists() and seed.resolve()!=TARGET.resolve():
+        p=run('cache-reflink', ['cp','-a','--reflink=always',str(seed/'debug'),str(TARGET/'debug')],180)
+        assert p.returncode==0, 'cache seed failed; no system-volume fallback'
+
+run('diff-check',['git','diff','--check'])
+for path in sorted((ROOT/'tests/sync-v4/k13').glob('*.mjs')):
+    assert run('syntax-'+path.stem,['node','--check',path]).returncode==0
+assert run('existing-oracles',['node','--test',ROOT/'tests/sync-v4/k13/oracles.test.mjs']).returncode==0
+
+if args.only in ('all','scenarios'):
+    p=run('train-daemon-build',['cargo','build','--locked','--bin','ctox','--jobs','2'],1800)
+    if p.returncode==0:
+        binary=TARGET/'debug/ctox'
+        receipt=OUT/'train-build.json'
+        receipt.write_text(json.dumps(dict(pass_=True, **{'pass':True}, terminal=True,
+            revision=TRAIN,binary=str(binary),binarySha256=digest(binary),source=str(ROOT)),indent=2))
+        p=run('train-incidents',['node',ROOT/'tests/sync-v4/k13/run.mjs',
+            '--build',receipt,'--expected-revision',TRAIN],2700)
+        # The default runner creates a new private artifact output; locate it
+        # from the printed evidence path rather than guessing a producer pass.
+        RESULTS['scenarios']=dict(exit=p.returncode,log=str(OUT/'train-incidents.log'))
+    else: RESULTS['scenarios']=dict(status='build unverified',exit=p.returncode)
+    save()
+
+if args.only in ('all','r10','r14'):
+    sources={ROOT/'src/core/service/store_startup.rs':(HERE/'r10.rs','p6_review4'),
+             ROOT/'src/core/store/lcm_adapter.rs':(HERE/'r14.rs','p6_review4')}
+    originals={}
+    try:
+        for path,(source,name) in sources.items(): originals[path]=wire(path,source,name)
+        exe=test_binary('train-tests-build',['cargo','test','--locked','--bin','ctox','--jobs','2'])
+        if args.only in ('all','r10'):
+            p=run('r10',[exe,'service::store_startup::p6_review4::r10_failed_start_must_retain_custody_until_engine_drains','--exact','--nocapture','--test-threads=1'],60)
+            RESULTS['r10']=dict(exit=p.returncode, reproduced=p.returncode!=0 and 'R10: maintenance acquired custody' in p.stdout)
+            save()
+        if args.only in ('all','r14'):
+            assert shutil.which('strace'), 'R14 build unverified: strace missing'
+            p=run('r14-probe',['strace','-ff','-s','4096','-e','trace=%file,write','-o',OUT/'r14-strace',exe,
+                'context::lcm::owner_adapter::p6_review4::r14_attach_syscall_probe','--exact','--nocapture','--test-threads=1'],60)
+            assert p.returncode==0 and 'R14_PATH ' in p.stdout, 'R14 probe did not execute'
+            match=re.search(r'R14_PATH (.+)',p.stdout); path=match.group(1).strip()
+            violations=[];polls=0
+            for trace in OUT.glob('r14-strace.*'):
+                active=False
+                for number,line in enumerate(trace.read_text().splitlines(),1):
+                    if 'R14_POLL_BEGIN tid=' in line: active=True;polls+=1
+                    elif 'R14_POLL_END tid=' in line: active=False
+                    elif active and ('p6-r14-owned.sqlite3' in line or str(Path(path).parent) in line) and re.match(r'(statx|newfstatat|readlink|readlinkat|lstat|stat|access)\(',line):
+                        violations.append(dict(trace=trace.name,line=number,syscall=line))
+            assert polls>0, 'R14 syscall observer did not see async polls'
+            RESULTS['r14']=dict(exit=1 if violations else 0,reproduced=bool(violations),polls=polls,violations=violations)
+            save(); print('R14 async filesystem violations',len(violations),flush=True)
+    finally:
+        for path,original in originals.items():path.write_bytes(original)
+        RESULTS['train_sources_restored']=all(path.read_bytes()==data for path,data in originals.items());save()
+
+if args.only in ('all','r13'):
+    harness=OUT/'r13-harness';(harness/'src').mkdir(parents=True)
+    inputs=['src/core/business_os/policy.rs']+['src/core/store/'+name+'.rs' for name in
+        ['rights','scope','manifest_rules','rights_matrix_tests','rights_tests','scope_tests']]+['src/core/rxdb/src/plugins/replication_webrtc/scope_filter.rs']
+    bindings={}
+    for relative in inputs:
+        dest=harness/relative;dest.parent.mkdir(parents=True,exist_ok=True)
+        dest.write_bytes((ROOT/relative).read_bytes() if USE_CURRENT_RIGHTS else subprocess.check_output(["git","show",RIGHTS+":"+relative]))
+
+        bindings[relative]=digest(dest)
+    coding=harness/'coding';coding.mkdir()
+    for name in ['draft_turn.rs','draft_turn_tests.rs']:shutil.copyfile(ROOT/'src/core/coding_agents'/name,coding/name)
+    with (coding/'draft_turn_tests.rs').open('a') as stream:
+        stream.write(f'\n#[path = {json.dumps(str(HERE/"r13.rs"))}]\nmod p6_review4;\n')
+    toml=f'''[package]
+name="ctox-p6-review4-r13"
+version="0.1.0"
+edition="2021"
+[workspace]
+[dependencies]
+ctox-store={{path="{ROOT}/src/core/store"}}
+rxdb={{package="ctox-rxdb",path="{ROOT}/src/core/rxdb"}}
+base64="=0.22.1"
+ring="=0.17.14"
+rusqlite={{version="=0.32.1",features=["bundled","hooks"]}}
+serde={{version="=1.0.228",features=["derive"]}}
+serde_json={{version="=1.0.151",features=["preserve_order"]}}
+sha2="=0.10.9"
+uuid={{version="=1.23.0",features=["v4"]}}
+tempfile="=3.27.0"
+anyhow="=1.0.102"
+zeroize="=1.9.1"
+tokio={{version="1",features=["macros","rt-multi-thread","time","sync"]}}
+futures-util="0.3"
+async-trait="0.1"
+[patch.crates-io]
+rtc-ice={{path="{ROOT}/src/core/rxdb/patches/rtc-ice"}}
+rtc={{path="{ROOT}/src/core/rxdb/patches/rtc"}}
+webrtc={{path="{ROOT}/src/core/rxdb/patches/webrtc"}}
+'''
+    (harness/'Cargo.toml').write_text(toml);shutil.copyfile(ROOT/'Cargo.lock',harness/'Cargo.lock')
+    (harness/'src/lib.rs').write_text('''#![allow(dead_code)]
+pub mod crew {pub const PUBLIC_MEMBER_FIELDS: &[&str]=&["id","name"];}
+pub mod secrets { pub fn with_current_secret_value<T>(_:&std::path::Path,_:&str,_:&str,
+ _:impl FnOnce(&[u8])->anyhow::Result<T>)->anyhow::Result<T>{anyhow::bail!("compile-only provider; no credential access")} }
+pub mod business_os {pub mod session {
+pub struct BusinessOsSession;
+pub fn session_user_id(_:&BusinessOsSession)->Option<&str>{None}
+pub fn session_role(_:&BusinessOsSession)->&'static str{"user"}}
+'''+f'#[path="{harness}/src/core/business_os/policy.rs"] pub mod policy;\n}}\n'+
+        f'#[path="{coding}/draft_turn.rs"] mod draft_turn;\n')
+    (OUT/'r13-source-binding.json').write_text(json.dumps(dict(policy_revision=RIGHTS,policy_files=bindings,
+        draft_source_revision=TRAIN,draft_sha256=digest(coding/'draft_turn.rs'),
+        limitations='session/credential/crew signatures only; real policy, writer and CodingPanel; scripted model reply, not sidecar E2E'),indent=2))
+    exe=test_binary('r13-build',['cargo','test','--manifest-path',harness/'Cargo.toml','--lib','--jobs','2'])
+    p=run('r13',[exe,'draft_turn::tests::p6_review4::r13_inflight_reply_cannot_patch_draft_after_committed_rights_revocation','--exact','--nocapture','--test-threads=1'],60)
+    RESULTS['r13']=dict(exit=p.returncode,reproduced=p.returncode!=0 and 'R13: draft changed after' in p.stdout);save()
+
+required=['r10','r13','r14'] if args.only=='all' else [args.only]
+if args.expect_red:
+    qualified=all(RESULTS.get(name,{}).get('reproduced') is True for name in required if name!='scenarios')
+    assert qualified, 'expected functional counterexample not reproduced; inspect individual logs'
+    print('P6_REVIEW4_FUNCTIONAL_RED_TARGETS_QUALIFIED',OUT,flush=True)
+    sys.exit(0)
+print('P6_REVIEW4_RESULTS',OUT,flush=True)
+sys.exit(1 if any(RESULTS.get(name,{}).get('exit',1)!=0 for name in required) else 0)
