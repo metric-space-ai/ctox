@@ -11,6 +11,7 @@ pub mod config;
 pub mod harness_adapter;
 pub mod import;
 pub mod ipc;
+pub mod preferences;
 pub mod publication;
 pub mod read_pool;
 pub mod registry;

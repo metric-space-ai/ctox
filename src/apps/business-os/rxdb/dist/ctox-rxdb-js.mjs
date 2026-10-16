@@ -95,6 +95,7 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   accounting_recurring_invoices: "924982a4dc4773c2fdc01bf5a05a29ee26fd3e5708f69a6ad061bef0dadcc67a",
   app_activations: "70ddf888c34a858ee7371acdda6b45f60e831a38867d6c598b6451ad8dab661a",
   app_drafts: "906e86981a483ca4106f517e8e0238bfe12f00128ee5c6840ae4e3bd6a5756b8",
+  app_user_preferences: "7fe59b9f151a8a8eb0bb61ff7bcc8aa0340c67647d0669a287a4f787bb57f33e",
   applications: "ef7b52e117777575029346888b1c17412e2f4bda0ef9ca6c5a5e89c54a310e00",
   appsec_approvals: "ab75d7da2d137f7a328e99735d3fc0350be18d7cbbffccc05cd84dccca5feaf3",
   appsec_artifacts: "96e48a95be0e013773561dd52b5be8170d13aa0409488d5569e7060654eb22e1",
