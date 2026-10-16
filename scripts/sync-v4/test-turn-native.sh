@@ -21,7 +21,9 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 # The lane overlays preserve mtimes. A corrected source may otherwise be older
 # than a prior SDK artifact, so force Cargo to inspect this producer's sources.
+touch src/core/rxdb/patches/rtc-turn/src/client/relay.rs
 touch src/core/rxdb/patches/webrtc/src/peer_connection/{ice_gatherer,turn_socket,mod,driver}.rs
+cargo test --locked --offline --manifest-path src/core/rxdb/Cargo.toml --test turn_native_browser turn_relay_gatherer_wire_roundtrips_agent_parser -- --nocapture
 cargo test --locked --offline --manifest-path src/core/rxdb/Cargo.toml --test turn_native_browser --no-run
 if [[ -z "${TURN_NATIVE_SERVER:-}" ]]; then
   mkdir -p "$OUT/debs" "$OUT/coturn"
@@ -36,7 +38,7 @@ openssl req -newkey rsa:2048 -nodes -keyout "$OUT/server.key" -out "$OUT/server.
 printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' > "$OUT/server.ext"
 openssl x509 -req -in "$OUT/server.csr" -CA "$OUT/ca.pem" -CAkey "$OUT/ca.key" -CAcreateserial -out "$OUT/server.pem" -days 1 -extfile "$OUT/server.ext" >>"$OUT/cert.log" 2>&1
 export SSL_CERT_FILE="$OUT/ca.pem"
-"$TURN_NATIVE_SERVER" -n --use-auth-secret --static-auth-secret=turn-native-fixture-only --realm=fixture.test \
+"$TURN_NATIVE_SERVER" -n -v --use-auth-secret --static-auth-secret=turn-native-fixture-only --realm=fixture.test \
  --no-cli --no-udp --no-dtls --no-tcp-relay --allow-loopback-peers --relay-threads=1 \
  --listening-ip=127.0.0.1 --relay-ip=127.0.0.1 --listening-port="$TURN_PORT" --tls-listening-port="$TLS_PORT" \
  --min-port=49300 --max-port=49399 --max-allocate-lifetime=6 --cert="$OUT/server.pem" --pkey="$OUT/server.key" \

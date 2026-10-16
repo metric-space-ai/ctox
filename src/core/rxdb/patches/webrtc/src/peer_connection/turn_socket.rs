@@ -212,7 +212,10 @@ impl TurnSocket {
         let (packets, receive) = mpsc::channel(MAX_PENDING);
         let (allocated, allocation) = oneshot::channel();
         let task = tokio::spawn(async move {
-            let _ = run(wire, client, local, server, requests, packets, allocated).await;
+            if let Err(error) = run(wire, client, local, server, requests, packets, allocated).await
+            {
+                log::warn!("native TURN task stopped: {error}");
+            }
         });
         let mut socket = Self {
             address: local,
@@ -237,7 +240,9 @@ async fn run(
     packets: mpsc::Sender<(Vec<u8>, SocketAddr)>,
     allocated: oneshot::Sender<io::Result<SocketAddr>>,
 ) -> io::Result<()> {
-    client.allocate().map_err(|_| fail())?;
+    client
+        .allocate()
+        .map_err(|_| io::Error::other("TURN allocation start"))?;
     let mut allocated = Some(allocated);
     let mut relay = None;
     let mut pending = VecDeque::<SendRequest>::new();
@@ -266,7 +271,9 @@ async fn run(
                         let _ = reply.send(Ok(address));
                     }
                 }
-                Event::AllocateError(..) => return Err(fail()),
+                Event::AllocateError(..) => {
+                    return Err(io::Error::other("TURN allocation rejected"));
+                }
                 Event::DataIndicationOrChannelData(_, peer, bytes) => {
                     // Bound receive memory. Dropping a network datagram under load
                     // preserves UDP semantics; SCTP remains the reliable layer.
@@ -278,10 +285,12 @@ async fn run(
         if let Some(address) = relay {
             let mut waiting = VecDeque::new();
             while let Some(request) = pending.pop_front() {
-                let mut allocation = client.relay(address).map_err(|_| fail())?;
-                allocation
-                    .create_permission(request.peer)
-                    .map_err(|_| fail())?;
+                let mut allocation = client
+                    .relay(address)
+                    .map_err(|_| io::Error::other("TURN relay state unavailable"))?;
+                allocation.create_permission(request.peer).map_err(|e| {
+                    io::Error::other(format!("TURN permission {:?}", std::mem::discriminant(&e)))
+                })?;
                 if allocation.send_to(&request.bytes, request.peer).is_err()
                     && request.queued_at.elapsed() < ALLOCATION_TIMEOUT
                 {
@@ -307,9 +316,9 @@ async fn run(
             bytes = wire.receive() => {
                 client.handle_read(TaggedBytesMut { now: Instant::now(), transport: TransportContext {
                     local_addr: local, peer_addr: server, transport_protocol: TransportProtocol::UDP, ecn: None,
-                }, message: BytesMut::from(bytes?.as_slice()) }).map_err(|_| fail())?;
+                }, message: BytesMut::from(bytes.map_err(|e| io::Error::new(e.kind(), "TURN wire receive"))?.as_slice()) }).map_err(|e| io::Error::other(format!("TURN client read {:?}", std::mem::discriminant(&e))))?;
             }
-            _ = tokio::time::sleep_until(timeout.into()) => { client.handle_timeout(Instant::now()).map_err(|_| fail())?; }
+            _ = tokio::time::sleep_until(timeout.into()) => { client.handle_timeout(Instant::now()).map_err(|e| io::Error::other(format!("TURN client timer {:?}", std::mem::discriminant(&e))))?; }
         }
     }
 }
