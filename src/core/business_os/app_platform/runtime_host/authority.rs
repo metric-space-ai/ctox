@@ -32,6 +32,7 @@ pub(crate) struct RuntimeAuthority {
     pub(super) codec: Arc<RuntimeCodec>,
     held: RwLock<HashMap<String, Held>>,
     myself: Weak<RuntimeAuthority>,
+    health: RwLock<Option<tokio::sync::watch::Sender<feed::FeedHealth>>>,
 }
 impl RuntimeAuthority {
     pub(super) fn new(
@@ -47,16 +48,75 @@ impl RuntimeAuthority {
             codec,
             held: Default::default(),
             myself: myself.clone(),
+            health: RwLock::new(None),
         })
+    }
+    pub(super) fn set_health(
+        &self,
+        health: tokio::sync::watch::Sender<feed::FeedHealth>,
+    ) -> Result<()> {
+        *self
+            .health
+            .write()
+            .map_err(|_| anyhow!("unavailable: health lock"))? = Some(health);
+        Ok(())
+    }
+    pub(super) fn health(&self) -> tokio::sync::watch::Sender<feed::FeedHealth> {
+        self.health
+            .read()
+            .ok()
+            .and_then(|v| v.clone())
+            .unwrap_or_else(|| tokio::sync::watch::channel(feed::FeedHealth::Healthy).0)
+    }
+    pub(super) fn effect_uncertain(&self, id: &str) -> Result<()> {
+        let status = feed::FeedHealth::ReconciliationRequired {
+            code: "effect_uncertain",
+            command_id: id.into(),
+        };
+        eprintln!("native app feed health={}", serde_json::to_string(&status)?);
+        self.health().send_replace(status);
+        Ok(())
     }
     fn query<T: Send + 'static>(
         &self,
         stage: &'static str,
-        read: impl FnOnce(&Connection) -> Result<T, StoreError> + Send + 'static,
+        read: impl Fn(&Connection) -> Result<T, StoreError> + Send + Sync + 'static,
     ) -> Result<T> {
         let pool = self.database.readers.clone();
+        let health = self.health();
+        let read = Arc::new(read);
         wait(&self.runtime, async move {
-            observed_read(pool, stage, ReadJob::new(JobOptions::default(), read)).await
+            tokio::time::timeout(
+                Duration::from_secs(12),
+                feed::resilient_read(pool, stage, &health, &mut 1, |_| {
+                    let read = read.clone();
+                    ReadJob::new(JobOptions::default(), move |db| {
+                        #[cfg(test)]
+                        if stage == "authority.admit" {
+                            feed::load_source::before_admission(db);
+                        }
+                        read(db)
+                    })
+                }),
+            )
+            .await
+            .unwrap_or(Err(StoreError::Busy))
+        })
+        .map_err(|error| {
+            if matches!(
+                error.downcast_ref::<StoreError>(),
+                Some(StoreError::Busy | StoreError::DeadlineExceeded)
+            ) {
+                ctox_app_runtime::HandlerError {
+                    code: "quota".into(),
+                    message: "read_overload".into(),
+                    uncertain: false,
+                    path: None,
+                }
+                .into()
+            } else {
+                error
+            }
         })
     }
     pub(super) fn binding(
@@ -343,6 +403,27 @@ impl RuntimeAuthority {
     }
 }
 impl CoreAuthority for RuntimeAuthority {
+    fn read_pressure(&self, stage: &'static str, attempts: u32) {
+        let health = self.health();
+        if matches!(
+            &*health.borrow(),
+            feed::FeedHealth::ReconciliationRequired { .. }
+        ) {
+            return;
+        }
+        if attempts > 0 {
+            health.send_replace(feed::FeedHealth::Degraded {
+                code: "read_overload",
+                stage,
+                attempts,
+                callback_cpu_us: None,
+                page_limit: 1,
+            });
+        } else if matches!(&*health.borrow(), feed::FeedHealth::Degraded { code: "read_overload", stage: prior, .. } if *prior == stage)
+        {
+            health.send_replace(feed::FeedHealth::Healthy);
+        }
+    }
     fn platform_command(&self, kind: &str) -> bool {
         routing::core_route(kind)
     }
@@ -630,15 +711,17 @@ impl RuntimeAuthority {
             return Ok(());
         }
         for binding in bindings {
-            let b = binding.clone();
-            let settled = self.database.readers.read_job(ReadJob::new(Default::default(), move |db| {
+            let health = self.health();
+            let settled = feed::resilient_read(self.database.readers.clone(), "event.finalize", &health, &mut 1, |_| {
+                let b = binding.clone();
+                ReadJob::new(Default::default(), move |db| {
                 let app=text(&b["command"],"app_id").map_err(sql_error)?;
                 let trigger=text(&b["command"]["client_context"],"trigger_id").map_err(sql_error)?;
                 let row: Option<(bool,String,u64,Option<String>)> = db.query_row(
                     "SELECT running,run_id,fence,outcome FROM _app_runtime_triggers WHERE app_id=?1 AND trigger_id=?2",
                     params![app,trigger],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
                 Ok(row.is_some_and(|(running,run,fence,outcome)| !running && b["fence"]["run_id"]==run && b["fence"]["fence"]==fence && outcome.as_deref().and_then(|s|serde_json::from_str::<Value>(s).ok()).is_some_and(|v|v["status"]=="completed" && v["uncertain"]!=true)))
-            })).await?;
+            })}).await?;
             if settled {
                 self.finish_event_record(&binding, "done").await?;
                 self.release(&binding).await?;
@@ -694,7 +777,7 @@ impl RuntimeAuthority {
         let task = format!("command:{id}");
         let codec = self.codec.clone();
         let saved=self.query("authority.completion_binding", move |db| {
-            let row:Option<(String,String,String,Option<String>,Option<String>)>=db.query_row("SELECT app_id,app_ver,actor_id,on_complete,on_failed FROM _app_runtime_completions WHERE task_id=?1 AND state='pending'",[task],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
+            let row:Option<(String,String,String,Option<String>,Option<String>)>=db.query_row("SELECT app_id,app_ver,actor_id,on_complete,on_failed FROM _app_runtime_completions WHERE task_id=?1 AND state='pending'",[task.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
             let Some((app,ver,actor_id,complete,failed))=row else{return Ok(None)};
             let target=document(db,"business_commands",&id)?.ok_or_else(||invalid("not_found: completed command"))?;
             let status=match target["status"].as_str(){Some("done"|"completed")=>"completed",Some("cancelled")=>"cancelled",Some("failed"|"rejected")=>"failed",_=>return Err(invalid("conflict: command is not terminal"))};

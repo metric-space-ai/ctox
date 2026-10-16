@@ -19,7 +19,9 @@ async fn intent(
         }))?
         .await;
     match written {
-        Ok(()) => terminal(database, "business_commands", id).await,
+        Ok(()) => {
+            super::receipt(database, "business_commands", id, routing::core_route(kind)).await
+        }
         Err(error) => {
             let code = match &error {
                 StoreError::Invalid(reason) => error_code(reason),
@@ -248,6 +250,17 @@ pub(super) async fn prove(database: &Database, cas: &Cas) -> Result<()> {
                 && feed::core_route_probe::observed(&format!("e39-platform-{index}")),
             "E42 route fell into app admission instead of Core: {result}"
         );
+        if result["error"]["uncertain"] == true {
+            anyhow::ensure!(
+                result["status"] == "running"
+                    && result["result"]["state"] == "reconciliation_required",
+                "uncertain Core effect must stay pending: {result}"
+            );
+            anyhow::ensure!(
+                feed::core_route_probe::count(&format!("e39-platform-{index}")) == 1,
+                "uncertain Core effect was replayed"
+            );
+        }
     }
     // Real current user/assignment data; authority and signer remain native owners.
     database

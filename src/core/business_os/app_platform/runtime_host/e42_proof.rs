@@ -19,7 +19,9 @@ async fn install(
             &hash,
             bytes.len() as u64,
         )?;
-        upload.append(0, &bytes)?;
+        for (index, chunk) in bytes.chunks(512 * 1024).enumerate() {
+            upload.append((index * 512 * 1024) as u64, chunk)?;
+        }
         upload.finish()?;
         let file = json!({"id":hash,"ref":hash,"size":bytes.len(),"owner_app":app,"name":path,"mime":"text/javascript"});
         let id = hash.clone();

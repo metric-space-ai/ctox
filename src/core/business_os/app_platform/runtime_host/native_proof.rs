@@ -85,6 +85,16 @@ impl Signal {
 }
 
 pub(super) async fn terminal(database: &Database, name: &str, id: &str) -> Result<Value> {
+    receipt(database, name, id, false).await
+}
+// Only routing probes accept a durable uncertain acknowledgement. Strict
+// business-result guards still require a terminal value through terminal().
+pub(super) async fn receipt(
+    database: &Database,
+    name: &str,
+    id: &str,
+    allow_uncertain: bool,
+) -> Result<Value> {
     let mut commits = database.writer.subscribe_commits();
     let name = name.to_owned();
     let id = id.to_owned();
@@ -94,12 +104,15 @@ pub(super) async fn terminal(database: &Database, name: &str, id: &str) -> Resul
         loop {
             let n = name.clone();
             let i = id.clone();
-            let doc = observed_read(database.readers.clone(), "proof_terminal", ReadJob::new(Default::default(), move |db| {
-                document(db, &n, &i)
-            })).await.with_context(|| format!("native terminal read {name}/{id}"))?;
+            let (health, _) = tokio::sync::watch::channel(feed::FeedHealth::Healthy);
+            let doc = feed::resilient_read(database.readers.clone(), "proof_terminal", &health, &mut 1, |_| {
+                let n = n.clone(); let i = i.clone();
+                ReadJob::new(Default::default(), move |db| document(db, &n, &i))
+            }).await.with_context(|| format!("native terminal read {name}/{id}"))?;
             if let Some(doc) = doc {
                 observed = json!({"present":true,"status":doc["status"],"error_code":doc["error"]["code"]});
-                if name != "business_commands"
+                if (allow_uncertain && doc["status"] == "running" && doc["error"]["uncertain"] == true && doc["result"]["state"] == "reconciliation_required")
+                    || name != "business_commands"
                     || matches!(
                         doc["status"].as_str(),
                         Some("done" | "failed" | "cancelled")
@@ -314,8 +327,17 @@ async fn run_native_proof(proof: Proof) -> Result<()> {
         let publish_us=started.elapsed().as_micros();
         eprintln!("APP_FEED_EVENT ts={} event=install_complete app=hot-app", now());
         anyhow::ensure!(delayed_pages.exhausted(), "native change source load was not exercised");
+        let delayed_admission = feed::load_source::delay_admission(database.writer.db_id().path(), 3);
+        let delayed_cursor = feed::load_source::delay_cursor(database.writer.db_id().path(), 1);
+        let mut cursor_commits = database.writer.subscribe_commits();
         let result=submit(database,"hot-write","hot-app","hot.echo",json!({"id":"one","n":7,"write":true})).await?;
         anyhow::ensure!(result["status"]=="done"&&result["result"]["n"]==7,"native handler roundtrip failed: {result}");
+        anyhow::ensure!(delayed_admission.exhausted(), "native admission did not retry genuine Store deadlines");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !delayed_cursor.exhausted() { cursor_commits.changed().await?; }
+            Ok::<_, anyhow::Error>(())
+        }).await??;
+        anyhow::ensure!(delayed_cursor.exhausted(), "native cursor did not retry a genuine rolled-back Store deadline");
         if proof == Proof::Platform {
             let result=submit(database,"e39-platform-only","hot-app","ctox.workjet.project.list",json!({})).await?;
             anyhow::ensure!(feed::core_route_probe::observed("e39-platform-only"),"E39 platform route must invoke Core, never an app process: {result}");
@@ -360,6 +382,7 @@ async fn run_native_proof(proof: Proof) -> Result<()> {
             anyhow::ensure!(result["status"]=="done"&&result["result"]["n"]==i,"native echo failed: {result}");samples.push(started.elapsed().as_micros());
         }
         samples.sort_unstable();
+        anyhow::ensure!(feed::core_route_probe::count("e39-platform-8") == 1, "uncertain Core effect was replayed while later commands ran");
         let active=database.readers.read_job(ReadJob::new(Default::default(),|db|document(db,"business_apps","hot-app"))).await?.context("active app missing")?;
         let removed=submit(database,"hot-remove","ctox-platform","ctox.app.remove",json!({"app_id":"hot-app","base_app_ver":active["active_ver"]})).await?;
         anyhow::ensure!(removed["status"]=="done","native remove failed: {removed}");
