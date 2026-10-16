@@ -163,6 +163,13 @@ async fn foreground_owns_real_files_and_drains_engine_before_store() -> anyhow::
     assert!(sync.readers.read(|tx|tx.query_row("SELECT EXISTS(SELECT 1 FROM c_ctox_queue_tasks WHERE id='foreground-ack' AND deleted=0)",[],|r|r.get::<_,bool>(0))).await?);
     let first_signer = foreground.inputs.instance_signer()?;
     let first_public = first_signer.key_id().to_owned();
+    let canonical_instance_id =
+        tokio::fs::read_to_string(root.join("runtime/business-os-instance-id")).await?;
+    assert_eq!(
+        first_signer.instance_id(),
+        canonical_instance_id.trim(),
+        "packet signer changed canonical instance ID"
+    );
     assert!(
         foreground.inputs.native_session().is_err(),
         "unenrolled daemon minted authority"
@@ -240,6 +247,10 @@ async fn foreground_owns_real_files_and_drains_engine_before_store() -> anyhow::
             std::fs::copy(
                 key,
                 destination.join(crate::secrets::SECRET_MASTER_KEY_FILE),
+            )?;
+            std::fs::copy(
+                root.join("runtime/business-os-instance-id"),
+                destination.join("business-os-instance-id"),
             )?;
             Ok(())
         })

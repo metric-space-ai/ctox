@@ -16,12 +16,18 @@ use std::sync::{
 
 pub(super) struct InstanceSigning {
     identity: Arc<SigningIdentity>,
+    instance_id: String,
     public: String,
     active: Arc<AtomicBool>,
 }
 impl InstanceSigning {
-    pub fn new(identity: Arc<SigningIdentity>, active: Arc<AtomicBool>) -> Self {
+    pub fn new(
+        identity: Arc<SigningIdentity>,
+        instance_id: String,
+        active: Arc<AtomicBool>,
+    ) -> Self {
         Self {
+            instance_id,
             public: identity.public_identity(),
             identity,
             active,
@@ -29,10 +35,8 @@ impl InstanceSigning {
     }
 }
 impl InstanceSigner for InstanceSigning {
-    // A self-authenticating stable instance ID, shared with the pinned native
-    // identity. There is no independently generated packet-signing identity.
     fn instance_id(&self) -> &str {
-        &self.public
+        &self.instance_id
     }
     fn key_id(&self) -> &str {
         &self.public
@@ -228,10 +232,11 @@ impl NativeSessionOwner {
         let Some(task) = self.task.as_mut() else {
             return std::future::pending().await;
         };
-        let result = task
-            .await
-            .map_err(|_| std::io::Error::other("native host task failed"))?;
+        // Keep the handle in self while pending: the foreground select may
+        // cancel this wait on SIGTERM and shutdown must still await the task.
+        let result = task.await;
         self.task.take();
+        let result = result.map_err(|_| std::io::Error::other("native host task failed"))?;
         result.map_err(|_| std::io::Error::other("native host session failed"))?;
         Err(std::io::Error::other("native host stopped unexpectedly"))
     }

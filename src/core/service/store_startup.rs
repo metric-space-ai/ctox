@@ -34,10 +34,14 @@ static FACTORIES: OnceLock<Mutex<Factories>> = OnceLock::new();
 #[cfg(all(test, unix))]
 static TEST_ROOTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 #[cfg(all(test, unix))]
-pub(super) struct ForegroundTestScope(tokio::sync::MutexGuard<'static, ()>);
+pub(super) struct ForegroundTestScope {
+    _lock: tokio::sync::MutexGuard<'static, ()>,
+}
 #[cfg(all(test, unix))]
 pub(super) async fn isolate_test_roots() -> ForegroundTestScope {
-    ForegroundTestScope(TEST_ROOTS.lock().await)
+    ForegroundTestScope {
+        _lock: TEST_ROOTS.lock().await,
+    }
 }
 #[cfg(all(test, unix))]
 impl Drop for ForegroundTestScope {
@@ -123,10 +127,18 @@ impl NativeOwners {
             .instance_signing_identity()
             .await
             .map_err(|_| StoreError::Invalid("instance signing identity unavailable".into()))?;
+        let instance_root = inputs.root.clone();
+        let instance_id = tokio::task::spawn_blocking(move || {
+            crate::business_os::store::stable_instance_id(&instance_root)
+        })
+        .await
+        .map_err(|_| StoreError::Panicked)?
+        .map_err(|_| StoreError::Invalid("canonical instance ID unavailable".into()))?;
         let signer_active = Arc::new(AtomicBool::new(true));
         let signer: Arc<dyn rxdb::plugins::replication_webrtc::v4_stream::InstanceSigner> =
             Arc::new(super::store_native::InstanceSigning::new(
                 identity.clone(),
+                instance_id,
                 signer_active.clone(),
             ));
         let mut native = Self {
