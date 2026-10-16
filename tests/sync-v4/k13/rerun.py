@@ -2,7 +2,7 @@
 """Lane-only K rerun; builds the composed source and preserves measured/not-run criteria."""
 import argparse,hashlib,json,os,re,shutil,signal,subprocess,time,zipfile
 from pathlib import Path
-P=argparse.ArgumentParser();P.add_argument('--revision',required=True);P.add_argument('--deadline',type=float,required=True);P.add_argument('--prepare-only',action='store_true');P.add_argument('--reuse-build');P.add_argument('--control-mutation',action='store_true');a=P.parse_args()
+P=argparse.ArgumentParser();P.add_argument('--revision',required=True);P.add_argument('--deadline',type=float,required=True);P.add_argument('--prepare-only',action='store_true');P.add_argument('--reuse-build');P.add_argument('--control-mutation',action='store_true');P.add_argument('--native-only',action='store_true');a=P.parse_args()
 ROOT=Path(__file__).resolve().parents[3];HERE=Path(__file__).resolve().parent
 assert os.environ.get('BUILD_LANE_BIN') and os.environ.get('CARGO_TARGET_DIR'),'canonical lane required'
 OUT=Path(os.environ['CARGO_TARGET_DIR'])/('p6-k-rerun-'+time.strftime('%Y%m%dT%H%M%SZ',time.gmtime()));OUT.mkdir()
@@ -46,6 +46,7 @@ try:
  paths=['src/core/service/store_startup.rs','src/core/service/store_native.rs','src/core/business_os/policy.rs','src/core/business_os/app_platform/runtime_host.rs']
  paths += ['src/apps/business-os/kernel/boot.mjs','src/apps/business-os/kernel/loader.mjs','src/apps/business-os/kernel/transport-webrtc.mjs','src/core/service/store_http.rs','src/core/business_os/store.rs',str(HERE.relative_to(ROOT)/'enrolled-fixture.rs')]
  paths += [str(HERE.relative_to(ROOT)/f) for f in ['control-provider.rs','source-release.rs']]
+ paths += [p for p in ['src/core/service/store_launch.rs','src/core/business_os/launch_context_v4.rs'] if (ROOT/p).is_file()]
  paths += [str(p.relative_to(ROOT)) for d in ['k13','k21','k22'] for p in (ROOT/'tests/sync-v4'/d).glob('*.mjs')]
  (OUT/'source-binding.json').write_text(json.dumps({'expected_revision':a.revision,'remote_git_metadata':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),'hashes':{p:hash_file(ROOT/p) for p in paths}},indent=2)+'\n')
  for file in HERE.glob('*.mjs'):
@@ -81,6 +82,7 @@ try:
  receipt=OUT/'build.json';receipt.write_text(json.dumps(build,indent=2))
  args=['node',HERE/'run.mjs','--build',receipt,'--expected-revision',a.revision]
  if a.prepare_only:args+=['--prepare-only','true']
+ if a.native_only:args+=['--control-only','true']
  code,text=run('scenarios',args,2400)
  path,s=summary(text);results['scenarios']=s['scenarios'];results['artifact_directory']=str(path)
  results['namespace_contract']=private(s);results['acceptance']=s['pass'];save()
@@ -98,7 +100,8 @@ try:
   guard='anyhow::ensure!(actor.is_admin && actor.role == "admin", "admin session required");'
   replacement='anyhow::ensure!(true, "admin session required");'
   assert provider_original.decode().count(guard)==1,'control mutation anchor'
-  original_product=(ROOT/'src/core/business_os/app_platform/runtime_host/native_proof.rs').read_bytes()
+  fixture_source=ROOT/'src/core/business_os/app_platform/runtime_host/native_proof.rs'
+  original_product=fixture_source.read_bytes()
   try:
    provider.write_bytes(provider_original.replace(guard.encode(),replacement.encode()))
    fixture_source=ROOT/'src/core/business_os/app_platform/runtime_host/native_proof.rs'
@@ -114,7 +117,7 @@ try:
   mcode,mtext=run('control-auth-mutation',['node',HERE/'run.mjs','--build',OUT/'control-mutant-build.json','--expected-revision',a.revision,'--scenario','K13','--control-only','true'],180)
   mp,ms=summary(mtext);mutant_case=json.loads((mp/'K13/result.json').read_text())
   positive=all(json.loads((path/r['id']/'result.json').read_text()).get('control',{}).get('nonAdminWriteRejected') is True for r in s['scenarios'])
-  rejected=mcode!=0 and mutant_case.get('error')=='Native control admitted a non-admin fixture write'
+  rejected=mcode!=0 and mutant_case.get('error')=='Native control admitted a non-admin fixture write' and all(r.get('namespaceVerified') and r.get('entryBound') and r.get('cleanup') for r in ms['scenarios'])
   results['control_auth_mutation']={**mutated['mutation'],'positive':positive,'mutant_rejected_for_expected_reason':rejected,'restored_source_sha256':hash_file(provider)};save()
 except Exception as e:
  results['runner_error']=str(e);print('P6_K_ERROR',str(e),flush=True)

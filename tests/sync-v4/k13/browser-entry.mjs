@@ -29,8 +29,21 @@ export async function installBrowserEntry(context, origin) {
       const deviceId=launch.hello.offer.device_proof.device_id;
       if(!deviceId || kernel.identity?.device_id!==deviceId)
         throw Error('not_run(native-device-enrollment): admitted device is not bound to kernel identity');
+      const consumed={scopeRevokes:[],revokedRejections:[]};
+      const events=t.events,revoke=events.revoke,result=events.write_result;
+      events.revoke=async message=>{
+        if(typeof revoke!=='function')throw Error('Kernel scope_revoke consumer missing');
+        await revoke(message);
+        consumed.scopeRevokes.push({rights_ver:message.rights_ver,collections:message.collections,consumed:true});
+      };
+      events.write_result=async message=>{
+        if(typeof result!=='function')throw Error('Kernel write-result consumer missing');
+        await result(message);
+        if(message.status==='rejected' && (message.code==='revoked'||message.reason==='revoked'||message.error?.code==='revoked'))
+          consumed.revokedRejections.push({op_id:message.op_id,code:'revoked',consumed:true});
+      };
       const shell=kernel.shellApi();
-      globalThis.__e2eOS={kernel,shell,transport:t,transportKind:'native-webrtc',nativePeerId:launch.signaling.nativePeerId,
+      globalThis.__e2eOS={kernel,shell,consumed,transport:t,transportKind:'native-webrtc',nativePeerId:launch.signaling.nativePeerId,
         // E38 supplies the device binding; the private native socket resolves
         // the server-issued cookie again for every fixture operation.
         authenticatedControl:{async authenticate(args){
