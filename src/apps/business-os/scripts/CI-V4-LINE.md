@@ -89,3 +89,31 @@ K-C4a `api.put('business_commands')` in news; K-C4b `db.business_commands.insert
 Observation (not a gate failure, same as V2 semantics): `modules/credentials/index.js:521` modifies an existing
 command document with `api.patch('business_commands', …)` (local redaction, V4-PORT OFFEN-2); declared in its manifest
 with ops read+write. V2 never treated modification as an intent write either.
+
+## 4. `assert-ctox-crew-map.mjs` → `assert-ctox-crew-map.v4.mjs`
+
+V2 failure: the ported ctox app imports `ctox:shared/crew-presence.js` etc.; Chromium refuses the unknown scheme
+(CORS "Cross origin requests are only supported for protocol schemes …"), the fixture never sets `__ctoxCrewReady`
+and every scenario times out after 30 s.
+
+| # | V2 invariant | v4 |
+|---|---|---|
+| K1 | only the selected task plus running tasks stand on the map | checked unchanged |
+| K2 | exactly one creature marked selected | checked unchanged |
+| K3 | waiting creature sleeps at `queued`; working creature works at `running` | checked unchanged |
+| K4 | fresh durable tool turn → finite `tool` impulse; waiting creature gets none | checked unchanged |
+| K5 | gesture settles back into the working pose | checked unchanged |
+| K6 | visible working crew is animated; reduced motion stops all motion | checked unchanged |
+| K7 | failed creature at `model-failed` with X eyes | checked unchanged |
+| K8 | selection reachable by mouse and keyboard | checked unchanged |
+| K9 | chat task-id deep link, shared identity colour, reference badge (no creature copy) | checked unchanged (chat is still `shared/business-chat.js`, debt L-32) |
+| K10 | one being per member; crew-bar seat shows portrait while body is on the map; presence events | checked unchanged |
+| K11 | member with two running tasks stands once with count 2 | checked unchanged |
+| K12 | identity colour stable across a clean reload; no console/network errors | checked unchanged |
+
+Differences are loading only: `ctox:shared/` bound to `/src/apps/business-os/shared/` when serving JS/CSS (as
+`v4/blob-loader.js` / `v4/frame/lab/frame.test.mjs`), ctox app imported without `?v=`, output dir `ctox-crew-map-v4`.
+12 invariants: 12 checked, 0 NO_V4. Run: exit 0, 7 scenarios, ~17 s (screenshots looked at: map, three nodes,
+crew bar, X eyes on the failed creature).
+Counter-checks (each → exit 1): K-K1 slot no longer gets `is-selected` ("selected creature is not marked");
+K-K2 crew-motion ignores the reduced-motion change ("reduced motion must stop all creature motion").
