@@ -27,7 +27,6 @@ use std::thread;
 use std::time::Duration;
 use tokio::process::Command;
 
-
 mod cli;
 
 pub use cli::Cli;
@@ -290,8 +289,6 @@ pub fn run(
     })
 }
 
-/// Sort matches in-place by descending score, then ascending path.
-
 /// Returns a comparator closure suitable for `slice.sort_by(...)` that orders
 /// items by descending score and then ascending path using the provided accessors.
 pub fn cmp_by_score_desc_then_path_asc<T, FScore, FPath>(
@@ -308,7 +305,6 @@ where
         other => other,
     }
 }
-
 
 struct SessionInner {
     search_directories: Vec<PathBuf>,
