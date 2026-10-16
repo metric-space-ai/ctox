@@ -400,19 +400,20 @@ fn may_edit_source(
             .and_then(Value::as_str)
             == Some(id)
     });
-    // CUTOVER-3: rights are seq-bearing Store rows. Decide on the rights of this
-    // same writer transaction (never a process-global or static default); rights
-    // that are not initialized or unreadable deny.
-    let Ok(rights) = policy::sync_rights::read(tx) else {
+    // Read the committed rights in this SAME writer transaction. Rights and
+    // draft effects share one queue/file: revocation cannot commit between this
+    // decision and the draft mutation. Do not cache the admission-time grant.
+    let scope = BusinessOsScope::module(app_id, assigned);
+    // Preserve the live authority availability/pending-update denial as well;
+    // durable rows alone must not revive an unbound or retired policy owner.
+    if !policy::evaluate_in_store(tx, actor, BusinessOsPermission::AppsSourceEdit, &scope).allowed {
         return Ok(false);
-    };
-    Ok(policy::evaluate_with_rights(
-        &rights,
-        actor,
-        BusinessOsPermission::AppsSourceEdit,
-        &BusinessOsScope::module(app_id, assigned),
+    }
+    let rights = policy::sync_rights::read(tx)?;
+    Ok(
+        policy::evaluate_with_rights(&rights, actor, BusinessOsPermission::AppsSourceEdit, &scope)
+            .allowed,
     )
-    .allowed)
 }
 
 fn command_status(result: &Value) -> &'static str {
@@ -943,6 +944,7 @@ impl CodingPanel {
         now: u64,
     ) -> Result<Admitted, StoreError> {
         let default_turn_id = format!("turn-{}", uuid::Uuid::new_v4());
+        let completion_actor = actor.clone();
         let admission =
             self.write(move |tx| admit_turn(tx, &actor, &command, default_turn_id, now))?;
         let (result, mut input, files, draft_id, base_rev) = match admission {
@@ -970,7 +972,14 @@ impl CodingPanel {
             .name(format!("coding-turn-{}", input.turn_id))
             .spawn(move || {
                 let turn_id = input.turn_id.clone();
-                let outcome = panel.drive(&mut input, files, &draft_id, &base_rev, &control);
+                let outcome = panel.drive(
+                    &mut input,
+                    files,
+                    &draft_id,
+                    &base_rev,
+                    &control,
+                    &completion_actor,
+                );
                 panel
                     .running
                     .lock()
@@ -993,6 +1002,7 @@ impl CodingPanel {
         draft_id: &str,
         base_rev: &str,
         control: &TurnControl,
+        actor: &BusinessOsActor,
     ) -> Value {
         let turn_id = input.turn_id.clone();
         let outcome = (|| -> Result<(BTreeMap<String, String>, Value), TurnFailure> {
@@ -1062,7 +1072,7 @@ impl CodingPanel {
                 })
             }
             Ok((baseline, response)) => self.complete(
-                &turn_id, input, &baseline, &response, draft_id, base_rev, now,
+                &turn_id, input, &baseline, &response, draft_id, base_rev, now, actor,
             ),
         };
         match result {
@@ -1082,6 +1092,7 @@ impl CodingPanel {
         draft_id: &str,
         base_rev: &str,
         now: u64,
+        actor: &BusinessOsActor,
     ) -> Result<Option<Value>, StoreError> {
         let (messages, tool_events) = project_messages(response, now);
         let changes = match diff_snapshot(baseline, response, self.content.as_ref()) {
@@ -1116,12 +1127,37 @@ impl CodingPanel {
         let draft_id = draft_id.to_owned();
         let base_rev = base_rev.to_owned();
         let app_id = input.app_id.clone();
+        let actor = actor.clone();
         self.write(move |tx| {
             let Some(turn) = get(tx, COLLECTION_TURNS, &turn_id)? else {
                 return Ok(None);
             };
             if !matches!(turn["state"].as_str(), Some("queued" | "running")) {
                 return Ok(None);
+            }
+            let still_owned = get(tx, COLLECTION_DRAFTS, &draft_id)?.is_some_and(|draft| {
+                draft["user_id"].as_str() == actor.id.as_deref()
+                    && draft["app_id"].as_str() == Some(app_id.as_str())
+                    && turn["user_id"].as_str() == actor.id.as_deref()
+            });
+            if !still_owned || !may_edit_source(tx, &actor, &app_id)? {
+                return finish_turn(
+                    tx,
+                    &turn_id,
+                    |turn| {
+                        turn["state"] = json!("failed");
+                        turn["error"] = TurnFailure::new("revoked", "apps.source.edit").to_value();
+                        turn["messages"].as_array_mut().map(|array| {
+                            array.extend(messages);
+                            array.truncate(MAX_MESSAGES);
+                        });
+                        turn["tool_events"] = Value::Array(tool_events);
+                        turn["rejected_patch"] = patch_ref
+                            .map(|(reference, size)| json!({"ref":reference,"size":size}))
+                            .unwrap_or(Value::Null);
+                    },
+                    now,
+                );
             }
             let changed_files: Vec<Value> = changes
                 .files
