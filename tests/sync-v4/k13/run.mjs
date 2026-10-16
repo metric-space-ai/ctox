@@ -16,7 +16,7 @@ for(let i=0;i<argv.length;i+=2) {
 }
 if(process.platform!=='linux' || !process.env.BUILD_LANE_BIN || !process.env.TMPDIR || !process.env.CARGO_TARGET_DIR)
   throw Error('Canonical Linux lane required');
-const allowed=new Set(['--build','--expected-revision','--output','--chrome','--modules-root','--turn-bin','--turn-lib','--prepare-only']);
+const allowed=new Set(['--build','--expected-revision','--output','--chrome','--modules-root','--turn-bin','--turn-lib','--prepare-only','--scenario','--control-only']);
 for(const flag of flags.keys())if(!allowed.has(flag))throw Error('Unsupported P6 option: '+flag);
 const expected=flags.get('--expected-revision');
 if(!/^[a-f0-9]{40}$/.test(expected??''))throw Error('Immutable expected daemon revision required');
@@ -34,7 +34,7 @@ const sourceManifest={head:execFileSync('git',['rev-parse','HEAD'],{cwd:reposito
   files:[...new Set(files)].map(path=>({path,sha256:hash(join(repository,path))}))};
 const unchanged=()=>sourceManifest.files.every(row=>hash(join(repository,row.path))===row.sha256);
 const summary={revision:expected,owner:'01a14204-d613',startedAt:new Date().toISOString(),
-  daemonEntry:'service --foreground',harnessSource:sourceManifest,scenarios:[],pass:false,terminal:false};
+  daemonEntry:'test-only production store_startup::run (fixture executable)',harnessSource:sourceManifest,scenarios:[],pass:false,terminal:false};
 const save=()=>fs.writeFileSync(join(output,'p6-result.json'),JSON.stringify(summary,null,2));
 save();
 let build;
