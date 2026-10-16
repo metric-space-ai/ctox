@@ -119,6 +119,9 @@ use crate::inference::runtime_plan;
 use crate::inference::runtime_state;
 
 #[cfg(test)]
+#[path = "appsec_projection_switch_tests.rs"]
+mod appsec_projection_switch_tests;
+#[cfg(test)]
 #[path = "model_catalog_boundary_tests.rs"]
 mod model_catalog_boundary_tests;
 mod module_boundary_tests;

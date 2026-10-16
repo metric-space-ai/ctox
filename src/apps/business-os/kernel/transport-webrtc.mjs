@@ -118,7 +118,7 @@ export class NativeWire {
  * HTTP records nor V3 query/replication fallbacks exist in this adapter.
  */
 export class WebRTCKernelTransport extends KernelTransport {
- constructor(options){super();this.options=options;this.reliable=new ReliableClientSession();this.now=options.now??clock;this.readyState=deferred();this.ready=this.readyState.promise;this.listeners=[];this.pending=new Map();this.closed=false;this.scopes=new Map();this.samples=0;this.offset=null;}
+ constructor(options){super();this.options=options.authSession?{...options,hello:(...args)=>options.authSession.hello(...args)}:options;this.reliable=new ReliableClientSession();this.now=options.now??clock;this.readyState=deferred();this.ready=this.readyState.promise;this.listeners=[];this.pending=new Map();this.closed=false;this.scopes=new Map();this.samples=0;this.offset=null;}
  async connect(identity,events){
   if(this.events)throw new CtoxError('conflict','Transport already bound');this.identity={...identity};this.events=events;this.started=this.now();
   try {
@@ -175,6 +175,7 @@ export class WebRTCKernelTransport extends KernelTransport {
    if(selected.type!=='hello_ok')throw new CtoxError('unavailable','Negotiation rejected');
    if(selected.transport.codec==='zstd'&&!this.options.codecs?.zstd)throw new CtoxError('unavailable','Negotiated codec adapter unavailable');
    if(this.options.wireFormat!=='k2-fixture'){this.reliable.attach({session_id,resume_from});this.scheduler.generation=this.reliable.generation;}
+   await this.options.authSession?.acceptHello(selected);
    this.session=selected;this.scheduler.configure(selected.transport);this.ingress.codec=selected.transport.codec;this.ingress.frameBytes=selected.transport.frame_bytes;
    if(core_time_ms!==undefined){if(!Number.isFinite(core_time_ms)||core_time_ms<0)throw new CtoxError('invalid','Invalid Core clock');this.offset=core_time_ms-(this.started+this.now())/2;}
    this.rtt=this.now()-this.started;this.events.session?.({epoch:selected.epoch,head_seq:selected.head_seq,rights_ver:selected.rights_ver});this.hello.activate();
@@ -218,7 +219,7 @@ export class WebRTCKernelTransport extends KernelTransport {
    default:throw new CtoxError('invalid',`Unknown V4 message ${message.type}`);
   }
  }
- async scope(collection){await this.ready;const resolved=await this.options.resolveScope?.(collection,this.session);if(!resolved?.scope_hash || !Number.isSafeInteger(resolved.gen))throw new CtoxError('forbidden','Canonical subscription scope missing');return {...resolved,collection,epoch:this.session.epoch};}
+ async scope(collection){await this.ready;if(this.options.authSession)return this.options.authSession.scope(collection);const resolved=await this.options.resolveScope?.(collection,this.session);if(!resolved?.scope_hash || !Number.isSafeInteger(resolved.gen))throw new CtoxError('forbidden','Canonical subscription scope missing');return {...resolved,collection,epoch:this.session.epoch};}
  async subscribe(scope){await this.ready;const sub={...scope,epoch:this.session.epoch};decimalSeq(sub.checkpoint_seq??'0');this.scopes.set(scope.collection,sub);if(this.options.wireFormat==='k2-fixture')await this.scheduler.send('control',{type:'subscribe',...sub,checkpoint:sub.checkpoint_seq==='0'?null:{instance_id:this.identity.instanceId,participant:sub.participant??this.identity.userId,collection:sub.collection,scope_hash:sub.scope_hash,gen:sub.gen,epoch:String(this.session.epoch),seq:sub.checkpoint_seq}});
   else await this.scheduler.send('control',{type:'subscribe',collection:sub.collection,scope_hash:sub.scope_hash,gen:sub.gen,priority:sub.priority??'P2',checkpoint:sub.checkpoint_seq==='0'?null:{instance_id:this.identity.instanceId,participant:this.options.participant??this.identity.userId,collection:sub.collection,scope_hash:sub.scope_hash,gen:sub.gen,epoch:String(this.session.epoch),seq:sub.checkpoint_seq}});
 }
@@ -264,7 +265,7 @@ export class WebRTCKernelTransport extends KernelTransport {
  }
  fail(error){if(this.closed)return;this.events?.status?.('kernel',{level:'error',code:'transport.failed',text:error.message});this.events?.link({state:'offline',rtt_ms:0,relay:false});this.readyState.reject(error);this.close();}
  close(){
-  if(this.closed)return;this.closed=true;this.hello?.close();this.scheduler?.close();this.ingress?.close();
+  if(this.closed)return;this.closed=true;this.options.authSession?.close();this.hello?.close();this.scheduler?.close();this.ingress?.close();
   for(const [t,n,f]of this.listeners)t.removeEventListener(n,f);this.listeners=[];
   for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(new CtoxError('unavailable','Transport closed'));}this.pending.clear();
   this.readyState.reject(new CtoxError('unavailable','Transport closed'));

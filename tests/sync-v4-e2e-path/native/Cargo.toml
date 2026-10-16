@@ -17,6 +17,7 @@ rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 [patch.crates-io]
+rtc-turn = { path = "../../../src/core/rxdb/patches/rtc-turn" }
 rtc-ice = { path = "../../../src/core/rxdb/patches/rtc-ice" }
 rtc = { path = "../../../src/core/rxdb/patches/rtc" }
 webrtc = { path = "../../../src/core/rxdb/patches/webrtc" }

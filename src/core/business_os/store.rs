@@ -28775,7 +28775,7 @@ pub(super) fn existing_instance_id(root: &Path) -> anyhow::Result<String> {
     Ok(trimmed.to_string())
 }
 
-pub(super) fn stable_instance_id(root: &Path) -> anyhow::Result<String> {
+pub(crate) fn stable_instance_id(root: &Path) -> anyhow::Result<String> {
     let runtime = root.join("runtime");
     std::fs::create_dir_all(&runtime)
         .with_context(|| format!("failed to create runtime dir {}", runtime.display()))?;

@@ -2,6 +2,8 @@
 
 pub(crate) mod driver;
 pub(crate) mod ice_gatherer;
+#[cfg(feature = "runtime-tokio")]
+mod turn_socket;
 
 use log::error;
 use std::collections::{HashMap, HashSet};
@@ -21,6 +23,7 @@ use driver::{
 };
 use ice_gatherer::RTCIceGatherOptions;
 use ice_gatherer::RTCIceGatherer;
+pub use ice_gatherer::{NATIVE_TURN_GATHERER_MARKER, native_relay_candidate};
 
 use rtc::data_channel::{RTCDataChannelId, RTCDataChannelInit};
 use rtc::peer_connection::RTCPeerConnectionBuilder;
@@ -364,6 +367,7 @@ where
         _tcp_addrs: Vec<A>,
     ) -> Result<Self> {
         let mut local_addrs = vec![];
+        let mut relay_addrs = vec![];
         let mut async_udp_sockets = HashMap::new();
         for addr in udp_addrs {
             let socket = std::net::UdpSocket::bind(addr)?;
@@ -376,6 +380,54 @@ where
             {
                 local_addrs.push(local_addr);
             }
+        }
+
+        #[cfg(feature = "runtime-tokio")]
+        {
+            use crate::runtime::AsyncUdpSocket;
+            use futures::stream::{FuturesUnordered, StreamExt};
+            let mut allocations = FuturesUnordered::new();
+            for server in &opts.ice_servers {
+                for url in &server.urls {
+                    if url.starts_with("turn:") || url.starts_with("turns:") {
+                        allocations.push(turn_socket::TurnSocket::connect(
+                            url,
+                            &server.username,
+                            &server.credential,
+                        ));
+                    }
+                }
+            }
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(4);
+            while let Ok(Some(allocation)) =
+                tokio::time::timeout_at(deadline, allocations.next()).await
+            {
+                match allocation {
+                    Ok(socket) => {
+                        let address = socket.local_addr()?;
+                        relay_addrs.push(address);
+                        async_udp_sockets.insert(address, socket as Arc<dyn AsyncUdpSocket>);
+                    }
+                    Err(_) => {
+                        log::warn!("TURN allocation unavailable; credentials and endpoint redacted")
+                    }
+                }
+            }
+        }
+        #[cfg(not(feature = "runtime-tokio"))]
+        if opts.ice_servers.iter().any(|s| {
+            s.urls
+                .iter()
+                .any(|u| u.starts_with("turn:") || u.starts_with("turns:"))
+        }) {
+            return Err(Error::Other(
+                "TURN requires the native Tokio runtime".to_owned(),
+            ));
+        }
+        if opts.ice_gather_policy == RTCIceTransportPolicy::Relay && relay_addrs.is_empty() {
+            return Err(Error::Other(
+                "TURN relay policy has no authenticated allocation".to_owned(),
+            ));
         }
 
         let (driver_event_tx, driver_event_rx) =
@@ -393,7 +445,7 @@ where
             driver_handle: Mutex::new(None),
         };
 
-        let ice_gatherer = RTCIceGatherer::new(local_addrs, opts);
+        let ice_gatherer = RTCIceGatherer::new(local_addrs, opts).with_relays(relay_addrs);
         let mut driver = PeerConnectionDriver::new(
             peer_connection.inner.clone(),
             ice_gatherer,

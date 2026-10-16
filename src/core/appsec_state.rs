@@ -8,6 +8,20 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn project_cli_result(root: &Path, forwarded_args: &[String], output: &Value) -> Result<Value> {
+    // Sync v4 (E17): once the active appsec-pentest version declares
+    // `core_projection: false`, the app projects its own collections and the
+    // core must not write them too. Read per call from the committed store.
+    if !ctox_store::app_catalog::core_projection_enabled(
+        &crate::paths::sync_db(root),
+        "appsec-pentest",
+    ) {
+        return Ok(json!({
+            "version": "ctox.appsec.durable_projection.v1",
+            "module_id": "appsec-pentest",
+            "skipped": "core_projection_disabled",
+            "counts": {},
+        }));
+    }
     let state_dir = appsec_state_dir(root, forwarded_args);
     let command = appsec_command(forwarded_args);
     let db_path = crate::paths::core_db(root);

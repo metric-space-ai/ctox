@@ -169,6 +169,7 @@ exclude = [
 ]
 
 [patch.crates-io]
+rtc-turn = { path = "src/core/rxdb/patches/rtc-turn" }
 # Mirror of src/core/harness/Cargo.toml patch.crates-io so that codex-* path
 # dependencies resolve against the same forks agent-runtime uses.
 crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }

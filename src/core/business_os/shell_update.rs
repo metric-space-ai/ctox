@@ -1046,7 +1046,10 @@ pub fn active_shell_root(root: &Path) -> Result<Option<PathBuf>> {
         return Ok(None);
     };
     let path = slots_root(root).join(&slot);
-    verify_slot(&path, Some(&slot))?;
+    // Admit once before the HTTP listener starts. The index handler reuses this
+    // verified inventory; every immutable asset read still checks its own bytes.
+    // Re-verifying the entire slot on the first GET / blocks before headers.
+    verified_release(root, slot)?.context("selected shell release is missing")?;
     if state.phase == "restart_required" {
         state.phase = if state.rollback_active {
             "rollback"

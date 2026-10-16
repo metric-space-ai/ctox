@@ -7822,6 +7822,12 @@ function ensureCtoxSmokeBinary() {
       : await browserEvaluationTarget.evaluate(async (stateOrArgs, maybeArgs) => {
       const sellifyScaleAppState = maybeArgs ? stateOrArgs : null;
       const { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, sellifyScaleSeed, sellifyScaleProvisionOnly, officeRestartFixtureBytes, uiCatalogFixture } = maybeArgs || stateOrArgs;
+      if (['command-browser-to-rust','command-roundtrip-timing-browser-to-rust'].includes(smokeMode)) {
+        const kernel=globalThis.ctoxBusinessOsSmoke?.state?.kernel??globalThis.ctoxKernel;
+        const {exerciseKernelCommands}=await import('/kernel/testkit/command-contracts.mjs');
+        const result=await exerciseKernelCommands(kernel,{appId:'ctox',type:smokeMode==='command-browser-to-rust'?'business_os.smoke':'ctox.provider_subscription.status',samples:smokeMode==='command-browser-to-rust'?1:30,timeoutMs:60000});
+        return {mode:smokeMode,...result};
+      }
       if (!globalThis.process) globalThis.process = {};
       if (typeof globalThis.process.nextTick !== 'function') {
         globalThis.process.nextTick = (callback, ...args) => Promise.resolve().then(() => callback(...args));
@@ -15431,60 +15437,6 @@ function ensureCtoxSmokeBinary() {
           if (verifiedBytes <= 8 * 1024 * 1024) throw new Error('fixture does not exceed one wire transfer');
           return { mode: smokeMode, commandId: id, documents: documents.length, verifiedBytes,
             commandMs, totalMs: performance.now() - startedAt };
-        }
-        if (smokeMode === 'command-roundtrip-timing-browser-to-rust') {
-          const commandBus = globalThis.ctoxBusinessOsSmoke?.state?.commandBus;
-          if (!commandBus?.dispatch) {
-            throw new Error('Business OS command bus is unavailable for command timing smoke');
-          }
-          const commandBusResource = performance.getEntriesByType('resource')
-            .map((entry) => entry.name)
-            .find((name) => /\/shared\/command-bus\.js\?v=/.test(name));
-          if (!commandBusResource) {
-            throw new Error('loaded command-bus module URL is unavailable for timing collection');
-          }
-          const commandBusModule = await import(commandBusResource);
-          if (typeof commandBusModule.consumeCommandRoundtripTiming !== 'function') {
-            throw new Error('command timing collector is unavailable');
-          }
-          const dispatchProbe = async (index, probe) => {
-            const id = `command_roundtrip_timing_${Date.now()}_${index}`;
-            const receipt = await commandBus.dispatch({
-              id,
-              module: 'ctox',
-              type: 'ctox.provider_subscription.status',
-              command_type: 'ctox.provider_subscription.status',
-              record_id: 'provider-subscriptions',
-              inbound_channel: 'command-roundtrip-timing-smoke',
-              payload: {},
-              client_context: smokeClientContext({
-                source: 'command-roundtrip-timing-smoke',
-                ...(probe ? { command_timing_probe: true } : {}),
-              }),
-            }, {
-              until: 'terminal',
-              timeoutMs: 60000,
-            });
-            if (!receipt || receipt.status !== 'completed') {
-              throw new Error(`timing command ${id} did not complete: ${JSON.stringify(receipt)}`);
-            }
-            return probe ? commandBusModule.consumeCommandRoundtripTiming(id) : null;
-          };
-          await dispatchProbe('warmup', false);
-          const samples = [];
-          for (let index = 1; index <= 30; index += 1) {
-            const sample = await dispatchProbe(index, true);
-            if (!sample || Object.keys(sample.marks || {}).length !== 7) {
-              throw new Error(`timing sample ${index} is incomplete: ${JSON.stringify(sample)}`);
-            }
-            samples.push(sample);
-          }
-          await Promise.all(replicationStates.map((state) => state.cancel?.()));
-          if (ownsDb) await db.close();
-          return {
-            mode: smokeMode,
-            samples,
-          };
         }
         if (smokeMode === 'command-burst-browser-to-rust') {
           const now = Date.now();

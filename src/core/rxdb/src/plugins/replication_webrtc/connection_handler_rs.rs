@@ -1940,13 +1940,18 @@ impl WebRTCRsConnectionHandler {
             .signaling
             .as_ref()
             .is_some_and(|signaling| signaling.join_accepted());
-        status.turn_configured = self.ice_servers.iter().any(|server| {
+        let ice_servers = self
+            .signaling
+            .as_ref()
+            .map(|s| s.ice_servers(&self.ice_servers))
+            .unwrap_or_else(|| self.ice_servers.clone());
+        status.turn_configured = ice_servers.iter().any(|server| {
             server
                 .urls
                 .iter()
                 .any(|url| url.starts_with("turn:") || url.starts_with("turns:"))
         });
-        status.credentialed_turn_ready = self.ice_servers.iter().any(|server| {
+        status.credentialed_turn_ready = ice_servers.iter().any(|server| {
             server
                 .urls
                 .iter()
@@ -2022,6 +2027,8 @@ impl WebRTCRsConnectionHandler {
             "signalingJoinAccepted": status.signaling_join_accepted,
             "handshake": self.handshake_status.lock().json(
                 self.signaling.as_ref().and_then(|client| client.own_peer_id()).as_deref()),
+            "iceConfiguration": self.signaling.as_ref().map(|s| s.ice_configuration_status()),
+            "turnCredentialExpiresAtMs": self.signaling.as_ref().map(|s| s.ice_configuration_status()["turnCredentialExpiresAtMs"].clone()).unwrap_or(Value::Null),
             "turnConfigured": status.turn_configured,
             "credentialedTurnReady": status.credentialed_turn_ready,
             "lastSendPriority": status.last_send_priority,
@@ -4527,7 +4534,13 @@ async fn build_peer_connection(
         )
     })?;
     let config = RTCConfigurationBuilder::new()
-        .with_ice_servers(handler.ice_servers.clone())
+        .with_ice_servers(
+            handler
+                .signaling
+                .as_ref()
+                .map(|s| s.ice_servers(&handler.ice_servers))
+                .unwrap_or_else(|| handler.ice_servers.clone()),
+        )
         .build();
     let mut setting_engine = SettingEngine::default();
     setting_engine.set_multicast_dns_mode(MulticastDnsMode::QueryOnly);
@@ -5398,32 +5411,34 @@ mod tests {
     fn p4_handler_send_failure_has_one_event_counter_and_log() {
         // The production counters are process-global. A child test process
         // isolates this measurement from unrelated parallel handler tests.
-        // The child uses --exact, which also guarantees this is the only
-        // test in its process. No process-environment switch is needed.
-        if !std::env::args().any(|arg| arg == "--exact") {
-            let module = module_path!().split_once("::").unwrap().1;
-            let output = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    &format!("{module}::p4_handler_send_failure_has_one_event_counter_and_log"),
-                    "--nocapture",
-                    "--test-threads=1",
-                ])
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "isolated handler wiring failed:\n{}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            assert!(
-                String::from_utf8_lossy(&output.stdout).contains("1 passed"),
-                "the isolated wiring test must actually run"
-            );
-            return;
-        }
+        let module = module_path!().split_once("::").unwrap().1;
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!("{module}::p4_handler_send_failure_isolated"),
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated handler wiring failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "the isolated wiring test must actually run"
+        );
+    }
 
+    // Executed by the wrapper above in its own process so global counters and
+    // tracing remain isolated without a process-environment test switch.
+    #[test]
+    #[ignore = "invoked by p4_handler_send_failure_has_one_event_counter_and_log"]
+    fn p4_handler_send_failure_isolated() {
         #[derive(Clone)]
         struct LogWriter(Arc<Mutex<Vec<u8>>>);
         impl std::io::Write for LogWriter {

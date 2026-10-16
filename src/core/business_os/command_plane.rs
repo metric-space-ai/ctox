@@ -288,7 +288,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 150] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 151] = [
     "news.topic.schedule",
     "news.source.auth_assist",
     "ctox.crew.member.create",
@@ -298,6 +298,7 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 150] = [
     "ctox.crew.learning.update",
     "ctox.crew.learning.delete",
     "ctox.crew.assign",
+    "ctox.plan.step.retry",
     "ctox.queue.release",
     "ctox.queue.block",
     "ctox.queue.retry",
@@ -1331,7 +1332,10 @@ impl CentralCommandPolicyRequirement {
                 BusinessOsPermission::CrewManage,
                 super::policy::BusinessOsScope::record(command_type),
             ))
-        } else if matches!(command_type, "ctox.queue.capacity" | "ctox.queue.pause") {
+        } else if matches!(
+            command_type,
+            "ctox.queue.capacity" | "ctox.queue.pause" | "ctox.plan.step.retry"
+        ) {
             Some(CommandPolicyRequirement::workspace(
                 BusinessOsPermission::CtoxTaskManage,
             ))
@@ -1759,7 +1763,8 @@ fn dispatch_business_command(
         | "ctox.queue.retry"
         | "ctox.queue.capacity"
         | "ctox.queue.pause"
-        | "ctox.queue.abort_turn" => {
+        | "ctox.queue.abort_turn"
+        | "ctox.plan.step.retry" => {
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
             // Finish the durable control claim and replicate its outcome. The
             // target queue task is not an execution task of this control command.
