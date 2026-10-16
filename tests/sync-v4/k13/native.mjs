@@ -168,13 +168,17 @@ export async function queueOffline(page, appId, collection, doc) {
   },{appId,collection,doc});
 }
 export async function pendingResult(page, opId) {
-  return page.evaluate(opId=>globalThis.__p6Pending.get(opId),opId);
+  const result=await page.evaluate(opId=>globalThis.__p6Pending.get(opId),opId);
+  if(result?.status==='rejected' && result.reason==='revoked')
+    await page.waitForFunction(opId=>globalThis.__e2eOS.consumed.revokedRejections.some(r=>r.op_id===opId && r.consumed),opId,{timeout:10000});
+  return result;
 }
-export async function trace(page) { return page.evaluate(()=>structuredClone(globalThis.__p6Trace)); }
+export async function trace(page) { return page.evaluate(()=>structuredClone({...globalThis.__p6Trace,consumed:globalThis.__e2eOS.consumed})); }
 export function assertRevocation(before,after,rights,collection,sendTrace) {
   assert.match(String(rights.seq),/^[0-9]+$/);
   const revoke=after.revokes.find(r=>String(r.rights_ver)===String(rights.rights_ver) && r.collections.includes(collection));
   assert.ok(revoke,'No authenticated scope_revoke received');
+  assert.ok(after.consumed?.scopeRevokes.some(r=>r.consumed && String(r.rights_ver)===String(rights.rights_ver) && r.collections?.includes(collection)),'Kernel did not consume the authenticated scope_revoke');
   // Receive callbacks on independent lanes can overlap. Their callback order
   // cannot prove a server-side one-frame fence: require the final native send
   // log anchored at the actual Store commit instead of inferring it from RTT.

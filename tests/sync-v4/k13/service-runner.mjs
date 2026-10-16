@@ -112,7 +112,12 @@ try {
       const b=globalThis.__p6Boot;if(!b)throw Error('No admitted identity to retire');
       const old={userId:b.kernel.userId,role:b.launchContext.actor.role};
       await b.kernel.logout();await b.loader.close();
-      const channels=Object.values(b.transport.channels??{});
+      const channels=[...new Set(Object.values(b.transport.channels??{}))];
+      await Promise.all(channels.map(c=>c.readyState==='closed'?Promise.resolve():new Promise((resolve,reject)=>{
+        const closed=()=>{clearTimeout(timer);c.removeEventListener('close',closed);resolve();};
+        const timer=setTimeout(()=>{c.removeEventListener('close',closed);reject(Error('Old peer subscription close deadline'));},5000);
+        c.addEventListener('close',closed);if(c.readyState==='closed')closed();
+      })));
       if(!b.transport.closed || channels.some(c=>c.readyState!=='closed'))throw Error('Old peer subscriptions remain active');
       return {...old,transportClosed:true,channelsClosed:true};
     });
@@ -125,7 +130,17 @@ try {
   };
   const h={config,page,newClient:page,reauthenticate,pause,offline:(p,value)=>p.context().setOffline(value),
     observe:(phase,measured)=>{row.phase=phase;(row.observations??=[]).push({phase,...measured});save();},
-    os:async p=>{try{const value=await bindings.get(p)();report.browserEntries.at(-1).proof=value.proof;save();return value;}finally{report.browserEntries.at(-1).boot=await p.evaluate(()=>({called:!!globalThis.__p6BootOptions,completed:!!globalThis.__p6Boot,error:globalThis.__p6BootError??null})).catch(()=>({pageClosed:true}));save();}}};
+    os:async p=>{try{
+      let value=await bindings.get(p)();
+      // Qualify one actual admin -> other-role -> admin handoff before fixture
+      // prepare can short-circuit the scenario. Every launch gets a new ticket.
+      if(!report.identityHandoffs?.length){
+        const original=principals.get(p),other=native.fixture.identities.find(i=>i.role!==original.role);
+        if(!other)throw Error('A second real role is required for handoff qualification');
+        await reauthenticate(p,other);value=await reauthenticate(p,original);
+      }
+      report.browserEntries.at(-1).proof=value.proof;save();return value;
+    }finally{report.browserEntries.at(-1).boot=await p.evaluate(()=>({called:!!globalThis.__p6BootOptions,completed:!!globalThis.__p6Boot,error:globalThis.__p6BootError??null})).catch(()=>({pageClosed:true}));save();}}};
   Object.assign(row,await scenario.run(h));
   }
 } catch(error) {
