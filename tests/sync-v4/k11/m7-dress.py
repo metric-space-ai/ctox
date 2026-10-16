@@ -142,7 +142,7 @@ def main():
         # not include the product's sealed-key/file custody and must never be
         # presented as a valid frozen-profile restoration.
         (component/'runtime').mkdir(mode=0o700)
-        for name in ('src','contracts','Cargo.toml'):
+        for name in ('src','contracts','Cargo.toml','bin'):
             (component/name).symlink_to(bundle/name)
         home = component/'home'
         home.mkdir(mode=0o700)

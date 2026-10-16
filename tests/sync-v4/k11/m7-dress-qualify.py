@@ -68,6 +68,9 @@ try:
     report['release']={k:release[k] for k in ('revision','runnerRevision','binary','binarySha256','package','packageSha256','sourceTree')}
     live=out/'liveness-root'
     (live/'home').mkdir(parents=True,mode=0o700)
+    bundle=Path(release['binary']).parent.parent
+    for name in ('src','contracts','Cargo.toml','bin'):
+        (live/name).symlink_to(bundle/name)
     live_env=dict(PATH=os.environ['PATH'],HOME=str(live/'home'),TMPDIR=os.environ['TMPDIR'],
                   CTOX_ROOT=str(live),CTOX_STATE_ROOT=str(live/'runtime'),LANG='C.UTF-8',
                   XDG_CONFIG_HOME=str(live/'home/.config'),XDG_CACHE_HOME=str(live/'home/.cache'))
