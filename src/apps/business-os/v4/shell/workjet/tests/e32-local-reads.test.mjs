@@ -1,5 +1,5 @@
 // E32 – reine Leseaktionen als lokale Kernel-Abfrage (Bericht ../E32.md).
-// v4-Proben gegen den echten Kern-Stub (Pin 637caf6 bzw. CTOX_APP_API_STUB), je umgestellte Aktion:
+// v4-Proben gegen den echten Kern-Stub (Pin 8265bd7 bzw. CTOX_APP_API_STUB), je umgestellte Aktion:
 //   1. Zeilen in die exportierte Collection schreiben (k.sim.push), Aktion aufrufen.
 //   2. Antwort = heutige Antwort für dieselben Daten. Referenz ist der V2-Rumpf am Pin e35a116ae (app.js, per git show)
 //      über DENSELBEN Kernel und dieselbe v2-compat-Lesesicht, mit Kern-Befehl (die Quittung verwirft V2). Rust-Fixtures
@@ -20,11 +20,12 @@ import { createWorkjetBridges } from '../index.js';
 import { createV2Compat, isUnsupported } from '../v2-compat.js';
 import { checkResponse } from './contract-checkers.mjs';
 import { V2_PIN } from './v2-oracle.mjs';
+import { realManifestRoutes } from '../../../tools/port/real-manifest.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: HERE, encoding: 'utf8' }).trim();
 const APP_V2 = execFileSync('git', ['show', `${V2_PIN}:src/apps/business-os/app.js`], { cwd: REPO, encoding: 'utf8', maxBuffer: 64 << 20 });
-const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/b6624eb');
+const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR, 'ctox-app-api-stub.mjs')).href);
 const OWNER = 'owner-1';
 const BUDGET_MS = 50;
@@ -40,11 +41,20 @@ const slice = (from, to) => {
 const V2_COMPUTER = slice('const WORKJET_COMPUTER_CONTROL_MAX_RESULTS', 'const WORKJET_PROJECT_CONTROL_MAX_RESULTS');
 const V2_SESSION = slice('const WORKJET_SESSION_CONTROL_MAX_RESULTS', 'function isStaleDataPlaneGeneration');
 
+// E48 (Pin 8265bd7): die Shell liest Fremd-Collections (business_commands, workjet_*) nur mit ihrem veröffentlichten
+// Manifest (Deklaration) und aktiven Eigentümern mit read-Export (ctox, ctox-platform) – wie in Produktion.
+const SHELL_ROUTES = realManifestRoutes('shell');
+async function publishShell(k) {
+  for (const o of SHELL_ROUTES._fixture_owners) if (!(await k.sim.inspect('business_apps', o.app))?.data?.active_ver) await k.sim.publishAppVersion(o.app, o.ver, o.publish);
+  await k.sim.publishAppVersion('shell', 'dev', { title: 'Shell', manifestExtra: SHELL_ROUTES });
+}
+
 let n = 0;
 async function setup({ latencyMs = 2, api: wrapApi = null } = {}) {
   const k = createStubKernel({ instanceId: `wjb-e32-${process.pid}-${++n}`, userId: OWNER, latencyMs, storage: 'memory',
     actor: { id: OWNER, display_name: 'Owner', role: 'admin', permissions: [] } });
   await k.ready;
+  await publishShell(k);
   const adapted = adaptKernel(k);
   const commands = [];
   const counting = Object.create(adapted, { appApi: { value(appId, ver) {
