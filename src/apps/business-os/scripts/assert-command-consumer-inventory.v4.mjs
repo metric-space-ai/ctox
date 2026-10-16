@@ -27,7 +27,9 @@
 //   node_modules/ (dependencies, never runtime source), */tests/, */fixtures/, kernel/testkit/ (test code and
 //   guard fixtures, e.g. v4/tools/guards/fixtures/tree/** and modules/mail/tests/mail-browser-qa.v4.mjs),
 //   v4/tools/ (Node tooling that names api.command as a scan pattern, e.g. v4/tools/port/scan.mjs).
-// NO_V4: none.
+// NO_V4 – the V2 exclusion of '/schema.js' files: leftover V2 schema files are not loaded on the v4 line and are
+// deleted with S9 (debt L-14); scanning them is harmless (they contain no dispatch, reader or writer pattern) and
+// line release/v2 keeps the exclusion in the unchanged V2 script.
 //
 // Changing an inventory below is a reviewed act, exactly like editing command-consumer-inventory.json in V2.
 import fs from 'node:fs';
@@ -48,6 +50,9 @@ const INVENTORY = Object.freeze({
     'shared/business-chat.js',
     'shared/react-settings.js',
     'shared/universal-importer.js',
+    // CHAT4 / L-42: the v4 shell hosts the unchanged V2 Business Chat (shared/business-chat.js), which dispatches
+    // through the v2-compat commandBus; approved by the kernel, removed with L-42.
+    'v4/shell/chat/index.js',
     'v4/shell/workjet/actions/computer.js',
     'v4/shell/workjet/actions/instance.js',
     'v4/shell/workjet/actions/meeting.js',
@@ -218,8 +223,6 @@ function excluded(file) {
     || file.endsWith('.test.js')
     || file.endsWith('.test.mjs')
     || file.endsWith('/test.mjs')
-    // v4-allow: debt L-14 (prüft V2-schema.js bis S9)
-    || file.endsWith('/schema.js')
     // v4 additions (test/tooling locations, see header):
     || /(^|\/)(node_modules|tests|fixtures|testkit)\//.test(file)
     || file.startsWith('v4/tools/');

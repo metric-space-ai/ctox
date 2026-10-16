@@ -25,6 +25,13 @@
 //        - Explorer (modules/explorer/index.js, was desktop-apps/explorer/app.js): upload only via
 //          api.files.put; never readAsDataURL; no direct desktop_file_chunks writes. The content address
 //          (sha256 of the bytes) is computed by the kernel putBlob – asserted here.
+//   4. NO_V4 – V2 shell build key (assertBusinessOsShellBuildKeyIsCurrent: APP_BUILD in app.js equals the
+//      app.js build key in index.html, app.css/shared/base.css links and the runtime stylesheet fallback with
+//      the build key). app.js/index.html are not served on the v4 line (GET / → v4/index.html, E38) and are
+//      deleted with S9; v4 loads without cache busters. Line release/v2 checks it in the unchanged V2 script.
+//   5. v4/boot.js may name exactly one control-plane path, '/api/business-os/launch-context' (E38: authenticated
+//      bootstrap, no business data; AGENTS.md allows HTTP for bootstrap/auth) – the same allowance the V2 script
+//      gives app.js for this path. Any other /api/business-os/… path in boot.js stays red.
 //      NO_V4 (no meaning in v4, reason):
 //        - "viewer/explorer import shared/file-integrity.js?v=…": v4 apps load no shell file by path and carry
 //          no ?v= cache buster (App-API 4.0 §10.2a Nr. 4, isolation rule R1); the kernel owns integrity.
@@ -70,7 +77,6 @@ const forbidden = [
 ];
 
 const offenders = [];
-assertBusinessOsShellBuildKeyIsCurrent();
 assertBusinessOsStaticImportsResolve();
 // v4-allow: debt L-01 (prüft V2-Shell app.js/index.html bis S9)
 assertAdvancedStatusInterfaceExists();
@@ -108,40 +114,6 @@ console.log(`RxDB-only contract OK (v4 line: ${v2Files.length} V2-root files + $
 function isV4TestOrLabFile(file) {
   const rel = relative(appRoot, file).split(/[\\/]/).join('/');
   return /(^|\/)(tests?|lab|fixtures|testkit)\//.test(rel) || /\.test\.m?js$/.test(rel);
-}
-
-function assertBusinessOsShellBuildKeyIsCurrent() {
-  const appPath = join(appRoot, 'app.js');
-  const indexPath = join(appRoot, 'index.html');
-  const appContent = readFileSync(appPath, 'utf8');
-  const indexContent = readFileSync(indexPath, 'utf8');
-  const appBuild = appContent.match(/const\s+APP_BUILD\s*=\s*['"]([^'"]+)['"]/)?.[1] || '';
-  // v4-allow: debt L-01 (prüft V2-Shell app.js/index.html bis S9)
-  const scriptBuild = indexContent.match(/<script[^>]+src=["']app\.js\?v=([^"']+)["']/)?.[1] || '';
-  if (!appBuild) offenders.push('src/apps/business-os/app.js: missing APP_BUILD constant');
-  if (!scriptBuild) offenders.push('src/apps/business-os/index.html: missing app.js build key');
-  if (appBuild && scriptBuild && appBuild !== scriptBuild) {
-    offenders.push(`src/apps/business-os/index.html: app.js build key ${scriptBuild} does not match APP_BUILD ${appBuild}`);
-  }
-  // v4-allow: debt L-01 (prüft V2-Shell app.js/index.html bis S9)
-  if (!/<link\s+rel=["']stylesheet["']\s+href=["']app\.css\?v=[^"']+["']/.test(indexContent)) {
-    offenders.push('src/apps/business-os/index.html: missing required app.css stylesheet link');
-  }
-  // v4-allow: debt L-01 (prüft V2-Shell app.js/index.html bis S9)
-  if (!/<link\s+rel=["']stylesheet["']\s+href=["']shared\/base\.css\?v=[^"']+["']/.test(indexContent)) {
-    offenders.push('src/apps/business-os/index.html: missing required shared/base.css stylesheet link');
-  }
-  if (!/ensureShellStylesheets\(\);/.test(appContent)) {
-    offenders.push('src/apps/business-os/app.js: missing runtime shell stylesheet fallback');
-  }
-  // v4-allow: debt L-01 (prüft V2-Shell app.js/index.html bis S9)
-  if (!/app\.css\?v=\$\{APP_BUILD\}/.test(appContent)) {
-    offenders.push('src/apps/business-os/app.js: stylesheet fallback must load app.css with APP_BUILD');
-  }
-  // v4-allow: debt L-01 (prüft V2-Shell app.js/index.html bis S9)
-  if (!/shared\/base\.css\?v=\$\{APP_BUILD\}/.test(appContent)) {
-    offenders.push('src/apps/business-os/app.js: stylesheet fallback must load shared/base.css with APP_BUILD');
-  }
 }
 
 function assertBusinessOsStaticImportsResolve() {
@@ -381,6 +353,14 @@ function contentForForbiddenHttpScan(file, content) {
       /['"]\/api\/business-os\/ctox\/update\/check['"]/g,
       /['"]\/api\/business-os\/ctox\/update\/apply['"]/g,
       /['"]\/api\/business-os\/ctox\/maintenance['"]/g,
+    );
+  }
+
+  if (rel === 'src/apps/business-os/v4/boot.js') {
+    // Difference 5 (E38): authenticated bootstrap control path of the v4 entry page, nothing else. Exactly this
+    // path (constant and the comment that names it, like the V2 sync.js allowance); no sub-path, no other path.
+    allow(
+      /\/api\/business-os\/launch-context(?![\w/.-])/g,
     );
   }
 

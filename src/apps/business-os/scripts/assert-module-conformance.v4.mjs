@@ -4,11 +4,9 @@
 //
 //   schema-covers-collections  the canonical schema source is modules/<id>/collections.schema.json (§16.13,
 //                              App-API 4.0); the port deleted schema.js. Every collection listed in module.json
-//                              must be declared there (same SHELL_REGISTERED exemptions as V2). A schema.js that
-//                              still exists (leftover, port OFFEN) must still import, and its collections count
-//                              too, exactly as in V2.
+//                              must be declared there (same SHELL_REGISTERED exemptions as V2).
 //   schema-import              collections.schema.json must exist and parse as {collections: {…}}.
-//   schema-parity              fingerprints taken from collections.schema.json (and leftover schema.js).
+//   schema-parity              fingerprints taken from collections.schema.json.
 //   mount-signature            the v4 contract is mount(root, api, { restored } = {}) → {unmount, snapshot}
 //                              (kernel/index.d.ts AppMount, v4/tools/port/PORTING.md R1-mount): exactly the two
 //                              positionals <element>, api plus at most one destructured options object.
@@ -21,7 +19,10 @@
 //                              invariant runs: v4/tools/isolation/check-isolation.mjs --rule R2 (every foreign
 //                              collection access declared in foreign_collections, exported by its owner, write
 //                              evidence requires 'write').
-//   NO_V4: none – every V2 rule has a v4 form.
+//   NO_V4 – "schema.js must import in Node and its collections count": the leftover V2 schema.js files
+//          (ctox, conversations, outbound) are not loaded on the v4 line (the kernel registers collections from
+//          collections.schema.json, §16.13) and are deleted with S9 (debt L-14). Line release/v2 checks them in the
+//          unchanged V2 script.
 //
 // Business OS module conformance guard.
 //
@@ -162,20 +163,6 @@ for (const id of moduleDirs) {
       }
     } catch (error) {
       offend('schema-import', `collections.schema.json does not parse: ${String(error?.message || error).slice(0, 160)}`);
-    }
-  }
-  // Leftover schema.js (port OFFEN): still must import, its collections count as in V2.
-  // v4-allow: debt L-14 (prüft V2-schema.js bis S9)
-  const schemaPath = join(dir, 'schema.js');
-  if (existsSync(schemaPath)) {
-    try {
-      const schemaModule = await import(pathToFileURL(schemaPath).href);
-      for (const [name, definition] of Object.entries(schemaModule.collections || {})) {
-        if (!Object.hasOwn(schemaCollections, name)) schemaCollections[name] = definition;
-      }
-    } catch (error) {
-      // v4-allow: debt L-14 (prüft V2-schema.js bis S9)
-      offend('schema-import', `schema.js failed to import in Node: ${String(error?.message || error).slice(0, 160)}`);
     }
   }
   const declared = Array.isArray(manifest.collections) ? manifest.collections : [];

@@ -19,11 +19,11 @@ Inventory per script: see the sections below (written as each counterpart lands)
 
 ## 1. `assert-rxdb-only.mjs` → `assert-rxdb-only.v4.mjs`
 
-Copy of the V2 script with three documented differences (header of the v4 file).
+Copy of the V2 script with five documented differences (header of the v4 file).
 
 | # | V2 invariant | v4 |
 |---|---|---|
-| R1 | shell build key: `APP_BUILD` = `index.html` `app.js?v=`, app.css/base.css links, stylesheet fallback | checked unchanged (app.js is still the shell entry) |
+| R1 | shell build key: `APP_BUILD` = `index.html` `app.js?v=`, app.css/base.css links, stylesheet fallback | NO_V4 (follow-up 1): app.js/index.html are not served on the v4 line (GET / → `v4/index.html`, E38) and are deleted with S9; v4 loads without cache busters. release/v2 checks it in the unchanged V2 script |
 | R2 | relative static imports resolve and named imports are exported | checked; roots + `kernel/`, `v4/frame`, `v4/shell`, `v4/source`; resolver follows `export * from`, `export const {a} =`, `export const A=1,B=2` (V2 resolver false-positives on `shared/permissions.js`, `research/tests/v4-fixture.mjs`, `kernel/framing.mjs`) |
 | R3 | advanced status interface (app.js/sync.js/db.js markers) | checked unchanged |
 | R4 | file chunk integrity | checked against v4 sources: `modules/desktop/collections.schema.json` per collection, `shared/file-integrity.js`, `universal-importer.js`, `rxdb_peer.rs` unchanged; viewer only `api.files.get`, explorer only `api.files.put`, no DataURL, no chunk access; kernel `fetchBlob` sha256 = ref, `files.put` ref = sha256 |
@@ -35,21 +35,24 @@ Copy of the V2 script with three documented differences (header of the v4 file).
 | R9 | CTOX Sync Engine branding (db.js, manifest, docs) | checked unchanged |
 | R10 | server.rs HTTP data APIs gated, control-plane allowlist has no data path | checked unchanged |
 | R11 | subscription auth starts through business_commands | checked unchanged |
-| R12 | 11 forbidden HTTP/fallback patterns + no upstream `rxdb` import | checked on all V2 roots + `kernel/**`, `v4/**` (tests/lab/fixtures/testkit of the added roots skipped) |
+| R12 | 11 forbidden HTTP/fallback patterns + no upstream `rxdb` import | checked on all V2 roots + `kernel/**`, `v4/**` (tests/lab/fixtures/testkit of the added roots skipped). `v4/boot.js` may name exactly `/api/business-os/launch-context` (E38: authenticated bootstrap, no business data), the same allowance V2 gives app.js; any other `/api/business-os/…` path or sub-path stays red |
 
-Total 13 invariant groups: 12 checked in v4 (one with v4 sources), 1 partial NO_V4 (R4').
+Total 13 invariant groups: 11 checked in v4 (R4 with v4 sources), R1 NO_V4, R4' partly NO_V4.
 Counter-checks (mirror `/Volumes/tmp/civ4-mirror`, each mutation → exit 1): K-R1 schema field renamed;
 K-R2 `FRAME_BYTES` export renamed; K-R3 kernel hash-mismatch reject removed; K-R4 viewer reads
 `desktop_file_chunks`; K-R5 explorer `readAsDataURL`; K-R6 `/api/business-os/records` in `v4/shell/app-host.js`;
 K-R7 `import … from "rxdb"` in kernel; K-R8 `APP_BUILD` removed from app.js.
+KORREKTUR (follow-up 1): K-R8 no longer applies, because R1 was removed from the v4 script. New counter-checks:
+K-B1 a second path `/api/business-os/sync/config` in `v4/boot.js` → red; K-B2 `/api/business-os/launch-context/records`
+in boot.js → red; K-B3 `/api/business-os/launch-context` in `v4/shell/app-host.js` (allowance only for boot.js) → red.
 
 ## 2. `assert-module-conformance.mjs` → `assert-module-conformance.v4.mjs`
 
 | # | V2 invariant | v4 |
 |---|---|---|
-| M1 | schema-covers-collections (module.json collections declared in schema.js) | checked against `collections.schema.json` (§16.13); leftover `schema.js` (ctox, conversations, outbound) still counted |
-| M2 | schema-import (schema.js imports in Node) | checked: `collections.schema.json` exists and parses as `{collections}`; leftover `schema.js` must still import |
-| M3 | schema-parity (same collection → identical definition) | checked, fingerprints from `collections.schema.json` (+ leftover schema.js) |
+| M1 | schema-covers-collections (module.json collections declared in schema.js) | checked against `collections.schema.json` (§16.13) |
+| M2 | schema-import (schema.js imports in Node) | checked: `collections.schema.json` exists and parses as `{collections}`. NO_V4 (follow-up 1) for the leftover V2 `schema.js` files (ctox, conversations, outbound): not loaded on the v4 line, deleted with S9 (debt L-14); release/v2 checks them |
+| M3 | schema-parity (same collection → identical definition) | checked, fingerprints from `collections.schema.json` |
 | M4 | mount-export | checked unchanged |
 | M5 | mount-signature `mount(ctx)` | checked with the v4 contract `mount(root, api, { restored } = {})` (kernel/index.d.ts AppMount, PORTING.md R1-mount); `mount(ctx)` is now red |
 | M6 | no-db-raw | checked unchanged |
@@ -61,7 +64,7 @@ K-R7 `import … from "rxdb"` in kernel; K-R8 `APP_BUILD` removed from app.js.
 | M12 | locales de/en | checked unchanged |
 | M13 | db-isolation-inventory (V2 guard, spawned) | V2 guard runs unchanged; only accepted finding: `desktop_apps: stale inventory entry for <id>` when `<id>` moved to `modules/<id>` (desktop-apps app.js gone, module.json + v4 manifest present: browser, creator, explorer, file-viewer). Plus v4 form: `check-isolation.mjs --rule R2` must exit 0 |
 
-13 invariants: 13 checked in v4 (M1/M2/M3/M5/M13 adapted to v4 sources), 0 NO_V4.
+13 invariants: 13 checked in v4 (M1/M2/M3/M5/M13 adapted to v4 sources); the leftover-`schema.js` part of M2 is NO_V4.
 Counter-checks (each → exit 1): K-M1 `ctox_ticket_cases` renamed in tickets collections.schema.json;
 K-M2 notes collections.schema.json unparseable; K-M3 file-viewer `desktop_files` schema drift vs cv-print-builder;
 K-M4 news `mount(ctx)`; K-M5 `ctx.db.raw` in news; K-M6 `:root { --news-x }` in news CSS; K-M7 news `locales/en.json`
@@ -74,14 +77,15 @@ those are v4-only rules without a V2 counterpart, not part of this gate.
 
 | # | V2 invariant | v4 |
 |---|---|---|
-| C1 | dispatch_consumers: exact inventory of files dispatching commands (`commandBus.dispatch`) | checked as two frozen inventories in the script: (a) V2 bus regex — 13 files (app.js, office bridge, shared/{app-actions,business-chat,react-settings,universal-importer}, v4/shell/workjet/* = v2-compat debt L-42); (b) v4 path `api.command(` — 43 files; every app file needs a v4 manifest |
+| C1 | dispatch_consumers: exact inventory of files dispatching commands (`commandBus.dispatch`) | checked as two frozen inventories in the script: (a) V2 bus regex — 14 files (app.js, office bridge, shared/{app-actions,business-chat,react-settings,universal-importer}, `v4/shell/chat/index.js` = CHAT4 / L-42, v4/shell/workjet/* = v2-compat debt L-42); (b) v4 path `api.command(` — 43 files; every app file needs a v4 manifest |
 | C2 | projection_readers: exact inventory of `business_commands` readers | checked: V2 regex ∪ `api.query/get/subscribe/watch/find/findOne('business_commands')` — 20 files; every app reader must declare `business_commands` in its v4 manifest (collections or foreign_collections read) |
 | C3 | legacy_projection_waiters = [] | checked unchanged |
 | C4 | direct_intent_writers = [] | checked: V2 regex ∪ `api.put/insert/upsert('business_commands')` |
 
 Scan scope = V2 scope plus exclusions for test/tooling locations: `node_modules/`, `*/tests/`, `*/fixtures/`
 (e.g. `v4/tools/guards/fixtures/tree/**`, `modules/mail/tests/mail-browser-qa.v4.mjs`), `kernel/testkit/`, `v4/tools/`.
-4 invariants: 4 checked in v4, 0 NO_V4.
+4 invariants: 4 checked in v4. NO_V4 (follow-up 1): the V2 scan exclusion of `/schema.js` files (leftover V2 files, deleted with S9; they hold no dispatch/reader/writer pattern, so scanning them changes nothing).
+Follow-up counter-checks: K-H1 `v4/shell/chat/index.js` stops dispatching → red (missing); K-H2 `commandBus.dispatch` in `v4/shell/app-host.js` → red.
 Counter-checks (each → exit 1): K-C1a `commandBus.dispatch` added to news; K-C1b `api.command` added to
 shared/crew-presence.js; K-C1c tickets stops dispatching (missing); K-C2a news reads `business_commands`;
 K-C2b importer manifest no longer declares `business_commands`; K-C3 `function waitForCommandProjection(`;
@@ -112,7 +116,7 @@ and every scenario times out after 30 s.
 | K12 | identity colour stable across a clean reload; no console/network errors | checked unchanged |
 
 Differences are loading only: `ctox:shared/` bound to `/src/apps/business-os/shared/` when serving JS/CSS (as
-`v4/blob-loader.js` / `v4/frame/lab/frame.test.mjs`), ctox app imported without `?v=`, output dir `ctox-crew-map-v4`.
+`v4/blob-loader.js` / `v4/frame/lab/frame.test.mjs`), ctox app and `shared/business-chat.js` imported without `?v=` (follow-up 1: v4 loads without cache busters), output dir `ctox-crew-map-v4`.
 12 invariants: 12 checked, 0 NO_V4. Run: exit 0, 7 scenarios, ~17 s (screenshots looked at: map, three nodes,
 crew bar, X eyes on the failed creature).
 Counter-checks (each → exit 1): K-K1 slot no longer gets `is-selected` ("selected creature is not marked");
@@ -153,3 +157,14 @@ Pre-existing reds, not touched (red before the port as well): `check-office-skil
 - `node --test --test-skip-pattern "Web Research oeffnet den Chat" shared/business-chat.test.mjs
   shared/react-settings.test.mjs shared/shell-crew-health.test.mjs` → 142/142 pass. Without the skip, that
   test fails, as expected.
+
+## 7. Follow-up 1 (v4 ratchet)
+
+The four `.v4.mjs` had raised the v4 ratchet: cache-buster 11 → 17 and ref-legacy-catalog-file 30 → 33. guard-v4.mjs
+has no exception mechanism for these rules. I removed the V2 checks behind them from the v4 scripts and listed them
+as NO_V4 above: R1 build key, the leftover schema.js import, the schema.js scan exclusion, and the `?v=` import in
+the crew-map harness. I also removed the debt markers that had been inserted above those lines.
+- `node v4/debt/ratchet.mjs` (from src/apps/business-os) → `ratchet: OK`, 11 counters lower.
+- `node v4/tools/guards/guard-v4.mjs` → 1827 hits, both with and without the four `.v4.mjs` (checked in a mirror
+  with the scripts removed). The scripts contribute 0 hits.
+- All four `.v4.mjs` → exit 0.

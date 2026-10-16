@@ -8,8 +8,8 @@
 //      the same binding when serving JavaScript and CSS ('ctox:shared/' -> '/src/apps/business-os/shared/'),
 //      exactly as v4/frame/lab/frame.test.mjs does. Without it the V2 harness never reaches __ctoxCrewReady.
 //   2. modules/ctox/index.js is imported without the V2 '?v=' cache buster (v4 apps carry no ?v=, the shell
-//      addresses app files by content hash). shared/business-chat.js keeps the V2 import (it is still the shell
-//      chat, debt L-32).
+//      addresses app files by content hash). shared/business-chat.js (still the shell chat, CHAT4, debt L-32) is
+//      imported without '?v=' as well – v4 loads without cache busters.
 // NO_V4: none – every assertion runs unchanged.
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
@@ -198,8 +198,7 @@ function harnessHtml() {
     body{margin:0;background:var(--background);color:var(--text);font-family:system-ui}main{width:1200px;margin:40px auto}svg{width:100%;height:660px}.proof-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.demo-node{fill:var(--surface);stroke:#314047}.demo-label{fill:var(--text);font:700 18px system-ui;text-anchor:middle}
   </style><link rel="stylesheet" href="/src/apps/business-os/modules/ctox/index.css"></head><body><main><svg viewBox="0 0 1000 620"><g><rect class="demo-node" x="110" y="202" width="140" height="76" rx="12"/><text class="demo-label" x="180" y="246">Queue</text><rect class="demo-node" x="430" y="202" width="140" height="76" rx="12"/><text class="demo-label" x="500" y="246">Working</text><rect class="demo-node" x="750" y="402" width="140" height="76" rx="12"/><text class="demo-label" x="820" y="446">Failed</text></g><g id="crew"></g></svg><div class="proof-only" id="chat"></div><div class="proof-only" data-chat-creature id="chat-creature"></div><div id="bar" style="display:flex;gap:6px;height:32px"></div></main><script type="module">
     import { __ctoxTestHooks } from '/src/apps/business-os/modules/ctox/index.js';
-    // v4-allow: debt L-01 (V2-Generationsmarke im Prüfstand bis S9)
-    import { __businessChatTestInternals, crewReferenceHtml, crewCreatureHtml, syncCrewProceduralMotion } from '/src/apps/business-os/shared/business-chat.js?v=20260831-crew-telemetry-v331';
+    import { __businessChatTestInternals, crewReferenceHtml, crewCreatureHtml, syncCrewProceduralMotion } from '/src/apps/business-os/shared/business-chat.js';
     const crewMembers=[{id:'crew:milo',name:'Milo',shape:'blob',color:'#00aa9a',archived:false},{id:'crew:nori',name:'Nori',shape:'square',color:'#7c6df2',archived:false},{id:'crew:tavi',name:'Tavi',shape:'triangle',color:'#e97255',archived:false}];
     const working={id:'task-working',commandId:'cmd-working',crewMemberId:'crew:milo',title:'Working task',status:'running',executionPhase:'running',executionProgress:{version:1,revision:1,phase:'work',percent:45,current_step:2,completed_steps:1,total_steps:2,steps:[{position:1,label:'Collect',status:'completed',activity_turns:1},{position:2,label:'Verify',status:'in_progress',activity_turns:1}],review:{status:'pending'},activity_turns:{total:2,thinking:1,tools:1,last_kind:'tool'},updated_at_ms:Date.now()-10000}};
     // Milo has a second running task: he is still ONE being on the map (Owner 28.09.2026).
