@@ -1,35 +1,4 @@
 #!/usr/bin/env bash
+# Compatibility entry point for the integrated store; no pinned donor composition.
 set -euo pipefail
-export RUST_TEST_THREADS=2 CMAKE_BUILD_PARALLEL_LEVEL=2 MAKEFLAGS=-j2
-SOURCE=$(pwd)
-PROOF=${IMPORT_PROOF_DIR:?set IMPORT_PROOF_DIR outside disposable TMPDIR}
-mkdir -p "$PROOF"
-# Compose the integrated registry and existing CAS only in isolated scratch.
-# Pin exact sources; never alter another strand's checkout files.
-REGISTRY_SOURCE=c132b903d8f08b0caf7034db984f76d834e392ff
-mkdir -p "$TMPDIR/import-registry"
-git --git-dir=/mnt/nvme1/build-lane/mirror/metric-space-ai__ctox.git cat-file -e "$REGISTRY_SOURCE^{commit}" || git --git-dir=/mnt/nvme1/build-lane/mirror/metric-space-ai__ctox.git fetch --filter=blob:none origin "$REGISTRY_SOURCE"
-git --git-dir=/mnt/nvme1/build-lane/mirror/metric-space-ai__ctox.git archive "$REGISTRY_SOURCE" src/core/store src/core/paths.rs src/core/rxdb/src/plugins/replication_webrtc/v4_stream.rs tests/sync-v4-m2 | tar -x -C "$TMPDIR/import-registry"
-STORE="$TMPDIR/import-registry/src/core/store"
-CAS_SOURCE=7d1cb291550b859a8c05997603f285cb7d3ca8ac
-git --git-dir=/mnt/nvme1/build-lane/mirror/metric-space-ai__ctox.git archive "$CAS_SOURCE" src/core/store/cas | tar -x -C "$TMPDIR/import-registry"
-sed -i '/^\[dependencies\]/a sha2 = "0.10"' "$STORE/Cargo.toml"
-printf '\npub mod cas;\n' >> "$STORE/lib.rs"
-printf '\n#[path="%s/src/core/store/import/mod.rs"] pub mod import;\n' "$SOURCE" >> "$STORE/lib.rs"
-rustfmt --edition 2021 src/core/store/import/{mod,base_release,core_import,file_import,tests}.rs src/core/store/import/tests/{release_input,profile,legacy,files}.rs
-rustfmt --edition 2021 --check src/core/store/import/{mod,base_release,core_import,file_import,tests}.rs src/core/store/import/tests/{release_input,profile,legacy,files}.rs
-export IMPORT_INPUT_ROOT=${IMPORT_INPUT_ROOT:-/mnt/sata8t/lane/artifacts/v4-import-input}
-export PATH=/mnt/nvme1/build-lane/cache/node-v24.13.1-linux-x64/bin:$PATH
-sha256sum "$IMPORT_INPUT_ROOT/outbound-tracking.schema.json" "$IMPORT_INPUT_ROOT/core-allowlisted-v2.sqlite3" > "$PROOF/supplement.sha256"
-node --check scripts/sync-v4/import-report.mjs
-bash -n src/core/store/import/tests/qualify.sh
-node --test src/core/store/import/tests/import-report.test.mjs 2>&1 | tee "$PROOF/input-contract.log"
-node scripts/sync-v4/import-report.mjs --v4-root "$IMPORT_INPUT_ROOT/v4" --platform "$IMPORT_INPUT_ROOT/ctox-platform.manifest.json" --output "$PROOF/input-inventory.json"
-cargo test --manifest-path "$STORE/Cargo.toml" --lib import::tests -- --nocapture 2>&1 | tee "$PROOF/component.log"
-cargo check --manifest-path "$STORE/Cargo.toml" 2>&1 | tee "$PROOF/check.log"
-python3 src/core/store/import/tests/mutations.py "$STORE"
-node scripts/sync-v4/import-report.mjs --v4-root "$IMPORT_INPUT_ROOT/v4" --platform "$IMPORT_INPUT_ROOT/ctox-platform.manifest.json" --output "$PROOF/import2-inventory-accounting.json" --counts "$PROOF/import2-files-tracking.json"
-cargo test --manifest-path "$STORE/Cargo.toml" --lib import::tests -- --nocapture 2>&1 | tee "$PROOF/restored.log"
-sha256sum src/core/store/import/*.rs src/core/store/import/tests/*.rs src/core/store/import/tests/*.py src/core/store/import/tests/*.sh src/core/store/import/tests/*.mjs scripts/sync-v4/import-report.mjs > "$PROOF/source.sha256"
-printf '%s\n' "$REGISTRY_SOURCE" > "$PROOF/registry-source.txt"
-printf '%s\n' "$CAS_SOURCE" > "$PROOF/cas-source.txt"
+exec bash scripts/sync-v4/qualify-import.sh "${IMPORT_INPUT_ROOT:?set copied release root}" "${IMPORT_PROOF_DIR:?set proof directory}" "${M7_INPUT_ROOT:?set copied frozen M7 release root}"

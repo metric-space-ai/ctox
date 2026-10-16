@@ -6,6 +6,7 @@ impl core_import::DataframeImporter for NoTimeseries {
     }
 }
 #[tokio::test]
+#[ignore = "qualification: requires copied release inputs, run via scripts/sync-v4/qualify-import.sh"]
 async fn devops_profile_copy_imports_crew_and_replay_does_not_emit_changes() -> Result<()> {
     let input = std::env::var("IMPORT_INPUT_ROOT").expect("copied release inputs required");
     let mut source = rusqlite::Connection::open_with_flags(
