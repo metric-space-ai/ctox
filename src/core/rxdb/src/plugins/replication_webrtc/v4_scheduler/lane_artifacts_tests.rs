@@ -394,7 +394,7 @@ impl PairFixture {
             for _ in 0..7 {
                 let channel = channels.recv().await.unwrap();
                 let label = channel.label().await.unwrap();
-                eprintln!("LANE4_CHANNEL {label}");
+                eprintln!("LANE4_CHANNEL {label} sid={:?}", channel.id());
                 let index = Lane::ALL
                     .iter()
                     .position(|l| l.label() == label)
@@ -977,7 +977,7 @@ struct Z3UdpShape {
     drops: Arc<std::sync::atomic::AtomicU64>,
 }
 impl Z3UdpShape {
-    async fn start(server: std::net::SocketAddr) -> Self {
+    async fn start(server: std::net::SocketAddr, rtt_ms: u64) -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};
         let front = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let back = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
@@ -1006,7 +1006,7 @@ impl Z3UdpShape {
                 let n = seen.fetch_add(1, Ordering::Relaxed)+1;
                 if n%100 == 0 {lost.fetch_add(1, Ordering::Relaxed); continue;}
                 delayed.push(Box::pin(async move {
-                    tokio::time::sleep(Duration::from_micros(37_500)).await;
+                    tokio::time::sleep(Duration::from_micros(rtt_ms * 1000 / 4)).await;
                     packet
                 }));
             }
@@ -1016,6 +1016,23 @@ impl Z3UdpShape {
 }
 impl Drop for Z3UdpShape {fn drop(&mut self) {self.task.abort();}}
 
+static Z3_CLOCK: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+fn z3_elapsed_ms() -> f64 {Z3_CLOCK.get_or_init(Instant::now).elapsed().as_secs_f64()*1000.0}
+fn z3_app_timeline(id: u64, event: &str) {
+    eprintln!("SCTP_APP {}",serde_json::json!({"id":id,"event":event,"ms":z3_elapsed_ms()}));
+}
+struct Z3SctpLogger;
+static Z3_SCTP_LOGGER: Z3SctpLogger = Z3SctpLogger;
+impl log::Log for Z3SctpLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {metadata.target()=="ctox_sctp_timeline"}
+    fn log(&self, record: &log::Record<'_>) {
+        if self.enabled(record.metadata()) {
+            eprintln!("SCTP_TIMELINE {}",serde_json::json!({"ms":z3_elapsed_ms(),"message":record.args().to_string()}));
+        }
+    }
+    fn flush(&self) {}
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "isolated coturn UDP listener and unprivileged netns required"]
 async fn z3_p4_turn_loss_rtt() {
@@ -1023,9 +1040,14 @@ async fn z3_p4_turn_loss_rtt() {
     use std::sync::atomic::Ordering;
     assert_eq!(std::env::var("Z3_OWN_NETNS").as_deref(), Ok("1"));
     let _ = rustls::crypto::ring::default_provider().install_default();
-    tokio::time::timeout(Duration::from_secs(90), async {
+    let _ = log::set_logger(&Z3_SCTP_LOGGER);
+    log::set_max_level(log::LevelFilter::Trace);
+    tokio::time::timeout(Duration::from_secs(180), async {
+        let rtt_ms = std::env::var("Z3_RTT_MS").unwrap_or_else(|_| "150".into()).parse::<u64>().unwrap();
+        assert!([20,150,600].contains(&rtt_ms));
+        let bulk_enabled = std::env::var("Z3_TURN_BULK").as_deref() == Ok("1");
         let server: std::net::SocketAddr = std::env::var("Z3_TURN_LISTENER").unwrap().parse().unwrap();
-        let a = Z3UdpShape::start(server).await; let b = Z3UdpShape::start(server).await;
+        let a = Z3UdpShape::start(server,rtt_ms).await; let b = Z3UdpShape::start(server,rtt_ms).await;
         let configuration = |port| RTCConfigurationBuilder::new()
             .with_ice_transport_policy(RTCIceTransportPolicy::Relay)
             .with_ice_servers(vec![RTCIceServer {urls:vec![format!("turn:127.0.0.1:{port}?transport=udp")],username:"z3-fixture".into(),credential:"z3-fixture-only".into()}]).build();
@@ -1039,6 +1061,31 @@ async fn z3_p4_turn_loss_rtt() {
         let mut bc = pair.target.take_incoming(Some(Lane::Commands)).unwrap();
         let mut control = pair.target.take_incoming(Some(Lane::Control)).unwrap();
         let mut replies = pair.source.take_incoming(Some(Lane::Control)).unwrap();
+        let mut bulk = pair.target.take_incoming(Some(Lane::Transfer)).unwrap();
+        let bulk_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let bulk_received = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let window = Arc::new(tokio::sync::Semaphore::new(16));
+        let mut seed = 0x6a09e667f3bcc909u64;
+        let mut payload = vec![0;16_000];
+        for byte in &mut payload {seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; *byte=seed as u8;}
+        let expected = payload.clone(); let count = bulk_received.clone(); let permits = window.clone();
+        let receive_bulk = tokio::spawn(async move {
+            while let Some(Incoming::Reliable{bytes,delivery:Some(token),..})=bulk.recv().await {
+                assert_eq!(bytes,expected);token.acknowledge().unwrap();count.fetch_add(1,Ordering::Relaxed);permits.add_permits(1);
+            }
+        });
+        let send_bulk = pair.source.clone(); let stop = bulk_stop.clone(); let permits = window.clone();
+        let bulk_clock = Instant::now();
+        let produce_bulk = tokio::spawn(async move {
+            let mut count=0u64;
+            while bulk_enabled && !stop.load(Ordering::Relaxed) {
+                let permit = permits.acquire().await.unwrap();
+                if stop.load(Ordering::Relaxed) {break;}
+                permit.forget();
+                send_bulk.send(Lane::Transfer,WireSeq(count),&payload,Some(Arc::new(Authorized))).await.unwrap();count+=1;
+            }
+            count
+        });
         let mut latency = Vec::new(); let mut effects_a=Vec::new(); let mut effects_b=Vec::new();
         for id in 0..64u64 {
             pair.source.send(Lane::Commands,WireSeq(id),&id.to_be_bytes(),Some(Arc::new(Authorized))).await.unwrap();
@@ -1048,16 +1095,23 @@ async fn z3_p4_turn_loss_rtt() {
                 assert_eq!(bytes,id.to_be_bytes()); effects.push(id); token.acknowledge().unwrap();
             }
             let clock=Instant::now();
-            pair.source.send(Lane::Control,WireSeq(id),b"probe",Some(Arc::new(Authorized))).await.unwrap();
+            let probe = [b"PROB".as_slice(),id.to_be_bytes().as_slice()].concat();
+            z3_app_timeline(id,"send");
+            pair.source.send(Lane::Control,WireSeq(id),&probe,Some(Arc::new(Authorized))).await.unwrap();
             let Some(Incoming::Reliable{bytes,delivery:Some(token),..})=control.recv().await else {panic!("TURN control missing");};
-            assert_eq!(bytes,b"probe");token.acknowledge().unwrap();
-            pair.target.send(Lane::Control,WireSeq(id),b"reply",Some(Arc::new(Authorized))).await.unwrap();
+            assert_eq!(bytes,probe);z3_app_timeline(id,"deliver_request");token.acknowledge().unwrap();
+            pair.target.send(Lane::Control,WireSeq(id),&probe,Some(Arc::new(Authorized))).await.unwrap();
             let Some(Incoming::Reliable{bytes,delivery:Some(token),..})=replies.recv().await else {panic!("TURN control reply missing");};
-            assert_eq!(bytes,b"reply");token.acknowledge().unwrap();latency.push(clock.elapsed().as_secs_f64()*1000.0);
+            assert_eq!(bytes,probe);z3_app_timeline(id,"deliver_reply");token.acknowledge().unwrap();latency.push(clock.elapsed().as_secs_f64()*1000.0);
         }
+        bulk_stop.store(true,Ordering::Relaxed);
+        let bulk_sent = produce_bulk.await.unwrap();
+        tokio::time::timeout(Duration::from_secs(20),async {while bulk_received.load(Ordering::Relaxed)!=bulk_sent {tokio::time::sleep(Duration::from_millis(5)).await;}}).await.expect("bulk admission lost delivery");
+        receive_bulk.abort();let _=receive_bulk.await;
+        let bulk_seconds=bulk_clock.elapsed().as_secs_f64();
         tokio::time::timeout(Duration::from_secs(5),async {
             loop {
-                if [(&sa,&pair.source),(&sb,&pair.target)].iter().all(|(session,scheduler)| [Lane::Commands,Lane::Control].iter().all(|lane| session.replay(scheduler.session.as_ref().unwrap().generation,*lane).unwrap().is_empty())) {break;}
+                if [(&sa,&pair.source),(&sb,&pair.target)].iter().all(|(session,scheduler)| [Lane::Commands,Lane::Control,Lane::Transfer].iter().all(|lane| session.replay(scheduler.session.as_ref().unwrap().generation,*lane).unwrap().is_empty())) {break;}
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         }).await.expect("TURN application delivery acknowledgements missing");
@@ -1066,7 +1120,8 @@ async fn z3_p4_turn_loss_rtt() {
         let drops=a.drops.load(Ordering::Relaxed)+b.drops.load(Ordering::Relaxed);
         assert!(drops>0,"loss shaper must drop actual network datagrams");
         latency.sort_by(f64::total_cmp);let p95=latency[(latency.len()*95/100).min(latency.len()-1)];
+        let p99=latency[(latency.len()*99/100).min(latency.len()-1)];
         pair.close().await;
-        eprintln!("Z3_P4_TURN {}",serde_json::json!({"scenario":3,"relay_only":true,"candidates_a":candidates_a,"candidates_b":candidates_b,"shim":"UDP at TURN control legs","nominal_rtt_ms":150,"drop_every":100,"datagrams":packets,"dropped_datagrams":drops,"sent":128,"explicit_send_results":128,"delivery_acknowledged":128,"lost":0,"duplicated":0,"control_p95_ms":p95,"control_roundtrip_ms":latency}));
+        eprintln!("Z3_P4_TURN {}",serde_json::json!({"scenario":3,"relay_only":true,"candidates_a":candidates_a,"candidates_b":candidates_b,"shim":"UDP at TURN control legs","nominal_rtt_ms":rtt_ms,"drop_every":100,"datagrams":packets,"dropped_datagrams":drops,"sent":128,"explicit_send_results":128,"delivery_acknowledged":128,"lost":0,"duplicated":0,"control_p95_ms":p95,"control_p99_ms":p99,"control_roundtrip_ms":latency,"bulk_enabled":bulk_enabled,"bulk_bytes":bulk_sent*16_000,"bulk_seconds":bulk_seconds,"bulk_mb_s":bulk_sent as f64*16_000.0/bulk_seconds/1_000_000.0}));
     }).await.expect("TURN loss RTT fixture deadline");
 }
