@@ -797,16 +797,18 @@ export interface V4LaunchContext {
     packageKeys:{keyId:string;alg:'Ed25519';publicKey:string}[];
   };
 }
-export type BootV4Reason='launch_context_unavailable'|'launch_context_invalid'|'package_verifier_missing'|'hello_rejected'|'transport_unavailable';
+export type BootV4Reason='invalid_options'|'launch_context_unavailable'|'launch_context_invalid'|'package_verifier_missing'|'hello_rejected'|'transport_unavailable';
 export declare class BootV4Error extends CtoxError {
   readonly name:'BootV4Error';
-  /** unavailable | invalid | forbidden (package_verifier_missing, hello_rejected) | unavailable (transport). */
+  /** invalid (invalid_options) | unavailable | invalid | forbidden (package_verifier_missing, hello_rejected) | unavailable (transport). */
   readonly reason:BootV4Reason;
 }
 export interface BootV4Options {
   /** Default '/api/business-os/launch-context'. */
   launchContextUrl?:string;
-  resolveShell:(version:string,artifacts:ShellKernelApi['artifacts'])=>ShellModule|Promise<ShellModule>;
+  /** Optional. Absent: createLoader loads the activated shell version via kernel.loadModule('shell', ver) (manifest entry,
+   * v4/frame/index.js). Present but not a function: BootV4Error reason 'invalid_options'. */
+  resolveShell?:(version:string,artifacts:ShellKernelApi['artifacts'])=>ShellModule|Promise<ShellModule>;
   fetchImpl?:typeof fetch;
   /** Host/test seam; default: built-in signaling client (WebSocket + RTCPeerConnection + createReliableChannels). */
   createPeer?:WebRTCTransportOptions['createPeer'];
@@ -815,6 +817,8 @@ export interface BootV4Options {
   handshakeTimeoutMs?:number;
   /** Additional loader/kernel options; identity, actor, transport and resolveShell always come from the launch context. */
   loaderOptions?:Partial<Omit<LoaderOptions,'instanceId'|'userId'|'actor'|'transport'|'resolveShell'>>;
+  /** Test/host seam; default createLoader. */
+  loaderFactory?:(options:LoaderOptions)=>Promise<KernelLoader>;
 }
 export interface BootV4Result {
   readonly loader:KernelLoader;
@@ -823,7 +827,7 @@ export interface BootV4Result {
   readonly launchContext:Readonly<V4LaunchContext['v4']>;
 }
 /** Leader tabs resolve after the authenticated hello; follower tabs after the loader is up. Never falls back to V2/HTTP data. */
-export declare function bootV4(options:BootV4Options):Promise<BootV4Result>;
+export declare function bootV4(options?:BootV4Options):Promise<BootV4Result>;
 export declare function parseV4LaunchContext(payload:unknown):Readonly<V4LaunchContext['v4']>;
 export declare function fetchV4LaunchContext(url?:string,fetchImpl?:typeof fetch):Promise<Readonly<V4LaunchContext['v4']>>;
 export declare const DEFAULT_LAUNCH_CONTEXT_URL:'/api/business-os/launch-context';

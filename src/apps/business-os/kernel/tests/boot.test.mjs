@@ -75,7 +75,6 @@ test('launch-context fetch is same-origin control plane with typed transport fai
   if(body==='not json')f.impl=async()=>({ok:true,status:200,json:async()=>{throw SyntaxError('bad json')}});
   await assert.rejects(fetchV4LaunchContext(undefined,f.impl),e=>e instanceof BootV4Error&&e.reason===reason&&e.code===code);
  }
- await assert.rejects(bootV4({fetchImpl:fetchFake([context()]).impl}),e=>e instanceof BootV4Error&&e.reason==='launch_context_invalid');
 });
 
 test('bootV4 hands exactly the launch context to the transport and brings the loader up over verified pages',async()=>{
@@ -126,4 +125,26 @@ test('typed errors: hello rejected, forged scope grant, unsigned page, missing v
  await assert.rejects(bootV4({fetchImpl:fetchFake([context()]).impl,createPeer:harness().createPeer,resolveShell:shell,loaderOptions,subtle:{importKey:async()=>{throw new DOMException('Unrecognized name','NotSupportedError')}}}),e=>e.reason==='package_verifier_missing');
  const noV4={...context()};delete noV4.v4;
  await assert.rejects(bootV4({fetchImpl:fetchFake([noV4]).impl,createPeer:harness().createPeer,resolveShell:shell,loaderOptions}),e=>e.reason==='launch_context_unavailable');
+});
+
+test('resolveShell is optional: absent, the loader gets no resolver and loads the activated shell entry itself',async()=>{
+ const ctx=context(),f=fetchFake([ctx]),h=harness(),seen=[];
+ const {createLoader}=await import('../loader.mjs');
+ const boot=await bootV4({fetchImpl:f.impl,createPeer:h.createPeer,loaderOptions,loaderFactory:opts=>{seen.push(opts);return createLoader(opts);}});
+ try{
+  assert.equal(seen.length,1);assert.equal(Object.prototype.hasOwnProperty.call(seen[0],'resolveShell'),false,'createLoader falls back to kernel.loadModule(shell, ver)');
+  assert.equal(seen[0].transport,boot.transport);assert.equal(seen[0].instanceId,'instance');assert.deepEqual(seen[0].actor,ctx.v4.actor);
+  assert.equal(boot.transport.session.instance_id,'instance');assert.equal(f.calls[0].url,'/api/business-os/launch-context');
+ }finally{await boot.loader.close();for(const p of h.peers)p.close();}
+ const given=[],resolver=()=>({startShell(){},stopShell(){}}),h2=harness();
+ const withShell=await bootV4({fetchImpl:fetchFake([context()]).impl,createPeer:h2.createPeer,resolveShell:resolver,loaderOptions,loaderFactory:opts=>{given.push(opts);return createLoader(opts);}});
+ try{assert.equal(given[0].resolveShell,resolver);}finally{await withShell.loader.close();for(const p of h2.peers)p.close();}
+});
+
+test('a non-function resolveShell is a typed error before any control-plane request',async()=>{
+ for(const value of [null,'v4/frame/index.js',{},42]){
+  const f=fetchFake([context()]);
+  await assert.rejects(bootV4({fetchImpl:f.impl,createPeer:harness().createPeer,resolveShell:value,loaderOptions}),e=>e instanceof BootV4Error&&e.reason==='invalid_options'&&e.code==='invalid',String(value));
+  assert.equal(f.calls.length,0);
+ }
 });

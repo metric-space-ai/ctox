@@ -10,7 +10,7 @@ import {decodeHelloFrame} from '../rxdb/src/hello.mjs';
 export const DEFAULT_LAUNCH_CONTEXT_URL='/api/business-os/launch-context';
 export const STREAM_DOMAIN='ctox.sync.v4.stream\0';
 export const SCOPE_DOMAIN='ctox:v4:scope\0';
-const REASON_CODE=Object.freeze({launch_context_unavailable:'unavailable',launch_context_invalid:'invalid',package_verifier_missing:'forbidden',hello_rejected:'forbidden',transport_unavailable:'unavailable'});
+const REASON_CODE=Object.freeze({invalid_options:'invalid',launch_context_unavailable:'unavailable',launch_context_invalid:'invalid',package_verifier_missing:'forbidden',hello_rejected:'forbidden',transport_unavailable:'unavailable'});
 
 export class BootV4Error extends CtoxError {
  constructor(reason,message,detail){super(REASON_CODE[reason]??'invalid',message,{reason,...(detail===undefined?{}:{detail:String(detail)})});this.name='BootV4Error';}
@@ -127,11 +127,13 @@ const isHelloRejection=error=>error?.name==='HelloRejected'||error?.code==='forb
 
 /**
  * bootV4: fetch the authenticated launch context, build the WebRTC kernel transport and start the loader.
- * `createPeer`, `loaderOptions` and `subtle` are host/test seams; identity, transport and hello always come from the
+ * `resolveShell` is optional (absent: createLoader loads the activated shell's manifest entry via kernel.loadModule).
+ * `createPeer`, `loaderOptions`, `loaderFactory` and `subtle` are host/test seams; identity, transport and hello always come from the
  * launch context. Never falls back to V2 or HTTP data paths.
  */
-export async function bootV4({launchContextUrl=DEFAULT_LAUNCH_CONTEXT_URL,resolveShell,fetchImpl=globalThis.fetch,createPeer,codecs,subtle=globalThis.crypto?.subtle,loaderOptions={},handshakeTimeoutMs}={}){
- if(typeof resolveShell!=='function')throw new BootV4Error('launch_context_invalid','resolveShell is required');
+export async function bootV4({launchContextUrl=DEFAULT_LAUNCH_CONTEXT_URL,resolveShell,fetchImpl=globalThis.fetch,createPeer,codecs,subtle=globalThis.crypto?.subtle,loaderOptions={},handshakeTimeoutMs,loaderFactory=createLoader}={}){
+ // Optional: absent -> the loader resolves the activated shell itself (kernel.loadModule('shell', ver) = manifest entry).
+ if(resolveShell!==undefined&&typeof resolveShell!=='function')throw new BootV4Error('invalid_options','resolveShell must be a function when given');
  const context=await fetchV4LaunchContext(launchContextUrl,fetchImpl);
  if(!subtle)fail('package_verifier_missing','WebCrypto unavailable');
  const keys=await importPackageKeys(context.packageKeys,subtle);
@@ -162,7 +164,7 @@ export async function bootV4({launchContextUrl=DEFAULT_LAUNCH_CONTEXT_URL,resolv
  const transport=new WebRTCKernelTransport({authSession,verifyPackage:createPackageVerifier({instanceId,userId,keys,subtle}),createPeer:(_address,identity)=>peerFactory(current.signaling,identity),address:context.signaling,codecs,...(handshakeTimeoutMs?{handshakeTimeoutMs}:{})});
  const {instanceId:_i,userId:_u,actor:_a,transport:_t,resolveShell:_r,...extra}=loaderOptions;
  let loader;
- try{loader=await createLoader({...extra,instanceId,userId,actor,transport,resolveShell});}
+ try{loader=await loaderFactory({...extra,instanceId,userId,actor,transport,...(resolveShell===undefined?{}:{resolveShell})});}
  catch(error){transport.close();throw error;}
  if(loader.kernel.isLeader){
   try{await transport.ready;}

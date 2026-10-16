@@ -34,6 +34,8 @@ const cases=[
  ['clock-start','transport-webrtc.mjs','async startHello(){this.started=this.now();','async startHello(){','webrtc.test.mjs','P4 hello'],
  ['shell-failure-report','loader.mjs',"else await kernel.activation.reportFailed('shell',String(ver),outcome.error??'shell_start_failed');",'','loader.test.mjs','loader follows shell activation'],
  ['boot-hello-token','boot.mjs','new WebRTCKernelTransport({authSession,verifyPackage','new WebRTCKernelTransport({verifyPackage','boot.test.mjs','exactly the launch context'],
+ ['boot-optional-shell','boot.mjs','...(resolveShell===undefined?{}:{resolveShell})','resolveShell','boot.test.mjs','resolveShell is optional'],
+ ['boot-shell-type','boot.mjs',"resolveShell!==undefined&&typeof resolveShell!=='function'",'false','boot.test.mjs','non-function resolveShell'],
  ['wire-endian','framing.mjs','d.setUint32(0,MAGIC);','d.setUint32(0,MAGIC,true);','webrtc.test.mjs','P4 hello'],
 ];
 const receipts=[];

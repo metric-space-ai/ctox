@@ -84,8 +84,8 @@ try{
    }
    close(){this.readyState=3;}
   };
-  const shellStarts=[];
-  const boot=await bootV4({resolveShell:async ver=>({startShell(){shellStarts.push(ver);},stopShell(){}})});
+  // Exactly what Shell v4's v4/boot.js does: no resolveShell, the loader resolves the activated shell entry itself.
+  const boot=await bootV4({launchContextUrl:'/api/business-os/launch-context'});
   await nativeReady;
   const api=boot.kernel.appApi('notes','1');const local=api.put('notes',{id:'client',title:'local'});await local.local;const receipt=await local.result;
   for(let n=0;n<400&&!api.get('notes','server').get();n++)await new Promise(r=>setTimeout(r,10));
@@ -100,7 +100,7 @@ try{
   };
   // Typed error in the real browser: the context endpoint without the session cookie answers 401.
   document.cookie='ctox_session=; Max-Age=0; Path=/';
-  try{await bootV4({resolveShell:()=>({startShell(){},stopShell(){}})});out.unauthenticated='no error';}catch(error){out.unauthenticated=`${error instanceof BootV4Error}:${error.reason}:${error.code}`;}
+  try{await bootV4({launchContextUrl:'/api/business-os/launch-context'});out.unauthenticated='no error';}catch(error){out.unauthenticated=`${error instanceof BootV4Error}:${error.reason}:${error.code}`;}
   await boot.loader.close();native.close();nativePc.close();
   document.querySelector('#result').textContent='PASS: bootV4 launch context -> real WebRTC transport -> loader';
   return out;
