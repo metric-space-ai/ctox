@@ -5,6 +5,7 @@ import {pathToFileURL} from 'node:url';
 import {createRequire} from 'node:module';
 import {Native,pause} from '../../sync-v4-e2e/native.mjs';
 import {installServiceEntry} from './service-entry.mjs';
+import {nativeControl} from './control-client.mjs';
 import {installBrowserEntry} from './browser-entry.mjs';
 const config=JSON.parse(fs.readFileSync(process.argv[2]));
 if(!config.canonicalTmpdir || !fs.statSync(config.canonicalTmpdir).isDirectory())throw Error('Canonical lane TMPDIR required');
@@ -40,6 +41,14 @@ try {
     await pause(100);
   }
   if(!report.daemon?.ready)throw Error('Foreground readiness deadline');
+  const call=nativeControl(config),admin=native.fixture.identities.find(i=>i.name==='admin');
+  const probeId='p6-probe-control';
+  const committed=await call(admin,'writeProbe',{id:probeId,n:17});
+  const stored=await call(admin,'readNative',{collection:'p6_control_rows',id:probeId});
+  if(committed.source!=='owner-writer-commit' || stored.rows.length!==1 || stored.rows[0].n!==17)throw Error('Native owner control positive proof failed');
+  let denied=false;try{await call({...admin,cookie:'p6-unissued'},'readNative',{collection:'p6_control_rows'});}catch(e){denied=e.message==='control request denied';}
+  if(!denied)throw Error('Native control admitted an unissued session');
+  report.control={ownerBacked:true,writeReadback:true,seq:committed.seq,unissuedSessionRejected:denied,process:await call(admin,'processIdentity')};
   save();
   const origin='http://127.0.0.1:'+config.port;
   const require=createRequire(join(config.modulesRoot,'playwright/package.json'));
@@ -51,7 +60,9 @@ try {
     const context=await browser.newContext();contexts.push(context);
     await context.addCookies([{name:'ctox_business_os_auth',value:enrolled.cookie,url:origin,httpOnly:true,sameSite:'Strict'}]);
     const connect=await installBrowserEntry(context,origin);
-    const p=await context.newPage();bindings.set(p,()=>connect(p,enrolled,native.fixture));
+    const p=await context.newPage();
+    await p.exposeBinding('__p6NativeControl',(_source,{operation,args})=>call(enrolled,operation,args));
+    bindings.set(p,()=>connect(p,enrolled,native.fixture));
     const response=await p.goto(origin+'/',{waitUntil:'domcontentloaded',timeout:20000});
     report.browserEntries.push({userId:enrolled.id,path:'/',status:response?.status()});save();
     return p;

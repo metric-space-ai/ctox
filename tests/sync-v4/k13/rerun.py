@@ -45,6 +45,7 @@ def private(s):return len(s.get('scenarios',[]))==3 and all(r.get('namespaceVeri
 try:
  paths=['src/core/service/store_startup.rs','src/core/service/store_native.rs','src/core/business_os/policy.rs','src/core/business_os/app_platform/runtime_host.rs']
  paths += ['src/apps/business-os/kernel/boot.mjs','src/apps/business-os/kernel/loader.mjs','src/apps/business-os/kernel/transport-webrtc.mjs','src/core/service/store_http.rs','src/core/business_os/store.rs',str(HERE.relative_to(ROOT)/'enrolled-fixture.rs')]
+ paths += [str(HERE.relative_to(ROOT)/'control-provider.rs')]
  paths += [str(p.relative_to(ROOT)) for d in ['k13','k21','k22'] for p in (ROOT/'tests/sync-v4'/d).glob('*.mjs')]
  (OUT/'source-binding.json').write_text(json.dumps({'expected_revision':a.revision,'remote_git_metadata':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),'hashes':{p:hash_file(ROOT/p) for p in paths}},indent=2)+'\n')
  for file in HERE.glob('*.mjs'):
@@ -56,7 +57,7 @@ try:
   binding=json.loads((producer.parent/'source-binding.json').read_text())
   assert build.get('pass') and build.get('terminal') and build['revision']==a.revision==binding['expected_revision'],'unverified producer'
   assert Path(build['source']).resolve()==ROOT,'foreign source root'
-  compiled={p:h for p,h in binding['hashes'].items() if p.startswith('src/') or p.endswith('enrolled-fixture.rs')}
+  compiled={p:h for p,h in binding['hashes'].items() if p.startswith('src/') or p.endswith(('enrolled-fixture.rs','control-provider.rs'))}
   assert compiled and all(hash_file(ROOT/p)==h for p,h in compiled.items()),'compiled product/fixture source differs'
   for kind in ['binary','fixtureBinary']:
    assert hash_file(build[kind])==build[kind+'Sha256'],'producer executable changed'

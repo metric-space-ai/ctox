@@ -102,7 +102,8 @@ if(build && !summary.scenarios.length) {
     const daemonPath=join(dir,'daemon.log'),daemonLog=fs.existsSync(daemonPath)?fs.readFileSync(daemonPath,'utf8'):'';
     const entryBound=boot?.revision===expected && boot?.binarySha256===build.binarySha256
       && boot?.root===config.root && Number.isInteger(boot?.pid)
-      && JSON.stringify(boot?.args)===JSON.stringify(['service','--foreground','--root',config.root]);
+      && boot?.entryKind==='test-only-production-foreground' && boot?.fixtureBinarySha256===build.fixtureBinarySha256
+      && JSON.stringify(boot?.args)===JSON.stringify(['p6_run_controlled_foreground','--ignored','--nocapture']);
     const row=report?.scenarios?.find(row=>row.id===id);
     const namespacePath=join(dir,'p6-namespace.json');
     const ns=fs.existsSync(namespacePath)?JSON.parse(fs.readFileSync(namespacePath)):null;

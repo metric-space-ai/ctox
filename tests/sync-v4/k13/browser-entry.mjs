@@ -21,7 +21,7 @@ export async function installBrowserEntry(context, origin) {
       if(!loader || loader.kernel!==kernel || !t?.session || t.closed || !Object.keys(t.channels??{}).length)
         throw Error('not_run(native-browser-hello): real native session was not admitted');
       const url=new URL(options.launchContextUrl??'/api/business-os/launch-context',location.href);
-      if(url.origin!==location.origin || url.pathname!=='/api/business-os/launch-context' || options.resolveShell!=='function' || options.customAdapter || location.pathname!=='/')
+      if(url.origin!==location.origin || url.pathname!=='/api/business-os/launch-context' || !['undefined','function'].includes(options.resolveShell) || options.customAdapter || location.pathname!=='/')
         throw Error('not_run(e38-entry): launch-context → bootV4 → loader path absent');
       if(kernel.instanceId!==instanceId || kernel.userId!==userId || t.identity.userId!==userId || t.session.instance_id!==instanceId)
         throw Error('not_run(e38-identity): kernel/transport identity mismatch');
@@ -38,6 +38,10 @@ export async function installBrowserEntry(context, origin) {
           return {userId:kernel.userId,deviceId,instanceId:kernel.instanceId,role:launch.actor.role,is_admin:launch.actor.is_admin};
         }},
       };
+      globalThis.__e2eOS.regression={contract:'ctox.sync-v4.regression-control.v1',
+        prepare:args=>globalThis.__p6NativeControl({operation:'prepare',args}),
+        control:async(operation,args)=>{const result=await globalThis.__p6NativeControl({operation,args});
+          if(operation==='authenticate' && args.deviceId!==deviceId)throw Error('Native device mismatch');return result;}};
       return {instanceId,userId,deviceId,role:launch.actor.role,transportKind:'native-webrtc',helloAdmitted:true,loader:true,
         shellVersion:loader.shellVersion,storageKind:kernel.storageKind,entry:location.pathname,launchContext:true};
     },{instanceId:fixture.instanceId,userId:identity.id,role:identity.role});

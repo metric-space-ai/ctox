@@ -55,15 +55,17 @@ export function installServiceEntry(Native) {
       this.start('voter-'+root.split('.').at(-1),this.config.binary,['service','--foreground','--root',root],
         {...this.env,CTOX_ROOT:root,CTOX_STATE_ROOT:resolve(root,'runtime')});
     }
-    const args=['service','--foreground','--root',this.config.root];
+    const args=['p6_run_controlled_foreground','--ignored','--nocapture'];
     const actual=hashFile(this.config.binary);
     if(actual!==this.config.binarySha256)throw Error('P6 service binary changed after verification');
-    const child=this.start('daemon',this.config.binary,args);this.daemon=child;
+    const fixtureActual=hashFile(this.config.fixtureBinary);
+    if(fixtureActual!==this.config.fixtureBinarySha256)throw Error('Native control executable changed');
+    const child=this.start('daemon',this.config.fixtureBinary,args,{...this.env,CTOX_P6_FIXTURE_CONFIG:this.config.configPath});this.daemon=child;
     const processRecord=this.receipts.find(row=>row.pid===child.pid);
     processRecord.owner=this.config.owner;processRecord.pidNamespace=fs.readlinkSync('/proc/self/ns/pid');
     processRecord.pidScope='private namespace';this.save();
     fs.writeFileSync(resolve(this.config.output,'p6-daemon-entry.json'),JSON.stringify({
-      revision:this.config.revision,binarySha256:actual,root:this.config.root,
+      revision:this.config.revision,binarySha256:actual,fixtureBinarySha256:fixtureActual,entryKind:"test-only-production-foreground",root:this.config.root,
       args,pid:child.pid,pidNamespace:fs.readlinkSync('/proc/self/ns/pid'),at:new Date().toISOString()
     },null,2),{mode:0o600});
   };

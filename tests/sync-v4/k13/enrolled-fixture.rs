@@ -14,7 +14,14 @@ async fn p6_prepare_enrolled_profiles() -> Result<()> {
     let mut identities = Vec::new();
     for (i, path) in roots.iter().enumerate() {
         let owner = Foreground::start(path.clone(), tokio::runtime::Handle::current()).await?;
-        owner.inputs.sync.writer.submit(WriteJob::new(Default::default(), seed))?.await?;
+        owner.inputs.sync.writer.submit(WriteJob::new(Default::default(), |tx| {
+            seed(tx)?;
+            schema::create_collection(tx, &CollectionDefinition {
+                name:"p6_control_rows".into(),app_id:"p6-fixture".into(),schema_ver:1,
+                schema_json:json!({"version":1,"type":"object","primaryKey":"id","properties":{"id":{"type":"string"},"n":{"type":"integer"}},"required":["id","n"]}),
+                class:"full".into(),client_limit:0,byte_budget:1048576,rights_ver:1,app_ver:"1".into(),
+            })?;Ok(())
+        }))?.await?;
         peers.insert(i as u64 + 1, Peer { identity: owner.inputs.instance_signer()?.key_id().into(), executor: true, data_replica: true });
         owners.push(owner);
     }
@@ -82,3 +89,6 @@ async fn p6_prepare_enrolled_profiles() -> Result<()> {
     for owner in &mut owners { owner.shutdown().await?; }
     result
 }
+
+#[path="control-provider.rs"]
+mod control_provider;

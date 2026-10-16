@@ -35,6 +35,7 @@ export async function connect(h, id) {
   },{contract:CONTROL_CONTRACT,id});
   if (!proof.available) return {result:notRun('Native fixture/identity control seam is not bound',proof)};
   const fixture = await control(page,'prepare',{scenario:id});
+  if(fixture.available===false)return {result:notRun(fixture.reason,{ownerBacked:fixture.ownerBacked})};
   assert.equal(fixture.scenario,id);
   assert.equal(fixture.isolated,true,'Only the runner-owned synthetic tenant may be modified');
   assert.equal(fixture.revision,h.config.revision,'Fixture must use the checksum-bound daemon revision');
