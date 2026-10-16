@@ -165,6 +165,10 @@ fn env() -> Env {
     let index = content.put(INDEX_JS.as_bytes()).unwrap();
     let long = content.put(long_js().as_bytes()).unwrap();
     rt.block_on(fixture.write(JobOptions::default(), move |tx| {
+        // The canonical Store carries the base-release rights rows (CUTOVER-3);
+        // the panel decides on them inside its own transaction.
+        ctox_store::change_log::initialize(tx)?;
+        policy::sync_rights::replace(tx, 1, &policy::base_release_rights(&[]))?;
         for name in [
             COLLECTION_DRAFTS,
             COLLECTION_TURNS,

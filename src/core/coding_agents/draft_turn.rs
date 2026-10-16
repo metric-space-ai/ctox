@@ -400,7 +400,14 @@ fn may_edit_source(
             .and_then(Value::as_str)
             == Some(id)
     });
-    Ok(policy::evaluate(
+    // CUTOVER-3: rights are seq-bearing Store rows. Decide on the rights of this
+    // same writer transaction (never a process-global or static default); rights
+    // that are not initialized or unreadable deny.
+    let Ok(rights) = policy::sync_rights::read(tx) else {
+        return Ok(false);
+    };
+    Ok(policy::evaluate_with_rights(
+        &rights,
         actor,
         BusinessOsPermission::AppsSourceEdit,
         &BusinessOsScope::module(app_id, assigned),
