@@ -413,3 +413,122 @@ async fn verification_retries_only_deadlines_and_never_reopens_a_closed_owner() 
     );
     Ok(())
 }
+
+#[test]
+fn core_collector_projects_ticket_and_archives_full_raw_row_without_inventing_a_conversation(
+) -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let path = fixture(root.path())?;
+    let frozen = path.parent().unwrap();
+    let live = root.path().join("core-live.sqlite3");
+    let db = Connection::open(&live)?;
+    db.execute_batch("CREATE TABLE ticket_items(ticket_key TEXT PRIMARY KEY,title TEXT,metadata_json TEXT,created_at TEXT);INSERT INTO ticket_items VALUES('ticket-1','Preserved ticket','{\"extra\":true}','2026-10-16T00:00:00Z');")?;
+    let copy = frozen.join("core.sqlite3");
+    db.backup(rusqlite::DatabaseName::Main, &copy, None)?;
+    let ro = Connection::open_with_flags(&copy, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let mut snapshot: Snapshot = serde_json::from_slice(&fs::read(&path)?).unwrap();
+    let mut source = Source {
+        choice: FileChoice {
+            database: "ctox.sqlite3".into(),
+            live_file: live,
+            frozen_file: copy,
+            lsof_receipt_sha256: "c".repeat(64),
+        },
+        measurement_sha256: String::new(),
+        kind: SourceKind::Core,
+        internal_table: None,
+        tables: vec![Decision {
+            rule: "E29-R5".into(),
+            table: Table {
+                name: "ticket_items".into(),
+                collection: "ctox_ticket_items".into(),
+                version: 1,
+                id_column: "ticket_key".into(),
+                body_column: None,
+                entity: cutover::Entity::Core,
+                mode: Mode::ArchiveOnly,
+            },
+            measurement: Some(freeze::measure(&ro, "ticket_items")?),
+        }],
+        collectors: vec![daemon_collectors::Collector::Core {
+            tables: vec!["ticket_items".into()],
+            original_root: root.path().into(),
+            copied_root: frozen.into(),
+            owner_user: None,
+        }],
+    };
+    measurements(&mut source);
+    snapshot.inventory.insert(
+        "ctox.sqlite3".into(),
+        BTreeSet::from(["ticket_items".into()]),
+    );
+    snapshot.databases.push(source);
+    fs::write(frozen.join("v4/manifests/tickets.manifest.json"),json!({"app_id":"tickets","collections":{"ctox_ticket_items":{"class":"full","schema":definition("ctox_ticket_items").schema_json}}}).to_string())?;
+    fs::write(&path, serde_json::to_vec(&snapshot).unwrap())?;
+    assert!(
+        matches!(prepare(path.clone(),&[],migration),Err(StoreError::Invalid(s)) if s=="cutover_core_conversation_rule_required")
+    );
+    fn not_a_crew_fixture(_: &str) -> i64 {
+        panic!("ticket projection must not invent crew context")
+    }
+    let result = prepare_with_core(path.clone(), &[], migration, Some(not_a_crew_fixture))?;
+    let doc = result
+        .import
+        .snapshot
+        .documents
+        .iter()
+        .find(|d| d.collection == "ctox_ticket_items")
+        .expect("native Core projection must run");
+    assert_eq!(doc.id, "ticket-1");
+    assert_eq!(doc.body["title"], "Preserved ticket");
+    assert_eq!(doc.body["metadata"]["extra"], true);
+    assert!(result
+        .import
+        .snapshot
+        .documents
+        .iter()
+        .any(|d| d.collection == cutover::ARCHIVE
+            && d.body["source_table"] == "ticket_items"
+            && d.body["doc"]["metadata_json"] == "{\"extra\":true}"));
+    let mut snapshot: Snapshot = serde_json::from_slice(&fs::read(&path)?).unwrap();
+    if let daemon_collectors::Collector::Core { tables, .. } =
+        &mut snapshot.databases[1].collectors[0]
+    {
+        tables.clear();
+    }
+    fs::write(&path, serde_json::to_vec(&snapshot).unwrap())?;
+    assert!(
+        matches!(prepare_with_core(path.clone(),&[],migration,Some(not_a_crew_fixture)),Err(StoreError::Invalid(s)) if s=="cutover_core_collector_coverage")
+    );
+    let copy = frozen.join("core.sqlite3");
+    let data = Connection::open(&copy)?;
+    data.execute_batch("CREATE TABLE iot_datapoints(asset_id TEXT,attribute_name TEXT,timestamp_ms INTEGER,value TEXT);INSERT INTO iot_datapoints VALUES('asset','temperature',1,'42');")?;
+    let core = &mut snapshot.databases[1];
+    core.tables.push(Decision {
+        rule: "E29-R5".into(),
+        table: Table {
+            name: "iot_datapoints".into(),
+            collection: "iot_timeseries".into(),
+            version: 0,
+            id_column: "$rowid".into(),
+            body_column: None,
+            entity: cutover::Entity::Core,
+            mode: Mode::ArchiveOnly,
+        },
+        measurement: Some(freeze::measure(&data, "iot_datapoints")?),
+    });
+    if let daemon_collectors::Collector::Core { tables, .. } = &mut core.collectors[0] {
+        *tables = vec!["ticket_items".into(), "iot_datapoints".into()];
+    }
+    measurements(core);
+    snapshot
+        .inventory
+        .get_mut("ctox.sqlite3")
+        .unwrap()
+        .insert("iot_datapoints".into());
+    fs::write(&path, serde_json::to_vec(&snapshot).unwrap())?;
+    assert!(
+        matches!(prepare_with_core(path,&[],migration,Some(not_a_crew_fixture)),Err(StoreError::Invalid(s)) if s=="cutover_dataframe_owner_required")
+    );
+    Ok(())
+}

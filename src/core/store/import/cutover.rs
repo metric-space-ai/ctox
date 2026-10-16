@@ -46,8 +46,14 @@ pub struct FileChoice {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Mode {
     Rows,
-    MirrorRows { collection_column: String },
-    Projection { columns: Vec<String> },
+    /// Preserve complete SQL rows while a specialized collector builds app documents.
+    ArchiveOnly,
+    MirrorRows {
+        collection_column: String,
+    },
+    Projection {
+        columns: Vec<String>,
+    },
     KeepCore,
 }
 #[derive(Serialize, Deserialize)]
@@ -205,6 +211,7 @@ struct Row {
     kind: SourceKind,
     authority: SourceKind,
     projection: bool,
+    archive_only: bool,
 }
 /// Actual physical generations; core collection ownership is an explicit input.
 /// The list is not a decision about which version is active.
@@ -265,8 +272,39 @@ fn read_rows(
     total: &mut (usize, usize),
 ) -> Result<Vec<Row>> {
     let name = sql(crate::change_log::identifier(&table.name))?;
-    let mut stmt = sql(input.tx.prepare(&format!("SELECT * FROM {name}")))?;
-    let names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+    let archive_only = matches!(table.mode, Mode::ArchiveOnly);
+    let use_rowid = table.id_column == "$rowid";
+    let use_primary = table.id_column == "$primary_key";
+    if (use_rowid || use_primary) && !archive_only {
+        return Err(invalid("cutover_composite_identity_archive_only"));
+    }
+    let primary: Vec<String> = if use_primary {
+        let mut keys: Vec<(i64, String)> =
+            sql(input.tx.prepare(&format!("PRAGMA table_info({name})")))?
+                .query_map([], |r| Ok((r.get(5)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+        keys.retain(|k| k.0 > 0);
+        keys.sort_by_key(|k| k.0);
+        if keys.is_empty() {
+            return Err(invalid("cutover_source_primary_key_required"));
+        }
+        keys.into_iter().map(|(_, name)| name).collect()
+    } else {
+        Vec::new()
+    };
+    let select = if use_rowid {
+        format!("SELECT rowid AS __cutover_rowid,* FROM {name}")
+    } else {
+        format!("SELECT * FROM {name}")
+    };
+    let mut stmt = sql(input.tx.prepare(&select))?;
+    let offset = usize::from(use_rowid);
+    let names: Vec<String> = stmt
+        .column_names()
+        .iter()
+        .skip(offset)
+        .map(|s| s.to_string())
+        .collect();
     if names.iter().any(|n| {
         [
             "password",
@@ -286,7 +324,7 @@ fn read_rows(
     while let Some(row) = sql(cursor.next())? {
         let mut raw = serde_json::Map::new();
         for (idx, key) in names.iter().enumerate() {
-            let value = match sql(row.get_ref(idx))? {
+            let value = match sql(row.get_ref(idx + offset))? {
                 ValueRef::Null => Value::Null,
                 ValueRef::Integer(n) => json!(n),
                 ValueRef::Real(n) => {
@@ -314,10 +352,20 @@ fn read_rows(
         if total.0 > budget.rows || total.1 > budget.bytes {
             return Err(invalid("cutover_budget"));
         }
-        let id = match &raw[&table.id_column] {
-            Value::String(s) => s.clone(),
-            Value::Number(n) => n.to_string(),
-            _ => return Err(invalid("cutover_source_id")),
+        let id = if use_rowid {
+            sql(row.get::<_, i64>(0))?.to_string()
+        } else if use_primary {
+            let key: Vec<_> = primary.iter().map(|name| raw[name].clone()).collect();
+            if key.iter().any(Value::is_null) {
+                return Err(invalid("cutover_source_primary_key_null"));
+            }
+            format!("pk:{}", sha(&json!(key)))
+        } else {
+            match &raw[&table.id_column] {
+                Value::String(s) => s.clone(),
+                Value::Number(n) => n.to_string(),
+                _ => return Err(invalid("cutover_source_id")),
+            }
         };
         bound(&id, 512)?;
         let collection = if let Mode::MirrorRows { collection_column } = &table.mode {
@@ -375,6 +423,7 @@ fn read_rows(
             },
             authority: table.entity.authority(),
             projection: deleted || matches!(table.mode, Mode::Projection { .. }),
+            archive_only,
         });
     }
     Ok(rows)
@@ -528,7 +577,8 @@ pub fn collect(
     // Only current authoritative rows may be the comparison oracle.
     let mut authorities = BTreeMap::new();
     for row in &rows {
-        if row.body.is_object()
+        if !row.archive_only
+            && row.body.is_object()
             && row.kind == row.authority
             && (row.authority == SourceKind::Core
                 || active.get(&row.collection) == Some(&row.version))
@@ -541,6 +591,10 @@ pub fn collect(
     }
     let mut docs = BTreeMap::new();
     for row in &rows {
+        if row.archive_only {
+            add_for_row(&mut docs, archive(row, imported_at)?, row, &mut audit)?;
+            continue;
+        }
         if !row.body.is_object() {
             let doc = archive(row, imported_at)?;
             audit.findings.push(Finding {

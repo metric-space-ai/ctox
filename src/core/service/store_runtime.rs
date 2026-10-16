@@ -101,21 +101,24 @@ impl Dispatcher for Inspect {
                     .ok_or(StoreError::Closed)?;
                 let databases = self.databases.lock().unwrap_or_else(|p| p.into_inner());
                 let sync = databases.get("sync").ok_or(StoreError::Closed)?;
-                *cutover = Some(ctox_store::import::daemon::Attachment::new(
-                    sync.writer.clone(),
-                    sync.readers.clone(),
-                    databases
-                        .values()
-                        .map(|d| d.writer.db_id().path().to_path_buf())
-                        .collect(),
-                    crate::paths::runtime_dir(&root),
-                    self.runtime.clone(),
-                    crate::business_os::migrate_cutover_document,
-                    databases
-                        .values()
-                        .map(|d| (d.writer.db_id().path().to_path_buf(), d.readers.clone()))
-                        .collect(),
-                ));
+                *cutover = Some(
+                    ctox_store::import::daemon::Attachment::new(
+                        sync.writer.clone(),
+                        sync.readers.clone(),
+                        databases
+                            .values()
+                            .map(|d| d.writer.db_id().path().to_path_buf())
+                            .collect(),
+                        crate::paths::runtime_dir(&root),
+                        self.runtime.clone(),
+                        crate::business_os::migrate_cutover_document,
+                        databases
+                            .values()
+                            .map(|d| (d.writer.db_id().path().to_path_buf(), d.readers.clone()))
+                            .collect(),
+                    )
+                    .with_core_conversation(crate::crew::member_conversation_id),
+                );
             }
             return cutover
                 .as_ref()

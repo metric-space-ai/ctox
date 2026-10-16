@@ -155,7 +155,7 @@ fn source_owner(row: &Value, source: &LegacyCollection) -> Option<String> {
         .map(str::to_owned)
         .or_else(|| source.owner_user.clone())
 }
-fn copied_path(paths: &ProfilePaths, path: &Path) -> Result<PathBuf> {
+pub(super) fn copied_path(paths: &ProfilePaths, path: &Path) -> Result<PathBuf> {
     let rel = if path.is_absolute() {
         path.strip_prefix(&paths.original_root)
             .map_err(|_| invalid("file_outside_profile"))?

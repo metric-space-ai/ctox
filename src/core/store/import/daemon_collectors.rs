@@ -11,6 +11,12 @@ use std::{
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Collector {
     JourFixe,
+    Core {
+        tables: Vec<String>,
+        original_root: PathBuf,
+        copied_root: PathBuf,
+        owner_user: Option<String>,
+    },
     MailTracking,
     MailServer,
     Files {
@@ -36,9 +42,10 @@ pub struct SnapshotSource {
     pub owner_user: Option<String>,
     pub created_at_ms: i64,
 }
-pub struct PendingFiles {
+pub(crate) struct PendingFiles {
     pub tables: Vec<String>,
-    pub plan: file_import::FilePlan,
+    pub plan: Option<file_import::FilePlan>,
+    pub bytes: Vec<file_import::ByteFile>,
 }
 
 fn covered(source: &Source, tables: &[String]) -> Result<()> {
@@ -62,6 +69,9 @@ fn append(
     keys: &[String],
 ) -> Result<()> {
     let mut hashes = extra.report.content_hashes.clone();
+    if extra.report.collections.values().any(|c| c.rejected != 0) {
+        return Err(invalid("cutover_specialized_rejected_rows"));
+    }
     if !extra.dataframe_rows.is_empty() {
         return Err(invalid("cutover_dataframe_owner_required"));
     }
@@ -126,18 +136,33 @@ fn empty(documents: Vec<Document>) -> core_import::CoreImport {
         report: ImportReport::default(),
     }
 }
-pub fn collect(
+pub(crate) fn collect(
     tx: &Transaction<'_>,
     source: &Source,
     release: &base_release::ReleasePlan,
     out: &mut cutover::CutoverImport,
     files: &mut Vec<PendingFiles>,
     root: &Path,
+    conversation: Option<daemon_core::Conversation>,
 ) -> Result<()> {
     let mut used = BTreeSet::new();
     for collector in &source.collectors {
         let tables: Vec<String> = match collector {
             Collector::JourFixe => vec![jour_fixe::COLLECTION.into()],
+            Collector::Core { tables, .. } => {
+                let actual: BTreeSet<_> = source
+                    .tables
+                    .iter()
+                    .map(|d| d.table.name.as_str())
+                    .filter(|n| daemon_core::TABLES.contains(n))
+                    .collect();
+                if actual != tables.iter().map(String::as_str).collect()
+                    || source.kind != cutover::SourceKind::Core
+                {
+                    return Err(invalid("cutover_core_collector_coverage"));
+                }
+                tables.clone()
+            }
             Collector::MailTracking => [
                 "stalwart_mail_tracking_tokens",
                 "stalwart_mail_tracking_events",
@@ -163,12 +188,14 @@ pub fn collect(
                 .iter()
                 .find(|d| &d.table.name == table)
                 .unwrap();
-            if !matches!(decision.table.mode, cutover::Mode::KeepCore)
-                && release
-                    .collections
-                    .values()
-                    .flatten()
-                    .any(|d| d.name == decision.table.collection)
+            if !matches!(
+                decision.table.mode,
+                cutover::Mode::KeepCore | cutover::Mode::ArchiveOnly
+            ) && release
+                .collections
+                .values()
+                .flatten()
+                .any(|d| d.name == decision.table.collection)
             {
                 return Err(invalid("cutover_collector_raw_row_must_be_archived"));
             }
@@ -178,6 +205,35 @@ pub fn collect(
             .map(|t| format!("{}:{t}", source.choice.database))
             .collect();
         match collector {
+            Collector::Core {
+                original_root,
+                copied_root,
+                owner_user,
+                ..
+            } => {
+                let copied = copied_root.canonicalize()?;
+                if !copied.starts_with(root)
+                    || std::fs::symlink_metadata(copied_root)?
+                        .file_type()
+                        .is_symlink()
+                {
+                    return Err(invalid("cutover_snapshot_path_escape"));
+                }
+                let mut services = daemon_core::Services::new(
+                    conversation
+                        .ok_or_else(|| invalid("cutover_core_conversation_rule_required"))?,
+                    original_root,
+                    &copied,
+                    owner_user.clone(),
+                )?;
+                let extra = core_import::collect(tx, &mut services, 2_000_000, 256 * 1024 * 1024)?;
+                append(out, extra, &keys)?;
+                files.push(PendingFiles {
+                    tables: keys,
+                    plan: None,
+                    bytes: services.files,
+                });
+            }
             Collector::JourFixe => append(
                 out,
                 jour_fixe::collect_bos(tx, 2_000_000, 256 * 1024 * 1024)?,
@@ -230,7 +286,11 @@ pub fn collect(
                         bytes: 256 * 1024 * 1024,
                     },
                 )?;
-                files.push(PendingFiles { tables: keys, plan });
+                files.push(PendingFiles {
+                    tables: keys,
+                    plan: Some(plan),
+                    bytes: vec![],
+                });
             }
         }
     }

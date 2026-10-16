@@ -127,6 +127,14 @@ impl base_release::MigrationEvaluator for NativeMigration {
     }
 }
 fn prepare(path: PathBuf, live: &[PathBuf], migration: Migration) -> Result<Prepared> {
+    prepare_with_core(path, live, migration, None)
+}
+fn prepare_with_core(
+    path: PathBuf,
+    live: &[PathBuf],
+    migration: Migration,
+    conversation: Option<daemon_core::Conversation>,
+) -> Result<Prepared> {
     let path = if path.is_dir() {
         path.join("cutover.json")
     } else {
@@ -379,6 +387,7 @@ fn prepare(path: PathBuf, live: &[PathBuf], migration: Migration) -> Result<Prep
             &mut import,
             &mut files,
             root,
+            conversation,
         )?;
     }
     for table in &mut tables {
@@ -452,9 +461,27 @@ pub async fn execute(
     cas_root: PathBuf,
     scratch: PathBuf,
 ) -> Result<Report> {
-    let prepared = tokio::task::spawn_blocking(move || prepare(request.snapshot, &live, migration))
-        .await
-        .map_err(|_| StoreError::Panicked)??;
+    execute_with_core(
+        writer, readers, retention, live, request, migration, cas_root, scratch, None,
+    )
+    .await
+}
+async fn execute_with_core(
+    writer: WriterHandle,
+    readers: crate::read_pool::ReadPool,
+    retention: BTreeMap<PathBuf, crate::read_pool::ReadPool>,
+    live: Vec<PathBuf>,
+    request: ImportRequest,
+    migration: Migration,
+    cas_root: PathBuf,
+    scratch: PathBuf,
+    conversation: Option<daemon_core::Conversation>,
+) -> Result<Report> {
+    let prepared = tokio::task::spawn_blocking(move || {
+        prepare_with_core(request.snapshot, &live, migration, conversation)
+    })
+    .await
+    .map_err(|_| StoreError::Panicked)??;
     let mut report = Report {
         inventory_complete: true,
         content_complete: false,
@@ -486,7 +513,14 @@ pub async fn execute(
     .await?;
     let mut imported = jour_fixe::prepare_files(imported, &cas, &scratch).await?;
     for files in prepared.files {
-        let prepared_files = file_import::prepare(files.plan, &cas, &scratch).await?;
+        let prepared_files = if let Some(plan) = files.plan {
+            file_import::prepare(plan, &cas, &scratch).await?
+        } else {
+            let mut prepared = file_import::prepare_bytes(files.bytes, &cas, &scratch).await?;
+            prepared.source_rows =
+                BTreeMap::from([("core_artifacts".into(), prepared.documents.len())]);
+            prepared
+        };
         for key in files.tables {
             let targets = report
                 .audit
@@ -630,6 +664,7 @@ pub struct Attachment {
     active: Arc<Mutex<Option<PathBuf>>>,
     migration: Migration,
     retention: BTreeMap<PathBuf, crate::read_pool::ReadPool>,
+    conversation: Option<daemon_core::Conversation>,
 }
 impl Attachment {
     pub fn new(
@@ -650,7 +685,12 @@ impl Attachment {
             active: Arc::new(Mutex::new(None)),
             migration,
             retention,
+            conversation: None,
         }
+    }
+    pub fn with_core_conversation(mut self, rule: fn(&str) -> i64) -> Self {
+        self.conversation = Some(rule);
+        self
     }
 }
 impl Dispatcher for Attachment {
@@ -677,6 +717,7 @@ impl Dispatcher for Attachment {
         }
         *active = Some(run.snapshot.clone());
         let migration = self.migration;
+        let conversation = self.conversation;
         let writer = self.writer.clone();
         let readers = self.readers.clone();
         let retention = self.retention.clone();
@@ -694,7 +735,7 @@ impl Dispatcher for Attachment {
             let admitted=tokio::task::spawn_blocking(move ||persist(&path,&receipt)).await.map_err(|_|StoreError::Panicked).and_then(|r|r);
             if let Err(error)=admitted { *active.lock().unwrap_or_else(|p|p.into_inner())=None; let _=send.send(Err(error)); return; }
             let _=send.send(serde_json::to_vec(&serde_json::json!({"state":"admitted","job_id":job_id,"report_path":report_path})).map_err(|_|invalid("cutover_receipt_encoding")));
-            let result=execute(writer,readers,retention,live,run,migration,root.join("transfers"),root.join("cutover-staging")).await;
+            let result=execute_with_core(writer,readers,retention,live,run,migration,root.join("transfers"),root.join("cutover-staging"),conversation).await;
             *active.lock().unwrap_or_else(|p|p.into_inner())=None;
             let terminal=match result { Ok(report)=>serde_json::json!({"state":"completed","job_id":job_id,"report":report}),Err(error)=>serde_json::json!({"state":"failed","job_id":job_id,"error":error.to_string()}) };
             let saved=tokio::task::spawn_blocking(move ||persist(&report_path,&terminal)).await;
