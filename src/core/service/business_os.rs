@@ -319,6 +319,12 @@ struct BusinessOsActivation {
 }
 
 pub fn handle_business_os_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    if args.first().is_some_and(|word|word=="v4") {
+        let request=ctox_store::import::daemon::cli_request(args)?;
+        let report=ctox_store::import::daemon::request(super::queue_store::endpoint(root),request)?;
+        println!("{}",String::from_utf8(report)?);
+        return Ok(());
+    }
     // Listeners retain owners but admit only individual requests, never their
     // entire lifetime. Ordinary CLI commands use one bounded compatibility job.
     if args.first().is_some_and(|word| word == "serve")

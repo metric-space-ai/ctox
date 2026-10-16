@@ -90,7 +90,7 @@ pub mod computer_endpoints;
 pub(crate) mod consumer_authority;
 pub(crate) mod provider_federation;
 mod rxdb_peer;
-pub(crate) use rxdb_peer::register_v4_native_command_handlers;
+pub(crate) use rxdb_peer::{register_v4_native_command_handlers,migrate_cutover_document};
 mod rxdb_peer_browser;
 mod rxdb_peer_business_data;
 mod rxdb_peer_business_data_source;

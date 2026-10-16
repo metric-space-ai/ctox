@@ -11,13 +11,15 @@ use std::{
 
 pub const ARCHIVE: &str = "legacy_records";
 const INLINE: usize = 256 * 1024;
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SourceKind {
     Rxdb,
     Core,
     Mirror,
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Entity {
     App,
     Core,
@@ -40,12 +42,16 @@ pub struct FileChoice {
     pub lsof_receipt_sha256: String,
 }
 /// An explicit projection retains the complete SQL row in the archive as well.
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Mode {
     Rows,
     MirrorRows { collection_column: String },
     Projection { columns: Vec<String> },
     KeepCore,
 }
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Table {
     pub name: String,
     pub collection: String,
@@ -84,6 +90,8 @@ pub struct Audit {
     pub findings: Vec<Finding>,
     pub compared_equal: Vec<String>,
     pub source_rows: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub target_documents: BTreeMap<String, std::collections::BTreeSet<(String, String)>>,
     #[serde(default)]
     pub source_tables: BTreeMap<String, freeze::Measurement>,
     pub source_row_hashes: BTreeMap<String, BTreeMap<String, String>>,
@@ -404,6 +412,10 @@ fn add(docs: &mut BTreeMap<(String, String), Document>, doc: Document) -> Result
     }
     Ok(())
 }
+fn add_for_row(docs: &mut BTreeMap<(String, String), Document>, doc: Document, row: &Row, audit: &mut Audit) -> Result<()> {
+    audit.target_documents.entry(format!("{}:{}",row.db,row.table)).or_default().insert((doc.collection.clone(),doc.id.clone()));
+    add(docs,doc)
+}
 /// Row equality is audited before target writes. This is an offline import, not
 /// a running projection or permission shortcut. CoreKeep never reads contents.
 pub fn collect(
@@ -532,7 +544,7 @@ pub fn collect(
                 mirror_sha256: sha(&row.raw),
                 archive_id: doc.id.clone(),
             });
-            add(&mut docs, doc)?;
+            add_for_row(&mut docs, doc, row, &mut audit)?;
             continue;
         }
         // Historical RxDB versions are archived even when an identical Core mirror exists.
@@ -544,14 +556,18 @@ pub fn collect(
                 ))
             })?;
             if row.version != *current {
-                add(&mut docs, archive(row, imported_at)?)?;
+                add_for_row(&mut docs, archive(row, imported_at)?, row, &mut audit)?;
                 continue;
             } // E29-R4
         }
         if row.kind != row.authority {
             // E29-R3
             let authority = authorities.get(&(row.collection.clone(), row.id.clone()));
-            if authority.is_some_and(|body| *body == &row.body) {
+            if known.contains(row.collection.as_str()) && authority.is_some_and(|body| *body == &row.body) {
+                let mut target_body=row.body.clone();
+                if let Some(spec)=plan.migrations.get(&row.collection) {target_body=evaluator.migrate(&row.collection,spec,target_body)?;}
+                let (target_id,_)=base_release::migrated_identity(&row.collection,&row.id,target_body)?;
+                audit.target_documents.entry(format!("{}:{}",row.db,row.table)).or_default().insert((row.collection.clone(),target_id));
                 audit.compared_equal.push(
                     json!([row.db, row.table, row.collection, row.version, row.id]).to_string(),
                 );
@@ -572,13 +588,13 @@ pub fn collect(
                     mirror_sha256: sha(&row.body),
                     archive_id: doc.id.clone(),
                 });
-                add(&mut docs, doc)?;
+                add_for_row(&mut docs, doc, row, &mut audit)?;
             }
             continue;
         }
         let declared = known.contains(row.collection.as_str()); // E29-R1
         if !declared {
-            add(&mut docs, archive(row, imported_at)?)?;
+            add_for_row(&mut docs, archive(row, imported_at)?, row, &mut audit)?;
             continue;
         } // E29-R2
         let mut body = row.body.clone();
@@ -588,7 +604,7 @@ pub fn collect(
         let _owner_changed = aliases.migrate(&row.collection, &mut body);
         let (id, body) = base_release::migrated_identity(&row.collection, &row.id, body)?;
         let archive_complete = row.projection || body != row.body;
-        add(
+        add_for_row(
             &mut docs,
             Document {
                 collection: row.collection.clone(),
@@ -596,9 +612,10 @@ pub fn collect(
                 body,
                 revision: row.revision.clone(),
             },
+            row, &mut audit,
         )?;
         if archive_complete {
-            add(&mut docs, archive(row, imported_at)?)?;
+            add_for_row(&mut docs, archive(row, imported_at)?, row, &mut audit)?;
         } // E29-R5
     }
     let mut report = ImportReport::default();
