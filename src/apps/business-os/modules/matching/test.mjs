@@ -1,6 +1,6 @@
 // matching – Datenfassade und Quelltext-Wächter auf dem App-API-4.0-Vertrag (V4-PORT.md).
 // Lauf: node --test src/apps/business-os/modules/matching/test.mjs
-// Kern-Stub: CTOX_APP_API_STUB (Pin), sonst ~/.local/state/shell-v4/stub-pins/68b83a3.
+// Kern-Stub: CTOX_APP_API_STUB (Pin), sonst ~/.local/state/shell-v4/stub-pins/8265bd7.
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -9,14 +9,21 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, test } from 'node:test';
 
 import { getContactsCollection, setMatchingDataApi, disposeMatchingData } from './ui/businessOsDataSource.js';
+import { realManifestRoutes } from '../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const { createStubKernel } = await import(pathToFileURL(join(STUB, 'ctox-app-api-stub.mjs')).href);
 
+const ROUTES = realManifestRoutes('matching');
 let n = 0;
 async function kernelWith(docs = {}) {
   const kernel = createStubKernel({ storage: 'memory', latencyMs: 2, multiTab: false, instanceId: `matching-${process.pid}-${++n}` });
   await kernel.ready;
+  // PIN-ALL (E48): echte Routen/Rechte/Collections aus v4/manifests/matching.manifest.json veröffentlichen, damit der Kern
+  // Lesen und Schreiben (Schema) wie in Produktion prüft.
+  await kernel.sim.push('business_apps', [{ id: 'matching', title: 'Matching' }]);
+  for (const o of ROUTES._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+  await kernel.sim.publishAppVersion('matching', '1.0.2', { title: 'Matching', manifestExtra: ROUTES });
   for (const [collection, rows] of Object.entries(docs)) await kernel.sim.push(collection, rows);
   await kernel.sim.settle();
   return kernel;
