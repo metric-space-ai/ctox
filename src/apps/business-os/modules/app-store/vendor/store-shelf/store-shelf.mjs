@@ -25,7 +25,7 @@ import {
   WebGLRenderer,
 } from "../three/three.module.min.js";
 import { RoundedBoxGeometry } from "../three/RoundedBoxGeometry.js";
-import { createAppPackageTexture, resolvePackagePalette } from "./box-art.mjs?v=20261007-shell-v2-workjet-logo";
+import { createAppPackageTexture, resolvePackagePalette } from "./box-art.mjs?v=20261016-shell-v2-v4-port-registry";
 
 function damp(current, target, smoothing, delta) {
   return MathUtils.lerp(current, target, 1 - Math.exp(-smoothing * delta));
