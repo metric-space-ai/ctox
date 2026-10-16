@@ -12,6 +12,7 @@ import resource
 from pathlib import Path
 import signal
 import subprocess
+import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -27,6 +28,7 @@ MUTATIONS = []
 ACTIVE = None
 PROCESS_LOCK=ROOT/'src/core/app_runtime/Cargo.lock'
 PROCESS_LOCK_BEFORE=PROCESS_LOCK.read_bytes() if PROCESS_LOCK.exists() else None
+SHORT_ROOT=tempfile.TemporaryDirectory(prefix='p6n-',dir='/tmp')
 
 def save():
     (OUT / 'results.json').write_text(json.dumps(RECORDS, indent=2) + '\n')
@@ -143,7 +145,9 @@ try:
         raise RuntimeError('lane-owned pinned Node bundle unavailable')
     ENV['CTOX_APP_RUNTIME_NODE_BUNDLE']=str(node)
     ENV['CTOX_APP_RUNTIME_TEST_NODE']=str(node)
-    ENV['CTOX_APP_RUNTIME_TEST_ROOT']=str(OUT/'node-scratch')
+    # App IPC is a Unix socket: the evidence directory exceeds SUN_LEN.
+    # Only disposable synthetic socket fixtures use this short owned root.
+    ENV['CTOX_APP_RUNTIME_TEST_ROOT']=SHORT_ROOT.name
     Path(ENV['CTOX_APP_RUNTIME_TEST_ROOT']).mkdir(exist_ok=True)
     (OUT/'node-binding.json').write_text(json.dumps({'path':str(node),'sha256':hashlib.sha256(node.read_bytes()).hexdigest()},indent=2)+'\n')
     js=[str(node),'--test',str(HERE/'document-signature.mjs')]
@@ -269,4 +273,5 @@ finally:
         PROCESS_LOCK.unlink(missing_ok=True)
     else:
         PROCESS_LOCK.write_bytes(PROCESS_LOCK_BEFORE)
+    SHORT_ROOT.cleanup()
     (OUT/'restoration.json').write_text(json.dumps({str(p.relative_to(ROOT)):p.read_bytes()==data for p,data in ORIGINALS.items()},indent=2)+'\n')
