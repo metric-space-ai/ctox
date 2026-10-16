@@ -567,6 +567,8 @@ export interface PublishOptions {
 }
 
 export interface StubSim {
+  scopeGrants():AppScopeControlMessage[];
+  failAppGrant(appId:string):void;
   /** Nächster bestätigter Write wird abgelehnt. */
   rejectNext(reason?: string | {code: CtoxErrorCode; reason: string}): Promise<void>;
   /** Test Core: terminal CAS rejection, independent of the metadata write receipt. */
@@ -700,6 +702,7 @@ export interface KernelWrite {
   app_id:string; op:'put'|'patch'|'delete'; body:unknown;
 }
 export declare class KernelTransport {
+  grantApp(appId:string):Promise<AppScopeGrantToken>;
   scope?(collection:string):Promise<{epoch:string;collection:string;scope_hash:string;gen:number}>;
   connect(identity:{instanceId:string; userId:string}, events:{
     page(page:KernelPage):Promise<void>;
@@ -707,7 +710,7 @@ export declare class KernelTransport {
     link(state:Metrics['link']):void;
     timing?(state:NonNullable<Metrics['timing']>):void;
     status?(appId:string,item:StatusItem):void;
-    revoke?(message:{collections:string[];rights_ver:string;artifacts?:string[]}):Promise<void>;
+    revoke?(message:{app_id?:string;collections:string[];rights_ver:string;artifacts?:string[]}):Promise<void>;
     actor?(state:Partial<{id:string;display_name:string;role:string;permissions:string[]}> & {id:string}):void;
   }):Promise<void>;
   subscribe(scope:Subscription):Promise<void>;
@@ -750,13 +753,17 @@ export interface WebRTCTransportOptions {
   ownsConnection?:boolean;
   createPeer?:(address:string|undefined,identity:{instanceId:string;userId:string})=>Promise<{channels:Record<number,RTCDataChannel>;peer?:RTCPeerConnection;relay?:boolean;close?:()=>void}>;
   /** Host pairing/signer supplies a P4-a hello; no credential persistence here. */
-  hello:object|((identity:{instanceId:string;userId:string})=>object|Promise<object>);
-  resolveScope:(collection:string,session:object)=>{scope_hash:string;gen:number}|Promise<{scope_hash:string;gen:number}>;
+  authSession?:KernelAuthSession;
+  hello?:object|((identity:{instanceId:string;userId:string})=>object|Promise<object>);
+  resolveScope?:(collection:string,session:object)=>{scope_hash:string;gen:number}|Promise<{scope_hash:string;gen:number}>;
   /** P6 policy verifies the complete signed package, including progress proof. */
   verifyPackage:(message:KernelPage,session:object)=>boolean|Promise<boolean>;
   codecs?:Partial<Record<'zstd'|'gzip',CodecAdapter>>;
   handshakeTimeoutMs?:number;
   transferTimeoutMs?:number;
+  grantTimeoutMs?:number;
+  /** Host/test clock seam for lease renewal only; handshake, delivery and close keep their own timers. */
+  grantClock?:{now():number;setTimeout(callback:()=>void,delay:number):any;clearTimeout(timer:any):void};
   now?:()=>number;
 }
 export declare class WebRTCKernelTransport extends KernelTransport {
@@ -788,7 +795,7 @@ export interface V4HelloOffer {
   instance_id:string; capabilities:string[];
   /** Minted by the daemon for this authenticated HTTP session; single use (fresh nonce per launch-context fetch). */
   device_proof:{device_id:string;public_key:string;nonce:string;signature:string};
-  /** Every collection the browser may subscribe to; hello_ok.scope_tokens[i] answers scopes_wanted[i]. */
+  /** Shell collections only. App grants are acquired separately on the control lane (E55). */
   scopes_wanted:string[];
   /** Without a host zstd adapter only ['gzip'] is usable. */
   transport:{codecs:('gzip'|'zstd')[];max_frame_bytes:number;fragmentation:boolean;reassembly:boolean};
@@ -854,3 +861,25 @@ export declare function bootV4(options?:BootV4Options):Promise<BootV4Result>;
 export declare function parseV4LaunchContext(payload:unknown):Readonly<V4LaunchContext['v4']>;
 export declare function fetchV4LaunchContext(url?:string,fetchImpl?:typeof fetch):Promise<Readonly<V4LaunchContext['v4']>>;
 export declare const DEFAULT_LAUNCH_CONTEXT_URL:'/api/business-os/launch-context';
+
+/** E55/E22: base64url(UTF8 JSON {claims,signature}); Ed25519 signature over UTF8
+ * `ctox:v4:scope\0` + recursively key-sorted canonical JSON of claims.
+ * exp = Unix seconds, rights_ver = canonical decimal u64; no padding in base64url. */
+export interface AppScopeGrantClaims {
+ instance_id:string; user_id:string; app_id:string; scope_hash:string; rights_ver:string; device_id:string; exp:number;
+ collections:{collection:string;gen:number;rights:('read'|'write')[];field_mask_digest:string}[];
+}
+export type AppScopeGrantToken=string;
+export type AppScopeControlMessage=
+ |{type:'scope.grant.request';app_id:string}
+ |{type:'scope.grant';token:AppScopeGrantToken}
+ |{type:'forbidden';app_id:string;reason:string};
+
+export interface KernelAuthSession {
+ hello(identity:{instanceId:string;userId:string},challenge?:{nonce:string}):Promise<object>;
+ acceptHello(frame:object):Promise<void>;
+ acceptAppGrant(appId:string,token:AppScopeGrantToken):Promise<AppScopeGrantToken>;
+ revokeApp(appId:string,rightsVer?:string):AppScopeGrantToken|undefined;
+ scope(collection:string):Promise<{epoch:string;collection:string;scope_hash:string;gen:number;app_id?:string}>;
+ tokens():string[]; close():void;
+}

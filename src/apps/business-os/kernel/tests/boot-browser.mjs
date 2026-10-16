@@ -20,7 +20,7 @@ function launchContext(){
  return {session:{},config:null,designTemplates:[],v4:{instanceId:'boot-browser',userId:'alice',actor:{id:'alice',role:'owner'},
   signaling:{urls:['wss://signal.invalid/ws'],room:'ctox-v4:boot-browser',peerId:'browser-1',nativePeerId:'native-1',token:'signal-token',iceServers:[]},
   hello:{offer:{type:'hello',protocol_ver:4,bootstrap_ver:1,app_api_ver:{min:'4.0',max:'4.0'},instance_id:'boot-browser',capabilities:[],
-   device_proof:{device_id:'browser-device',public_key:'A'.repeat(43),nonce,signature:'C'.repeat(86)},scopes_wanted:COLLECTIONS,
+   device_proof:{device_id:'browser-device',public_key:'A'.repeat(43),nonce,signature:'C'.repeat(86)},scopes_wanted:COLLECTIONS.filter(c=>c!=='notes'),
    transport:{codecs:['gzip'],max_frame_bytes:16384,fragmentation:true,reassembly:true}}},
   packageKeys:[{keyId:'instance-key-1',alg:'Ed25519',publicKey:publicRaw}]}};
 }
@@ -53,16 +53,17 @@ try{
   const enc=s=>new TextEncoder().encode(s),b64url=bytes=>btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
   const key=await crypto.subtle.importKey('jwk',signingJwk,{name:'Ed25519'},false,['sign']);
   const signBytes=async s=>new Uint8Array(await crypto.subtle.sign({name:'Ed25519'},key,enc(s)));
-  const tokens={};
-  for(const c of collections){const claims={instance_id:'boot-browser',scope_hash:`scope:${c}`,rights_ver:1,device_id:'browser-device',exp:Math.floor(Date.now()/1000)+600};tokens[c]=b64url(enc(canonicalJson({claims,signature:b64url(await signBytes(SCOPE_DOMAIN+canonicalJson(claims)))})));}
+  const shellCollections=collections.filter(c=>c!=='notes'),tokens={};
+  for(const appId of ['shell','notes']){const claims={instance_id:'boot-browser',user_id:'alice',app_id:appId,scope_hash:`scope:${appId}`,rights_ver:'1',device_id:'browser-device',exp:Math.floor(Date.now()/1000)+600,collections:(appId==='shell'?shellCollections:['notes']).map(c=>({collection:c,gen:1,rights:['read','write'],field_mask_digest:'fixture:all'}))};tokens[appId]=b64url(enc(canonicalJson({claims,signature:b64url(await signBytes(SCOPE_DOMAIN+canonicalJson(claims)))})));}
   class SignedNative extends FakeNativePeer {
    async receive(data){
     if(typeof data==='string'&&JSON.parse(data).type!=='ack'){const m=JSON.parse(data),{session_id,resume_from,...p4}=m;this.native=session_id!==undefined;if(this.native)this.sessionId=session_id;const hello=decodeHelloFrame(JSON.stringify(p4));this.messages.push(m);
      const selected=negotiateHello({instance_id:this.instanceId,bootstrap_min:1,bootstrap_max:1,app_api_ver:{min:'4.0',max:'4.0'},capabilities:[],required_capabilities:[],transport:hello.transport},hello);
-     this.channels[0].send(JSON.stringify({type:'hello_ok',protocol_ver:4,instance_id:this.instanceId,...selected,epoch:this.epoch,head_seq:this.head,scope_tokens:hello.scopes_wanted.map(c=>tokens[c]),rights_ver:'1',core_time_ms:Date.now(),...(this.native?{session_id:this.sessionId,resume_from:this.received.map(String)}:{})}));return;}
+     this.channels[0].send(JSON.stringify({type:'hello_ok',protocol_ver:4,instance_id:this.instanceId,...selected,epoch:this.epoch,head_seq:this.head,scope_tokens:[tokens.shell],rights_ver:'1',core_time_ms:Date.now(),...(this.native?{session_id:this.sessionId,resume_from:this.received.map(String)}:{})}));return;}
     return super.receive(data);
    }
-   async page(collection,docs=[]){const m={type:'page',instance_id:this.instanceId,key_id:'instance-key-1',participant:'alice',collection,scope_hash:`scope:${collection}`,gen:1,epoch:'1',package_id:`pkg-${Math.random()}`,seq_from:'0',seq_to:this.head,cursor_to:this.head,head_seq:this.head,complete:true,backlog:0,core_sent_at_ms:Date.now(),docs};
+   async apply(m,lane){if(m.type==='scope.grant.request'){this.messages.push(m);if(lane!==0)throw Error('grant must use control');return this.send('control',{type:'scope.grant',token:tokens[m.app_id]});}return super.apply(m,lane);}
+   async page(collection,docs=[]){const m={type:'page',instance_id:this.instanceId,key_id:'instance-key-1',participant:'alice',collection,scope_hash:`scope:${shellCollections.includes(collection)?'shell':collection}`,gen:1,epoch:'1',package_id:`pkg-${Math.random()}`,seq_from:'0',seq_to:this.head,cursor_to:this.head,head_seq:this.head,complete:true,backlog:0,core_sent_at_ms:Date.now(),docs};
     return this.send('initial',{...m,sig:[...await signBytes(STREAM_DOMAIN+canonicalJson(m))]});}
   }
   // Native side: a second real RTCPeerConnection answering the browser's offer.
@@ -87,7 +88,7 @@ try{
   };
   // Exactly what Shell v4's v4/boot.js does: no resolveShell, the loader resolves the activated shell entry itself.
   const boot=await bootV4({launchContextUrl:'/api/business-os/launch-context'});
-  await nativeReady;
+  await nativeReady;await boot.transport.grantApp('notes');
   const api=boot.kernel.appApi('notes','1');const local=api.put('notes',{id:'client',title:'local'});await local.local;const receipt=await local.result;
   for(let n=0;n<400&&!api.get('notes','server').get();n++)await new Promise(r=>setTimeout(r,10));
   const url=new URL(sockets[0].url);
@@ -110,7 +111,7 @@ try{
  expect(!requests.some(path=>/(?:^|\/)(?:fake-core[^/]*|testkit)\.mjs$/.test(path)),'E52 boot never requests unserved fake-core or testkit modules');
  expect(result.online==='online','link online');expect(result.leader===true,'leader');expect(result.storage==='indexeddb','IndexedDB');
  expect(result.serviceWorker&&new URL(result.serviceWorker).pathname==='/sw.js'&&new URL(result.serviceWorker).searchParams.get('db')==='ctox-boot-browser-alice'&&new URL(result.swScope).pathname==='/','same-origin /sw.js?db=<kernel IDB> scope /');
- expect(result.helloOffer==='browser-device','native received the launch-context hello');expect(result.scopes===7,'seven verified scope tokens');
+ expect(result.helloOffer==='browser-device','native received the launch-context hello');expect(result.scopes===1,'one verified Shell grant; app grants loaded on control lane');
  expect(result.receipt==='accepted','write accepted over WebRTC');expect(result.page==='via real WebRTC','signed page verified and applied');
  expect(JSON.stringify(result.labels)===JSON.stringify(['ctox-v4-commands','ctox-v4-control','ctox-v4-initial-sync','ctox-v4-interactive','ctox-v4-live','ctox-v4-transfer']),'native reliable lane names');expect(result.peerConnection,'real RTCPeerConnection');
  expect(result.signalingQuery.token==='signal-token'&&result.signalingQuery.role==='browser'&&result.signalingQuery.room==='ctox-v4:boot-browser','signaling query from launch context');
