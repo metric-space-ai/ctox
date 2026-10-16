@@ -336,7 +336,7 @@ fn startup_failure_retains_typed_cause_without_logging_parameters() {
             serde_json::json!({"token":"do-not-log-this","url":"ws://private.invalid?credential=hidden"}),
         ),
     );
-    let failure = StartupFailure::at("database", original);
+    let failure = StartupFailure::at("database", original.clone());
     assert_eq!(
         failure
             .cause
@@ -345,12 +345,21 @@ fn startup_failure_retains_typed_cause_without_logging_parameters() {
             .code(),
         "SQLITE_OWNER"
     );
-    let public = format!("{}", std::io::Error::other(failure));
-    assert!(public.contains("stage=database") && public.contains("RxError(SQLITE_OWNER)"));
-    assert!(
-        !public.contains("do-not-log-this")
-            && !public.contains("private.invalid")
-            && !public.contains("hidden"),
-        "startup diagnostic leaked credential-bearing parameters"
-    );
+    for failure in [
+        failure,
+        StartupFailure::at("signaling", std::io::Error::other(original)),
+    ] {
+        let error = std::io::Error::other(failure);
+        let public = format!("{error} {error:?}");
+        assert!(
+            public.contains("RxError(SQLITE_OWNER)"),
+            "native cause code lost"
+        );
+        assert!(
+            !public.contains("do-not-log-this")
+                && !public.contains("private.invalid")
+                && !public.contains("hidden"),
+            "startup diagnostic leaked credential-bearing parameters"
+        );
+    }
 }

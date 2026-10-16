@@ -41,10 +41,15 @@ use std::{
 
 /// Original typed causes stay in memory. Log only their classes/codes: RxError
 /// parameters and io messages may contain signaling URLs or credentials.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct StartupFailure {
     stage: &'static str,
     cause: Arc<anyhow::Error>,
+}
+impl std::fmt::Debug for StartupFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
 }
 impl StartupFailure {
     fn at(stage: &'static str, error: impl Into<anyhow::Error>) -> Self {
@@ -67,7 +72,15 @@ impl StartupFailure {
                     return "RxError(redacted-code)".into();
                 }
                 if let Some(io) = cause.downcast_ref::<std::io::Error>() {
-                    return format!("io({:?})", io.kind());
+                    let inner = io
+                        .get_ref()
+                        .and_then(|e| e.downcast_ref::<rxdb::rx_error::RxError>())
+                        .map(|rx| StartupFailure::at("native_io", rx.clone()).codes());
+                    return format!(
+                        "io({:?}){}",
+                        io.kind(),
+                        inner.map(|s| format!(" <- {s}")).unwrap_or_default()
+                    );
                 }
                 if let Some(store) = cause.downcast_ref::<StoreError>() {
                     return match store {
@@ -82,6 +95,9 @@ impl StartupFailure {
                         StoreError::Io(_) => "store(Io)",
                     }
                     .into();
+                }
+                if let Some(sql) = cause.downcast_ref::<rusqlite::Error>() {
+                    return format!("sqlite({:?})", sql.sqlite_error_code());
                 }
                 "cause(redacted)".into()
             })
@@ -207,6 +223,20 @@ impl BrowserIngress {
             crate::persistence::run_core_sync(move || launch_context_v4::native_transport(&root))
                 .await
                 .map_err(|e| StartupFailure::at("routing", e))?;
+        let admission = inputs
+            .browser_admission()
+            .map_err(|e| StartupFailure::at("admission", e))?;
+        let ice_servers = config
+            .ice_servers
+            .into_iter()
+            .map(|mut value| {
+                if let Some(url) = value["urls"].as_str() {
+                    value["urls"] = serde_json::json!([url]);
+                }
+                serde_json::from_value(value)
+            })
+            .collect::<Result<_, _>>()
+            .map_err(|e| StartupFailure::at("ice", e))?;
         let storage =
             super::store_rxdb::native_storage(inputs.sync.writer.db_id().path().to_owned())
                 .await
@@ -226,9 +256,7 @@ impl BrowserIngress {
             })
             .await
             .map_err(|e| StartupFailure::at("database", e))?;
-        let admission = inputs
-            .browser_admission()
-            .map_err(|e| StartupFailure::at("admission", e))?;
+
         let source = Arc::new(Source {
             inputs: Arc::downgrade(&inputs),
             admission: admission.clone(),
@@ -276,17 +304,7 @@ impl BrowserIngress {
             signaling_urls: urls,
             room: config.sync_room,
             peer_session_id: config.native_peer_id,
-            ice_servers: config
-                .ice_servers
-                .into_iter()
-                .map(|mut value| {
-                    if let Some(url) = value["urls"].as_str() {
-                        value["urls"] = serde_json::json!([url]);
-                    }
-                    serde_json::from_value(value)
-                })
-                .collect::<Result<_, _>>()
-                .map_err(|e| StartupFailure::at("ice", e))?,
+            ice_servers,
             bringup_timeout: Duration::from_secs(15),
             admission: ctox_sync::native::NativeAdmission {
                 peer: Arc::new(|_| true),
