@@ -87,7 +87,11 @@ try:
   assert case('restored-patch','patch',retained)==0
   assert case('restored-guard','guard',retained)==0
   record['pass']=record['stale_intent_exit']==0
- code,_=run('outbound-real-guards',[retained,'p6_fields_outbound_','--nocapture','--test-threads=1'],70)
+ code,log=run('outbound-real-guards',[retained,'p6_fields_outbound_','--nocapture','--test-threads=1'],70)
+ names=['p6_fields_outbound_manifest_guard_is_loadable','p6_fields_outbound_contact_native_status_is_guarded']
+ assert all(name in log for name in names),'incident guard targets not executed'
+ record['outbound_findings']={'manifest_guard_load':{'failure_proven':'checked-in Outbound native field guard is not loadable' in log},'contact_native_status':{'failure_proven':'declared contact native field-status was writable' in log}}
+ if code:assert code==101 and any(item['failure_proven'] for item in record['outbound_findings'].values()),'incident guard failure unclassified'
  record['outbound_guard_exit']=code;record['pass']=record.get('pass',True) and code==0;save()
 except Exception as error:
  record['error']=str(error);print('P6_FIELDS_ERROR',str(error),flush=True)
