@@ -7,8 +7,119 @@ use ctox_app_runtime::{
 use ctox_store::{change_log::subscription::write_contract, WriteJob};
 use tokio::{sync::watch, task::JoinHandle};
 
+/// Read pressure is observable even while the committed feed remains attached.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub(crate) enum FeedHealth {
+    Healthy,
+    Degraded {
+        code: &'static str,
+        stage: &'static str,
+        attempts: u32,
+        callback_cpu_us: Option<u64>,
+        page_limit: u32,
+    },
+}
+
+// Retry only pure snapshots, before any handler/effect or cursor acknowledgement.
+// The store still owns its admission/deadline/generation guards. Wall-clock
+// preemption must not be interpreted as a terminal failure of the subscription.
+async fn resilient_read<T: Send + 'static>(
+    pool: ctox_store::read_pool::ReadPool,
+    stage: &'static str,
+    health: &watch::Sender<FeedHealth>,
+    mut job: impl FnMut(u32) -> ReadJob<T>,
+) -> Result<T, StoreError> {
+    let mut attempts = 0u32;
+    let mut limit = 256;
+    loop {
+        let (result, cpu) = measured_read(pool.clone(), stage, job(limit)).await;
+        // Spend bounded CPU per page, rather than charging scheduler delays.
+        if cpu.is_some_and(|us| us > 20_000) {
+            limit = (limit / 2).max(1);
+        }
+        match result {
+            Ok(value) => {
+                if *health.borrow() != FeedHealth::Healthy {
+                    health.send_replace(FeedHealth::Healthy);
+                    eprintln!("native app feed health={{\"state\":\"healthy\",\"stage\":\"{stage}\"}}");
+                }
+                return Ok(value);
+            }
+            Err(StoreError::DeadlineExceeded | StoreError::Busy) => {
+                attempts = attempts.saturating_add(1);
+                if attempts >= 3 {
+                    let status = FeedHealth::Degraded {
+                        code: "read_overload", stage, attempts,
+                        callback_cpu_us: cpu, page_limit: limit,
+                    };
+                    health.send_replace(status.clone());
+                    if attempts == 3 || attempts % 32 == 0 {
+                        eprintln!("native app feed health={}", serde_json::to_string(&status).expect("feed health"));
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis((10u64 << attempts.min(5)).min(500))).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+#[cfg(test)]
+mod load_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn slow_change_source_recovers_without_closing_feed() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("feed.sqlite3");
+        let writer = Connection::open(&path).unwrap();
+        ctox_store::config::ConnectionConfig::default().apply_writer(&writer).unwrap();
+        writer.execute_batch("CREATE TABLE head(seq INTEGER); INSERT INTO head VALUES(42)").unwrap();
+        let pool = ctox_store::read_pool::ReadPool::open(
+            path, 1, Default::default(), Default::default(),
+        ).await.unwrap();
+        let (send, mut receive) = watch::channel(FeedHealth::Healthy);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let source = attempts.clone();
+        let task_pool = pool.clone();
+        let task = tokio::spawn(async move {
+            resilient_read(task_pool, "change_page", &send, |_| {
+                let source = source.clone();
+                ReadJob::new(Default::default(), move |db| {
+                    // Genuine owner-enforced read deadlines, not fabricated errors.
+                    if source.fetch_add(1, Ordering::SeqCst) < 3 {
+                        std::thread::sleep(Duration::from_millis(80));
+                    }
+                    db.query_row("SELECT seq FROM head", [], |r|r.get::<_, u64>(0)).map_err(Into::into)
+                })
+            }).await
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                receive.changed().await.expect("feed closed instead of degrading");
+                let state = receive.borrow_and_update().clone();
+                if let FeedHealth::Degraded { code, stage, callback_cpu_us, .. } = state {
+                    assert_eq!(code, "read_overload");
+                    assert_eq!(stage, "change_page");
+                    #[cfg(target_os = "linux")]
+                    assert!(callback_cpu_us.unwrap() < 20_000, "sleep is not callback CPU");
+                    break;
+                }
+            }
+        }).await.expect("sustained overload must be visible");
+        assert_eq!(task.await.unwrap().expect("slow page must not stop feed"), 42);
+        assert_eq!(*receive.borrow(), FeedHealth::Healthy);
+        assert!(attempts.load(Ordering::SeqCst) >= 4);
+        pool.shutdown().await.unwrap();
+    }
+}
+
 pub(crate) struct RuntimeBinding {
+
     pub ingress: AppRuntimeIngress,
+    pub health: watch::Receiver<FeedHealth>,
     stop: watch::Sender<bool>,
     task: Option<JoinHandle<Result<()>>>,
 }
@@ -56,6 +167,7 @@ impl RuntimeBinding {
         let ingress = registration.ingress.clone();
         let (stop, stopping) = watch::channel(false);
         let feed_ingress = ingress.clone();
+        let (health_send, health) = watch::channel(FeedHealth::Healthy);
         let task = runtime.spawn(async move {
             let result = drive(
                 database,
@@ -66,6 +178,7 @@ impl RuntimeBinding {
                 commits,
                 cursor,
                 stopping,
+                health_send,
             )
             .await;
             if result.is_err() {
@@ -76,6 +189,7 @@ impl RuntimeBinding {
         });
         Ok(Self {
             ingress,
+            health,
             stop,
             task: Some(task),
         })
@@ -103,6 +217,7 @@ async fn drive(
     mut commits: ctox_store::writer::CommitReceiver,
     mut cursor: u64,
     mut stop: watch::Receiver<bool>,
+    health: watch::Sender<FeedHealth>,
 ) -> Result<()> {
     // Recover pending commands once. Running/uncertain effects are never replayed.
     let startup=observed_read(database.readers.clone(), "startup_commands", ReadJob::new(JobOptions::default(),|db|{
@@ -129,15 +244,21 @@ async fn drive(
         // Drain retained heads before awaiting the next coalesced wakeup.
         loop {
             let after = cursor;
-            let page=observed_read(database.readers.clone(), "change_page", ReadJob::new(JobOptions::default(),move|db|{
-                let mut statement=db.prepare("SELECT c.collection,c.id,c.seq,c.op,c.gen FROM _changes c JOIN _collections r ON r.name=c.collection AND r.gen=c.gen AND r.state='active' WHERE c.seq>?1 ORDER BY c.seq LIMIT 256")?;
-                let rows=statement.query_map([after],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,u64>(2)?,r.get::<_,u8>(3)?,r.get::<_,u64>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            if *stop.borrow() { return Ok(()); }
+            let read = resilient_read(database.readers.clone(), "change_page", &health, |limit| ReadJob::new(JobOptions::default(),move|db|{
+                let mut statement=db.prepare("SELECT c.collection,c.id,c.seq,c.op,c.gen FROM _changes c JOIN _collections r ON r.name=c.collection AND r.gen=c.gen AND r.state='active' WHERE c.seq>?1 ORDER BY c.seq LIMIT ?2")?;
+                let rows=statement.query_map(params![after,limit],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,u64>(2)?,r.get::<_,u8>(3)?,r.get::<_,u64>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
                 rows.into_iter().map(|(collection,id,seq,op,gen)|{
                     let doc=if op==1{None}else{document(db,&collection,&id)?};
                     let prior:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM _revs WHERE collection=?1 AND gen=?2 AND id=?3 AND seq<?4)",params![collection,gen,id,seq],|r|r.get(0))?;
                     Ok((collection,id,seq,if op==1{"delete"}else if prior{"update"}else{"insert"}.to_owned(),doc))
                 }).collect::<Result<Vec<_>,StoreError>>()
-            })).await?;
+            }));
+            tokio::pin!(read);
+            let page = tokio::select! { biased;
+                _ = stop.changed() => return Ok(()),
+                page = &mut read => page?,
+            };
             if page.is_empty() {
                 authority
                     .finish_events(true)
