@@ -21,7 +21,10 @@ function errorCode(error) {
   // Der native Peer verwirft mit dem rohen payload.error (Text oder Objekt), nicht immer mit einem Error.
   const message = typeof error === 'string' ? error : String(error?.message || error?.error || '');
   if (CODE.test(message)) return message; // Kern liefert den Code als Fehlertext (permission_denied, rate_limited, …)
+  const prefixed = /^([a-z][a-z0-9_]{0,63}):/.exec(message); // „permission_denied: Detail“
+  if (prefixed) return prefixed[1];
   const code = String(error?.code || '');
+  if (CODE.test(code) && code !== 'native_failed') return code; // v4: Kern-Code ohne Präfix im Fehlerobjekt
   if (code === 'CTOX_WEBRTC_CAPABILITY_MISSING' || /unknown (native )?method|not supported|unsupported/i.test(message)) {
     return 'unsupported';
   }

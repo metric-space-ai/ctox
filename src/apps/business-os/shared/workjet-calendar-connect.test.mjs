@@ -34,6 +34,8 @@ test('Fehler kommen als {action, commandId, error} zurück, nie geworfen', async
   const cases = [
     ['permission_denied', 'permission_denied'],
     [new Error('rate_limited'), 'rate_limited'],
+    [new Error('permission_denied: not the owner'), 'permission_denied'],
+    [Object.assign(new Error('not the owner'), { code: 'permission_denied' }), 'permission_denied'],
     [{ message: 'Unknown native method ctox.workjet.calendar.connect.v1' }, 'unsupported'],
     [Object.assign(new Error('Native WebRTC peer lacks x'), { code: 'CTOX_WEBRTC_CAPABILITY_MISSING' }), 'unsupported'],
     [new Error('Timed out waiting for remote WebRTC request ctox.workjet.calendar.connect.v1'), 'timeout'],
