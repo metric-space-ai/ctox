@@ -1,4 +1,50 @@
 #[test]
+fn release_loader_partitions_kind_and_legacy_filename_and_rejects_collection_misclassification() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("tools/manifest/out")).unwrap();
+    std::fs::create_dir(root.join("manifests")).unwrap();
+    std::fs::write(root.join("tools/manifest/out/ownership.json"), "{}").unwrap();
+    let platform = root.join("platform.json");
+    std::fs::write(&platform, r#"{"app_id":"ctox-platform","collections":{"business_commands":{"schema":{"version":2}}}}"#).unwrap();
+    let path = root.join("manifests/renamed.manifest.json");
+    std::fs::write(
+        &path,
+        r#"{"kind":"lib","app_id":"lib:office","version":"1.2","files":{}}"#,
+    )
+    .unwrap();
+    let loaded = load_base_release(root, &platform).unwrap();
+    assert_eq!(loaded.libs[0].artifact_id, "lib:office@1.2");
+    assert_eq!(loaded.manifests.len(), 1);
+    assert!(loaded.schemas.is_empty() || loaded.schemas.keys().all(|a| a == "ctox-platform"));
+    std::fs::remove_file(&path).unwrap();
+    let legacy = root.join("manifests/lib-office.manifest.json");
+    std::fs::write(
+        &legacy,
+        r#"{"app_id":"lib:office","version":"1.2","files":{}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        load_base_release(root, &platform).unwrap().libs[0].artifact_id,
+        "lib:office@1.2"
+    );
+    std::fs::write(
+        &legacy,
+        r#"{"app_id":"lib:office","version":"1.2","collections":{}}"#,
+    )
+    .unwrap();
+    assert!(load_base_release(root, &platform)
+        .unwrap_err()
+        .to_string()
+        .contains("lib_with_collections"));
+    std::fs::remove_file(&legacy).unwrap();
+    std::fs::write(&path, r#"{"app_id":"ordinary-app"}"#).unwrap();
+    assert!(load_base_release(root, &platform)
+        .unwrap_err()
+        .to_string()
+        .contains("manifest_collections"));
+}
+#[test]
 fn schema_archive_preserves_old_value_but_explicit_remove_erases_it_and_denies_deleted_revision_writes(
 ) {
     let mut db = Connection::open_in_memory().unwrap();

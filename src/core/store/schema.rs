@@ -1753,7 +1753,15 @@ pub fn purge_online_index_page(
 pub struct BaseReleaseInput {
     pub ownership: Value,
     pub manifests: Vec<Value>,
+    #[serde(default)]
+    pub libs: Vec<BaseReleaseLibrary>,
     pub schemas: std::collections::BTreeMap<String, Value>,
+}
+/// Immutable platform artifact, kept out of app schema publication.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BaseReleaseLibrary {
+    pub artifact_id: String,
+    pub manifest: Value,
 }
 #[derive(Debug, Clone)]
 pub struct BaseReleaseDefaults {
@@ -1787,13 +1795,61 @@ pub fn load_base_release(
         .map_err(|e| invalid(e.to_string()))?;
     files.sort();
     let mut manifests = Vec::new();
+    let mut libs = Vec::new();
     for path in files {
         if path
             .file_name()
             .and_then(|n| n.to_str())
             .is_some_and(|n| n.ends_with(".manifest.json"))
         {
-            manifests.push(json(&path)?);
+            let manifest = json(&path)?;
+            let is_library = manifest["kind"] == "lib"
+                || path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("lib-"));
+            if is_library {
+                if manifest.get("collections").is_some() {
+                    return Err(invalid("lib_with_collections"));
+                }
+                let name = manifest["app_id"]
+                    .as_str()
+                    .and_then(|id| id.strip_prefix("lib:"))
+                    .filter(|name| {
+                        !name.is_empty()
+                            && name
+                                .bytes()
+                                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                    })
+                    .ok_or_else(|| invalid("lib_identity"))?;
+                let version = manifest["version"]
+                    .as_str()
+                    .ok_or_else(|| invalid("lib_version"))?;
+                let parts: Vec<_> = version.split('.').collect();
+                if parts.len() != 2
+                    || parts.iter().any(|p| {
+                        p.is_empty()
+                            || !p.bytes().all(|b| b.is_ascii_digit())
+                            || p.parse::<u32>().is_err()
+                            || (p.len() > 1 && p.starts_with('0'))
+                    })
+                {
+                    return Err(invalid("lib_version"));
+                }
+                let artifact_id = format!("lib:{name}@{version}");
+                if libs
+                    .iter()
+                    .any(|lib: &BaseReleaseLibrary| lib.artifact_id == artifact_id)
+                {
+                    return Err(invalid("duplicate_lib_artifact"));
+                }
+                libs.push(BaseReleaseLibrary {
+                    artifact_id,
+                    manifest,
+                });
+            } else {
+                manifests.push(manifest);
+            }
         }
     }
     manifests.retain(|m| m.get("app_id").and_then(Value::as_str) != Some("ctox-platform"));
@@ -1807,6 +1863,9 @@ pub fn load_base_release(
         if app.contains('/') || app.contains('\\') || app == "." || app == ".." {
             return Err(invalid("invalid manifest app_id path"));
         }
+        if !manifest["collections"].is_object() {
+            return Err(invalid("manifest_collections"));
+        }
         let path = v4_root
             .join("schemas")
             .join(format!("{app}.collections.schema.json"));
@@ -1817,6 +1876,7 @@ pub fn load_base_release(
     Ok(BaseReleaseInput {
         ownership,
         manifests,
+        libs,
         schemas,
     })
 }
