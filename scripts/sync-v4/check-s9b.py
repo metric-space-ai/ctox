@@ -101,6 +101,11 @@ link = root / 'runtime/build/cargo-target'
 link.parent.mkdir(parents=True, exist_ok=True)
 if not link.exists():
     link.symlink_to(Path(os.environ['CARGO_TARGET_DIR']))
+dependencies = Path(os.environ['CARGO_TARGET_DIR']) / 's9-js/node_modules'
+assert (dependencies / 'playwright/index.mjs').is_file(), 'stage S9 test dependencies through check-s9.sh first'
+modules = root / 'src/apps/business-os/node_modules'
+if not modules.exists():
+    modules.symlink_to(dependencies)
 result = subprocess.run(['node', 'src/apps/business-os/rxdb/tests/run-all.mjs', '--require-wire-daemon'],
                         cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 (proof / 'rxdb-js.log').write_bytes(result.stdout)
