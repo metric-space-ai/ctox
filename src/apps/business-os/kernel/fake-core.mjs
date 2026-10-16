@@ -108,7 +108,12 @@ export class MemoryCoreTransport extends KernelTransport {
     const rows = [...this.core.docs.values()].filter(d => d.collection === collection && BigInt(d.seq) > BigInt(sub.checkpoint_seq ?? '0')).sort((a,b) => BigInt(a.seq) < BigInt(b.seq) ? -1 : 1)
       .map((r) => (this.core.runtime.canRead(user, r) ? r : { ...r, data: null, deleted: true }));
     const page = { ...sub, epoch: '1', docs: cloneValue(rows), cursor_to: this.head, head_seq: this.head, backlog: 0, complete: true };
-    await this.events.page(page); sub.checkpoint_seq = page.cursor_to;
+    // K-BF1: Checkpoint VOR der Übergabe vorziehen. Der Leiter meldet seinen Rückstand (this.backlog) noch während
+    // events.page an die Folger; mit dem alten Checkpoint trug diese letzte Meldung N > 0, und nichts korrigierte sie.
+    // Scheitert die Annahme, wird der Checkpoint zurückgesetzt, solange keine spätere Seite ihn weitergeschoben hat.
+    const previous = sub.checkpoint_seq; sub.checkpoint_seq = page.cursor_to;
+    try { await this.events.page(page); }
+    catch (error) { if (sub.checkpoint_seq === page.cursor_to) sub.checkpoint_seq = previous; throw error; }
   }
   async push(collection, docs) { return this.core.commit(collection, docs); }
   async write(entry) {
