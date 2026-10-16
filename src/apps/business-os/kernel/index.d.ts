@@ -111,7 +111,19 @@ export declare class CtoxError extends Error {
 
 export type StatusItem = { level: 'info' | 'warn' | 'error'; code: string; text: string; ref?: string };
 
+/** Unix epoch milliseconds, first observation of each stage; null = not observed.
+ * queued = local durable queue, sent = first transport dispatch, acked = validated
+ * Core receipt (including rejection), completed = canonical terminal state or rejection.
+ * Observational per-tab ring, creation order, at most 500; not durable or a completion authority.
+ */
+export type CommandTiming = Readonly<{command_id:string; queued:number; sent:number|null; acked:number|null; completed:number|null}>;
+/** Bridge adapter hook: forward timing snapshots here, never command payloads.
+ * Exceptions are isolated from the data path. Cross-tab updates can repeat; key by command_id.
+ */
+export interface CommandDiagnostics { onCommandTiming?(timing:CommandTiming):void; }
+export interface CommandMetrics extends LiveDoc<Metrics> { readonly commands:ReadonlyArray<CommandTiming>; }
 export type Metrics = {
+  commands: ReadonlyArray<CommandTiming>;
   timing?: {push_latency_ms:number;clock_offset_ms:number;clock_uncertainty_ms:number;samples:number};
   backlog: number;
   outbox: { count: number; oldest_ms: number };
@@ -222,7 +234,7 @@ export interface CtoxAppApi {
     clear(code: string): void;
   };
   // Messwerte (lesend, für die Zustandszone; Apps zeigen sie nicht selbst). Leser-Tabs: link = Zustand des Leiters.
-  metrics: LiveDoc<Metrics>;
+  metrics: CommandMetrics;
   shell: ShellApi;
   actor: Actor;
   files: FilesApi;
@@ -439,7 +451,7 @@ export interface ShellKernelApi {
   releaseApp(appId: string, opts: { base_app_ver: string; channel?: string }): CommandHandle;
   removeApp(appId: string, opts: { base_app_ver: string }): CommandHandle;
   source(appId: string): SourceApi;
-  metrics: LiveDoc<Metrics>;
+  metrics: CommandMetrics;
   leader: LiveDoc<{ isLeader: boolean; leader_gen: number; tab_id: string }>;
   identity: {
     readonly instance_id: string;
@@ -472,6 +484,7 @@ export declare function createShellKernel(kernel: StubKernel): ShellKernelApi;
 // ============================================================================================================
 
 export interface StubKernelOptions {
+  diagnostics?: CommandDiagnostics;
   instanceId?: string;
   userId?: string;
   /** Standard: `ctox-<instanceId>-<userId>` (§16.7). */

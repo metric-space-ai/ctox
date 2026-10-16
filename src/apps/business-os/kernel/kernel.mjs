@@ -1,3 +1,4 @@
+import { createCommandTimings } from './command-timings.mjs';
 import { PLATFORM_COLLECTIONS, PLATFORM_APP_ID } from './platform.mjs';
 import { artifactUrl, utf8Base64, bytesBase64 } from './artifact-url.mjs';
 import { takeoverV3Database } from './migrate-v3.mjs';
@@ -253,7 +254,11 @@ export function createKernel(opts = {}) {
       const appId = rec.collection === 'business_apps' ? rec.id : visible(r)?.app_id;
       if (appId) scheduleActivation(appId);
     }
-    if (rec.collection === 'business_commands') notify('commands');
+    if (rec.collection === 'business_commands') {
+      if (rec.pending && rec.lseq) commandTimings.mark(rec.id, 'queued');
+      if (!rec.pending && ['done','failed','cancelled','rejected'].includes(r.data?.status)) commandTimings.mark(rec.id, 'completed');
+      notify('commands');
+    }
     return true;
   }
   function setCheckpoint(cp) {
@@ -293,6 +298,11 @@ export function createKernel(opts = {}) {
   }
 
   // ---- Metriken ----
+  const commandTimings = createCommandTimings((value, broadcast, patch) => {
+    notify('metrics');
+    if (broadcast) post({type:'command_timing', value:patch});
+    try { opts.diagnostics?.onCommandTiming?.(value); } catch { /* diagnostics cannot affect writes */ }
+  });
   async function refreshOutboxStat() {
     if (!db || closed) return;
     const next = await db.outboxStat();
@@ -344,12 +354,14 @@ export function createKernel(opts = {}) {
   const metricsLive = makeLive(['metrics'], () => {
     const net = isLeader || !followerNet ? { link, backlog: (fakeCore?.backlog ?? 0) + extraBacklog, collections: collectionsView } : followerNet;
     return {
+      commands: commandTimings.snapshot(),
       backlog: net.backlog,
       collections: cloneValue(net.collections ?? {}),
       outbox: { count: outboxStat.count, oldest_ms: outboxStat.oldest_at ? Math.max(0, Date.now() - outboxStat.oldest_at) : 0 },
       link: { ...net.link }, ...(timing?{timing:{...timing}}:{}),
     };
   });
+  Object.defineProperty(metricsLive, 'commands', {get: () => { guardAlive(); return deepFreeze(commandTimings.snapshot()); }});
   let knownGen = 0;
   const leaderLive = makeLive(['leader'], () => ({ isLeader, leader_gen: isLeader ? myGen : knownGen, tab_id: tabId }));
 
@@ -518,6 +530,7 @@ export function createKernel(opts = {}) {
         await refreshOutboxStat();
         break;
       }
+      case 'command_timing': commandTimings.merge(msg.value); break;
       case 'outbox': await refreshOutboxStat(); if (isLeader) schedulePump(); break;
       case 'priority': if(isLeader)transport.priority?.({app_id:msg.app_id,collections:msg.collections});break;
       case 'subscribe': if(isLeader && typeof msg.collection==='string')await subscribeCollection(msg.collection,'P1');break;
@@ -669,6 +682,10 @@ export function createKernel(opts = {}) {
     return true;
   }
   function handleWriteResult(info, result) {
+    if (info.collection === 'business_commands') {
+      commandTimings.mark(info.id, 'acked');
+      if (result.status === 'rejected') commandTimings.mark(info.id, 'completed');
+    }
     const res = waiters.get(info.op_id);
     if (res) { waiters.delete(info.op_id); res(cloneValue(result)); }
     if (result.status === 'rejected' && result.reason !== 'cancelled') {
@@ -799,6 +816,9 @@ export function createKernel(opts = {}) {
         setUploadProgress(e.id,blob.size,blob.size,true); uploadsDone.add(e.id);notify('uploads');post({type:'upload_done',ref:e.id});
       } else {
         if(!subscriptions.has(e.collection))await subscribeCollection(e.collection);
+        if (e.collection === 'business_commands' && !e.pending_result) {
+          commandTimings.mark(e.id, 'sent');
+        }
         const result=e.pending_result??await transport.write(cloneValue(e));
         if(result)awaitingResult=!await applyResult(e,result);
         else awaitingResult=true;
@@ -862,6 +882,7 @@ export function createKernel(opts = {}) {
       return settleWrite(t,e,base,res);
     });
     if(!out)return true;
+    if(e.collection === 'business_commands') commandTimings.mark(e.id, 'acked');
     if(out.replay) {
       // Explicit replay uses the SAME signed page path, without regressing any
       // durable checkpoint. A no-write command replay still needs its older row.
