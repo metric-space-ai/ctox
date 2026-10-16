@@ -152,6 +152,7 @@ export class MemoryCoreTransport extends KernelTransport {
     const old = this.core.docs.get(this.key(entry.collection,entry.id));
     const rejection = this.reject.shift();
     let result = rejection === undefined ? null : {status:'rejected', ...(typeof rejection === 'object' ? rejection : {reason:rejection})};
+    if (!result && entry.body && Object.keys(entry.body).some(key=>key.startsWith('_'))) result={status:'rejected',code:'invalid',reason:'Underscore document fields are reserved'};
     // K-WJ-B2 (E27.2): Befehlstyp ohne veröffentlichte Route → beim Schreiben abgelehnt, nie erst accepted und später failed
     if (!result && entry.collection === 'business_commands' && entry.op === 'put' && entry.body?.status === 'queued' && !(old?.data && !old.deleted) && !this.commandRouteKnown(entry.body)) {
       result = { status: 'rejected', code: 'unknown_command', reason: `unknown_command:${entry.body.type}` };
