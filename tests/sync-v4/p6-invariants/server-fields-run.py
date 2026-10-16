@@ -8,7 +8,7 @@ assert os.environ.get('BUILD_LANE_BIN') and os.environ.get('CARGO_TARGET_DIR'),'
 OUT=Path(os.environ['CARGO_TARGET_DIR'])/('p6-fields-'+time.strftime('%Y%m%dT%H%M%SZ',time.gmtime()));OUT.mkdir()
 ENV=dict(os.environ,CARGO_BUILD_JOBS='2',RUST_TEST_THREADS='2',TOKIO_WORKER_THREADS='2',CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS='1',CMAKE_BUILD_PARALLEL_LEVEL='2')
 originals={};record={'head':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),'steps':[],'mutations':[],'terminal':False};active=None
-paths=['src/core/store/rights.rs','src/core/store/manifest_rules.rs','src/core/store/write_contract.rs','src/core/store/subscription.rs','src/apps/business-os/kernel/kernel.mjs','src/apps/business-os/kernel/values.mjs']+[str(p.relative_to(ROOT)) for p in HERE.glob('server-fields*')]
+paths=['src/core/business_os/policy.rs','src/core/business_os/app_platform/commands.rs','src/core/business_os/app_platform/runtime_host.rs','src/apps/business-os/v4/manifests/outbound-lead-generation.manifest.json','src/core/store/rights.rs','src/core/store/manifest_rules.rs','src/core/store/write_contract.rs','src/core/store/subscription.rs','src/apps/business-os/kernel/kernel.mjs','src/apps/business-os/kernel/values.mjs']+[str(p.relative_to(ROOT)) for p in HERE.glob('server-fields*')]
 def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 record['sources']={p:sha(ROOT/p) for p in paths}
 def save():(OUT/'results.json').write_text(json.dumps(record,indent=2)+'\n')
