@@ -1,6 +1,6 @@
 // app-store gegen den verbindlichen App-API-4.0-Stub des Kerns (createStubKernel, gepinnt über CTOX_APP_API_STUB,
 // read-only unter /__stub/ ausgeliefert) in echtem Chromium. Muster: modules/knowledge/tests/v4-api.test.mjs.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/app-store/tests/v4-api.test.mjs
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf node --test src/apps/business-os/modules/app-store/tests/v4-api.test.mjs
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const SHOTS = join(HERE, 'shots');

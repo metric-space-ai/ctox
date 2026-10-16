@@ -1,7 +1,7 @@
 // credentials gegen den eingefrorenen App-API-4.0-Kern-Stub (createStubKernel) in echtem Chromium.
 // Muster: modules/knowledge/tests/v4-api.test.mjs. Stub-Pfad aus CTOX_APP_API_STUB (Pflicht-Pin
-// ~/.local/state/shell-v4/stub-pins/68b83a3), read-only unter /__stub/ ausgeliefert.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/credentials/tests/v4-api.test.mjs
+// ~/.local/state/shell-v4/stub-pins/f967baf), read-only unter /__stub/ ausgeliefert.
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf node --test src/apps/business-os/modules/credentials/tests/v4-api.test.mjs
 // Playwright: aus PLAYWRIGHT_MODULE, sonst ~/Documents/ctox/src/apps/business-os/node_modules/playwright.
 // Screenshots (1280 und 420) landen in tests/shots/.
 import { test, before, after } from 'node:test';
@@ -12,9 +12,10 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const APP = 'credentials';
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
@@ -55,12 +56,17 @@ before(async () => {
   page.on('response', (r) => { if (r.status() >= 400) console.error('[page] HTTP', r.status(), r.url()); });
   page.__errors = errors;
   await page.goto(base);
+  // FIXT-R: echte Routen/Rechte/Fremd-Collections der credentials-Version (v4/manifests/credentials.manifest.json) plus
+  // Eigentümer (ctox-platform für business_commands). Ohne aktive Version lehnt der Kern ctox.secret.* ab.
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes(APP));
   await page.evaluate(async (APP) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import(`/modules/${APP}/index.js`);
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false });
     await kernel.ready;
     await kernel.sim.push('business_apps', [{ id: APP, title: 'Zugangsdaten' }]);
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion(APP, '1', { title: 'Zugangsdaten', manifestExtra: window.__routes });
     window.__secrets = new Map([
       ['OPENAI_API_KEY', { name: 'OPENAI_API_KEY', description: 'Alpha OpenAI Zugang', is_set: true, updated_at: '2026-10-01T10:00:00Z' }],
       ['SMTP_PASSWORD', { name: 'SMTP_PASSWORD', description: 'Beta Mailversand', is_set: false }],

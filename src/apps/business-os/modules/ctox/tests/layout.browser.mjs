@@ -19,6 +19,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 // Stub: CTOX_APP_API_STUB, sonst die eingecheckte Pin-Kopie 68b83a3 (tests/fixtures/app-api-stub/PIN.md) – auch in CI.
 const STUB = process.env.CTOX_APP_API_STUB || join(dirname(fileURLToPath(import.meta.url)), 'fixtures/app-api-stub');
@@ -69,9 +70,9 @@ after(async () => {
   await new Promise((r) => server?.close(r));
 });
 
-// Befehlsrouten der echten ctox-Version (v4/manifests/ctox.manifest.json): handlers und command_rights.
-const CTOX_MANIFEST = JSON.parse(await readFile(join(HERE, '../../../v4/manifests/ctox.manifest.json'), 'utf8'));
-const CTOX_MANIFEST_ROUTES = { handlers: CTOX_MANIFEST.handlers ?? {}, command_rights: CTOX_MANIFEST.command_rights ?? {} };
+// Routen, Rechte und Collections der echten ctox-Version (v4/manifests/ctox.manifest.json) plus das Kern-Manifest
+// ctox-platform (E48): ctox liest business_commands/ctox_queue_tasks als Fremd-Collections der Plattform (_fixture_owners).
+const CTOX_MANIFEST_ROUTES = realManifestRoutes('ctox');
 
 // One page per scenario: a fresh stub kernel with the routing-failure fixture, mounted into #win.
 async function openFixture(width, { extra = null } = {}) {
@@ -89,6 +90,8 @@ async function openFixture(width, { extra = null } = {}) {
     await kernel.sim.push('business_apps', [{ id: 'ctox', title: 'Crew' }, { id: 'shell', title: 'Shell' }]);
     // E35 (Option B): die aktive ctox-Version mit ihren Befehlsrouten veröffentlichen (nach der business_apps-Zeile, sonst fehlt active_ver), wie die anderen v4-Gate-Dateien.
     // Ohne aktives Manifest lehnt der Kern App-Befehle (ctox.queue.pause) beim Schreiben mit unknown_command ab.
+    // FIXT-R: Eigentümer der Fremd-Collections (echte Manifeste, inkl. ctox-platform) vor der eigenen Version.
+    for (const o of ctoxManifest?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
     await kernel.sim.publishAppVersion('ctox', '1.1.2', { title: 'Crew', manifestExtra: ctoxManifest });
     await kernel.sim.push('business_commands', [{ id: 'layout-command', command_id: 'layout-command', execution_task_id: 'layout-task', execution_mode: 'queue', execution_phase: 'queued', status: 'accepted', payload: { title: 'Cereda' }, execution_progress: { phase: 'queued', steps: [] }, updated_at_ms: Date.now() }]);
     await kernel.sim.push('ctox_queue_tasks', [{ id: 'layout-task', command_id: 'layout-command', status: 'queued', route_status: 'failed', failure_class: 'terminal', failure_attempt_count: 4, status_note: 'thread/start MCP handshake timeout', updated_at_ms: Date.now() }]);

@@ -11,6 +11,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -60,11 +61,20 @@ before(async () => {
   page.on('response', (r) => { if (r.status() >= 400) console.error('[page] HTTP', r.status(), r.url()); });
   page.__errors = errors;
   await page.goto(base);
+  // Befehlsrouten/Deklarationen der echten outbound-Version (v4/manifests/outbound.manifest.json); ohne aktive Version
+  // lehnt der Kern seit E26/E27 App-Befehle mit unknown_command und Schreibzugriffe ab.
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes('outbound'));
   await page.evaluate(async () => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import('/modules/outbound/index.js');
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, actor: { role: 'admin', permissions: ['apps.source.edit'] } });
     await kernel.ready;
+    // FIXT-R: Eigentümer der Fremd-Collections (echte Manifeste, inkl. ctox-platform) vor der eigenen Version.
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion('outbound', '1.0.0', { title: 'Outbound', manifestExtra: window.__routes });
+    // knowledge.command ist ein Plattformbefehl des CTOX-Kerns (src/core/business_os/command_plane.rs), keine App-Route:
+    // der Prüfstand simuliert ihn wie die anderen Kernbefehle per sim.onCommand (Antwort wie der bisherige Stub-Standard).
+    kernel.sim.onCommand('knowledge.command', () => ({ ok: true }));
     const now = Date.now();
     await kernel.sim.push('outbound_campaigns', [
       { id: 'outbound_default_campaign', name: 'Outbound Firmenqualifizierung', status: 'active', payload: {}, created_at_ms: now - 9000, updated_at_ms: now - 9000 },
@@ -183,6 +193,10 @@ test('leere Collections: kein Zustandstext, keine Zone (nur die Standard-Kampagn
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     const k2 = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, instanceId: 'empty' });
     await k2.ready;
+    // FIXT-R: Eigentümer der Fremd-Collections (echte Manifeste, inkl. ctox-platform) vor der eigenen Version.
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await k2.sim.inspect('business_apps', o.app))?.data?.active_ver) await k2.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await k2.sim.publishAppVersion('outbound', '1.0.0', { title: 'Outbound', manifestExtra: window.__routes });
+    k2.sim.onCommand('knowledge.command', () => ({ ok: true }));
     const host = document.createElement('div');
     host.style.cssText = 'width:900px;height:600px';
     document.body.append(host);

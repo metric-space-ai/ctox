@@ -72,6 +72,8 @@ test('Kernel vorbereitet', async () => {
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, actor: { role: 'admin', permissions: ['apps.source.edit'] } });
     await kernel.ready;
     await kernel.sim.push('business_apps', [{ id: 'ctox', title: 'Crew' }, { id: 'knowledge', title: 'Knowledge' }]);
+    // FIXT-R: Eigentümer der Fremd-Collections (echte Manifeste, inkl. ctox-platform) vor der eigenen Version.
+    for (const o of routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
     await kernel.sim.publishAppVersion('ctox', '1.1.2', { title: 'Crew', manifestExtra: routes });
     await kernel.sim.push('ctox_queue_tasks', [
       { id: 'task-alpha', title: 'Alpha Aufgabe', prompt: 'Alpha erledigen', status: 'queued', route_status: 'pending', priority: 'normal', updated_at_ms: Date.now() - 2000 },

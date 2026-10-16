@@ -1,6 +1,6 @@
 // spreadsheets gegen den eingefrorenen App-API-4.0-Kern-Stub (createStubKernel, Pin CTOX_APP_API_STUB, read-only unter
 // /__stub/ ausgeliefert) in echtem Chromium. Muster: modules/knowledge/tests/v4-api.test.mjs.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/spreadsheets/tests/v4-api.test.mjs
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf node --test src/apps/business-os/modules/spreadsheets/tests/v4-api.test.mjs
 // Screenshots (1280 und 420) mit CTOX_SPREADSHEETS_SHOTS=1 nach tests/shots/.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,13 +10,14 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || join(homedir(), 'Documents/ctox/src/apps/business-os/node_modules/playwright'));
-const TYPES = { '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.json': 'application/json', '.svg': 'image/svg+xml' };
+const TYPES = { '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.json': 'application/json', '.svg': 'image/svg+xml', '.wasm': 'application/wasm' };
 
 const PAGE = `<!doctype html><html><head><meta charset="utf-8">
 <link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/shared/base.css">
@@ -50,12 +51,18 @@ before(async () => {
   page.on('console', (m) => { if (m.type() === 'error') console.error('[page]', m.text()); });
   page.__errors = errors;
   await page.goto(base);
+  // FIXT-R: echte Routen/Rechte/Collections/Fremd-Collections von spreadsheets (v4/manifests/spreadsheets.manifest.json).
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes('spreadsheets'));
   await page.evaluate(async () => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import('/modules/spreadsheets/index.js');
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, actor: { role: 'admin', permissions: ['apps.source.edit'] } });
     await kernel.ready;
     await kernel.sim.push('business_apps', [{ id: 'ctox', title: 'CTOX' }, { id: 'spreadsheets', title: 'Tabellen' }]);
+    // FIXT-R: Eigentümer der Fremd-Collections (ctox-platform, desktop, documents) vor der eigenen Version, diese nach
+    // der business_apps-Zeile.
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion('spreadsheets', '1.0.0', { title: 'Tabellen', manifestExtra: window.__routes });
     const sheet = (id, title, updated) => ({
       id, title, filename: `${id}.xlsx`, mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       status: 'Imported', spreadsheet_type: 'xlsx', owner_id: '', current_version_id: `${id}_v1`, source_sha256: '',

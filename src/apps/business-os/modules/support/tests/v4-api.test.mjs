@@ -1,7 +1,7 @@
 // support gegen den eingefrorenen App-API-4.0-Kern-Stub (createStubKernel) in echtem Chromium.
-// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/68b83a3), read-only unter /__stub/.
+// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/f967baf), read-only unter /__stub/.
 // Eigene Attrappe (v4/tools/port/test-api.mjs) nur für den Abo-Zähler. Muster: modules/knowledge/tests/v4-api.test.mjs.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/support/tests/v4-api.test.mjs
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf node --test src/apps/business-os/modules/support/tests/v4-api.test.mjs
 // Screenshots (1280 / 420) landen in modules/support/tests/shots/.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,8 +11,9 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const SHOTS = join(HERE, 'shots');
@@ -57,11 +58,17 @@ before(async () => {
   page.on('response', (r) => { if (r.status() >= 400) console.error('[page] HTTP', r.status(), r.url()); });
   page.__errors = errors;
   await page.goto(base);
+  // Befehlsrouten/Deklarationen der echten support-Version (v4/manifests/support.manifest.json); ohne aktive Version
+  // lehnt der Kern seit E26/E27 support.* beim Schreiben mit unknown_command ab.
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes('support'));
   await page.evaluate(async () => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import('/modules/support/index.js');
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, userId: 'agent-1', actor: { id: 'agent-1', role: 'admin', permissions: ['apps.source.edit'] } });
     await kernel.ready;
+    // FIXT-R: Eigentümer der Fremd-Collections (echte Manifeste, inkl. ctox-platform) vor der eigenen Version.
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion('support', '0.1.2', { title: 'Support', manifestExtra: window.__routes });
     const now = Date.now();
     await kernel.sim.push('support_conversations', [
       { id: 'conv_a', status: 'open', priority: 'high', inbox_id: 'inbox-mail', assignee_id: '', search_text: 'Alpha GmbH Rechnung fehlt', primary_thread_key: 'mail/alpha', updated_at_ms: now - 2000, last_activity_at_ms: now - 2000 },
@@ -255,7 +262,7 @@ test('Import: ungültiges JSON → Zone; gültig → open_from_thread (Payload u
 
 test('Schreiben: api.put erscheint live und wird vom Core angenommen', async () => {
   const result = await page.evaluate(async () => {
-    const h = window.__api.put('support_conversations', { id: 'conv_put', status: 'open', priority: 'low', search_text: 'delta', primary_thread_key: 'mail/delta', updated_at_ms: Date.now() });
+    const h = window.__api.put('support_conversations', { id: 'conv_put', status: 'open', priority: 'low', search_text: 'delta', primary_thread_key: 'mail/delta', last_activity_at_ms: Date.now(), updated_at_ms: Date.now() });
     await h.local;
     return h.result;
   });
