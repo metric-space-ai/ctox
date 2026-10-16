@@ -34,8 +34,20 @@ jobs:
         working-directory: src/apps/business-os
         run: |
           node modules/ctox/test.js
-          node --test shared/business-chat.test.mjs shared/react-settings.test.mjs shared/shell-crew-health.test.mjs
           node modules/tickets/tickets.test.mjs
+      # Line selection (E37): V2 chat suite on release/v2; on every other line the same suite without the V2 research
+      # handoff test plus its v4 counterpart (missing script = red, no fallback).
+      - name: Chat behavior (V2 line)
+        if: (github.base_ref || github.ref_name) == 'release/v2'
+        working-directory: src/apps/business-os
+        run: node --test shared/business-chat.test.mjs shared/react-settings.test.mjs shared/shell-crew-health.test.mjs
+      - name: Chat behavior (v4 line)
+        if: (github.base_ref || github.ref_name) != 'release/v2'
+        working-directory: src/apps/business-os
+        run: node --test --test-skip-pattern "Web Research oeffnet den Chat" shared/business-chat.test.mjs shared/react-settings.test.mjs shared/shell-crew-health.test.mjs
+      - name: Research chat handoff (v4 line)
+        if: ${{ !cancelled() && (github.base_ref || github.ref_name) != 'release/v2' }}
+        run: node src/apps/business-os/scripts/research-chat-handoff.v4.mjs
       - name: Compact shell layout and interaction
         if: ${{ !cancelled() }}
         working-directory: src/apps/business-os
@@ -55,11 +67,22 @@ jobs:
           node scripts/assert-accessibility-contract.mjs
           node scripts/assert-module-collection-allowlists.mjs
           node scripts/generate-module-registry.mjs --check
-          node scripts/assert-rxdb-only.mjs
           node rxdb/tests/data-plane-guard-smoke.mjs
-          node scripts/assert-ctox-crew-map.mjs
           node scripts/assert-ctox-data-state.mjs --output-dir "${RUNNER_TEMP}/crew-ui/data"
           node scripts/shell-v2-geometry-lab.mjs --apps ctox,tickets --widths 640,1180,1440 --output-dir "${RUNNER_TEMP}/crew-ui/geometry"
+      # Line selection (E37): V2 RxDB-only and crew-map contracts on release/v2, v4 counterparts elsewhere.
+      - name: RxDB-only and crew map contracts (V2 line)
+        if: ${{ !cancelled() && (github.base_ref || github.ref_name) == 'release/v2' }}
+        working-directory: src/apps/business-os
+        run: |
+          node scripts/assert-rxdb-only.mjs
+          node scripts/assert-ctox-crew-map.mjs
+      - name: RxDB-only and crew map contracts (v4 line)
+        if: ${{ !cancelled() && (github.base_ref || github.ref_name) != 'release/v2' }}
+        working-directory: src/apps/business-os
+        run: |
+          node scripts/assert-rxdb-only.v4.mjs
+          node scripts/assert-ctox-crew-map.v4.mjs
       - name: Browser database regressions
         if: ${{ !cancelled() }}
         run: node src/apps/business-os/rxdb/tests/run-all.mjs
