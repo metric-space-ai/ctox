@@ -174,7 +174,9 @@ async fn native_daemon_hotplug_roundtrip_and_change() -> Result<()> {
     let mut bootstrap = Vec::new();
     let mut peers = BTreeMap::new();
     for node in 1..=3 {
-        let root = tempfile::Builder::new().prefix("ap4b-").tempdir()?;
+        let root = tempfile::Builder::new()
+            .prefix("ap4b-")
+            .tempdir_in("/tmp")?;
         let owner = Foreground::start(root.path().to_owned(), Handle::current()).await?;
         owner
             .inputs
