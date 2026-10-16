@@ -1,4 +1,6 @@
 use super::base_release::{self, MigrationEvaluator, ReleasePlan};
+#[path = "tests/cutover.rs"]
+mod cutover;
 #[path = "tests/files.rs"]
 mod files;
 use super::*;

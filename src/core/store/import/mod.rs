@@ -2,6 +2,7 @@
 //! registered destination writer; this module never opens a database or runs DDL.
 pub mod base_release;
 pub mod core_import;
+pub mod cutover;
 pub mod file_import;
 pub mod jour_fixe;
 
@@ -173,7 +174,11 @@ pub(crate) async fn write_page_audited(
                 }
                 let inserted = insert_document(tx, &doc)?;
                 if let Some(source) = expected.get(&(doc.collection.clone(), doc.id.clone())) {
-                    let target = jour_fixe::persisted_hash(tx, &doc)?;
+                    let target = if doc.collection == jour_fixe::COLLECTION {
+                        jour_fixe::persisted_hash(tx, &doc)?
+                    } else {
+                        cutover::persisted_hash(tx, &doc)?
+                    };
                     if source != &target {
                         return Err(invalid(format!(
                             "import_content_mismatch:{}:{}",

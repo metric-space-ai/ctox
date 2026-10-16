@@ -1,0 +1,90 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "primaryKey": "id",
+  "version": 0,
+  "description": "Cutover-Archiv (E29): Datensätze von Apps ohne v4-Manifest, älteren Collection-Versionen und Spalten aus Teilprojektionen. Schreibt nur der Kern-Import; Nutzer lesen nur. Ein späterer App-Install kann die Daten übernehmen.",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Empfehlung: sha256-hex über source_db|source_table|collection|collection_version|record_id (deterministisch, Wiederholung idempotent)."
+    },
+    "source_db": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "source_table": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "collection": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "collection_version": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "record_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "doc": {
+      "type": [
+        "object",
+        "array"
+      ],
+      "description": "Ursprünglicher Datensatz unverändert. Ab 256 KiB legt der Import ihn als Blob ab: dann {blob_ref, size, sha256} und doc_storage = blob."
+    },
+    "doc_storage": {
+      "type": "string",
+      "enum": [
+        "inline",
+        "blob"
+      ],
+      "description": "Unterscheidet die Blob-Form eindeutig von einem Altdatensatz, der zufällig dieselben Schlüssel hat. Fehlt = inline."
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "minLength": 64,
+      "maxLength": 64,
+      "description": "sha256 des Datensatzes (kanonisches JSON bzw. Blob-Inhalt)."
+    },
+    "imported_at": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    }
+  },
+  "required": [
+    "id",
+    "source_db",
+    "source_table",
+    "collection",
+    "collection_version",
+    "record_id",
+    "doc",
+    "sha256",
+    "imported_at"
+  ],
+  "indexes": [
+    "imported_at",
+    [
+      "collection",
+      "collection_version"
+    ],
+    [
+      "source_db",
+      "source_table"
+    ],
+    "record_id"
+  ]
+}
