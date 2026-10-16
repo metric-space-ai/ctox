@@ -143,7 +143,7 @@ pub(super) fn collect_into(tx: &Transaction<'_>, out: &mut core_import::CoreImpo
             .push(format!("source_table_absent:{COLLECTION}"));
         return Ok(());
     }
-    let columns = sql(tx.prepare("PRAGMA table_info(workjet_jour_fixe_meetings)"))?
+    let columns = sql(tx.prepare("PRAGMA table_xinfo(workjet_jour_fixe_meetings)"))?
         .query_map([], |r| r.get::<_, String>(1))
         .map_err(StoreError::from)?
         .collect::<rusqlite::Result<BTreeSet<_>>>()

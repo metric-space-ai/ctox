@@ -74,6 +74,22 @@ async fn meeting_import_preserves_every_row_hash_and_replay_is_seq_neutral() -> 
     assert!(hashes
         .values()
         .all(|h| h.target_sha256.as_ref() == Some(&h.source_sha256)));
+    let target_rows: usize = writer
+        .submit(WriteJob::new(JobOptions::default(), |tx| {
+            let active = sql(schema::active_collection(
+                tx,
+                super::super::jour_fixe::COLLECTION,
+            ))?
+            .ok_or_else(|| invalid("meeting collection missing"))?;
+            let table = sql(crate::change_log::identifier(&active.table))?;
+            sql(tx.query_row(
+                &format!("SELECT count(*) FROM {table} WHERE deleted=0"),
+                [],
+                |r| r.get(0),
+            ))
+        }))?
+        .await?;
+    assert_eq!(target_rows, source_count);
     let before = writer
         .submit(WriteJob::new(JobOptions::default(), |tx| {
             sql(crate::change_log::head(tx))
@@ -97,7 +113,7 @@ async fn meeting_import_preserves_every_row_hash_and_replay_is_seq_neutral() -> 
         0
     );
     if let Ok(path) = std::env::var("JF_IMPORT_PROOF") {
-        std::fs::write(path, serde_json::to_vec_pretty(&json!({"source_rows":source_count,"first":first,"replay":replay,"seq_before":before.head_seq.to_string(),"seq_after":after.head_seq.to_string()})).unwrap())?;
+        std::fs::write(path, serde_json::to_vec_pretty(&json!({"source_rows":source_count,"target_rows":target_rows,"first":first,"replay":replay,"seq_before":before.head_seq.to_string(),"seq_after":after.head_seq.to_string()})).unwrap())?;
     }
     writer.shutdown().await?;
     Ok(())
@@ -110,7 +126,7 @@ fn unsupported_content_and_extra_columns_fail_before_any_write() -> Result<()> {
         "UPDATE workjet_jour_fixe_meetings SET preparation_task_id='task'",
         [],
     )?;
-    conn.execute("UPDATE workjet_jour_fixe_meetings SET metadata_json=json_set(metadata_json,'$.slides',json('[{\"id\":\"slide\"}]'))", [])?;
+    conn.execute("UPDATE workjet_jour_fixe_meetings SET metadata_json=json_set(metadata_json,'$.slides',json_array(json_object('id','slide','meeting_id',meeting_id,'position',0,'title','Status','body_markdown','Source-backed status.')))", [])?;
     let tx = conn.transaction()?;
     let error = core_import::collect(&tx, &mut NoFiles, 100, 100000)
         .err()
@@ -121,6 +137,7 @@ fn unsupported_content_and_extra_columns_fail_before_any_write() -> Result<()> {
         "{error}"
     );
     tx.rollback()?;
+    conn.execute("UPDATE workjet_jour_fixe_meetings SET preparation_task_id=NULL,metadata_json=json_set(metadata_json,'$.slides',json('[]'))", [])?;
     conn.execute_batch("ALTER TABLE workjet_jour_fixe_meetings ADD COLUMN future_column TEXT;")?;
     let tx = conn.transaction()?;
     let error = core_import::collect(&tx, &mut NoFiles, 100, 100000)
