@@ -57,6 +57,10 @@ def main(a):
         result['processes'].append(row)
         return p
     try:
+        fixture_spec = importlib.util.spec_from_file_location('bootstrap_fixture', Path(__file__).parent.parent/'k11/m7-bootstrap-fixture.py')
+        fixture = importlib.util.module_from_spec(fixture_spec)
+        fixture_spec.loader.exec_module(fixture)
+        result['privateBootstrapConfiguration'] = fixture.configure(root)
         native = spawn('foreground',[binary,'service','--foreground'])
         until = time.monotonic()+15
         while time.monotonic()<until and native.poll() is None:

@@ -154,6 +154,8 @@ def main():
                    BUILD_LANE_BIN=os.environ['BUILD_LANE_BIN'],
                    XDG_CONFIG_HOME=str(home/'.config'), XDG_CACHE_HOME=str(home/'.cache'),
                    CTOX_ROOT=str(component), CTOX_STATE_ROOT=str(component/'runtime'))
+        assert run('component-bootstrap-fixture', ['python3', HERE/'m7-bootstrap-fixture.py',
+            '--root', component, '--output', out/'component-bootstrap-fixture.json'], 10, env) == 0
         starts = []
         for attempt in range(2):
             log_path = out/('foreground-'+str(attempt)+'.log')
