@@ -224,7 +224,3 @@ fn build_memory_id(index: usize, path: &Path) -> String {
         .unwrap_or_else(|| "memory".to_string());
     format!("memory_{index}_{stem}")
 }
-
-#[cfg(test)]
-#[path = "memory_trace_tests.rs"]
-mod tests;

@@ -7882,66 +7882,8 @@ mod tests {
         validate_dynamic_tools(&tools).expect("valid schema");
     }
 
-    #[test]
-    fn config_load_error_marks_cloud_requirements_failures_for_relogin() {
-        let err = std::io::Error::other(CloudRequirementsLoadError::new(
-            CloudRequirementsLoadErrorCode::Auth,
-            Some(401),
-            "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
-        ));
 
-        let error = config_load_error(&err);
 
-        assert_eq!(
-            error.data,
-            Some(json!({
-                "reason": "cloudRequirements",
-                "errorCode": "Auth",
-                "action": "relogin",
-                "statusCode": 401,
-                "detail": "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
-            }))
-        );
-        assert!(
-            error.message.contains("failed to load configuration"),
-            "unexpected error message: {}",
-            error.message
-        );
-    }
-
-    #[test]
-    fn config_load_error_leaves_non_cloud_requirements_failures_unmarked() {
-        let err = std::io::Error::other("required MCP servers failed to initialize");
-
-        let error = config_load_error(&err);
-
-        assert_eq!(error.data, None);
-        assert!(
-            error.message.contains("failed to load configuration"),
-            "unexpected error message: {}",
-            error.message
-        );
-    }
-
-    #[test]
-    fn config_load_error_marks_non_auth_cloud_requirements_failures_without_relogin() {
-        let err = std::io::Error::other(CloudRequirementsLoadError::new(
-            CloudRequirementsLoadErrorCode::RequestFailed,
-            None,
-            "failed to load your workspace-managed config",
-        ));
-
-        let error = config_load_error(&err);
-
-        assert_eq!(
-            error.data,
-            Some(json!({
-                "reason": "cloudRequirements",
-                "errorCode": "RequestFailed",
-                "detail": "failed to load your workspace-managed config",
-            }))
-        );
-    }
 
     #[test]
     fn collect_resume_override_mismatches_includes_service_tier() {

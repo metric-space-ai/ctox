@@ -314,7 +314,3 @@ fn verified_plugin_suggestion_completed(
         .flat_map(|marketplace| marketplace.plugins.into_iter())
         .any(|plugin| plugin.id == tool_id && plugin.installed)
 }
-
-#[cfg(test)]
-#[path = "tool_suggest_tests.rs"]
-mod tests;

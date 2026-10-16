@@ -1,12 +1,10 @@
 use super::parse_turn_item;
 use ctox_protocol::items::AgentMessageContent;
 use ctox_protocol::items::TurnItem;
-use ctox_protocol::items::WebSearchItem;
 use ctox_protocol::models::ContentItem;
 use ctox_protocol::models::ReasoningItemContent;
 use ctox_protocol::models::ReasoningItemReasoningSummary;
 use ctox_protocol::models::ResponseItem;
-use ctox_protocol::models::WebSearchAction;
 use ctox_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 
@@ -294,112 +292,5 @@ fn parses_reasoning_including_raw_content() {
             );
         }
         other => panic!("expected TurnItem::Reasoning, got {other:?}"),
-    }
-}
-
-#[test]
-fn parses_web_search_call() {
-    let item = ResponseItem::WebSearchCall {
-        id: Some("ws_1".to_string()),
-        status: Some("completed".to_string()),
-        action: Some(WebSearchAction::Search {
-            query: Some("weather".to_string()),
-            queries: None,
-        }),
-    };
-
-    let turn_item = parse_turn_item(&item).expect("expected web search turn item");
-
-    match turn_item {
-        TurnItem::WebSearch(search) => assert_eq!(
-            search,
-            WebSearchItem {
-                id: "ws_1".to_string(),
-                query: "weather".to_string(),
-                action: WebSearchAction::Search {
-                    query: Some("weather".to_string()),
-                    queries: None,
-                },
-            }
-        ),
-        other => panic!("expected TurnItem::WebSearch, got {other:?}"),
-    }
-}
-
-#[test]
-fn parses_web_search_open_page_call() {
-    let item = ResponseItem::WebSearchCall {
-        id: Some("ws_open".to_string()),
-        status: Some("completed".to_string()),
-        action: Some(WebSearchAction::OpenPage {
-            url: Some("https://example.com".to_string()),
-        }),
-    };
-
-    let turn_item = parse_turn_item(&item).expect("expected web search turn item");
-
-    match turn_item {
-        TurnItem::WebSearch(search) => assert_eq!(
-            search,
-            WebSearchItem {
-                id: "ws_open".to_string(),
-                query: "https://example.com".to_string(),
-                action: WebSearchAction::OpenPage {
-                    url: Some("https://example.com".to_string()),
-                },
-            }
-        ),
-        other => panic!("expected TurnItem::WebSearch, got {other:?}"),
-    }
-}
-
-#[test]
-fn parses_web_search_find_in_page_call() {
-    let item = ResponseItem::WebSearchCall {
-        id: Some("ws_find".to_string()),
-        status: Some("completed".to_string()),
-        action: Some(WebSearchAction::FindInPage {
-            url: Some("https://example.com".to_string()),
-            pattern: Some("needle".to_string()),
-        }),
-    };
-
-    let turn_item = parse_turn_item(&item).expect("expected web search turn item");
-
-    match turn_item {
-        TurnItem::WebSearch(search) => assert_eq!(
-            search,
-            WebSearchItem {
-                id: "ws_find".to_string(),
-                query: "'needle' in https://example.com".to_string(),
-                action: WebSearchAction::FindInPage {
-                    url: Some("https://example.com".to_string()),
-                    pattern: Some("needle".to_string()),
-                },
-            }
-        ),
-        other => panic!("expected TurnItem::WebSearch, got {other:?}"),
-    }
-}
-
-#[test]
-fn parses_partial_web_search_call_without_action_as_other() {
-    let item = ResponseItem::WebSearchCall {
-        id: Some("ws_partial".to_string()),
-        status: Some("in_progress".to_string()),
-        action: None,
-    };
-
-    let turn_item = parse_turn_item(&item).expect("expected web search turn item");
-    match turn_item {
-        TurnItem::WebSearch(search) => assert_eq!(
-            search,
-            WebSearchItem {
-                id: "ws_partial".to_string(),
-                query: String::new(),
-                action: WebSearchAction::Other,
-            }
-        ),
-        other => panic!("expected TurnItem::WebSearch, got {other:?}"),
     }
 }

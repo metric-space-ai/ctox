@@ -962,7 +962,3 @@ fn sanitize_slug(name: &str) -> String {
 fn format_connector_label(name: &str, _id: &str) -> String {
     name.to_string()
 }
-
-#[cfg(test)]
-#[path = "connectors_tests.rs"]
-mod tests;

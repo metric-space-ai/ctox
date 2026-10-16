@@ -28,6 +28,13 @@ where
         }
     }
 
+    pub fn clear(&self) {
+        self.inner
+            .lock()
+            .unwrap_or_else(|error| panic!("BlockingLruCache mutex poisoned: {error}"))
+            .clear();
+    }
+
     pub fn get_or_try_insert_with<E, F>(&self, key: K, f: F) -> Result<V, E>
     where
         F: FnOnce() -> Result<V, E>,
@@ -35,7 +42,7 @@ where
         if let Some(value) = self
             .inner
             .lock()
-            .expect("BlockingLruCache mutex poisoned")
+            .unwrap_or_else(|error| panic!("BlockingLruCache mutex poisoned: {error}"))
             .get(&key)
             .cloned()
         {
@@ -44,11 +51,39 @@ where
 
         let value = f()?;
 
-        let mut cache = self.inner.lock().expect("BlockingLruCache mutex poisoned");
+        let mut cache = self
+            .inner
+            .lock()
+            .unwrap_or_else(|error| panic!("BlockingLruCache mutex poisoned: {error}"));
         if let Some(existing) = cache.get(&key).cloned() {
             return Ok(existing);
         }
         cache.put(key, value.clone());
         Ok(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BlockingLruCache;
+    use std::num::NonZeroUsize;
+
+    #[test]
+    fn clear_invalidates_every_cached_entry() -> Result<(), &'static str> {
+        let cache = BlockingLruCache::new(NonZeroUsize::new(2).ok_or("nonzero capacity")?);
+        for key in [1, 2] {
+            assert_eq!(
+                cache.get_or_try_insert_with(key, || Ok::<_, ()>(key)),
+                Ok(key)
+            );
+        }
+        cache.clear();
+        for key in [1, 2] {
+            assert_eq!(
+                cache.get_or_try_insert_with(key, || Ok::<_, ()>(key + 10)),
+                Ok(key + 10)
+            );
+        }
+        Ok(())
     }
 }

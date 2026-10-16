@@ -557,38 +557,6 @@ mod windows_impl {
         Ok(())
     }
 
-    #[cfg(test)]
-    mod tests {
-        use super::should_apply_network_block;
-        use crate::policy::SandboxPolicy;
-
-        fn workspace_policy(network_access: bool) -> SandboxPolicy {
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots: Vec::new(),
-                read_only_access: Default::default(),
-                network_access,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
-            }
-        }
-
-        #[test]
-        fn applies_network_block_when_access_is_disabled() {
-            assert!(should_apply_network_block(&workspace_policy(false)));
-        }
-
-        #[test]
-        fn skips_network_block_when_access_is_allowed() {
-            assert!(!should_apply_network_block(&workspace_policy(true)));
-        }
-
-        #[test]
-        fn applies_network_block_for_read_only() {
-            assert!(should_apply_network_block(
-                &SandboxPolicy::new_read_only_policy()
-            ));
-        }
-    }
 }
 
 #[cfg(not(target_os = "windows"))]

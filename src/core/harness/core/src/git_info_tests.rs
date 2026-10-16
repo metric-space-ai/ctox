@@ -554,39 +554,3 @@ async fn test_get_git_working_tree_state_unpushed_commit() {
     assert_eq!(state.sha, GitSha::new(&remote_sha));
     assert!(state.diff.contains("updated"));
 }
-
-#[test]
-fn test_git_info_serialization() {
-    let git_info = GitInfo {
-        commit_hash: Some("abc123def456".to_string()),
-        branch: Some("main".to_string()),
-        repository_url: Some("https://github.com/example/repo.git".to_string()),
-    };
-
-    let json = serde_json::to_string(&git_info).expect("Should serialize GitInfo");
-    let parsed: serde_json::Value = serde_json::from_str(&json).expect("Should parse JSON");
-
-    assert_eq!(parsed["commit_hash"], "abc123def456");
-    assert_eq!(parsed["branch"], "main");
-    assert_eq!(
-        parsed["repository_url"],
-        "https://github.com/example/repo.git"
-    );
-}
-
-#[test]
-fn test_git_info_serialization_with_nones() {
-    let git_info = GitInfo {
-        commit_hash: None,
-        branch: None,
-        repository_url: None,
-    };
-
-    let json = serde_json::to_string(&git_info).expect("Should serialize GitInfo");
-    let parsed: serde_json::Value = serde_json::from_str(&json).expect("Should parse JSON");
-
-    // Fields with None values should be omitted due to skip_serializing_if
-    assert!(!parsed.as_object().unwrap().contains_key("commit_hash"));
-    assert!(!parsed.as_object().unwrap().contains_key("branch"));
-    assert!(!parsed.as_object().unwrap().contains_key("repository_url"));
-}

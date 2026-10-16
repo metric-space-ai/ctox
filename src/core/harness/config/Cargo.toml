@@ -24,3 +24,6 @@ toml = { workspace = true }
 toml_edit = { workspace = true }
 tracing = { workspace = true }
 
+[dev-dependencies]
+anyhow = { workspace = true }
+pretty_assertions = { workspace = true }

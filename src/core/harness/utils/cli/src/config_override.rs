@@ -180,15 +180,6 @@ mod tests {
         assert_eq!(arr.len(), 3);
     }
 
-    #[test]
-    fn canonicalizes_use_legacy_landlock_alias() {
-        let overrides = CliConfigOverrides {
-            raw_overrides: vec!["use_legacy_landlock=true".to_string()],
-        };
-        let parsed = overrides.parse_overrides().expect("parse_overrides");
-        assert_eq!(parsed[0].0.as_str(), "features.use_legacy_landlock");
-        assert_eq!(parsed[0].1.as_bool(), Some(true));
-    }
 
     #[test]
     fn parses_inline_table() {

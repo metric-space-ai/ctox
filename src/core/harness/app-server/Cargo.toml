@@ -70,8 +70,6 @@ walkdir = { workspace = true }
 
 [dev-dependencies]
 app_test_support = { workspace = true }
-opentelemetry = { workspace = true }
-opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = [
     "base64",
@@ -79,5 +77,3 @@ rmcp = { workspace = true, default-features = false, features = [
     "schemars",
     "server",
 ] }
-tracing-opentelemetry = { workspace = true }
-wiremock = { workspace = true }

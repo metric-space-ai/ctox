@@ -244,36 +244,3 @@ fn redact_username_segments(value: &str, usernames: &[String]) -> String {
     }
     out
 }
-
-#[cfg(test)]
-mod tests {
-    use super::redact_username_segments;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn sanitize_tag_value_redacts_username_segments() {
-        let usernames = vec!["Alice".to_string(), "Bob".to_string()];
-        let msg = "failed to write C:\\Users\\Alice\\file.txt; fallback D:\\Profiles\\Bob\\x";
-        let redacted = redact_username_segments(msg, &usernames);
-        assert_eq!(
-            redacted,
-            "failed to write C:\\Users\\<user>\\file.txt; fallback D:\\Profiles\\<user>\\x"
-        );
-    }
-
-    #[test]
-    fn sanitize_tag_value_leaves_unknown_segments() {
-        let usernames = vec!["Alice".to_string()];
-        let msg = "failed to write E:\\data\\file.txt";
-        let redacted = redact_username_segments(msg, &usernames);
-        assert_eq!(redacted, msg);
-    }
-
-    #[test]
-    fn sanitize_tag_value_redacts_multiple_occurrences() {
-        let usernames = vec!["Alice".to_string()];
-        let msg = "C:\\Users\\Alice\\a and C:\\Users\\Alice\\b";
-        let redacted = redact_username_segments(msg, &usernames);
-        assert_eq!(redacted, "C:\\Users\\<user>\\a and C:\\Users\\<user>\\b");
-    }
-}

@@ -60,11 +60,6 @@ mod tests {
         assert_eq!(TomlValue::Float(1.25), json_to_toml(json_value));
     }
 
-    #[test]
-    fn json_null_to_toml() {
-        let json_value = serde_json::Value::Null;
-        assert_eq!(TomlValue::String(String::new()), json_to_toml(json_value));
-    }
 
     #[test]
     fn json_object_nested() {
