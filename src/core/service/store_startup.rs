@@ -251,7 +251,7 @@ impl Foreground {
         match NativeOwners::attach(&owner.inputs).await {
             Ok(native) => owner.native_owners = Some(native),
             Err(error) => {
-                owner.shutdown().await?;
+                owner.drain().await?;
                 return Err(error);
             }
         }
@@ -267,7 +267,7 @@ impl Foreground {
             match factory.start(owner.inputs.clone()).await {
                 Ok(engine) => owner.engines.push(engine),
                 Err(error) => {
-                    owner.shutdown().await?;
+                    owner.drain().await?;
                     return Err(error);
                 }
             }
@@ -293,6 +293,24 @@ impl Foreground {
             .unwrap_or_else(|p| p.into_inner())
             .starting = false;
         Ok(())
+    }
+    /// Transfer custody to a runtime-owned cleanup task. A cancelled startup or
+    /// signal waiter must not drop a still-running engine and release its files.
+    /// Retry drain failures without opening writer admission or dropping owners.
+    async fn drain(mut self) -> Result<(), StoreError> {
+        tokio::spawn(async move {
+            loop {
+                match self.shutdown().await {
+                    Ok(()) => return Ok(()),
+                    Err(_) => {
+                        eprintln!("ctox v4 drain pending; retaining engine/store custody");
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| StoreError::Panicked)?
     }
     async fn wait_native_stopped(&mut self) -> std::io::Result<()> {
         #[cfg(unix)]
@@ -325,11 +343,11 @@ pub(crate) async fn run(root: PathBuf) -> anyhow::Result<()> {
     match pid_result {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
-            owner.shutdown().await?;
+            owner.drain().await?;
             return Err(error);
         }
         Err(error) => {
-            owner.shutdown().await?;
+            owner.drain().await?;
             return Err(error.into());
         }
     }
@@ -362,7 +380,7 @@ pub(crate) async fn run(root: PathBuf) -> anyhow::Result<()> {
         Ok(())
     })
     .await;
-    let shutdown_result = owner.shutdown().await;
+    let shutdown_result = owner.drain().await;
     pid_result??;
     signal_result?;
     shutdown_result?;
