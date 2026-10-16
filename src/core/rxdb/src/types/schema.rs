@@ -95,6 +95,20 @@ impl JsonSchemaType {
     }
 }
 
+// JSON Schema permits either a boolean or a schema for additionalProperties.
+// Keeping the fragment typed preserves its exact wire/hash value (not `true`).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum AdditionalProperties {
+    Boolean(bool),
+    Schema(Box<JsonSchema>),
+}
+impl From<bool> for AdditionalProperties {
+    fn from(value: bool) -> Self {
+        Self::Boolean(value)
+    }
+}
+
 // ref: rxdb/src/types/rx-schema.d.ts JsonSchema<RxDocType>
 //
 // JSON-Schema fragment. Upstream is a TS conditional/recursive type. Here we
@@ -144,7 +158,7 @@ pub struct JsonSchema {
         default,
         skip_serializing_if = "Option::is_none"
     )]
-    pub additional_properties: Option<bool>,
+    pub additional_properties: Option<AdditionalProperties>,
 
     #[serde(rename = "final", default, skip_serializing_if = "Option::is_none")]
     pub final_field: Option<bool>,

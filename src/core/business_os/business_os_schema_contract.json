@@ -186,7 +186,7 @@
     "additionalProperties": true
   },
   "accounting_dunning_letters": {
-    "version": 0,
+    "version": 1,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -216,18 +216,30 @@
         "type": "number"
       },
       "pdf_attachment_id": {
-        "type": "string"
+        "type": [
+          "string",
+          "null"
+        ]
       },
       "sent_via": {
-        "type": "string"
+        "type": [
+          "string",
+          "null"
+        ]
       },
       "sent_at_ms": {
-        "type": "number"
+        "type": [
+          "number",
+          "null"
+        ]
       },
       "status": {
         "type": "string"
       },
       "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
         "type": "number"
       }
     },
@@ -248,7 +260,7 @@
     "additionalProperties": true
   },
   "accounting_dunning_runs": {
-    "version": 0,
+    "version": 1,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -267,7 +279,10 @@
         "additionalProperties": true
       },
       "invoices_total": {
-        "type": "number"
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
       },
       "letters_sent": {
         "type": "number"
@@ -281,6 +296,9 @@
       "payload": {
         "type": "object",
         "additionalProperties": true
+      },
+      "updated_at_ms": {
+        "type": "number"
       }
     },
     "required": [
@@ -801,7 +819,7 @@
     "additionalProperties": true
   },
   "accounting_payment_allocations": {
-    "version": 0,
+    "version": 1,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -810,7 +828,10 @@
         "maxLength": 160
       },
       "payment_id": {
-        "type": "string"
+        "type": [
+          "string",
+          "null"
+        ]
       },
       "invoice_id": {
         "type": "string"
@@ -822,13 +843,19 @@
         "type": "number"
       },
       "note": {
-        "type": "string"
+        "type": [
+          "string",
+          "null"
+        ]
       },
       "allocated_at_ms": {
         "type": "number"
       },
       "allocated_by_command_id": {
         "type": "string"
+      },
+      "updated_at_ms": {
+        "type": "number"
       }
     },
     "required": [
@@ -1056,6 +1083,113 @@
       "updated_at_ms"
     ],
     "additionalProperties": true
+  },
+  "app_activations": {
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "app_id": {
+        "type": "string"
+      },
+      "app_ver": {
+        "type": "string"
+      },
+      "device_id": {
+        "type": "string"
+      },
+      "user_id": {
+        "type": "string"
+      },
+      "state": {
+        "type": "string",
+        "enum": [
+          "received",
+          "fetched",
+          "data-ready",
+          "activated",
+          "failed"
+        ]
+      },
+      "reason": {
+        "type": "string"
+      },
+      "at_seq": {
+        "type": "string"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id"
+    ],
+    "additionalProperties": false,
+    "indexes": [
+      "app_id",
+      "device_id"
+    ]
+  },
+  "app_drafts": {
+    "primaryKey": "id",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "app_id",
+      "user_id"
+    ],
+    "indexes": [
+      "app_id",
+      "user_id"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "app_id": {
+        "type": "string"
+      },
+      "user_id": {
+        "type": "string"
+      },
+      "base_app_ver": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "manifest_fields": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "files": {
+        "type": "object",
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": "Pfad → sha256 des Inhalts; null = im Entwurf gelöschte Datei (K-1c)."
+      },
+      "collections_schema": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    }
   },
   "applications": {
     "version": 0,
@@ -2349,6 +2483,102 @@
       ]
     ],
     "additionalProperties": true
+  },
+  "business_app_versions": {
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "app_id": {
+        "type": "string"
+      },
+      "app_ver": {
+        "type": "string"
+      },
+      "manifest": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "manifest_sha256": {
+        "type": "string"
+      },
+      "signature": {
+        "type": "string"
+      },
+      "base_app_ver": {
+        "type": "string"
+      },
+      "state": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id"
+    ],
+    "additionalProperties": false,
+    "indexes": [
+      "app_id",
+      "state"
+    ]
+  },
+  "business_apps": {
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "app_id": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "active_ver": {
+        "type": "string"
+      },
+      "migrated_at_seq": {
+        "type": "string"
+      },
+      "visible_roles": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "layout": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "provenance": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "locally_modified": {
+        "type": "boolean"
+      },
+      "state": {
+        "type": "string"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id"
+    ],
+    "additionalProperties": false,
+    "indexes": [
+      "app_id",
+      "state"
+    ]
   },
   "business_chats": {
     "version": 0,
@@ -3676,8 +3906,8 @@
     "additionalProperties": true
   },
   "communication_accounts": {
-    "version": 0,
-    "primaryKey": "account_key",
+    "version": 1,
+    "primaryKey": "id",
     "type": "object",
     "properties": {
       "account_key": {
@@ -3717,9 +3947,14 @@
       },
       "deleted_at_ms": {
         "type": "number"
+      },
+      "id": {
+        "type": "string",
+        "maxLength": 256
       }
     },
     "required": [
+      "id",
       "account_key",
       "channel",
       "address",
@@ -3727,11 +3962,14 @@
       "created_at",
       "updated_at"
     ],
-    "additionalProperties": true
+    "additionalProperties": true,
+    "indexes": [
+      "account_key"
+    ]
   },
   "communication_messages": {
-    "version": 0,
-    "primaryKey": "message_key",
+    "version": 1,
+    "primaryKey": "id",
     "type": "object",
     "properties": {
       "message_key": {
@@ -3827,9 +4065,14 @@
       },
       "work_id": {
         "type": "string"
+      },
+      "id": {
+        "type": "string",
+        "maxLength": 256
       }
     },
     "required": [
+      "id",
       "message_key",
       "channel",
       "account_key",
@@ -3838,11 +4081,14 @@
       "external_created_at",
       "observed_at"
     ],
-    "additionalProperties": true
+    "additionalProperties": true,
+    "indexes": [
+      "message_key"
+    ]
   },
   "communication_threads": {
-    "version": 0,
-    "primaryKey": "thread_key",
+    "version": 1,
+    "primaryKey": "id",
     "type": "object",
     "properties": {
       "thread_key": {
@@ -3883,16 +4129,24 @@
       },
       "updated_at": {
         "type": "string"
+      },
+      "id": {
+        "type": "string",
+        "maxLength": 256
       }
     },
     "required": [
+      "id",
       "thread_key",
       "channel",
       "account_key",
       "last_message_at",
       "updated_at"
     ],
-    "additionalProperties": true
+    "additionalProperties": true,
+    "indexes": [
+      "thread_key"
+    ]
   },
   "ctox_bug_reports": {
     "version": 0,
@@ -3944,8 +4198,175 @@
     ],
     "additionalProperties": true
   },
+  "ctox_crew_assignments": {
+    "additionalProperties": false,
+    "indexes": [
+      [
+        "member_id",
+        "updated_at_ms"
+      ],
+      "updated_at_ms"
+    ],
+    "primaryKey": "id",
+    "properties": {
+      "assigned_at": {
+        "type": "string"
+      },
+      "id": {
+        "maxLength": 1024,
+        "type": "string"
+      },
+      "member_id": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "task_id": {
+        "maxLength": 1024,
+        "type": "string"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "task_id",
+      "member_id",
+      "assigned_at",
+      "updated_at_ms"
+    ],
+    "type": "object",
+    "version": 0
+  },
+  "ctox_crew_continuity": {
+    "additionalProperties": false,
+    "indexes": [
+      [
+        "member_id",
+        "kind"
+      ],
+      "updated_at_ms"
+    ],
+    "primaryKey": "id",
+    "properties": {
+      "content": {
+        "type": "string"
+      },
+      "created_at": {
+        "type": "string"
+      },
+      "head_commit_id": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "id": {
+        "maxLength": 256,
+        "type": "string"
+      },
+      "kind": {
+        "enum": [
+          "anchors",
+          "narrative"
+        ],
+        "type": "string"
+      },
+      "member_id": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "updated_at": {
+        "type": "string"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "member_id",
+      "kind",
+      "head_commit_id",
+      "content",
+      "created_at",
+      "updated_at",
+      "updated_at_ms"
+    ],
+    "type": "object",
+    "version": 0
+  },
+  "ctox_crew_continuity_commits": {
+    "additionalProperties": false,
+    "indexes": [
+      [
+        "document_id",
+        "created_at_ms"
+      ],
+      [
+        "member_id",
+        "created_at_ms"
+      ],
+      "updated_at_ms"
+    ],
+    "primaryKey": "id",
+    "properties": {
+      "created_at": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "diff_text": {
+        "type": "string"
+      },
+      "document_id": {
+        "maxLength": 256,
+        "type": "string"
+      },
+      "id": {
+        "maxLength": 256,
+        "type": "string"
+      },
+      "kind": {
+        "enum": [
+          "anchors",
+          "narrative"
+        ],
+        "type": "string"
+      },
+      "member_id": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "parent_commit_id": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "rendered_text": {
+        "type": "string"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "document_id",
+      "member_id",
+      "kind",
+      "parent_commit_id",
+      "diff_text",
+      "rendered_text",
+      "created_at",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "type": "object",
+    "version": 0
+  },
   "ctox_crew_learnings": {
-    "version": 0,
+    "version": 1,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -3987,6 +4408,9 @@
       },
       "updated_at_ms": {
         "type": "number"
+      },
+      "normalized_text": {
+        "type": "string"
       }
     },
     "required": [
@@ -3997,7 +4421,8 @@
       "confirmed_by_owner",
       "archived",
       "created_at_ms",
-      "updated_at_ms"
+      "updated_at_ms",
+      "normalized_text"
     ],
     "indexes": [
       [
@@ -4008,7 +4433,11 @@
         "member_id",
         "confirmed_by_owner"
       ],
-      "updated_at_ms"
+      "updated_at_ms",
+      [
+        "member_id",
+        "normalized_text"
+      ]
     ],
     "additionalProperties": false
   },
@@ -4090,6 +4519,18 @@
       },
       "updated_at_ms": {
         "type": "number"
+      },
+      "created_at": {
+        "type": "string",
+        "default": ""
+      },
+      "created_at_ms": {
+        "type": "number",
+        "default": 0
+      },
+      "updated_at": {
+        "type": "string",
+        "default": ""
       }
     },
     "required": [
@@ -6659,6 +7100,46 @@
     ],
     "additionalProperties": true
   },
+  "files": {
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "name": {
+        "type": "string"
+      },
+      "mime": {
+        "type": "string"
+      },
+      "size": {
+        "type": "number"
+      },
+      "ref": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
+      "owner_app": {
+        "type": "string"
+      },
+      "owner_user": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id"
+    ],
+    "additionalProperties": false,
+    "indexes": [
+      "owner_app",
+      "ref"
+    ]
+  },
   "interview_meetings": {
     "version": 0,
     "primaryKey": "id",
@@ -7685,6 +8166,65 @@
     ],
     "additionalProperties": true
   },
+  "knowledge_tasks": {
+    "additionalProperties": true,
+    "primaryKey": "id",
+    "properties": {
+      "acknowledged_at": {
+        "type": "string"
+      },
+      "acknowledged_by": {
+        "type": "string"
+      },
+      "command_id": {
+        "type": "string"
+      },
+      "command_type": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "error": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "id": {
+        "maxLength": 160,
+        "type": "string"
+      },
+      "record_id": {
+        "type": "string"
+      },
+      "result": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "status": {
+        "type": "string"
+      },
+      "summary": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "command_id",
+      "command_type",
+      "title",
+      "status",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "type": "object",
+    "version": 0
+  },
   "knowledge_views": {
     "additionalProperties": true,
     "primaryKey": "id",
@@ -7908,7 +8448,7 @@
     "additionalProperties": true
   },
   "kundenpipeline_vorgaenge": {
-    "version": 0,
+    "version": 1,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -7945,11 +8485,17 @@
         "additionalProperties": true
       },
       "triage_json": {
-        "type": "object",
+        "type": [
+          "object",
+          "null"
+        ],
         "additionalProperties": true
       },
       "run_json": {
-        "type": "object",
+        "type": [
+          "object",
+          "null"
+        ],
         "additionalProperties": true
       },
       "mails_json": {
@@ -7987,8 +8533,137 @@
     ],
     "additionalProperties": true
   },
+  "legacy_records": {
+    "type": "object",
+    "additionalProperties": false,
+    "primaryKey": "id",
+    "version": 0,
+    "description": "Cutover-Archiv (E29): Datensätze von Apps ohne v4-Manifest, älteren Collection-Versionen und Spalten aus Teilprojektionen. Schreibt nur der Kern-Import; Nutzer lesen nur. Ein späterer App-Install kann die Daten übernehmen.",
+    "properties": {
+      "id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "description": "Empfehlung: sha256-hex über source_db|source_table|collection|collection_version|record_id (deterministisch, Wiederholung idempotent)."
+      },
+      "source_db": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "source_table": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "collection": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "collection_version": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "record_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512
+      },
+      "doc": {
+        "type": [
+          "object",
+          "array"
+        ],
+        "description": "Ursprünglicher Datensatz unverändert. Ab 256 KiB legt der Import ihn als Blob ab: dann {blob_ref, size, sha256} und doc_storage = blob."
+      },
+      "doc_storage": {
+        "type": "string",
+        "enum": [
+          "inline",
+          "blob"
+        ],
+        "description": "Unterscheidet die Blob-Form eindeutig von einem Altdatensatz, der zufällig dieselben Schlüssel hat. Fehlt = inline."
+      },
+      "sha256": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$",
+        "minLength": 64,
+        "maxLength": 64,
+        "description": "sha256 des Datensatzes (kanonisches JSON bzw. Blob-Inhalt)."
+      },
+      "imported_at": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      }
+    },
+    "required": [
+      "id",
+      "source_db",
+      "source_table",
+      "collection",
+      "collection_version",
+      "record_id",
+      "doc",
+      "sha256",
+      "imported_at"
+    ],
+    "indexes": [
+      "imported_at",
+      [
+        "collection",
+        "collection_version"
+      ],
+      [
+        "source_db",
+        "source_table"
+      ],
+      "record_id"
+    ]
+  },
+  "mail_server_state": {
+    "primaryKey": "id",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "kind"
+    ],
+    "indexes": [
+      "kind"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "kind": {
+        "type": "string",
+        "enum": [
+          "runtime",
+          "domain",
+          "user"
+        ]
+      },
+      "name": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "data": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    }
+  },
   "matching_objects": {
-    "version": 1,
+    "version": 2,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -8041,15 +8716,12 @@
     "required": [
       "id",
       "kind",
-      "title",
-      "status",
-      "data",
       "updated_at_ms"
     ],
     "additionalProperties": true
   },
   "matching_requirements": {
-    "version": 1,
+    "version": 2,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -8102,15 +8774,12 @@
     "required": [
       "id",
       "kind",
-      "title",
-      "status",
-      "data",
       "updated_at_ms"
     ],
     "additionalProperties": true
   },
   "matching_results": {
-    "version": 1,
+    "version": 2,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -8176,9 +8845,6 @@
     "required": [
       "id",
       "kind",
-      "title",
-      "status",
-      "data",
       "updated_at_ms"
     ],
     "additionalProperties": true
@@ -8887,31 +9553,729 @@
         "type": "string",
         "maxLength": 180
       },
-      "campaign_id": {
-        "type": "string"
-      },
       "source_id": {
-        "type": "string"
-      },
-      "label": {
-        "type": "string"
-      },
-      "url": {
-        "type": "string"
-      },
-      "adapter_kind": {
-        "type": "string"
-      },
-      "target_key": {
         "type": "string"
       },
       "status": {
         "type": "string"
       },
-      "enabled": {
+      "auth_status": {
+        "type": "string"
+      },
+      "scrape_status": {
+        "type": "string"
+      },
+      "last_error": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "last_command_id": {
+        "type": "string"
+      },
+      "last_task_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "source_id",
+      "status",
+      "scrape_status",
+      "auth_status",
+      "last_command_id",
+      "last_error",
+      "payload",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "outbound_lead_generation_field_status_witnesses": {
+    "type": "object",
+    "version": 0,
+    "primaryKey": "id",
+    "additionalProperties": true,
+    "description": "Feld-Status-Zeugen je Lead (id = record_id), nur vom Writeback-Handler in derselben Transaktion wie der Lead geschrieben. Vorher SQLite outbound_native_field_status_witnesses. Strang OLGSCR.",
+    "required": [
+      "id",
+      "record_id",
+      "witnesses"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "record_id": {
+        "type": "string"
+      },
+      "witnesses": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "scope",
+            "person_key",
+            "field",
+            "status"
+          ],
+          "properties": {
+            "scope": {
+              "type": "string",
+              "enum": [
+                "lead",
+                "person",
+                "contact"
+              ]
+            },
+            "person_key": {
+              "type": "string"
+            },
+            "field": {
+              "type": "string"
+            },
+            "status": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    }
+  },
+  "outbound_lead_generation_imports": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "title": {
+        "type": "string"
+      },
+      "source_type": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "lead_count": {
+        "type": "number"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "title",
+      "source_type",
+      "status",
+      "lead_count",
+      "payload",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "outbound_lead_generation_leads": {
+    "version": 1,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "import_id": {
+        "type": "string"
+      },
+      "campaign": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "domain": {
+        "type": "string"
+      },
+      "website": {
+        "type": "string"
+      },
+      "city": {
+        "type": "string"
+      },
+      "country": {
+        "type": "string"
+      },
+      "research_status": {
+        "type": "string"
+      },
+      "validation_status": {
+        "type": "string"
+      },
+      "sellify_status": {
+        "type": "string"
+      },
+      "task_id": {
+        "type": "string"
+      },
+      "command_id": {
+        "type": "string"
+      },
+      "data": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "contacts": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "selected_contact_ids": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "evidence": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "field_status": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "person_field_status": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "import_id",
+      "campaign",
+      "name",
+      "domain",
+      "website",
+      "city",
+      "country",
+      "research_status",
+      "validation_status",
+      "sellify_status",
+      "task_id",
+      "command_id",
+      "data",
+      "contacts",
+      "selected_contact_ids",
+      "evidence",
+      "payload",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "outbound_lead_generation_policy_report_reviews": {
+    "type": "object",
+    "version": 0,
+    "primaryKey": "id",
+    "additionalProperties": true,
+    "description": "Freigabe-Buchführung des Update-Verteilers je Versand (id = approval_key policy-report:<report_key>:<action_digest>). Vorher communication_founder_reply_reviews (reviewer policy-report) im Kern (record_and_send_policy_report_email). Nur der Handler outbound.update_digest.send_now schreibt. Strang OLG3.",
+    "required": [
+      "id",
+      "approval_key",
+      "inbound_message_key",
+      "action_digest",
+      "action_json",
+      "body_sha256",
+      "reviewer",
+      "review_summary",
+      "approved_at"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 400
+      },
+      "approval_key": {
+        "type": "string"
+      },
+      "inbound_message_key": {
+        "type": "string"
+      },
+      "action_digest": {
+        "type": "string"
+      },
+      "action_json": {
+        "type": "string"
+      },
+      "body_sha256": {
+        "type": "string"
+      },
+      "reviewer": {
+        "type": "string"
+      },
+      "review_summary": {
+        "type": "string"
+      },
+      "account_key": {
+        "type": "string"
+      },
+      "report_key": {
+        "type": "string"
+      },
+      "approved_at": {
+        "type": "string"
+      },
+      "sent_at": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "send_result": {
+        "type": "object"
+      }
+    }
+  },
+  "outbound_lead_generation_research_policies": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "title": {
+        "type": "string"
+      },
+      "version_number": {
+        "type": "number"
+      },
+      "status": {
+        "type": "string"
+      },
+      "skill_name": {
+        "type": "string"
+      },
+      "skill_version": {
+        "type": "string"
+      },
+      "min_independent_sources": {
+        "type": "number"
+      },
+      "rules": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "instructions": {
+        "type": "string"
+      },
+      "field_keys": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "configuration_digest": {
+        "type": "string"
+      },
+      "reconciliation_status": {
+        "type": "string"
+      },
+      "reconciliation_command_id": {
+        "type": "string"
+      },
+      "reconciliation_task_id": {
+        "type": "string"
+      },
+      "reconciliation_error": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "title",
+      "version_number",
+      "status",
+      "skill_name",
+      "skill_version",
+      "min_independent_sources",
+      "rules",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "outbound_lead_generation_scrape_account_states": {
+    "type": "object",
+    "version": 0,
+    "primaryKey": "id",
+    "additionalProperties": true,
+    "description": "Anbieterkonto inaktiv je Ziel (id = target_key). Vorher scrape_account_state (account_state.rs). Strang OLGSCR.",
+    "required": [
+      "id",
+      "target_id",
+      "generation",
+      "reason",
+      "causal_run_id",
+      "last_probe_run_id",
+      "failed_probes",
+      "next_probe_at_ms",
+      "probe_lease_until_ms",
+      "updated_at_ms"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "target_key": {
+        "type": "string"
+      },
+      "target_id": {
+        "type": "string"
+      },
+      "generation": {
+        "type": "integer"
+      },
+      "reason": {
+        "type": "string"
+      },
+      "causal_run_id": {
+        "type": "string"
+      },
+      "last_probe_run_id": {
+        "type": "string"
+      },
+      "credential_ref": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "credential_version": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "failed_probes": {
+        "type": "integer"
+      },
+      "next_probe_at_ms": {
+        "type": "integer"
+      },
+      "probe_lease_owner": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "probe_lease_until_ms": {
+        "type": "integer"
+      },
+      "updated_at_ms": {
+        "type": "integer"
+      }
+    }
+  },
+  "outbound_lead_generation_scrape_runs": {
+    "type": "object",
+    "version": 0,
+    "primaryKey": "id",
+    "additionalProperties": true,
+    "description": "Scrape-Lauf (id = run_id); Manifest/Artefakte in files. Vorher scrape_run + scrape_artifact. Strang OLGSCR.",
+    "required": [
+      "id",
+      "run_id",
+      "target_id",
+      "trigger_kind",
+      "started_at",
+      "status",
+      "result"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 200
+      },
+      "run_id": {
+        "type": "string"
+      },
+      "target_key": {
+        "type": "string"
+      },
+      "target_id": {
+        "type": "string"
+      },
+      "trigger_kind": {
+        "type": "string"
+      },
+      "command_id": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "started_at": {
+        "type": "string"
+      },
+      "finished_at": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "status": {
+        "type": "string"
+      },
+      "script_revision_no": {
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "script_sha256": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "result": {
+        "type": "object"
+      },
+      "run_manifest_ref": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "artifacts": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        }
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    }
+  },
+  "outbound_lead_generation_scrape_scripts": {
+    "type": "object",
+    "version": 0,
+    "primaryKey": "id",
+    "additionalProperties": true,
+    "description": "Skript-Revision (id = <target_key>:r<revision_no>); Text in files (script_ref). Vorher scrape_script_revision.script_body. Strang OLGSCR.",
+    "required": [
+      "id",
+      "target_key",
+      "target_id",
+      "revision_no",
+      "language",
+      "script_sha256",
+      "script_ref",
+      "created_at"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 200
+      },
+      "target_key": {
+        "type": "string"
+      },
+      "target_id": {
+        "type": "string"
+      },
+      "revision_no": {
+        "type": "integer"
+      },
+      "language": {
+        "type": "string"
+      },
+      "entry_command": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "script_sha256": {
+        "type": "string"
+      },
+      "script_ref": {
+        "type": "string"
+      },
+      "size_bytes": {
+        "type": "integer"
+      },
+      "change_reason": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "notes": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "created_at": {
+        "type": "string"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    }
+  },
+  "outbound_lead_generation_scrape_targets": {
+    "type": "object",
+    "version": 0,
+    "primaryKey": "id",
+    "additionalProperties": true,
+    "description": "Scrape-Ziel (id = target_key). Vorher Core-SQLite scrape_target (capabilities/scrape/mod.rs:99). Strang OLGSCR.",
+    "required": [
+      "id",
+      "target_id",
+      "target_key",
+      "display_name",
+      "start_url",
+      "target_kind",
+      "status",
+      "config",
+      "output_schema",
+      "workspace_dir",
+      "created_at",
+      "updated_at",
+      "updated_at_ms"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "target_id": {
+        "type": "string"
+      },
+      "target_key": {
+        "type": "string"
+      },
+      "display_name": {
+        "type": "string"
+      },
+      "start_url": {
+        "type": "string"
+      },
+      "target_kind": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "schedule_hint": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "config": {
+        "type": "object"
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "workspace_dir": {
+        "type": "string"
+      },
+      "latest_script_revision_no": {
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "latest_script_sha256": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "script_registered": {
         "type": "boolean"
       },
-      "tier": {
+      "created_at": {
+        "type": "string"
+      },
+      "updated_at": {
+        "type": "string"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    }
+  },
+  "outbound_lead_generation_sources": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "label": {
+        "type": "string"
+      },
+      "url": {
         "type": "string"
       },
       "countries": {
@@ -8926,28 +10290,25 @@
           "type": "string"
         }
       },
+      "enabled": {
+        "type": "boolean"
+      },
       "requires_credential": {
         "type": "boolean"
       },
       "credential_secret_name": {
         "type": "string"
       },
-      "auth_mode": {
+      "target_key": {
         "type": "string"
       },
-      "auth_status": {
+      "adapter_status": {
         "type": "string"
       },
       "scrape_status": {
         "type": "string"
       },
-      "last_run_id": {
-        "type": "string"
-      },
-      "last_success_at_ms": {
-        "type": "number"
-      },
-      "last_error": {
+      "auth_status": {
         "type": "string"
       },
       "payload": {
@@ -8963,11 +10324,17 @@
     },
     "required": [
       "id",
-      "source_id",
+      "label",
       "url",
-      "adapter_kind",
-      "status",
+      "countries",
+      "field_keys",
       "enabled",
+      "requires_credential",
+      "credential_secret_name",
+      "target_key",
+      "adapter_status",
+      "scrape_status",
+      "auth_status",
       "payload",
       "created_at_ms",
       "updated_at_ms"
@@ -9347,6 +10714,37 @@
     ],
     "additionalProperties": true
   },
+  "outbound_research_policies": {
+    "type": "object",
+    "version": 0,
+    "primaryKey": "id",
+    "additionalProperties": true,
+    "required": [
+      "id",
+      "app",
+      "published_at_ms",
+      "policy_contract",
+      "updated_at_ms"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "app": {
+        "type": "string"
+      },
+      "published_at_ms": {
+        "type": "number"
+      },
+      "policy_contract": {
+        "type": "string"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    }
+  },
   "outbound_research_runs": {
     "version": 0,
     "primaryKey": "id",
@@ -9404,7 +10802,7 @@
     "additionalProperties": true
   },
   "outbound_sender_assignments": {
-    "version": 0,
+    "version": 1,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -9446,7 +10844,6 @@
     },
     "required": [
       "id",
-      "campaign_id",
       "sender_account_id",
       "status",
       "created_at_ms",
@@ -9642,7 +11039,7 @@
     "additionalProperties": true
   },
   "outbound_suppression_entries": {
-    "version": 0,
+    "version": 1,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -9674,18 +11071,171 @@
       },
       "updated_at_ms": {
         "type": "number"
+      },
+      "email": {
+        "type": "string"
+      },
+      "domain": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "suppression_reason": {
+        "type": "string"
+      },
+      "engagement_id": {
+        "type": "string"
+      },
+      "recipient_email": {
+        "type": "string"
       }
     },
     "required": [
       "id",
-      "scope",
-      "value",
       "reason",
-      "active",
       "created_at_ms",
       "updated_at_ms"
     ],
     "additionalProperties": true
+  },
+  "outbound_tracking_endpoints": {
+    "additionalProperties": false,
+    "primaryKey": "id",
+    "type": "object",
+    "version": 0,
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 64
+      },
+      "path": {
+        "type": "string"
+      },
+      "command_type": {
+        "type": "string"
+      },
+      "ingest_path": {
+        "type": "string"
+      },
+      "base_url": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "registered_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "path",
+      "command_type",
+      "base_url",
+      "status",
+      "registered_at_ms",
+      "updated_at_ms"
+    ]
+  },
+  "outbound_tracking_events": {
+    "additionalProperties": false,
+    "primaryKey": "id",
+    "type": "object",
+    "version": 0,
+    "indexes": [
+      "message_id",
+      "token"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "token": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "message_id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "campaign_id": {
+        "type": "string"
+      },
+      "event_type": {
+        "type": "string",
+        "enum": [
+          "opened",
+          "clicked"
+        ]
+      },
+      "occurred_at_ms": {
+        "type": "number"
+      },
+      "user_agent": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "token",
+      "message_id",
+      "event_type",
+      "occurred_at_ms"
+    ]
+  },
+  "outbound_tracking_tokens": {
+    "additionalProperties": false,
+    "primaryKey": "id",
+    "type": "object",
+    "version": 0,
+    "indexes": [
+      "message_id"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "token": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "message_id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "campaign_id": {
+        "type": "string"
+      },
+      "event_type": {
+        "type": "string",
+        "enum": [
+          "opened",
+          "clicked"
+        ]
+      },
+      "target_url": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "token",
+      "message_id",
+      "event_type",
+      "created_at_ms"
+    ]
   },
   "placements": {
     "version": 0,
@@ -10219,6 +11769,123 @@
       "updated_at_ms"
     ],
     "additionalProperties": true
+  },
+  "sellify_campaigns": {
+    "type": "object",
+    "version": 0,
+    "primaryKey": "id",
+    "additionalProperties": true,
+    "required": [
+      "id",
+      "is_deleted",
+      "updated_at_ms"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    }
+  },
+  "sellify_companies": {
+    "type": "object",
+    "version": 0,
+    "primaryKey": "id",
+    "additionalProperties": true,
+    "required": [
+      "id",
+      "is_deleted",
+      "updated_at_ms"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    }
+  },
+  "sellify_people": {
+    "type": "object",
+    "version": 0,
+    "primaryKey": "id",
+    "additionalProperties": true,
+    "required": [
+      "id",
+      "is_deleted",
+      "updated_at_ms"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "deleted_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    }
+  },
+  "shell_preferences": {
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "user_id": {
+        "type": "string"
+      },
+      "pins": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "launcher_order": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "settings": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id"
+    ],
+    "additionalProperties": false,
+    "indexes": [
+      "user_id"
+    ]
   },
   "signature_requests": {
     "version": 0,
@@ -11815,7 +13482,7 @@
     "additionalProperties": true
   },
   "support_view_filters": {
-    "version": 0,
+    "version": 1,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -11845,8 +13512,14 @@
         "type": "string"
       },
       "value": {
-        "type": "object",
-        "additionalProperties": true
+        "type": [
+          "object",
+          "array",
+          "string",
+          "number",
+          "boolean",
+          "null"
+        ]
       },
       "position": {
         "type": "number"
@@ -12520,6 +14193,807 @@
     ],
     "additionalProperties": false
   },
+  "workjet_jour_fixe_meetings": {
+    "additionalProperties": false,
+    "indexes": [
+      "updated_at_ms",
+      [
+        "project_id",
+        "scheduled_at_ms"
+      ]
+    ],
+    "primaryKey": "id",
+    "properties": {
+      "agenda": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schema": {
+            "type": "string",
+            "enum": [
+              "ctox.workjet.jour_fixe.agenda.v1"
+            ]
+          },
+          "operation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "prepared_at_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "source_meeting_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 128
+          },
+          "source_goal": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "goal_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "goal_id",
+              "revision"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "position": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "topic_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "source_meeting_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "priority": {
+                  "type": "string",
+                  "enum": [
+                    "P0",
+                    "P1",
+                    "P2"
+                  ]
+                },
+                "due_at_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "position",
+                "topic_id",
+                "source_meeting_id",
+                "title",
+                "priority"
+              ]
+            }
+          }
+        },
+        "required": [
+          "schema",
+          "operation_id",
+          "prepared_at_ms",
+          "source_meeting_id",
+          "items"
+        ]
+      },
+      "comments": {
+        "type": [
+          "array",
+          "object"
+        ],
+        "maxItems": 1000,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "slide_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "deck_revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "x": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "y": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "author_user_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "created_at_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "supervisor_event_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "meeting_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "id",
+            "slide_id",
+            "deck_revision",
+            "x",
+            "y",
+            "text",
+            "author_user_id",
+            "created_at_ms",
+            "meeting_id"
+          ]
+        },
+        "additionalProperties": false,
+        "properties": {
+          "blob_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 262145,
+            "maximum": 9007199254740991
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "blob_ref",
+          "size",
+          "sha256"
+        ],
+        "description": "Liste nach Wire-Vertrag workjet-jour-fixe-v1.json; über 256 KiB legt der Import den Inhalt als BlobRef ab und das Feld trägt {blob_ref, size, sha256} (E28). items gilt nur für die Liste, properties/required nur für die Blob-Form."
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "created_operation_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "deck_revision": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "error": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096
+      },
+      "id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "owner_user_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "preparation_task_id": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "prepare_at_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "prepared_at_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "prepared_operation_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "previous_goal": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "goal_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "goal_id",
+          "revision"
+        ]
+      },
+      "project_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "revision": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "scheduled_at_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "slides": {
+        "type": [
+          "array",
+          "object"
+        ],
+        "maxItems": 100,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "position": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "body_markdown": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384
+            },
+            "audio": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "file_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "sha256": {
+                  "type": "string",
+                  "minLength": 64,
+                  "maxLength": 64
+                },
+                "mime_type": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "duration_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "narration_text_sha256": {
+                  "type": "string",
+                  "minLength": 64,
+                  "maxLength": 64
+                },
+                "source_run_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "format": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32
+                },
+                "synthesis_duration_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "provenance": {
+                  "type": "string",
+                  "enum": [
+                    "native_gateway",
+                    "authenticated_owner_local_audio"
+                  ]
+                },
+                "generation_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                }
+              },
+              "required": [
+                "file_id",
+                "sha256",
+                "mime_type",
+                "duration_ms",
+                "narration_text_sha256",
+                "source_run_id",
+                "model",
+                "format",
+                "synthesis_duration_ms"
+              ]
+            },
+            "meeting_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "id",
+            "position",
+            "title",
+            "body_markdown",
+            "meeting_id"
+          ]
+        },
+        "additionalProperties": false,
+        "properties": {
+          "blob_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 262145,
+            "maximum": 9007199254740991
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "blob_ref",
+          "size",
+          "sha256"
+        ],
+        "description": "Liste nach Wire-Vertrag workjet-jour-fixe-v1.json; über 256 KiB legt der Import den Inhalt als BlobRef ab und das Feld trägt {blob_ref, size, sha256} (E28). items gilt nur für die Liste, properties/required nur für die Blob-Form."
+      },
+      "state": {
+        "type": "string",
+        "enum": [
+          "planned",
+          "preparing",
+          "ready",
+          "live",
+          "review",
+          "confirmed",
+          "cancelled",
+          "failed"
+        ]
+      },
+      "supervisor": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "workjet_thread_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "ctox_thread_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "workjet_thread_id",
+          "ctox_thread_key"
+        ]
+      },
+      "timezone": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "todos": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "proposed",
+              "confirmed",
+              "superseded"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "acceptance": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "priority": {
+                  "type": "string",
+                  "enum": [
+                    "P0",
+                    "P1",
+                    "P2"
+                  ]
+                },
+                "evidence_ids": {
+                  "type": "array",
+                  "maxItems": 128,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                },
+                "due_at_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "owner": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              },
+              "required": [
+                "id",
+                "title",
+                "acceptance",
+                "priority",
+                "evidence_ids"
+              ]
+            }
+          },
+          "confirmed_by_user_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "confirmed_at_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "goal": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "goal_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "goal_id",
+              "revision"
+            ]
+          },
+          "meeting_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "revision",
+          "status",
+          "items",
+          "meeting_id"
+        ]
+      },
+      "transcript": {
+        "type": [
+          "array",
+          "object"
+        ],
+        "maxItems": 10000,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "speaker": {
+              "type": "string",
+              "enum": [
+                "owner",
+                "supervisor"
+              ]
+            },
+            "modality": {
+              "type": "string",
+              "enum": [
+                "text",
+                "speech"
+              ]
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384
+            },
+            "started_at_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "ended_at_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "source_run_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "audio": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "file_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "sha256": {
+                  "type": "string",
+                  "minLength": 64,
+                  "maxLength": 64
+                },
+                "mime_type": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "duration_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "narration_text_sha256": {
+                  "type": "string",
+                  "minLength": 64,
+                  "maxLength": 64
+                },
+                "source_run_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "format": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32
+                },
+                "synthesis_duration_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "provenance": {
+                  "type": "string",
+                  "enum": [
+                    "native_gateway",
+                    "authenticated_owner_local_audio"
+                  ]
+                },
+                "generation_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                }
+              },
+              "required": [
+                "file_id",
+                "sha256",
+                "mime_type",
+                "duration_ms",
+                "narration_text_sha256",
+                "source_run_id",
+                "model",
+                "format",
+                "synthesis_duration_ms"
+              ]
+            },
+            "stream_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "sentence_end_latency_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "meeting_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "id",
+            "sequence",
+            "speaker",
+            "modality",
+            "text",
+            "started_at_ms",
+            "ended_at_ms",
+            "meeting_id"
+          ]
+        },
+        "additionalProperties": false,
+        "properties": {
+          "blob_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 262145,
+            "maximum": 9007199254740991
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "blob_ref",
+          "size",
+          "sha256"
+        ],
+        "description": "Liste nach Wire-Vertrag workjet-jour-fixe-v1.json; über 256 KiB legt der Import den Inhalt als BlobRef ab und das Feld trägt {blob_ref, size, sha256} (E28). items gilt nur für die Liste, properties/required nur für die Blob-Form."
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "project_id",
+      "owner_user_id",
+      "supervisor",
+      "scheduled_at_ms",
+      "prepare_at_ms",
+      "timezone",
+      "state",
+      "revision",
+      "deck_revision",
+      "updated_at_ms"
+    ],
+    "type": "object",
+    "version": 1
+  },
   "workjet_project_chats": {
     "version": 0,
     "primaryKey": "id",
@@ -12809,7 +15283,7 @@
     "additionalProperties": false
   },
   "workjet_provider_registry": {
-    "version": 0,
+    "version": 1,
     "primaryKey": "id",
     "type": "object",
     "additionalProperties": false,
@@ -12979,6 +15453,52 @@
                 "type": "string",
                 "maxLength": 256
               }
+            },
+            "reportedQuota": {
+              "description": "Vom Anbieter gemeldetes Kontingent (Kern #872), drei Zustände laut Feld state. Feldregeln je Zustand und Zeitinvarianten (Beobachtung höchstens 15 min alt, Reset nach Beobachtung und höchstens 40 Tage) prüft der native Erzeuger; das Schema nutzt nur die vom Shell-Validator und RxDB unterstützten Schlüsselwörter.",
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "state"
+              ],
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "unknown",
+                    "unavailable",
+                    "reported"
+                  ]
+                },
+                "errorClass": {
+                  "type": "string",
+                  "enum": [
+                    "quota_read_failed"
+                  ]
+                },
+                "period": {
+                  "type": "string",
+                  "enum": [
+                    "weekly",
+                    "monthly"
+                  ]
+                },
+                "used_percent": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                "observedAtMs": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "resetAtMs": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              }
             }
           },
           "required": [
@@ -13042,7 +15562,7 @@
     ]
   },
   "workjet_session_transfers": {
-    "version": 0,
+    "version": 1,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -13255,6 +15775,63 @@
       },
       "is_deleted": {
         "type": "boolean"
+      },
+      "applied_at_ms": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "apply_mismatch_count": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "apply_mismatch_sha256": {
+        "type": "string",
+        "maxLength": 64
+      },
+      "last_terminal_turn_id": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "maxLength": 160
+      },
+      "observed_head": {
+        "type": "string",
+        "maxLength": 64
+      },
+      "observed_manifest_sha256": {
+        "type": "string",
+        "maxLength": 64
+      },
+      "observed_tree_sha256": {
+        "type": "string",
+        "maxLength": 64
+      },
+      "packed_at_ms": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "pause_acked_at_ms": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "recovery_aborting_at_ms": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "source_git_repository": {
+        "type": "boolean"
+      },
+      "switched_at_ms": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "target_partial_cleanup_required": {
+        "type": "boolean"
+      },
+      "worker_instance_id": {
+        "type": "string",
+        "maxLength": 256
       }
     },
     "required": [
@@ -13290,7 +15867,7 @@
     "additionalProperties": false
   },
   "workjet_sessions": {
-    "version": 0,
+    "version": 1,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -13338,7 +15915,10 @@
         "maxLength": 160
       },
       "last_terminal_turn_id": {
-        "type": "string",
+        "type": [
+          "string",
+          "null"
+        ],
         "maxLength": 160
       },
       "owner_user_id": {
