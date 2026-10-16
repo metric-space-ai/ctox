@@ -3,9 +3,14 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {createStubKernel} from '../kernel.mjs';
 let next=0;
+const routes=k=>{for(const type of ['notes.run','other.run'])k.sim.onCommand(type,()=>({ok:true}));};
+function waitCommandDone(handle){return new Promise((resolve,reject)=>{
+ let off;const timer=setTimeout(()=>{off?.();reject(Error('command completion deadline'));},3000);
+ off=handle.status.subscribe(state=>{if(state.status==='done'){clearTimeout(timer);queueMicrotask(()=>off?.());resolve(state);}else if(['failed','rejected'].includes(state.status)){clearTimeout(timer);queueMicrotask(()=>off?.());reject(Error(JSON.stringify(state)));}});
+});}
 test('E26 idempotency: SHA UUID, one durable intent across repeat and reload',async()=>{
  const opts={instanceId:`e26-${process.pid}-${++next}`,userId:'u1',latencyMs:2,multiTab:false};
- let k=createStubKernel(opts);await k.ready;
+ let k=createStubKernel(opts);await k.ready;routes(k);
  try{
   await k.sim.setLink({state:'offline'});
   const api=k.appApi('notes','1'),h=api.command('notes.run',{original:true},{idempotency_key:'persist'});
@@ -22,11 +27,11 @@ test('E26 idempotency: SHA UUID, one durable intent across repeat and reload',as
   assert.deepEqual(api.get('business_commands',h.id).get().payload,{original:true});
   for(const key of [null,7,'x'.repeat(129)])assert.throws(()=>api.command('notes.run',{}, {idempotency_key:key}),e=>e.code==='invalid'&&e.path==='idempotency_key');
   assert.notEqual(api.command('notes.run',{}).id,api.command('notes.run',{}).id);
-  const id=h.id;await k.close();k=createStubKernel(opts);await k.ready;await k.sim.setLink({state:'offline'});
+  const id=h.id;await k.close();k=createStubKernel(opts);await k.ready;routes(k);await k.sim.setLink({state:'offline'});
   const resumed=k.appApi('notes','2').command('notes.changed',{}, {idempotency_key:'persist'});await resumed.local;
   assert.equal(resumed.id,id);assert.equal((await k.sim.outbox()).filter(e=>e.id===id).length,1);
-  await k.sim.setLink({state:'online'});await k.sim.settle();await resumed.result;
-  const before=k.appApi('notes','1').get('business_commands',id).get();
+  await k.sim.setLink({state:'online'});await k.sim.settle();assert.equal((await resumed.result).status,'accepted');await waitCommandDone(resumed);
+  const before=k.appApi('notes','1').get('business_commands',id).get();assert.equal(before.status,'done');
   const completed=k.appApi('notes','1').command('notes.run',{}, {idempotency_key:'persist'});assert.equal(completed.cancel(),false);await completed.local;await completed.result;
   assert.deepEqual(k.appApi('notes','1').get('business_commands',id).get(),before);
   assert.deepEqual(completed.status.get(),resumed.status.get());
