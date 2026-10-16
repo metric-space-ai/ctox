@@ -139,6 +139,38 @@ fn initialize(root: &Path, imported: Option<(Vec<u8>, SigningIdentity)>) -> Resu
 }
 
 pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
+    if args.first().is_some_and(|word| word == "identity") {
+        let endpoint = crate::service::queue_store::endpoint(root);
+        let active_endpoint = match &endpoint {
+            ctox_store::ipc::StoreEndpoint::UnixSocket { path } => path.exists(),
+            ctox_store::ipc::StoreEndpoint::NamedPipe { directory, .. } => directory.join("store-daemon.lock").exists(),
+        };
+        if active_endpoint {
+            let reply = ctox_store::ipc::request(endpoint.clone(),
+                ctox_store::ipc::Request { request_id: 1, kind: ctox_store::ipc::JobKind::Read,
+                    method: "sync.identity".into(), payload: Vec::new() },
+                ctox_store::JobOptions::default())?.blocking_wait();
+            match reply {
+                Ok(reply) => return print(serde_json::from_slice::<serde_json::Value>(&reply)?),
+                Err(error) => {
+                    // A stale socket after an interrupted foreground process is
+                    // not an owner. Prove exclusive custody before falling back;
+                    // a live owner (including one returning an error) wins.
+                    let offline = ctox_store::ipc::MaintenanceOwner::acquire(&endpoint,
+                        ctox_store::DbId::new(crate::paths::core_db(root))?)
+                        .map_err(|_|anyhow::Error::new(error))?;
+                    drop(offline);
+                }
+            }
+        }
+    }
+    let work = root.to_owned();
+    let args = args.to_owned();
+    crate::persistence::run_cli_owned(root, move || handle_owned_command(&work, &args))
+        .context("native Sync CLI owner execution failed")
+}
+
+fn handle_owned_command(root: &Path, args: &[String]) -> Result<()> {
     let root = std::fs::canonicalize(root)?;
     // --root is resolved by the canonical CLI dispatcher before this adapter.
     let mut words = Vec::new();
@@ -168,9 +200,20 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
             let config: HostConfiguration = serde_json::from_str(&input()?).context("invalid native Sync public configuration")?;
             let _lease = HostDirectoryLock::acquire(&directory(&root))?;
             config.validate_key(key(&root)?.as_ref())?;
-            let mut connection = rusqlite::Connection::open(crate::inference::runtime_env::runtime_config_path(&root))?;
-            connection.busy_timeout(Duration::from_secs(2))?;
-            host_config::save(&mut connection, &config)?;
+            let path = crate::inference::runtime_env::runtime_config_path(&root);
+            let saved = config.clone();
+            crate::lcm::owner_adapter::OwnerAdapter::for_path(&path)?.write_blocking(move |tx| {
+                saved.validate().map_err(|error|ctox_store::StoreError::Invalid(error.to_string()))?;
+                if let Some(previous) = host_config::load(tx).map_err(|error|ctox_store::StoreError::Invalid(error.to_string()))? {
+                    if !previous.same_binding(&saved) {
+                        return Err(ctox_store::StoreError::Invalid("native Sync binding cannot change".into()));
+                    }
+                }
+                tx.execute_batch("CREATE TABLE IF NOT EXISTS ctox_sync_host(singleton INTEGER PRIMARY KEY CHECK(singleton=1),configuration TEXT NOT NULL)")?;
+                let encoded = serde_json::to_string(&saved).map_err(|error|ctox_store::StoreError::Invalid(error.to_string()))?;
+                tx.execute("INSERT INTO ctox_sync_host(singleton,configuration) VALUES(1,?1) ON CONFLICT(singleton) DO UPDATE SET configuration=excluded.configuration",[encoded])?;
+                Ok(())
+            })?;
             print(serde_json::json!({"configured": true, "nodeId": config.node_id(), "scopeId": config.scope_id, "activation": "next-host-start"}))
         },
         ["transport"] => {

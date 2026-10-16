@@ -319,6 +319,19 @@ struct BusinessOsActivation {
 }
 
 pub fn handle_business_os_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    // Listeners retain owners but admit only individual requests, never their
+    // entire lifetime. Ordinary CLI commands use one bounded compatibility job.
+    if args.first().is_some_and(|word| word == "serve") ||
+        (args.first().is_some_and(|word| word == "mcp") && args.get(1).is_some_and(|word| word == "serve" || word == "connect")) {
+        return crate::persistence::with_cli_owners(root, || handle_owned_business_os_command(root, args));
+    }
+    let work = root.to_owned();
+    let args = args.to_owned();
+    crate::persistence::run_cli_owned(root, move || handle_owned_business_os_command(&work, &args))
+        .context("Business OS CLI owner execution failed")
+}
+
+fn handle_owned_business_os_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         None | Some("status") => {
             println!("{}", business_os_status_text(root));

@@ -402,13 +402,14 @@ pub(crate) fn run_core_blocking<T: Send + 'static>(
     let admission = sync_slots()
         .try_acquire_owned()
         .map_err(|_| ctox_store::StoreError::Busy)?;
-    let (reply, result) = std::sync::mpsc::sync_channel(1);
-    runtime.spawn_blocking(move || {
+    // Keep the compatibility body on an ordinary OS thread: legacy CLI
+    // commands may drive async owner APIs themselves. Entering a Tokio worker
+    // here would make their block_on/runtime shutdown panic. SQLite still runs
+    // only on the handed-out writer/read pool, and these jobs share four slots.
+    std::thread::Builder::new().name("ctox-core-blocking".into()).spawn(move || {
         let _admission = admission;
-        let value = with_core_sync_context(operation);
-        let _ = reply.send(value);
-    });
-    result.recv().map_err(|_| CoreSyncError::WorkerClosed)?
+        with_core_sync_context(operation)
+    })?.join().map_err(|_| CoreSyncError::WorkerClosed)?
 }
 
 /// Uses only the Core handle installed for this root. Missing/retired owners
@@ -419,6 +420,60 @@ pub(crate) fn run_core_blocking_at<T: Send + 'static>(
 ) -> Result<T> {
     let runtime = injected_core(root)?.runtime.clone();
     run_core_blocking(&runtime, operation)
+}
+
+/// Offline CLI ownership uses the daemon's exclusive lease and the same file
+/// adapters. A running daemon rejects the lease before any file can be opened.
+/// The runtime is scoped to this command; owner shutdown precedes its drop.
+pub(crate) fn run_cli_owned<T: Send + 'static>(
+    root: &Path,
+    operation: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let work = root.to_owned();
+    with_cli_owners(root, move || run_core_blocking_at(&work, operation))
+}
+
+/// Lifecycle scope for foreground HTTP/MCP listeners. Listening and remote I/O
+/// consume no compatibility permit; only their individual store phases do.
+pub(crate) fn with_cli_owners<T>(root: &Path, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    if injected_core(root).is_ok() {
+        return operation();
+    }
+    anyhow::ensure!(tokio::runtime::Handle::try_current().is_err(),
+        "offline CLI ownership requires an ordinary OS thread");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2).max_blocking_threads(8).enable_all().build()?;
+    let handle = runtime.handle().clone();
+    let endpoint = crate::service::queue_store::endpoint(root);
+    let mut stores = crate::service::store_runtime::DaemonStores::start(endpoint, handle)?;
+    let work = root.to_owned();
+    let attached = runtime.block_on(async {
+        use ctox_store::DbId;
+        use std::sync::Arc;
+        let core = stores.register("core", DbId::new(crate::paths::core_db(&work))?, false,
+            Arc::new(|_| Ok(()))).await?;
+        let core_owner = install_core_owner(&work, core.writer.clone(), core.readers.clone()).await?;
+        let lcm = crate::lcm::attach_lcm_store(&work, core.writer, core.readers).await?;
+        let runtime_db = stores.register("runtime", DbId::new(crate::paths::runtime_config_db(&work))?, false,
+            Arc::new(|tx| {tx.execute_batch("CREATE TABLE IF NOT EXISTS runtime_env_kv(env_key TEXT PRIMARY KEY,env_value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runtime_state_store(state_id INTEGER PRIMARY KEY CHECK(state_id=1),state_json TEXT NOT NULL);")?; Ok(())})).await?;
+        let runtime_owner = crate::runtime_env::RuntimeStore::attach(&work, runtime_db.writer, runtime_db.readers).await?;
+        let secrets_db = stores.register("secrets", DbId::new(crate::paths::secrets_db(&work))?, false,
+            Arc::new(|tx| {crate::secrets::initialize_owned_secret_schema(tx).map_err(|_|ctox_store::StoreError::Invalid("secret schema initialization failed".into()))?; Ok(())})).await?;
+        let secrets_owner = crate::secrets::SecretStore::attach(&work, secrets_db.writer, secrets_db.readers).await?;
+        Ok::<_, anyhow::Error>((core_owner, lcm, runtime_owner, secrets_owner))
+    });
+    let result = match attached {
+        Ok(retained) => {
+            let result = operation();
+            drop(retained);
+            result
+        }
+        Err(error) => Err(error),
+    };
+    let shutdown = runtime.block_on(stores.shutdown());
+    // Never replace a command failure with a fabricated absent/success value.
+    shutdown.context("offline CLI owner shutdown failed")?;
+    result
 }
 
 type InstalledCoreOwners =
