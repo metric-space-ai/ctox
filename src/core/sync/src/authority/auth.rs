@@ -79,6 +79,84 @@ pub struct SigningIdentity {
 pub struct CanonicalInstancePacket(Vec<u8>);
 impl CanonicalInstancePacket {
     const DOMAIN: &'static [u8] = b"ctox.sync.v4.stream\0";
+    /// E41's full signed hello has its own fixed domain. Decode and re-encode
+    /// through the canonical encoder; this is never a raw signing bypass.
+    pub fn from_launch_bytes(bytes: &[u8]) -> io::Result<Self> {
+        const DOMAIN: &[u8] = b"ctox.launch-context.v4\0";
+        if bytes.len() > 16 * 1024 {
+            return Err(invalid("launch exceeds bootstrap budget"));
+        }
+        let payload = bytes
+            .strip_prefix(DOMAIN)
+            .ok_or_else(|| invalid("launch domain required"))?;
+        let value: Value =
+            serde_json::from_slice(payload).map_err(|_| invalid("invalid launch packet"))?;
+        if value["type"] != "hello"
+            || value["protocol_ver"] != 4
+            || !value["device_proof"].is_object()
+        {
+            return Err(invalid("launch hello required"));
+        }
+        let stream = Self::encode_stream(value)?;
+        let mut encoded = DOMAIN.to_vec();
+        encoded.extend_from_slice(&stream.0[Self::DOMAIN.len()..]);
+        if encoded != bytes {
+            return Err(invalid("noncanonical launch packet"));
+        }
+        Ok(Self(encoded))
+    }
+    /// Scope claims use the existing fixed wire domain and exact canonical JSON.
+    /// This boundary never grants authority; Core validates the live claims.
+    pub fn from_scope_bytes(bytes: &[u8]) -> io::Result<Self> {
+        const DOMAIN: &[u8] = b"ctox:v4:scope\0";
+        if bytes.len() > 16 * 1024 {
+            return Err(invalid("scope budget"));
+        }
+        let value: Value = serde_json::from_slice(
+            bytes
+                .strip_prefix(DOMAIN)
+                .ok_or_else(|| invalid("scope domain"))?,
+        )
+        .map_err(|_| invalid("scope claims"))?;
+        if value.as_object().is_none_or(|m| m.len() != 5)
+            || value["instance_id"].as_str().is_none_or(str::is_empty)
+            || value["device_id"].as_str().is_none_or(str::is_empty)
+            || value["scope_hash"].as_str().is_none_or(str::is_empty)
+            || value["rights_ver"].as_u64().is_none()
+            || value["exp"].as_u64().is_none()
+        {
+            return Err(invalid("scope claims contract"));
+        }
+        let stream = Self::encode_stream(value)?;
+        let mut encoded = DOMAIN.to_vec();
+        encoded.extend_from_slice(&stream.0[Self::DOMAIN.len()..]);
+        if encoded != bytes {
+            return Err(invalid("noncanonical scope claims"));
+        }
+        Ok(Self(encoded))
+    }
+    /// Existing app catalog signatures cover canonical manifest JSON. Only a
+    /// manifest-shaped encoder output is eligible, never arbitrary raw JSON.
+    pub fn from_manifest_bytes(bytes: &[u8]) -> io::Result<Self> {
+        if bytes.len() > MAX_ENVELOPE_BYTES {
+            return Err(invalid("manifest exceeds budget"));
+        }
+        let value: Value =
+            serde_json::from_slice(bytes).map_err(|_| invalid("invalid manifest"))?;
+        if value["app_id"].as_str().is_none_or(str::is_empty)
+            || value["app_ver"].as_str().is_none_or(str::is_empty)
+            || !value["capabilities_required"].is_array()
+            || !value["collections"].is_object()
+        {
+            return Err(invalid("manifest contract required"));
+        }
+        let stream = Self::encode_stream(value)?;
+        let encoded = &stream.0[Self::DOMAIN.len()..];
+        if encoded != bytes {
+            return Err(invalid("noncanonical manifest"));
+        }
+        Ok(Self(encoded.to_vec()))
+    }
     pub fn encode_stream(mut value: Value) -> io::Result<Self> {
         if !value.is_object() {
             return Err(invalid("instance stream object required"));

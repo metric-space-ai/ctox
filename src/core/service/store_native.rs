@@ -47,6 +47,19 @@ impl InstanceSigner for InstanceSigning {
         }
         let encoded =
             ctox_sync::authority::auth::CanonicalInstancePacket::from_stream_bytes(canonical)
+                .or_else(|_| {
+                    ctox_sync::authority::auth::CanonicalInstancePacket::from_launch_bytes(
+                        canonical,
+                    )
+                })
+                .or_else(|_| {
+                    ctox_sync::authority::auth::CanonicalInstancePacket::from_manifest_bytes(
+                        canonical,
+                    )
+                })
+                .or_else(|_| {
+                    ctox_sync::authority::auth::CanonicalInstancePacket::from_scope_bytes(canonical)
+                })
                 .map_err(|_| "instance packet is not canonical".to_owned())?;
         Ok(self.identity.sign_instance_packet(&encoded))
     }

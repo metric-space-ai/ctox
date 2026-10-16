@@ -34,6 +34,8 @@ pub(crate) struct StoreInputs {
     native_session: OnceLock<NativeSessionInputs>,
     instance_signer:
         OnceLock<Arc<dyn ctox_store::change_log::subscription::protocol::InstanceSigner>>,
+    pub(super) browser_ingress: OnceLock<Arc<super::store_browser_ingress::BrowserIngress>>,
+    pub(super) browser: OnceLock<Arc<super::store_browser::BrowserAdmission>>,
     pub(super) verifier: OnceLock<Arc<super::store_verifier::CoreVerifier>>,
     closing: Arc<AtomicBool>,
     retired: AtomicBool,
@@ -68,6 +70,8 @@ impl InputRegistration {
             native_session: OnceLock::new(),
             instance_signer: OnceLock::new(),
             verifier: OnceLock::new(),
+            browser: OnceLock::new(),
+            browser_ingress: OnceLock::new(),
             closing,
             retired: AtomicBool::new(false),
             sync_reads: Arc::new(tokio::sync::Semaphore::new(64)),
@@ -122,6 +126,21 @@ pub(crate) struct ActivationSnapshot<T> {
     pub commits: CommitReceiver,
 }
 impl StoreInputs {
+    pub(crate) async fn ensure_browser_ingress(self: &Arc<Self>) -> Result<(), StoreError> {
+        self.check()?;
+        self.browser_ingress
+            .get()
+            .ok_or(StoreError::Closed)?
+            .start()
+            .await?;
+        self.check()
+    }
+    pub(crate) fn browser_admission(
+        &self,
+    ) -> Result<Arc<super::store_browser::BrowserAdmission>, StoreError> {
+        self.check()?;
+        self.browser.get().cloned().ok_or(StoreError::Closed)
+    }
     pub(crate) fn instance_verifier(
         &self,
     ) -> Result<Arc<super::store_verifier::CoreVerifier>, StoreError> {

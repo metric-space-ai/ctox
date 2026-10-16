@@ -119,6 +119,17 @@ async fn foreground_binds_current_store_policy_and_retires_it() -> anyhow::Resul
         )
         .map_err(anyhow::Error::msg)?;
     let mut corrupted = signature.clone();
+    let manifest =
+        br#"{"app_id":"signed-app","app_ver":"1","capabilities_required":[],"collections":{}}"#;
+    let manifest_signature = identity.sign(manifest).map_err(anyhow::Error::msg)?;
+    verifier
+        .verify_manifest(manifest, &manifest_signature)
+        .map_err(anyhow::Error::msg)?;
+    assert!(identity.sign(br#"{ "app_id":"signed-app","app_ver":"1","capabilities_required":[],"collections":{} }"#).is_err(), "instance signer accepted a noncanonical manifest");
+    assert!(
+        identity.sign(b"{\"arbitrary\":true}").is_err(),
+        "instance signer accepted arbitrary canonical JSON"
+    );
     corrupted[0] ^= 1;
     assert!(
         verifier
