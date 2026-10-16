@@ -1,10 +1,11 @@
 //! `process.run` — bounded tool process (CATALOG Nr. 4). The program is a
 //! name from the platform allowlist (typed runtime config key, name → absolute
-//! path); the app never names a binary path. The child starts with an EMPTY
-//! environment plus exactly the variables passed in `env` (never inherited),
+//! path); the app never names a binary path. The child receives the fixed
+//! platform environment and validated app additions, never the daemon environment.
+//! Approved network runs receive Core-controlled proxy settings before exec,
 //! inside the app's own workspace directory, with a hard timeout. Runs under
 //! the registry's held executor fence and always inside the E20 OS sandbox
-//! (`sandbox.rs`): no network, only the workspace writable, CTOX state and
+//! (`sandbox.rs`): only approved proxy egress, only the workspace writable, CTOX state and
 //! secrets invisible, resource limits. Without a working sandbox the call is
 //! `unavailable`; there is no unconfined path.
 use super::*;
@@ -141,6 +142,7 @@ fn resolve_entry(entry: &AllowEntry) -> Option<Resolved> {
 /// A bare DNS host name (no scheme, port, path or wildcard).
 fn domain(name: &str) -> bool {
     name.len() <= 253
+        && name.parse::<std::net::IpAddr>().is_err()
         && name.contains('.')
         && name.split('.').all(|label| {
             !label.is_empty()
@@ -273,9 +275,10 @@ pub(super) fn execute(
         limits,
         net_domains,
     };
-    let mut command = super::sandbox::command(&plan)?;
+    let mut confined = super::sandbox::command(&plan)?;
+    let command = &mut confined.command;
     #[cfg(unix)]
-    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    std::os::unix::process::CommandExt::process_group(command, 0);
     command
         .current_dir(&cwd)
         .env_clear()

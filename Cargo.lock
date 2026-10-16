@@ -2465,6 +2465,7 @@ dependencies = [
  "ctox-mailserver",
  "ctox-pdf-parse 0.1.0",
  "ctox-postgres-adapter",
+ "ctox-process-network",
  "ctox-protocol",
  "ctox-qwen3-embedding-0-6b",
  "ctox-rxdb",
@@ -3206,6 +3207,20 @@ dependencies = [
  "tokio-postgres",
  "tokio-postgres-rustls",
  "uuid",
+]
+
+[[package]]
+name = "ctox-process-network"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "ctox-linux-sandbox",
+ "ctox-network-proxy",
+ "libc",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

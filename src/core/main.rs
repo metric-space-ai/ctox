@@ -370,6 +370,9 @@ fn install_sqlite_error_log() {
 }
 
 fn main() -> anyhow::Result<()> {
+    if let Some(result) = ctox_process_network::dispatch() {
+        return result;
+    }
     // Keep the generated argv0 aliases alive for the process lifetime. On
     // Linux, child tool executions re-enter this binary as
     // `ctox-linux-sandbox`; arg0_dispatch performs that dispatch before the

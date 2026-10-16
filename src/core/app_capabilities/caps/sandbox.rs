@@ -5,7 +5,8 @@
 //! `unavailable` with a reason, never a fallback.
 //!
 //! - Linux: bubblewrap. All namespaces are unshared (user, mount, pid, net,
-//!   ipc, uts, cgroup), so the child has no network but its own loopback.
+//!   ipc, uts, cgroup), so the child has no direct egress; approved network
+//!   runs use only the routed proxy on their own loopback.
 //!   The root is an empty read-only tmpfs; only the system trees (/usr, /etc,
 //!   /opt, …), the entry's program/script/read paths, and the app workspace
 //!   are mounted. The workspace is the only writable host path (its `.tmp`
@@ -19,9 +20,9 @@
 //!   the same read/write/network rules; limits via setrlimit before exec
 //!   (macOS counts RLIMIT_NPROC per user, so no process limit there).
 //!
-//! Domain-restricted egress (§16.48 "Netz nur auf freigegebene Zieldomain(s)")
-//! is not built: a call or entry that names target domains is `unavailable`
-//! instead of silently running with or without network.
+//! Linux domain-restricted egress uses the Harness policy proxy outside the
+//! namespace and its UDS-to-loopback bridge inside it. No external interface
+//! or route is shared. Unsupported platforms still return `unavailable`.
 use super::*;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -206,18 +207,38 @@ fn read_paths(plan: &Plan, hidden: &[PathBuf]) -> Result<Vec<PathBuf>, CtoxError
 
 /// The confined command. The caller sets env (after `env_clear`), stdio and
 /// waits; on Unix the child leads its own process group.
-pub fn command(plan: &Plan) -> Result<std::process::Command, CtoxError> {
-    if !plan.net_domains.is_empty() {
-        return Err(unavailable(
-            "domain-restricted network is not supported; sandboxed runs have no network",
-        ));
-    }
+pub struct ConfinedCommand {
+    pub command: std::process::Command,
+    // Keep the per-call proxy alive until the child and its output pipes close.
+    _network: Option<ctox_process_network::Guard>,
+}
+pub fn command(plan: &Plan) -> Result<ConfinedCommand, CtoxError> {
     let config = config(plan.root)?;
-    platform_command(plan, &config)
+    let network = if plan.net_domains.is_empty() {
+        None
+    } else {
+        let executable = std::env::current_exe().map_err(native_error)?;
+        Some(
+            ctox_process_network::Guard::start(&executable, &plan.net_domains)
+                .map_err(|e| unavailable(&e.to_string()))?,
+        )
+    };
+    #[cfg(target_os = "linux")]
+    let command = platform_network_command(plan, &config, network.as_ref())?;
+    #[cfg(not(target_os = "linux"))]
+    let command = platform_command(plan, &config)?;
+    Ok(ConfinedCommand {
+        command,
+        _network: network,
+    })
 }
 
 #[cfg(target_os = "linux")]
-fn platform_command(plan: &Plan, config: &Config) -> Result<std::process::Command, CtoxError> {
+fn platform_network_command(
+    plan: &Plan,
+    config: &Config,
+    network: Option<&ctox_process_network::Guard>,
+) -> Result<std::process::Command, CtoxError> {
     let bwrap = locate(
         config.bwrap.as_ref(),
         BWRAP_CANDIDATES,
@@ -226,7 +247,10 @@ fn platform_command(plan: &Plan, config: &Config) -> Result<std::process::Comman
     let prlimit = locate(config.prlimit.as_ref(), PRLIMIT_CANDIDATES, "prlimit")?;
     probe(&bwrap, &prlimit)?;
     let hidden = hidden(plan.root);
-    let reads = read_paths(plan, &hidden)?;
+    let mut reads = read_paths(plan, &hidden)?;
+    if network.is_some() {
+        reads.push(std::env::current_exe().map_err(native_error)?);
+    }
     let tmp = plan.workspace.join(".tmp");
     std::fs::create_dir_all(&tmp).map_err(|_| unavailable("workspace tmp cannot be created"))?;
     let path = |p: &Path| p.to_string_lossy().into_owned();
@@ -274,6 +298,13 @@ fn platform_command(plan: &Plan, config: &Config) -> Result<std::process::Comman
     for h in &covered {
         args.extend(["--remount-ro".into(), path(h)]);
     }
+    if let Some(network) = network {
+        args.extend([
+            "--ro-bind".into(),
+            path(&network.socket),
+            ctox_process_network::SOCKET.into(),
+        ]);
+    }
     args.extend(["--remount-ro".into(), "/".into()]);
     args.extend(["--chdir".into(), path(plan.cwd), "--".into()]);
     let limits = plan.limits;
@@ -289,10 +320,15 @@ fn platform_command(plan: &Plan, config: &Config) -> Result<std::process::Comman
         args.push(format!("--{flag}={value}:{value}"));
     }
     args.push("--".into());
-    args.push(plan.program.into());
-    args.extend(plan.args.iter().cloned());
     let mut command = std::process::Command::new(&bwrap);
     command.args(args);
+    if let Some(network) = network {
+        network.wrap(
+            &mut command,
+            &std::env::current_exe().map_err(native_error)?,
+        );
+    }
+    command.arg(plan.program).args(&plan.args);
     Ok(command)
 }
 
