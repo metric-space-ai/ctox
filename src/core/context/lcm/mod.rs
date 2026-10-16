@@ -920,13 +920,24 @@ impl Summarizer for HeuristicSummarizer {
     }
 }
 
+#[path = "../../store/harness_adapter.rs"]
+mod legacy_file_owner;
+
 pub struct LcmEngine {
     conn: Connection,
     config: LcmConfig,
+    // Connection drops before the cooperative legacy lease. This fallback
+    // must never overlap the injected Core owner, even in another process.
+    _owner_lease: Option<legacy_file_owner::FileOwner>,
 }
 
 impl LcmEngine {
     pub fn open(path: &Path, config: LcmConfig) -> Result<Self> {
+        let owner_lease = if path == Path::new(":memory:") {
+            None
+        } else {
+            Some(legacy_file_owner::FileOwner::acquire_legacy_shared(path)?)
+        };
         let conn = Connection::open(path)
             .with_context(|| format!("failed to open SQLite database {}", path.display()))?;
         conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
@@ -934,6 +945,7 @@ impl LcmEngine {
         let engine = Self {
             conn,
             config: config.clone(),
+            _owner_lease: owner_lease,
         };
         // Skip the writer-locked schema-init batch on subsequent opens of the
         // same database file. The first open per process still runs the full
@@ -1585,30 +1597,14 @@ impl LcmEngine {
     }
 
     pub fn worker_attempt(&self, attempt_id: &str) -> Result<Option<WorkerAttemptRecord>> {
-        self.conn
-            .query_row(
-                &format!("{WORKER_ATTEMPT_SELECT} WHERE attempt_id = ?1"),
-                [attempt_id],
-                map_worker_attempt_row,
-            )
-            .optional()
-            .context("failed to load worker attempt")
+        snapshot_worker_attempt(&self.conn, attempt_id)
     }
 
     pub fn recoverable_worker_attempt(
         &self,
         work_key: &str,
     ) -> Result<Option<WorkerAttemptRecord>> {
-        self.conn
-            .query_row(
-                &format!(
-                    "{WORKER_ATTEMPT_SELECT} WHERE work_key = ?1 AND effects_completed = 0 ORDER BY created_at DESC LIMIT 1"
-                ),
-                [work_key],
-                map_worker_attempt_row,
-            )
-            .optional()
-            .context("failed to load recoverable worker attempt")
+        snapshot_recoverable_worker_attempt(&self.conn, work_key)
     }
 
     pub fn record_task_execution_plan(
@@ -1852,129 +1848,14 @@ impl LcmEngine {
     }
 
     pub fn task_execution_progress(&self, work_key: &str) -> Result<Option<serde_json::Value>> {
-        let row = self
-            .conn
-            .query_row(
-                "SELECT revision, task_id, command_id, explanation, steps_json,
-                        phase, completed_steps, total_steps, percent, review_status, updated_at_ms
-                 FROM task_execution_plan_revisions
-                 WHERE work_key = ?1
-                 ORDER BY revision DESC LIMIT 1",
-                [work_key],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, String>(5)?,
-                        row.get::<_, i64>(6)?,
-                        row.get::<_, i64>(7)?,
-                        row.get::<_, i64>(8)?,
-                        row.get::<_, String>(9)?,
-                        row.get::<_, i64>(10)?,
-                    ))
-                },
-            )
-            .optional()?;
-        let Some((
-            revision,
-            task_id,
-            command_id,
-            explanation,
-            steps_json,
-            phase,
-            completed_steps,
-            total_steps,
-            percent,
-            review_status,
-            updated_at_ms,
-        )) = row
-        else {
-            return Ok(None);
-        };
-        let steps = serde_json::from_str::<Vec<TaskExecutionPlanStepInput>>(&steps_json)?;
-        let mut rendered_steps = Vec::with_capacity(steps.len());
-        for (index, step) in steps.iter().enumerate() {
-            let position = i64::try_from(index + 1).unwrap_or(i64::MAX);
-            let activity_turns = self.conn.query_row(
-                "SELECT COUNT(*) FROM task_execution_activity_turns
-                 WHERE work_key = ?1 AND plan_revision = ?2 AND step_position = ?3",
-                params![work_key, revision, position],
-                |row| row.get::<_, i64>(0),
-            )?;
-            rendered_steps.push(serde_json::json!({
-                "position": position,
-                "label": step.label,
-                "status": step.status,
-                "activity_turns": activity_turns,
-            }));
-        }
-        let (thinking_turns, tool_turns) = self.conn.query_row(
-            "SELECT
-                COALESCE(SUM(CASE WHEN kind = 'thinking' THEN 1 ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN kind = 'tool' THEN 1 ELSE 0 END), 0)
-             FROM task_execution_activity_turns WHERE work_key = ?1",
-            [work_key],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-        )?;
-        let last_activity_kind = self
-            .conn
-            .query_row(
-                "SELECT kind FROM task_execution_activity_turns
-                 WHERE work_key = ?1 ORDER BY created_at_ms DESC, rowid DESC LIMIT 1",
-                [work_key],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        let current_step = rendered_steps
-            .iter()
-            .find(|step| {
-                step.get("status").and_then(serde_json::Value::as_str) == Some("in_progress")
-            })
-            .and_then(|step| step.get("position"))
-            .and_then(serde_json::Value::as_i64);
-        Ok(Some(serde_json::json!({
-            "version": 1,
-            "revision": revision,
-            "task_id": task_id,
-            "command_id": command_id,
-            "phase": phase,
-            "percent": percent,
-            "current_step": current_step,
-            "completed_steps": completed_steps,
-            "total_steps": total_steps,
-            "steps": rendered_steps,
-            "review": { "status": review_status },
-            "activity_turns": {
-                "total": thinking_turns + tool_turns,
-                "thinking": thinking_turns,
-                "tools": tool_turns,
-                "last_kind": last_activity_kind,
-            },
-            "explanation": explanation,
-            "updated_at_ms": updated_at_ms,
-        })))
+        snapshot_task_execution_progress(&self.conn, work_key)
     }
 
     pub fn task_execution_progress_for_task(
         &self,
         task_id: &str,
     ) -> Result<Option<serde_json::Value>> {
-        let work_key = self
-            .conn
-            .query_row(
-                "SELECT work_key FROM task_execution_plan_revisions
-                 WHERE task_id = ?1 ORDER BY updated_at_ms DESC, revision DESC LIMIT 1",
-                [task_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        match work_key {
-            Some(work_key) => self.task_execution_progress(&work_key),
-            None => Ok(None),
-        }
+        snapshot_task_execution_progress_for_task(&self.conn, task_id)
     }
 
     /// Insert the attempt's assistant row once and bind its id to the marker in
@@ -2422,31 +2303,7 @@ impl LcmEngine {
     }
 
     pub fn snapshot(&self, conversation_id: i64) -> Result<LcmSnapshot> {
-        let messages = self.messages_for_conversation(conversation_id)?;
-        let summaries = self.summaries_for_conversation(conversation_id)?;
-        let context_items = self
-            .context_entries(conversation_id)?
-            .into_iter()
-            .map(|entry| ContextItemSnapshot {
-                ordinal: entry.ordinal,
-                item_type: entry.item_type,
-                message_id: entry.message_id,
-                summary_id: entry.summary_id,
-                seq: entry.seq,
-                depth: entry.depth,
-                token_count: entry.token_count,
-            })
-            .collect();
-        let summary_edges = self.summary_edges_for_conversation(conversation_id)?;
-        let summary_messages = self.summary_message_links_for_conversation(conversation_id)?;
-        Ok(LcmSnapshot {
-            conversation_id,
-            messages,
-            summaries,
-            context_items,
-            summary_edges,
-            summary_messages,
-        })
+        lcm_snapshot_with(&self.conn, conversation_id)
     }
 
     /// Bounded live-turn view. Full history remains available through
@@ -4353,38 +4210,7 @@ impl LcmEngine {
     }
 
     fn context_entries(&self, conversation_id: i64) -> Result<Vec<ContextEntry>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT
-                ci.ordinal,
-                ci.item_type,
-                ci.message_id,
-                ci.summary_id,
-                COALESCE(m.seq, ci.ordinal) AS seq,
-                COALESCE(s.depth, 0) AS depth,
-                COALESCE(m.token_count, s.token_count, 0) AS token_count
-            FROM context_items ci
-            LEFT JOIN messages m ON m.message_id = ci.message_id
-            LEFT JOIN summaries s ON s.summary_id = ci.summary_id
-            WHERE ci.conversation_id = ?1
-            ORDER BY ci.ordinal ASC
-            "#,
-        )?;
-        let rows = stmt.query_map([conversation_id], |row| {
-            Ok(ContextEntry {
-                ordinal: row.get(0)?,
-                item_type: match row.get::<_, String>(1)?.as_str() {
-                    "message" => ContextItemType::Message,
-                    _ => ContextItemType::Summary,
-                },
-                message_id: row.get(2)?,
-                summary_id: row.get(3)?,
-                seq: row.get(4)?,
-                depth: row.get(5)?,
-                token_count: row.get(6)?,
-            })
-        })?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        snapshot_context_entries(&self.conn, conversation_id)
     }
 
     fn context_token_count(&self, conversation_id: i64) -> Result<i64> {
@@ -4498,23 +4324,7 @@ impl LcmEngine {
         &self,
         conversation_id: i64,
     ) -> Result<Vec<MessageRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT message_id, conversation_id, seq, role, content, token_count, created_at, agent_outcome
-             FROM messages WHERE conversation_id = ?1 ORDER BY seq ASC",
-        )?;
-        let rows = stmt.query_map([conversation_id], |row| {
-            Ok(MessageRecord {
-                message_id: row.get(0)?,
-                conversation_id: row.get(1)?,
-                seq: row.get(2)?,
-                role: row.get(3)?,
-                content: row.get(4)?,
-                token_count: row.get(5)?,
-                created_at: row.get(6)?,
-                agent_outcome: row.get(7)?,
-            })
-        })?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        snapshot_messages_for_conversation(&self.conn, conversation_id)
     }
 
     /// Cheap change-detection marker for UI polling over the most recent
@@ -4598,61 +4408,21 @@ impl LcmEngine {
     }
 
     fn summaries_for_conversation(&self, conversation_id: i64) -> Result<Vec<SummaryRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT summary_id, conversation_id, kind, depth, content, token_count,
-                    descendant_count, descendant_token_count, source_message_token_count, created_at
-             FROM summaries WHERE conversation_id = ?1 ORDER BY depth ASC, created_at ASC",
-        )?;
-        let rows = stmt.query_map([conversation_id], |row| {
-            Ok(SummaryRecord {
-                summary_id: row.get(0)?,
-                conversation_id: row.get(1)?,
-                kind: parse_summary_kind(&row.get::<_, String>(2)?),
-                depth: row.get(3)?,
-                content: row.get(4)?,
-                token_count: row.get(5)?,
-                descendant_count: row.get(6)?,
-                descendant_token_count: row.get(7)?,
-                source_message_token_count: row.get(8)?,
-                created_at: row.get(9)?,
-            })
-        })?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        snapshot_summaries_for_conversation(&self.conn, conversation_id)
     }
 
     fn summary_edges_for_conversation(
         &self,
         conversation_id: i64,
     ) -> Result<Vec<(String, String)>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT e.parent_summary_id, e.child_summary_id
-            FROM summary_edges e
-            JOIN summaries parent ON parent.summary_id = e.parent_summary_id
-            JOIN summaries child ON child.summary_id = e.child_summary_id
-            WHERE parent.conversation_id = ?1 AND child.conversation_id = ?1
-            ORDER BY e.parent_summary_id ASC, e.child_summary_id ASC
-            "#,
-        )?;
-        let rows = stmt.query_map([conversation_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        snapshot_summary_edges_for_conversation(&self.conn, conversation_id)
     }
 
     fn summary_message_links_for_conversation(
         &self,
         conversation_id: i64,
     ) -> Result<Vec<(String, i64)>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT sm.summary_id, sm.message_id
-            FROM summary_messages sm
-            JOIN summaries s ON s.summary_id = sm.summary_id
-            WHERE s.conversation_id = ?1
-            ORDER BY sm.summary_id ASC, sm.message_id ASC
-            "#,
-        )?;
-        let rows = stmt.query_map([conversation_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        snapshot_summary_message_links_for_conversation(&self.conn, conversation_id)
     }
 
     fn summary_parent_ids(&self, summary_id: &str) -> Result<Vec<String>> {
@@ -5982,3 +5752,381 @@ fn iso_now() -> String {
 
 #[cfg(test)]
 mod tests;
+
+fn lcm_snapshot_with(conn: &Connection, conversation_id: i64) -> Result<LcmSnapshot> {
+    let messages = snapshot_messages_for_conversation(conn, conversation_id)?;
+    let summaries = snapshot_summaries_for_conversation(conn, conversation_id)?;
+    let context_items = snapshot_context_entries(conn, conversation_id)?
+        .into_iter()
+        .map(|entry| ContextItemSnapshot {
+            ordinal: entry.ordinal,
+            item_type: entry.item_type,
+            message_id: entry.message_id,
+            summary_id: entry.summary_id,
+            seq: entry.seq,
+            depth: entry.depth,
+            token_count: entry.token_count,
+        })
+        .collect();
+    let summary_edges = snapshot_summary_edges_for_conversation(conn, conversation_id)?;
+    let summary_messages = snapshot_summary_message_links_for_conversation(conn, conversation_id)?;
+    Ok(LcmSnapshot {
+        conversation_id,
+        messages,
+        summaries,
+        context_items,
+        summary_edges,
+        summary_messages,
+    })
+}
+
+/// The native dump caller reads all LCM components in the same owner snapshot.
+/// Schema registry initialization precedes injection; this path opens nothing.
+pub(crate) fn owned_lcm_snapshot(path: &Path, conversation_id: i64) -> Result<LcmSnapshot> {
+    owned_lcm_read(path, move |conn| lcm_snapshot_with(conn, conversation_id))
+}
+
+fn snapshot_context_entries(conn: &Connection, conversation_id: i64) -> Result<Vec<ContextEntry>> {
+    let mut stmt = conn.prepare(
+        r#"
+            SELECT
+                ci.ordinal,
+                ci.item_type,
+                ci.message_id,
+                ci.summary_id,
+                COALESCE(m.seq, ci.ordinal) AS seq,
+                COALESCE(s.depth, 0) AS depth,
+                COALESCE(m.token_count, s.token_count, 0) AS token_count
+            FROM context_items ci
+            LEFT JOIN messages m ON m.message_id = ci.message_id
+            LEFT JOIN summaries s ON s.summary_id = ci.summary_id
+            WHERE ci.conversation_id = ?1
+            ORDER BY ci.ordinal ASC
+            "#,
+    )?;
+    let rows = stmt.query_map([conversation_id], |row| {
+        Ok(ContextEntry {
+            ordinal: row.get(0)?,
+            item_type: match row.get::<_, String>(1)?.as_str() {
+                "message" => ContextItemType::Message,
+                _ => ContextItemType::Summary,
+            },
+            message_id: row.get(2)?,
+            summary_id: row.get(3)?,
+            seq: row.get(4)?,
+            depth: row.get(5)?,
+            token_count: row.get(6)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+fn snapshot_messages_for_conversation(
+    conn: &Connection,
+    conversation_id: i64,
+) -> Result<Vec<MessageRecord>> {
+    let mut stmt = conn.prepare(
+            "SELECT message_id, conversation_id, seq, role, content, token_count, created_at, agent_outcome
+             FROM messages WHERE conversation_id = ?1 ORDER BY seq ASC",
+        )?;
+    let rows = stmt.query_map([conversation_id], |row| {
+        Ok(MessageRecord {
+            message_id: row.get(0)?,
+            conversation_id: row.get(1)?,
+            seq: row.get(2)?,
+            role: row.get(3)?,
+            content: row.get(4)?,
+            token_count: row.get(5)?,
+            created_at: row.get(6)?,
+            agent_outcome: row.get(7)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+fn snapshot_summaries_for_conversation(
+    conn: &Connection,
+    conversation_id: i64,
+) -> Result<Vec<SummaryRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT summary_id, conversation_id, kind, depth, content, token_count,
+                    descendant_count, descendant_token_count, source_message_token_count, created_at
+             FROM summaries WHERE conversation_id = ?1 ORDER BY depth ASC, created_at ASC",
+    )?;
+    let rows = stmt.query_map([conversation_id], |row| {
+        Ok(SummaryRecord {
+            summary_id: row.get(0)?,
+            conversation_id: row.get(1)?,
+            kind: parse_summary_kind(&row.get::<_, String>(2)?),
+            depth: row.get(3)?,
+            content: row.get(4)?,
+            token_count: row.get(5)?,
+            descendant_count: row.get(6)?,
+            descendant_token_count: row.get(7)?,
+            source_message_token_count: row.get(8)?,
+            created_at: row.get(9)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+fn snapshot_summary_edges_for_conversation(
+    conn: &Connection,
+    conversation_id: i64,
+) -> Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare(
+        r#"
+            SELECT e.parent_summary_id, e.child_summary_id
+            FROM summary_edges e
+            JOIN summaries parent ON parent.summary_id = e.parent_summary_id
+            JOIN summaries child ON child.summary_id = e.child_summary_id
+            WHERE parent.conversation_id = ?1 AND child.conversation_id = ?1
+            ORDER BY e.parent_summary_id ASC, e.child_summary_id ASC
+            "#,
+    )?;
+    let rows = stmt.query_map([conversation_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+fn snapshot_summary_message_links_for_conversation(
+    conn: &Connection,
+    conversation_id: i64,
+) -> Result<Vec<(String, i64)>> {
+    let mut stmt = conn.prepare(
+        r#"
+            SELECT sm.summary_id, sm.message_id
+            FROM summary_messages sm
+            JOIN summaries s ON s.summary_id = sm.summary_id
+            WHERE s.conversation_id = ?1
+            ORDER BY sm.summary_id ASC, sm.message_id ASC
+            "#,
+    )?;
+    let rows = stmt.query_map([conversation_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+fn owned_lcm_read<T: Send + 'static>(
+    path: &Path,
+    operation: impl FnOnce(&Connection) -> Result<T> + Send + 'static,
+) -> Result<T> {
+    crate::persistence::require_sync_owner_context()?;
+    Ok(
+        owner_adapter::OwnerAdapter::for_path(path)?.read_blocking(move |conn| {
+            operation(conn)
+                .map_err(|_| ctox_store::StoreError::Invalid("LCM snapshot unavailable".into()))
+        })?,
+    )
+}
+
+fn snapshot_worker_attempt(
+    conn: &Connection,
+    attempt_id: &str,
+) -> Result<Option<WorkerAttemptRecord>> {
+    conn.query_row(
+        &format!("{WORKER_ATTEMPT_SELECT} WHERE attempt_id = ?1"),
+        [attempt_id],
+        map_worker_attempt_row,
+    )
+    .optional()
+    .context("failed to load worker attempt")
+}
+fn snapshot_recoverable_worker_attempt(
+    conn: &Connection,
+    work_key: &str,
+) -> Result<Option<WorkerAttemptRecord>> {
+    conn
+            .query_row(
+                &format!(
+                    "{WORKER_ATTEMPT_SELECT} WHERE work_key = ?1 AND effects_completed = 0 ORDER BY created_at DESC LIMIT 1"
+                ),
+                [work_key],
+                map_worker_attempt_row,
+            )
+            .optional()
+            .context("failed to load recoverable worker attempt")
+}
+fn snapshot_task_execution_progress(
+    conn: &Connection,
+    work_key: &str,
+) -> Result<Option<serde_json::Value>> {
+    let row = conn
+        .query_row(
+            "SELECT revision, task_id, command_id, explanation, steps_json,
+                        phase, completed_steps, total_steps, percent, review_status, updated_at_ms
+                 FROM task_execution_plan_revisions
+                 WHERE work_key = ?1
+                 ORDER BY revision DESC LIMIT 1",
+            [work_key],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, i64>(10)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((
+        revision,
+        task_id,
+        command_id,
+        explanation,
+        steps_json,
+        phase,
+        completed_steps,
+        total_steps,
+        percent,
+        review_status,
+        updated_at_ms,
+    )) = row
+    else {
+        return Ok(None);
+    };
+    let steps = serde_json::from_str::<Vec<TaskExecutionPlanStepInput>>(&steps_json)?;
+    let mut rendered_steps = Vec::with_capacity(steps.len());
+    for (index, step) in steps.iter().enumerate() {
+        let position = i64::try_from(index + 1).unwrap_or(i64::MAX);
+        let activity_turns = conn.query_row(
+            "SELECT COUNT(*) FROM task_execution_activity_turns
+                 WHERE work_key = ?1 AND plan_revision = ?2 AND step_position = ?3",
+            params![work_key, revision, position],
+            |row| row.get::<_, i64>(0),
+        )?;
+        rendered_steps.push(serde_json::json!({
+            "position": position,
+            "label": step.label,
+            "status": step.status,
+            "activity_turns": activity_turns,
+        }));
+    }
+    let (thinking_turns, tool_turns) = conn.query_row(
+        "SELECT
+                COALESCE(SUM(CASE WHEN kind = 'thinking' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN kind = 'tool' THEN 1 ELSE 0 END), 0)
+             FROM task_execution_activity_turns WHERE work_key = ?1",
+        [work_key],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+    )?;
+    let last_activity_kind = conn
+        .query_row(
+            "SELECT kind FROM task_execution_activity_turns
+                 WHERE work_key = ?1 ORDER BY created_at_ms DESC, rowid DESC LIMIT 1",
+            [work_key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let current_step = rendered_steps
+        .iter()
+        .find(|step| step.get("status").and_then(serde_json::Value::as_str) == Some("in_progress"))
+        .and_then(|step| step.get("position"))
+        .and_then(serde_json::Value::as_i64);
+    Ok(Some(serde_json::json!({
+        "version": 1,
+        "revision": revision,
+        "task_id": task_id,
+        "command_id": command_id,
+        "phase": phase,
+        "percent": percent,
+        "current_step": current_step,
+        "completed_steps": completed_steps,
+        "total_steps": total_steps,
+        "steps": rendered_steps,
+        "review": { "status": review_status },
+        "activity_turns": {
+            "total": thinking_turns + tool_turns,
+            "thinking": thinking_turns,
+            "tools": tool_turns,
+            "last_kind": last_activity_kind,
+        },
+        "explanation": explanation,
+        "updated_at_ms": updated_at_ms,
+    })))
+}
+fn snapshot_task_execution_progress_for_task(
+    conn: &Connection,
+    task_id: &str,
+) -> Result<Option<serde_json::Value>> {
+    let work_key = conn
+        .query_row(
+            "SELECT work_key FROM task_execution_plan_revisions
+                 WHERE task_id = ?1 ORDER BY updated_at_ms DESC, revision DESC LIMIT 1",
+            [task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    match work_key {
+        Some(work_key) => snapshot_task_execution_progress(conn, &work_key),
+        None => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod legacy_owner_contract {
+    use super::*;
+    #[tokio::test]
+    async fn legacy_lcm_must_not_open_an_owned_core_file() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("core.sqlite");
+        {
+            // Offline fixture preparation ends before Core takes ownership.
+            let offline = LcmEngine::open(&path, LcmConfig::default())?;
+            offline.add_message(71, "user", "owner snapshot fixture")?;
+            offline.record_task_execution_plan(TaskExecutionPlanUpdate {
+                work_key: "fixture-work",
+                task_id: "fixture-task",
+                command_id: "fixture-command",
+                attempt_id: "fixture-attempt",
+                explanation: None,
+                steps: &[TaskExecutionPlanStepInput {
+                    label: "durable step".into(),
+                    status: "in_progress".into(),
+                }],
+            })?;
+        }
+        let (writer, readers) =
+            ctox_store::testkit::StoreFixture::open(ctox_store::DbId::new(&path)?)
+                .await?
+                .into_parts();
+        let adapter =
+            owner_adapter::OwnerAdapter::attach(&path, writer.clone(), readers.clone()).await?;
+        assert!(
+            LcmEngine::open(&path, LcmConfig::default()).is_err(),
+            "legacy LCM opened a second native connection while Core owns the file"
+        );
+        let query_path = path.clone();
+        let (snapshot, progress, by_task) = crate::persistence::run_core_sync(move || {
+            assert!(run_worker_attempt(&query_path, "absent")?.is_none());
+            assert!(run_recoverable_worker_attempt(&query_path, "absent")?.is_none());
+            Ok((
+                run_dump(&query_path, 71)?,
+                run_task_execution_progress(&query_path, "fixture-work")?,
+                run_task_execution_progress_for_task(&query_path, "fixture-task")?,
+            ))
+        })
+        .await?;
+        assert!(progress
+            .as_ref()
+            .is_some_and(|value| value["task_id"] == "fixture-task"));
+        assert!(progress == by_task);
+        assert!(
+            snapshot.messages.len() == 1
+                && snapshot.messages[0].content == "owner snapshot fixture"
+        );
+        assert!(
+            snapshot.context_items.len() == 1
+                && snapshot.context_items[0].message_id == Some(snapshot.messages[0].message_id)
+        );
+        drop(adapter);
+        readers.shutdown().await?;
+        writer.shutdown().await?;
+        assert!(
+            LcmEngine::open(&path, LcmConfig::default()).is_ok(),
+            "released file must remain available to the explicit legacy path"
+        );
+        Ok(())
+    }
+}

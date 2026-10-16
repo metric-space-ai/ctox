@@ -257,11 +257,13 @@ where
                         }
                         Some(Err(err)) => {
                             error!("Socket recv error: {}", err);
-                            //TODO: better handling on socket recv error #777
-                            // On error, we lost the buffer, create a new one and restart this socket
-                            // This should be rare (only on actual socket errors)
-                            // For now, we return the error to stop the loop
-                            return Err(err.into());
+                            // A failed optional TURN leg must not kill an
+                            // established direct path (or another relay).
+                            // Retire only this receive future; ICE consent
+                            // detects loss if this was the selected path.
+                            if socket_recv_futures.is_empty() {
+                                return Err(err.into());
+                            }
                         }
                         None => {
                             // All socket futures completed (should never happen in normal operation)

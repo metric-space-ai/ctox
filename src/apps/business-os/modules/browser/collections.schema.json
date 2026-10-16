@@ -647,6 +647,36 @@
       "version": 0
     }
   },
+  "migration_strategies": {
+    "browser_frames": {
+      "1": {
+        "operations": []
+      }
+    },
+    "browser_input_events": {
+      "1": {
+        "operations": []
+      }
+    },
+    "browser_sessions": {
+      "1": {
+        "operations": []
+      }
+    },
+    "browser_tabs": {
+      "1": {
+        "operations": []
+      }
+    },
+    "outbound_lead_generation_adapters": {
+      "1": {
+        "operations": []
+      },
+      "2": {
+        "operations": []
+      }
+    }
+  },
   "module_id": "browser",
   "schema_format": "ctox-business-os-module-collections-v1"
 }

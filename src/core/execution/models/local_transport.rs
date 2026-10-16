@@ -544,6 +544,25 @@ impl LocalStream {
         Ok(LocalStream { inner })
     }
 
+    /// Transfer an already connected private IPC stream into a child stdio
+    /// handle. This permits a permission-restricted child to communicate over
+    /// an inherited socket/pipe without granting permission to open any endpoint.
+    pub fn into_child_stdio(self) -> io::Result<std::process::Stdio> {
+        match self.inner {
+            #[cfg(unix)]
+            StreamInner::Unix(stream) => {
+                use std::os::fd::OwnedFd;
+                Ok(std::process::Stdio::from(OwnedFd::from(stream)))
+            }
+            #[cfg(windows)]
+            StreamInner::NamedPipe(file) => Ok(std::process::Stdio::from(file)),
+            StreamInner::Tcp(_) => Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "child runtime requires private IPC",
+            )),
+        }
+    }
+
     /// Sets the read timeout for the underlying transport.
     ///
     /// On Windows named-pipe streams this is a best-effort no-op because the

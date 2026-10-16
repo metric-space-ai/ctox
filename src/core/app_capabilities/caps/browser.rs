@@ -22,6 +22,10 @@ pub const ALLOWED_OPS: &[&str] = &[
     "clipboard_clear",
     "credential_fill",
     "nav_state",
+    // §16.48 read/act steps without app script execution.
+    "extract",
+    "click",
+    "wait",
 ];
 pub const MAX_CAPTURE_URLS: usize = 10;
 const MAX_PARAMS_BYTES: usize = 16 * 1024;
@@ -139,6 +143,9 @@ fn validate_params(op: &str, params: &Value) -> Result<(), CtoxError> {
             return Err(invalid("$.params.url"));
         }
     }
+    if matches!(op, "extract" | "click" | "wait") {
+        validate_step_params(op, map)?;
+    }
     if op == "credential_fill"
         && !map
             .get("credential_ref")
@@ -148,6 +155,65 @@ fn validate_params(op: &str, params: &Value) -> Result<(), CtoxError> {
         return Err(invalid("$.params.credential_ref"));
     }
     Ok(())
+}
+
+fn selector(value: Option<&Value>) -> bool {
+    value
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.trim().is_empty() && s.len() <= 512 && !s.contains('\0'))
+}
+/// §16.48 step shapes: `click {selector}`, `wait {selector | ms ≤ 30 000}`,
+/// `extract {selector, fields:{name:{selector, attr | text:true}}, limit}`.
+/// Only data – the Core turns it into its own page script.
+fn validate_step_params(op: &str, map: &serde_json::Map<String, Value>) -> Result<(), CtoxError> {
+    let only = |keys: &[&str]| map.keys().all(|key| keys.contains(&key.as_str()));
+    match op {
+        "click" if only(&["selector"]) && selector(map.get("selector")) => Ok(()),
+        "wait" if only(&["selector", "ms"]) => match (map.get("selector"), map.get("ms")) {
+            (Some(_), None) if selector(map.get("selector")) => Ok(()),
+            (None, Some(ms)) if ms.as_u64().is_some_and(|ms| (1..=30_000).contains(&ms)) => Ok(()),
+            _ => Err(invalid("$.params")),
+        },
+        "extract" if only(&["selector", "fields", "limit"]) && selector(map.get("selector")) => {
+            if !map
+                .get("limit")
+                .and_then(Value::as_u64)
+                .is_some_and(|limit| (1..=1000).contains(&limit))
+            {
+                return Err(invalid("$.limit"));
+            }
+            let fields = map
+                .get("fields")
+                .and_then(Value::as_object)
+                .filter(|fields| !fields.is_empty() && fields.len() <= 32)
+                .ok_or_else(|| invalid("$.fields"))?;
+            for (name, field) in fields {
+                let field = field.as_object().ok_or_else(|| invalid("$.fields"))?;
+                let name_ok = !name.is_empty()
+                    && name.len() <= 64
+                    && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+                let keys_ok = field
+                    .keys()
+                    .all(|key| matches!(key.as_str(), "selector" | "attr" | "text"));
+                let source_ok = match (field.get("attr"), field.get("text")) {
+                    (Some(attr), None) => attr.as_str().is_some_and(|a| {
+                        !a.is_empty()
+                            && a.len() <= 64
+                            && a.bytes().all(|b| {
+                                b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':')
+                            })
+                    }),
+                    (None, Some(text)) => text == &Value::Bool(true),
+                    _ => false,
+                };
+                if !(name_ok && keys_ok && source_ok && selector(field.get("selector"))) {
+                    return Err(invalid("$.fields"));
+                }
+            }
+            Ok(())
+        }
+        _ => Err(invalid("$.params")),
+    }
 }
 
 pub(super) fn execute(
@@ -350,6 +416,9 @@ const OP_COMMANDS: &[(&str, &str)] = &[
     ("clipboard_copy", "browser.clipboard.copy"),
     ("clipboard_paste", "browser.clipboard.paste"),
     ("clipboard_clear", "browser.clipboard.clear"),
+    ("extract", "browser.extract"),
+    ("click", "browser.click"),
+    ("wait", "browser.wait"),
 ];
 impl PeerBrowserEngine<'_> {
     fn run(&self, ctx: &CapCallContext, command: &str, payload: Value) -> Result<Value, CtoxError> {
@@ -459,6 +528,31 @@ struct Step {
     tab_id: Option<String>,
     #[serde(default)]
     params: Value,
+    // §16.48 flat step fields (extract/click/wait).
+    selector: Option<Value>,
+    fields: Option<Value>,
+    limit: Option<Value>,
+    ms: Option<Value>,
+}
+impl Step {
+    /// Flat step fields become the op params; both forms at once are invalid.
+    fn params(&self) -> Result<Value, CtoxError> {
+        let flat = [
+            ("selector", &self.selector),
+            ("fields", &self.fields),
+            ("limit", &self.limit),
+            ("ms", &self.ms),
+        ]
+        .into_iter()
+        .filter_map(|(key, value)| value.clone().map(|value| (key.to_owned(), value)))
+        .collect::<serde_json::Map<_, _>>();
+        match (flat.is_empty(), &self.params) {
+            (true, Value::Null) => Ok(json!({})),
+            (true, params) => Ok(params.clone()),
+            (false, Value::Null) => Ok(Value::Object(flat)),
+            (false, _) => Err(invalid("$.steps")),
+        }
+    }
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -475,7 +569,7 @@ fn validate_step(step: &Step) -> Result<(), CtoxError> {
     if !ALLOWED_OPS.contains(&step.op.as_str()) {
         return Err(invalid("$.op"));
     }
-    validate_params(&step.op, &step.params)
+    validate_params(&step.op, &step.params()?)
 }
 /// `browser.automation.run` — a bounded sequence of browser.op in one
 /// session. Every step is validated BEFORE the first one runs; each step then
@@ -517,11 +611,7 @@ pub(super) fn automation_run(
             timed_out = true;
             break;
         }
-        let params = if step.params.is_null() {
-            json!({})
-        } else {
-            step.params.clone()
-        };
+        let params = step.params()?;
         match engine.op(ctx, &session, step.tab_id.as_deref(), &step.op, &params) {
             Ok(result) => {
                 steps.push(json!({"op":step.op,"ok":true,"result":strip_secrets(result)}))
@@ -535,6 +625,13 @@ pub(super) fn automation_run(
     }
     let artifact =
         serde_json::to_vec(&json!({"session_id":session,"steps":steps})).map_err(native_error)?;
+    // §16.48: the result JSON (incl. extract items) is at most 1 MiB.
+    if artifact.len() > 1024 * 1024 {
+        return Err(CtoxError::new(
+            ErrorCode::Quota,
+            "automation result exceeds 1 MiB",
+        ));
+    }
     let name = format!("{session}.automation.json");
     let meta = store.put(
         &ctx.app_id,
