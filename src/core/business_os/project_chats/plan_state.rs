@@ -291,74 +291,19 @@ pub(in crate::business_os) fn visible_from_root(
 
 #[cfg(test)]
 pub(in crate::business_os) fn run_contract(
-    operation: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
+    operation: impl FnOnce(tempfile::TempDir) -> anyhow::Result<()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()?
-        .block_on(crate::persistence::run_core_sync(operation))
-}
-
-#[cfg(test)]
-pub(in crate::business_os) struct TestPolicy {
-    _registration: Option<crate::business_os::policy::PolicyAuthorityRegistration>,
-    _authority: std::sync::Arc<crate::business_os::policy::sync_rights::StoreRightsAuthority>,
-    _runtime: tokio::runtime::Runtime,
-    _root: tempfile::TempDir,
-}
-
-/// The real v4 Writer/rights publication used by the daemon, not a test allow
-/// flag or role-only fallback. Each filtered contract owns this registration.
-#[cfg(test)]
-pub(in crate::business_os) fn test_policy() -> anyhow::Result<TestPolicy> {
-    use crate::business_os::policy::{self, sync_rights::StoreRightsAuthority};
-    use ctox_store::{registry::Registry, writer::WriterOptions, DbId};
-    use std::sync::Arc;
-    let root = tempfile::tempdir()?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    let writer = Registry.open(
-        DbId::new(root.path().join("rights.sqlite"))?,
-        WriterOptions {
-            configure: Some(Arc::new(|db| {
-                db.execute_batch("PRAGMA journal_mode=WAL;PRAGMA synchronous=NORMAL;")?;
-                Ok(())
-            })),
-            head_seq: Some(Arc::new(|db| {
-                db.query_row("SELECT v FROM _seq WHERE singleton=1", [], |r| r.get(0))
-                    .map_err(Into::into)
-            })),
-        },
-    )?;
-    let authority = runtime
-        .block_on(StoreRightsAuthority::attach(
-            writer,
-            "plan-state-fixture".into(),
-        ))
-        .map_err(anyhow::Error::msg)?;
-    let schemas: serde_json::Value =
-        serde_json::from_str(include_str!("../business_os_schema_contract.json"))?;
-    let mut collections: Vec<String> = schemas.as_object().unwrap().keys().cloned().collect();
-    collections.push("planned_steps".into());
-    runtime
-        .block_on(authority.replace(policy::base_release_rights(&collections), vec![]))
-        .map_err(anyhow::Error::msg)?;
-    let registration =
-        policy::bind_policy_authority(authority.clone()).map_err(anyhow::Error::msg)?;
-    Ok(TestPolicy {
-        _registration: Some(registration),
-        _authority: authority,
-        _runtime: runtime,
-        _root: root,
-    })
-}
-
-#[cfg(test)]
-impl Drop for TestPolicy {
-    fn drop(&mut self) {
-        let _ = self._runtime.block_on(self._authority.writer().shutdown());
-        drop(self._registration.take());
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
+    let mut root = tempfile::tempdir()?;
+    // The outer guard owns cleanup: all daemon handles must shut down first,
+    // including when a contract assertion panics inside run_core_sync.
+    let path = root.path().to_path_buf();
+    let _cleanup = Cleanup(path.clone());
+    root.disable_cleanup(true);
+    crate::app_capabilities::cap3::tests::run_with_core_owners(path, move || operation(root))
 }

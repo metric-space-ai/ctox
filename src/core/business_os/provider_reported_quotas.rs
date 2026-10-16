@@ -189,9 +189,8 @@ mod tests {
     }
     #[test]
     fn grok_registry_reports_gateway_quota_and_invalidates_replaced_account() -> Result<()> {
-        crate::business_os::project_chats::plan_state::run_contract(move || {
-            let _rights = crate::business_os::project_chats::plan_state::test_policy()?;
-            let f = super::super::tests::Fixture::new()?;
+        crate::business_os::project_chats::plan_state::run_contract(move |root| {
+            let f = super::super::tests::Fixture::with_root(root)?;
             crate::secrets::write_secret_record(
                 f.root.path(),
                 "provider-subscriptions",

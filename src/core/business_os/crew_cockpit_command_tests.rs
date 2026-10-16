@@ -22,9 +22,7 @@ fn task(root: &Path) -> anyhow::Result<channels::QueueTaskView> {
 
 #[test]
 fn plan_step_retry_dispatch_denies_user_and_audits_verified_actor() -> anyhow::Result<()> {
-    crate::business_os::project_chats::plan_state::run_contract(move || {
-        let _rights = crate::business_os::project_chats::plan_state::test_policy()?;
-        let root = tempfile::tempdir()?;
+    crate::business_os::project_chats::plan_state::run_contract(move |root| {
         let plan = crate::mission::plan::ingest_goal(
             root.path(),
             crate::mission::plan::PlanIngestRequest {

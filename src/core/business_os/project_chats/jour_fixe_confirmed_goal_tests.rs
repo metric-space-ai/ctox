@@ -4,7 +4,10 @@ use super::*;
 use crate::mission::{plan, schedule};
 
 fn fixture() -> anyhow::Result<TempDir> {
-    let root = super::jour_fixe_owner::fixture("review")?;
+    fixture_with_root(tempfile::tempdir()?)
+}
+fn fixture_with_root(root: TempDir) -> anyhow::Result<TempDir> {
+    let root = super::jour_fixe_owner::fixture_with_root("review", root)?;
     let _ = store::issue_business_os_capability_token_for_managed_user(
         root.path(),
         "owner",
@@ -665,9 +668,8 @@ fn concurrent_owner_confirmations_linearize_to_one_goal_for_one_proposal() -> an
 #[test]
 fn failed_plan_step_reaches_supervisor_turn_and_thread_then_clears_on_retry() -> anyhow::Result<()>
 {
-    crate::business_os::project_chats::plan_state::run_contract(move || {
-        let _rights = crate::business_os::project_chats::plan_state::test_policy()?;
-        let root = fixture()?;
+    crate::business_os::project_chats::plan_state::run_contract(move |root| {
+        let root = fixture_with_root(root)?;
         let accepted = send(
             root.path(),
             "confirmed-failure",
@@ -776,9 +778,8 @@ fn failed_plan_step_reaches_supervisor_turn_and_thread_then_clears_on_retry() ->
 #[test]
 fn planned_steps_projection_is_current_read_only_and_never_crosses_projects() -> anyhow::Result<()>
 {
-    crate::business_os::project_chats::plan_state::run_contract(move || {
-        let _rights = crate::business_os::project_chats::plan_state::test_policy()?;
-        let root = fixture()?;
+    crate::business_os::project_chats::plan_state::run_contract(move |root| {
+        let root = fixture_with_root(root)?;
         let result = send(
             root.path(),
             "confirm-projection",
