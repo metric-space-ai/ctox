@@ -202,21 +202,27 @@ def main():
                   measured=[dict(exit=x.get('identityExit'),publicIdentity=x.get('publicIdentity')) for x in starts],
                   method='Official sync identity after each real foreground shutdown; no key extraction',
                   limit='Fresh-state control, not the installed frozen-profile migration/signature witness')
-        # This only probes admission capability. A failed sudo never launches
-        # unshare or an installer, and no host user/system bus is contacted.
-        capable = run('namespace-admission', ['sudo','-n','true'], 10) == 0
-        if not capable:
-            criterion('supported-update-rollback', 'not_run', 'gpu3 lane owner',
-                      reason='Private systemd namespace requires approved setup; sudo -n admission failed. No host service fallback.')
+        # Try the actual approved namespace command once. sudo -n true is not
+        # a permission oracle: policy may allow unshare but disallow true.
+        # This fallback constructs a deterministic real V3 fixture via its
+        # old CLI, preserving its own full private file/key custody. Never
+        # boot a SQLite-only clone with missing sealed-key assets.
+        transition = out/'install'
+        code = run('supported-update-rollback', ['node',HERE/'installer-smoke.mjs',args.before,args.release,transition,'yes'],660)
+        proof = transition/'upgrade/installer.json'
+        details = json.loads(proof.read_text()) if proof.exists() else {}
+        success = code == 0 and details.get('roundtripExecuted') and details.get('canonicalReleasePackage') and details.get('rollback',{}).get('dataReadback',{}).get('matchesBefore') and details.get('forward',{}).get('dataReadback',{}).get('matchesBefore')
+        controller_log = transition/'controller.log'
+        admission = controller_log.read_text() if controller_log.exists() else ''
+        denied = any(text in admission for text in ('sudo: a password is required',
+            'sudo: a terminal is required', 'unshare: unshare failed: Operation not permitted'))
+        controller_file = transition/'upgrade/controller.json'
+        controller = json.loads(controller_file.read_text()) if controller_file.exists() else {}
+        if code != 0 and denied and not details.get('installerExecuted') and controller.get('groupAbsent') is True:
+            criterion('supported-update-rollback','not_run','gpu3 lane owner',
+                      reason='Actual sudo/unshare namespace command rejected before installer execution; no host service fallback.',
+                      evidence=str(controller_log),controller=str(controller_file),exit=code)
         else:
-            # This fallback constructs the deterministic real V3 fixture through
-            # the old CLI, preserving its own full private file/key custody.
-            # Do not boot a SQLite-only clone with missing sealed-key assets.
-            transition = out/'install'
-            code = run('supported-update-rollback', ['node',HERE/'installer-smoke.mjs',args.before,args.release,transition,'yes'],660)
-            proof = transition/'upgrade/installer.json'
-            details = json.loads(proof.read_text()) if proof.exists() else {}
-            success = code == 0 and details.get('roundtripExecuted') and details.get('canonicalReleasePackage') and details.get('rollback',{}).get('dataReadback',{}).get('matchesBefore') and details.get('forward',{}).get('dataReadback',{}).get('matchesBefore')
             criterion('supported-update-rollback', 'pass' if success else 'fail', 'DevOps',
                       evidence=str(proof), exit=code, fixture='New deterministic real V3 fixture; not frozen WELSCH',
                       dataReadback='full synthetic app row/schema match required; frozen WELSCH coverage remains separate')
