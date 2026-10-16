@@ -122,6 +122,15 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
   actions + the 404 error path PASS via spec and via Rust. No writes live-tested:
   there is no GitHub test repo, and the real repo is not a scratch target.
   26/30 requests straight from the generator.
+- **Notion (2026-10-15): converted Rust -> hybrid spec** (`specs/notion.json`,
+  7 spec + 16 Rust actions). Parity: all recorded port cases identical, 0 of 396
+  differential cases differ. Live (`tests/live_notion.rs`, only the shared test
+  page 3f94d550-…-7dd9): 7 reads + the 404 error path PASS via spec and via Rust
+  (spec part live: GET_PAGE, LIST_USERS, GET_USER). Writes skip: the test
+  integration lacks "insert content" (403 restricted_resource), so nothing was
+  created; the test writes only a child page that it archives. No shared
+  database, so QUERY_DATABASE / UPDATE_DATABASE_ITEM are parity-only.
+  15/23 requests straight from the generator. No format change needed.
 - **Trello (2026-10-15):** hot-plug only (`specs/trello.json`, 22 actions). All
   live-passed; a throwaway board is created and deleted. Needed auth scheme
   `oauth_header` (key+token in the Authorization header). Webhooks need a
@@ -346,6 +355,16 @@ turned into a list stay Rust. Added only:
 Hard-won detail: `commit_id` in a body still needs `segment: true`; the
 adversarial cases catch every missing id check, so run them before trusting a
 port pass.
+
+Notion lessons: the most hybrid service so far (7/23 spec). Requests are mostly
+trivial; the value of the Rust adapter is content *conversion*: markdown <->
+block trees, 2000-char rich-text chunking, titles pulled from typed property
+maps, comment threads grouped by discussion. Do not grow the format toward a
+template language for that: keep conversions in Rust and spec the plain
+pass-through/projection tools. Rule of thumb: if the Rust parse/build calls a
+helper that recurses or loops with state, it is a Rust action. A read-only
+integration makes writes unprovable live; detect `restricted_resource` and
+report SKIP instead of creating fixtures elsewhere.
 
 Ideas not yet automated: `segment`/required inference for GraphQL variables
 (probe `grp/sub` and absence per variable), `tristate` inference (enum `["true","false"]` sent as

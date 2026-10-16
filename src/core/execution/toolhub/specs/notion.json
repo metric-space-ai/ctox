@@ -1,0 +1,460 @@
+{
+  "actions": [
+    {
+      "description": {
+        "de": "Liest Metadaten und Eigenschaften einer Seite (eine Datenbankzeile ist auch eine Seite).",
+        "en": "Reads a page's metadata and property values (a database row is a page)."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "page_id": {
+            "description": "Seiten-ID / page id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "page_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "headers": {
+          "notion-version": "2022-02-22"
+        },
+        "method": "GET",
+        "path": "/pages/{page_id}"
+      },
+      "risk": "read",
+      "scopes": [],
+      "slug": "NOTION_GET_PAGE",
+      "title": {
+        "de": "Seite lesen",
+        "en": "Get page"
+      }
+    },
+    {
+      "description": {
+        "de": "Fragt eine Datenbank mit Notions nativen Filter- und Sortier-JSON-Objekten ab (UND/ODER, Bereiche, enthält).",
+        "en": "Queries a database using Notion's native filter and sort JSON (AND/OR, ranges, contains)."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "database_id": {
+            "description": "Datenbank-ID / database id",
+            "type": "string"
+          },
+          "filter": {
+            "description": "Optionales Notion-Filter-Objekt / optional Notion filter object",
+            "type": "object"
+          },
+          "page_size": {
+            "default": 100,
+            "description": "Maximale Zeilen (1-100) / max rows",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sorts": {
+            "description": "Optionale Notion-Sortierobjekte / optional Notion sort objects",
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "start_cursor": {
+            "description": "Paginierungscursor / pagination cursor",
+            "type": "string"
+          }
+        },
+        "required": [
+          "database_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "filter": {
+              "arg": "filter"
+            },
+            "page_size": {
+              "arg": "page_size",
+              "default": 100
+            },
+            "sorts": {
+              "arg": "sorts",
+              "type": "raw"
+            },
+            "start_cursor": {
+              "arg": "start_cursor",
+              "trim": true
+            }
+          }
+        },
+        "headers": {
+          "notion-version": "2022-02-22"
+        },
+        "method": "POST",
+        "path": "/databases/{database_id}/query",
+        "read_only_post": true
+      },
+      "response": {
+        "fields": {
+          "count": {
+            "count": true,
+            "pointer": "/results"
+          },
+          "has_more": {
+            "pointer": "/has_more"
+          },
+          "next_cursor": {
+            "pointer": "/next_cursor"
+          },
+          "results": {
+            "default": [],
+            "pointer": "/results"
+          },
+          "success": {
+            "default": true,
+            "pointer": "/__ctox_missing__"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "read",
+      "scopes": [],
+      "slug": "NOTION_QUERY_DATABASE",
+      "title": {
+        "de": "Datenbank abfragen",
+        "en": "Query database"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet Personen und Bots im Workspace (braucht die Fähigkeit „Benutzerinformationen lesen“).",
+        "en": "Lists the people and bots in the workspace (needs the \"Read user information\" capability)."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "page_size": {
+            "default": 100,
+            "description": "Benutzer pro Seite (1-100) / users per page",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "start_cursor": {
+            "description": "Paginierungscursor / pagination cursor",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "headers": {
+          "notion-version": "2022-02-22"
+        },
+        "method": "GET",
+        "path": "/users",
+        "query": {
+          "page_size": {
+            "arg": "page_size",
+            "default": 100
+          },
+          "start_cursor": {
+            "arg": "start_cursor",
+            "trim": true
+          }
+        }
+      },
+      "response": {
+        "fields": {
+          "count": {
+            "count": true,
+            "pointer": "/results"
+          },
+          "has_more": {
+            "pointer": "/has_more"
+          },
+          "next_cursor": {
+            "pointer": "/next_cursor"
+          },
+          "users": {
+            "each": {
+              "avatar_url": "/avatar_url",
+              "email": "/person/email",
+              "id": "/id",
+              "name": "/name",
+              "type": "/type"
+            },
+            "pointer": "/results"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "read",
+      "scopes": [],
+      "slug": "NOTION_LIST_USERS",
+      "title": {
+        "de": "Benutzer auflisten",
+        "en": "List users"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest die Details eines Workspace-Benutzers.",
+        "en": "Reads a workspace user's details."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "user_id": {
+            "description": "Benutzer-ID / user id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "headers": {
+          "notion-version": "2022-02-22"
+        },
+        "method": "GET",
+        "path": "/users/{user_id}"
+      },
+      "response": {
+        "fields": {
+          "avatar_url": {
+            "pointer": "/avatar_url"
+          },
+          "bot": {
+            "pointer": "/bot"
+          },
+          "email": {
+            "pointer": "/person/email"
+          },
+          "id": {
+            "pointer": "/id"
+          },
+          "name": {
+            "pointer": "/name"
+          },
+          "type": {
+            "pointer": "/type"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "read",
+      "scopes": [],
+      "slug": "NOTION_GET_USER",
+      "title": {
+        "de": "Benutzer lesen",
+        "en": "Get user"
+      }
+    },
+    {
+      "description": {
+        "de": "Setzt Feldwerte einer bestehenden Datenbankzeile; nur enthaltene Felder werden geändert.",
+        "en": "Sets field values on an existing database row; only included properties are changed."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "item_id": {
+            "description": "Seiten-ID der Zeile / page id of the row",
+            "type": "string"
+          },
+          "properties": {
+            "description": "Zu setzende Notion-Properties, z.B. {\"Status\":{\"status\":{\"name\":\"Done\"}}} / Notion properties to set",
+            "type": "object"
+          }
+        },
+        "required": [
+          "item_id",
+          "properties"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "properties": {
+              "arg": "properties",
+              "required": true
+            }
+          }
+        },
+        "headers": {
+          "notion-version": "2022-02-22"
+        },
+        "method": "PATCH",
+        "path": "/pages/{item_id}"
+      },
+      "response": {
+        "fields": {
+          "item": {
+            "pointer": ""
+          },
+          "success": {
+            "default": true,
+            "pointer": "/__ctox_missing__"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "write",
+      "scopes": [],
+      "slug": "NOTION_UPDATE_DATABASE_ITEM",
+      "title": {
+        "de": "Datenbankeintrag ändern",
+        "en": "Update database item"
+      }
+    },
+    {
+      "description": {
+        "de": "Archiviert (Papierkorb) oder stellt eine Seite oder Datenbankzeile über das archived-Flag.",
+        "en": "Archives (trashes) or restores any page or database row via its archived flag."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "description": "true = archivieren, false = wiederherstellen / true = archive, false = restore",
+            "type": "boolean"
+          },
+          "page_id": {
+            "description": "Seiten-ID / page id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "page_id",
+          "archived"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "archived": {
+              "arg": "archived",
+              "required": true
+            }
+          }
+        },
+        "headers": {
+          "notion-version": "2022-02-22"
+        },
+        "method": "PATCH",
+        "path": "/pages/{page_id}"
+      },
+      "risk": "write",
+      "scopes": [],
+      "slug": "NOTION_ARCHIVE_PAGE",
+      "title": {
+        "de": "Seite archivieren/wiederherstellen",
+        "en": "Archive or restore page"
+      }
+    },
+    {
+      "description": {
+        "de": "Löscht (archiviert) einen einzelnen Block und entfernt ihn von seiner Seite.",
+        "en": "Deletes (archives) a single block, removing it from its page."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "block_id": {
+            "description": "Block-ID / block id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "block_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "headers": {
+          "notion-version": "2022-02-22"
+        },
+        "method": "DELETE",
+        "path": "/blocks/{block_id}"
+      },
+      "risk": "destructive",
+      "scopes": [],
+      "slug": "NOTION_DELETE_BLOCK",
+      "title": {
+        "de": "Block löschen",
+        "en": "Delete block"
+      }
+    }
+  ],
+  "allowed_hosts": [
+    "api.notion.com"
+  ],
+  "api_base": "https://api.notion.com/v1",
+  "auth_schemes": [
+    {
+      "authorize_url": "https://api.notion.com/v1/oauth/authorize",
+      "default_scopes": [],
+      "extra_authorize_params": [
+        [
+          "owner",
+          "user"
+        ]
+      ],
+      "pkce": false,
+      "refreshable": false,
+      "scope_separator": " ",
+      "token_url": "https://api.notion.com/v1/oauth/token",
+      "type": "oauth2"
+    },
+    {
+      "type": "bearer"
+    }
+  ],
+  "connection_fields": [],
+  "description": {
+    "de": "Notion-Seiten und -Datenbanken durchsuchen, lesen und bearbeiten.",
+    "en": "Search, read and edit Notion pages and databases."
+  },
+  "name": "Notion",
+  "notes": "Drafted by examples/spec_from_builtin.rs from the compiled adapter src/toolkits/notion.rs; verified by the differential test.",
+  "replaces_builtin": true,
+  "schema": "ctox.adapter-spec/v1",
+  "slug": "notion",
+  "version": "1.0.0",
+  "hybrid": {
+    "rust_actions": [
+      "NOTION_ADD_COMMENT",
+      "NOTION_APPEND_TO_PAGE",
+      "NOTION_ARCHIVE_DATABASE_ITEM",
+      "NOTION_CREATE_DATABASE",
+      "NOTION_CREATE_DATABASE_ITEM",
+      "NOTION_CREATE_PAGE",
+      "NOTION_FIND_DATABASE_ITEM",
+      "NOTION_GET_BLOCK_CHILDREN",
+      "NOTION_GET_DATABASE",
+      "NOTION_GET_PAGE_COMMENTS",
+      "NOTION_LIST_DATABASES",
+      "NOTION_MOVE_PAGE",
+      "NOTION_RESTORE_DATABASE_ITEM",
+      "NOTION_SEARCH",
+      "NOTION_UPDATE_BLOCK",
+      "NOTION_UPDATE_DATABASE_SCHEMA"
+    ],
+    "reason": "Markdown <-> Notion block conversion (CREATE_PAGE, APPEND_TO_PAGE, UPDATE_BLOCK, CREATE_DATABASE_ITEM content, GET_BLOCK_CHILDREN markdown), rich-text chunking at 2000 chars (ADD_COMMENT, titles), title extraction from typed property maps (SEARCH, LIST_DATABASES, GET_DATABASE), comment grouping and sorting by discussion (GET_PAGE_COMMENTS), computed success/firstMatch and title-bearing messages (FIND/ARCHIVE/RESTORE_DATABASE_ITEM), schema builders (CREATE_DATABASE, UPDATE_DATABASE_SCHEMA) and parent selection (MOVE_PAGE). All are code, not request/response shape."
+  },
+  "docs": [
+    "https://developers.notion.com/reference"
+  ]
+}

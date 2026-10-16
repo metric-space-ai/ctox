@@ -822,3 +822,16 @@ fn github_format_features() {
     assert!(out[0].get("extra").is_none());
     assert_eq!(a.rust_actions().len(), 10);
 }
+
+const NOTION: &str = include_str!("../specs/notion.json");
+
+#[test]
+fn notion_spec_matches_compiled_adapter() {
+    let (n, d) = differential("notion", NOTION);
+    assert!(d.is_empty(), "{} of {n} differ:\n{}", d.len(), d.join("\n"));
+    let a = SpecAdapter::from_json(NOTION).unwrap();
+    assert_eq!(a.rust_actions().len(), 16);
+    // Rust part still converts markdown to blocks through the hybrid.
+    let r = a.build_request("NOTION_APPEND_TO_PAGE", &json!({"block_id": "b1", "content": "# T"})).unwrap();
+    assert!(String::from_utf8_lossy(r.body.as_ref().unwrap()).contains("heading_1"));
+}
