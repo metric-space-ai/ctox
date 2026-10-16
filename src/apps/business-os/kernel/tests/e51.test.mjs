@@ -12,6 +12,10 @@ test('E51 preferences bind app and user even for admin, persist, and never expos
  await k.sim.publishAppVersion('ctox-platform','test-e51',{collections:{app_user_preferences:{schema:{type:'object',properties:{id:{type:'string'}}}}},manifestExtra:{exports:{app_user_preferences:['read','write']}}});
  await k.sim.publishAppVersion('a','1',{manifestExtra:{foreign_collections:{app_user_preferences:{owner_app:'ctox-platform',ops:['read','write']}}}});
  assert.throws(()=>a.query('app_user_preferences',{}),e=>e.code==='forbidden');assert.throws(()=>a.get('app_user_preferences','b/alice/same'),e=>e.code==='forbidden');
+ assert.throws(()=>k.appApi('ctox-platform','test-e51').query('app_user_preferences',{}),e=>e.code==='forbidden','platform ownership is no exception');
+ const secret=await k.appApi('vault','1').files.put({text:'foreign preference secret'},{id:'pref-secret'});await secret.done;
+ await b.prefs.set('blob',{ref:secret.ref}).result;
+ await assert.rejects(a.files.get({ref:secret.ref}),e=>e.code==='forbidden','a foreign preference cannot grant file access');
  await assert.rejects(a.put('app_user_preferences',{id:'b/alice/same',app_id:'b',user_id:'alice',key:'same',value:'stolen'}).local,e=>e.code==='forbidden');
  const options={instanceId:k.identity.instance_id,userId:'alice',dbName:k.dbName,storage:'memory',multiTab:false,latencyMs:0};await k.close();const reload=createStubKernel(options);t.after(()=>reload.close());await reload.ready;
  assert.deepEqual(reload.appApi('a','1').prefs.get('same'),{own:'A'});

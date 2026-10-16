@@ -7,7 +7,7 @@ import {protocolChannels,FakeNativePeer,offer} from './fake-native-peer.mjs';
 import {WebRTCKernelTransport} from '../transport-webrtc.mjs';
 
 const tick=()=>new Promise(r=>setTimeout(r,5));
-const COLLECTIONS=['business_apps','business_app_versions','business_commands','files','shell_preferences','app_drafts','notes'];
+const COLLECTIONS=['business_apps','business_app_versions','business_commands','files','shell_preferences','app_user_preferences','app_drafts','notes'];
 const b64url=bytes=>Buffer.from(bytes).toString('base64url');
 function instanceKey(){const {privateKey,publicKey}=generateKeyPairSync('ed25519');return {privateKey,publicKey:publicKey.export({format:'jwk'}).x};}
 const KEY=instanceKey(),FOREIGN=instanceKey();
