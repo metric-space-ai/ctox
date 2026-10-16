@@ -153,6 +153,8 @@ export interface ShellApi {
   /** §16.19 Nr. 5: App rendert ihr Kopfzeilen-Element, die Shell setzt es in den Kopf-Slot. null entfernt es. */
   registerHeader(el: HTMLElement | null): void;
   /** Unbekanntes Ziel → Fehler in der Zustandszone, `false`, nie stiller Fallback. */
+  /** Read-only: no navigation or status entry is emitted. */
+  canNavigate(appId: string, params?: Record<string, unknown>): boolean;
   navigate(appId: string, params?: Record<string, unknown>): boolean;
   onRoute(cb: (ev: RouteEvent) => void): () => void;
   locale: LiveDoc<string>;
@@ -231,7 +233,7 @@ export interface CtoxAppApi {
   /** opts.on_complete/on_failed: Rückruf-Befehlstypen der eigenen App (§16.39 Nr. 3), als Felder am Befehlsdokument.
    *  §16.44: ctox.coding.turn {app_id, draft_id, base_draft_rev, prompt, model?, turn_id?}, ctox.coding.cancel {turn_id};
    *  Ablehnung im write_result {status:'rejected', code, reason}. */
-  command(type: string, payload: object, opts?: { record_id?: string; on_complete?: string; on_failed?: string; idempotency_key?: string }): CommandHandle;
+  command(type: string, payload: object, opts?: { record_id?: string; on_complete?: string; on_failed?: string; idempotency_key?: string; target_app?: string }): CommandHandle;
   // Priorität (E1) – reiner Hinweis
   setVisible(collections: string[]): void;
   // Zustand – nur an die Zustandszone der Shell (Anf. 27)

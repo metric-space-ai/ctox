@@ -58,8 +58,10 @@ async function runCommand(core, doc, depth, via) {
   await sleep(); await update({ status: 'accepted' }); await update({ status: 'running', progress: 0.5 });
   const user = core.users.get(doc.actor_id) ?? null;
   let final;
-  if (via?.failures.has(doc.type)) { final = { status: 'failed', error: via.failures.get(doc.type) }; via.failures.delete(doc.type); }
-  else if (via?.handlers.has(doc.type)) {
+  const route=core.runtime.resolveCommand(doc,user,via?.handlers.has(doc.type)||via?.failures.has(doc.type));
+  if(route.error)final={status:'failed',error:route.error};
+  else if (!route.platform && route.target===doc.app_id && via?.failures.has(doc.type)) { final = { status: 'failed', error: via.failures.get(doc.type) }; via.failures.delete(doc.type); }
+  else if (!route.platform && route.target===doc.app_id && via?.handlers.has(doc.type)) {
     try { final = { status: 'done', progress: 1, result: await via.handlers.get(doc.type)(cloneValue(doc.payload), { app_id: doc.app_id, command_id: doc.id }) ?? { ok: true } }; } catch (e) { final = { status: 'failed', error: String(e.message) }; }
   } else {
     try { final = await core.runtime.execute(user, doc, depth); } catch (e) { final = { status: 'failed', error: String(e?.message ?? e) }; }
@@ -155,7 +157,7 @@ export class MemoryCoreTransport extends KernelTransport {
       result = { status: 'rejected', code: 'unknown_command', reason: `unknown_command:${entry.body.type}` };
     }
     if (!result) {
-      const code = this.core.runtime.checkWrite(this.currentUser, entry, old);
+      const code = this.core.runtime.checkWrite(this.currentUser, {...entry,test_route:this.handlers.has(entry.body?.type)||this.failures.has(entry.body?.type)}, old);
       if (code) result = typeof code === 'object' ? { status: 'rejected', code: code.code, reason: code.reason } : { status: 'rejected', reason: code };
     }
     if (!result && entry.expected_revision !== undefined && entry.expected_revision !== old?.rev) result={status:'rejected',code:'revision_conflict',reason:'Expected revision differs from current revision'};
@@ -196,7 +198,7 @@ export class MemoryCoreTransport extends KernelTransport {
    *  App-Versionen und die an diesem Transport registrierten Test-Routen (sim.onCommand / sim.failCommand). */
   commandRouteKnown(body) {
     const type = String(body?.type ?? '');
-    return this.handlers.has(type) || this.failures.has(type) || this.core.runtime.hasCommandRoute(body?.app_id, type);
+    return this.handlers.has(type) || this.failures.has(type) || this.core.runtime.hasCommandRoute(body?.app_id, type, body);
   }
   async artifact(hash) { if(!this.core.artifacts.has(hash)) throw new CtoxError('not_found','Artifact missing'); return this.core.artifacts.get(hash); }
   putArtifact(hash, content) { this.core.artifacts.set(hash, content); }

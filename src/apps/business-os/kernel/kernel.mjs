@@ -1,3 +1,4 @@
+import {commandTarget} from './command-routing.mjs';
 import { createCommandTimings } from './command-timings.mjs';
 import { PLATFORM_COLLECTIONS, PLATFORM_APP_ID } from './platform.mjs';
 import { artifactUrl, utf8Base64, bytesBase64 } from './artifact-url.mjs';
@@ -658,7 +659,7 @@ export function createKernel(opts = {}) {
         await putDoc(t, r);
         return r;
       });
-ownCommandQueued = !reused;
+      ownCommandQueued = !reused;
       if (ns === 'business_commands' && rec.pending) commandTimings.mark(id, 'queued');
       mirrorPut(rec);
       post({ type: 'docs', keys: [[ns, id]], local_seq: rec.lseq });
@@ -1320,8 +1321,14 @@ ownCommandQueued = !reused;
     const shell = Object.freeze({
       setTitle(title) { win.title = String(title); notify(winTag); },
       registerHeader(el){if(el!==null && (typeof HTMLElement==='function'?!(el instanceof HTMLElement):!el||typeof el!=='object'||typeof el.tagName!=='string'))throw new CtoxError('invalid','Header must be an HTMLElement or null');win.header=el;notify(winTag);},
-      navigate(target, params = {}) {
+      canNavigate(target, params = {}) {
         const known = target === 'shell' || !!visible(mirrorGet('business_apps', target));
+        if(!known)return false;
+        if(params.command_type!==undefined)return (readManifest(appId,app.ver)?.commands_out??[]).some(x=>x.app===target&&x.type===params.command_type);
+        return true;
+      },
+      navigate(target, params = {}) {
+        const known = shell.canNavigate(target,params);
         if (!known) {
           zoneReport(appId, { level: 'error', code: 'shell.navigate.unknown_target', text: `Navigationsziel unbekannt: ${target}`, ref: String(target) }, 'kernel');
           return false;
@@ -1624,6 +1631,8 @@ ownCommandQueued = !reused;
       remove(collection, id) { return localWrite(app, 'delete', collection, id, null); },
       command(type, payload = {}, commandOptions={}) {
         if (typeof type !== 'string' || !type) throw new CtoxError('invalid', 'Befehlstyp fehlt', { path: 'type' });
+        const route=commandTarget({type,app_id:appId,...(commandOptions.target_app===undefined?{}:{target_app:commandOptions.target_app})},readManifest(appId,app.ver));
+        if(route.error)throw new CtoxError('forbidden','Command target is not declared',{path:'target_app'});
         const key = commandOptions.idempotency_key;
         if (key !== undefined && (typeof key !== 'string' || key.length > 128)) throw new CtoxError('invalid', 'idempotency_key must be a string of at most 128 characters', { path: 'idempotency_key' });
         // UUIDv8: first 128 SHA-256 bits, RFC variant/version bits normalized.
@@ -1635,6 +1644,7 @@ ownCommandQueued = !reused;
           ...(typeof commandOptions.on_complete === 'string' ? { on_complete: commandOptions.on_complete } : {}),
           ...(typeof commandOptions.on_failed === 'string' ? { on_failed: commandOptions.on_failed } : {}),
           type, payload, status: 'queued', app_id: appId, actor_id: actor.id, created_at: new Date().toISOString(),
+          ...(!route.platform && (route.target!==appId || commandOptions.target_app!==undefined) ? {target_app:route.target} : {}),
         }, key !== undefined);
         const status = makeLive(['c:business_commands', 'commands'], () => {
           const d = visible(mirrorGet('business_commands', id));

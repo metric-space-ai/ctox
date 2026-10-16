@@ -6,7 +6,20 @@ const kernel=resolve('src/apps/business-os/kernel'),out=resolve(process.env.KERN
 await mkdir(out,{recursive:true});const scratch=await mkdtemp(join(out,'copy-')),base=join(scratch,'src/apps/business-os/kernel');
 await cp(kernel,base,{recursive:true});await mkdir(resolve(base,'../rxdb/src'),{recursive:true});await cp(resolve(kernel,'../rxdb/src/hello.mjs'),resolve(base,'../rxdb/src/hello.mjs'));
 await mkdir(resolve(base,'../shared'),{recursive:true});await cp(resolve(kernel,'../shared/async-timeout.js'),resolve(base,'../shared/async-timeout.js'));
+// Native source fixtures used by the shared-name/inventory assertions inside isolated mutation copies.
+for(const file of ['business_os/business_command_inventory.json','rxdb/src/plugins/replication_webrtc/lanes.rs']){
+ const target=resolve(scratch,'src/core',file);await mkdir(resolve(target,'..'),{recursive:true});await cp(resolve('src/core',file),target);
+}
 const cases=[
+ ['e39-target','command-routing.mjs','body.target_app??choices[0]??body.app_id','body.app_id','e39.test.mjs','cross-app routing'],
+ ['e39-inbound','command-routing.mjs',"if(cross && !(target?.commands_in??[])","if(false && !(target?.commands_in??[])",'e39.test.mjs','cross-app routing'],
+ ['e39-handler','command-routing.mjs',"if(!target?.handlers?.[body.type]",'if(false','e39.test.mjs','cross-app routing'],
+ ['e39-right','command-routing.mjs',"!(Array.isArray(right.roles)&&right.roles.includes(user.role))",'false','e39.test.mjs','target command right'],
+ ['e39-right-precedence','command-routing.mjs','b[0].length-a[0].length','a[0].length-b[0].length','e39.test.mjs','native rights precedence'],
+ ['e39-app-write','command-routing.mjs',"if(cross && user && user.role!=='admin' && !right && !writable)",'if(false)','e39.test.mjs','native rights precedence'],
+ ['e42-platform','command-routing.mjs','return platformTypes.has(type)','return false && platformTypes.has(type)','e39.test.mjs','every native inventory'],
+ ['e44-can-navigate','kernel.mjs','if(!known)return false;','if(!known)return true;','e39.test.mjs','canNavigate'],
+ ['e41-lane-name','transport-webrtc.mjs',"name==='initial'?'initial-sync':name",'name','e39-inventory.test.mjs','share the same reliable lane'],
  ['window','scheduler.mjs','this.sent[lane]-this.acked[lane]<this.windowFrames','true','scheduler.test.mjs','window sends'],
  ['ack-preemption','scheduler.mjs','if(noAck)this.queues[lane].unshift(entry);else this.queues[lane].push(entry);','this.queues[lane].push(entry);','scheduler.test.mjs','window sends'],
  ['association-budget','scheduler.mjs','this.buffered()+size>this.maxBuffered','false','scheduler.test.mjs','connection buffer'],
@@ -20,9 +33,9 @@ const cases=[
  ['pairing','transport-webrtc.mjs','hello?.instance_id!==identity.instanceId','false','webrtc.test.mjs','wrong pairing'],
  ['clock-metrics','kernel.mjs',"timing=next;notify('metrics');","notify('metrics');",'kernel-v4.test.mjs','real transport'],
  ['platform-owner','kernel.mjs','SYSTEM_COLLECTIONS.has(collection)?PLATFORM_APP_ID:app.id','app.id','kernel-v4.test.mjs','platform collections'],
- ['rollback-pointer','kernel.mjs','activated_ver:lastGood','activated_ver:ver','contract.test.mjs','activation.reportFailed'],
- ['artifact-retry','kernel.mjs','attempt<2','attempt<1','contract.test.mjs','Artefakt mit falschem Hash'],
- ['layout','kernel.mjs','normalizeLayout(o.layout??prevManifest?.layout)','normalizeLayout(null)','contract.test.mjs','kernel.apps liefert layout'],
+ ['rollback-pointer','kernel.mjs','activated_ver: lastGood','activated_ver: ver','contract.test.mjs','activation.reportFailed'],
+ ['artifact-retry','kernel.mjs','attempt < 2','attempt < 1','contract.test.mjs','Artefakt mit falschem Hash'],
+ ['layout','kernel.mjs','normalizeLayout(o.layout ?? prevManifest?.layout)','normalizeLayout(null)','contract.test.mjs','kernel.apps liefert layout'],
  ['tab-isolation','kernel.mjs','tab:${tabKey}:${key}','tab:shared:${key}','contract.test.mjs','windowState je Tab'],
  ['preference-owner','kernel.mjs',"collection==='shell_preferences' && id!==userId",'false','contract.test.mjs','windowState je Tab'],
  ['record-id','kernel.mjs','record_id:commandOptions.record_id','record_id: undefined','contract.test.mjs','registerHeader nimmt'],
@@ -55,10 +68,10 @@ const selected=new Set((process.env.KERNEL_MUTATIONS??'').split(',').filter(Bool
 for(const id of selected)if(![...cases,...browserCases].some(item=>item[0]===id))throw Error(`Unknown mutation: ${id}`);
 const wanted=([id])=>!selected.size||selected.has(id);
 try{for(const [id,file,before,after,test,pattern]of cases.filter(wanted)){const path=join(base,file),original=await readFile(path,'utf8');if(!original.includes(before))throw Error(`Mutation anchor missing: ${id}`);const line=original.slice(0,original.indexOf(before)).split('\n').length;
- const baseline=spawnSync(process.execPath,['--test','--test-concurrency=1','--test-timeout=3500',`--test-name-pattern=${pattern}`,join(base,'tests',test)],{encoding:'utf8',timeout:7000,maxBuffer:2*1024*1024});
+ const baseline=spawnSync(process.execPath,['--test','--test-concurrency=1',`--test-name-pattern=${pattern}`,join(base,'tests',test)],{encoding:'utf8',timeout:7000,maxBuffer:2*1024*1024});
  if(baseline.status!==0)throw Error(`Mutation baseline is red: ${id}\n${baseline.stdout}\n${baseline.stderr}`);
  await writeFile(path,original.split(before).join(after));
- const run=spawnSync(process.execPath,['--test','--test-concurrency=1','--test-timeout=3500',`--test-name-pattern=${pattern}`,join(base,'tests',test)],{encoding:'utf8',timeout:7000,maxBuffer:2*1024*1024});
+ const run=spawnSync(process.execPath,['--test','--test-concurrency=1',`--test-name-pattern=${pattern}`,join(base,'tests',test)],{encoding:'utf8',timeout:7000,maxBuffer:2*1024*1024});
  await writeFile(path,original);const output=(run.stdout??'')+(run.stderr??'');const killed=run.status!==0&&/not ok/.test(output)&&!/SyntaxError|ERR_MODULE_NOT_FOUND/.test(output);
  const receipt={id,file,line,before,after,test,pattern,exit:run.status,killed,output};receipts.push(receipt);await writeFile(join(out,'mutation-proof.json'),JSON.stringify(receipts,null,2));
  console.log(`${killed?'MUTATION_KILLED':'MUTATION_SURVIVED'} ${id} ${file}:${line} -> ${test} /${pattern}/`);if(!killed)process.exitCode=1;

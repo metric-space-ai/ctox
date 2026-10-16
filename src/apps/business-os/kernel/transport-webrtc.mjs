@@ -294,4 +294,4 @@ export class WebRTCKernelTransport extends KernelTransport {
   if(this.options.ownsConnection!==false){this.endpoint?.close?.();this.endpoint?.peer?.close();for(const channel of new Set(Object.values(this.channels??{})))channel.close?.();}
  }
 }
-export function createReliableChannels(peer){const channels={};for(const [name,lane]of Object.entries(LANES))if(lane<6)channels[lane]=peer.createDataChannel(`ctox-v4-${name}`,{ordered:true});return channels;}
+export function createReliableChannels(peer){const channels={};for(const [name,lane]of Object.entries(LANES))if(lane<6)channels[lane]=peer.createDataChannel(`ctox-v4-${name==='initial'?'initial-sync':name}`,{ordered:true});return channels;}
