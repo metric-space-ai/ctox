@@ -22,4 +22,8 @@ fs.writeFileSync(join(out,'result.json'),JSON.stringify({receipt,bytes:fs.statSy
  binarySha256:build.binarySha256,positiveVerified:true,mutatedDigestRejected:true},null,2));
 console.log('P6 large-binary checksum verified; digest mutation rejected');
 JS
-python3 tests/sync-v4/p6-review-4/run.py --only scenarios --train "$train" --deadline "$deadline"
+if [ "${4:-scenarios}" = all ]; then
+  python3 tests/sync-v4/p6-review-4/run.py --only all --expect-red --train "$train" --deadline "$deadline"
+else
+  python3 tests/sync-v4/p6-review-4/run.py --only scenarios --train "$train" --deadline "$deadline"
+fi

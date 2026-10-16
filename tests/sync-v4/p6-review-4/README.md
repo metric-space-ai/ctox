@@ -30,7 +30,7 @@ Individual exits, source bindings and complete logs remain under the order's
 The root tests wire private test modules in a disposable source copy under the
 lane target. Supplied production sources remain untouched; copied wiring is
 also restored in `finally`. No production fix or public test hook is installed.
-The targets use current policy sources on the updated train7 (3c6cd65ef).
+The targets use current policy sources on the updated train7 (a6dda5aab, including E21 library/app partition).
 `--train <sha>` binds the immutable product revision and refuses source drift
 in src/, Cargo.toml or Cargo.lock. The old #827 composition is retained only
 for reproducing the original 59849cee5 baseline without its array error.
