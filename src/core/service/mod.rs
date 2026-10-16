@@ -18,6 +18,7 @@ pub mod reset;
 pub mod state_invariants;
 pub mod state_write_guard;
 pub(crate) mod store_inputs;
+pub(crate) mod store_http;
 mod store_native;
 pub(crate) mod store_runtime;
 pub(crate) mod store_rxdb;

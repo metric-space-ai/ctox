@@ -208,6 +208,7 @@ pub(crate) use rxdb_peer_browser::{
     CoreBrowserBinding,
 };
 pub use server::serve_business_os;
+pub(crate) use server::resolve_business_os_app_root;
 pub use server::BusinessOsServeOptions;
 #[cfg(unix)]
 pub(crate) mod session_handoff_enrollment;
