@@ -42,3 +42,30 @@ Counter-checks (mirror `/Volumes/tmp/civ4-mirror`, each mutation → exit 1): K-
 K-R2 `FRAME_BYTES` export renamed; K-R3 kernel hash-mismatch reject removed; K-R4 viewer reads
 `desktop_file_chunks`; K-R5 explorer `readAsDataURL`; K-R6 `/api/business-os/records` in `v4/shell/app-host.js`;
 K-R7 `import … from "rxdb"` in kernel; K-R8 `APP_BUILD` removed from app.js.
+
+## 2. `assert-module-conformance.mjs` → `assert-module-conformance.v4.mjs`
+
+| # | V2 invariant | v4 |
+|---|---|---|
+| M1 | schema-covers-collections (module.json collections declared in schema.js) | checked against `collections.schema.json` (§16.13); leftover `schema.js` (ctox, conversations, outbound) still counted |
+| M2 | schema-import (schema.js imports in Node) | checked: `collections.schema.json` exists and parses as `{collections}`; leftover `schema.js` must still import |
+| M3 | schema-parity (same collection → identical definition) | checked, fingerprints from `collections.schema.json` (+ leftover schema.js) |
+| M4 | mount-export | checked unchanged |
+| M5 | mount-signature `mount(ctx)` | checked with the v4 contract `mount(root, api, { restored } = {})` (kernel/index.d.ts AppMount, PORTING.md R1-mount); `mount(ctx)` is now red |
+| M6 | no-db-raw | checked unchanged |
+| M7 | no-indexeddb | checked unchanged |
+| M8 | css-no-root-tokens | checked unchanged |
+| M9 | css-no-shell-token-redefinition | checked unchanged |
+| M10 | css-no-self-referential-token | checked unchanged |
+| M11 | css-no-cdn-import | checked unchanged |
+| M12 | locales de/en | checked unchanged |
+| M13 | db-isolation-inventory (V2 guard, spawned) | V2 guard runs unchanged; only accepted finding: `desktop_apps: stale inventory entry for <id>` when `<id>` moved to `modules/<id>` (desktop-apps app.js gone, module.json + v4 manifest present: browser, creator, explorer, file-viewer). Plus v4 form: `check-isolation.mjs --rule R2` must exit 0 |
+
+13 invariants: 13 checked in v4 (M1/M2/M3/M5/M13 adapted to v4 sources), 0 NO_V4.
+Counter-checks (each → exit 1): K-M1 `ctox_ticket_cases` renamed in tickets collections.schema.json;
+K-M2 notes collections.schema.json unparseable; K-M3 file-viewer `desktop_files` schema drift vs cv-print-builder;
+K-M4 news `mount(ctx)`; K-M5 `ctx.db.raw` in news; K-M6 `:root { --news-x }` in news CSS; K-M7 news `locales/en.json`
+removed; K-M8 non-ported stale desktop_app `ghost-app` in the inventory; K-M9 tickets manifest names `news` as owner of
+`ctox_crew_members` (R2).
+Note: `check-isolation.mjs` without `--rule` is red before and after this change (R1 6, R3 80, R4 149 findings) —
+those are v4-only rules without a V2 counterpart, not part of this gate.
