@@ -10934,6 +10934,8 @@ var replicationWebRtcTestInternals = Object.freeze({
   localCheckpointValidityKey,
   localCheckpointStillCovers,
   remoteCheckpointStillCovers,
+  remotePushCheckpointStillCovers,
+  localPushCheckpointStillCovers,
   // Eager replicas are never evicted by the demand sidecar.
   demandSidecarPrimaryDelete,
   // Lazy accessors (classes are declared below): let smoke tests drive the
@@ -12061,8 +12063,17 @@ var CtoxWebRtcReplicationState = class {
       } else {
         this.firstPullCompletedAtMs = 0;
         this.publishLocalReplicaCoverage();
-        this.retainedCheckpoints = null;
-        clearPersistentCheckpoints(this.checkpointStorageKey);
+        const keepPush = Boolean(retained.push) && remotePushCheckpointStillCovers(retained, validityKey) && localPushCheckpointStillCovers(retained.localValidityKey, localValidityKey) && readPermissionDigestMatches(retained.permissionDigest, readPermissionDigest);
+        if (keepPush) {
+          if (!this.pushCheckpointsByPeer.has(peerId)) {
+            this.pushCheckpointsByPeer.set(peerId, retained.push);
+          }
+          this.retainedCheckpoints = { ...retained, pull: null, firstPullCompletedAtMs: null };
+          writePersistentCheckpoints(this.checkpointStorageKey, this.retainedCheckpoints);
+        } else {
+          this.retainedCheckpoints = null;
+          clearPersistentCheckpoints(this.checkpointStorageKey);
+        }
       }
     }
     const peerStates = new Map(this.peerStates$.getValue() || /* @__PURE__ */ new Map());
@@ -13200,6 +13211,23 @@ function remoteCheckpointStillCovers(retained, currentKey, remoteProtocol) {
   const retainedLwt = Number(retained?.pull?.lwt);
   const remoteHeadLwt = Number(remoteProtocol?.checkpoint?.latestLwt);
   return Number.isFinite(retainedLwt) && Number.isFinite(remoteHeadLwt) && remoteHeadLwt >= retainedLwt;
+}
+function remotePushCheckpointStillCovers(retained, currentKey) {
+  const retainedKey = retained?.validityKey;
+  if (!retainedKey || !currentKey) return false;
+  if (retainedKey === currentKey) return true;
+  const before = String(retainedKey).split("|");
+  const now = String(currentKey).split("|");
+  if (before.length !== 4 || now.length !== 4) return false;
+  return before[0] === now[0] && before[1] === now[1] && before[2] === now[2];
+}
+function localPushCheckpointStillCovers(retainedKey, currentKey) {
+  if (!retainedKey || !currentKey) return false;
+  if (retainedKey === currentKey) return true;
+  const retained = parseBrowserLocalCheckpointKey(retainedKey);
+  const current = parseBrowserLocalCheckpointKey(currentKey);
+  if (!retained || !current) return false;
+  return retained.collection === current.collection && retained.schemaHash === current.schemaHash && retained.storeGeneration === current.storeGeneration && Number.isFinite(retained.latestLwt) && Number.isFinite(current.latestLwt) && current.latestLwt >= retained.latestLwt;
 }
 function localCheckpointValidityKey(checkpoint) {
   if (!checkpoint || typeof checkpoint !== "object") return "";
