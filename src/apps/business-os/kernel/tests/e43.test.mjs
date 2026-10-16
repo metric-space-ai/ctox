@@ -30,9 +30,9 @@ export function specifiers(source){
 export async function importsLeavingKernel(root=kernelRoot){
  const offenders=[];
  for(const file of await walk(root)){
-  const rel=relative(root,file),isTest=rel.startsWith(`tests${sep}`)||rel.startsWith(`testkit${sep}`);
+  const rel=relative(root,file),isTest=rel.startsWith(`tests${sep}`)||rel.startsWith(`testkit${sep}`)||rel.startsWith(`tools${sep}`);
   for(const spec of specifiers(await readFile(file,'utf8'))){
-   if(spec.startsWith('./')||spec.startsWith('../')){const target=resolve(dirname(file),spec);if(target!==root&&!target.startsWith(root+sep))offenders.push(`${rel}: ${spec}`);}
+   if(spec.startsWith('./')||spec.startsWith('../')){const target=resolve(dirname(file),spec);if((target!==root&&!target.startsWith(root+sep))||(!isTest&&target.startsWith(join(root,'tools')+sep)))offenders.push(`${rel}: ${spec}`);}
    else if(isTest&&(spec.startsWith('node:')||spec.startsWith('/')))continue; // Node built-ins and in-page URLs under the kernel route
    else offenders.push(`${rel}: ${spec}`);
   }

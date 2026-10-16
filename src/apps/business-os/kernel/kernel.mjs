@@ -1418,6 +1418,7 @@ export function createKernel(opts = {}) {
     function readableNamespace(ns) {
       const caller = readManifest(appId,app.ver);
       const c = ns.replace(/@g[1-9][0-9]*$/,'');
+      if (c === PREFERENCE_COLLECTION) return false; // preferences never grant another app a file reference
       if (caller?.collections?.[c] && (!SYSTEM_COLLECTIONS.has(c) || appId==='ctox-platform')) return ns === resolveNs(app,c);
       const f = caller?.foreign_collections?.[c];
       const owner = f?.owner_app ?? f?.app ?? f?.owner;
