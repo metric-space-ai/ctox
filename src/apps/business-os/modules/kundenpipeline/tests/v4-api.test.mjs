@@ -12,7 +12,7 @@ import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
@@ -53,7 +53,12 @@ before(async () => {
   await page.goto(base);
   // Befehlsrouten der echten kundenpipeline-Version (v4/manifests/kundenpipeline.manifest.json, wie customers/E35): ohne
   // aktive Version lehnt der Kern seit E26/E27 kundenpipeline.decision.resolve beim Schreiben mit unknown_command ab.
-  await page.evaluate((routes) => { window.__kundenpipelineRoutes = routes; }, realManifestRoutes('kundenpipeline'));
+  // Stub 8265bd7 liest in runCommand das Handler-Artefakt (manifest.files[path]) VOR dem sim.onCommand-Simulator; die
+  // Fixture veröffentlicht keine Dateien („Artefakt undefined fehlt“). Für den simulierten Typ daher ohne Handler-Pfad
+  // veröffentlichen – Route und command_rights bleiben die echten.
+  const kundenpipelineRoutes = realManifestRoutes('kundenpipeline');
+  if (kundenpipelineRoutes.handlers) delete kundenpipelineRoutes.handlers['kundenpipeline.decision.resolve'];
+  await page.evaluate((routes) => { window.__kundenpipelineRoutes = routes; }, kundenpipelineRoutes);
   await page.evaluate(async (APP) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import(`/modules/${APP}/index.js`);
@@ -62,6 +67,9 @@ before(async () => {
     // FIXT-R: Eigentümer der Fremd-Collections (echte Manifeste, inkl. ctox-platform) vor der eigenen Version.
     for (const o of window.__kundenpipelineRoutes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
     await kernel.sim.publishAppVersion(APP, '1', { title: 'Decision Hub', manifestExtra: window.__kundenpipelineRoutes });
+    // Stub 8265bd7 kann den echten Handler (relative _lib-Importe) nicht laden; sim.onCommand hat Vorrang (E42.1) und
+    // bildet das Ergebnis von resolveAgentDecision (handlers/_lib/hub.js) nach.
+    kernel.sim.onCommand('kundenpipeline.decision.resolve', (payload) => ({ ok: true, entscheidung_id: payload.entscheidung_id, option_id: payload.option_id, status: 'beantwortet' }));
     await kernel.sim.push('kundenpipeline_vorgaenge', [
       { id: 'case-1', title: 'Anfrage Müller GmbH', status: 'offen', kunde_name: 'Müller GmbH', quelle_json: { kanal: 'mail', body_clean: 'Bitte Angebot für 40 Module.' }, created_at_ms: 1, updated_at_ms: 1 },
     ]);
