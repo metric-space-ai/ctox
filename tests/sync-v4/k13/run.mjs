@@ -96,6 +96,7 @@ if(build && !summary.scenarios.length) {
       if(!unchanged())throw Error('Harness source changed before scenario');
       controller=await namespace(configPath,log);
     } catch(e){error=e.message;}finally{fs.closeSync(log);}
+    if(controller?.groupAbsent===true)for(const index of [0,1,2])fs.rmSync(join(dir,'tenant-runtime-'+index),{recursive:true,force:true});
     const path=join(dir,'result.json'),report=fs.existsSync(path)?JSON.parse(fs.readFileSync(path)):null;
     const entryPath=join(dir,'p6-daemon-entry.json'),boot=fs.existsSync(entryPath)?JSON.parse(fs.readFileSync(entryPath)):null;
     const daemonPath=join(dir,'daemon.log'),daemonLog=fs.existsSync(daemonPath)?fs.readFileSync(daemonPath,'utf8'):'';
