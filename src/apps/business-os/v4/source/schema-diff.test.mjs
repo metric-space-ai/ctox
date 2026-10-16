@@ -61,12 +61,12 @@ test('Migration mit deklarativen steps zählt (wie Kern-Stub)', () => {
   assert.deepEqual(publishBlockers(d, []), []);
 });
 
-// Gleichlauf mit der Einstufung des Kern-Stubs (maßgeblich, §16.22 A6). Pin über CTOX_APP_API_STUB, Default 9fa9948.
+// Gleichlauf mit der Einstufung des Kern-Stubs (maßgeblich, §16.22 A6). Pin über CTOX_APP_API_STUB, Default 8265bd7.
 test('Gleichlauf mit Kern-Stub classifyCollections', async () => {
   const { homedir } = await import('node:os');
   const { join } = await import('node:path');
   const { pathToFileURL } = await import('node:url');
-  const pin = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+  const pin = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
   const stub = await import(pathToFileURL(join(pin, 'ctox-app-api-stub.mjs')).href);
   const variants = [];
   const v = (f) => { const b = clone(base); f(b); variants.push(b); };
