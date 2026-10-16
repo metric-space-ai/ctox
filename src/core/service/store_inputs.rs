@@ -22,6 +22,7 @@ static INPUTS: OnceLock<Mutex<HashMap<PathBuf, Weak<StoreInputs>>>> = OnceLock::
 pub(crate) struct NativeSessionInputs {
     pub instance_signer: Arc<dyn rxdb::plugins::replication_webrtc::v4_stream::InstanceSigner>,
     pub execution_authority: Arc<dyn ctox_sync::authority::client::ExecutionAuthority>,
+    pub(super) active: Arc<AtomicBool>,
 }
 
 pub(crate) struct StoreInputs {
@@ -31,6 +32,8 @@ pub(crate) struct StoreInputs {
     pub runtime: Handle,
     pub databases: HashMap<String, Database>,
     native_session: OnceLock<NativeSessionInputs>,
+    instance_signer:
+        OnceLock<Arc<dyn rxdb::plugins::replication_webrtc::v4_stream::InstanceSigner>>,
     closing: Arc<AtomicBool>,
     retired: AtomicBool,
     sync_reads: Arc<tokio::sync::Semaphore>,
@@ -62,6 +65,7 @@ impl InputRegistration {
             runtime,
             databases,
             native_session: OnceLock::new(),
+            instance_signer: OnceLock::new(),
             closing,
             retired: AtomicBool::new(false),
             sync_reads: Arc::new(tokio::sync::Semaphore::new(64)),
@@ -120,7 +124,34 @@ impl StoreInputs {
     /// daemon does not manufacture an execution authority for app activation.
     pub(crate) fn native_session(&self) -> Result<&NativeSessionInputs, StoreError> {
         self.check()?;
-        self.native_session.get().ok_or(StoreError::Closed)
+        let native = self.native_session.get().ok_or(StoreError::Closed)?;
+        if !native.active.load(Ordering::Acquire) {
+            return Err(StoreError::Closed);
+        }
+        Ok(native)
+    }
+
+    /// Bootstrap may use the persisted instance signer before enrollment, but
+    /// absence of a native authority never grants an execution capability.
+    pub(crate) fn instance_signer(
+        &self,
+    ) -> Result<Arc<dyn rxdb::plugins::replication_webrtc::v4_stream::InstanceSigner>, StoreError>
+    {
+        self.check()?;
+        self.instance_signer
+            .get()
+            .cloned()
+            .ok_or(StoreError::Closed)
+    }
+
+    pub(super) fn publish_instance_signer(
+        &self,
+        signer: Arc<dyn rxdb::plugins::replication_webrtc::v4_stream::InstanceSigner>,
+    ) -> Result<(), StoreError> {
+        self.check()?;
+        self.instance_signer
+            .set(signer)
+            .map_err(|_| StoreError::AlreadyOwned)
     }
 
     pub(super) fn publish_native_session(
