@@ -9,6 +9,7 @@
 mod commands;
 #[cfg(test)]
 mod model_check_tests;
+mod platform_routes;
 pub(crate) mod runtime_host;
 #[cfg(test)]
 mod tests;

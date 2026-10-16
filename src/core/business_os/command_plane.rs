@@ -294,7 +294,13 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 151] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 157] = [
+    "ctox.secret.request.list",
+    "ctox.secret.request.fulfill",
+    "ctox.secret.request.decline",
+    "ctox.workjet.remote_worker.admit",
+    "ctox.maintenance.restart",
+    "instance.providers.models.check",
     "news.topic.schedule",
     "news.source.auth_assist",
     "ctox.crew.member.create",

@@ -1141,5 +1141,61 @@
       "ctox.workjet.computer.list",
       "ctox.workjet.session.list"
     ]
-  }
+  },
+  "platform_routes": [
+    {
+      "method": "ctox.secret.request.list",
+      "route": "ctox.secret.request.list",
+      "handler": "src/core/business_os/app_platform/platform_routes.rs",
+      "test": "e49_platform_rights_metadata_grants_and_restart_reply_boundary",
+      "verification": "build unverified",
+      "productive": "not_run",
+      "gap": "new implementation not lane verified"
+    },
+    {
+      "method": "ctox.secret.request.fulfill",
+      "route": "ctox.secret.request.fulfill",
+      "handler": "src/core/business_os/app_platform/platform_routes.rs",
+      "test": "e49_platform_rights_metadata_grants_and_restart_reply_boundary",
+      "verification": "build unverified",
+      "productive": "not_run",
+      "gap": "protected command-bound SecretStore intake/commit adapter missing"
+    },
+    {
+      "method": "ctox.secret.request.decline",
+      "route": "ctox.secret.request.decline",
+      "handler": "src/core/business_os/app_platform/platform_routes.rs",
+      "test": "e49_platform_rights_metadata_grants_and_restart_reply_boundary",
+      "verification": "build unverified",
+      "productive": "not_run",
+      "gap": "new implementation not lane verified"
+    },
+    {
+      "method": "ctox.workjet.remote_worker.admit",
+      "route": "ctox.workjet.remote_worker.admit",
+      "handler": "src/core/business_os/app_platform/platform_routes.rs",
+      "test": "e49_platform_rights_metadata_grants_and_restart_reply_boundary",
+      "verification": "build unverified",
+      "productive": "not_run",
+      "gap": "devices projection does not yet publish machine_enrollment_id; executor grant consumption not wired"
+    },
+    {
+      "method": "ctox.maintenance.restart",
+      "route": "ctox.maintenance.restart",
+      "handler": "src/core/business_os/app_platform/platform_routes.rs",
+      "test": "e49_platform_rights_metadata_grants_and_restart_reply_boundary",
+      "verification": "build unverified",
+      "productive": "not_run",
+      "gap": "native egress acknowledgment and service restart consumer not wired"
+    },
+    {
+      "method": "instance.providers.models.check",
+      "route": "instance.providers.models.check",
+      "handler": "src/core/business_os/app_platform/platform_routes.rs",
+      "test": "e49_platform_rights_metadata_grants_and_restart_reply_boundary",
+      "verification": "build unverified",
+      "productive": "not_run",
+      "gap": "models.check handler absent from train12"
+    }
+  ]
 }

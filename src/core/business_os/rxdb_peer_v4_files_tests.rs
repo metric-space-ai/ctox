@@ -131,7 +131,7 @@ fn e30_native_files_require_exported_row_or_visible_actual_reference() {
         admit(&tx, &rules(false, FieldMask::All), &actor, "shell", &hash).is_err(),
         "removing the owner's read export revokes bytes"
     );
-    tx.execute(&format!("UPDATE {table} SET deleted=1"), [])
+    tx.execute(&format!("UPDATE {table} SET deleted=1,data=NULL"), [])
         .unwrap();
     put(
         &tx,
