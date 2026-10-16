@@ -128,8 +128,12 @@ pub(super) fn after_native_write(
     }
     Ok(())
 }
-fn core_only(db: &Connection, app: &str, kind: &str) -> Result<bool, StoreError> {
-    let manifests = serde_json::to_value(rights(db)?.manifests).map_err(sql_error)?;
+fn core_only(
+    snapshot: &sync_rights::RightsSnapshot,
+    app: &str,
+    kind: &str,
+) -> Result<bool, StoreError> {
+    let manifests = serde_json::to_value(&snapshot.manifests).map_err(sql_error)?;
     let Some(manifest) = manifests
         .as_array()
         .and_then(|all| all.iter().find(|m| m["app_id"] == app))
@@ -166,15 +170,26 @@ pub(super) fn delivery_permit(
     if a.id.as_deref() != doc["actor_id"].as_str() {
         return Err(invalid("forbidden: command actor differs"));
     }
+    delivery_permit_with_rights(db, doc, a, &rights(db)?)
+}
+pub(super) fn delivery_permit_with_rights(
+    db: &Connection,
+    doc: &Value,
+    a: &BusinessOsActor,
+    snapshot: &sync_rights::RightsSnapshot,
+) -> Result<bool, StoreError> {
+    if a.id.as_deref() != doc["actor_id"].as_str() {
+        return Err(invalid("forbidden: command actor differs"));
+    }
     let app = text(doc, "app_id").map_err(sql_error)?;
     let kind = text(doc, "type").map_err(sql_error)?;
-    if core_only(db, app, kind)? {
+    if core_only(snapshot, app, kind)? {
         if receipt(db, doc)?.is_none() {
             return Err(invalid("forbidden: core origin required"));
         }
         return Ok(true);
     }
-    permit(db, app, a, kind)?;
+    permit_with_rights(db, snapshot, app, a, kind)?;
     Ok(false)
 }
 pub(super) fn audit_rejection(

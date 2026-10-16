@@ -241,8 +241,17 @@ fn permit(
     a: &BusinessOsActor,
     kind: &str,
 ) -> Result<sync_rights::manifest_rules::CommandPermit, StoreError> {
+    permit_with_rights(db, &rights(db)?, app, a, kind)
+}
+fn permit_with_rights(
+    db: &Connection,
+    snapshot: &sync_rights::RightsSnapshot,
+    app: &str,
+    a: &BusinessOsActor,
+    kind: &str,
+) -> Result<sync_rights::manifest_rules::CommandPermit, StoreError> {
     let id = a.id.as_deref().ok_or_else(|| invalid("forbidden: actor"))?;
-    rights(db)?
+    snapshot
         .authorize_command(app, id, a.role.as_str(), kind, assigned(db, app, id)?)
         .map_err(sql_error)
 }

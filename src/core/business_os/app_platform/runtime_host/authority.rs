@@ -353,8 +353,14 @@ impl CoreAuthority for RuntimeAuthority {
         let b = binding.clone();
         let expected = manifest.clone();
         self.query("authority.admit", move |db| {
-            let a = codec.check(db, &b)?;
-            let current = if b["command"]["runtime_completion"] == true {
+            let (a, checked_manifest, snapshot) = codec.checked_snapshot(db, &b)?;
+            // Preserve native-platform admission semantics; ordinary app releases
+            // were already verified by checked_snapshot in this exact WAL view.
+            let native =
+                super::super::commands::handles(text(&b["command"], "type").map_err(sql_error)?);
+            let current = if !native {
+                checked_manifest
+            } else if b["command"]["runtime_completion"] == true {
                 codec.version(
                     db,
                     text(&b["command"], "app_id").map_err(sql_error)?,
@@ -367,7 +373,7 @@ impl CoreAuthority for RuntimeAuthority {
             if current != expected {
                 return Err(invalid("revoked: manifest changed"));
             }
-            origin::delivery_permit(db, &b["command"], &a)?;
+            origin::delivery_permit_with_rights(db, &b["command"], &a, &snapshot)?;
             Ok(())
         })
     }
