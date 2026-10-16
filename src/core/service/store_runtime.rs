@@ -89,7 +89,13 @@ impl Dispatcher for Inspect {
             return Err(StoreError::Closed);
         }
         if request.method == "http.listen" {
-            return self.http.lock().unwrap_or_else(|p| p.into_inner()).clone().ok_or(StoreError::Closed)?.dispatch(request, options);
+            return self
+                .http
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+                .ok_or(StoreError::Closed)?
+                .dispatch(request, options);
         }
         if request.method == "queue.ack" {
             let queue = self
@@ -197,9 +203,14 @@ impl DaemonStores {
         })
     }
 
-    pub(crate) fn install_http(&self, http: Arc<super::store_http::HttpSurface>) -> Result<(), StoreError> {
+    pub(crate) fn install_http(
+        &self,
+        http: Arc<super::store_http::HttpSurface>,
+    ) -> Result<(), StoreError> {
         let mut slot = self.http.lock().unwrap_or_else(|p| p.into_inner());
-        if slot.is_some() { return Err(StoreError::AlreadyOwned); }
+        if slot.is_some() {
+            return Err(StoreError::AlreadyOwned);
+        }
         *slot = Some(http);
         Ok(())
     }
@@ -392,7 +403,9 @@ impl DaemonStores {
     /// lifecycle lock and advertise offline maintenance while it is running.
     pub async fn shutdown(&mut self) -> Result<(), StoreError> {
         let http = self.http.lock().unwrap_or_else(|p| p.into_inner()).take();
-        if let Some(http) = http { http.shutdown().await?; }
+        if let Some(http) = http {
+            http.shutdown().await?;
+        }
         // Retire lookup/admission first. Existing jobs are then drained by the
         // pools/writers; retain the daemon lock until all file owners stop.
         self.closing.store(true, Ordering::Release);
