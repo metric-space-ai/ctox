@@ -4,7 +4,7 @@ import {WebRTCKernelTransport} from '../transport-webrtc.mjs';
 import {protocolChannels,FakeNativePeer,offer} from './fake-native-peer.mjs';
 import {sha256Hex} from '../values.mjs';
 test('E26 remote range uses aligned transfer chunks and rejects corrupt per-chunk hash',async()=>{
- const pair=protocolChannels(),peer=new FakeNativePeer(pair.server),transport=new WebRTCKernelTransport({wireFormat:'k2-fixture',channels:pair.client,hello:offer('instance'),verifyPackage:async()=>true});
+ const pair=protocolChannels(),peer=new FakeNativePeer(pair.server),transport=new WebRTCKernelTransport({channels:pair.client,hello:offer('instance'),verifyPackage:async()=>true});
  try{
   await transport.connect({instanceId:'instance',userId:'alice'},{link(){},page(){},write_result(){}});
   const bytes=Uint8Array.from({length:210000},(_,i)=>i%251),blob=new Blob([bytes]),ref=await sha256Hex(blob);peer.blobs.set(ref,blob);

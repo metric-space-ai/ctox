@@ -10,7 +10,7 @@ import { assertLeader, acquireGeneration } from './leader.mjs';
 import { CtoxError, StaleLeader, cloneValue, deepFreeze, deepEqual, jsonEq, liveEqual, mergePatch, fnv1a, uuidv7, sha256Js, sha256Hex, hasBlob, isBlob, isPlainObject } from './values.mjs';
 import { compileQuery, runCompiledQuery, normalizeJson, validateSchema } from './app-api.mjs';
 import { openBackend, deleteBackend } from './store-idb-v5.mjs';
-import { emptyBase, byOpId, docKey, nsName, applyOp, recompute } from './outbox.mjs';
+import { emptyBase, byOpId, enqueueWrite, reserveWrites, docKey, nsName, applyOp, recompute } from './outbox.mjs';
 import { checkCommandTransition } from './command-state.mjs';
 import { SCHEMA_FILE, parseCollectionsFile, classifyCollections, applyMigrationSteps, manifestCollectionsToParsed, parsedToManifestCollections } from './schema-diff.mjs';
 export { CtoxError, uuidv7, sha256Hex, sha256Js } from './values.mjs';
@@ -141,6 +141,7 @@ export function createKernel(opts = {}) {
   const timers = new Set(), tasks = new Set(), deadlineCancels = new Set();
   const inflight = new Map(); // docKey -> op_id
   const inflightOps = new Set();
+  const reservedOps = new Set();
   const skipBeforeCommit = new Set();
   const uploadProgress = new Map(), uploadsDone = new Set();
   const activationListeners = new Set();
@@ -388,6 +389,7 @@ export function createKernel(opts = {}) {
 
   // ---- Laden, Leiterwahl ----
   async function loadFromStorage() {
+    for (const e of await db.all('outbox')) if (e.client_seq != null) reservedOps.add(e.op_id);
     const docs = await db.all('docs');
     for (const r of docs) mirrorPut(r);
     const metas = await db.all('meta');
@@ -454,10 +456,12 @@ export function createKernel(opts = {}) {
     if (closed) return;
     myGen = await acquireGeneration(db);
     isLeader = true;
+    for (const e of await db.all('outbox')) if (e.client_seq != null) reservedOps.add(e.op_id);
     sendLeaderHint();
     // Ein neuer Leiter hat alles gelesen, was der alte geschrieben hat (gemeinsame IDB).
     for (const r of await db.all('docs')) mirrorPut(r);
     for (const m of await db.all('meta')) if (m.key.startsWith('activation:')) applyActivationLocal(m, false);
+    await settleAwaitingPages();
     notify('leader');
     post({ type: 'leader', gen: myGen });
     if (!transportConnected) {
@@ -620,7 +624,7 @@ export function createKernel(opts = {}) {
           } else resolveResult({ status: 'accepted', rev: stored.rev, seq: stored.seq });
           return stored;
         }
-        await t.put('outbox', entry); // docs + outbox in EINER Transaktion
+        await enqueueWrite(t, entry); // preserve E26 reuse plus durable enqueue/client order
         const r = recompute(ns, id, stored?.base ?? emptyBase(), await t.outboxFor(ns, id));
         await putDoc(t, r);
         return r;
@@ -659,13 +663,13 @@ export function createKernel(opts = {}) {
     if (closed || loggedOut) return false;
     const e = getEntry();
     if (!e) { skipBeforeCommit.add(op_id); return true; } // noch nicht vorbereitet
-    // nur vor dem Senden: Leiter weiß es exakt; ein Leser nur, wenn der Leiter offline ist.
-    const canCancel = isLeader ? !inflightOps.has(op_id) : (followerNet?.link?.state ?? 'online') !== 'online';
+    // Only the leader can synchronously prove that no durable dispatch was reserved.
+    const canCancel = isLeader && !pumping && !inflightOps.has(op_id) && !reservedOps.has(op_id);
     if (!canCancel) return false;
     track((async () => {
       const rec = await db.tx(async (t) => {
         const queued = await t.get('outbox', op_id);
-        if (!queued || queued.sent_gen) return null;
+        if (!queued || queued.sent_gen || queued.client_seq != null) return null;
         await t.del('outbox', op_id);
         const stored = await t.get('docs', [e.collection, e.id]);
         const r = recompute(e.collection, e.id, stored?.base ?? emptyBase(), await t.outboxFor(e.collection, e.id));
@@ -706,18 +710,25 @@ export function createKernel(opts = {}) {
     try {
       do {
         pumpAgain = false;
-        const entries = (await db.all('outbox')).sort(byOpId);
+        const entries = await db.tx(async t => { await assertGen(t); return reserveWrites(t); });
+        for (const e of entries) if (e.client_seq != null) reservedOps.add(e.op_id);
+        // P8's bounded gap buffer holds 64 positions. A blocked document head
+        // must not let thousands of later commands exhaust it after reconnect.
+        const floor = entries.find(e => e.client_seq != null)?.client_seq;
         const first = new Map();
         for (const e of entries) { const k = docKey(e.collection, e.id); if (!first.has(k)) first.set(k, e); }
         for (const [k, e] of first) {
           if (inflight.has(k) || !isLeader || link.state !== 'online') continue;
+          if (e.awaiting_page) continue;
+          if (e.client_seq != null && BigInt(e.client_seq) >= BigInt(floor) + 64n) continue;
           inflight.set(k, e.op_id);
           inflightOps.add(e.op_id);
           if (e.op === 'upload') setUploadProgress(e.id, Math.floor((uploadProgress.get(e.id)?.total ?? 0) / 2), uploadProgress.get(e.id)?.total ?? 0, true);
           later(() => track(confirm(k, e)), latencyMs);
         }
       } while (pumpAgain);
-    } finally { pumping = false; }
+    } catch (err) { if (err instanceof StaleLeader) stepDown(); else throw err; }
+    finally { pumping = false; }
   }
   async function subscribeCollection(collection,priority='P2') {
     if (!isLeader || closed || !transportConnected) return;
@@ -787,27 +798,25 @@ export function createKernel(opts = {}) {
     trackScope(page.collection, scope, { backlog: Math.max(0, Number(page.backlog ?? 0)), complete: !!page.complete, error: null }, false);
     netChanged();
     post({type:'docs',keys:out.recs.map(r=>[r.collection,r.id]),checkpoint:out.cp});
+    await settleAwaitingPages(page.collection);
+  }
+  async function settleAwaitingPages(collection) {
+    let touched=false;
+    for (const entry of await db.all('outbox')) if (entry.awaiting_page && (!collection || entry.collection===collection)) {await applyResult(entry,entry.awaiting_page);touched=true;}
+    if(touched){await refreshOutboxStat();schedulePump();}
   }
   async function receiveResult(message) {
     const entry=await db.get('outbox',message.op_id);
+    if(entry && message.client_seq!==undefined && message.client_seq!==entry.client_seq)throw new CtoxError('invalid','write_result client_seq mismatch');
     if(entry){await applyResult(entry,message);await refreshOutboxStat();schedulePump();}
   }
   async function confirm(k,e) {
     let awaitingResult=false;
     try {
       // Mark dispatch and validate the generation in one durable transaction.
-      const sent = await db.tx(async t=>{
-        await assertGen(t);const entry=await t.get('outbox',e.op_id);if(!entry)return null;
-        // Allocate on first dispatch, not local creation: cancelling an unsent
-        // operation must not create a permanent gap. Reconnect reuses the slot.
-        if(entry.op!=='upload' && entry.client_seq===undefined) {
-          entry.client_seq=String(BigInt((await t.get('meta','write_client_seq'))?.value??'0')+1n);
-          await t.put('meta',{key:'write_client_seq',value:entry.client_seq});
-        }
-        const dispatched={...entry,sent_gen:myGen};await t.put('outbox',dispatched);return dispatched;
-      });
+      const sent = await db.tx(async t=>{await assertGen(t);const entry=await t.get('outbox',e.op_id);if(!entry)return false;await t.put('outbox',{...entry,sent_gen:myGen});return entry;});
       if(!sent || closed || !isLeader)return;
-      e=sent;
+      e = sent;
       if(e.op==='upload') {
         const blob=await db.get('blobs',e.id); await transport.upload(e.id,blob.blob);
         await db.tx(async t=>{await assertGen(t);await t.del('outbox',e.op_id);await t.put('blobs',{...blob,pinned:false});await t.put('meta',{key:`upload_done:${e.id}`,ref:e.id});await bumpLocalSeq(t);});
@@ -839,6 +848,7 @@ export function createKernel(opts = {}) {
     await t.del('outbox',e.op_id);
     const rec=recompute(e.collection,e.id,base,await t.outboxFor(e.collection,e.id));await putDoc(t,rec);
     const info={op_id:e.op_id,app_id:e.app_id,collection:e.collection,id:e.id};
+    delete res.type;delete res.client_seq;delete res.requires_page;
     await t.put('meta',{key:`result:${e.op_id}`,info,result:res});
     return {rec,res,info};
   }
@@ -847,6 +857,7 @@ export function createKernel(opts = {}) {
     const key=docKey(out.info.collection,out.info.id);
     if(inflight.get(key)===out.info.op_id)inflight.delete(key);
     inflightOps.delete(out.info.op_id);
+    reservedOps.delete(out.info.op_id);
     handleWriteResult(out.info,out.res);
     post({type:'docs',keys:[[out.info.collection,out.info.id]]});post({type:'write_result',info:out.info,result:out.res});
     schedulePump();
@@ -854,7 +865,7 @@ export function createKernel(opts = {}) {
   async function applyResult(e,result) {
     const out=await db.tx(async t=>{
       await assertGen(t);
-      if(!(await t.get('outbox',e.op_id)))return null;
+      const queued=await t.get('outbox',e.op_id);if(!queued)return null;
       const stored=await t.get('docs',[e.collection,e.id]); let base=stored?.base??emptyBase();
       const res={...result};delete res.doc;delete res.deleted;
       if(!['accepted','merged','rejected','migrated'].includes(res.status))throw new CtoxError('invalid','Invalid write result');
