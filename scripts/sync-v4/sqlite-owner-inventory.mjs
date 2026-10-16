@@ -7,7 +7,7 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 
-const BASELINE = 854; // Measured at the assignment base; lowered as openers retire.
+const BASELINE = 850; // Measured at the assignment base; lowered as openers retire.
 
 function sourceOnly(text) {
   const chars = text.split('');

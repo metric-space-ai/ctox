@@ -1837,25 +1837,20 @@ fn load_strategic_directive_authority_events(
     }
     // The governance schema is created lazily by the governance module; if
     // it does not exist yet, return an empty vec rather than erroring.
-    let conn = Connection::open(db_path).with_context(|| {
-        format!(
-            "failed to open db {} for strategic-directive authority events",
-            db_path.display()
-        )
-    })?;
-    let exists: bool = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='governance_events'",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?
-        .is_some();
-    if !exists {
-        return Ok(Vec::new());
-    }
-    let mut stmt = conn.prepare(
-        "SELECT event_id, mechanism_id, severity, details_json, created_at
+    let rows = crate::lcm::with_lcm_read(db_path, move |conn: &Connection| {
+        let exists: bool = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='governance_events'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .is_some();
+        if !exists {
+            return Ok(Vec::new());
+        }
+        let mut stmt = conn.prepare(
+            "SELECT event_id, mechanism_id, severity, details_json, created_at
          FROM governance_events
          WHERE mechanism_id IN (
              'strategic_directive_mutation_owner_authorised',
@@ -1863,23 +1858,27 @@ fn load_strategic_directive_authority_events(
          )
          ORDER BY CAST(created_at AS INTEGER) DESC
          LIMIT ?1",
-    )?;
-    // We pull a generous slice and filter in Rust because the structured
-    // thread/conversation match lives inside `details_json`. Clamp to a
-    // sane upper bound so this stays cheap even if the audit trail is busy.
-    let scan_limit = (limit.max(1) * 8).min(512) as i64;
-    let rows = stmt.query_map(params![scan_limit], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, String>(3)?,
-            row.get::<_, String>(4)?,
-        ))
+        )?;
+        // We pull a generous slice and filter in Rust because the structured
+        // thread/conversation match lives inside `details_json`. Clamp to a
+        // sane upper bound so this stays cheap even if the audit trail is busy.
+        let scan_limit = (limit.max(1) * 8).min(512) as i64;
+        let rows = stmt
+            .query_map(params![scan_limit], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
     })?;
     let mut out: Vec<StrategicDirectiveAuthorityEvent> = Vec::new();
     for row in rows {
-        let (event_id, mechanism_id, severity, details_json, created_at) = row?;
+        let (event_id, mechanism_id, severity, details_json, created_at) = row;
         let details: serde_json::Value =
             serde_json::from_str(&details_json).unwrap_or(serde_json::Value::Null);
         let detail_thread = details
