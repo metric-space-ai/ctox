@@ -248,6 +248,14 @@
 [data-app="invoices"] .invoices-module .ctox-filterbar .ctox-pane-search {
   min-height: 30px;
   height: 30px;
+  /* Schmale Fenster: das Suchfeld nimmt den freien Platz der Leiste und wird nie auf ein Zeichen gequetscht. */
+  flex: 1 1 8rem;
+  min-width: 8rem;
+}
+
+[data-app="invoices"] .invoices-module .ctox-filterbar {
+  width: 100%;
+  min-width: 0;
 }
 
 /* Pane bodies below the static heads take the remaining pane height; the

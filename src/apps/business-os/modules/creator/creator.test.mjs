@@ -371,3 +371,13 @@ test('v4: library empties render nothing; data only via api.query, commands neve
   assert.equal(localeDe.libSyncing, undefined);
   assert.equal(localeEn.libSyncing, undefined);
 });
+
+test('creator v4: Plattform-, Shell- und Bibliothekszeilen sind keine Eigenbau-Apps', () => {
+  const apps = normalizeCreatorInstalledApps({ modules: [
+    { id: 'ctox-platform', app_id: 'ctox-platform', title: 'Plattform', active_ver: '1' },
+    { id: 'shell', app_id: 'shell', title: 'Shell', active_ver: 'lab' },
+    { id: 'lib:ctox-office', app_id: 'lib:ctox-office', title: 'lib:ctox-office@1.0', active_ver: '1.0' },
+    { id: 'lager', app_id: 'lager', title: 'Lager', active_ver: '1.0.0' },
+  ] });
+  assert.deepEqual(apps.map((a) => a.id), ['lager']);
+});

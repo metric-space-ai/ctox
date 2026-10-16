@@ -142,7 +142,8 @@ export async function mount(root, api, { restored } = {}) {
   cleanups.push(() => clearTimeout(clockTimer));
 
   cleanups.push(api.query('business_apps', {}).subscribe((rows) => {
-    modules = rows.filter((row) => row?.id && row.id !== 'shell');
+    // Keine Apps: Rahmen (shell), Plattform (ctox-platform, vom Kern veröffentlicht, E48) und Bibliotheken (lib:*).
+    modules = rows.filter((row) => row?.id && row.id !== 'shell' && row.id !== 'ctox-platform' && !String(row.id).startsWith('lib:'));
     // App icons are assets of each app (layout.icon_svg); shared/icons.js only supplies generic ones.
     for (const row of modules) if (row.layout?.icon_svg) registerSvgIcon(row.id, row.layout.icon_svg);
     launcher = createLauncher(modules);

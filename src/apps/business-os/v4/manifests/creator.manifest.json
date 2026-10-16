@@ -33,7 +33,7 @@
     "icon.svg": "de0aa6e8b76d219f047f44a4b0a40ea8b95cf6f9665f7f0986be680944c1e527",
     "index.css": "91fc512850093cabdc5bca133ae3fe72a8a6cd7a08ddf325d3562deef7f0f69f",
     "index.html": "52692e05ee78590c3ab750ed00cb1afb8423adb28535eac1014507a7be56176c",
-    "index.js": "e141bacd7ba89d41e1513e03b508c4e3247befcd760c86767b153d421aca1647",
+    "index.js": "c6f4e90e4a570aa1f9b68739decbc0a1b940c0c4267f3408a1042884ea7afbbe",
     "locales/de.json": "0e4929dbfc4407aca26774a848d3748b4951578e598b41b25e17ca0b7e1cf2d0",
     "locales/en.json": "95f6638b9822a5443ef52ce34ff1aad5d210fe74b3b6aeafa75ec341dc1f6036",
     "module.json": "0b4075f3cc27c3bb18f7a8e6e8fe35b3365b2025234acac9fc4d73584d15804d",
@@ -116,7 +116,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "52b0c11f75c032deeb591e63a1332ccad05fdc78e947b02411d4877493abe0ad",
+    "base_hash": "d5a5df7a4ed72b8ee4e6e2085c5622082ddf004b32989abb8d45fc907c35fa52",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },
