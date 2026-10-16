@@ -7590,6 +7590,58 @@
     ],
     "additionalProperties": true
   },
+  "knowledge_table_rows": {
+    "additionalProperties": true,
+    "primaryKey": "id",
+    "properties": {
+      "actor_id": {
+        "type": "string"
+      },
+      "content_hash": {
+        "type": "string"
+      },
+      "id": {
+        "maxLength": 180,
+        "type": "string"
+      },
+      "row_count": {
+        "type": "integer"
+      },
+      "row_index": {
+        "type": "integer"
+      },
+      "schema_hash": {
+        "type": "string"
+      },
+      "table_id": {
+        "type": "string"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "values": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "view_id": {
+        "maxLength": 160,
+        "type": "string"
+      },
+      "window_key": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "view_id",
+      "actor_id",
+      "row_index",
+      "values",
+      "updated_at_ms"
+    ],
+    "type": "object",
+    "version": 0
+  },
   "knowledge_tables": {
     "version": 0,
     "primaryKey": "id",
@@ -7632,6 +7684,55 @@
       "updated_at_ms"
     ],
     "additionalProperties": true
+  },
+  "knowledge_views": {
+    "additionalProperties": true,
+    "primaryKey": "id",
+    "properties": {
+      "actor_id": {
+        "type": "string"
+      },
+      "filter": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "id": {
+        "maxLength": 160,
+        "type": "string"
+      },
+      "limit": {
+        "type": "integer"
+      },
+      "skip": {
+        "type": "integer"
+      },
+      "sort": {
+        "items": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "table": {
+        "maxLength": 180,
+        "type": "string"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "table",
+      "filter",
+      "sort",
+      "skip",
+      "limit",
+      "actor_id",
+      "updated_at_ms"
+    ],
+    "type": "object",
+    "version": 0
   },
   "kundenpipeline_entscheidungen": {
     "version": 0,
