@@ -74,6 +74,14 @@ The default transport is offline; it NEVER manufactures acceptance. `createStubK
 - `transport-webrtc.mjs`: authenticated P4 hello, canonical scopes, signed progress pages, write results,
   clock metrics, and bounded CAS transfers over reliable RTCDataChannels. The host supplies `hello`,
   `verifyPackage`, `resolveScope` and either channels or `createPeer(address, identity)`; reconnect uses the factory.
+- `boot.mjs` (E38.4): `bootV4({launchContextUrl, resolveShell, fetchImpl?})` is the one-call v4 browser entry used by
+  Shell `v4/boot.js`. It fetches `GET /api/business-os/launch-context` (credentials same-origin) and reads only its `v4`
+  member (`V4LaunchContext` in `index.d.ts`: instanceId, userId, actor, signaling, hello.offer, packageKeys), builds
+  `createKernelSession` + `WebRTCKernelTransport` (Ed25519 package/scope verification with the instance keys, built-in
+  signaling client: join, SDP offer to `nativePeerId`, trickle ICE, `createReliableChannels`) and calls `createLoader`.
+  Leader tabs resolve after the authenticated hello. Failures are `BootV4Error` with `reason`
+  `launch_context_unavailable|launch_context_invalid|package_verifier_missing|hello_rejected|transport_unavailable`;
+  there is no V2, V3 or HTTP data fallback. Each reconnect fetches a fresh single-use hello from the launch context.
 - `scheduler.mjs`/`ingress.mjs`/`framing.mjs`: control > commands > interactive, then byte DRR 8:3:1
   live/initial/transfer; per-lane ACK windows, aggregate SCTP budget, parallel ordered lane ingress.
   Frames are at most 16 KiB total. The 32-byte big-endian header is CTX4 magic, lane/codec/reserved,
@@ -91,6 +99,8 @@ Both initial catch-up and changes use `page`; data and the scoped checkpoint com
 
 On the admitted GPU lane: `node --test --test-concurrency=2 src/apps/business-os/kernel/tests/*.test.mjs`.
 Browser: `PLAYWRIGHT_MODULE=<existing package> CHROME_BIN=<existing chromium> node src/apps/business-os/kernel/tests/browser.mjs`.
+bootV4 in real Chromium (E38.4): same variables, `node src/apps/business-os/kernel/tests/boot-browser.mjs` (in-page signaling
+relay + FakeNativePeer on a second RTCPeerConnection; real launch-context HTTP fetch, WebRTC, WebCrypto and /sw.js).
 PNG icon round trip (K-1b): same variables, `node src/apps/business-os/kernel/tests/browser-png.mjs` (runs on macOS with Google Chrome).
 The latter starts only its own bounded loopback static fixture and isolated headless context; no tenant or credentials.
 The explicit Node lock adapter is test-only; browsers use actual navigator.locks and IndexedDB.

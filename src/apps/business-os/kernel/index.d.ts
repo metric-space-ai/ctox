@@ -756,3 +756,74 @@ export interface ArtifactBinding {
   /** §16.50: gleich-ursprüngliche Worker-URL unter der gebundenen Lib-Wurzel `/~a/lib:<name>@<M.m>[~lib:…]/<path>` (nie data:/blob:); nicht gebunden → not_found. */
   workerUrl(lib: string, path: string): string;
 }
+
+// ---- E38.4 v4 browser entry (boot.mjs) ----
+/** P4-a hello offer exactly as decodeHelloFrame (rxdb/src/hello.mjs) accepts it. */
+export interface V4HelloOffer {
+  type:'hello'; protocol_ver:4; bootstrap_ver:number; app_api_ver:{min:string;max:string};
+  /** Must equal V4LaunchContext.v4.instanceId. */
+  instance_id:string; capabilities:string[];
+  /** Minted by the daemon for this authenticated HTTP session; single use (fresh nonce per launch-context fetch). */
+  device_proof:{device_id:string;public_key:string;nonce:string;signature:string};
+  /** Every collection the browser may subscribe to; hello_ok.scope_tokens[i] answers scopes_wanted[i]. */
+  scopes_wanted:string[];
+  /** Without a host zstd adapter only ['gzip'] is usable. */
+  transport:{codecs:('gzip'|'zstd')[];max_frame_bytes:number;fragmentation:boolean;reassembly:boolean};
+}
+/**
+ * Response of GET /api/business-os/launch-context (credentials same-origin). V2 fields (session, config,
+ * designTemplates) stay untouched; v4 reads ONLY the `v4` member. Unknown members are ignored. No business data.
+ */
+export interface V4LaunchContext {
+  v4:{
+    instanceId:string;
+    userId:string;
+    /** actor.id === userId. */
+    actor:{id:string;role:string;[key:string]:unknown};
+    signaling:{
+      /** ws:/wss: signaling endpoints, tried in order. */
+      urls:string[];
+      room:string;
+      /** This browser's signaling peer id. */
+      peerId:string;
+      /** The daemon's native v4 peer id; the browser sends it the SDP offer. */
+      nativePeerId:string;
+      /** Signaling join token (query `token`). */
+      token:string;
+      iceServers:{urls:string|string[];username?:string;credential?:string}[];
+    };
+    hello:{offer:V4HelloOffer};
+    /** Instance signing keys: verify stream packages (key_id) and scope tokens. Ed25519 raw public key, base64url (43 chars). */
+    packageKeys:{keyId:string;alg:'Ed25519';publicKey:string}[];
+  };
+}
+export type BootV4Reason='launch_context_unavailable'|'launch_context_invalid'|'package_verifier_missing'|'hello_rejected'|'transport_unavailable';
+export declare class BootV4Error extends CtoxError {
+  readonly name:'BootV4Error';
+  /** unavailable | invalid | forbidden (package_verifier_missing, hello_rejected) | unavailable (transport). */
+  readonly reason:BootV4Reason;
+}
+export interface BootV4Options {
+  /** Default '/api/business-os/launch-context'. */
+  launchContextUrl?:string;
+  resolveShell:(version:string,artifacts:ShellKernelApi['artifacts'])=>ShellModule|Promise<ShellModule>;
+  fetchImpl?:typeof fetch;
+  /** Host/test seam; default: built-in signaling client (WebSocket + RTCPeerConnection + createReliableChannels). */
+  createPeer?:WebRTCTransportOptions['createPeer'];
+  codecs?:WebRTCTransportOptions['codecs'];
+  subtle?:SubtleCrypto;
+  handshakeTimeoutMs?:number;
+  /** Additional loader/kernel options; identity, actor, transport and resolveShell always come from the launch context. */
+  loaderOptions?:Partial<Omit<LoaderOptions,'instanceId'|'userId'|'actor'|'transport'|'resolveShell'>>;
+}
+export interface BootV4Result {
+  readonly loader:KernelLoader;
+  readonly kernel:Kernel;
+  readonly transport:WebRTCKernelTransport;
+  readonly launchContext:Readonly<V4LaunchContext['v4']>;
+}
+/** Leader tabs resolve after the authenticated hello; follower tabs after the loader is up. Never falls back to V2/HTTP data. */
+export declare function bootV4(options:BootV4Options):Promise<BootV4Result>;
+export declare function parseV4LaunchContext(payload:unknown):Readonly<V4LaunchContext['v4']>;
+export declare function fetchV4LaunchContext(url?:string,fetchImpl?:typeof fetch):Promise<Readonly<V4LaunchContext['v4']>>;
+export declare const DEFAULT_LAUNCH_CONTEXT_URL:'/api/business-os/launch-context';

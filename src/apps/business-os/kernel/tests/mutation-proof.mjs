@@ -5,6 +5,7 @@ import {spawnSync} from 'node:child_process';
 const kernel=resolve('src/apps/business-os/kernel'),out=resolve(process.env.KERNEL_EVIDENCE_DIR??process.env.TMPDIR,'k2-mutations');
 await mkdir(out,{recursive:true});const scratch=await mkdtemp(join(out,'copy-')),base=join(scratch,'src/apps/business-os/kernel');
 await cp(kernel,base,{recursive:true});await mkdir(resolve(base,'../rxdb/src'),{recursive:true});await cp(resolve(kernel,'../rxdb/src/hello.mjs'),resolve(base,'../rxdb/src/hello.mjs'));
+await mkdir(resolve(base,'../shared'),{recursive:true});await cp(resolve(kernel,'../shared/async-timeout.js'),resolve(base,'../shared/async-timeout.js'));
 const cases=[
  ['window','scheduler.mjs','this.sent[lane]-this.acked[lane]<this.windowFrames','true','scheduler.test.mjs','window sends'],
  ['ack-preemption','scheduler.mjs','if(noAck)this.queues[lane].unshift(entry);else this.queues[lane].push(entry);','this.queues[lane].push(entry);','scheduler.test.mjs','window sends'],
@@ -32,6 +33,7 @@ const cases=[
  ['reconnect-address','transport-webrtc.mjs','this.options={...this.options,address,channels:undefined,peer:undefined}','this.options={...this.options,channels:undefined,peer:undefined}','kernel-v4.test.mjs','real transport'],
  ['clock-start','transport-webrtc.mjs','async startHello(){this.started=this.now();','async startHello(){','webrtc.test.mjs','P4 hello'],
  ['shell-failure-report','loader.mjs',"else await kernel.activation.reportFailed('shell',String(ver),outcome.error??'shell_start_failed');",'','loader.test.mjs','loader follows shell activation'],
+ ['boot-hello-token','boot.mjs','new WebRTCKernelTransport({authSession,verifyPackage','new WebRTCKernelTransport({verifyPackage','boot.test.mjs','exactly the launch context'],
  ['wire-endian','framing.mjs','d.setUint32(0,MAGIC);','d.setUint32(0,MAGIC,true);','webrtc.test.mjs','P4 hello'],
 ];
 const receipts=[];
