@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import {createInterface} from 'node:readline';
 import {readFileSync} from 'node:fs';
-import {verify,createPublicKey} from 'node:crypto';
+import {verify,createPublicKey,createHash} from 'node:crypto';
 const inventory=JSON.parse(readFileSync(new URL('../../../tests/sync_v4_e25/e25-methods.json',import.meta.url)));
 const root=process.env.KERNEL_URL;
 const {createKernel}=await import(root+'/kernel.mjs');
@@ -18,6 +18,7 @@ const canonical=v=>Array.isArray(v)?'['+v.map(canonical).join(',')+']':v&&typeof
 const publicKey=createPublicKey({key:Buffer.from('302a300506032b6570032100d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a','hex'),format:'der',type:'spki'});
 let verified=0,replays=0,holdNextInitial=false,heldInitial=null;
 const inFlight=new Set();
+const nativeStages=new Map(),kernelStages=[];
 class NativeBridge extends FakeNativePeer {
  async apply(m,lane){
   const work=this.applyRequest(m,lane);inFlight.add(work);
@@ -26,7 +27,9 @@ class NativeBridge extends FakeNativePeer {
  async applyRequest(m,lane){
   if(m.type==='write'){
    assert.equal(lane,1,'command must use P1');
+   const arrived=performance.now();
    const response=await rpc('write',{message:m});
+   nativeStages.set(response.core_stages.id,{native_ingress_ms:arrived,native_response_ms:performance.now(),core:response.core_stages});
    await this.send('commands',response.receipt);
    assert.equal(response.completion_lane,1,'Core native registry must select P1 completion');
    await this.send('commands',response.page);return;
@@ -60,18 +63,20 @@ try {
  await boot('business_apps',[{id:'ctox-platform',active_ver:'platform-7'}]);
  await boot('business_app_versions',[{id:'ctox-platform@platform-7',manifest:config.manifest}]);
  const api=k.appApi('sender','99');
- const measured=[];
+ const measured=[];let firstHandle;
  const selected=[...inventory.methods,...inventory.command_bus.map(m=>({...m,command_bus:true}))].filter(m=>!config.e25_method||m.method===config.e25_method);
  assert.ok(selected.length>0,"selected E25 method is missing from the acceptance list");
  for(const method of selected){
   const samples=[];
   for(let i=0;i<64;i++){
    const fixture_result=method.streaming?{state:'finished',text:'native final'}:{method:method.method,value:i};
-   const start=performance.now(),h=api.command(method.method,{fixture_result});
-   await h.local;assert.equal((await h.result).status,'accepted');
+   const start=performance.now(),h=api.command(method.method,{fixture_result});firstHandle??=h;
+   await h.local;const local=performance.now();
+   assert.equal((await h.result).status,'accepted');const accepted=performance.now();
    await new Promise((resolve,reject)=>{let off;const timeout=setTimeout(()=>{off?.();reject(Error('E25 completion missing '+method.method))},3000);off=h.status.subscribe(s=>{if(s.status==='done'){clearTimeout(timeout);queueMicrotask(()=>{off?.();resolve()});}});});
    assert.deepEqual(h.status.get().result,fixture_result);
-   samples.push(performance.now()-start);
+   const receipt=performance.now();samples.push(receipt-start);
+   kernelStages.push({id:h.id,method:method.method,sample:i,kernel_write_ms:start,kernel_local_ms:local,accepted_ms:accepted,receipt_ms:receipt,...nativeStages.get(h.id)});
   }
   console.error("E25 method samples complete "+method.method);
   samples.sort((a,b)=>a-b);
@@ -79,13 +84,14 @@ try {
 
   measured.push({method:method.method,p50_ms:samples[Math.ceil(samples.length*.5)-1],p95_ms:p95,p99_ms:samples.at(-1),samples_ms:samples,lane:1,pass:p95<=150});
  }
+ await rpc('trace',{measured:{methods:measured,stage_timestamps:kernelStages,memory_source_sha256:createHash('sha256').update(readFileSync(new URL(root+'/store-idb-v5.mjs'))).digest('hex')}});
  assert.deepEqual(await k.sim.outbox(),[]);assert.deepEqual(peer.errors,[]);
  // Replay the same canonical command through ordinary kernel write + signed page.
  const doc=await rpc('first_command');await k.evict('business_commands');holdNextInitial=true;
  const {result:ignoredResult,executor_fence:ignoredFence,...intent}=doc;
  const h=api.put('business_commands',{...intent,status:'queued'});
  await h.local;assert.equal((await h.result).status,'merged');
- assert.equal(api.get('business_commands',doc.id).get().status,'done');
+ assert.equal(firstHandle.status.get().status,'done');
  assert.equal((await k.sim.outbox()).length,0);
  assert.ok(replays>0,'canonical receipt must trigger a real page replay');
  if(heldInitial)await peer.send('initial',heldInitial);
@@ -95,6 +101,6 @@ try {
  while(inFlight.size)await Promise.all([...inFlight]);
  await rpc('drain');
  assert.deepEqual(peer.errors,[]);
- await new Promise((resolve,reject)=>process.stdout.write(JSON.stringify({type:'measured' ,profile:'E25 component, fixture native DTOs, real Kernel/P5/P9 writer/signatures; not product',methods:measured,completion_lanes:[...completionLanes],verified_pages:verified,canonical_replays:replays,pass:measured.every(m=>m.pass)})+'\n',error=>error?reject(error):resolve()));
+ await new Promise((resolve,reject)=>process.stdout.write(JSON.stringify({type:'measured' ,profile:'E25 component, fixture native DTOs, real Kernel/P5/P9 writer/signatures; not product',methods:measured,stage_timestamps:kernelStages,memory_source_sha256:createHash('sha256').update(readFileSync(new URL(root+'/store-idb-v5.mjs'))).digest('hex'),completion_lanes:[...completionLanes],verified_pages:verified,canonical_replays:replays,pass:measured.every(m=>m.pass)})+'\n',error=>error?reject(error):resolve()));
  assert.ok(measured.every(m=>m.pass),"component P1 p95 exceeded 150ms; retain the measured negative result");
 }finally{clearTimeout(timer);await k.close();peer.close();lines.close();}

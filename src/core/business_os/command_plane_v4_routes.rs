@@ -91,6 +91,21 @@ fn dispatch_authorized(
             return Err(routes::error("forbidden", "native_permission_denied"));
         }
     }
+    if matches!(
+        native.kind.as_str(),
+        "ctox.secret.request.list"
+            | "ctox.secret.request.fulfill"
+            | "ctox.secret.request.decline"
+            | "ctox.workjet.remote_worker.admit"
+            | "ctox.maintenance.restart"
+            | "instance.providers.models.check"
+    ) {
+        // E49 uses the canonical Platform writer, not a legacy command ledger.
+        return Err(routes::error(
+            "unavailable",
+            "canonical_platform_feed_required",
+        ));
+    }
     let mut prepared = PreparedBusinessCommand::from_command(command)
         .map_err(|_| routes::error("invalid", "native_payload_invalid"))?;
     if domain_effect::supports_command(&command.command_type) {
