@@ -4955,6 +4955,10 @@ fn create_symlink(target: &Path, link_path: &Path) -> Result<()> {
     }
 }
 
+#[cfg(all(test, target_os = "linux"))]
+#[path = "process_sandbox_runtime_test.rs"]
+mod process_sandbox_runtime_test;
+
 #[cfg(test)]
 mod tests {
     use super::*;
