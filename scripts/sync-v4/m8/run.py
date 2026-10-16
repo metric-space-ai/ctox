@@ -18,7 +18,11 @@ def main():
     a=argparse.ArgumentParser();a.add_argument('--out',type=pathlib.Path,required=True)
     a.add_argument('--component-ref',default='HEAD',help='P9 source revision; HEAD after integration contains P9')
     a.add_argument('--profile-seconds',type=int,default=360);a.add_argument('--check-only',action='store_true')
+    a.add_argument('--deadline-utc',type=datetime.datetime.fromisoformat,help='optional total measurement deadline, timezone required')
     args=a.parse_args();out=args.out.resolve()
+    if args.deadline_utc is not None and args.deadline_utc.tzinfo is None: a.error('--deadline-utc requires timezone')
+    def remaining():
+        return (args.deadline_utc-datetime.datetime.now(datetime.timezone.utc)).total_seconds() if args.deadline_utc else 1000000
     out.mkdir(parents=True,exist_ok=False)
     source=REPO;component=args.component_ref
     if component=='HEAD': component=subprocess.check_output(['git','-C',str(REPO),'rev-parse','HEAD'],text=True).strip()
@@ -60,7 +64,8 @@ def main():
     provenance={'profile':'component profile, pre-cutover','component_source':component,'harness_source':subprocess.check_output(['git','-C',str(REPO),'rev-parse','HEAD'],text=True).strip(),
         'harness_files':inputs,'test_composition':composition,'host':os.uname().nodename,'started':datetime.datetime.now(datetime.timezone.utc).isoformat(),
         'command_fixture':'OrderedWriter, store fence, projections, commit-driven signed Subscription; fixture authority/executor, no AppRuntimeIngress',
-        'clock':'one native process monotonic Instant; no cross-host synchronization claim'}
+        'clock':'one native process monotonic Instant; no cross-host synchronization claim',
+        'requested_profile_seconds':args.profile_seconds,'deadline_utc':args.deadline_utc.isoformat() if args.deadline_utc else None,'effective_profile_seconds':{}}
     (out/'provenance.json').write_text(json.dumps(provenance,indent=2))
     # Capability probe is confined to a new unprivileged user/network namespace.
     os.environ['M8_PARENT_NETNS']=os.readlink('/proc/self/ns/net')
@@ -76,7 +81,7 @@ def main():
     expected_marker='M8_NATIVE_SOURCE_SHA256 '+hashlib.sha256(b''.join(p.read_bytes() for p in rust_sources)).hexdigest()
     provenance['expected_source_marker']=expected_marker
     provenance['forced_rebuild_sources']=[str(p) for p in rust_sources]
-    build=execute(['cargo','build','--locked','--manifest-path',str(manifest),'--jobs','2'],out/'build.log',1800)
+    build=execute(['cargo','build','--locked','--manifest-path',str(manifest),'--jobs','2'],out/'build.log',max(1,min(1800,int(remaining()-180))))
     if build:
         print((out/'build.log').read_text()[-18000:])
         sys.path.insert(0,str(HERE.parent));import evaluate
@@ -98,10 +103,17 @@ def main():
     assert evaluate.evaluate({})['component_profile_pass'] is False
     if args.check_only:
         print('M8_BUILD_AND_FAIL_CLOSED_EVALUATOR_GREEN');return 0
-    for rtt in (20,150,600):
-        command=[str(binary),str(out),str(args.profile_seconds),str(rtt)]
+    for index,rtt in enumerate((20,150,600)):
+        if remaining()<=60:
+            provenance["effective_profile_seconds"][str(rtt)]=0
+            (out/f"profile-{rtt}.json").write_text(json.dumps({"rtt_ms":rtt,"completed":False,"errors":["measurement deadline exhausted before native start"]}))
+            continue
+        seconds=max(1,min(args.profile_seconds,int((remaining()-60)/(3-index))-60))
+        provenance['effective_profile_seconds'][str(rtt)]=seconds
+        (out/'provenance.json').write_text(json.dumps(provenance,indent=2))
+        command=[str(binary),str(out),str(seconds),str(rtt)]
         if netns==0:command=['unshare','--user','--map-root-user','--net','bash',str(HERE.parent/'netem.sh'),*command]
-        code=execute(command,out/f'native-{rtt}.log',args.profile_seconds+60)
+        code=execute(command,out/f'native-{rtt}.log',seconds+60)
         p=out/f'profile-{rtt}.json'
         if not p.exists():p.write_text(json.dumps({'rtt_ms':rtt,'completed':False,'errors':[f'native process exit {code}; see native-{rtt}.log']}))
         if netns==0 and (out/f'netem-{rtt}.json').exists() and code==0:

@@ -263,14 +263,14 @@ async fn probe(e: Arc<Endpoint>, lane: Lane, value: Value, bulk_active: &AtomicB
         .expect("probe response deadline")
         .expect("probe response");
     if lane == Lane::Commands {
-        assert_eq!(
-            reply["receipt"]["results"][0]["result"]["status"],
-            "accepted"
-        );
-        assert_eq!(
-            reply["terminal"]["results"][0]["result"]["status"],
-            "accepted"
-        );
+        use ctox_store::change_log::subscription::protocol::{OrderedWriteResult, WriteStatus};
+        for phase in ["receipt", "terminal"] {
+            let result: OrderedWriteResult =
+                serde_json::from_value(reply[phase]["results"][0].clone())
+                    .expect("canonical flattened ordered write result");
+            assert_eq!(result.result.status, WriteStatus::Accepted);
+            assert!(result.result.rev.is_some() && result.result.seq.is_some());
+        }
     }
 }
 fn entropy() -> Vec<u8> {

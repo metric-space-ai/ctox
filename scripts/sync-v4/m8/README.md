@@ -28,6 +28,10 @@ SHA-256 compiled from those source bytes; the runner verifies it against the
 inputs before starting any profile and retains source-marker.txt. A mismatched
 binary is rejected instead of measured.
 
+Optional `--deadline-utc 2026-10-16T03:05:00+00:00` bounds the measurement
+budget after lane admission. The runner records requested/effective per-profile
+limits, reserves time for qualification, and leaves timed-out or unstarted
+profiles failed. It never lowers the required artifact size or latency targets.
 The native process has one Core and two clients, two independent associations,
 production V4 schedulers/framing and real native DTLS/SCTP data channels.
 Its channel setup follows the green lane4 native test: only the offering endpoint
