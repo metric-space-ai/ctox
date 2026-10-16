@@ -109,17 +109,3 @@ impl InstanceVerifier for CoreVerifier {
         Ok(())
     }
 }
-
-// RxDB and Store include the same wire source in separate crates. Delegate,
-// rather than inventing another verifier/key or accepting a transport identity.
-impl rxdb::plugins::replication_webrtc::v4_stream::InstanceVerifier for CoreVerifier {
-    fn verify(
-        &self,
-        instance: &str,
-        key_id: &str,
-        canonical: &[u8],
-        signature: &[u8],
-    ) -> Result<(), String> {
-        InstanceVerifier::verify(self, instance, key_id, canonical, signature)
-    }
-}
