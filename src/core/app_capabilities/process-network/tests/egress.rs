@@ -13,7 +13,11 @@ fn e20_net_domain_escape() {
     let exe = executable.as_path();
     let guard = Guard::start(exe, &["example.com".into()]).expect("network owner starts");
     let sandbox = |args: &[&str]| {
-        let mut c = Command::new("/usr/bin/bwrap");
+        // Kernel acceptance uses a private path-bound AppArmor profile on
+        // restricted-userns hosts; this is a test-only executable selection.
+        let bwrap =
+            std::env::var_os("CTOX_E20_TEST_BWRAP").unwrap_or_else(|| "/usr/bin/bwrap".into());
+        let mut c = Command::new(bwrap);
         c.args([
             "--unshare-all",
             "--die-with-parent",
