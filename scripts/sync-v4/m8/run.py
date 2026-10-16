@@ -60,6 +60,12 @@ def main():
     turn=shutil.which('turnserver')
     provenance['turn']={'status':'TURN not measured','binary_present':bool(turn),'reason':'no local coturn executable' if not turn else 'current component source lacks verified native relay selection; no direct path relabeled TURN'}
     (out/'provenance.json').write_text(json.dumps(provenance,indent=2))
+    # The canonical mirror can preserve old mtimes: force the actual compiled copy.
+    rust_sources=[manifest.parent/'src'/name for name in ('main.rs','commands.rs','network.rs')]
+    for path in rust_sources: os.utime(path,None)
+    expected_marker='M8_NATIVE_SOURCE_SHA256 '+hashlib.sha256(b''.join(p.read_bytes() for p in rust_sources)).hexdigest()
+    provenance['expected_source_marker']=expected_marker
+    provenance['forced_rebuild_sources']=[str(p) for p in rust_sources]
     build=execute(['cargo','build','--manifest-path',str(manifest),'--jobs','2'],out/'build.log',1800)
     if build:
         print((out/'build.log').read_text()[-18000:])
@@ -69,6 +75,11 @@ def main():
         return build
     print('M8_NATIVE_BUILD_GREEN',flush=True)
     binary=pathlib.Path(os.environ['CARGO_TARGET_DIR'])/'debug/ctox-sync-v4-m8'
+    actual_marker=subprocess.check_output([str(binary),'--source-marker'],text=True,timeout=10).strip()
+    (out/'source-marker.txt').write_text(actual_marker+'\n')
+    print(actual_marker,flush=True)
+    if actual_marker!=expected_marker: raise RuntimeError('stale native binary: source marker mismatch')
+    provenance['verified_source_marker']=actual_marker
     provenance['binary_sha256']=hashlib.sha256(binary.read_bytes()).hexdigest()
     (out/'provenance.json').write_text(json.dumps(provenance,indent=2))
     # Evaluator contract: absent samples fail; mutation changes real evaluation threshold.

@@ -580,6 +580,9 @@ async fn profile(rtt: u64, out: &std::path::Path, seconds: u64, use_shim: bool) 
 }
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
+    let source_hash = Sha256::digest(concat!(include_str!("main.rs"), include_str!("commands.rs"), include_str!("network.rs")).as_bytes());
+    println!("M8_NATIVE_SOURCE_SHA256 {source_hash:x}");
+    if std::env::args().any(|a| a == "--source-marker") { return; }
     START.set(Instant::now()).unwrap();
     let _ = rustls::crypto::ring::default_provider().install_default();
     let args: Vec<_> = std::env::args().collect();
