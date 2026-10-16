@@ -17,6 +17,7 @@ pub(crate) mod queue_store;
 pub mod reset;
 pub mod state_invariants;
 pub mod state_write_guard;
+pub(crate) mod store_http;
 pub(crate) mod store_inputs;
 mod store_native;
 pub(crate) mod store_runtime;

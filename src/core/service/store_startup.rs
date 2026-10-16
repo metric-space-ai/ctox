@@ -80,6 +80,7 @@ pub(crate) struct Foreground {
 /// Lifetimes for the real weak-routed legacy adapters. They reuse only the
 /// registered file's writer/readers, never an additional connection or pool.
 struct NativeOwners {
+    _policy: crate::business_os::policy::PolicyAuthorityRegistration,
     _core: Arc<crate::persistence::CorePersistence>,
     _lcm: crate::lcm::owner_adapter::OwnerAdapter,
     _runtime: crate::runtime_env::RuntimeStore,
@@ -134,6 +135,17 @@ impl NativeOwners {
         .await
         .map_err(|_| StoreError::Panicked)?
         .map_err(|_| StoreError::Invalid("canonical instance ID unavailable".into()))?;
+        // Required production binding, before any engine/session admission.
+        // The same Store generation owns policy and sync publication; failure
+        // is fatal, never a silent deny-all startup or an implicit default grant.
+        let rights = crate::business_os::policy::sync_rights::StoreRightsAuthority::attach(
+            inputs.sync.writer.clone(),
+            instance_id.clone(),
+        )
+        .await
+        .map_err(|_| StoreError::Invalid("Store policy authority attachment failed".into()))?;
+        let policy = crate::business_os::policy::bind_policy_authority(rights)
+            .map_err(|_| StoreError::Invalid("Store policy authority binding failed".into()))?;
         let signer_active = Arc::new(AtomicBool::new(true));
         let signer: Arc<dyn ctox_store::change_log::subscription::protocol::InstanceSigner> =
             Arc::new(super::store_native::InstanceSigning::new(
@@ -142,6 +154,7 @@ impl NativeOwners {
                 signer_active.clone(),
             ));
         let mut native = Self {
+            _policy: policy,
             _core: core,
             _lcm: lcm,
             _runtime: runtime,
@@ -251,10 +264,13 @@ impl Foreground {
         match NativeOwners::attach(&owner.inputs).await {
             Ok(native) => owner.native_owners = Some(native),
             Err(error) => {
-                owner.shutdown().await?;
+                owner.drain().await?;
                 return Err(error);
             }
         }
+        owner
+            .stores
+            .install_http(super::store_http::HttpSurface::new(owner.inputs.clone()))?;
         let app_engine =
             crate::business_os::app_platform::runtime_host::attach_native(owner.inputs.clone())
                 .await; // APP-PLATFORM-4 attach
@@ -278,7 +294,7 @@ impl Foreground {
             match factory.start(owner.inputs.clone()).await {
                 Ok(engine) => owner.engines.push(engine),
                 Err(error) => {
-                    owner.shutdown().await?;
+                    owner.drain().await?;
                     return Err(error);
                 }
             }
@@ -305,6 +321,28 @@ impl Foreground {
             .starting = false;
         Ok(())
     }
+    /// Transfer custody to a runtime-owned cleanup task. A cancelled startup or
+    /// signal waiter must not drop a still-running engine and release its files.
+    /// Retry drain failures without opening writer admission or dropping owners.
+    async fn drain(mut self) -> Result<(), StoreError> {
+        tokio::spawn(async move {
+            loop {
+                let drained = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
+                    self.shutdown(),
+                ))
+                .await;
+                match drained {
+                    Ok(Ok(())) => return Ok(()),
+                    Ok(Err(_)) | Err(_) => {
+                        eprintln!("ctox v4 drain pending; retaining engine/store custody");
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| StoreError::Panicked)?
+    }
     async fn wait_native_stopped(&mut self) -> std::io::Result<()> {
         #[cfg(unix)]
         if let Some(session) = self
@@ -322,6 +360,41 @@ pub(crate) async fn run(root: PathBuf) -> anyhow::Result<()> {
     #[cfg(unix)]
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut owner = Foreground::start(root.clone(), Handle::current()).await?;
+    // E36: the ordinary daemon owns HTTP too. Read the established typed
+    // runtime-store settings through its existing reader, never a CLI opener.
+    let runtime_db = owner
+        .inputs
+        .databases
+        .get("runtime")
+        .ok_or(StoreError::Closed)?;
+    let settings = runtime_db
+        .readers
+        .read(|tx| {
+            use rusqlite::OptionalExtension;
+            let read = |key: &str| {
+                tx.query_row(
+                    "SELECT env_value FROM runtime_env_kv WHERE env_key=?1",
+                    [key],
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()
+            };
+            Ok((
+                read("CTOX_BUSINESS_OS_WEB_AUTOSTART")?,
+                read("CTOX_BUSINESS_OS_WEB_ADDR")?,
+            ))
+        })
+        .await?;
+    if !matches!(settings.0.as_deref(), Some("0" | "false" | "off")) {
+        let addr = settings.1.unwrap_or_else(|| "127.0.0.1:8765".into());
+        let root = root.clone();
+        if let Err(error) =
+            tokio::task::spawn_blocking(move || super::store_http::serve(&root, &addr)).await?
+        {
+            owner.drain().await?;
+            return Err(error);
+        }
+    }
     // Publish process metadata only after acquiring the daemon/file custody.
     // A rejected second start must not overwrite the running owner's PID.
     let pid_root = root.clone();
@@ -336,11 +409,11 @@ pub(crate) async fn run(root: PathBuf) -> anyhow::Result<()> {
     match pid_result {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
-            owner.shutdown().await?;
+            owner.drain().await?;
             return Err(error);
         }
         Err(error) => {
-            owner.shutdown().await?;
+            owner.drain().await?;
             return Err(error.into());
         }
     }
@@ -373,7 +446,7 @@ pub(crate) async fn run(root: PathBuf) -> anyhow::Result<()> {
         Ok(())
     })
     .await;
-    let shutdown_result = owner.shutdown().await;
+    let shutdown_result = owner.drain().await;
     pid_result??;
     signal_result?;
     shutdown_result?;

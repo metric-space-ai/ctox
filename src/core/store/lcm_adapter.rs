@@ -44,7 +44,10 @@ impl OwnerAdapter {
         writer: WriterHandle,
         readers: ReadPool,
     ) -> Result<Self, StoreError> {
-        let expected = DbId::new(path)?;
+        let identity_path = path.to_owned();
+        let expected = tokio::task::spawn_blocking(move || DbId::new(identity_path))
+            .await
+            .map_err(|_| StoreError::Panicked)??;
         if writer.db_id() != &expected || readers.generation() != writer.generation().0 {
             return Err(StoreError::Invalid("store owner identity mismatch".into()));
         }
@@ -58,7 +61,10 @@ impl OwnerAdapter {
                 )?)
             }))
             .await?;
-        if DbId::new(reader_path)? != expected {
+        let reader_identity = tokio::task::spawn_blocking(move || DbId::new(reader_path))
+            .await
+            .map_err(|_| StoreError::Panicked)??;
+        if reader_identity != expected {
             return Err(StoreError::Invalid("store reader identity mismatch".into()));
         }
         let runtime = tokio::runtime::Handle::try_current()

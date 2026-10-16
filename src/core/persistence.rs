@@ -490,7 +490,10 @@ pub(crate) async fn install_core_owner(
     writer: ctox_store::writer::WriterHandle,
     readers: ctox_store::read_pool::ReadPool,
 ) -> Result<std::sync::Arc<CorePersistence>> {
-    let expected = ctox_store::DbId::new(sqlite_path(root))?;
+    let identity_path = sqlite_path(root);
+    let expected = tokio::task::spawn_blocking(move || ctox_store::DbId::new(identity_path))
+        .await
+        .context("Core identity worker failed")??;
     anyhow::ensure!(
         writer.db_id() == &expected,
         "injected Core writer path differs"
