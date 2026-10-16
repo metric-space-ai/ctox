@@ -111,9 +111,6 @@ impl NativeSessionStream {
         self.feed.changes.changed().await.map_err(|_| closed())?;
         (self.check)()?;
         let mut value = self.feed.current(self.after)?;
-        if terminal(&value) {
-            value = self.feed.current(0)?;
-        }
         let mut previous = self.after;
         for event in value["events"].as_array().into_iter().flatten() {
             let sequence = event["sequence"]
@@ -126,6 +123,11 @@ impl NativeSessionStream {
         }
         self.after = previous;
         self.done = terminal(&value);
+        // Validate incremental events before expanding the terminal payload to
+        // the canonical full snapshot shared with the finish control.
+        if self.done {
+            value = self.feed.current(0)?;
+        }
         Ok(Some((self.next)(value)))
     }
 }
@@ -356,7 +358,12 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
                 own["op"] = pending.command.payload["op"].clone();
             }
             pending.result = Ok(own);
-            pending.linked = Some(Box::new(parent.update(canonical)));
+            // Controls acknowledge their own snapshot. Only the producer stream
+            // may advance a running opening command; a delayed read/write ACK
+            // must not overwrite a newer pushed partial.
+            if terminal(&canonical) {
+                pending.linked = Some(Box::new(parent.update(canonical)));
+            }
         }
         Ok(())
     }

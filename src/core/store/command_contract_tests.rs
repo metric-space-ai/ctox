@@ -450,6 +450,7 @@ async fn kernel_component(e25: bool) {
     let mut executor_seq = 0;
     let mut first = None;
     let mut measured = None;
+    let mut reply_closed = false;
     let mut projection_us = Vec::new();
     loop {
         line.clear();
@@ -458,7 +459,19 @@ async fn kernel_component(e25: bool) {
         }
         let request: Value = serde_json::from_str(&line).expect("component stdout is JSON");
         if request["type"] == "measured" {
+            // Preserve raw measurements even when a latency assertion makes
+            // the child exit nonzero before the final enriched result is built.
+            if e25 {
+                println!("E25_KERNEL_COMPONENT_RAW {}", request);
+            }
             measured = Some(request);
+            continue;
+        }
+        if reply_closed {
+            assert!(
+                matches!(request["type"].as_str(), Some("subscribe" | "drain")),
+                "effect request after child pipe closure"
+            );
             continue;
         }
         let now = std::time::SystemTime::now()
@@ -607,14 +620,30 @@ async fn kernel_component(e25: bool) {
                 .unwrap()
             }
             "first_command" => first.clone().unwrap(),
+            "drain" => Value::Null,
             _ => panic!("unknown component request"),
         };
         if let Err(error) = writeln!(
             input,
             "{}",
             json!({"request":request["request"],"value":value})
-        ).and_then(|_| input.flush()) {
-            panic!("Kernel component child closed input: {error}; exit={:?}", child.0.wait());
+        )
+        .and_then(|_| input.flush())
+        {
+            // The child may have completed every assertion and closed its
+            // transport while an already-issued read-only replay RPC was in
+            // flight. Drain stdout, then REQUIRE both its measurement and exit0.
+            // A late write or any other I/O/child failure remains a hard error.
+            if error.kind() == std::io::ErrorKind::BrokenPipe
+                && matches!(request["type"].as_str(), Some("subscribe" | "drain"))
+            {
+                reply_closed = true;
+            } else {
+                panic!(
+                    "Kernel component child closed input: {error}; exit={:?}",
+                    child.0.try_wait()
+                );
+            }
         }
     }
     drop(input);
@@ -623,6 +652,7 @@ async fn kernel_component(e25: bool) {
         "real Kernel/native command harness failed"
     );
     let mut measured = measured.expect("missing actual runtime measurement");
+    measured["read_reply_closed_during_teardown"] = json!(reply_closed);
     projection_us.sort_by(|a, b| a.total_cmp(b));
     measured["projection_read_p50_us"] = json!(projection_us[projection_us.len().div_ceil(2) - 1]);
     measured["projection_read_p99_us"] =

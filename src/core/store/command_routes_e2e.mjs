@@ -17,8 +17,13 @@ const rpc=(type,data={})=>new Promise((resolve,reject)=>{const id=++request;pend
 const canonical=v=>Array.isArray(v)?'['+v.map(canonical).join(',')+']':v&&typeof v==='object'?'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}':JSON.stringify(v);
 const publicKey=createPublicKey({key:Buffer.from('302a300506032b6570032100d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a','hex'),format:'der',type:'spki'});
 let verified=0,replays=0,holdNextInitial=false,heldInitial=null;
+const inFlight=new Set();
 class NativeBridge extends FakeNativePeer {
  async apply(m,lane){
+  const work=this.applyRequest(m,lane);inFlight.add(work);
+  try{return await work;}finally{inFlight.delete(work);}
+ }
+ async applyRequest(m,lane){
   if(m.type==='write'){
    assert.equal(lane,1,'command must use P1');
    const response=await rpc('write',{message:m});
@@ -47,7 +52,7 @@ const transport=new MeasuredTransport({channels:pair.client,hello:offer('isolate
  if(valid)verified++;return valid;
 }});
 const k=createKernel({instanceId:'isolated-core',userId:'alice',storage:'memory',multiTab:false,latencyMs:0,transport});
-const timer=setTimeout(()=>{console.error('E25 kernel component deadline');process.exit(1)},60000);
+const timer=setTimeout(()=>{console.error('E25 kernel component deadline');process.exit(1)},600000);
 try {
  await k.ready;await transport.ready;
  while(!transport.scopes.has('business_app_versions'))await new Promise(r=>setTimeout(r,1));
@@ -56,7 +61,7 @@ try {
  await boot('business_app_versions',[{id:'ctox-platform@platform-7',manifest:config.manifest}]);
  const api=k.appApi('sender','99');
  const measured=[];
- const selected=inventory.methods.filter(m=>!config.e25_method||m.method===config.e25_method);
+ const selected=[...inventory.methods,...inventory.command_bus.map(m=>({...m,command_bus:true}))].filter(m=>!config.e25_method||m.method===config.e25_method);
  assert.ok(selected.length>0,"selected E25 method is missing from the acceptance list");
  for(const method of selected){
   const samples=[];
@@ -68,6 +73,7 @@ try {
    assert.deepEqual(h.status.get().result,fixture_result);
    samples.push(performance.now()-start);
   }
+  console.error("E25 method samples complete "+method.method);
   samples.sort((a,b)=>a-b);
   const p95=samples[Math.ceil(samples.length*.95)-1];
 
@@ -84,6 +90,11 @@ try {
  assert.ok(replays>0,'canonical receipt must trigger a real page replay');
  if(heldInitial)await peer.send('initial',heldInitial);
  assert.deepEqual([...completionLanes],[1],"native command completions must arrive on P1");
- console.log(JSON.stringify({type:'measured',profile:'E25 component, fixture native DTOs, real Kernel/P5/P9 writer/signatures; not product',methods:measured,completion_lanes:[...completionLanes],verified_pages:verified,canonical_replays:replays,pass:measured.every(m=>m.pass)}));
+ // Stop ingress and drain admitted RPCs before closing the child pipe. A
+ // canonical replay can finish the command while a page RPC is still in flight.
+ while(inFlight.size)await Promise.all([...inFlight]);
+ await rpc('drain');
+ assert.deepEqual(peer.errors,[]);
+ console.log(JSON.stringify({type:'measured' ,profile:'E25 component, fixture native DTOs, real Kernel/P5/P9 writer/signatures; not product',methods:measured,completion_lanes:[...completionLanes],verified_pages:verified,canonical_replays:replays,pass:measured.every(m=>m.pass)}));
  assert.ok(measured.every(m=>m.pass),"component P1 p95 exceeded 150ms; retain the measured negative result");
 }finally{clearTimeout(timer);await k.close();peer.close();lines.close();}

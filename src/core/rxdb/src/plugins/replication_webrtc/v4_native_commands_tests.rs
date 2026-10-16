@@ -470,6 +470,7 @@ async fn e25_speech_session_controls_and_native_events_keep_one_opening_identity
         before,
         "read must use the latest pushed native partial, not poll the backend"
     );
+    assert_eq!(db.query_row("SELECT COUNT(*) FROM completions WHERE command_id=?1", [&open.command_id], |r|r.get::<_,i64>(0)).unwrap(),2,"read controls must not rewrite the producer-owned running opening command");
     let swapped = MockPeer("browser".into(), 2);
     pool.authenticated_peers.lock().insert(swapped.clone());
     handler
@@ -496,6 +497,11 @@ async fn e25_speech_session_controls_and_native_events_keep_one_opening_identity
         final_result.publish(&tx, None, &mut persist).unwrap();
         tx.commit().unwrap();
     }
+    // A terminal producer notification after an already-delivered partial must
+    // not revalidate old full-snapshot events against the incremental cursor.
+    let terminal_event = stream.next().await.unwrap().unwrap();
+    assert_eq!(terminal_event.result.as_ref().unwrap()["text"], "actual final text");
+    assert!(stream.next().await.unwrap().is_none());
     let final_body: String = db
         .query_row(
             "SELECT body FROM completions WHERE command_id='finish-control'",
