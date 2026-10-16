@@ -120,7 +120,29 @@ pub async fn apply(
             bytes += size;
             page.push(pending.next().unwrap());
         }
-        let written = super::write_page(writer, page).await?;
+        let expected = page
+            .iter()
+            .filter_map(|d| {
+                report
+                    .content_hashes
+                    .get(&d.collection)?
+                    .get(&d.id)
+                    .map(|h| {
+                        (
+                            (d.collection.clone(), d.id.clone()),
+                            h.source_sha256.clone(),
+                        )
+                    })
+            })
+            .collect();
+        let written = super::write_page_audited(writer, page, expected).await?;
+        for (collection, hashes) in written.content_hashes {
+            report
+                .content_hashes
+                .entry(collection)
+                .or_default()
+                .extend(hashes);
+        }
         for (collection, counts) in written.collections {
             let total = report.collections.entry(collection).or_default();
             total.target_documents += counts.target_documents;
@@ -340,6 +362,7 @@ pub fn collect(
             .insert(name.into(), Counts::default());
     }
     mail_tracking(tx, &mut out)?;
+    super::jour_fixe::collect_into(tx, &mut out)?;
     tickets(tx, &mut out)?;
     iot(tx, &mut out)?;
     crew(tx, services, &mut out)?;

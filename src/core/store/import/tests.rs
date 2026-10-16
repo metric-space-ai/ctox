@@ -5,6 +5,8 @@ use super::*;
 use crate::{registry::Registry, schema, types::DbId, writer::WriterOptions};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
+#[path = "tests/jour_fixe.rs"]
+mod jour_fixe;
 #[path = "tests/legacy.rs"]
 mod legacy;
 #[path = "tests/profile.rs"]
