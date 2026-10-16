@@ -1286,3 +1286,288 @@ pub(super) fn strategic_directive_id(
         .collect::<String>();
     format!("sdir_{prefix}")
 }
+
+/// A handle to the injected Core owner. It holds no SQLite connection and
+/// never keeps a transaction across a model/tool call. Each method is one
+/// admitted owner job (or the existing snapshot/compute/write compaction).
+#[derive(Clone)]
+pub(crate) struct LcmClient {
+    path: PathBuf,
+}
+impl LcmClient {
+    pub(crate) fn attach(path: &Path) -> Result<Self> {
+        crate::persistence::require_sync_owner_context()?;
+        owner_adapter::OwnerAdapter::for_path(path)?;
+        run_init(path)?;
+        Ok(Self {
+            path: path.to_owned(),
+        })
+    }
+    pub(crate) fn continuity_init_documents(&self, id: i64) -> Result<ContinuityShowAll> {
+        run_continuity_init(&self.path, id)
+    }
+    pub(crate) fn continuity_show_all(&self, id: i64) -> Result<ContinuityShowAll> {
+        self.continuity_init_documents(id)?;
+        owned_lcm_session_read(&self.path, move |engine| {
+            engine.stored_continuity_show_all(id)
+        })
+    }
+    pub(crate) fn stored_continuity_show_all(&self, id: i64) -> Result<ContinuityShowAll> {
+        owned_lcm_session_read(&self.path, move |engine| {
+            engine.stored_continuity_show_all(id)
+        })
+    }
+    pub(crate) fn continuity_show(
+        &self,
+        id: i64,
+        kind: ContinuityKind,
+    ) -> Result<ContinuityDocumentState> {
+        owned_lcm_write(&self.path, move |engine| {
+            engine.ensure_continuity_document(id, kind)
+        })?;
+        owned_lcm_session_read(&self.path, move |engine| engine.continuity_show(id, kind))
+    }
+    pub(crate) fn working_set_snapshot(&self, id: i64, limit: usize) -> Result<LcmSnapshot> {
+        owned_lcm_session_read(&self.path, move |engine| {
+            engine.working_set_snapshot(id, limit)
+        })
+    }
+    pub(crate) fn snapshot(&self, id: i64) -> Result<LcmSnapshot> {
+        owned_lcm_session_read(&self.path, move |engine| engine.snapshot(id))
+    }
+    pub(crate) fn peek_mission_state(&self, id: i64) -> Result<MissionStateRecord> {
+        owned_lcm_session_read(&self.path, move |engine| engine.peek_mission_state(id))
+    }
+    pub(crate) fn continuity_forgotten(
+        &self,
+        id: i64,
+        kind: Option<ContinuityKind>,
+        query: Option<&str>,
+    ) -> Result<Vec<ContinuityForgottenEntry>> {
+        let query = query.map(str::to_owned);
+        owned_lcm_session_read(&self.path, move |engine| {
+            engine.continuity_forgotten(id, kind, query.as_deref())
+        })
+    }
+    pub(crate) fn evaluate_compaction(&self, id: i64, budget: i64) -> Result<CompactionDecision> {
+        owned_lcm_session_read(&self.path, move |engine| {
+            engine.evaluate_compaction(id, budget)
+        })
+    }
+    pub(crate) fn continuity_full_replace_document(
+        &self,
+        id: i64,
+        kind: ContinuityKind,
+        content: &str,
+    ) -> Result<ContinuityDocumentState> {
+        run_continuity_full_replace(&self.path, id, kind.as_str(), content)
+    }
+    pub(crate) fn continuity_string_replace_document(
+        &self,
+        id: i64,
+        kind: ContinuityKind,
+        find: &str,
+        replace: &str,
+    ) -> Result<ContinuityDocumentState> {
+        run_continuity_string_replace(&self.path, id, kind.as_str(), find, replace)
+    }
+    pub(crate) fn record_task_execution_plan(
+        &self,
+        input: TaskExecutionPlanUpdate<'_>,
+    ) -> Result<serde_json::Value> {
+        run_record_task_execution_plan(&self.path, input)
+    }
+    pub(crate) fn record_task_execution_plan_guarded(
+        &self,
+        input: TaskExecutionPlanUpdate<'_>,
+        authorize: impl FnOnce(&Connection) -> Result<()> + Send + 'static,
+    ) -> Result<serde_json::Value> {
+        let (work_key, task_id, command_id, attempt_id) = (
+            input.work_key.to_owned(),
+            input.task_id.to_owned(),
+            input.command_id.to_owned(),
+            input.attempt_id.to_owned(),
+        );
+        let explanation = input.explanation.map(str::to_owned);
+        let steps = input.steps.to_vec();
+        owned_lcm_write(&self.path, move |engine| {
+            engine.record_task_execution_plan_guarded(
+                TaskExecutionPlanUpdate {
+                    work_key: &work_key,
+                    task_id: &task_id,
+                    command_id: &command_id,
+                    attempt_id: &attempt_id,
+                    explanation: explanation.as_deref(),
+                    steps: &steps,
+                },
+                authorize,
+            )
+        })
+    }
+    pub(crate) fn mission_state(&self, id: i64) -> Result<MissionStateRecord> {
+        owned_lcm_write(&self.path, move |engine| engine.mission_state(id))
+    }
+    pub(crate) fn stored_mission_state(&self, id: i64) -> Result<Option<MissionStateRecord>> {
+        owned_lcm_session_read(&self.path, move |engine| engine.stored_mission_state(id))
+    }
+    pub(crate) fn mission_assurance_snapshot(&self, id: i64) -> Result<MissionAssuranceSnapshot> {
+        owned_lcm_session_read(&self.path, move |engine| {
+            engine.mission_assurance_snapshot(id)
+        })
+    }
+    pub(crate) fn active_strategy_snapshot(
+        &self,
+        id: i64,
+        thread: Option<&str>,
+    ) -> Result<StrategySnapshot> {
+        let thread = thread.map(str::to_owned);
+        owned_lcm_session_read(&self.path, move |engine| {
+            engine.active_strategy_snapshot(id, thread.as_deref())
+        })
+    }
+    pub(crate) fn continuity_forgotten_recent(
+        &self,
+        id: i64,
+        kind: Option<ContinuityKind>,
+        limit: usize,
+    ) -> Result<Vec<ContinuityForgottenEntry>> {
+        owned_lcm_session_read(&self.path, move |engine| {
+            engine.continuity_forgotten_recent(id, kind, limit)
+        })
+    }
+    pub(crate) fn continuity_build_prompt(
+        &self,
+        id: i64,
+        kind: ContinuityKind,
+    ) -> Result<ContinuityPromptPayload> {
+        run_continuity_build_prompt(&self.path, id, kind.as_str())
+    }
+    pub(crate) fn continuity_apply_diff(
+        &self,
+        id: i64,
+        kind: ContinuityKind,
+        diff: &str,
+    ) -> Result<ContinuityDocumentState> {
+        let diff = diff.to_owned();
+        owned_lcm_write(&self.path, move |engine| {
+            engine.continuity_apply_diff(id, kind, &diff)
+        })
+    }
+    pub(crate) fn continuity_preserve_recent_anchor_literals(
+        &self,
+        id: i64,
+    ) -> Result<Option<ContinuityDocumentState>> {
+        // Prepare the mechanical diff outside both SQLite executors. Recheck
+        // the source under the writer before applying so deleted literals or
+        // a newer anchor head are never overwritten by stale preparation.
+        owned_lcm_write(&self.path, move |engine| {
+            engine.ensure_continuity_document(id, ContinuityKind::Anchors)
+        })?;
+        let source = owned_lcm_session_read(&self.path, move |engine| {
+            Ok((
+                engine.continuity_show(id, ContinuityKind::Anchors)?,
+                engine.working_set_snapshot(id, 512)?,
+                engine.continuity_forgotten_recent(id, Some(ContinuityKind::Anchors), 256)?,
+            ))
+        })?;
+        let (document, snapshot, forgotten) = source;
+        let mut literals = collect_explicit_anchor_literals(&snapshot.messages);
+        literals.retain(|literal| {
+            !forgotten
+                .iter()
+                .any(|entry| entry.line.contains(&literal.literal))
+        });
+        let Some(diff) = build_anchor_literal_preservation_diff(&document.content, &literals)
+        else {
+            return Ok(None);
+        };
+        let before = serde_json::to_string(&(document, snapshot, forgotten))?;
+        owned_lcm_write(&self.path, move |engine| {
+            let current = (
+                engine.continuity_show(id, ContinuityKind::Anchors)?,
+                engine.working_set_snapshot(id, 512)?,
+                engine.continuity_forgotten_recent(id, Some(ContinuityKind::Anchors), 256)?,
+            );
+            if serde_json::to_string(&current)? != before {
+                return Err(ctox_store::StoreError::Busy.into());
+            }
+            engine
+                .continuity_apply_diff(id, ContinuityKind::Anchors, &diff)
+                .map(Some)
+        })
+    }
+    pub(crate) fn compact<S: Summarizer>(
+        &self,
+        id: i64,
+        budget: i64,
+        summarizer: &S,
+        force: bool,
+    ) -> Result<CompactionResult> {
+        owned_lcm_compact(
+            &self.path,
+            id,
+            budget,
+            LcmConfig::default(),
+            summarizer,
+            force,
+        )
+    }
+    pub(crate) fn sync_mission_state_from_continuity_with_repair(
+        &self,
+        id: i64,
+    ) -> Result<MissionStateRepairOutcome> {
+        owned_lcm_write(&self.path, move |engine| {
+            engine.sync_mission_state_from_continuity_with_repair(id)
+        })
+    }
+    pub(crate) fn sync_mission_state_from_continuity(&self, id: i64) -> Result<MissionStateRecord> {
+        self.mission_state(id)
+    }
+    pub(crate) fn increment_mission_agent_failure_count(
+        &self,
+        id: i64,
+    ) -> Result<MissionStateRecord> {
+        owned_lcm_write(&self.path, move |engine| {
+            engine.increment_mission_agent_failure_count(id)
+        })
+    }
+    pub(crate) fn reset_mission_agent_failure_count(&self, id: i64) -> Result<MissionFailureReset> {
+        owned_lcm_write(&self.path, move |engine| {
+            engine.reset_mission_agent_failure_count(id)
+        })
+    }
+    pub(crate) fn defer_mission_for_reason(
+        &self,
+        id: i64,
+        reason: &str,
+    ) -> Result<MissionStateRecord> {
+        let reason = reason.to_owned();
+        owned_lcm_write(&self.path, move |engine| {
+            engine.defer_mission_for_reason(id, &reason)
+        })
+    }
+    pub(crate) fn overwrite_mission_state(&self, record: &MissionStateRecord) -> Result<()> {
+        let record = record.clone();
+        owned_lcm_write(&self.path, move |engine| {
+            engine.overwrite_mission_state(&record)
+        })
+    }
+    pub(crate) fn add_message(&self, id: i64, role: &str, content: &str) -> Result<MessageRecord> {
+        run_add_message(&self.path, id, role, content)
+    }
+}
+
+/// SQL-only phases for compatibility callers whose durable tables share Core.
+/// Closures cannot retain a connection, submit recursive jobs, or run model I/O.
+pub(crate) fn with_lcm_write<T: Send + 'static>(
+    path: &Path,
+    operation: impl FnOnce(&Connection) -> Result<T> + Send + 'static,
+) -> Result<T> {
+    owned_lcm_write(path, move |engine| operation(&engine.conn))
+}
+pub(crate) fn with_lcm_read<T: Send + 'static>(
+    path: &Path,
+    operation: impl FnOnce(&Connection) -> Result<T> + Send + 'static,
+) -> Result<T> {
+    owned_lcm_read(path, operation)
+}

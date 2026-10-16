@@ -1145,14 +1145,16 @@ fn queue_supports_plan_failure(root: &Path, job: &QueuedPrompt) -> Result<bool> 
     if job.source_label != "queue" || job.leased_message_keys.len() != 1 {
         return Ok(false);
     }
-    let conn = Connection::open(crate::paths::core_db(root))?;
-    Ok(conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM business_command_task_links l
+    let task_id = job.leased_message_keys[0].clone();
+    lcm::with_lcm_read(&crate::paths::core_db(root), move |conn| {
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM business_command_task_links l
          JOIN business_command_aggregates a ON a.command_id=l.command_id
          WHERE l.task_id=?1 AND a.command_type='business_os.chat.task')",
-        [&job.leased_message_keys[0]],
-        |row| row.get(0),
-    )?)
+            [task_id],
+            |row| row.get(0),
+        )?)
+    })
 }
 
 fn accepted_queue_plan_failure(
@@ -2008,7 +2010,7 @@ fn attempt_state_invariant_repair(
     state_invariants::RuntimeStateInvariantReport,
 )> {
     let db_path = crate::paths::core_db(&root);
-    let engine = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
+    let engine = lcm::LcmClient::attach(&db_path)?;
     let mut repair = engine.sync_mission_state_from_continuity_with_repair(conversation_id)?;
     let mut report = state_invariants::evaluate_runtime_state_invariants(root, conversation_id)?;
     let repaired_codes = report
@@ -7195,7 +7197,7 @@ fn start_prompt_worker(
             // non-success outcomes increment it for status and explicit
             // mission-governance decisions.
             let mut agent_failure_threshold_hit = false;
-            if let Ok(engine) = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default()) {
+            if let Ok(engine) = lcm::LcmClient::attach(&db_path) {
                 if agent_outcome.is_agent_failure() && !retryable_runtime_failure {
                     match engine.increment_mission_agent_failure_count(conversation_id) {
                         Ok(record) => {
@@ -7258,7 +7260,7 @@ fn start_prompt_worker(
             let mut mission_sync_outcome = if founder_visible_mail_turn {
                 None
             } else {
-                lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())
+                lcm::LcmClient::attach(&db_path)
                     .and_then(|engine| engine.sync_mission_state_from_continuity(conversation_id))
                     .ok()
             };
@@ -7280,11 +7282,9 @@ fn start_prompt_worker(
             // missing observability/authority without a competing retry loop.
             if !founder_visible_mail_turn && latest_runtime_error.is_some() {
                 if let Some(work_id) = job.ticket_self_work_id.as_deref() {
-                    let mission_record = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())
-                        .ok()
-                        .and_then(|engine| {
-                            engine.stored_mission_state(conversation_id).ok().flatten()
-                        });
+                    let mission_record = lcm::LcmClient::attach(&db_path).ok().and_then(|engine| {
+                        engine.stored_mission_state(conversation_id).ok().flatten()
+                    });
                     let decision = crate::service::mission_governor::evaluate_loop_governor(
                         &job.goal,
                         mission_record.as_ref(),
@@ -15557,29 +15557,33 @@ fn queue_legacy_verification_review_attempt_count(
     message_key: &str,
     retry_floor: Option<&str>,
 ) -> Result<usize> {
-    let db_path = root.join("runtime/ctox.sqlite3");
+    let db_path = crate::paths::core_db(root);
     if !db_path.exists() {
         return Ok(0);
     }
-    let conn = rusqlite::Connection::open(db_path)?;
-    if !table_exists(&conn, "verification_runs")? || !table_exists(&conn, "communication_messages")?
-    {
-        return Ok(0);
-    }
-    let Some(mut floor_ms) = queue_message_review_floor_millis(&conn, message_key)? else {
-        return Ok(0);
-    };
-    if let Some(retry_floor_ms) = retry_floor.and_then(parse_rfc3339_millis) {
-        floor_ms = floor_ms.max(retry_floor_ms);
-    }
-    if let Some(workspace_root) = job
-        .workspace_root
-        .as_deref()
-        .filter(|value| !value.is_empty())
-    {
-        let workspace_pattern = format!("%{workspace_root}%");
-        let count: i64 = conn.query_row(
-            r#"
+    let job = job.clone();
+    let message_key = message_key.to_owned();
+    let retry_floor = retry_floor.map(str::to_owned);
+    lcm::with_lcm_read(&db_path, move |conn| {
+        if !table_exists(&conn, "verification_runs")?
+            || !table_exists(&conn, "communication_messages")?
+        {
+            return Ok(0);
+        }
+        let Some(mut floor_ms) = queue_message_review_floor_millis(conn, &message_key)? else {
+            return Ok(0);
+        };
+        if let Some(retry_floor_ms) = retry_floor.as_deref().and_then(parse_rfc3339_millis) {
+            floor_ms = floor_ms.max(retry_floor_ms);
+        }
+        if let Some(workspace_root) = job
+            .workspace_root
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            let workspace_pattern = format!("%{workspace_root}%");
+            let count: i64 = conn.query_row(
+                r#"
             SELECT COUNT(*)
             FROM verification_runs
             WHERE review_required = 1
@@ -15593,13 +15597,13 @@ fn queue_legacy_verification_review_attempt_count(
                  OR raw_report LIKE ?3
               )
             "#,
-            params![job.source_label, floor_ms, workspace_pattern],
-            |row| row.get(0),
-        )?;
-        return Ok(count.max(0) as usize);
-    }
-    let count: i64 = conn.query_row(
-        r#"
+                params![job.source_label, floor_ms, workspace_pattern],
+                |row| row.get(0),
+            )?;
+            return Ok(count.max(0) as usize);
+        }
+        let count: i64 = conn.query_row(
+            r#"
         SELECT COUNT(*)
         FROM verification_runs
         WHERE review_required = 1
@@ -15609,10 +15613,11 @@ fn queue_legacy_verification_review_attempt_count(
           AND preview = ?3
           AND CAST(created_at AS INTEGER) >= ?4
         "#,
-        params![job.source_label, job.goal, job.preview, floor_ms],
-        |row| row.get(0),
-    )?;
-    Ok(count.max(0) as usize)
+            params![job.source_label, job.goal, job.preview, floor_ms],
+            |row| row.get(0),
+        )?;
+        Ok(count.max(0) as usize)
+    })
 }
 
 fn queue_review_budget_attempt_count(
@@ -21939,7 +21944,7 @@ fn maybe_redirect_owner_visible_work_to_strategy_setup(
         .unwrap_or_else(|| default_follow_up_thread_key(&job.goal));
     let conversation_id = turn_loop::conversation_id_for_thread_key(Some(thread_key.as_str()));
     let db_path = crate::paths::core_db(&root);
-    let engine = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
+    let engine = lcm::LcmClient::attach(&db_path)?;
     let strategy = engine.active_strategy_snapshot(conversation_id, Some(thread_key.as_str()))?;
     if strategy.active_vision.is_some() && strategy.active_mission.is_some() {
         return Ok(false);
@@ -25464,7 +25469,7 @@ fn recover_mission_after_accepted_attempt(
     if !accepted {
         return Ok(None);
     }
-    let engine = lcm::LcmEngine::open(db_path, lcm::LcmConfig::default())?;
+    let engine = lcm::LcmClient::attach(db_path)?;
     engine
         .reset_mission_agent_failure_count(conversation_id)
         .map(Some)

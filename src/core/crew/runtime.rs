@@ -146,7 +146,9 @@ pub(crate) fn prepare_attempt_or_continue(
                 "crew preparation failed"
             };
             selection_warning(root, task_ids.first().map(String::as_str), attempt, cause);
-            if let Ok(conn) = Connection::open(crate::paths::core_db(root)) {
+            let task_ids = task_ids.to_vec();
+            let lease_owner = lease_owner.to_owned();
+            let _ = crate::lcm::with_lcm_write(&crate::paths::core_db(root), move |conn| {
                 for id in task_ids {
                     let _ = conn.execute(
                         "UPDATE communication_routing_state SET crew_member_id=NULL
@@ -154,7 +156,8 @@ pub(crate) fn prepare_attempt_or_continue(
                         params![id, lease_owner],
                     );
                 }
-            }
+                Ok(())
+            });
             None
         }
     }

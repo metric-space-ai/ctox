@@ -29,7 +29,6 @@ pub use mission_state::{
     ClosureConfidence, ContinuationMode, MissionStateFields, MissionStatus, TriggerIntensity,
 };
 use mission_state::{focus_semantic_conflicts_local, normalize_mission_text};
-pub(crate) use runtime_support::seed_mission_state_for_queue_with;
 use runtime_support::*;
 pub use runtime_support::{
     run_add_assistant_turn, run_add_message, run_begin_worker_attempt_finalization, run_compact,
@@ -44,6 +43,9 @@ pub use runtime_support::{
     run_refresh_continuity, run_secret_rewrite, run_set_task_execution_review_status,
     run_show_continuity, run_task_execution_progress, run_task_execution_progress_for_task,
     run_terminalize_worker_attempt, run_worker_attempt,
+};
+pub(crate) use runtime_support::{
+    seed_mission_state_for_queue_with, with_lcm_read, with_lcm_write, LcmClient,
 };
 pub(crate) use worker_runs::projected_worker_run_id;
 pub use worker_runs::{run_register_worker_run, WorkerRunInput};
