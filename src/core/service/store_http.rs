@@ -101,6 +101,7 @@ impl HttpSurface {
                                     Header::from_bytes("X-Content-Type-Options", "nosniff")
                                         .unwrap(),
                                 );
+                                response.add_header(Header::from_bytes("Content-Security-Policy", "default-src 'self'; script-src 'self' blob:; connect-src 'self' wss:; object-src 'none'; base-uri 'none'").unwrap());
                                 let _ = request.respond(response);
                             }
                             Ok(None) => (),
@@ -195,6 +196,13 @@ fn answer(
     if path.starts_with("/api/") {
         return Ok((404, "text/plain", Vec::new()));
     }
+    // §10.1 is a bootstrap allowlist, not an unauthenticated module/record
+    // server. Active Shell/app artifacts must arrive over the V4 data stream.
+    if !matches!(path, "/" | "/index.html" | "/loader.mjs" | "/sw.js")
+        && !(path.starts_with("/kernel/") && path.ends_with(".mjs"))
+    {
+        return Ok((404, "text/plain", Vec::new()));
+    }
     let relative = path.strip_prefix('/').unwrap_or(path);
     let relative = if relative.is_empty() {
         "index.html"
@@ -222,6 +230,9 @@ fn answer(
         Some("wasm") => "application/wasm",
         _ => "application/octet-stream",
     };
+    if target.metadata()?.len() > 1024 * 1024 {
+        return Ok((413, "text/plain", Vec::new()));
+    }
     Ok((
         200,
         mime,
@@ -349,6 +360,13 @@ mod tests {
             assert_eq!(
                 client
                     .get(format!("http://{}/api/business-os/records", listen.addr))
+                    .send()?
+                    .status(),
+                404
+            );
+            assert_eq!(
+                client
+                    .get(format!("http://{}/modules/private/index.js", listen.addr))
                     .send()?
                     .status(),
                 404
