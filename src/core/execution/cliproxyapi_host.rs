@@ -416,6 +416,29 @@ impl ctox_cliproxyapi::internal::api::server_management::ManagementRuntimeStatus
 }
 
 #[derive(Debug, Clone)]
+struct CoreManagementExecutor;
+impl ctox_cliproxyapi::internal::api::server_management::ManagementBlockingExecutor
+    for CoreManagementExecutor
+{
+    fn execute(
+        &self,
+        operation: ctox_cliproxyapi::internal::api::server_management::ManagementJob,
+    ) -> ctox_cliproxyapi::internal::api::server_management::ManagementFuture {
+        Box::pin(async move {
+            crate::persistence::run_core_sync(move || Ok(operation())).await.map_err(|error| {
+                use ctox_cliproxyapi::internal::api::server_management::ManagementExecutionError;
+                if matches!(error.downcast_ref::<ctox_store::StoreError>(), Some(ctox_store::StoreError::Busy)) {
+                    ManagementExecutionError::Busy
+                } else {
+                    eprintln!("ctox management: Core owner admission unavailable");
+                    ManagementExecutionError::Unavailable
+                }
+            })
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 struct CtoxManagementRuntimeConfigSource {
     root: PathBuf,
 }
@@ -517,7 +540,10 @@ impl ctox_cliproxyapi::internal::api::server_management::ManagementRuntimeConfig
     > {
         load_instance_proxy_config(&self.root)
             .map(|stored| stored.as_ref().map(management_runtime_config_summary))
-            .map_err(|_| {
+            .map_err(|error| {
+                if let Some(reason) = error.downcast_ref::<crate::persistence::CoreSyncError>() {
+                    eprintln!("ctox management config admission failed: {reason}");
+                }
                 ctox_cliproxyapi::internal::api::server_management::ManagementRuntimeConfigError::StoreUnavailable
             })
     }
@@ -538,8 +564,16 @@ impl ctox_cliproxyapi::internal::api::server_management::ManagementRuntimeConfig
         {
             return Err(ManagementRuntimeConfigError::Invalid);
         }
-        ensure_runtime_secrets_available(&self.root, &mutation.runtime)
-            .map_err(|_| ManagementRuntimeConfigError::CredentialUnavailable)?;
+        ensure_runtime_secrets_available(&self.root, &mutation.runtime).map_err(|error| {
+            if let Some(reason) = error.downcast_ref::<crate::persistence::CoreSyncError>() {
+                eprintln!("ctox management credential admission failed: {reason}");
+                ManagementRuntimeConfigError::StoreUnavailable
+            } else if error.downcast_ref::<ctox_store::StoreError>().is_some() {
+                ManagementRuntimeConfigError::StoreUnavailable
+            } else {
+                ManagementRuntimeConfigError::CredentialUnavailable
+            }
+        })?;
         let stored = save_instance_proxy_config(
             &self.root,
             mutation.expected_revision,
@@ -3239,7 +3273,12 @@ async fn run_instance_management_supervisor(root: PathBuf) {
     };
 
     loop {
-        let snapshot = match InstanceManagementKeySnapshot::load(&root) {
+        let work = root.clone();
+        let snapshot = match crate::persistence::run_core_sync(move || {
+            InstanceManagementKeySnapshot::load(&work)
+        })
+        .await
+        {
             Ok(Some(snapshot)) => snapshot,
             Ok(None) => {
                 set_instance_management_status(
@@ -3290,11 +3329,10 @@ async fn run_instance_management_supervisor(root: PathBuf) {
         drop(snapshot);
         let runtime_status = Arc::new(CtoxManagementRuntimeStatusSource::new(root.clone()));
         let runtime_config = Arc::new(CtoxManagementRuntimeConfigSource::new(root.clone()));
-        let handler = Arc::new(ManagementHandler::with_runtime_sources(
-            authenticator,
-            runtime_status,
-            runtime_config,
-        ));
+        let handler = Arc::new(
+            ManagementHandler::with_runtime_sources(authenticator, runtime_status, runtime_config)
+                .with_blocking_executor(Arc::new(CoreManagementExecutor)),
+        );
         let listener = match tokio::net::TcpListener::bind(instance_management_addr()).await {
             Ok(listener) => listener,
             Err(error) => {
@@ -3339,9 +3377,14 @@ async fn run_instance_management_supervisor(root: PathBuf) {
                 _ = tokio::time::sleep(std::time::Duration::from_secs(
                     INSTANCE_MANAGEMENT_RETRY_SECONDS,
                 )) => {
-                    match InstanceManagementKeySnapshot::load(&root) {
+                    let work = root.clone();
+                    match crate::persistence::run_core_sync(move || InstanceManagementKeySnapshot::load(&work)).await {
                         Ok(Some(current)) if current.fingerprint == key_fingerprint => {}
-                        _ => break,
+                        Ok(_) => break,
+                        Err(error) => {
+                            set_instance_management_status(&root, InstanceManagementPhase::Faulted, Some(error.to_string()));
+                            break;
+                        }
                     }
                 }
             }
@@ -4891,8 +4934,8 @@ mod tests {
         assert!(!response.contains(key));
     }
 
-    #[tokio::test]
-    async fn management_put_atomically_activates_secret_free_provider_topology() {
+    #[test]
+    fn management_put_atomically_activates_secret_free_provider_topology() {
         use ctox_cliproxyapi::internal::api::handlers::management::{
             ManagementAuthenticator, SystemManagementAuthClock,
         };
@@ -4901,7 +4944,11 @@ mod tests {
         };
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-        let root = tempfile::tempdir().unwrap();
+        let fixture = Arc::new(tempfile::tempdir().unwrap());
+        let work = fixture.path().to_owned();
+        let root = Arc::clone(&fixture);
+        crate::persistence::with_cli_owners(&work, || {
+            crate::persistence::run_core_blocking_at(&work, move || {
         for (name, value) in [
             ("persisted-claude-access", "access-token-do-not-store"),
             ("persisted-claude-refresh", "refresh-token-do-not-store"),
@@ -4928,7 +4975,7 @@ mod tests {
             Arc::new(CtoxManagementRuntimeConfigSource::new(
                 root.path().to_path_buf(),
             )),
-        );
+        ).with_blocking_executor(Arc::new(CoreManagementExecutor));
         let body = serde_json::to_vec(&serde_json::json!({
             "schema": INSTANCE_PROXY_CONFIG_SCHEMA,
             "expected_revision": 0,
@@ -4936,6 +4983,7 @@ mod tests {
             "runtime": stored_claude_runtime(),
         }))
         .unwrap();
+        let response = tokio::runtime::Handle::current().block_on(async move {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -4958,6 +5006,8 @@ mod tests {
         let mut response = Vec::new();
         client.read_to_end(&mut response).await.unwrap();
         server.await.unwrap();
+        response
+        });
 
         let split = response
             .windows(4)
@@ -4992,6 +5042,9 @@ mod tests {
             stale.unwrap_err(),
             ManagementRuntimeConfigError::RevisionConflict
         );
+                    Ok::<(), anyhow::Error>(())
+            })
+        }).unwrap();
     }
 
     #[test]
