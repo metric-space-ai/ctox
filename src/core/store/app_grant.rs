@@ -420,8 +420,13 @@ impl AppGrantSession {
             .with_snapshot(rights.rights_ver, &head.epoch, |instance, _| {
                 let state = self.state.lock().map_err(|_| "grant session unavailable")?;
                 let claims = &grant.claims;
-                self.peer_authority
-                    .validate(tx, &state.user, &state.role, &state.device, &claims.app_id)?;
+                self.peer_authority.validate(
+                    tx,
+                    &state.user,
+                    &state.role,
+                    &state.device,
+                    &claims.app_id,
+                )?;
                 if !state.active
                     || claims.instance_id != instance
                     || claims.user_id != state.user
@@ -493,7 +498,10 @@ impl AppGrantSession {
             .iter()
             .filter_map(|(app, issued)| {
                 let valid = state.active
-                    && self.peer_authority.validate(tx, &state.user, &state.role, &state.device, app).is_ok()
+                    && self
+                        .peer_authority
+                        .validate(tx, &state.user, &state.role, &state.device, app)
+                        .is_ok()
                     && now < issued.claims.exp
                     && issued.claims.rights_ver == rights.rights_ver.to_string()
                     && resolve(tx, &rights, &state, app).is_ok_and(|(cols, hash)| {

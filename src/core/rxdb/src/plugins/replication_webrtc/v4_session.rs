@@ -15,7 +15,9 @@ use std::sync::{
 /// It signs pages, reads the commit-driven change log and uses the ONE writer
 /// transaction for document + op_id result. Replayed requests recheck authority.
 pub trait V4StreamSource: Send + Sync {
-    fn control(&self, _: &str, _: Value) -> BoxFuture<'static, RxResult<Option<Value>>> { Box::pin(async { Err(invalid()) }) }
+    fn control(&self, _: &str, _: Value) -> BoxFuture<'static, RxResult<Option<Value>>> {
+        Box::pin(async { Err(invalid()) })
+    }
     /// Missing or stale authority is an error, including every retained replay.
     /// An optional guard would silently turn denied publication into unrestricted IO.
     fn publication(
@@ -128,7 +130,10 @@ impl V4Session {
                         let message: Value =
                             serde_json::from_slice(&bytes).map_err(|_| invalid())?;
                         match message.get("type").and_then(Value::as_str) {
-                            Some("scope.grant.request") if lane == Lane::Control => { grant_control::dispatch(&*source, &peer, message, &sender, &seq).await?; }
+                            Some("scope.grant.request") if lane == Lane::Control => {
+                                grant_control::dispatch(&*source, &peer, message, &sender, &seq)
+                                    .await?;
+                            }
                             Some("subscribe") if lane == Lane::Control => {
                                 let collection = message["collection"]
                                     .as_str()

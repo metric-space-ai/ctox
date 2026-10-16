@@ -272,7 +272,10 @@ impl BrowserAdmission {
             }
             peers.insert(transport_peer.clone(), binding);
         }
-        authorized.scope_tokens = vec![super::store_browser_ingress::scope_grant_route::shell(self, &inputs, &transport_peer).await?];
+        authorized.scope_tokens = vec![
+            super::store_browser_ingress::scope_grant_route::shell(self, &inputs, &transport_peer)
+                .await?,
+        ];
         Ok(authorized)
     }
     pub(super) fn ensure_current(&self) -> Result<(), StoreError> {
