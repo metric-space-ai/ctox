@@ -248,7 +248,7 @@ export function prepareImport(raw, nowMs, salt = '') {
     source: String(src.source || 'import'),
     created_at_ms: num(src.created_at_ms) || now,
     updated_at_ms: now,
-    _deleted: false,
+    // _deleted ist reserviert (Kern-Tombstone, E47) und wird nie von der App geschrieben.
   };
 }
 

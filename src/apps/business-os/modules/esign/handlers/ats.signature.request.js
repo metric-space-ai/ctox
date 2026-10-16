@@ -18,7 +18,6 @@ export default async function handle(command, ctx) {
     status: 'sent',
     created_at_ms: now,
     updated_at_ms: now,
-    _deleted: false,
   });
   await recordAtsGovernanceEvent(ctx, command, atsActorValue(command), 'business_os.ats.signature_requested',
     { request_id: id, document_id: documentId }, now);

@@ -1,6 +1,6 @@
 // documents gegen den eingefrorenen App-API-4.0-Kern-Stub (createStubKernel, Pin CTOX_APP_API_STUB, read-only unter
 // /__stub/ ausgeliefert) in echtem Chromium. Muster: modules/knowledge/tests/v4-api.test.mjs.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf node --test src/apps/business-os/modules/documents/tests/v4-api.test.mjs
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/8265bd7 node --test src/apps/business-os/modules/documents/tests/v4-api.test.mjs
 // Screenshots (1280 und 420) mit CTOX_DOCUMENTS_SHOTS=1 nach tests/shots/.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,7 +12,7 @@ import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
@@ -138,6 +138,9 @@ test('leere Collections: kein Text in Liste und Editor, keine Zone', async () =>
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     const k2 = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, instanceId: 'empty' });
     await k2.ready;
+    // E48: auch der leere Kern braucht die veröffentlichte documents-Version (foreign_collections business_commands u. a.).
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await k2.sim.inspect('business_apps', o.app))?.data?.active_ver) await k2.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await k2.sim.publishAppVersion('documents', '1.0.0', { title: 'Dokumente', manifestExtra: window.__routes });
     const host = document.createElement('div');
     host.style.cssText = 'width:900px;height:500px;position:relative';
     document.body.append(host);

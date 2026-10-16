@@ -264,7 +264,6 @@ export async function onReply(command, reply, ctx) {
       business_command_id: command.id,
       created_at_ms: now,
       updated_at_ms: now,
-      _deleted: false,
     });
     const existing = await tx.get('documents', documentId);
     const doc = existing ? JSON.parse(JSON.stringify(existing)) : { id: documentId, document_id: documentId };

@@ -15,7 +15,7 @@ import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const APP = 'nachweise';
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
@@ -57,7 +57,12 @@ before(async () => {
   page.__errors = errors;
   await page.goto(base);
   // FIXT-R: echte Routen/Rechte/Collections aus v4/manifests/nachweise.manifest.json (strikter Kern seit E26/E48).
-  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes(APP));
+  // Stub 8265bd7 liest in runCommand das Handler-Artefakt (manifest.files[path]) VOR dem sim.onCommand-Simulator; die
+  // Fixture veröffentlicht keine Dateien („Artefakt undefined fehlt“). Die simulierten Typen daher ohne Handler-Pfad
+  // veröffentlichen – Routen und command_rights bleiben die echten.
+  const routes = realManifestRoutes(APP);
+  for (const type of ['ats.deployment.check', 'ats.leistungsnachweis.signoff']) if (routes.handlers) delete routes.handlers[type];
+  await page.evaluate((routes) => { window.__routes = routes; }, routes);
   await page.evaluate(async (APP) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import(`/modules/${APP}/index.js`);

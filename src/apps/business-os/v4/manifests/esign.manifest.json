@@ -98,9 +98,9 @@
     "assets/icon@512.jpg": "dbc5218cb41381406d1e7b2399848338a5a7bac873c87317e6ab6b16c4017ddc",
     "collections.schema.json": "4e9604d5dd9a697bcce4265b3a275b21b77c1468ceb31a8625aedfcd201cf34f",
     "core/signature.js": "aa8a6372988feb4c935de2a34e436bb95fb5ba57cd1072300d1803260a219895",
-    "handlers/_ats.js": "9b61f67b398d511d68dcbca570b5c3a5c8056f5c9e147bca835c6274f4ba8c46",
+    "handlers/_ats.js": "106c6da0358fb3fad8885549b272cd91b6f6113ad1db0416a61c8791c3229988",
     "handlers/_sha256.js": "1ff0c246683822435b50fb3879af0243c235700cf70fa04572266d1aacc94d12",
-    "handlers/ats.signature.request.js": "030c34e6615dca67c28f00ba980b674614f0746dfa6888231b034611566bddec",
+    "handlers/ats.signature.request.js": "c9f0796ff61be9d5b41c58f7feb4a692f7145b56d1f17ed93029d67fc0366c8a",
     "handlers/ats.signature.sign.js": "4125f277f17cf4bb423bbf29ebe02c26d21efd90904bde67bdbae960d168dc70",
     "icon.svg": "420acabd7dd113e084742ef65d2f90acfcb9ebea0c1004d925585753e64ee5c9",
     "index.css": "1cc8dcccc409e256d05952e009d0292383f84a161dba15c3bd7301d3d3969064",
@@ -389,7 +389,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "762ef0bafb980d2844cf8fca858cc994ecde2912c13ef76cc2100c00b9f1f582",
+    "base_hash": "ba117cc067935c1e76f1a31af858f75a1ab80a697e5f145d6f2e86c6012e1a94",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

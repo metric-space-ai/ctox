@@ -1,6 +1,6 @@
 // app-store gegen den verbindlichen App-API-4.0-Stub des Kerns (createStubKernel, gepinnt über CTOX_APP_API_STUB,
 // read-only unter /__stub/ ausgeliefert) in echtem Chromium. Muster: modules/knowledge/tests/v4-api.test.mjs.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf node --test src/apps/business-os/modules/app-store/tests/v4-api.test.mjs
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/8265bd7 node --test src/apps/business-os/modules/app-store/tests/v4-api.test.mjs
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -9,8 +9,9 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const SHOTS = join(HERE, 'shots');
@@ -79,6 +80,9 @@ before(async () => {
   page.on('console', (m) => { if (m.type() === 'error') console.error('[page]', m.text()); });
   page.__errors = errors;
   await page.goto(base);
+  // FIXT-8265 (E48): echte Deklarationen der app-store-Version (v4/manifests/app-store.manifest.json: business_apps,
+  // business_app_versions, app_catalog, app_drafts, files von ctox-platform) plus Eigentümer documents/notes/spreadsheets.
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes('app-store'));
   await page.evaluate(async ({ apps, versions, catalog }) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     const { createCatalogCore } = await import('/modules/app-store/tests/catalog-core-sim.mjs');
@@ -86,17 +90,27 @@ before(async () => {
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, actor: { role: 'admin', permissions: ['apps.source.view', 'apps.source.edit'] } });
     await kernel.ready;
     await kernel.sim.push('business_apps', [{ id: 'app-store', title: 'App Store' }, { id: 'creator', title: 'Creator' }]);
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion('app-store', '1', { title: 'App Store', manifestExtra: window.__routes });
     await kernel.sim.push('business_app_versions', versions);
     await kernel.sim.push('business_apps', apps);
     await kernel.sim.settle();
-    const core = createCatalogCore(kernel, kernel.appApi('app-store', '1'));
+    // FIXT-8265: app-store deklariert business_commands nicht (nur api.command). Testseitiges Lesen daher über die
+    // Befehls-ids aus api.command und kernel.sim.inspect, nicht über die App-API.
+    const inner = kernel.appApi('app-store', '1');
+    const cmdIds = [];
+    const core = createCatalogCore(kernel, { ...inner, command(type, payload, opts) { const h = inner.command(type, payload, opts); cmdIds.push(h.id); return h; } });
     core.setCatalog(catalog);
     const api = core.api;
     window.__core = core;
     window.__k = kernel;
     window.__api = api;
     window.__zone = () => kernel.statusZone.forApp('app-store').get().filter((e) => e.source === 'app');
-    window.__commands = () => api.query('business_commands', { sort: [{ created_at: 'asc' }] }).get();
+    window.__commands = async () => {
+      const rows = [];
+      for (const id of cmdIds) { const r = await kernel.sim.inspect('business_commands', id); if (r?.data != null && !r.deleted) rows.push(r.data); }
+      return rows.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+    };
   }, { apps: APPS, versions: VERSIONS, catalog: CATALOG });
 });
 
@@ -136,18 +150,18 @@ test('mount: Katalog aus business_apps/business_app_versions, nur api.*, Titel �
 
 test('§9.6: Hinweis „lokal angepasst“ steht in der Zone, nicht in der Liste', async () => {
   const zone = await page.evaluate(() => window.__zone());
-  assert.equal(zone.length, 1);
+  assert.equal(zone.length, 1, JSON.stringify(zone.map((e) => [e.code, e.text])));
   assert.equal(zone[0].code, 'app-store.update.locally_modified.documents');
   assert.equal(zone[0].level, 'info');
   assert.match(zone[0].text, /Dokumente: Update verfügbar, App lokal angepasst/);
   assert.doesNotMatch(await page.$eval('#win', (el) => el.textContent), /lokal angepasst/);
   // Lokal angepasste App: Update nur nach ausdrücklicher Bestätigung (v3: confirm, mode 'discard'); ohne Ja kein Befehl.
   await selectApp('documents');
-  const beforeCmds = await page.evaluate(() => window.__commands().length);
+  const beforeCmds = await page.evaluate(async () => (await window.__commands()).length);
   const beforeDialogs = await page.evaluate(() => window.__k.sim.dialogs.length);
   await click('[data-detail-actions] [data-card-action="update"]');
   await settle();
-  assert.equal(await page.evaluate(() => window.__commands().length), beforeCmds);
+  assert.equal(await page.evaluate(async () => (await window.__commands()).length), beforeCmds);
   const dialog = await page.evaluate(() => window.__k.sim.dialogs.at(-1));
   assert.equal(await page.evaluate(() => window.__k.sim.dialogs.length), beforeDialogs + 1);
   assert.match(JSON.stringify(dialog), /lokale Änderungen/);
@@ -209,7 +223,7 @@ test('Plattform-Befehl: Aktualisieren → ctox.app.update {app_id, base_app_ver,
   const running = await page.evaluate(() => Boolean(document.querySelector('[data-detail-actions] .is-progress')));
   assert.equal(running, true, 'Fortschrittsknopf sofort, ohne auf den Core zu warten');
   await settle();
-  const cmd = await page.evaluate(() => window.__commands().at(-1));
+  const cmd = await page.evaluate(async () => (await window.__commands()).at(-1));
   assert.equal(cmd.type, 'ctox.app.update');
   assert.equal(cmd.record_id, 'customers');
   // §16.29: genau der Vertrag, keine v3-Felder (module_id, mode, expected_baseline_sha256).
@@ -224,11 +238,11 @@ test('Plattform-Befehl: Aktualisieren → ctox.app.update {app_id, base_app_ver,
 });
 
 test('Entfernen fragt über api.shell.dialog; ohne Ja kein Befehl, mit Ja ctox.app.remove → App archiviert', async () => {
-  const before = await page.evaluate(() => window.__commands().length);
+  const before = await page.evaluate(async () => (await window.__commands()).length);
   await selectApp('notes');
   await click('[data-detail-actions] [data-card-action="uninstall"]');
   await settle();
-  assert.equal(await page.evaluate(() => window.__commands().length), before);
+  assert.equal(await page.evaluate(async () => (await window.__commands()).length), before);
   assert.ok(await page.evaluate(() => window.__k.sim.dialogs.length) >= 1);
   await page.evaluate(async () => {
     const { withDialogAnswer } = await import('/v4/tools/port/test-api.mjs');
@@ -239,7 +253,7 @@ test('Entfernen fragt über api.shell.dialog; ohne Ja kein Befehl, mit Ja ctox.a
   await settle();
   await click('[data-detail-actions] [data-card-action="uninstall"]');
   await settle();
-  const cmd = await page.evaluate(() => window.__commands().at(-1));
+  const cmd = await page.evaluate(async () => (await window.__commands()).at(-1));
   assert.equal(cmd.type, 'ctox.app.remove');
   assert.deepEqual(cmd.payload, { app_id: 'notes', base_app_ver: '1' });
   assert.equal(cmd.status, 'done');
@@ -272,7 +286,7 @@ test('§16.29 Rollback: ctox.app.rollback {app_id, base_app_ver, target_ver}; ä
     window.__app = await window.__mod.mount(document.getElementById('win'), withDialogAnswer(window.__c.api, true), { restored: snap });
   });
   await settle();
-  const before = await page.evaluate(() => window.__commands().length);
+  const before = await page.evaluate(async () => (await window.__commands()).length);
   await click('[data-detail-actions] [data-card-action="versions"]');
   await settle();
   await click('#win [data-rollback-version="customers@2"]');
@@ -281,7 +295,7 @@ test('§16.29 Rollback: ctox.app.rollback {app_id, base_app_ver, target_ver}; ä
   assert.equal(rej.type, 'ctox.app.rollback');
   assert.deepEqual(rej.payload, { app_id: 'customers', base_app_ver: '3', target_ver: '2' });
   assert.equal(rej.reason, 'migration_required');
-  assert.equal(await page.evaluate(() => window.__commands().length), before, 'abgelehnter Befehl erreicht business_commands nicht');
+  assert.equal(await page.evaluate(async () => (await window.__commands()).length), before, 'abgelehnter Befehl erreicht business_commands nicht');
   const zone = await page.evaluate(() => window.__zone().filter((e) => e.code === 'app-store.command.ctox.app.rollback'));
   assert.equal(zone.length, 1);
   assert.equal(zone[0].level, 'error');
@@ -307,10 +321,10 @@ test('§16.29 Konflikt: Basis nicht mehr aktiv → Zone mit Text und Aktion „A
   // Kern ist der Projektion voraus (customers aktiv 5), der Client sieht noch 3.
   await page.evaluate(() => window.__core.setAhead('customers', '5'));
   await selectApp('customers');
-  const before = await page.evaluate(() => window.__commands().length);
+  const before = await page.evaluate(async () => (await window.__commands()).length);
   await click('[data-detail-actions] [data-card-action="update"]');
   await settle();
-  assert.equal(await page.evaluate(() => window.__commands().length), before);
+  assert.equal(await page.evaluate(async () => (await window.__commands()).length), before);
   assert.deepEqual(await page.evaluate(() => window.__core.rejections.at(-1).payload), { app_id: 'customers', base_app_ver: '3', release_ver: '4' });
   let zone = await page.evaluate(() => window.__zone().filter((e) => e.code === 'app-store.conflict.customers'));
   assert.equal(zone.length, 1);
@@ -343,7 +357,7 @@ test('§16.29 Konflikt: Basis nicht mehr aktiv → Zone mit Text und Aktion „A
   await settle();
   await page.evaluate(() => { document.querySelector('#win .app-release-dialog').requestSubmit(); });
   await settle();
-  const cmd = await page.evaluate(() => window.__commands().at(-1));
+  const cmd = await page.evaluate(async () => (await window.__commands()).at(-1));
   assert.equal(cmd.type, 'ctox.app.release');
   assert.deepEqual(cmd.payload, { app_id: 'customers', base_app_ver: '5', channel: 'team' });
   assert.equal(cmd.status, 'done');
@@ -363,7 +377,7 @@ test('§16.29 Marketplace und Vorlagen aus app_catalog; Installieren = ctox.app.
   assert.equal(await page.$eval('[data-detail-source]', (el) => el.textContent), 'CTOX main');
   await click('[data-detail-actions] [data-card-action="install"]');
   await settle();
-  const cmd = await page.evaluate(() => window.__commands().at(-1));
+  const cmd = await page.evaluate(async () => (await window.__commands()).at(-1));
   assert.equal(cmd.type, 'ctox.app.update');
   assert.deepEqual(cmd.payload, { app_id: 'kanban', base_app_ver: null, release_ver: '1' });
   assert.equal(cmd.status, 'done');
@@ -415,6 +429,9 @@ test('leere Plattform: kein Zustandstext, keine Zone', async () => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     const k2 = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, instanceId: 'empty' });
     await k2.ready;
+    // FIXT-8265: auch der leere Kern braucht die veröffentlichte app-store-Version (Fremdlesen deklariert).
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await k2.sim.inspect('business_apps', o.app))?.data?.active_ver) await k2.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await k2.sim.publishAppVersion('app-store', '1', { title: 'App Store', manifestExtra: window.__routes });
     const host = document.createElement('div');
     document.body.append(host);
     const app = await window.__mod.mount(host, k2.appApi('app-store', '1'), { restored: { v: 1, scope: 'installed', viewMode: 'list' } });

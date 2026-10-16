@@ -2,7 +2,7 @@
 // CTOX_APP_API_STUB, read-only unter /__stub/ ausgeliefert) in echtem Chromium.
 // Muster: modules/knowledge/tests/v4-api.test.mjs. Eigene Hüllen nur, wo der Stub nicht abdeckt:
 // countingApi (Abo-Zähler) und withDialogAnswer (Dialog-Antwort) aus v4/tools/port/test-api.mjs.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/ctox/tests/v4-api.test.mjs
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/8265bd7 node --test src/apps/business-os/modules/ctox/tests/v4-api.test.mjs
 // Screenshots (1280/420) nach modules/ctox/tests/shots/, wenn CTOX_V4_SHOTS=1.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,7 +14,7 @@ import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
@@ -121,10 +121,14 @@ test('Live-Änderung vom Core (sim.push) erscheint ohne Neuladen, Löschung vers
 });
 
 test('leere Collections rendern keinen Zustandstext und keine Zone', async () => {
-  const empty = await page.evaluate(async () => {
+  const empty = await page.evaluate(async (routes) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     const k2 = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, instanceId: 'empty' });
     await k2.ready;
+    // FIXT-8265 (E48): auch der leere Kern braucht die veröffentlichte ctox-Version; ohne sie sind business_commands,
+    // ctox_queue_tasks und ctox_runtime_settings (Plattform, auto-veröffentlicht) undeklariert gesperrt.
+    for (const o of routes?._fixture_owners ?? []) if (!(await k2.sim.inspect('business_apps', o.app))?.data?.active_ver) await k2.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await k2.sim.publishAppVersion('ctox', '1.1.2', { title: 'Crew', manifestExtra: routes });
     const host = document.createElement('div');
     host.style.cssText = 'width:900px;height:600px;position:relative';
     document.body.append(host);
@@ -138,7 +142,7 @@ test('leere Collections rendern keinen Zustandstext und keine Zone', async () =>
     host.remove();
     await k2.close();
     return { listText, mainText, hasStateBox, zone };
-  });
+  }, realManifestRoutes('ctox'));
   assert.equal(empty.listText, '');
   assert.equal(empty.mainText, '');
   assert.equal(empty.hasStateBox, false);
