@@ -736,6 +736,11 @@ fn refresh_measured_with(
     flags: u8,
     timing: &mut ProjectionTiming<'_>,
 ) -> Result<()> {
+    if flags & CHAT != 0 {
+        timing.phase("project_plan_failure", || {
+            super::super::project_chats::plan_state::project_threads(root, conn)
+        })?;
+    }
     if !has_table(conn, "communication_routing_state")? {
         return Ok(());
     }
