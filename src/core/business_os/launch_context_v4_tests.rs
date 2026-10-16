@@ -84,18 +84,27 @@ pub(crate) async fn fixture() -> Result<(tempfile::TempDir, Foreground, Business
 async fn paired_launch_binds_device_key_inside_the_real_signed_e50_offer() -> Result<()> {
     let _scope = isolate_test_roots().await;
     let (_root, mut fg, user) = fixture().await?;
-    let public = URL_SAFE_NO_PAD.encode([7;32]);
+    let public = URL_SAFE_NO_PAD.encode([7; 32]);
     let context = build_for_device(&fg.inputs, &user, &public).await?;
     let h = hello(&context);
     let device: Value = serde_json::from_str(&h.device_proof.device_id)?;
-    assert_eq!(device["device_pubkey"], public, "paired key missing from signed launch");
-    let key: [u8;32] = URL_SAFE_NO_PAD.decode(&context.v4.package_keys[0].public_key)?.try_into().unwrap();
-    verify_offer(h,&context.v4.signaling.peer_id,&key)?;
+    assert_eq!(
+        device["device_pubkey"], public,
+        "paired key missing from signed launch"
+    );
+    let key: [u8; 32] = URL_SAFE_NO_PAD
+        .decode(&context.v4.package_keys[0].public_key)?
+        .try_into()
+        .unwrap();
+    verify_offer(h, &context.v4.signaling.peer_id, &key)?;
     let mut tampered = h.clone();
     let mut different = device;
-    different["device_pubkey"] = serde_json::json!(URL_SAFE_NO_PAD.encode([8;32]));
+    different["device_pubkey"] = serde_json::json!(URL_SAFE_NO_PAD.encode([8; 32]));
     tampered.device_proof.device_id = serde_json::to_string(&different)?;
-    assert!(verify_offer(&tampered,&context.v4.signaling.peer_id,&key).is_err(), "device-key substitution accepted");
+    assert!(
+        verify_offer(&tampered, &context.v4.signaling.peer_id, &key).is_err(),
+        "device-key substitution accepted"
+    );
     fg.shutdown().await?;
     Ok(())
 }

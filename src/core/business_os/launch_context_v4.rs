@@ -106,8 +106,10 @@ pub(crate) async fn build_for_device(
     device_pubkey: &str,
 ) -> Result<V4LaunchContext> {
     let raw = URL_SAFE_NO_PAD.decode(device_pubkey)?;
-    ensure!(raw.len() == 32 && URL_SAFE_NO_PAD.encode(&raw) == device_pubkey,
-        "invalid paired device public key");
+    ensure!(
+        raw.len() == 32 && URL_SAFE_NO_PAD.encode(&raw) == device_pubkey,
+        "invalid paired device public key"
+    );
     build_principal(owners, user, false, Some(device_pubkey)).await
 }
 /// E50: only the HTTP boundary may authenticate the implicit loopback admin.
