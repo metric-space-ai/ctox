@@ -196,6 +196,14 @@ mod tests {
             )
             .unwrap();
             assert_eq!(
+                selected(root.path(), &ctx, tool.name, None)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::Forbidden,
+                "{} must refuse the policy before dispatch",
+                tool.name
+            );
+            assert_eq!(
                 run().unwrap_err().code,
                 ErrorCode::Forbidden,
                 "{} refused shape",
