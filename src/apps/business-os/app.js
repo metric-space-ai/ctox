@@ -1,30 +1,30 @@
-import { requestSupervisorRoute } from './shared/workjet-supervisor-route-native.mjs?v=20261015-shell-v2-settings-reconnect';
-import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261015-shell-v2-settings-reconnect';
-import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261015-shell-v2-settings-reconnect';
-import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261015-shell-v2-settings-reconnect';
-import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261015-shell-v2-settings-reconnect';
-import { requestDictation } from './shared/speech-dictation.mjs?v=20261015-shell-v2-settings-reconnect';
-import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261015-shell-v2-settings-reconnect';
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261015-shell-v2-settings-reconnect';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261015-shell-v2-settings-reconnect';
-import { PROJECT_EXECUTION_POLICY_SCHEMA, validateProjectExecutionPolicyValue } from './shared/workjet-project-execution-policy-contract.generated.mjs?v=20261015-shell-v2-settings-reconnect';
-import { validateSupervisorLumaValue } from './shared/workjet-supervisor-luma-contract.generated.mjs?v=20261015-shell-v2-settings-reconnect';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261015-shell-v2-settings-reconnect';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261015-shell-v2-settings-reconnect';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261015-shell-v2-settings-reconnect';
-import { CtoxResizer } from './shared/resizer.js?v=20261015-shell-v2-settings-reconnect';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261015-shell-v2-settings-reconnect';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261015-shell-v2-settings-reconnect';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261015-shell-v2-settings-reconnect';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261015-shell-v2-settings-reconnect';
-import { createAppActions } from './shared/app-actions.js?v=20261015-shell-v2-settings-reconnect';
+import { requestSupervisorRoute } from './shared/workjet-supervisor-route-native.mjs?v=20261016-shell-v2-plan-step-retry';
+import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261016-shell-v2-plan-step-retry';
+import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261016-shell-v2-plan-step-retry';
+import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261016-shell-v2-plan-step-retry';
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261016-shell-v2-plan-step-retry';
+import { requestDictation } from './shared/speech-dictation.mjs?v=20261016-shell-v2-plan-step-retry';
+import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261016-shell-v2-plan-step-retry';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261016-shell-v2-plan-step-retry';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261016-shell-v2-plan-step-retry';
+import { PROJECT_EXECUTION_POLICY_SCHEMA, validateProjectExecutionPolicyValue } from './shared/workjet-project-execution-policy-contract.generated.mjs?v=20261016-shell-v2-plan-step-retry';
+import { validateSupervisorLumaValue } from './shared/workjet-supervisor-luma-contract.generated.mjs?v=20261016-shell-v2-plan-step-retry';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261016-shell-v2-plan-step-retry';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261016-shell-v2-plan-step-retry';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261016-shell-v2-plan-step-retry';
+import { CtoxResizer } from './shared/resizer.js?v=20261016-shell-v2-plan-step-retry';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261016-shell-v2-plan-step-retry';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261016-shell-v2-plan-step-retry';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261016-shell-v2-plan-step-retry';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261016-shell-v2-plan-step-retry';
+import { createAppActions } from './shared/app-actions.js?v=20261016-shell-v2-plan-step-retry';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261015-shell-v2-settings-reconnect';
+} from './shared/app-lifecycle.js?v=20261016-shell-v2-plan-step-retry';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -33,20 +33,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261015-shell-v2-settings-reconnect';
+} from './shared/permissions.js?v=20261016-shell-v2-plan-step-retry';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261015-shell-v2-settings-reconnect';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261015-shell-v2-settings-reconnect';
+} from './shared/branding.js?v=20261016-shell-v2-plan-step-retry';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261016-shell-v2-plan-step-retry';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261015-shell-v2-settings-reconnect';
+} from './shared/presentation.js?v=20261016-shell-v2-plan-step-retry';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -57,9 +57,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261015-shell-v2-settings-reconnect';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261015-shell-v2-settings-reconnect';
-import { createDocumentsFacade } from './shared/documents.js?v=20261015-shell-v2-settings-reconnect';
+} from './shared/shell-permissions-ui.js?v=20261016-shell-v2-plan-step-retry';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261016-shell-v2-plan-step-retry';
+import { createDocumentsFacade } from './shared/documents.js?v=20261016-shell-v2-plan-step-retry';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -67,27 +67,27 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261015-shell-v2-settings-reconnect';
+} from './shared/maintenance-state.js?v=20261016-shell-v2-plan-step-retry';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261015-shell-v2-settings-reconnect';
+} from './shared/workspace-session.js?v=20261016-shell-v2-plan-step-retry';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261015-shell-v2-settings-reconnect';
+} from './shared/taskbar-pins.js?v=20261016-shell-v2-plan-step-retry';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
   WORKJET_CATEGORY_IDS,
   workjetCategoryForModule,
   workjetCategoryForTarget,
-} from './shared/workjet-theme.js?v=20261015-shell-v2-settings-reconnect';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261015-shell-v2-settings-reconnect';
-import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261015-shell-v2-settings-reconnect';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261015-shell-v2-settings-reconnect';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261015-shell-v2-settings-reconnect';
+} from './shared/workjet-theme.js?v=20261016-shell-v2-plan-step-retry';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261016-shell-v2-plan-step-retry';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261016-shell-v2-plan-step-retry';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261016-shell-v2-plan-step-retry';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261016-shell-v2-plan-step-retry';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -95,14 +95,14 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261015-shell-v2-settings-reconnect';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261015-shell-v2-settings-reconnect';
-import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261015-shell-v2-settings-reconnect';
+} from './shared/startup-deadlines.js?v=20261016-shell-v2-plan-step-retry';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261016-shell-v2-plan-step-retry';
+import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261016-shell-v2-plan-step-retry';
 import {
   PRESENTATION_ACTIONS, PRESENTATION_READ_ACTION, PRESENTATION_CANVAS_SAVE_ACTION, presentationReadPayload,
   presentationCanvasSavePayload, presentationFromReadResult, presentationMutationFromResult, readJourFixePresentationContent,
-} from './shared/jour-fixe-presentation.mjs?v=20261015-shell-v2-settings-reconnect';
-import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261015-shell-v2-settings-reconnect';
+} from './shared/jour-fixe-presentation.mjs?v=20261016-shell-v2-plan-step-retry';
+import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261016-shell-v2-plan-step-retry';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -123,7 +123,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261015-shell-v2-settings-reconnect';
+const APP_BUILD = '20261016-shell-v2-plan-step-retry';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -13915,6 +13915,39 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
     ? { sync: state.sync, instance: boundedWorkjetProjectText(
       state.syncConfig?.instance_id || state.sync?.config?.instance_id, 'native instanceId', 256,
     ) } : null;
+  if (action === 'ctox.plan.step.retry') {
+    // Workjet-Planschritt wiederholen (ctox#872): leitet genau { step_id } als Business-Command weiter.
+    // Antwort sobald der Befehl angenommen ist; den Ausgang meldet die Plan-Projektion.
+    assertWorkjetProjectPayloadKeys(request, new Set(['action', 'commandId', 'payload']));
+    const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
+    const payloadIn = request.payload;
+    if (!payloadIn || typeof payloadIn !== 'object' || Array.isArray(payloadIn)) {
+      throw new TypeError('Plan step retry requires a payload object.');
+    }
+    assertWorkjetProjectPayloadKeys(payloadIn, new Set(['step_id', 'thread_id']));
+    const stepId = boundedWorkjetProjectText(payloadIn.step_id, 'step_id', 256);
+    if (state.session !== requestSession || state.db !== requestDb
+      || actorContext(state.session).id !== ownerUserId) {
+      throw new Error('Workjet project session changed before the retry was sent.');
+    }
+    if (typeof state.commandBus?.dispatch !== 'function') throw new Error('Command transport is unavailable.');
+    const receipt = await state.commandBus.dispatch({
+      id: commandId,
+      command_id: commandId,
+      module: 'ctox',
+      command_type: 'ctox.plan.step.retry',
+      record_id: stepId,
+      payload: { step_id: stepId },
+      client_context: { source: 'workjet-project-control', actor: actorContext(requestSession) },
+    }, { until: 'accepted', timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
+    if (receipt?.command_id && receipt.command_id !== commandId) {
+      throw new Error('Plan step retry returned an uncorrelated receipt.');
+    }
+    if (receipt?.ok === false || receipt?.status === 'failed' || receipt?.status === 'rejected') {
+      throw new Error(String(receipt?.error?.message || receipt?.error || 'Plan step retry was rejected.'));
+    }
+    return { action, commandId, status: 'pending' };
+  }
   if (action === 'speech.dictation') {
     const sync = state.sync;
     const instance = boundedWorkjetProjectText(state.syncConfig?.instance_id || sync?.config?.instance_id, 'instanceId', 256);
