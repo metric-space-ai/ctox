@@ -3,6 +3,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { runOracle } from './v2-oracle.mjs';
+import { realManifestRoutes } from '../../../tools/port/real-manifest.mjs';
+
+// E48 (Pin 8265bd7): die Shell liest Fremd-Collections (business_commands, workjet_*) nur mit ihrem veröffentlichten
+// Manifest (Deklaration) und aktiven Eigentümern mit read-Export (ctox; ctox-platform veröffentlicht der Stub selbst).
+const SHELL_ROUTES = realManifestRoutes('shell');
+async function publishShell(k) {
+  for (const o of SHELL_ROUTES._fixture_owners) if (!(await k.sim.inspect('business_apps', o.app))?.data?.active_ver) await k.sim.publishAppVersion(o.app, o.ver, o.publish);
+  await k.sim.publishAppVersion('shell', 'dev', { title: 'Shell', manifestExtra: SHELL_ROUTES });
+}
 
 export const ORACLE_TESTS = {
   'workjet-project-control.test.mjs': [
@@ -267,7 +276,7 @@ async function waitForSyncBridgeReady() {}
   const { createV2Compat, isUnsupported } = await import('../v2-compat.js');
   const { checkResponse } = await import('./contract-checkers.mjs');
   const HERE = path.dirname(fileURLToPath(import.meta.url));
-  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/f49f7221b');
+  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
   const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR, 'ctox-app-api-stub.mjs')).href);
   const FIX = path.resolve(HERE, '../../../../../../core/rxdb/tests/fixtures');
   const fixture = (name) => JSON.parse(fs.readFileSync(path.join(FIX, name), 'utf8'));
@@ -399,6 +408,9 @@ async function waitForSyncBridgeReady() {}
   // nach accepted – die Brücke kann so kein „angenommen“ melden (Stub 637caf6, Registry je app_id/type).
   test('[v4 Strang B] ctox.plan.step.retry ohne Kernroute: beim Schreiben abgelehnt → nicht unterstützt, nie pending', async () => {
     const { k, b } = await mk();
+    // Seit E42 (Pin 8265bd7) hat der simulierte Kern die Plattformroute ctox.plan.step.retry (isPlatformCommand); ein
+    // Kern ohne diese Route wird deshalb nachgestellt: er lehnt beim Schreiben mit unknown_command ab (write_result).
+    await k.sim.rejectNext('unknown_command: ctox.plan.step.retry');
     const call = b.workjetProjectControl({ action: 'ctox.plan.step.retry', commandId: 'retry-3', payload: { step_id: 'step-9' } });
     try { await assert.rejects(call, (e) => isUnsupported(e)); } finally { await new Promise((r) => setTimeout(r, 30)); await k.close(); }
   });
@@ -690,7 +702,7 @@ async function waitForSyncBridgeReady() {}
   const { adaptKernel } = await import('../../kernel-adapter.js');
   const { createV2Compat, isUnsupported } = await import('../v2-compat.js');
   const { checkResponse } = await import('./contract-checkers.mjs');
-  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/f49f7221b');
+  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
   const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR, 'ctox-app-api-stub.mjs')).href);
   let nC = 0;
   const mkC = async () => {
@@ -884,7 +896,7 @@ async function waitForSyncBridgeReady() {}
   const { createWorkjetBridges } = await import('../index.js');
   const { createV2Compat, isUnsupported } = await import('../v2-compat.js');
   const { checkResponse } = await import('./contract-checkers.mjs');
-  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/f49f7221b');
+  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
   const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR, 'ctox-app-api-stub.mjs')).href);
   let seq = 0;
   async function withKernel(fn) {
@@ -1267,7 +1279,7 @@ function isStaleDataPlaneGeneration() {}
   const { createWorkjetBridges, installWorkjetBridges, INVENTORY, inventoryList } = await import('../index.js');
   const { createV2Compat, isUnsupported } = await import('../v2-compat.js');
   const { checkResponse, CHECKERS, sessionTransferEventD } = await import('./contract-checkers.mjs');
-  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/f49f7221b');
+  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
   const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR, 'ctox-app-api-stub.mjs')).href);
   const WORKJET_UNSUPPORTED = /(?:unsupported|unknown)\s+(?:workjet\s+)?(?:project[- ]control\s+)?action/i;
   const docOf = (r) => r?.doc ?? r?.value ?? r?.data ?? r;
@@ -1277,6 +1289,7 @@ function isStaleDataPlaneGeneration() {}
     const k = createStubKernel({ instanceId: `wjb-d-${process.pid}-${++n}`, userId: 'owner-1', latencyMs: 2, storage: 'memory',
       actor: { id: 'owner-1', display_name: 'Owner', role: 'admin', permissions: [] } });
     await k.ready;
+    await publishShell(k);
     return k;
   };
   const withKernel = (fn) => async () => {
@@ -1719,7 +1732,7 @@ function isStaleDataPlaneGeneration() {}
   const { adaptKernel } = await import('../../kernel-adapter.js');
   const { createV2Compat } = await import('../v2-compat.js');
   const { checkResponse } = await import('./contract-checkers.mjs');
-  const STUB_DIR_CC = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/f49f7221b');
+  const STUB_DIR_CC = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
   const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR_CC, 'ctox-app-api-stub.mjs')).href);
   test('[v4] Kalender verbinden über die Brücke: Kern-Befehl ctox.workjet.calendar.connect.v1, Fehler als Code', async () => {
     const k = createStubKernel({ instanceId: `wjbcc-${process.pid}`, userId: 'owner-1', latencyMs: 2, storage: 'memory',
@@ -1849,7 +1862,7 @@ async function waitForSyncBridgeReady() {}
   const { createV2Compat, isUnsupported } = await import('../v2-compat.js');
   const { checkResponse, correlateR } = await import('./contract-checkers.mjs');
   const { readStoredFileFromDemandChunks, sha256Hex } = await import('../../../../shared/file-integrity.js');
-  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/f49f7221b');
+  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
   const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR, 'ctox-app-api-stub.mjs')).href);
   const workjetRegex = /(?:unsupported|unknown)\s+(?:workjet\s+)?(?:project[- ]control\s+)?action/i;
   const OWNER = 'owner-1';
