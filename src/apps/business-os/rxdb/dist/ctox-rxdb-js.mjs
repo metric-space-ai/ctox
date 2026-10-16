@@ -251,6 +251,7 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   outbound_tracking_events: "883b8efd526deb34b004936804fbb524ae691c10fdb2a82b18bb6d8d37c31739",
   outbound_tracking_tokens: "9865ab1ed6060b958576602c364d9a0875ea8b87cbc9d4621ea36ce759999f6e",
   placements: "638132ba63acb16782721b0d0b0469cf44de077f50e367d1287f5ef27e8a3df0",
+  planned_steps: "ee336cebbc2e9101ea816dc7c1696f2cf4c818b32f60f92d5f96c24466def9ec",
   planning_absences: "20263440e5b0fa1d7a3a8c0d95f0753f6f5a30da517dcc208fafe5467ef1870b",
   planning_employees: "36852db8c0acb2b48b653592aeefa1af483843e22a2f400cf411178d7e8377c7",
   planning_projects: "fc558898d1dfe2d9f8cfb925b5fbd304133fcfad7b2e63069770d5f8325e9b6f",
@@ -309,11 +310,11 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
 function canonicalJson(value) {
   return JSON.stringify(sortCanonical(value));
 }
-async function sha256Hex(text) {
+async function sha256Hex(text2) {
   if (!globalThis.crypto?.subtle) {
     throw new Error("WebCrypto crypto.subtle is required for CTOX schema hashes");
   }
-  const bytes = new TextEncoder().encode(text);
+  const bytes = new TextEncoder().encode(text2);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -386,15 +387,15 @@ function normalizeSchemaIndex(index) {
   return [String(index)];
 }
 function finalSchemaFields(schema) {
-  const fields = [];
+  const fields2 = [];
   for (const [name, property] of Object.entries(schema.properties || {})) {
-    if (property && typeof property === "object" && property.final === true) fields.push(name);
+    if (property && typeof property === "object" && property.final === true) fields2.push(name);
   }
-  fields.push(primaryFieldOfPrimaryKey(schema.primaryKey));
+  fields2.push(primaryFieldOfPrimaryKey(schema.primaryKey));
   if (schema.primaryKey && typeof schema.primaryKey === "object" && Array.isArray(schema.primaryKey.fields)) {
-    for (const field of schema.primaryKey.fields) fields.push(String(field));
+    for (const field of schema.primaryKey.fields) fields2.push(String(field));
   }
-  return fields;
+  return fields2;
 }
 function rxMetaSchema() {
   return {
@@ -455,9 +456,9 @@ function buildProtocolPayload({
   if (cleanCapabilityToken) {
     peerSession.capabilityToken = cleanCapabilityToken;
   }
-  const proof = normalizeDeviceProof(deviceProof);
-  if (proof) {
-    peerSession.deviceProof = proof;
+  const proof2 = normalizeDeviceProof(deviceProof);
+  if (proof2) {
+    peerSession.deviceProof = proof2;
   }
   return {
     protocol: CTOX_RXDB_PROTOCOL,
@@ -483,14 +484,14 @@ function buildProtocolPayload({
     ])).sort()
   };
 }
-function normalizeDeviceProof(proof) {
-  if (!proof || typeof proof !== "object") return null;
-  const nonce = typeof proof.nonce === "string" ? proof.nonce.trim() : "";
-  const signature = typeof proof.signature === "string" ? proof.signature.trim() : "";
-  const jwk = proof.publicJwk;
+function normalizeDeviceProof(proof2) {
+  if (!proof2 || typeof proof2 !== "object") return null;
+  const nonce = typeof proof2.nonce === "string" ? proof2.nonce.trim() : "";
+  const signature = typeof proof2.signature === "string" ? proof2.signature.trim() : "";
+  const jwk = proof2.publicJwk;
   const x = typeof jwk?.x === "string" ? jwk.x.trim() : "";
   const y = typeof jwk?.y === "string" ? jwk.y.trim() : "";
-  if (proof.version !== "ctox-device-proof-v1" || !/^[A-Za-z0-9_-]{43}$/.test(nonce) || !/^[A-Za-z0-9_-]{86}$/.test(signature) || jwk?.kty !== "EC" || jwk?.crv !== "P-256" || !/^[A-Za-z0-9_-]{43}$/.test(x) || !/^[A-Za-z0-9_-]{43}$/.test(y)) {
+  if (proof2.version !== "ctox-device-proof-v1" || !/^[A-Za-z0-9_-]{43}$/.test(nonce) || !/^[A-Za-z0-9_-]{86}$/.test(signature) || jwk?.kty !== "EC" || jwk?.crv !== "P-256" || !/^[A-Za-z0-9_-]{43}$/.test(x) || !/^[A-Za-z0-9_-]{43}$/.test(y)) {
     return null;
   }
   return {
@@ -698,10 +699,10 @@ var CtoxEventEmitter = class {
   }
 };
 function waitForEvent(emitter, type, timeoutMs = 1e4) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve, reject2) => {
     const timeout = setTimeout(() => {
       unsubscribe();
-      reject(new Error(`Timed out waiting for ${type}`));
+      reject2(new Error(`Timed out waiting for ${type}`));
     }, timeoutMs);
     const unsubscribe = emitter.once(type, (event) => {
       clearTimeout(timeout);
@@ -1205,7 +1206,7 @@ var CtoxRecoveryJournal = class {
     return outcomes;
   }
   async recordConflict(conflict = {}) {
-    const record = {
+    const record2 = {
       conflictId: conflict.conflictId || globalThis.crypto?.randomUUID?.() || `conflict-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       schema: "ctox.indexeddb.recovery-conflict.v1",
       databaseName: this.databaseName,
@@ -1214,9 +1215,9 @@ var CtoxRecoveryJournal = class {
       createdAtMs: Date.now(),
       ...structuredCloneSafe2(conflict)
     };
-    await this.withQuotaRecovery(() => putRecord(this.db, CONFLICT_STORE, record));
+    await this.withQuotaRecovery(() => putRecord(this.db, CONFLICT_STORE, record2));
     await this.publishStatus();
-    return record;
+    return record2;
   }
   async listConflicts() {
     return getAllRecords(this.db, CONFLICT_STORE).then((rows) => rows.filter((row) => row.state === "pending"));
@@ -1310,18 +1311,18 @@ var CtoxRecoveryJournal = class {
     };
     content.contentHash = await sha256Json(content);
     const encrypted = await encryptRecoveryArtifact(content, passphrase);
-    const text = JSON.stringify(encrypted, null, 2);
+    const text2 = JSON.stringify(encrypted, null, 2);
     await putRecord(this.db, META_STORE, { key: "lastExport", value: Date.now() });
     await this.publishStatus();
     return {
       filename: `ctox-recovery-${this.instanceId}-${(/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-")}.ctox-recovery`,
-      blob: new Blob([text], { type: "application/vnd.ctox.recovery+json" }),
+      blob: new Blob([text2], { type: "application/vnd.ctox.recovery+json" }),
       pendingWrites: countOutstandingWrites(content.pendingBatches)
     };
   }
   async previewImport(file, passphrase) {
-    const text = typeof file === "string" ? file : await file.text();
-    const content = await decryptRecoveryArtifact(JSON.parse(text), passphrase);
+    const text2 = typeof file === "string" ? file : await file.text();
+    const content = await decryptRecoveryArtifact(JSON.parse(text2), passphrase);
     const expectedHash = content.contentHash;
     const hashInput = { ...content };
     delete hashInput.contentHash;
@@ -1482,7 +1483,7 @@ var CtoxRecoveryJournal = class {
   }
 };
 function openJournalDatabase(name) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve, reject2) => {
     const request = indexedDB.open(name, JOURNAL_VERSION);
     let settled = false;
     const finish = (fn, value) => {
@@ -1493,7 +1494,7 @@ function openJournalDatabase(name) {
       return true;
     };
     const timer = setTimeout(() => {
-      finish(reject, recoveryError(
+      finish(reject2, recoveryError(
         "indexeddb_journal_unavailable",
         `IndexedDB open timed out after ${JOURNAL_OPEN_TIMEOUT_MS}ms for recovery journal ${name}`
       ));
@@ -1523,12 +1524,12 @@ function openJournalDatabase(name) {
         }
       }
     };
-    request.onerror = () => finish(reject, request.error || new Error(`Failed to open recovery journal ${name}`));
-    request.onblocked = () => finish(reject, recoveryError("indexeddb_journal_unavailable", `Recovery journal ${name} is blocked.`));
+    request.onerror = () => finish(reject2, request.error || new Error(`Failed to open recovery journal ${name}`));
+    request.onblocked = () => finish(reject2, recoveryError("indexeddb_journal_unavailable", `Recovery journal ${name} is blocked.`));
   });
 }
 function transact(db, storeName, mode, run) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve, reject2) => {
     const tx = db.transaction(storeName, mode);
     const store = tx.objectStore(storeName);
     let result;
@@ -1540,31 +1541,31 @@ function transact(db, storeName, mode, run) {
           tx.abort();
         } catch {
         }
-        reject(error);
+        reject2(error);
       });
     } catch (error) {
       try {
         tx.abort();
       } catch {
       }
-      reject(error);
+      reject2(error);
     }
     tx.oncomplete = () => resolve(result);
-    tx.onerror = () => reject(tx.error || new Error(`IndexedDB ${storeName} transaction failed`));
-    tx.onabort = () => reject(tx.error || new Error(`IndexedDB ${storeName} transaction aborted`));
+    tx.onerror = () => reject2(tx.error || new Error(`IndexedDB ${storeName} transaction failed`));
+    tx.onabort = () => reject2(tx.error || new Error(`IndexedDB ${storeName} transaction aborted`));
   });
 }
 function requestResult(request) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve, reject2) => {
     request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error("IndexedDB request failed"));
+    request.onerror = () => reject2(request.error || new Error("IndexedDB request failed"));
   });
 }
 function putRecord(db, storeName, value) {
   return transact(db, storeName, "readwrite", (store) => requestResult(store.put(value)));
 }
 function putSequencedBatch(db, batch) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve, reject2) => {
     const tx = db.transaction([META_STORE, BATCH_STORE], "readwrite");
     const meta = tx.objectStore(META_STORE);
     const batches = tx.objectStore(BATCH_STORE);
@@ -1581,18 +1582,18 @@ function putSequencedBatch(db, batch) {
         tx.abort();
       } catch {
       }
-      reject(request.error || new Error("Failed to allocate recovery journal sequence"));
+      reject2(request.error || new Error("Failed to allocate recovery journal sequence"));
     };
     tx.oncomplete = () => resolve(sequence);
-    tx.onerror = () => reject(tx.error || new Error("Recovery journal batch transaction failed"));
-    tx.onabort = () => reject(tx.error || new Error("Recovery journal batch transaction aborted"));
+    tx.onerror = () => reject2(tx.error || new Error("Recovery journal batch transaction failed"));
+    tx.onabort = () => reject2(tx.error || new Error("Recovery journal batch transaction aborted"));
   });
 }
 function getRecord(db, storeName, key) {
   return transact(db, storeName, "readonly", (store) => requestResult(store.get(key)));
 }
 function scanRecords(db, storeName, visit, indexName = null, key = void 0) {
-  return transact(db, storeName, "readonly", (store) => new Promise((resolve, reject) => {
+  return transact(db, storeName, "readonly", (store) => new Promise((resolve, reject2) => {
     const source = indexName ? store.index(indexName) : store;
     const request = source.openCursor(key);
     request.onsuccess = () => {
@@ -1605,10 +1606,10 @@ function scanRecords(db, storeName, visit, indexName = null, key = void 0) {
         visit(cursor.value);
         cursor.continue();
       } catch (error) {
-        reject(error);
+        reject2(error);
       }
     };
-    request.onerror = () => reject(request.error || new Error("IndexedDB recovery scan failed"));
+    request.onerror = () => reject2(request.error || new Error("IndexedDB recovery scan failed"));
   }));
 }
 function getAllRecords(db, storeName) {
@@ -1739,17 +1740,17 @@ var recoveryJournalTestInternals = Object.freeze({
 function normalizeQueryProjection(projection, primaryPath = null) {
   if (projection == null) return null;
   if (!Array.isArray(projection)) throw new TypeError("projection must be an array of field paths");
-  const fields = /* @__PURE__ */ new Set();
+  const fields2 = /* @__PURE__ */ new Set();
   for (const field of projection) {
     if (typeof field !== "string" || !field || field.split(".").some((part) => !part || part === "__proto__" || part === "constructor" || part === "prototype")) throw new TypeError("projection requires safe non-empty field paths");
-    fields.add(field);
+    fields2.add(field);
   }
-  if (fields.size && primaryPath) {
-    fields.add(primaryPath);
-    fields.add("_rev");
-    fields.add("_deleted");
+  if (fields2.size && primaryPath) {
+    fields2.add(primaryPath);
+    fields2.add("_rev");
+    fields2.add("_deleted");
   }
-  const ordered = [...fields].sort(compareCodePoints);
+  const ordered = [...fields2].sort(compareCodePoints);
   const normalized = [];
   for (const field of ordered) {
     if (!normalized.some((parent) => field.startsWith(`${parent}.`))) normalized.push(field);
@@ -1822,9 +1823,9 @@ function createMemoryProjectedQueryCache() {
   return {
     name: "memory",
     async put(key, documents, now = Date.now()) {
-      const record = cacheRecord(key, documents, now);
-      bytes += record.bytes - (rows.get(key)?.bytes || 0);
-      rows.set(key, record);
+      const record2 = cacheRecord(key, documents, now);
+      bytes += record2.bytes - (rows.get(key)?.bytes || 0);
+      rows.set(key, record2);
       const oldest = [...rows.values()].sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
       for (const candidate of oldest) {
         if (bytes <= PROJECTED_QUERY_CACHE_BUDGET_BYTES && rows.size <= PROJECTED_QUERY_CACHE_MAX_WINDOWS) break;
@@ -1834,10 +1835,10 @@ function createMemoryProjectedQueryCache() {
       }
     },
     async get(key, now = Date.now()) {
-      const record = rows.get(key);
-      if (!record) return null;
-      record.lastAccessedAt = now;
-      return cloneQueryRow(record.documents);
+      const record2 = rows.get(key);
+      if (!record2) return null;
+      record2.lastAccessedAt = now;
+      return cloneQueryRow(record2.documents);
     },
     async clear() {
       rows.clear();
@@ -1853,9 +1854,9 @@ function createIndexedDbProjectedQueryCache({ databaseName }) {
   let fallback = null;
   async function open() {
     if (!opening) {
-      opening = new Promise((resolve, reject) => {
+      opening = new Promise((resolve, reject2) => {
         if (!globalThis.indexedDB) {
-          reject(new Error("IndexedDB unavailable"));
+          reject2(new Error("IndexedDB unavailable"));
           return;
         }
         let settled = false;
@@ -1865,7 +1866,7 @@ function createIndexedDbProjectedQueryCache({ databaseName }) {
           clearTimeout(timer);
           fn(value);
         };
-        const timer = setTimeout(() => finish(reject, new Error("Projected cache open timed out")), 4e3);
+        const timer = setTimeout(() => finish(reject2, new Error("Projected cache open timed out")), 4e3);
         const request = indexedDB.open(databaseName, 1);
         request.onupgradeneeded = () => {
           const db = request.result;
@@ -1885,8 +1886,8 @@ function createIndexedDbProjectedQueryCache({ databaseName }) {
           };
           finish(resolve, db);
         };
-        request.onerror = () => finish(reject, request.error || new Error("Projected cache open failed"));
-        request.onblocked = () => finish(reject, new Error("Projected cache open blocked"));
+        request.onerror = () => finish(reject2, request.error || new Error("Projected cache open failed"));
+        request.onblocked = () => finish(reject2, new Error("Projected cache open blocked"));
       }).catch((error) => {
         opening = null;
         throw error;
@@ -1908,14 +1909,14 @@ function createIndexedDbProjectedQueryCache({ databaseName }) {
       return fallback ? "memory-fallback" : "indexeddb";
     },
     async put(key, documents, now = Date.now()) {
-      const record = cacheRecord(key, documents, now);
+      const record2 = cacheRecord(key, documents, now);
       const db = await backend();
       if (!db) return fallback.put(key, documents, now);
-      await new Promise((resolve, reject) => {
+      await new Promise((resolve, reject2) => {
         const tx = db.transaction([ROWS, META], "readwrite");
         tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error || new Error("Projected cache write failed"));
-        tx.onabort = () => reject(tx.error || new Error("Projected cache write aborted"));
+        tx.onerror = () => reject2(tx.error || new Error("Projected cache write failed"));
+        tx.onabort = () => reject2(tx.error || new Error("Projected cache write aborted"));
         const rowStore = tx.objectStore(ROWS), metaStore = tx.objectStore(META);
         const budgetRequest = metaStore.get(BUDGET_KEY);
         budgetRequest.onsuccess = () => {
@@ -1923,10 +1924,10 @@ function createIndexedDbProjectedQueryCache({ databaseName }) {
           previousRequest.onsuccess = () => {
             const previous = previousRequest.result;
             const budget = budgetRequest.result || { bytes: 0, count: 0 };
-            let bytes = budget.bytes + record.bytes - (previous?.bytes || 0);
+            let bytes = budget.bytes + record2.bytes - (previous?.bytes || 0);
             let count = budget.count + (previous ? 0 : 1);
-            rowStore.put({ key, documents: record.documents });
-            metaStore.put({ key, bytes: record.bytes, lastAccessedAt: now });
+            rowStore.put({ key, documents: record2.documents });
+            metaStore.put({ key, bytes: record2.bytes, lastAccessedAt: now });
             const finishBudget = () => metaStore.put({ key: BUDGET_KEY, bytes, count });
             if (bytes <= PROJECTED_QUERY_CACHE_BUDGET_BYTES && count <= PROJECTED_QUERY_CACHE_MAX_WINDOWS) {
               finishBudget();
@@ -1959,12 +1960,12 @@ function createIndexedDbProjectedQueryCache({ databaseName }) {
       if (!key) return null;
       const db = await backend();
       if (!db) return fallback.get(key, now);
-      return new Promise((resolve, reject) => {
+      return new Promise((resolve, reject2) => {
         const tx = db.transaction([ROWS, META], "readwrite");
         let documents = null;
         tx.oncomplete = () => resolve(documents);
-        tx.onerror = () => reject(tx.error || new Error("Projected cache read failed"));
-        tx.onabort = () => reject(tx.error || new Error("Projected cache read aborted"));
+        tx.onerror = () => reject2(tx.error || new Error("Projected cache read failed"));
+        tx.onabort = () => reject2(tx.error || new Error("Projected cache read aborted"));
         const rowRequest = tx.objectStore(ROWS).get(key);
         rowRequest.onsuccess = () => {
           documents = rowRequest.result?.documents || null;
@@ -1980,10 +1981,10 @@ function createIndexedDbProjectedQueryCache({ databaseName }) {
     async clear() {
       const db = await backend();
       if (!db) return fallback.clear();
-      await new Promise((resolve, reject) => {
+      await new Promise((resolve, reject2) => {
         const tx = db.transaction([ROWS, META], "readwrite");
         tx.oncomplete = () => resolve();
-        tx.onerror = tx.onabort = () => reject(tx.error || new Error("Projected cache clear failed"));
+        tx.onerror = tx.onabort = () => reject2(tx.error || new Error("Projected cache clear failed"));
         tx.objectStore(ROWS).clear();
         tx.objectStore(META).clear();
       });
@@ -2022,9 +2023,9 @@ function createMemoryMetaBackend() {
     async getProjectedQueryRows(key, now) {
       return projectedCache.get(key, now);
     },
-    async putQueryWindow(record) {
-      const key = queryWindowKey(record);
-      queryWindows.set(key, { ...record });
+    async putQueryWindow(record2) {
+      const key = queryWindowKey(record2);
+      queryWindows.set(key, { ...record2 });
     },
     async getQueryWindow(key) {
       const entry = queryWindows.get(stringKey(key));
@@ -2036,14 +2037,14 @@ function createMemoryMetaBackend() {
       deleteQueryWindowRefs2(normalizedKey);
     },
     async scanQueryWindows() {
-      return Array.from(queryWindows.values(), (record) => ({ ...record }));
+      return Array.from(queryWindows.values(), (record2) => ({ ...record2 }));
     },
-    async replaceQueryWindowDocumentRefs(record) {
-      const windowKey = queryWindowKey(record);
+    async replaceQueryWindowDocumentRefs(record2) {
+      const windowKey = queryWindowKey(record2);
       deleteQueryWindowRefs2(windowKey);
       const documentKeys = /* @__PURE__ */ new Set();
-      for (const id of normalizeDocumentIds([...record.documentIds || [], ...record.selectorRefIds || []])) {
-        const documentKey = `${record.collection}|${id}`;
+      for (const id of normalizeDocumentIds([...record2.documentIds || [], ...record2.selectorRefIds || []])) {
+        const documentKey = `${record2.collection}|${id}`;
         documentKeys.add(documentKey);
         const refs = queryWindowRefsByDocument.get(documentKey) || /* @__PURE__ */ new Set();
         refs.add(windowKey);
@@ -2060,8 +2061,8 @@ function createMemoryMetaBackend() {
       }
       return Array.from(keys);
     },
-    async putDocumentAccess(record) {
-      documentAccess.set(documentAccessKey(record), { ...record });
+    async putDocumentAccess(record2) {
+      documentAccess.set(documentAccessKey(record2), { ...record2 });
     },
     async getDocumentAccess(collection, id) {
       const entry = documentAccess.get(`${collection}|${id}`);
@@ -2071,10 +2072,10 @@ function createMemoryMetaBackend() {
       documentAccess.delete(`${collection}|${id}`);
     },
     async scanDocumentAccess() {
-      return Array.from(documentAccess.values(), (record) => ({ ...record }));
+      return Array.from(documentAccess.values(), (record2) => ({ ...record2 }));
     },
-    async putCacheStats(record) {
-      cacheStats.set(record.databaseName, { ...record });
+    async putCacheStats(record2) {
+      cacheStats.set(record2.databaseName, { ...record2 });
     },
     async getCacheStats(databaseName) {
       const entry = cacheStats.get(databaseName);
@@ -2103,11 +2104,11 @@ function createMemoryMetaBackend() {
     queryWindowRefsByWindow.delete(windowKey);
   }
 }
-function queryWindowKey(record) {
-  return [record.collection, record.queryFingerprint, record.offset, record.limit].join("|");
+function queryWindowKey(record2) {
+  return [record2.collection, record2.queryFingerprint, record2.offset, record2.limit].join("|");
 }
-function documentAccessKey(record) {
-  return `${record.collection}|${record.id}`;
+function documentAccessKey(record2) {
+  return `${record2.collection}|${record2.id}`;
 }
 function stringKey(key) {
   if (Array.isArray(key)) return key.join("|");
@@ -2144,18 +2145,18 @@ var QueryMetaStorage = class {
     this.primaryDelete = typeof fn === "function" ? fn : null;
   }
   async getQueryWindow(key) {
-    const record = await this.backend.getQueryWindow(stringKey2(key));
-    if (!record) return null;
-    record.lastAccessedAt = this.clock();
-    await this.backend.putQueryWindow(record);
-    return record;
+    const record2 = await this.backend.getQueryWindow(stringKey2(key));
+    if (!record2) return null;
+    record2.lastAccessedAt = this.clock();
+    await this.backend.putQueryWindow(record2);
+    return record2;
   }
   async upsertQueryWindow({ collection, queryFingerprint: queryFingerprint2, offset, limit, documentIds, complete, authoritativeRevision, satisfiedRevision = null, satisfiedGeneration = null, queryShape = null, permissionDigest = void 0, projection = null, projectionKey = null }) {
     const now = this.clock();
     const existing = await this.backend.getQueryWindow(
       [collection, queryFingerprint2, offset, limit].join("|")
     );
-    const record = {
+    const record2 = {
       // Payloads live in the separate bounded projected-query cache. Ordinary
       // metadata scans and document eviction never materialize partial rows.
       ...projection?.length ? { projection: [...projection], projectionKey } : {},
@@ -2186,12 +2187,12 @@ var QueryMetaStorage = class {
       updatedAt: now,
       lastAccessedAt: now
     };
-    await this.backend.putQueryWindow(record);
+    await this.backend.putQueryWindow(record2);
     await this.backend.replaceQueryWindowDocumentRefs?.({
-      ...record,
+      ...record2,
       selectorRefIds: computeSelectorRefIds(queryShape)
     });
-    return record;
+    return record2;
   }
   async invalidateQueryWindow(key) {
     const stringified = stringKey2(key);
@@ -2253,18 +2254,18 @@ var QueryMetaStorage = class {
   }
   async getDocumentAccess(collection, id) {
     await this._metadataMutationTail;
-    const record = await this.backend.getDocumentAccess(collection, id);
-    return record ? { ...record } : null;
+    const record2 = await this.backend.getDocumentAccess(collection, id);
+    return record2 ? { ...record2 } : null;
   }
   async evictDocuments(ids) {
     return this.enqueueMetadataMutation(async () => {
       const now = this.clock();
       let removed = 0;
       for (const { collection, id } of ids) {
-        const record = await this.backend.getDocumentAccess(collection, id);
-        if (!record) continue;
-        if (record.dirty) continue;
-        if (record.pinReason === PIN_RECENT_READ && now - record.lastAccessedAt < SIDECAR_PIN_RECENT_READ_TTL_MS) {
+        const record2 = await this.backend.getDocumentAccess(collection, id);
+        if (!record2) continue;
+        if (record2.dirty) continue;
+        if (record2.pinReason === PIN_RECENT_READ && now - record2.lastAccessedAt < SIDECAR_PIN_RECENT_READ_TTL_MS) {
           continue;
         }
         if (this.primaryDelete) {
@@ -2417,9 +2418,9 @@ var QueryMetaStorage = class {
         return 0;
       }
       const now = this.clock();
-      const candidates = all.filter((record) => !record.dirty).filter((record) => {
-        if (record.pinReason !== "recently-read") return true;
-        return now - record.lastAccessedAt >= SIDECAR_PIN_RECENT_READ_TTL_MS;
+      const candidates = all.filter((record2) => !record2.dirty).filter((record2) => {
+        if (record2.pinReason !== "recently-read") return true;
+        return now - record2.lastAccessedAt >= SIDECAR_PIN_RECENT_READ_TTL_MS;
       }).sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
       let removed = 0;
       let remainingBytes = workingSetBytes;
@@ -2693,7 +2694,7 @@ function normalizeEstimatedBytes(estimatedBytes) {
 }
 function sumEstimatedDocumentAccessBytes(records) {
   return (Array.isArray(records) ? records : []).reduce(
-    (sum, record) => sum + (record.estimatedBytes || 0),
+    (sum, record2) => sum + (record2.estimatedBytes || 0),
     0
   );
 }
@@ -2806,12 +2807,12 @@ var CtoxIndexedDbStorage = class {
     return countUnsyncedWrites(this.db);
   }
   async clearCachedCollections(collectionNames = []) {
-    const names = [...new Set((collectionNames || []).map((name) => String(name || "").trim()).filter(Boolean))];
-    if (!names.length) return { cleared: {}, total: 0 };
+    const names2 = [...new Set((collectionNames || []).map((name) => String(name || "").trim()).filter(Boolean))];
+    if (!names2.length) return { cleared: {}, total: 0 };
     const safetyTx = this.db.transaction(DOCUMENT_STORE, "readonly");
     const safetyDone = idbTransactionDone(safetyTx);
     const pushable = safetyTx.objectStore(DOCUMENT_STORE).index(PUSHABLE_LWT_INDEX);
-    const pendingEntries = await Promise.all(names.map(async (name) => {
+    const pendingEntries = await Promise.all(names2.map(async (name) => {
       const range = IDBKeyRange.bound(
         [name, 1, 0, ""],
         [name, 1, Number.MAX_SAFE_INTEGER, INDEX_HIGH_KEY]
@@ -2829,7 +2830,7 @@ var CtoxIndexedDbStorage = class {
     const countTx = this.db.transaction(DOCUMENT_STORE, "readonly");
     const countDone = idbTransactionDone(countTx);
     const collectionIndex = countTx.objectStore(DOCUMENT_STORE).index("collection");
-    const counts = await Promise.all(names.map(async (name) => {
+    const counts = await Promise.all(names2.map(async (name) => {
       const count = Number(await idbRequest(collectionIndex.count(IDBKeyRange.only(name))) || 0);
       return [name, count];
     }));
@@ -2841,7 +2842,7 @@ var CtoxIndexedDbStorage = class {
     });
     const markers = tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE);
     try {
-      for (const name of names) {
+      for (const name of names2) {
         const marker = await localCheckpointMarker(markers, name);
         documents.delete(IDBKeyRange.bound([name, ""], [name, INDEX_HIGH_KEY]));
         markers.put({ ...marker, evictionGeneration: marker.evictionGeneration + 1 });
@@ -2856,7 +2857,7 @@ var CtoxIndexedDbStorage = class {
       });
       throw error;
     }
-    for (const name of names) {
+    for (const name of names2) {
       globalThis.dispatchEvent?.(new CustomEvent("ctox-rxdb-external-change", {
         detail: { databaseName: this.db.name, collection: name, ids: [], cleared: true }
       }));
@@ -2960,8 +2961,8 @@ var CtoxIndexedDbCollection = class {
       const records = await Promise.all(readIds.map((id) => idbRequest(store.get([this.name, id]))));
       await done;
       for (let index = 0; index < readIds.length; index += 1) {
-        const record = records[index];
-        if (record?.replicationOriginRole && record.doc) documents[readIds[index]] = record.doc;
+        const record2 = records[index];
+        if (record2?.replicationOriginRole && record2.doc) documents[readIds[index]] = record2.doc;
       }
       if (Object.keys(documents).length) {
         await this.recoveryJournal.markMasterAcknowledged(this.name, documents);
@@ -2978,8 +2979,8 @@ var CtoxIndexedDbCollection = class {
     if (!id) return null;
     const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
     const store = tx.objectStore(DOCUMENT_STORE);
-    const record = await idbRequest(store.get([this.name, id]));
-    return record || null;
+    const record2 = await idbRequest(store.get([this.name, id]));
+    return record2 || null;
   }
   // Field-merge + merge-base tracking for one incoming write that already
   // passed `shouldAcceptDocumentWrite`. Decides what actually gets stored:
@@ -3477,19 +3478,19 @@ var CtoxIndexedDbCollection = class {
       const source = doc?.newDocumentState || doc?.document || doc;
       const id = documentId2(source);
       if (!id) continue;
-      const record = await this.getStoredRecord(id);
-      if (!record || record.replicationOriginRole || !record.doc) continue;
+      const record2 = await this.getStoredRecord(id);
+      if (!record2 || record2.replicationOriginRole || !record2.doc) continue;
       await this.recoveryJournal?.recordConflict?.({
         code: "structured_conflict_requires_resolution",
         conflictType: "authz_rejected",
         collection: this.name,
-        base: record.base || null,
-        local: record.doc,
-        master: record.base || null,
+        base: record2.base || null,
+        local: record2.doc,
+        master: record2.base || null,
         message: message || "The native peer refused this write (authorization/schema). The rejected local version remains recoverable here.",
         rejectionCode: String(code || "authz_rejected")
       });
-      const masterState = record.base ? record.base : { ...record.doc, _deleted: true };
+      const masterState = record2.base ? record2.base : { ...record2.doc, _deleted: true };
       rollbackRows.push({ document: masterState });
       reconciledIds.push(id);
     }
@@ -3575,9 +3576,9 @@ var CtoxIndexedDbCollection = class {
     const store = tx.objectStore(DOCUMENT_STORE);
     const result = {};
     for (const id of ids) {
-      const record = await idbRequest(store.get([this.name, String(id)]));
-      if (record && (withDeleted || !record.deleted)) {
-        result[String(id)] = record.doc;
+      const record2 = await idbRequest(store.get([this.name, String(id)]));
+      if (record2 && (withDeleted || !record2.deleted)) {
+        result[String(id)] = record2.doc;
       }
     }
     await done;
@@ -3597,10 +3598,10 @@ var CtoxIndexedDbCollection = class {
     let rowsRead = 0;
     await iterateCursor(index.openCursor(range), (cursor) => {
       if (!cursor) return false;
-      const record = cursor.value;
+      const record2 = cursor.value;
       rowsRead += 1;
-      if (withDeleted || !record.deleted) {
-        documents.push(record.doc);
+      if (withDeleted || !record2.deleted) {
+        documents.push(record2.doc);
       }
       return true;
     });
@@ -3655,11 +3656,11 @@ var CtoxIndexedDbCollection = class {
       );
       await iterateCursor(index.openCursor(range, plan.direction), (cursor) => {
         if (!cursor || documents.length >= maxMatches) return false;
-        const record = cursor.value;
-        if (!record || seen.has(record.id)) return true;
-        seen.add(record.id);
-        if (!record.deleted && matchesSelector2(record.doc, selector)) {
-          documents.push(record.doc);
+        const record2 = cursor.value;
+        if (!record2 || seen.has(record2.id)) return true;
+        seen.add(record2.id);
+        if (!record2.deleted && matchesSelector2(record2.doc, selector)) {
+          documents.push(record2.doc);
         }
         return documents.length < maxMatches;
       });
@@ -3683,12 +3684,12 @@ var CtoxIndexedDbCollection = class {
     let skipped = 0;
     await iterateCursor(index.openCursor(range), (cursor) => {
       if (!cursor || documents.length >= limit) return false;
-      const record = cursor.value;
-      if (!record.deleted && matchesSelector2(record.doc, selector)) {
+      const record2 = cursor.value;
+      if (!record2.deleted && matchesSelector2(record2.doc, selector)) {
         if (skipped < skip) {
           skipped += 1;
         } else {
-          documents.push(record.doc);
+          documents.push(record2.doc);
         }
       }
       return documents.length < limit;
@@ -3713,9 +3714,9 @@ var CtoxIndexedDbCollection = class {
     const documents = [];
     await iterateCursor(index.openCursor(range, "prev"), (cursor) => {
       if (!cursor) return false;
-      const record = cursor.value;
-      if (!record.deleted && matchesSelector2(record.doc, selector)) {
-        documents.push(record.doc);
+      const record2 = cursor.value;
+      if (!record2.deleted && matchesSelector2(record2.doc, selector)) {
+        documents.push(record2.doc);
       }
       return documents.length < maxMatches;
     });
@@ -3749,8 +3750,8 @@ var CtoxIndexedDbCollection = class {
     let count = 0;
     await iterateCursor(index.openCursor(range), (cursor) => {
       if (!cursor || count >= limit) return false;
-      const record = cursor.value;
-      if (!record.deleted && matchesSelector2(record.doc, query?.selector || {})) {
+      const record2 = cursor.value;
+      if (!record2.deleted && matchesSelector2(record2.doc, query?.selector || {})) {
         if (skipped < skip) {
           skipped += 1;
         } else {
@@ -3779,10 +3780,10 @@ var CtoxIndexedDbCollection = class {
         return false;
       }
       scanned += 1;
-      const record = cursor.value;
-      nextCheckpoint = { lwt: record.lwt, id: record.id };
-      if (!documentMatchesReplicationOrigin(record.doc, excludedOriginRole)) {
-        documents.push(record.doc);
+      const record2 = cursor.value;
+      nextCheckpoint = { lwt: record2.lwt, id: record2.id };
+      if (!documentMatchesReplicationOrigin(record2.doc, excludedOriginRole)) {
+        documents.push(record2.doc);
       }
       return true;
     });
@@ -3812,9 +3813,9 @@ var CtoxIndexedDbCollection = class {
       }
       const index = tx.objectStore(DOCUMENT_STORE).index("collectionLwtId");
       const range = IDBKeyRange.bound([this.name, 0, ""], [this.name, Number.MAX_SAFE_INTEGER, "\uFFFF"], false, false);
-      const record2 = await firstCursorValue(index.openCursor(range, "prev"));
+      const record3 = await firstCursorValue(index.openCursor(range, "prev"));
       await done;
-      return { marker: marker2, record: record2 };
+      return { marker: marker2, record: record3 };
     };
     let snapshot = await readSnapshot();
     if (!snapshot) {
@@ -3827,8 +3828,8 @@ var CtoxIndexedDbCollection = class {
       snapshot = await readSnapshot();
       if (!snapshot) throw new Error("Local checkpoint marker disappeared during initialization");
     }
-    const { marker, record } = snapshot;
-    if (!record) {
+    const { marker, record: record2 } = snapshot;
+    if (!record2) {
       return {
         source: "browser",
         state: "advertised",
@@ -3841,15 +3842,15 @@ var CtoxIndexedDbCollection = class {
         localStoreGeneration: marker.localStoreGeneration
       };
     }
-    const latestIdHash = await sha256Hex(record.id);
+    const latestIdHash = await sha256Hex(record2.id);
     return {
       source: "browser",
       state: "advertised",
       collection: this.name,
       schemaHash: schemaHash2,
-      latestLwt: record.lwt,
+      latestLwt: record2.lwt,
       latestIdHash,
-      epoch: `browser:${this.name}:${record.lwt}:${latestIdHash.slice(0, 16)}`,
+      epoch: `browser:${this.name}:${record2.lwt}:${latestIdHash.slice(0, 16)}`,
       evictionGeneration: marker.evictionGeneration,
       localStoreGeneration: marker.localStoreGeneration
     };
@@ -3919,13 +3920,13 @@ var CtoxIndexedDbCollection = class {
     let updated = 0;
     await iterateCursor(index.openCursor(range), (cursor) => {
       if (!cursor) return false;
-      const record = cursor.value;
-      if (record?.schemaIndexSignature !== this.indexSignature) {
+      const record2 = cursor.value;
+      if (record2?.schemaIndexSignature !== this.indexSignature) {
         const next = {
-          ...record,
-          indexValues: indexValuesFor(this.indexes, record.doc || {}),
+          ...record2,
+          indexValues: indexValuesFor(this.indexes, record2.doc || {}),
           schemaIndexSignature: this.indexSignature,
-          schemaIndexEntries: schemaIndexEntriesFor(this.indexes, record.doc || {}, record.id, this.name)
+          schemaIndexEntries: schemaIndexEntriesFor(this.indexes, record2.doc || {}, record2.id, this.name)
         };
         cursor.update(next);
         updated += 1;
@@ -3937,7 +3938,7 @@ var CtoxIndexedDbCollection = class {
   }
 };
 function openDatabase(databaseName) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve, reject2) => {
     let settled = false;
     const finish = (fn, value) => {
       if (settled) return false;
@@ -3947,7 +3948,7 @@ function openDatabase(databaseName) {
       return true;
     };
     const timer = setTimeout(() => {
-      finish(reject, new Error(`IndexedDB open timed out after ${OPEN_DATABASE_TIMEOUT_MS}ms for ${databaseName}`));
+      finish(reject2, new Error(`IndexedDB open timed out after ${OPEN_DATABASE_TIMEOUT_MS}ms for ${databaseName}`));
     }, OPEN_DATABASE_TIMEOUT_MS);
     const request = indexedDB.open(databaseName, DB_VERSION);
     request.onupgradeneeded = () => {
@@ -3992,8 +3993,8 @@ function openDatabase(databaseName) {
         }
       }
     };
-    request.onerror = () => finish(reject, request.error || new Error(`Failed to open IndexedDB ${databaseName}`));
-    request.onblocked = () => finish(reject, new Error(`IndexedDB open blocked for ${databaseName}`));
+    request.onerror = () => finish(reject2, request.error || new Error(`Failed to open IndexedDB ${databaseName}`));
+    request.onblocked = () => finish(reject2, new Error(`IndexedDB open blocked for ${databaseName}`));
   });
 }
 function schedulePersistUnsyncedWriteCount(db) {
@@ -4081,7 +4082,7 @@ function normalizeDocument(doc, lwt, replicationOrigin = null, previous = null) 
 function storedRecordForWrite({ collection, id, doc, lwt, indexes, indexSignature, replicationOrigin = null, base = void 0, previous = null }) {
   const normalizedDoc = normalizeDocument(doc, lwt, replicationOrigin, previous?.doc || null);
   const replicationOriginRole = String(replicationOrigin?.role || "").slice(0, 64);
-  const record = {
+  const record2 = {
     collection,
     id,
     lwt,
@@ -4094,9 +4095,9 @@ function storedRecordForWrite({ collection, id, doc, lwt, indexes, indexSignatur
     doc: normalizedDoc
   };
   if (base !== void 0 && base !== null) {
-    record.base = base;
+    record2.base = base;
   }
-  return record;
+  return record2;
 }
 function migrateStoredReplicationFlags(store) {
   const request = store.openCursor();
@@ -4110,15 +4111,15 @@ function migrateStoredReplicationFlags(store) {
     cursor.continue();
   };
 }
-function normalizeStoredReplicationFlags(record) {
-  if (!record || typeof record !== "object") return record;
-  const role = String(record.doc?._meta?.ctoxReplicationOrigin?.role || "").slice(0, 64);
+function normalizeStoredReplicationFlags(record2) {
+  if (!record2 || typeof record2 !== "object") return record2;
+  const role = String(record2.doc?._meta?.ctoxReplicationOrigin?.role || "").slice(0, 64);
   const pushable = role ? 0 : 1;
-  if (record.replicationOriginRole === role && record.pushable === pushable) {
-    return record;
+  if (record2.replicationOriginRole === role && record2.pushable === pushable) {
+    return record2;
   }
   return {
-    ...record,
+    ...record2,
     replicationOriginRole: role,
     pushable
   };
@@ -4280,8 +4281,8 @@ async function latestCollectionLwtInTransaction(store, collection) {
     false,
     false
   );
-  const record = await firstCursorValue(index.openCursor(range, "prev"));
-  const latest = Number(record?.lwt || 0);
+  const record2 = await firstCursorValue(index.openCursor(range, "prev"));
+  const latest = Number(record2?.lwt || 0);
   return Number.isFinite(latest) && latest > 0 ? latest : 0;
 }
 function sanitizeReplicationOrigin(origin) {
@@ -4324,16 +4325,16 @@ function normalizeSchemaIndexes(schema = {}, primaryPath = primaryPathFromSchema
     }
   }
   const seen = /* @__PURE__ */ new Set();
-  return normalized.map((fields, position) => {
-    const key = fields.join(",");
+  return normalized.map((fields2, position) => {
+    const key = fields2.join(",");
     if (seen.has(key)) return null;
     seen.add(key);
-    return { name: `idx_${position}_${fields.join("_")}`, fields };
+    return { name: `idx_${position}_${fields2.join("_")}`, fields: fields2 };
   }).filter(Boolean);
 }
 function normalizeSchemaIndexFields(index, primaryPath, { preservePrefix = false } = {}) {
-  const fields = Array.isArray(index) ? index : [index];
-  const normalizedFields = fields.map((field) => String(field || "").trim()).filter(Boolean);
+  const fields2 = Array.isArray(index) ? index : [index];
+  const normalizedFields = fields2.map((field) => String(field || "").trim()).filter(Boolean);
   if (!normalizedFields.length) return ["_deleted", primaryPath];
   const next = normalizedFields.slice();
   if (!next.includes(primaryPath)) next.push(primaryPath);
@@ -4395,8 +4396,8 @@ function selectBestIndex(indexes, selectorFields = [], sortFields = []) {
   let bestScore = 0;
   for (const index of indexes || []) {
     let score = 0;
-    const fields = index.fields[0] === "_deleted" ? index.fields.slice(1) : index.fields;
-    for (const field of fields) {
+    const fields2 = index.fields[0] === "_deleted" ? index.fields.slice(1) : index.fields;
+    for (const field of fields2) {
       if (wanted.includes(field)) score += 1;
       else break;
     }
@@ -4622,20 +4623,20 @@ function valueAtPath3(doc, path) {
   return String(path || "").split(".").reduce((value, key) => value?.[key], doc);
 }
 function idbRequest(request) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve, reject2) => {
     request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onerror = () => reject2(request.error);
   });
 }
 function idbTransactionDone(tx) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve, reject2) => {
     tx.oncomplete = () => resolve();
-    tx.onabort = () => reject(tx.error || new Error("IndexedDB transaction aborted"));
-    tx.onerror = () => reject(tx.error || new Error("IndexedDB transaction failed"));
+    tx.onabort = () => reject2(tx.error || new Error("IndexedDB transaction aborted"));
+    tx.onerror = () => reject2(tx.error || new Error("IndexedDB transaction failed"));
   });
 }
 function iterateCursor(request, visitor) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve, reject2) => {
     request.onsuccess = () => {
       const cursor = request.result;
       if (!cursor) {
@@ -4649,13 +4650,13 @@ function iterateCursor(request, visitor) {
       }
       cursor.continue();
     };
-    request.onerror = () => reject(request.error);
+    request.onerror = () => reject2(request.error);
   });
 }
 function firstCursorValue(request) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve, reject2) => {
     request.onsuccess = () => resolve(request.result?.value || null);
-    request.onerror = () => reject(request.error);
+    request.onerror = () => reject2(request.error);
   });
 }
 var ctoxIndexedDbStorageTestInternals = {
@@ -4697,6 +4698,207 @@ async function localCheckpointMarker(store, collection, { create = true } = {}) 
   await idbRequest(store.put(marker));
   return marker;
 }
+
+// src/apps/business-os/rxdb/src/hello.mjs
+var MAX_HELLO_BYTES = 16384;
+var MAX_FRAME_BYTES = 16384;
+var MAX_U64 = 18446744073709551615n;
+var own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+var record = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+var text = (value) => typeof value === "string" && value.trim().length > 0;
+var byteLength = (value) => new TextEncoder().encode(value).byteLength;
+var names = (value) => Array.isArray(value) && value.length <= 128 && value.every((name) => text(name) && byteLength(name) <= 256);
+var b64 = (value, length) => typeof value === "string" && value.length === length && /^[A-Za-z0-9_-]+$/.test(value);
+var integer = (value) => Number.isInteger(value) && value >= 0 && value <= 65535;
+function decimalSeq(value) {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value) || value.length > 20 || BigInt(value) > MAX_U64) {
+    throw new TypeError("expected canonical decimal u64 string");
+  }
+  return value;
+}
+function version(value) {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(value)) return null;
+  const [major, minor] = value.split(".").map(Number);
+  return integer(major) && integer(minor) ? major * 65536 + minor : null;
+}
+function bounds(range) {
+  if (!record(range)) return null;
+  const min = version(range.min), max = version(range.max);
+  return min !== null && max !== null && min <= max ? [min, max] : null;
+}
+var REASONS = /* @__PURE__ */ new Set([
+  "invalid_hello",
+  "protocol_incompatible",
+  "bootstrap_incompatible",
+  "app_api_incompatible",
+  "instance_mismatch",
+  "capability_missing",
+  "transport_incompatible",
+  "device_proof_invalid",
+  "authentication_failed",
+  "handshake_timeout",
+  "unexpected_message"
+]);
+var HelloRejected = class extends Error {
+  constructor(reason, required) {
+    super(`hello rejected: ${reason}; required ${required}`);
+    this.name = "HelloRejected";
+    this.reason = reason;
+    this.required = required;
+  }
+  toFrame() {
+    return { type: "hello_reject", reason: this.reason, required: this.required };
+  }
+};
+function reject(reason, required) {
+  throw new HelloRejected(reason, required);
+}
+function fields(value, expected) {
+  return record(value) && Object.keys(value).every((key) => expected.includes(key)) && expected.every((key) => own(value, key));
+}
+var HELLO_FIELDS = [
+  "type",
+  "protocol_ver",
+  "bootstrap_ver",
+  "app_api_ver",
+  "instance_id",
+  "capabilities",
+  "device_proof",
+  "scopes_wanted",
+  "transport"
+];
+var OK_FIELDS = [
+  "type",
+  "protocol_ver",
+  "bootstrap_ver",
+  "app_api_ver",
+  "instance_id",
+  "capabilities",
+  "transport",
+  "epoch",
+  "head_seq",
+  "scope_tokens",
+  "rights_ver"
+];
+function offer(value) {
+  return fields(value, ["codecs", "max_frame_bytes", "fragmentation", "reassembly"]) && Array.isArray(value.codecs) && value.codecs.length <= 128 && value.codecs.every((codec) => codec === "zstd" || codec === "gzip") && Number.isInteger(value.max_frame_bytes) && value.max_frame_bytes >= 0 && value.max_frame_bytes <= 4294967295 && typeof value.fragmentation === "boolean" && typeof value.reassembly === "boolean";
+}
+function proof(value) {
+  return fields(value, ["device_id", "public_key", "nonce", "signature"]) && text(value.device_id) && byteLength(value.device_id) <= 256 && b64(value.public_key, 43) && b64(value.nonce, 43) && b64(value.signature, 86);
+}
+function decodeHelloFrame(input) {
+  const encoded = typeof input === "string" ? input : null;
+  if (encoded === null || new TextEncoder().encode(encoded).byteLength > MAX_HELLO_BYTES) {
+    reject("invalid_hello", "hello <= 16384 bytes");
+  }
+  let frame;
+  try {
+    frame = JSON.parse(encoded);
+  } catch {
+    reject("invalid_hello", "valid V4 control frame");
+  }
+  if (!record(frame)) reject("invalid_hello", "valid V4 control frame");
+  if (frame.type === "hello") {
+    if (!fields(frame, HELLO_FIELDS) || !integer(frame.protocol_ver) || !integer(frame.bootstrap_ver) || !fields(frame.app_api_ver, ["min", "max"]) || !bounds(frame.app_api_ver) || !text(frame.instance_id) || !names(frame.capabilities) || !names(frame.scopes_wanted) || !proof(frame.device_proof) || !offer(frame.transport)) {
+      reject("invalid_hello", "valid hello fields");
+    }
+  } else if (frame.type === "hello_ok") {
+    const transport = frame.transport;
+    if (!fields(frame, OK_FIELDS) || !integer(frame.protocol_ver) || !integer(frame.bootstrap_ver) || version(frame.app_api_ver) === null || !text(frame.instance_id) || !text(frame.epoch) || !names(frame.capabilities) || !Array.isArray(frame.scope_tokens) || frame.scope_tokens.some((token) => !text(token)) || !fields(transport, ["codec", "frame_bytes", "fragmentation", "reassembly"]) || !["zstd", "gzip"].includes(transport.codec) || !Number.isInteger(transport.frame_bytes) || transport.frame_bytes < 1024 || transport.frame_bytes > MAX_FRAME_BYTES || transport.fragmentation !== true || transport.reassembly !== true) {
+      reject("invalid_hello", "valid hello_ok fields");
+    }
+    try {
+      decimalSeq(frame.head_seq);
+      decimalSeq(frame.rights_ver);
+    } catch {
+      reject("invalid_hello", "canonical decimal u64 sequences");
+    }
+  } else if (frame.type === "hello_reject") {
+    if (!fields(frame, ["type", "reason", "required"]) || !REASONS.has(frame.reason) || !text(frame.required) || byteLength(frame.required) > 256) {
+      reject("invalid_hello", "valid hello_reject fields");
+    }
+  } else reject("invalid_hello", "hello, hello_ok or hello_reject");
+  return frame;
+}
+var HelloConnection = class {
+  #hello;
+  #state = "connecting";
+  #report;
+  #rejection = null;
+  #timer = null;
+  #timeout;
+  #requiredCapabilities;
+  constructor(hello, report, { handshakeTimeoutMs = 1e4, requiredCapabilities = [] } = {}) {
+    this.#hello = decodeHelloFrame(JSON.stringify(hello));
+    if (this.#hello.type !== "hello") reject("unexpected_message", "hello first");
+    if (typeof report !== "function") throw new TypeError("state reporter is required");
+    if (!Number.isInteger(handshakeTimeoutMs) || handshakeTimeoutMs <= 0 || handshakeTimeoutMs > 6e4)
+      throw new TypeError("bounded handshake deadline is required");
+    if (!names(requiredCapabilities) || requiredCapabilities.some((name) => !this.#hello.capabilities.includes(name)))
+      throw new TypeError("required capabilities must be offered");
+    this.#requiredCapabilities = [...requiredCapabilities];
+    this.#report = report;
+    this.#timeout = handshakeTimeoutMs;
+    this.#timer = setTimeout(() => {
+      this.#rejection = Object.freeze({ reason: "handshake_timeout", required: "hello before deadline" });
+      this.close();
+    }, this.#timeout);
+    this.#emit();
+  }
+  get snapshot() {
+    return Object.freeze({ state: this.#state, rejection: this.#rejection });
+  }
+  #emit() {
+    this.#report(this.snapshot);
+  }
+  #set(state) {
+    this.#state = state;
+    this.#emit();
+  }
+  connected() {
+    if (this.#state !== "connecting") reject("unexpected_message", "connecting state");
+    this.#set("authenticating");
+    return JSON.parse(JSON.stringify(this.#hello));
+  }
+  receive(input) {
+    if (this.#state !== "authenticating") reject("unexpected_message", "authenticating state");
+    try {
+      const frame = decodeHelloFrame(input);
+      if (frame.type === "hello_reject") reject(frame.reason, frame.required);
+      if (frame.type !== "hello_ok") reject("unexpected_message", "hello_ok or hello_reject");
+      const hello = this.#hello;
+      if (frame.protocol_ver !== hello.protocol_ver) reject("protocol_incompatible", "offered protocol");
+      if (frame.bootstrap_ver !== hello.bootstrap_ver) reject("bootstrap_incompatible", "offered bootstrap");
+      if (frame.instance_id !== hello.instance_id) reject("instance_mismatch", "paired instance");
+      const range = bounds(hello.app_api_ver), selected = version(frame.app_api_ver);
+      if (selected < range[0] || selected > range[1]) reject("app_api_incompatible", "offered API range");
+      if (frame.capabilities.some((name) => !hello.capabilities.includes(name)) || this.#requiredCapabilities.some((name) => !frame.capabilities.includes(name)))
+        reject("capability_missing", "offered capabilities");
+      if (!hello.transport.codecs.includes(frame.transport.codec) || frame.transport.frame_bytes > hello.transport.max_frame_bytes || !hello.transport.fragmentation || !hello.transport.reassembly)
+        reject("transport_incompatible", "offered transport limits");
+      this.#set("negotiated");
+      return frame;
+    } catch (error) {
+      const failure = error instanceof HelloRejected ? error : new HelloRejected("invalid_hello", "valid V4 control frame");
+      this.#rejection = Object.freeze({ reason: failure.reason, required: failure.required });
+      this.close();
+      throw failure;
+    }
+  }
+  activate() {
+    if (this.#state !== "negotiated") reject("unexpected_message", "negotiated state");
+    clearTimeout(this.#timer);
+    this.#timer = null;
+    this.#set("live");
+  }
+  close() {
+    if (this.#state === "closed") return;
+    clearTimeout(this.#timer);
+    this.#timer = null;
+    this.#set("draining");
+    this.#set("closed");
+  }
+};
 
 // src/apps/business-os/rxdb/src/inbound-request-queue.mjs
 var InboundRequestQueue = class {
@@ -4789,11 +4991,11 @@ var MAX_INFLATED_FRAME_BYTES = MAX_TRANSFER_BYTES * 16;
 function frameDeflateSupported() {
   return typeof DecompressionStream === "function" && typeof atob === "function";
 }
-async function decodeFramePayload(text, encoding) {
+async function decodeFramePayload(text2, encoding) {
   if (encoding !== FRAME_ENCODING_DEFLATE_BASE64) {
     throw new Error(`unsupported WebRTC frame encoding: ${encoding}`);
   }
-  const binary = atob(text);
+  const binary = atob(text2);
   const compressed = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) {
     compressed[index] = binary.charCodeAt(index);
@@ -4874,7 +5076,8 @@ var CtoxWebRtcNativePeer = class {
     storageToken = randomId("storage"),
     expectedNativePeerId = "",
     protocolPayload = null,
-    requestHandlers = {}
+    requestHandlers = {},
+    v4Hello = null
   } = {}) {
     if (!signalingUrl) {
       throw new Error("signalingUrl is required");
@@ -4882,7 +5085,11 @@ var CtoxWebRtcNativePeer = class {
     if (!room) {
       throw new Error("room is required");
     }
+    if (v4Hello && (typeof v4Hello.createHello !== "function" || typeof v4Hello.verifyServerHello !== "function" || !Number.isInteger(v4Hello.handshakeTimeoutMs ?? 1e4) || (v4Hello.handshakeTimeoutMs ?? 1e4) <= 0 || (v4Hello.handshakeTimeoutMs ?? 1e4) > 6e4)) {
+      throw new TypeError("V4 requires host signer, paired-server verifier and bounded deadline");
+    }
     this.options = {
+      v4Hello,
       signalingUrl,
       room,
       roomPassword,
@@ -5056,15 +5263,15 @@ var CtoxWebRtcNativePeer = class {
   }
   send(remotePeerId, payload) {
     const connection = this.connections.get(remotePeerId);
-    if (!connection?.channel || connection.channel.readyState !== "open") {
+    if (!connection?.channel || connection.channel.readyState !== "open" || this.options.v4Hello && !connection.v4Live) {
       return false;
     }
-    const text = JSON.stringify(payload);
+    const text2 = JSON.stringify(payload);
     return this.enqueueSendFrame(connection, {
       payload,
-      text,
-      inline: encodedSize(text) <= MAX_INLINE_FRAME_BYTES,
-      priority: classifySendPriority(payload, text)
+      text: text2,
+      inline: encodedSize(text2) <= MAX_INLINE_FRAME_BYTES,
+      priority: classifySendPriority(payload, text2)
     });
   }
   enqueueSendFrame(connection, item) {
@@ -5160,12 +5367,12 @@ var CtoxWebRtcNativePeer = class {
       this.refreshSendQueueStatus(connection);
     }
   }
-  async sendFramed(connection, text) {
+  async sendFramed(connection, text2) {
     const channel = connection.channel;
     const transferId = `${this.options.clientId}|frame|${Date.now()}|${this.frameCounter++}`;
-    const chunks = splitFrameChunks(text, transferId);
+    const chunks = splitFrameChunks(text2, transferId);
     const totalFrames = chunks.length;
-    const totalBytes = encodedSize(text);
+    const totalBytes = encodedSize(text2);
     if (totalBytes > MAX_TRANSFER_BYTES) {
       throw new Error(`WebRTC frame transfer exceeds ${MAX_TRANSFER_BYTES} bytes`);
     }
@@ -5282,18 +5489,18 @@ var CtoxWebRtcNativePeer = class {
     }
   }
   awaitFrameAck(transferId, peerId, ackSeq = null) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve, reject2) => {
       const timer = setTimeout(() => {
         this.pendingFrameAcks.delete(frameAckKey(transferId, ackSeq));
-        reject(new Error(`Timed out waiting for WebRTC frame ack ${transferId}:${ackSeq ?? "final"}`));
+        reject2(new Error(`Timed out waiting for WebRTC frame ack ${transferId}:${ackSeq ?? "final"}`));
       }, FRAME_ACK_TIMEOUT_MS);
-      this.pendingFrameAcks.set(frameAckKey(transferId, ackSeq), { resolve, reject, timer, peerId, transferId, ackSeq, sentAtMs: Date.now() });
+      this.pendingFrameAcks.set(frameAckKey(transferId, ackSeq), { resolve, reject: reject2, timer, peerId, transferId, ackSeq, sentAtMs: Date.now() });
       this.recordTransportStatus({ pendingAcks: this.pendingFrameAcks.size });
     });
   }
   requestFrameResume(connection, transferId, attempt, ackSeq) {
     const channel = connection.channel;
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve, reject2) => {
       if (this.connections.get(connection.remotePeerId) !== connection || channel?.readyState !== "open") {
         resolve(false);
         return;
@@ -5306,7 +5513,7 @@ var CtoxWebRtcNativePeer = class {
       }, FRAME_RESUME_TIMEOUT_MS);
       this.pendingFrameAcks.set(key, {
         resolve: (payload) => resolve(payload || true),
-        reject,
+        reject: reject2,
         timer,
         peerId: connection.remotePeerId,
         transferId,
@@ -5333,7 +5540,7 @@ var CtoxWebRtcNativePeer = class {
       backpressureWaitCount: this.transportStats.backpressureWaitCount + 1,
       lastBufferedAmount: Number(channel.bufferedAmount || 0)
     });
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve, reject2) => {
       const previousThreshold = channel.bufferedAmountLowThreshold;
       channel.bufferedAmountLowThreshold = SEND_BUFFER_LOW_WATER;
       let timer = null;
@@ -5370,7 +5577,7 @@ var CtoxWebRtcNativePeer = class {
             { reconnect: false, expectedConnection: connection }
           );
         }
-        reject(error);
+        reject2(error);
       }, SEND_BUFFER_STALL_TIMEOUT_MS);
     });
   }
@@ -5381,7 +5588,7 @@ var CtoxWebRtcNativePeer = class {
     const id = `${this.options.clientId}|${Date.now()}|${this.requestCounter++}`;
     const requestPeerId = String(remotePeerId || "");
     const requestConnection = this.connections.get(requestPeerId) || null;
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve, reject2) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         const error = new Error(`Timed out waiting for WebRTC response ${method}`);
@@ -5394,9 +5601,9 @@ var CtoxWebRtcNativePeer = class {
             this.removeConnection(peerId, `request-timeout-${method}`, null, { expectedConnection: connection });
           }
         }
-        reject(error);
+        reject2(error);
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer, method, peerId: remotePeerId });
+      this.pending.set(id, { resolve, reject: reject2, timer, method, peerId: remotePeerId });
       const frame = { id, method, params };
       if (collection) frame.collection = collection;
       const sendPromise = method === "ctox.browser.live.v1" || method === "ctox.workjet.jour_fixe.speech.v1" || method === CTOX_OUTBOUND_SELLIFY_LOOKUP_METHOD ? this.sendImmediateControlFrame(remotePeerId, frame) : Promise.resolve(this.send(remotePeerId, frame));
@@ -5405,16 +5612,18 @@ var CtoxWebRtcNativePeer = class {
         this.pending.delete(id);
         clearTimeout(timer);
         this.scheduleReconnect(remotePeerId, `send-not-open-${method}`);
-        reject(new Error(`WebRTC peer ${remotePeerId} is not open`));
+        reject2(new Error(`WebRTC peer ${remotePeerId} is not open`));
       }).catch((error) => {
         this.pending.delete(id);
         clearTimeout(timer);
-        reject(error);
+        reject2(error);
       });
     });
   }
   async requestAuxiliary(remotePeerId, label, method, params = [], timeoutMs = 15e3) {
     const peerId = String(remotePeerId || "");
+    if (this.options.v4Hello && !this.connections.get(peerId)?.v4Live)
+      throw new HelloRejected("unexpected_message", "live V4 connection");
     let channel = null;
     const deadline = Date.now() + Math.min(5e3, timeoutMs);
     while (!channel && Date.now() < deadline) {
@@ -5430,18 +5639,18 @@ var CtoxWebRtcNativePeer = class {
       throw new Error(`WebRTC auxiliary channel ${label} is not open`);
     }
     const id = `${this.options.clientId}|aux|${Date.now()}|${this.requestCounter++}`;
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve, reject2) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`Timed out waiting for WebRTC auxiliary response ${method}`));
+        reject2(new Error(`Timed out waiting for WebRTC auxiliary response ${method}`));
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer, method, peerId });
+      this.pending.set(id, { resolve, reject: reject2, timer, method, peerId });
       try {
         channel.send(JSON.stringify({ id, method, params }));
       } catch (error) {
         this.pending.delete(id);
         clearTimeout(timer);
-        reject(error);
+        reject2(error);
       }
     });
   }
@@ -5456,15 +5665,15 @@ var CtoxWebRtcNativePeer = class {
     const connection = this.connections.get(String(remotePeerId || ""));
     const channel = connection?.channel;
     if (!connection || !channel || channel.readyState !== "open") return false;
-    const text = JSON.stringify(payload);
-    if (encodedSize(text) > MAX_INLINE_FRAME_BYTES) {
+    const text2 = JSON.stringify(payload);
+    if (encodedSize(text2) > MAX_INLINE_FRAME_BYTES) {
       throw new Error("WebRTC control frame exceeds the inline frame budget");
     }
     await this.waitForSendBuffer(channel, connection);
     if (this.connections.get(connection.remotePeerId) !== connection || channel.readyState !== "open") {
       return false;
     }
-    channel.send(text);
+    channel.send(text2);
     this.recordSentInlineFrame(payload, channel);
     this.recordTransportStatus({
       sentScheduledFrames: this.transportStats.sentScheduledFrames + 1,
@@ -5775,16 +5984,16 @@ var CtoxWebRtcNativePeer = class {
   }
   async createOffer(remotePeerId, peer) {
     if (this.closed || peer.signalingState === "closed") return;
-    const offer = await peer.createOffer();
+    const offer2 = await peer.createOffer();
     if (this.closed || peer.signalingState === "closed") return;
-    await peer.setLocalDescription(offer);
+    await peer.setLocalDescription(offer2);
     const connection = this.connections.get(remotePeerId);
     if (connection) {
       connection.signalStats.offerSent += 1;
       connection.signalStats.lastSignalAtMs = Date.now();
       this.recordConnectionEvent(connection, "offer-sent", { signalingState: peer.signalingState });
     }
-    this.sendSignal(remotePeerId, { type: offer.type, sdp: offer.sdp });
+    this.sendSignal(remotePeerId, { type: offer2.type, sdp: offer2.sdp });
   }
   async handlePeerSignal(remotePeerId, signal) {
     const connection = this.ensureConnection(remotePeerId);
@@ -5883,6 +6092,11 @@ var CtoxWebRtcNativePeer = class {
     connection.channel = channel;
     connection.inboundFrameGeneration = Number(connection.inboundFrameGeneration || 0) + 1;
     connection.inboundFrameChain = Promise.resolve();
+    clearTimeout(connection.v4Timer);
+    connection.v4Session?.close();
+    connection.v4Session = null;
+    connection.v4FailureRecorded = false;
+    connection.v4Live = false;
     const isCurrentChannel = () => !this.closed && this.connections.get(connection.remotePeerId) === connection && connection.channel === channel;
     channel.onopen = () => {
       if (!isCurrentChannel()) return;
@@ -5892,7 +6106,19 @@ var CtoxWebRtcNativePeer = class {
       }
       this.forceInitiatorPeers.delete(connection.remotePeerId);
       this.recordConnectionEvent(connection, "datachannel-open", { readyState: channel.readyState || "open" });
-      this.events.emit("peer-open", { peerId: connection.remotePeerId });
+      if (this.options.v4Hello) {
+        connection.v4Live = false;
+        connection.v4Timer = setTimeout(
+          () => this.failV4Hello(
+            connection,
+            new HelloRejected("handshake_timeout", "hello before deadline")
+          ),
+          this.options.v4Hello.handshakeTimeoutMs ?? 1e4
+        );
+        this.events.emit("peer-state", { peerId: connection.remotePeerId, state: "authenticating" });
+      } else {
+        this.events.emit("peer-open", { peerId: connection.remotePeerId });
+      }
     };
     channel.onmessage = (event) => {
       let payload = event.data;
@@ -5914,6 +6140,67 @@ var CtoxWebRtcNativePeer = class {
       this.removeConnection(connection.remotePeerId, "channel-close", null, { expectedConnection: connection });
     };
   }
+  failV4Hello(connection, error) {
+    if (this.connections.get(connection.remotePeerId) !== connection || connection.v4FailureRecorded) return;
+    connection.v4FailureRecorded = true;
+    connection.v4Live = false;
+    clearTimeout(connection.v4Timer);
+    const failure = error instanceof HelloRejected ? error : new HelloRejected("authentication_failed", "current paired device authority");
+    connection.lastError = {
+      code: "hello_reject",
+      reason: failure.reason,
+      required: failure.required,
+      peerId: connection.remotePeerId
+    };
+    this.recordConnectionEvent(connection, "hello-reject", connection.lastError);
+    this.events.emit("peer-state", { ...connection.lastError, state: "hello_reject" });
+    this.events.emit("error", connection.lastError);
+    this.removeConnection(connection.remotePeerId, "hello-reject", null, { expectedConnection: connection });
+  }
+  async handleV4Control(connection, channel, payload) {
+    const generation = connection.inboundFrameGeneration;
+    const current = () => !this.closed && this.connections.get(connection.remotePeerId) === connection && connection.channel === channel && connection.inboundFrameGeneration === generation;
+    if (!current()) return;
+    try {
+      const frame = decodeHelloFrame(JSON.stringify(payload));
+      if (frame.type === "hello_reject") throw new HelloRejected(frame.reason, frame.required);
+      if (frame.type === "hello" && !connection.v4Session) {
+        const options = this.options.v4Hello;
+        const verified = await options.verifyServerHello({ peerId: connection.remotePeerId, hello: frame });
+        if (!current()) return;
+        if (verified !== true) throw new HelloRejected("authentication_failed", "paired server proof");
+        const hello = await options.createHello({
+          peerId: connection.remotePeerId,
+          challenge: frame.device_proof.nonce,
+          serverHello: frame
+        });
+        if (!current()) return;
+        if (hello?.device_proof?.nonce !== frame.device_proof.nonce)
+          throw new HelloRejected("device_proof_invalid", "fresh connection challenge");
+        connection.v4Session = new HelloConnection(hello, (snapshot) => {
+          if (!current()) return;
+          this.events.emit("peer-state", { peerId: connection.remotePeerId, ...snapshot });
+          if (snapshot.rejection) this.failV4Hello(
+            connection,
+            new HelloRejected(snapshot.rejection.reason, snapshot.rejection.required)
+          );
+        }, {
+          handshakeTimeoutMs: options.handshakeTimeoutMs ?? 1e4,
+          requiredCapabilities: options.requiredCapabilities || []
+        });
+        channel.send(JSON.stringify(connection.v4Session.connected()));
+      } else if (frame.type === "hello_ok" && connection.v4Session && !connection.v4Live) {
+        connection.v4Session.receive(JSON.stringify(frame));
+        connection.v4Session.activate();
+        clearTimeout(connection.v4Timer);
+        connection.v4Live = true;
+        this.recordConnectionEvent(connection, "hello-live", { protocol: 4 });
+        this.events.emit("peer-open", { peerId: connection.remotePeerId });
+      } else throw new HelloRejected("unexpected_message", "hello before application traffic");
+    } catch (error) {
+      if (current()) this.failV4Hello(connection, error);
+    }
+  }
   enqueueInboundDataChannelFrame(connection, channel, payload) {
     if (this.closed || this.connections.get(connection.remotePeerId) !== connection || connection.channel !== channel) {
       return Promise.resolve();
@@ -5922,6 +6209,10 @@ var CtoxWebRtcNativePeer = class {
     const previous = connection.inboundFrameChain || Promise.resolve();
     const current = previous.then(async () => {
       if (this.closed || this.connections.get(connection.remotePeerId) !== connection || connection.channel !== channel || Number(connection.inboundFrameGeneration || 0) !== generation) return;
+      if (this.options.v4Hello && (["hello", "hello_ok", "hello_reject"].includes(payload?.type) || !connection.v4Live)) {
+        await this.handleV4Control(connection, channel, payload);
+        return;
+      }
       await this.handleDataChannelFrame(connection.remotePeerId, payload);
     });
     connection.inboundFrameChain = current.catch((error) => {
@@ -6194,11 +6485,11 @@ var CtoxWebRtcNativePeer = class {
       return;
     }
     this.incomingFrames.delete(transferId);
-    let text = "";
+    let text2 = "";
     for (let index = 0; index < entry.totalFrames; index += 1) {
-      text += entry.received.get(index) || "";
+      text2 += entry.received.get(index) || "";
     }
-    if (entry.totalBytes && encodedSize(text) !== entry.totalBytes) {
+    if (entry.totalBytes && encodedSize(text2) !== entry.totalBytes) {
       this.recordTransportStatus({
         incomingTransfers: this.incomingFrames.size,
         incomingFrameBufferedBytes: this.incomingFrameBufferedBytes(),
@@ -6209,7 +6500,7 @@ var CtoxWebRtcNativePeer = class {
         peerId,
         transferId,
         expectedBytes: entry.totalBytes,
-        actualBytes: encodedSize(text)
+        actualBytes: encodedSize(text2)
       });
       return;
     }
@@ -6236,7 +6527,7 @@ var CtoxWebRtcNativePeer = class {
       completedAckCacheSize: this.completedFrameAcks.size
     });
     try {
-      const decoded = entry.encoding ? await decodeFramePayload(text, entry.encoding) : text;
+      const decoded = entry.encoding ? await decodeFramePayload(text2, entry.encoding) : text2;
       await this.handleDataChannelFrame(peerId, JSON.parse(decoded));
     } catch (error) {
       this.events.emit("error", {
@@ -6285,15 +6576,15 @@ var CtoxWebRtcNativePeer = class {
       return Promise.resolve();
     }
     const key = requestObservationKey(peerId, method);
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve, reject2) => {
       const timer = setTimeout(() => {
         const waiters2 = (this.requestWaiters.get(key) || []).filter((item) => item.resolve !== resolve);
         if (waiters2.length) this.requestWaiters.set(key, waiters2);
         else this.requestWaiters.delete(key);
-        reject(new Error(`Timed out waiting for remote WebRTC request ${method}`));
+        reject2(new Error(`Timed out waiting for remote WebRTC request ${method}`));
       }, timeoutMs);
       const waiters = this.requestWaiters.get(key) || [];
-      waiters.push({ resolve, reject, timer });
+      waiters.push({ resolve, reject: reject2, timer });
       this.requestWaiters.set(key, waiters);
     });
   }
@@ -6390,6 +6681,10 @@ var CtoxWebRtcNativePeer = class {
     this.events.emit("aux-channel", { peerId: connection.remotePeerId, label, channel });
   }
   async handleAuxiliaryChannelMessage(connection, label, raw) {
+    if (this.options.v4Hello && !connection.v4Live) {
+      this.failV4Hello(connection, new HelloRejected("unexpected_message", "hello before auxiliary traffic"));
+      return;
+    }
     this.auxMessageStats.messagesReceived += 1;
     this.auxMessageStats.lastMessageAtMs = Date.now();
     let payload;
@@ -6417,10 +6712,10 @@ var CtoxWebRtcNativePeer = class {
       if (entry.total <= 0 || entry.chunks.size < entry.total) return;
       this.auxIncomingFrames.delete(key);
       this.auxMessageStats.incompleteTransfers = this.auxIncomingFrames.size;
-      let text = "";
-      for (let index = 0; index < entry.total; index += 1) text += entry.chunks.get(index) || "";
+      let text2 = "";
+      for (let index = 0; index < entry.total; index += 1) text2 += entry.chunks.get(index) || "";
       try {
-        payload = JSON.parse(text);
+        payload = JSON.parse(text2);
       } catch {
         this.auxMessageStats.parseErrors += 1;
         return;
@@ -6475,6 +6770,8 @@ var CtoxWebRtcNativePeer = class {
     connection.inboundFrameGeneration = Number(connection.inboundFrameGeneration || 0) + 1;
     connection.inboundFrameChain = null;
     if (connection.channel) connection.channel.onmessage = null;
+    clearTimeout(connection.v4Timer);
+    connection.v4Session?.close();
     if (connection.handshakeTimer) {
       clearTimeout(connection.handshakeTimer);
       connection.handshakeTimer = null;
@@ -7167,9 +7464,9 @@ function requestObservationKey(peerId, method) {
 function encodedSize(value) {
   return utf8ByteLength(String(value || ""));
 }
-function utf8ByteLength(text) {
+function utf8ByteLength(text2) {
   let bytes = 0;
-  const value = String(text || "");
+  const value = String(text2 || "");
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
     if (code <= 127) {
@@ -7190,7 +7487,7 @@ function utf8ByteLength(text) {
   }
   return bytes;
 }
-function splitFrameChunks(text, transferId) {
+function splitFrameChunks(text2, transferId) {
   const envelope = JSON.stringify({
     ctoxFrame: CTOX_FRAME_PROTOCOL,
     kind: "chunk",
@@ -7201,7 +7498,7 @@ function splitFrameChunks(text, transferId) {
   });
   const overhead = encodedSize(envelope);
   const budget = Math.max(1, Math.min(MAX_CHUNK_CHARS, MAX_SERIALIZED_FRAME_BYTES - overhead - 64));
-  const value = String(text || "");
+  const value = String(text2 || "");
   if (!value) return [""];
   const chunks = [];
   let cur = "";
@@ -7287,7 +7584,7 @@ function nextHighPriorityInlineSend(queue) {
 function shouldRecycleConnectionAfterRequestTimeout(method = "") {
   return ["ctoxProtocol", "token"].includes(String(method || ""));
 }
-function classifySendPriority(payload = {}, text = "") {
+function classifySendPriority(payload = {}, text2 = "") {
   if (payload?.ctoxFrame === CTOX_FRAME_PROTOCOL) {
     return ["ack", "resume", "start"].includes(payload.kind) ? "high" : "normal";
   }
@@ -7303,7 +7600,7 @@ function classifySendPriority(payload = {}, text = "") {
     "rxdb.file.cancel",
     "ctox.browser.live.v1"
   ].includes(method)) return "high";
-  if (method === "masterWrite" && encodedSize(text) > MAX_INLINE_FRAME_BYTES) return "low";
+  if (method === "masterWrite" && encodedSize(text2) > MAX_INLINE_FRAME_BYTES) return "low";
   if (method === "masterWrite") return "high";
   if (payload?.id && (Object.prototype.hasOwnProperty.call(payload, "result") || Object.prototype.hasOwnProperty.call(payload, "error"))) {
     return "high";
@@ -7361,12 +7658,12 @@ async function decodeChunk(chunk) {
   const json = await deflateInflate(bytes);
   return JSON.parse(json);
 }
-function base64ToBytes2(b64) {
+function base64ToBytes2(b642) {
   if (typeof Buffer !== "undefined" && typeof Buffer.from === "function") {
-    const buf = Buffer.from(b64, "base64");
+    const buf = Buffer.from(b642, "base64");
     return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
   }
-  const bin = globalThis.atob(b64);
+  const bin = globalThis.atob(b642);
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
   return out;
@@ -7729,8 +8026,8 @@ function createDemandLoadingTransport({
       error.retryable = true;
       return Promise.reject(error);
     }
-    const promise = new Promise((resolve, reject) => {
-      shared.consumers.set(requestId, { resolve, reject });
+    const promise = new Promise((resolve, reject2) => {
+      shared.consumers.set(requestId, { resolve, reject: reject2 });
     });
     shared.aliases.add(requestId);
     coalescedQueryConsumers.set(requestId, shared);
@@ -7760,14 +8057,14 @@ function createDemandLoadingTransport({
     shared.consumers.clear();
   }
   function withQueryStreamSlot(envelope, fn) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve, reject2) => {
       const requestId = String(envelope?.requestId || "");
       const estimatedBytes = estimateEnvelopeBytes(envelope);
       const background = isBackgroundQuery(envelope);
       const run = () => {
         queryStreamState.active += 1;
         if (background) queryStreamState.activeBackground = (queryStreamState.activeBackground || 0) + 1;
-        Promise.resolve().then(fn).then(resolve, reject).finally(() => {
+        Promise.resolve().then(fn).then(resolve, reject2).finally(() => {
           queryStreamState.active = Math.max(0, queryStreamState.active - 1);
           if (background) queryStreamState.activeBackground = Math.max(0, (queryStreamState.activeBackground || 0) - 1);
           drainReadyQueryRequests();
@@ -7784,13 +8081,13 @@ function createDemandLoadingTransport({
           const error = new Error("QUERY_QUEUE_LIMIT: queued demand requests exceed the browser count/byte budget");
           error.code = "QUERY_QUEUE_LIMIT";
           error.retryable = true;
-          reject(error);
+          reject2(error);
           return;
         }
         const entry = {
           requestId,
           run,
-          reject,
+          reject: reject2,
           owner: transportOwner,
           estimatedBytes,
           background,
@@ -7808,7 +8105,7 @@ function createDemandLoadingTransport({
             if (index < 0) return;
             if (!peerId) {
               queryStreamState.queue.splice(index, 1);
-              reject(new Error("PEER_UNAVAILABLE"));
+              reject2(new Error("PEER_UNAVAILABLE"));
             }
             drainReadyQueryRequests();
           }, (error) => {
@@ -7816,7 +8113,7 @@ function createDemandLoadingTransport({
             const index = queryStreamState.queue.indexOf(entry);
             if (index < 0) return;
             queryStreamState.queue.splice(index, 1);
-            reject(error);
+            reject2(error);
             drainReadyQueryRequests();
           });
         };
@@ -7882,8 +8179,8 @@ function createDemandLoadingTransport({
     const peerId = await waitForPeerId(AUTHORIZED_PEER_WAIT_TIMEOUT_MS, () => Boolean(cancellationReason()));
     if (cancellationReason()) throw createQueryCancelError(cancellationReason());
     if (!peerId) throw new Error("PEER_UNAVAILABLE");
-    const promise = new Promise((resolve, reject) => {
-      queryCollectors.set(requestId, { chunks: [], resolve, reject, peerId, bufferedBytes: 0 });
+    const promise = new Promise((resolve, reject2) => {
+      queryCollectors.set(requestId, { chunks: [], resolve, reject: reject2, peerId, bufferedBytes: 0 });
       metrics.queryFetchRequests += 1;
       updatePeaks();
     });
@@ -7984,11 +8281,11 @@ function createDemandLoadingTransport({
     }
     const peerId = await waitForPeerId();
     if (!peerId) throw new Error("PEER_UNAVAILABLE");
-    const promise = new Promise((resolve, reject) => {
+    const promise = new Promise((resolve, reject2) => {
       fileCollectors.set(requestId, {
         chunks: [],
         resolve,
-        reject,
+        reject: reject2,
         peerId,
         onChunk: typeof onChunk === "function" ? onChunk : null,
         bufferedBytes: 0
@@ -8061,9 +8358,9 @@ function createDemandLoadingTransport({
     if (!peerId) throw new Error("PEER_UNAVAILABLE");
     let removeAbort = () => {
     };
-    const promise = new Promise((resolve, reject) => {
+    const promise = new Promise((resolve, reject2) => {
       if (signal?.aborted) {
-        reject(createRowsCancelError(rowsAbortReason(signal)));
+        reject2(createRowsCancelError(rowsAbortReason(signal)));
         return;
       }
       const onAbort = () => {
@@ -8083,7 +8380,7 @@ function createDemandLoadingTransport({
         },
         reject: (error) => {
           removeAbort();
-          reject(error);
+          reject2(error);
         },
         peerId,
         bufferedBytes: 0
@@ -8464,8 +8761,8 @@ function rowsAbortReason(signal) {
   return "client-abort";
 }
 function createRowsCancelError(reason) {
-  const text = typeof reason === "string" && reason.trim() ? reason.trim() : "client-abort";
-  const error = new Error(`ROWS_CANCELLED: ${text}`);
+  const text2 = typeof reason === "string" && reason.trim() ? reason.trim() : "client-abort";
+  const error = new Error(`ROWS_CANCELLED: ${text2}`);
   error.name = "AbortError";
   error.code = "ROWS_CANCELLED";
   error.retryable = false;
@@ -8745,8 +9042,8 @@ function createQueryDemandLoader({
         consumerCancelled: false,
         detachConsumerSignal: null
       };
-      const cancellationPromise = new Promise((_, reject) => {
-        invocationEntry.rejectCancellation = reject;
+      const cancellationPromise = new Promise((_, reject2) => {
+        invocationEntry.rejectCancellation = reject2;
       });
       cancellationPromise.catch(() => {
       });
@@ -9352,16 +9649,16 @@ var v15LogSink = null;
 function setV15LogSink(fn) {
   v15LogSink = typeof fn === "function" ? fn : null;
 }
-function v15Log(event, fields) {
+function v15Log(event, fields2) {
   if (v15LogSink) {
     try {
-      v15LogSink(event, fields);
+      v15LogSink(event, fields2);
     } catch {
     }
     return;
   }
   if (globalThis?.__CTOX_V15_DEBUG__ === true && globalThis?.console?.debug) {
-    globalThis.console.debug("[V1.5]", event, fields);
+    globalThis.console.debug("[V1.5]", event, fields2);
   }
 }
 function defaultMatcher(doc, selector = {}) {
@@ -9641,9 +9938,9 @@ async function reconcilePresentSequences(backend, collection, fileId, presentSeq
   return surviving;
 }
 async function getPresence(backend, collection, fileId) {
-  const record = await backend.getDocumentAccess(collection, `${fileId}-presence`);
-  if (!record || !record.fileChunkPresence) return null;
-  return record.fileChunkPresence;
+  const record2 = await backend.getDocumentAccess(collection, `${fileId}-presence`);
+  if (!record2 || !record2.fileChunkPresence) return null;
+  return record2.fileChunkPresence;
 }
 async function putPresence(backend, collection, fileId, presence) {
   await backend.putDocumentAccess({
@@ -9878,8 +10175,8 @@ function cancellationError(reason) {
   return createCancelError(typeof reason === "string" ? reason : "client-abort");
 }
 function createCancelError(reason) {
-  const text = typeof reason === "string" && reason.trim() ? reason.trim() : "client-abort";
-  const error = new Error(`ROWS_CANCELLED: ${text}`);
+  const text2 = typeof reason === "string" && reason.trim() ? reason.trim() : "client-abort";
+  const error = new Error(`ROWS_CANCELLED: ${text2}`);
   error.name = "AbortError";
   error.code = "ROWS_CANCELLED";
   error.retryable = false;
@@ -9933,12 +10230,12 @@ function createIndexedDbMetaBackend({ databaseName }) {
     async getProjectedQueryRows(key, now) {
       return projectedCache.get(key, now);
     },
-    async putQueryWindow(record) {
+    async putQueryWindow(record2) {
       await withDb(
         "putQueryWindow",
-        [record],
+        [record2],
         (db) => runRequest(
-          db.transaction(STORE_QUERY_WINDOWS, "readwrite").objectStore(STORE_QUERY_WINDOWS).put(record)
+          db.transaction(STORE_QUERY_WINDOWS, "readwrite").objectStore(STORE_QUERY_WINDOWS).put(record2)
         )
       );
     },
@@ -9972,14 +10269,14 @@ function createIndexedDbMetaBackend({ databaseName }) {
         )
       );
     },
-    async replaceQueryWindowDocumentRefs(record) {
+    async replaceQueryWindowDocumentRefs(record2) {
       await withDb(
         "replaceQueryWindowDocumentRefs",
-        [record],
+        [record2],
         async (db) => {
-          const windowKey = queryWindowKey2(record);
+          const windowKey = queryWindowKey2(record2);
           await deleteQueryWindowRefs(db, windowKey);
-          await putQueryWindowRefs(db, record);
+          await putQueryWindowRefs(db, record2);
         }
       );
     },
@@ -10004,12 +10301,12 @@ function createIndexedDbMetaBackend({ databaseName }) {
         }
       );
     },
-    async putDocumentAccess(record) {
+    async putDocumentAccess(record2) {
       await withDb(
         "putDocumentAccess",
-        [record],
+        [record2],
         (db) => runRequest(
-          db.transaction(STORE_DOCUMENT_ACCESS, "readwrite").objectStore(STORE_DOCUMENT_ACCESS).put(record)
+          db.transaction(STORE_DOCUMENT_ACCESS, "readwrite").objectStore(STORE_DOCUMENT_ACCESS).put(record2)
         )
       );
     },
@@ -10040,12 +10337,12 @@ function createIndexedDbMetaBackend({ databaseName }) {
         )
       );
     },
-    async putCacheStats(record) {
+    async putCacheStats(record2) {
       await withDb(
         "putCacheStats",
-        [record],
+        [record2],
         (db) => runRequest(
-          db.transaction(STORE_CACHE_STATS, "readwrite").objectStore(STORE_CACHE_STATS).put(record)
+          db.transaction(STORE_CACHE_STATS, "readwrite").objectStore(STORE_CACHE_STATS).put(record2)
         )
       );
     },
@@ -10090,7 +10387,7 @@ function openSidecarDatabase(databaseName) {
   if (!globalThis.indexedDB) {
     throw new Error("indexedDB is required for sidecar metadata storage");
   }
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve, reject2) => {
     let settled = false;
     const finish = (fn, value) => {
       if (settled) return false;
@@ -10100,7 +10397,7 @@ function openSidecarDatabase(databaseName) {
       return true;
     };
     const timer = setTimeout(() => {
-      finish(reject, new Error(`IndexedDB open timed out for sidecar ${databaseName}`));
+      finish(reject2, new Error(`IndexedDB open timed out for sidecar ${databaseName}`));
     }, OPEN_TIMEOUT_MS);
     const request = globalThis.indexedDB.open(databaseName, SIDECAR_DB_VERSION);
     request.onupgradeneeded = () => {
@@ -10145,10 +10442,10 @@ function openSidecarDatabase(databaseName) {
       }
     };
     request.onerror = () => {
-      finish(reject, request.error || new Error(`failed to open sidecar ${databaseName}`));
+      finish(reject2, request.error || new Error(`failed to open sidecar ${databaseName}`));
     };
     request.onblocked = () => {
-      finish(reject, new Error(`IndexedDB open blocked for sidecar ${databaseName}`));
+      finish(reject2, new Error(`IndexedDB open blocked for sidecar ${databaseName}`));
     };
   });
 }
@@ -10178,13 +10475,13 @@ function parseQueryWindowKey(key) {
   throw new TypeError("query window key must be array or string");
 }
 function runRequest(request) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve, reject2) => {
     request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onerror = () => reject2(request.error);
   });
 }
-function queryWindowKey2(record) {
-  return [record.collection, record.queryFingerprint, record.offset, record.limit].join("|");
+function queryWindowKey2(record2) {
+  return [record2.collection, record2.queryFingerprint, record2.offset, record2.limit].join("|");
 }
 function stringKey3(key) {
   if (Array.isArray(key)) return key.join("|");
@@ -10195,17 +10492,17 @@ function normalizeDocumentIds3(ids) {
   if (!Array.isArray(ids)) return [];
   return Array.from(new Set(ids.map((id) => String(id || "")).filter(Boolean)));
 }
-async function putQueryWindowRefs(db, record) {
-  const documentIds = normalizeDocumentIds3([...record.documentIds || [], ...record.selectorRefIds || []]);
+async function putQueryWindowRefs(db, record2) {
+  const documentIds = normalizeDocumentIds3([...record2.documentIds || [], ...record2.selectorRefIds || []]);
   if (!documentIds.length) return;
-  const windowKey = queryWindowKey2(record);
+  const windowKey = queryWindowKey2(record2);
   await runTransaction(
     db.transaction(STORE_QUERY_WINDOW_REFS, "readwrite"),
     (tx) => {
       const store = tx.objectStore(STORE_QUERY_WINDOW_REFS);
       for (const documentId3 of documentIds) {
         store.put({
-          collection: record.collection,
+          collection: record2.collection,
           documentId: documentId3,
           windowKey
         });
@@ -10230,10 +10527,10 @@ async function deleteQueryWindowRefs(db, windowKey) {
   );
 }
 function runTransaction(tx, schedule) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve, reject2) => {
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error || new Error("IndexedDB transaction aborted"));
+    tx.onerror = () => reject2(tx.error);
+    tx.onabort = () => reject2(tx.error || new Error("IndexedDB transaction aborted"));
     try {
       schedule(tx);
     } catch (error) {
@@ -10241,7 +10538,7 @@ function runTransaction(tx, schedule) {
         tx.abort();
       } catch {
       }
-      reject(error);
+      reject2(error);
     }
   });
 }
@@ -11326,11 +11623,11 @@ var SharedRoomPeer = class {
       });
     }
     if (!this.activeRegistryUnsub) {
-      this.activeRegistryUnsub = this.activeRegistry.onChange((names) => {
+      this.activeRegistryUnsub = this.activeRegistry.onChange((names2) => {
         const previous = this.lastActiveCollectionsSet || /* @__PURE__ */ new Set();
-        const current = new Set(Array.isArray(names) ? names : []);
+        const current = new Set(Array.isArray(names2) ? names2 : []);
         this.lastActiveCollectionsSet = current;
-        this.sendActiveCollections(names);
+        this.sendActiveCollections(names2);
         for (const name of current) {
           if (previous.has(name)) continue;
           const registration = this.collections.get(name);
@@ -11365,8 +11662,8 @@ var SharedRoomPeer = class {
   // Phase 2: send `rxdb.activeCollections` (fire-and-forget) to the active
   // native peer. No-op until a peer is open. Resent on (re)handshake because
   // the native peer drops its per-peer active set on disconnect.
-  sendActiveCollections(names) {
-    const list = Array.isArray(names) ? names : this.activeRegistry.activeCollectionsList();
+  sendActiveCollections(names2) {
+    const list = Array.isArray(names2) ? names2 : this.activeRegistry.activeCollectionsList();
     const peerId = this.activeRemotePeerId;
     if (!peerId || !this.peer) return;
     const key = list.join(" ");
@@ -11690,7 +11987,7 @@ var SharedRoomPeer = class {
     const immediate = this.openSharedPeerIds()[0];
     if (immediate) return immediate;
     this.ensurePeer();
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve, reject2) => {
       let settled = false;
       let unsubscribe = null;
       let interval = null;
@@ -11710,7 +12007,7 @@ var SharedRoomPeer = class {
         if (peerId) settle(resolve, peerId);
       };
       const timer = setTimeout(() => {
-        settle(reject, new Error(`Timed out waiting for shared WebRTC peer in ${this.room}`));
+        settle(reject2, new Error(`Timed out waiting for shared WebRTC peer in ${this.room}`));
       }, timeoutMs);
       unsubscribe = this.peer?.on?.("peer-open", (event) => {
         const peerId = event.detail?.peerId;
@@ -11867,7 +12164,7 @@ var CtoxWebRtcReplicationState = class {
     let timer = null;
     let lastError = null;
     try {
-      return await new Promise((resolve, reject) => {
+      return await new Promise((resolve, reject2) => {
         let settled = false;
         const finish = (fn, value) => {
           if (settled) return;
@@ -11876,11 +12173,11 @@ var CtoxWebRtcReplicationState = class {
         };
         const inspect = () => {
           if (settled) return;
-          if (this.cancelled) return finish(reject, new Error("WebRTC replication cancelled"));
+          if (this.cancelled) return finish(reject2, new Error("WebRTC replication cancelled"));
           const negotiated = this.shared?.negotiated || null;
           if (!negotiated) return;
           if (!negotiated.queryFetchCapable) {
-            return finish(reject, new Error(`Native WebRTC peer lacks ${CTOX_QUERY_FETCH_CAPABILITY}`));
+            return finish(reject2, new Error(`Native WebRTC peer lacks ${CTOX_QUERY_FETCH_CAPABILITY}`));
           }
           const generation = this.collectionQueryGenerationToken(negotiated.peerId);
           if (!generation) return;
@@ -11896,7 +12193,7 @@ var CtoxWebRtcReplicationState = class {
         inspect();
         timer = setTimeout(() => {
           const cause = lastError?.message ? `; last error: ${lastError.message}` : "";
-          finish(reject, new Error(`Native query readiness exceeded ${budgetMs}ms${cause}`));
+          finish(reject2, new Error(`Native query readiness exceeded ${budgetMs}ms${cause}`));
         }, budgetMs);
       });
     } finally {
@@ -12568,9 +12865,9 @@ var CtoxWebRtcReplicationState = class {
     const mergedRows = [];
     for (const row of rows) {
       const id = primaryValue(row.newDocumentState, primaryPath);
-      let record = null;
+      let record2 = null;
       try {
-        record = await storage.getStoredRecord?.(id);
+        record2 = await storage.getStoredRecord?.(id);
       } catch (cause) {
         const error = fieldMergePersistenceError({
           cause,
@@ -12582,7 +12879,7 @@ var CtoxWebRtcReplicationState = class {
         throw error;
       }
       const { merged, requiresManualResolution, conflictFields } = threeWayMergeDocuments(
-        record?.base,
+        record2?.base,
         row.newDocumentState,
         row.assumedMasterState,
         { primaryPath }
@@ -13114,7 +13411,7 @@ var CtoxWebRtcReplicationState = class {
   async waitForOpenPeerId(timeoutMs = 8e3) {
     const immediatePeerId = this.openPeerIds()[0];
     if (immediatePeerId) return immediatePeerId;
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve, reject2) => {
       let settled = false;
       let subscription = null;
       const settle = (handler, value) => {
@@ -13132,7 +13429,7 @@ var CtoxWebRtcReplicationState = class {
         if (peerId) settle(resolve, peerId);
       };
       const timer = setTimeout(() => {
-        settle(reject, new Error(`Timed out waiting for WebRTC peer reopen for ${this.collection.name}`));
+        settle(reject2, new Error(`Timed out waiting for WebRTC peer reopen for ${this.collection.name}`));
       }, timeoutMs);
       subscription = this.peerStates$?.subscribe?.(inspect) || null;
       inspect();
@@ -13645,20 +13942,20 @@ function delay2(ms) {
 function createDeferred() {
   let settled = false;
   let resolve;
-  let reject;
+  let reject2;
   const promise = new Promise((promiseResolve, promiseReject) => {
     resolve = (value) => {
       if (settled) return;
       settled = true;
       promiseResolve(value);
     };
-    reject = (error) => {
+    reject2 = (error) => {
       if (settled) return;
       settled = true;
       promiseReject(error);
     };
   });
-  return { promise, resolve, reject };
+  return { promise, resolve, reject: reject2 };
 }
 function normalizeRemoteProtocol(payload) {
   if (!payload || typeof payload !== "object") return payload;
@@ -14068,7 +14365,7 @@ function createMultiTabSyncCoordinator({
       if (!channel || !leaderTabId) return Promise.reject(new Error("No multi-tab sync leader is available."));
       const requestedLeaderTabId = leaderTabId;
       const requestId = globalThis.crypto?.randomUUID?.() || `dirty-${tabId}-${clock()}-${Math.random().toString(36).slice(2)}`;
-      return new Promise((resolve, reject) => {
+      return new Promise((resolve, reject2) => {
         const timer = setTimeout(() => {
           pendingDirtyAcks.delete(requestId);
           if (leaderTabId === requestedLeaderTabId) {
@@ -14078,9 +14375,9 @@ function createMultiTabSyncCoordinator({
             attemptElection().catch(() => {
             });
           }
-          reject(new Error(`Multi-tab leader did not acknowledge ${collection} within ${timeoutMs}ms.`));
+          reject2(new Error(`Multi-tab leader did not acknowledge ${collection} within ${timeoutMs}ms.`));
         }, Math.max(100, Number(timeoutMs) || DIRTY_ACK_TIMEOUT_MS));
-        pendingDirtyAcks.set(requestId, { resolve, reject, timer });
+        pendingDirtyAcks.set(requestId, { resolve, reject: reject2, timer });
         post({ type: "dirty", requestId, collection, ids });
       });
     },
@@ -14096,7 +14393,7 @@ function createMultiTabSyncCoordinator({
       }
       const requestedLeaderTabId = leaderTabId;
       const requestId = globalThis.crypto?.randomUUID?.() || `native-${tabId}-${clock()}-${Math.random().toString(36).slice(2)}`;
-      return new Promise((resolve, reject) => {
+      return new Promise((resolve, reject2) => {
         const timer = setTimeout(() => {
           pendingNativeRequests.delete(requestId);
           if (leaderTabId === requestedLeaderTabId) {
@@ -14106,9 +14403,9 @@ function createMultiTabSyncCoordinator({
             attemptElection().catch(() => {
             });
           }
-          reject(new Error(`The multi-tab leader did not answer ${method} within ${timeoutMs}ms.`));
+          reject2(new Error(`The multi-tab leader did not answer ${method} within ${timeoutMs}ms.`));
         }, Math.max(100, Number(timeoutMs) || NATIVE_REQUEST_TIMEOUT_MS));
-        pendingNativeRequests.set(requestId, { resolve, reject, timer });
+        pendingNativeRequests.set(requestId, { resolve, reject: reject2, timer });
         post({ type: "native-request", requestId, method, params, options });
       });
     },
@@ -14225,11 +14522,11 @@ async function createRxDatabase({
 }
 async function removeRxDatabase(name) {
   if (!name || !globalThis.indexedDB?.deleteDatabase) return;
-  await new Promise((resolve, reject) => {
+  await new Promise((resolve, reject2) => {
     const request = indexedDB.deleteDatabase(name);
     request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error || new Error(`Failed to delete IndexedDB ${name}`));
-    request.onblocked = () => reject(new Error(`IndexedDB delete blocked for ${name}`));
+    request.onerror = () => reject2(request.error || new Error(`Failed to delete IndexedDB ${name}`));
+    request.onblocked = () => reject2(new Error(`IndexedDB delete blocked for ${name}`));
   });
 }
 function addRxPlugin(_ignored = null) {
@@ -14280,10 +14577,10 @@ var CtoxRxDatabase = class {
       retryPrimaryOpen: async () => {
         if (!globalThis.indexedDB?.open) return false;
         const request = indexedDB.open(name);
-        const opened = await new Promise((resolve, reject) => {
+        const opened = await new Promise((resolve, reject2) => {
           request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error || new Error(`Failed to reopen IndexedDB ${name}`));
-          request.onblocked = () => reject(new Error(`IndexedDB open blocked for ${name}`));
+          request.onerror = () => reject2(request.error || new Error(`Failed to reopen IndexedDB ${name}`));
+          request.onblocked = () => reject2(new Error(`IndexedDB open blocked for ${name}`));
         });
         opened.close();
         return true;
@@ -15080,11 +15377,11 @@ var CtoxRxDocument = class {
     readOnlyProjectedRows.add(row);
     return row;
   }
-  async patch(fields) {
-    return this.incrementalPatch(fields);
+  async patch(fields2) {
+    return this.incrementalPatch(fields2);
   }
-  async atomicPatch(fields) {
-    return this.incrementalPatch(fields);
+  async atomicPatch(fields2) {
+    return this.incrementalPatch(fields2);
   }
   async update(operation) {
     if (operation?.$set && typeof operation.$set === "object") {
@@ -15101,16 +15398,16 @@ var CtoxRxDocument = class {
   async atomicUpdate(modifier) {
     return this.incrementalModify(modifier);
   }
-  async incrementalPatch(fields) {
+  async incrementalPatch(fields2) {
     if (readOnlyProjectedDocuments.has(this)) throw projectedDocumentWriteError();
-    const updatedAtMs = Number(fields?.updated_at_ms || Date.now());
+    const updatedAtMs = Number(fields2?.updated_at_ms || Date.now());
     const next = {
       ...this._data,
-      ...fields,
+      ...fields2,
       updated_at_ms: updatedAtMs,
       _meta: {
         ...this._data._meta || {},
-        ...fields?._meta || {},
+        ...fields2?._meta || {},
         lwt: updatedAtMs
       }
     };
@@ -15144,8 +15441,8 @@ function normalizeQuery(query, primaryPath) {
 }
 function normalizeIndex(index) {
   if (!Array.isArray(index)) return void 0;
-  const fields = index.map((field) => String(field || "").trim()).filter(Boolean);
-  return fields.length ? fields : void 0;
+  const fields2 = index.map((field) => String(field || "").trim()).filter(Boolean);
+  return fields2.length ? fields2 : void 0;
 }
 function matchesSelector(doc, selector = {}) {
   for (const [key, expected] of Object.entries(selector || {})) {
@@ -15309,34 +15606,34 @@ function parseLinearRegexAtom(source, cursor, end) {
 }
 function testLinearRegexPattern(value, compiled) {
   const input = String(value || "").slice(0, MAX_LINEAR_REGEX_INPUT_LENGTH);
-  const text = compiled.ignoreCase ? input.toLocaleLowerCase() : input;
+  const text2 = compiled.ignoreCase ? input.toLocaleLowerCase() : input;
   const tokens = compiled.ignoreCase ? compiled.tokens.map((token) => token.kind === "literal" ? { ...token, value: token.value.toLocaleLowerCase() } : token) : compiled.tokens;
   if (!tokens.length) return true;
-  const starts = compiled.anchoredStart ? [0] : Array.from({ length: text.length + 1 }, (_, index) => index);
+  const starts = compiled.anchoredStart ? [0] : Array.from({ length: text2.length + 1 }, (_, index) => index);
   return starts.some((start) => {
-    const endings = consumeLinearRegexTokens(text, tokens, start, 0);
-    return endings.some((end) => compiled.anchoredEnd ? end === text.length : true);
+    const endings = consumeLinearRegexTokens(text2, tokens, start, 0);
+    return endings.some((end) => compiled.anchoredEnd ? end === text2.length : true);
   });
 }
-function consumeLinearRegexTokens(text, tokens, position, tokenIndex) {
+function consumeLinearRegexTokens(text2, tokens, position, tokenIndex) {
   if (tokenIndex >= tokens.length) return [position];
   const token = tokens[tokenIndex];
   const endings = [];
   let next = position;
   let count = 0;
   while (count < token.min) {
-    if (!linearRegexAtomMatches(text[next], token)) return endings;
+    if (!linearRegexAtomMatches(text2[next], token)) return endings;
     next += 1;
     count += 1;
   }
   const positions = [next];
-  while (count < token.max && next < text.length && linearRegexAtomMatches(text[next], token)) {
+  while (count < token.max && next < text2.length && linearRegexAtomMatches(text2[next], token)) {
     next += 1;
     count += 1;
     positions.push(next);
   }
   for (let index = positions.length - 1; index >= 0; index -= 1) {
-    endings.push(...consumeLinearRegexTokens(text, tokens, positions[index], tokenIndex + 1));
+    endings.push(...consumeLinearRegexTokens(text2, tokens, positions[index], tokenIndex + 1));
   }
   return endings;
 }

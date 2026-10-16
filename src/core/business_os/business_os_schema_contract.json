@@ -11291,6 +11291,98 @@
     ],
     "additionalProperties": true
   },
+  "planned_steps": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "goal_id",
+      "goal_revision",
+      "goal_status",
+      "step_id",
+      "status",
+      "project_id",
+      "owner",
+      "owner_user_id",
+      "title",
+      "failed_step_id"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "goal_id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "goal_revision": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 9007199254740991
+      },
+      "goal_status": {
+        "type": "string",
+        "enum": [
+          "active",
+          "blocked",
+          "failed",
+          "completed"
+        ]
+      },
+      "step_id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "queued",
+          "blocked",
+          "failed",
+          "completed"
+        ]
+      },
+      "project_id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "owner": {
+        "type": "string"
+      },
+      "owner_user_id": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "title": {
+        "type": "string"
+      },
+      "failed_step_id": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "maxLength": 256
+      },
+      "updated_at_ms": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 9007199254740991
+      },
+      "completed_at_ms": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 9007199254740991
+      }
+    },
+    "indexes": [
+      "project_id",
+      "goal_id"
+    ]
+  },
   "planning_absences": {
     "version": 0,
     "primaryKey": "id",
