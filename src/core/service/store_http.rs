@@ -36,7 +36,8 @@ pub(crate) struct HttpSurface {
 }
 impl HttpSurface {
     pub async fn new(inputs: Arc<StoreInputs>) -> Result<Arc<Self>, StoreError> {
-        let bootstrap = crate::business_os::browser_bootstrap::BrowserBootstrap::start(&inputs).await?;
+        let bootstrap =
+            crate::business_os::browser_bootstrap::BrowserBootstrap::start(&inputs).await?;
         Ok(Arc::new(Self {
             inputs,
             _bootstrap: bootstrap,

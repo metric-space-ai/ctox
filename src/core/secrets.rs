@@ -506,7 +506,7 @@ fn mutate_secret_records(
         .map(|(s, n)| (s.to_string(), n.to_string()))
         .collect::<Vec<_>>();
     let now = now_iso_string();
-    Ok(secret_owner(root)?.write_blocking(move|tx|{
+    let changed = secret_owner(root)?.write_blocking(move|tx|{
         for(scope,name,expected)in guards {
             let current:Option<(String,String)>=tx.query_row("SELECT nonce_b64,ciphertext_b64 FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",params![scope,name],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
             let current=current.map(|(n,c)|decrypt_secret_value(&key,&n,&c).map_err(|_|ctox_store::StoreError::Invalid("secret compare decryption failed".into()))).transpose()?;
@@ -518,7 +518,11 @@ fn mutate_secret_records(
             tx.execute("INSERT INTO ctox_secret_records (secret_id,scope,secret_name,description,metadata_json,nonce_b64,ciphertext_b64,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?8) ON CONFLICT(scope,secret_name) DO UPDATE SET description=excluded.description,metadata_json=excluded.metadata_json,nonce_b64=excluded.nonce_b64,ciphertext_b64=excluded.ciphertext_b64,updated_at=excluded.updated_at",params![format!("secret:{}:{}",scope,stable_digest(&name)),scope,name,description,metadata,encrypted.nonce_b64,encrypted.ciphertext_b64,now])?;
         }
         Ok(true)
-    })?)
+    })?;
+    if changed {
+        crate::business_os::browser_bootstrap::invalidate(root);
+    }
+    Ok(changed)
 }
 
 /// Deletes a credential tuple in one SQLite transaction. This is used after
@@ -533,7 +537,7 @@ pub fn delete_secret_records(root: &Path, keys: &[(&str, &str)]) -> Result<usize
         .iter()
         .map(|(s, n)| (s.to_string(), n.to_string()))
         .collect::<Vec<_>>();
-    Ok(secret_owner(root)?.write_blocking(move |tx| {
+    let deleted = secret_owner(root)?.write_blocking(move |tx| {
         let mut deleted = 0usize;
         for (scope, name) in keys {
             deleted = deleted.saturating_add(tx.execute(
@@ -542,7 +546,11 @@ pub fn delete_secret_records(root: &Path, keys: &[(&str, &str)]) -> Result<usize
             )?);
         }
         Ok(deleted)
-    })?)
+    })?;
+    if deleted > 0 {
+        crate::business_os::browser_bootstrap::invalidate(root);
+    }
+    Ok(deleted)
 }
 
 pub fn secret_store_path(root: &Path) -> PathBuf {

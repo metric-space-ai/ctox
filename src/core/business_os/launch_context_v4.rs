@@ -120,23 +120,20 @@ async fn build_principal(
     );
     let signer = owners.instance_signer()?;
     let raw_key = public_key(signer.key_id())?;
+    let peer = format!("browser-{}", uuid::Uuid::new_v4());
+    let prepared = super::browser_bootstrap::prepared(&owners.root, &peer)?;
+    let catalog = prepared.catalog;
     let id = user.id.clone();
     let key = raw_key;
     let snapshot = owners
         .activation_snapshot(move |tx| {
-            snapshot(tx, &id, &key, local)
+            snapshot(tx, &id, &key, local, &catalog)
                 .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))
         })
         .await
         .context("read launch identity and grants")?
         .value;
-    let root = owners.root.clone();
-    let peer = format!("browser-{}", uuid::Uuid::new_v4());
-    let session = peer.clone();
-    // Reuse the V3 browser credential and configured/ctox.dev TURN route. This
-    // existing helper performs network/secret-owner I/O outside the Sync snapshot.
-    let config = super::browser_bootstrap::config(&root, &session)
-        .context("read prepared browser signaling and TURN")?;
+    let config = prepared.config;
     ensure!(
         config.instance_id == signer.instance_id(),
         "instance identity differs"
@@ -352,6 +349,7 @@ fn snapshot(
     id: &str,
     key: &[u8; 32],
     local: bool,
+    catalog: &Value,
 ) -> Result<(Actor, Vec<String>, Vec<String>)> {
     let user = if local && id == "local-dev" {
         serde_json::json!({"id":"local-dev","role":"admin","active":true})
@@ -403,7 +401,11 @@ fn snapshot(
         let Some(ver) = app["active_ver"].as_str().filter(|v| !v.is_empty()) else {
             continue;
         };
-        let version = document(tx, "business_app_versions", &format!("{app_id}@{ver}"))?;
+        let version_id = format!("{app_id}@{ver}");
+        let version = catalog["business_app_versions"]
+            .as_array()
+            .and_then(|versions| versions.iter().find(|version| version["id"] == version_id))
+            .context("active app release preparation pending")?;
         ensure!(
             matches!(version["state"].as_str(), Some("published" | "archived")),
             "unpublished active manifest"

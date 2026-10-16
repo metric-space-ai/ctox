@@ -77,6 +77,7 @@ pub(crate) async fn fixture() -> Result<(tempfile::TempDir, Foreground, Business
         created_at_ms: 0,
         updated_at_ms: 0,
     };
+    super::super::browser_bootstrap::settle(&fg.inputs).await?;
     Ok((root, fg, user))
 }
 
@@ -88,6 +89,18 @@ async fn launch_context_v4_real_owners_shape_signature_freshness_and_rights() ->
         "fixture requires an isolated explicit root"
     );
     let (_root, mut fg, user) = fixture().await?;
+    // A plain OS callback has no admitted Core TLS. Prepared bootstrap reads
+    // still succeed: moving computation back here trips the real Core guard.
+    let prepared_root = fg.inputs.root.clone();
+    let prepared = std::thread::spawn(move || {
+        super::super::browser_bootstrap::prepared(&prepared_root, "memory-only-contract")
+    })
+    .join()
+    .expect("bootstrap callback panicked")?;
+    assert!(prepared.config.signaling_room_password.is_empty());
+    assert!(prepared.catalog["business_app_versions"]
+        .as_array()
+        .is_some_and(|v| !v.is_empty()));
     let first = build(&fg.inputs, &user)
         .await
         .context("first launch build")?;

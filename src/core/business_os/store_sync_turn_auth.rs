@@ -751,8 +751,11 @@ impl BrowserBootstrapMaterial {
     pub(crate) fn for_session(&self, session: &str) -> BusinessOsSyncConfig {
         let mut config = self.config.clone();
         if let Some((url, secret)) = &self.turn {
-            let (username, credential) = mint_ephemeral_turn_credentials(secret, session, now_ms() as i64);
-            config.ice_servers.push(serde_json::json!({"urls": url,"username":username,"credential":credential}));
+            let (username, credential) =
+                mint_ephemeral_turn_credentials(secret, session, now_ms() as i64);
+            config
+                .ice_servers
+                .push(serde_json::json!({"urls": url,"username":username,"credential":credential}));
         }
         config.ice_diagnostics = ice_diagnostics(&config.ice_servers);
         config

@@ -206,6 +206,7 @@ fn write_runtime_env_map(root: &Path, env_map: &BTreeMap<String, String>) -> Res
         }
         Ok(())
     })?;
+    crate::business_os::browser_bootstrap::invalidate(root);
     Ok(())
 }
 
@@ -223,6 +224,7 @@ pub fn set_runtime_env_value(root: &Path, key: &str, value: &str) -> Result<()> 
         tx.execute("INSERT INTO runtime_env_kv (env_key,env_value) VALUES (?1,?2) ON CONFLICT(env_key) DO UPDATE SET env_value=excluded.env_value",params![key,value])?;
         Ok(())
     })?;
+    crate::business_os::browser_bootstrap::invalidate(root);
     Ok(())
 }
 
@@ -236,6 +238,7 @@ pub fn clear_runtime_env_value(root: &Path, key: &str) -> Result<()> {
         tx.execute("DELETE FROM runtime_env_kv WHERE env_key=?1", [key])?;
         Ok(())
     })?;
+    crate::business_os::browser_bootstrap::invalidate(root);
     Ok(())
 }
 
@@ -357,6 +360,7 @@ impl RuntimeStore {
             tx.execute("INSERT INTO runtime_env_kv (env_key, env_value) VALUES (?1, ?2) ON CONFLICT(env_key) DO UPDATE SET env_value = excluded.env_value", params![key, value])?;
             Ok(())
         }).await?;
+        crate::business_os::browser_bootstrap::invalidate(&self.root);
         Ok(())
     }
 }
