@@ -705,7 +705,7 @@ async fn deliver_completion(
 
 /// ReadPool already pins a transaction before calling us. This is the same
 /// native fence check as commit, borrowing that snapshot without nesting BEGIN.
-pub(super) async fn check_model_fence(
+pub(in super::super) async fn check_model_fence(
     pool: ctox_store::read_pool::ReadPool,
     check: Arc<dyn Fn(&rusqlite::Transaction<'_>) -> Result<(), StoreError> + Send + Sync>,
 ) -> Result<(), StoreError> {

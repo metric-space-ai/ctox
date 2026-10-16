@@ -48,7 +48,8 @@ async fn native_model_check_is_permissioned_bound_and_not_reexecuted() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     let mut command = request();
     command.id = uuid::Uuid::new_v4().to_string();
-    let first = f.platform.dispatch(
+    let pending_platform = f.platform.clone();
+    let first = pending_platform.dispatch(
         BusinessOsActor::new(Some("owner".into()), "admin"),
         command.clone(),
         1001,
