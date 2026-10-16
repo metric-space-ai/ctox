@@ -159,7 +159,7 @@ fn serve_owned_business_os(root: &Path, options: BusinessOsServeOptions) -> anyh
     let app_root = crate::persistence::run_core_blocking_at(root, move || {
         resolve_business_os_app_root(&work)
     })?;
-    if !app_root.join("index.html").is_file() {
+    if !app_root.join(business_os_entry_document(&app_root, None)).is_file() {
         anyhow::bail!(
             "native Business OS app is missing at {}",
             app_root.display()
@@ -307,7 +307,7 @@ pub(crate) fn resolve_business_os_app_root(root: &Path) -> anyhow::Result<PathBu
     }
     [root.join("business-os"), root.join("src/apps/business-os")]
         .into_iter()
-        .find(|candidate| candidate.join("index.html").is_file())
+        .find(|candidate| candidate.join(business_os_entry_document(candidate, None)).is_file())
         .context("no Business OS shell is installed")
 }
 
@@ -3482,6 +3482,20 @@ fn file_modified_label(path: &Path) -> String {
         .unwrap_or_default()
 }
 
+fn business_os_entry_document(app_root: &Path, version: Option<&str>) -> &'static str {
+    // E31: a V4 slot never silently boots the legacy V2 shell. A missing
+    // loader is a broken package, even when it still contains index.html.
+    if version.map_or_else(
+        || app_root.join("v4").is_dir(),
+        |version| version.starts_with("0.2."),
+    )
+    {
+        "v4/boot/index.html"
+    } else {
+        "index.html"
+    }
+}
+
 fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> anyhow::Result<()> {
     let raw_rel = if matches!(path, "/" | "/business-os" | "/business-os/") {
         "index.html"
@@ -3532,6 +3546,11 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
             None => return respond_shell_generation_mismatch(request, &requested, &active),
         }
     }
+    let rel = if rel == "index.html" {
+        business_os_entry_document(&selected_app_root, release.as_ref().map(|value| value.version.as_str()))
+    } else {
+        rel
+    };
     if !runtime_module_static_authorized(root, &selected_app_root, rel, release.as_deref()) {
         // Do not reveal whether a customer package exists on this instance.
         return respond_status(request, 404, "not found");
@@ -3576,8 +3595,8 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
         fs::read(&target)?
     };
     let mime = mime_for(&target);
-    let is_index = target == selected_app_root.join("index.html");
-    if is_index {
+    let is_index = rel == "index.html" || rel == "v4/boot/index.html";
+    if is_index && rel == "index.html" {
         // The launch context is injected server-side, exactly as it was before
         // the client-first attempt. That attempt shipped a hard cutover: the
         // shell fetched /api/business-os/launch-context and refused to boot
@@ -4367,6 +4386,63 @@ fn mime_for(path: &PathBuf) -> &'static str {
 #[cfg(test)]
 mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn v4_bootstrap_entry_never_falls_back_to_v2() -> anyhow::Result<()> {
+        use crate::service::store_startup::{Foreground, isolate_test_roots};
+        let _scope = isolate_test_roots().await;
+        let fixture = tempfile::Builder::new().prefix("e31-").tempdir_in("/tmp")?;
+        let root = fixture.path().to_owned();
+        let app = root.join("business-os");
+        fs::create_dir_all(app.join("v4/boot"))?;
+        fs::write(app.join("index.html"), "legacy V2 must not be served")?;
+        let loader = "<!doctype html><html><head></head><body>real-v4-loader-fixture</body></html>";
+        fs::write(app.join("v4/boot/index.html"), loader)?;
+        let mut foreground = Foreground::start(root.clone(), tokio::runtime::Handle::current()).await?;
+        // Exercise E36's real foreground-owned listener, not the retired
+        // standalone HTTP handler. IPC can request a listener, never own a store.
+        let reply = ctox_store::ipc::request(
+            crate::service::queue_store::endpoint(&root),
+            ctox_store::ipc::Request {
+                request_id: 31,
+                kind: ctox_store::ipc::JobKind::Read,
+                method: "http.listen".into(),
+                payload: serde_json::to_vec(&serde_json::json!({"addr":"127.0.0.1:0"}))?,
+            },
+            Default::default(),
+        )?.await?;
+        let listener: serde_json::Value = serde_json::from_slice(&reply)?;
+        let address = listener["addr"].as_str().context("foreground HTTP address")?.to_owned();
+        let observed = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let client = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(5)).build();
+            let mut times = Vec::new();
+            for _ in 0..20 {
+                let start = std::time::Instant::now();
+                let response = client.get(&format!("http://{address}/")).call()?;
+                let status = response.status();
+                let body = response.into_string()?;
+                let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                eprintln!("E31_HTTP_RESPONSE {}", serde_json::json!({
+                    "status": status, "elapsed_ms": elapsed_ms, "body_bytes": body.len(),
+                    "is_expected_loader": body == loader,
+                    "is_legacy_fixture": body.contains("legacy V2 must not be served")
+                }));
+                anyhow::ensure!(status == 200, "V4 root failed with {status}");
+                anyhow::ensure!(body == loader, "GET / served V2 or legacy launch context");
+                times.push(elapsed_ms);
+            }
+            fs::remove_file(app.join("v4/boot/index.html"))?;
+            let missing = client.get(&format!("http://{address}/")).call();
+            anyhow::ensure!(matches!(missing, Err(ureq::Error::Status(404, _))), "missing V4 loader fell back to V2");
+            times.sort_by(f64::total_cmp);
+            eprintln!("E31_HTTP_RECEIPT {}", serde_json::json!({"p99_ms": times[19], "missingLoaderStatus": 404}));
+            anyhow::ensure!(times[19] < 500.0, "GET / p99 >=500ms");
+            Ok(())
+        }).await?;
+        foreground.shutdown().await?;
+        observed?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn guard_prod_foreground_http_bootstrap_and_restart_identity() -> anyhow::Result<()> {
         use crate::service::store_startup::{Foreground, isolate_test_roots};
         let _scope = isolate_test_roots().await;
@@ -4392,14 +4468,14 @@ mod tests {
             Ok(())
         });
         let observed = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<f64>> {
-            let client = reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(15)).build()?;
+            let client = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(15)).build();
             let mut latencies = Vec::new();
             for _ in 0..20 {
                 let started = std::time::Instant::now();
-                let response = client.get(format!("http://{address}/")).send()?;
+                let response = client.get(&format!("http://{address}/")).call()?;
                 let status = response.status();
-                let body = response.text()?;
-                anyhow::ensure!(status.as_u16()==200, "GET / returned {status}: {body}");
+                let body = response.into_string()?;
+                anyhow::ensure!(status==200, "GET / returned {status}: {body}");
                 anyhow::ensure!(body.contains("foreground owner probe"), "bootstrap document missing");
                 latencies.push(started.elapsed().as_secs_f64()*1000.0);
             }

@@ -80,6 +80,12 @@ def main():
         receipt.write_text(json.dumps(report, indent=2)+'\n')
     save()
     try:
+        # A release receipt must name the actual product bytes, including root
+        # dependency inputs; callers must not accidentally certify a dirty tree.
+        subprocess.run(['git', 'diff', '--exit-code', 'HEAD', '--', 'src', 'Cargo.toml', 'Cargo.lock', '.cargo'],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        report['buildInputs'] = {name: subprocess.check_output(['git', 'hash-object', name], text=True).strip()
+                                 for name in ('Cargo.toml', 'Cargo.lock')}
         env = {**os.environ, 'CARGO_BUILD_JOBS': '2', 'CMAKE_BUILD_PARALLEL_LEVEL': '2',
                'RUST_TEST_THREADS': '2', 'CTOX_BUILD_VERSION': 'native-m7-'+revision[:12]}
         command = ['cargo', 'build', '--locked', '--release', '--target', 'x86_64-unknown-linux-gnu', '-j', '2']
