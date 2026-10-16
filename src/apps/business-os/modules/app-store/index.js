@@ -516,6 +516,8 @@ async function triggerCardAction(appId, actionType) {
 // Jede App der Instanz ist im Instanz-Store installiert (§9.6). „Update verfügbar“ = app_catalog führt für die App eine
 // höhere Version mit source 'main' als die aktive. Ist die App lokal angepasst (locally_modified), bleibt das Update
 // sichtbar markiert („Update … · angepasst“), steht aber nicht im Band „Updates“ und geht nur über den Verwerfen-Dialog.
+const NON_APP_IDS = new Set(['ctox-platform', 'shell']);
+
 function rebuildCatalog() {
   const catalogByApp = catalogRowsByApp();
   const versionsByApp = new Map();
@@ -529,6 +531,8 @@ function rebuildCatalog() {
   const versionStates = {};
   for (const app of state.platformApps || []) {
     if (!app?.id) continue;
+    // Plattform- und Shell-Zeilen (ctox-platform veröffentlicht der Kern selbst, E48; shell ist der Rahmen) sind keine Apps.
+    if (NON_APP_IDS.has(app.id)) continue;
     const versions = (versionsByApp.get(app.id) || []).slice()
       .sort((left, right) => Number(right.migrated_at_seq || 0) - Number(left.migrated_at_seq || 0));
     const active = versions.find((version) => version.app_ver === app.active_ver) || null;

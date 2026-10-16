@@ -25,6 +25,7 @@ const stubDir = path.resolve(process.env.CTOX_APP_API_STUB || path.join(process.
 // PIN-ALL (E48): echte Routen/Fremd-Collections aus v4/manifests/app-store.manifest.json; ohne aktive app-store-Version
 // liefert der Kern business_apps/business_app_versions nicht an die App.
 const routes = realManifestRoutes('app-store');
+const publishedExtraApps = ['app-store', ...(routes._fixture_owners ?? []).map((o) => o.app).filter((id) => id !== 'ctox-platform' && id !== 'shell')];
 const html = `<!doctype html><html lang="de" data-theme="dark" data-shell-style="ctox">
 <meta charset="utf-8"><link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/shared/base.css">
 <link rel="stylesheet" href="/modules/app-store/index.css">
@@ -153,7 +154,10 @@ try {
   await page.screenshot({path:path.join(output,'reopened.png')});
   await context.setOffline(true);
   await page.getByRole('button', {name:'Als Liste anzeigen', exact:true}).click();
-  assert.equal(await page.locator('[data-apps-grid] [data-app-id]').count(), catalogueSize);
+  // Erwartet: die Katalog-Apps der Fixture plus jede weitere echte App, die sie veröffentlicht (app-store selbst und die
+  // Eigentümer seiner Fremd-Collections, E48); Plattform/Shell sind keine Apps und erscheinen nie.
+  assert.equal(await page.locator('[data-apps-grid] [data-app-id="ctox-platform"], [data-apps-grid] [data-app-id="shell"]').count(), 0);
+  assert.equal(await page.locator('[data-apps-grid] [data-app-id]').count(), catalogueSize + publishedExtraApps.length);
   assert.equal(await page.locator('[data-apps-grid]').getByText('Cached Calendar', {exact:true}).count(), 1);
   await page.screenshot({path:path.join(output,'offline.png')});
   assert.deepEqual(pageErrors, []);
