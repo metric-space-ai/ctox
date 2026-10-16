@@ -1,4 +1,4 @@
-// CHAT4: Abnahme der V2-Chatleiste im v4-Rahmen gegen den Kern-Stub (Pin b6624eb), Playwright mit echter Maus/Tastatur.
+// CHAT4: Abnahme der V2-Chatleiste im v4-Rahmen gegen den Kern-Stub (Pin 8265bd7), Playwright mit echter Maus/Tastatur.
 // Lauf (aus src/apps/business-os): node v4/shell/chat/tests/chat.test.mjs [counter]
 //   counter = Gegenprobe: v4/shell/chat/index.js wird durch ein Modul ersetzt, das nichts montiert; (a)–(c) müssen rot sein.
 // Fälle: (a) Leiste unten links bei 1280 und 420, genau eine Leiste (Crew-Leiste abgetreten); (b) Chat öffnen, Text
@@ -10,9 +10,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { SEED, TYPED, openDock, typeInChat } from './drive.mjs';
+import { realManifestRoutes } from '../../../tools/port/real-manifest.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/b6624eb');
+process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const { startServer } = await import('../../../frame/lab/serve.mjs');
 const require = createRequire(path.join(os.homedir(), 'Documents/ctox/src/apps/business-os/package.json'));
 const { chromium } = require('playwright');
@@ -47,7 +48,7 @@ try {
   await P.goto(`${base}/v4/frame/lab/stub-lab.html?inst=chat4-${Date.now().toString(36)}`);
   await P.waitForFunction(() => window.__labReady === true && document.querySelector('[data-v4-ready]'));
   // Empfänger des Chatbefehls (wie die ctox-App, deren Handler business_os.chat.task annimmt) und Saat in business_chats.
-  await P.evaluate(async (seed) => {
+  await P.evaluate(async ([seed, ctoxRoutes]) => {
     const { kernel } = window.__lab;
     window.__chat4Cmds = [];
     kernel.sim.onCommand('business_os.chat.task', (payload, c) => {
@@ -62,9 +63,10 @@ try {
     // Crew-App wie im Rahmenlabor (taskbar_group 'crew'): ohne Übergabe stünde ihre Crew-Leiste ebenfalls unten links.
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#0f766e"/></svg>';
     await kernel.sim.publishAppVersion('crew-ben', '1.0.0', { title: 'Crew Ben', layout: { category: 'Crew', icon_svg: svg, presentation: { taskbar_group: 'crew' } }, styles: [] });
-    await kernel.sim.publishAppVersion('ctox', '1.0.0', { title: 'CTOX', layout: { category: 'Crew', icon_svg: svg }, styles: [],
-      collections: { business_chats: {}, ctox_crew_members: {}, ctox_harness_status: {}, ctox_harness_events: {} } });
-  }, SEED);
+    // E48: Eigentümer der Shell-Fremdlesungen (business_chats, ctox_crew_members, …) mit echtem Manifest (collections +
+    // exports), sonst liest die Shell sie nicht.
+    await kernel.sim.publishAppVersion('ctox', '1.0.0', { title: 'CTOX', layout: { category: 'Crew', icon_svg: svg }, styles: [], manifestExtra: ctoxRoutes });
+  }, [SEED, realManifestRoutes('ctox')]);
   await P.waitForSelector('[data-v4-app="ctox"]', { state: 'attached' });
   await P.waitForSelector('[data-ctox-chat-root] [data-chat-dock]', { timeout: 8000 }).catch(() => {});
 
