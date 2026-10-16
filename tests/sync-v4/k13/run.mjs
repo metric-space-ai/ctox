@@ -7,7 +7,7 @@ import {join,resolve,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {spawn,execFileSync} from 'node:child_process';
-import {verifiedBuild,owner} from '../../sync-v4-e2e/native.mjs';
+import {verifiedBuild} from './build-receipt.mjs';
 const argv=process.argv.slice(2),flags=new Map();
 for(let i=0;i<argv.length;i+=2) {
   if(!argv[i]?.startsWith('--') || !argv[i+1])throw Error('Expected --key value');
@@ -16,7 +16,7 @@ for(let i=0;i<argv.length;i+=2) {
 }
 if(process.platform!=='linux' || !process.env.BUILD_LANE_BIN || !process.env.TMPDIR || !process.env.CARGO_TARGET_DIR)
   throw Error('Canonical Linux lane required');
-const allowed=new Set(['--build','--expected-revision','--output','--chrome','--modules-root','--turn-bin','--turn-lib','--os-bootstrap']);
+const allowed=new Set(['--build','--expected-revision','--output','--chrome','--modules-root','--turn-bin','--turn-lib','--prepare-only']);
 for(const flag of flags.keys())if(!allowed.has(flag))throw Error('Unsupported P6 option: '+flag);
 const expected=flags.get('--expected-revision');
 if(!/^[a-f0-9]{40}$/.test(expected??''))throw Error('Immutable expected daemon revision required');
@@ -33,7 +33,7 @@ const sourceManifest={head:execFileSync('git',['rev-parse','HEAD'],{cwd:reposito
   scope:'immutable dedicated harness source; includes owned P6 test overlay',
   files:[...new Set(files)].map(path=>({path,sha256:hash(join(repository,path))}))};
 const unchanged=()=>sourceManifest.files.every(row=>hash(join(repository,row.path))===row.sha256);
-const summary={revision:expected,owner:'01a101a1-d8e3',startedAt:new Date().toISOString(),
+const summary={revision:expected,owner:'01a14204-d613',startedAt:new Date().toISOString(),
   daemonEntry:'service --foreground',harnessSource:sourceManifest,scenarios:[],pass:false,terminal:false};
 const save=()=>fs.writeFileSync(join(output,'p6-result.json'),JSON.stringify(summary,null,2));
 save();
@@ -47,8 +47,8 @@ try {
 }
 let cancelled=false;
 async function namespace(config,log) {
-  const child=spawn('sudo',['-n','unshare','--net','--',process.execPath,
-    join(repository,'scripts/sync-v4/e2e-netns.mjs'),config],{stdio:['ignore',log,log],detached:true});
+  const child=spawn('unshare',['--user','--map-root-user','--net','--mount','--pid','--fork','--mount-proc','--',process.execPath,
+    join(here,'netns.mjs'),config],{stdio:['ignore',log,log],detached:true});
   const row={owner:summary.owner,pid:child.pid,pgid:child.pid,purpose:'isolated P6 scenario namespace',
     stop:'terminal or bounded namespace deadline',startedAt:new Date().toISOString()};
   const controller=join(dirname(config),'p6-controller.json');
@@ -73,41 +73,54 @@ async function namespace(config,log) {
   }
 }
 if(build && !summary.scenarios.length) {
-  for(const [id,seconds] of [['K13',180],['K21',1200],['K22',900]]) {
+  for(const [id,seconds] of [['K13',180],['K21',1200],['K22',900]].filter(([id])=>!flags.has('--scenario') || flags.get('--scenario')===id)) {
     if(cancelled){summary.scenarios.push({id,status:'not_run',pass:false,acceptanceComplete:false,reason:'Controller interrupted',daemonExecuted:false});save();continue;}
     const dir=join(output,id);fs.mkdirSync(dir,{mode:0o700});
-    const config={owner,...build,output:dir,profile:'small',clients:1,rttMs:20,warmRttMs:20,lossPercent:0,
-      uid:process.getuid(),gid:process.getgid(),seedAfterStart:false,leadProfile:'eager',prime:false,
-      catalog:true,scenarioRoot:resolve(here,'..'),scenario:id,osBootstrap:flags.get('--os-bootstrap')??null,
-      root:join(dir,'tenant-'+expected.slice(0,12)),port:19865,signalingPort:19866,turnPort:34789,
+    const config={owner:summary.owner,...build,output:dir,profile:'small',clients:1,rttMs:20,warmRttMs:20,lossPercent:0,
+      uid:process.getuid(),gid:process.getgid(),hostNamespaces:Object.fromEntries(['user','net','mnt','pid'].map(k=>[k,fs.readlinkSync('/proc/self/ns/'+k)])),seedAfterStart:false,leadProfile:'eager',prime:false,
+      controlOnly:flags.get('--control-only')==='true',catalog:true,scenarioRoot:resolve(here,'..'),scenario:id,prepareOnly:flags.get('--prepare-only')==='true',
+      root:join('/tmp','p6-'+id.toLowerCase()+'-'+expected.slice(0,8)),port:19865,signalingPort:19866,turnPort:34789,
       runner:join(here,'service-runner.mjs'),sourceManifest,buildReceipt:resolve(flags.get('--build')),
       lane,canonicalTmpdir:process.env.TMPDIR,durationSeconds:seconds,hostNetworkNamespace:fs.readlinkSync('/proc/self/ns/net'),
       chrome:flags.get('--chrome')??'/opt/google/chrome/chrome',
       modulesRoot:flags.get('--modules-root')??join(lane,'deps/shell-browser-collection-auth/node_modules'),
-      turnBin:flags.get('--turn-bin')??'/usr/bin/turnserver',turnLib:flags.get('--turn-lib')??''};
+      turnBin:flags.get('--turn-bin')??'/usr/bin/turnserver',turnLib:flags.get('--turn-lib','--prepare-only')??''};
     const configPath=join(dir,'config.private.json');
+    config.configPath=configPath;config.fixturePrivate=join(dir,'fixture.private.json');
     fs.writeFileSync(configPath,JSON.stringify(config,null,2),{mode:0o600});
     const log=fs.openSync(join(output,id+'.log'),'w',0o600);
     let controller,error;
     try {
-      for(const file of [config.chrome,config.turnBin])fs.accessSync(file,fs.constants.X_OK);
-      fs.accessSync(join(config.modulesRoot,'playwright/package.json'),fs.constants.R_OK);
+      // Browser/TURN prerequisites are checked only when a native listener exists.
+      // An unrelated missing browser must not prevent observing the real daemon.
       if(!unchanged())throw Error('Harness source changed before scenario');
       controller=await namespace(configPath,log);
     } catch(e){error=e.message;}finally{fs.closeSync(log);}
+    if(controller?.groupAbsent===true)for(const index of [0,1,2])fs.rmSync(join(dir,'tenant-runtime-'+index),{recursive:true,force:true});
     const path=join(dir,'result.json'),report=fs.existsSync(path)?JSON.parse(fs.readFileSync(path)):null;
     const entryPath=join(dir,'p6-daemon-entry.json'),boot=fs.existsSync(entryPath)?JSON.parse(fs.readFileSync(entryPath)):null;
     const daemonPath=join(dir,'daemon.log'),daemonLog=fs.existsSync(daemonPath)?fs.readFileSync(daemonPath,'utf8'):'';
     const entryBound=boot?.revision===expected && boot?.binarySha256===build.binarySha256
       && boot?.root===config.root && Number.isInteger(boot?.pid)
-      && JSON.stringify(boot?.args)===JSON.stringify(['service','--foreground','--root',config.root]);
+      && boot?.entryKind==='test-only-production-foreground' && boot?.fixtureBinarySha256===build.fixtureBinarySha256
+      && JSON.stringify(boot?.args)===JSON.stringify(['p6_run_controlled_foreground','--ignored','--nocapture']);
     const row=report?.scenarios?.find(row=>row.id===id);
+    const namespacePath=join(dir,'p6-namespace.json');
+    const ns=fs.existsSync(namespacePath)?JSON.parse(fs.readFileSync(namespacePath)):null;
+    const namespaceVerified=ns?.hostUid===config.uid && ns?.hostGid===config.gid && ns?.pid===1
+
+      && ['user','net','mnt','pid'].every(k=>ns.namespaces?.[k] && ns.namespaces[k]!==config.hostNamespaces[k])
+      && ns?.uidMap?.join(',')===[0,config.uid,1].join(',') && ns?.gidMap?.join(',')===[0,config.gid,1].join(',')
+      && ns?.processLimit?.insideSandbox===true && ns?.privilegedHostEntry===false
+      && report?.processLimits?.some(line=>/Max processes\s+4096\s+4096/.test(line));
+    const entryNamespaceBound=entryBound && boot?.pidNamespace===ns?.namespaces?.pid;
     const cleanup=controller?.groupAbsent===true && report?.cleanup==='owned groups absent';
-    const complete=entryBound && unchanged() && controller?.exit?.code===0 && report?.terminal===true && cleanup
+    const complete=entryNamespaceBound && namespaceVerified && unchanged() && controller?.exit?.code===0 && report?.terminal===true && cleanup
       && report.scenarios.length===1 && row?.status==='measured' && row.pass===true && row.acceptanceComplete===true;
     summary.scenarios.push({id,status:row?.status??'not_run',pass:complete,acceptanceComplete:complete,
       evidence:path,processExit:controller?.exit??null,controller:join(dir,'p6-controller.json'),
       daemonEntryEvidence:entryPath,entryBound,daemonExecuted:entryBound && /ctox v4 store daemon ready/.test(daemonLog),
+      namespaceEvidence:namespacePath,namespaceVerified,entryNamespaceBound,criteria:row?.criteria??null,daemon:report?.daemon??null,
       reason:error??row?.reason??row?.error??report?.error??(!entryBound?'Real service entry was not verified':null),
       cleanup,sourceUnchanged:unchanged()});save();
   }
