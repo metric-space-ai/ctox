@@ -2,6 +2,17 @@
 // Loaded by outbound/index.js. Operates on the shared `state` object.
 // Implements lead queue, engagement cockpit, approval inbox, ready-to-send queue,
 // reply handling and the surrounding command dispatch wiring.
+// App-API 4.0: Daten kommen live aus dem lokalen Spiegel (v4-bridge.js), Befehle laufen ohne Warten über
+// api.command; Fehler stehen in der Zustandszone der Shell, nie im Inhalt.
+
+import {
+  readAll,
+  putDoc,
+  sendCommand,
+  reportStatus,
+  clearStatus,
+  promptDialog,
+} from './v4-bridge.js';
 
 let stateRef = null;
 let translate = (key, fallback) => fallback ?? key;
@@ -38,16 +49,10 @@ export function configureActiveOutreach({ state, t, escapeHtml, rerender }) {
       busyMessageIds: new Set(),
       busyEngagementIds: new Set(),
       error: null,
-      schedulerInterval: null,
     };
   }
-  // Periodically poke the backend scheduler so auto_draft_pending/ooo_retry_at_ms
-  // flags translate into approval-gated drafts without manual UI intervention.
-  if (!state.activeOutreach.schedulerInterval && typeof window !== 'undefined') {
-    state.activeOutreach.schedulerInterval = window.setInterval(() => {
-      runSchedulerTickQuiet();
-    }, 5 * 60 * 1000);
-  }
+  // v4: Der 5-Minuten-Scheduler-Takt der UI entfällt (keine Schleifen in Apps). Den periodischen
+  // outbound.scheduler.tick übernimmt die Laufzeit (V4-PORT.md OFFEN-2); der Knopf „Scheduler-Tick“ bleibt.
   state.engagements = state.engagements || [];
   state.engagementMessages = state.engagementMessages || [];
   state.engagementApprovals = state.engagementApprovals || [];
@@ -60,64 +65,35 @@ export function configureActiveOutreach({ state, t, escapeHtml, rerender }) {
   state.outboundLetterTemplates = state.outboundLetterTemplates || [];
 }
 
-async function findAll(collection) {
-  if (!collection) return [];
-  const docs = await collection.find().exec();
-  return docs
-    .map((doc) => (doc.toJSON ? doc.toJSON() : doc))
-    .sort((a, b) => (b.updated_at_ms || 0) - (a.updated_at_ms || 0));
-}
+// Live-Collections der aktiven Kommunikation (index.js abonniert sie je Montage, ACTIVE_OUTREACH_COLLECTIONS).
+export const ACTIVE_OUTREACH_COLLECTIONS = Object.freeze([
+  'outbound_engagements',
+  'outbound_messages',
+  'outbound_approvals',
+  'outbound_sequences',
+  'outbound_sender_assignments',
+  'outbound_meeting_requests',
+  'outbound_suppression_entries',
+  'outbound_account_limits',
+  'outbound_skillbooks',
+  'outbound_letter_templates',
+]);
 
-function activeCollection(name) {
-  const facade = stateRef?.ctx?.db;
-  if (!facade || !name) return null;
-  return facade.collection?.(name) || null;
-}
-
-function isBusinessOsPermissionDenied(error) {
-  return error?.code === 'CTOX_BUSINESS_OS_PERMISSION_DENIED'
-    || error?.name === 'BusinessOsPermissionError';
-}
-
-export async function loadActiveOutreachData() {
-  if (!stateRef?.ctx?.db) return;
-  let engagements = [];
-  let messages = [];
-  let approvals = [];
-  let sequences = [];
-  let senderAssignments = [];
-  let meetingRequests = [];
-  let suppressionEntries = [];
-  let accountLimits = [];
-  let skillbooks = [];
-  let letterTemplates = [];
-  try {
-    [
-      engagements,
-      messages,
-      approvals,
-      sequences,
-      senderAssignments,
-      meetingRequests,
-      suppressionEntries,
-      accountLimits,
-      skillbooks,
-      letterTemplates,
-    ] = await Promise.all([
-      findAll(activeCollection('outbound_engagements')),
-      findAll(activeCollection('outbound_messages')),
-      findAll(activeCollection('outbound_approvals')),
-      findAll(activeCollection('outbound_sequences')),
-      findAll(activeCollection('outbound_sender_assignments')),
-      findAll(activeCollection('outbound_meeting_requests')),
-      findAll(activeCollection('outbound_suppression_entries')),
-      findAll(activeCollection('outbound_account_limits')),
-      findAll(activeCollection('outbound_skillbooks')),
-      findAll(activeCollection('outbound_letter_templates')),
-    ]);
-  } catch (error) {
-    if (!isBusinessOsPermissionDenied(error)) throw error;
-  }
+// Übernimmt den aktuellen lokalen Stand (synchron, ohne Netz) in den Modulzustand.
+export function loadActiveOutreachData() {
+  if (!stateRef) return;
+  const [
+    engagements,
+    messages,
+    approvals,
+    sequences,
+    senderAssignments,
+    meetingRequests,
+    suppressionEntries,
+    accountLimits,
+    skillbooks,
+    letterTemplates,
+  ] = ACTIVE_OUTREACH_COLLECTIONS.map((name) => readAll(name));
   stateRef.engagements = engagements;
   stateRef.engagementMessages = messages;
   stateRef.engagementApprovals = approvals;
@@ -163,7 +139,7 @@ function countLeadQueue(campaignId) {
 
 export function renderActiveOutreachShell(campaign) {
   if (!campaign) {
-    return `<div class="ctox-empty">${escapeFn(translate('selectCampaignFirst', 'Bitte zuerst eine Campaign wählen.'))}</div>`;
+    return '';
   }
   const counts = activeOutreachCounts(campaign.id);
   const view = stateRef.activeOutreach.view || 'lead_queue';
@@ -176,23 +152,16 @@ export function renderActiveOutreachShell(campaign) {
     { key: 'done', label: translate('done', 'Abgeschlossen'), count: counts.done },
     { key: 'settings', label: translate('skillSettings', 'Skills & Vorlagen'), count: (stateRef.outboundSkillbooks?.length || 0) + (stateRef.outboundLetterTemplates?.length || 0) },
   ];
-  const errorBanner = stateRef.activeOutreach.error
-    ? `<div class="outbound-outreach-error" role="alert" aria-live="assertive">${escapeFn(stateRef.activeOutreach.error)} <button type="button" data-action="ao-dismiss-error" aria-label="${escapeFn(translate('cancel', 'Schließen'))}">×</button></div>`
-    : '';
   return `
     <section class="outbound-outreach" data-outreach-campaign="${escapeFn(campaign.id)}">
       <header class="outbound-outreach-head">
         <div>
           <h3>${escapeFn(translate('activeOutreach', 'Aktive Kommunikation'))}</h3>
-          <p>${escapeFn(translate('activeOutreachIntro', 'CTOX bereitet Nachrichten, Antworten und Termine vor. Versand erst nach expliziter Freigabe.'))}</p>
         </div>
         <div class="outbound-outreach-head-actions">
-          <button type="button" class="ctox-button" data-action="ao-reconcile-provider" title="${escapeFn(translate('reconcileProviderHint', 'Status der Mailserver-Queue mit Outbound-Messages abgleichen'))}">${escapeFn(translate('reconcileProvider', 'Provider-Status abgleichen'))}</button>
-          <button type="button" class="ctox-button" data-action="ao-scheduler-tick" title="${escapeFn(translate('schedulerTickHint', 'Fällige Engagements verarbeiten: Drafts vorbereiten, Suppressed schließen'))}">${escapeFn(translate('schedulerTick', 'Scheduler-Tick'))}</button>
-          <button type="button" class="ctox-button" data-action="ao-audit-export" title="${escapeFn(translate('auditExportHint', 'Vollstaendigen JSON-Export der Outbound-Daten dieser Campaign laden'))}">${escapeFn(translate('auditExport', 'Audit-Export'))}</button>
+          <button type="button" class="ctox-button" data-action="ao-audit-export" title="${escapeFn(translate('auditExportHint', 'Vollständigen JSON-Export der Outbound-Daten dieser Kampagne laden'))}">${escapeFn(translate('auditExport', 'Audit-Export'))}</button>
         </div>
       </header>
-      ${errorBanner}
       <nav class="ctox-pane-tabs outbound-outreach-tabs" role="tablist">
         ${tabs.map((tab) => renderOutreachTab(tab, view)).join('')}
       </nav>
@@ -337,7 +306,7 @@ function renderLeadQueue(campaign) {
     return status === 'qualified' || status === 'lead_qualified';
   });
   if (leads.length === 0) {
-    return `<div class="ctox-empty">${escapeFn(translate('noQualifiedLeads', 'Keine qualifizierten Leads warten auf Engagement.'))}</div>`;
+    return '';
   }
   const defaultMailbox = campaign.communication_account_key || campaign.payload?.communication_account_key || '';
   const defaultChannel = campaign.payload?.active_outreach?.default_channel || 'email';
@@ -390,7 +359,7 @@ function renderEngagementsView(campaign) {
     .filter((e) => e.campaign_id === campaign.id)
     .filter((e) => !['closed', 'meeting_booked'].includes(e.status || ''));
   if (engagements.length === 0) {
-    return `<div class="ctox-empty">${escapeFn(translate('noActiveEngagements', 'Keine aktiven Engagements.'))}</div>`;
+    return '';
   }
   const slice = engagements.slice(0, ACTIVE_OUTREACH_PAGE_SIZE);
   const truncated = engagements.length > ACTIVE_OUTREACH_PAGE_SIZE;
@@ -435,7 +404,7 @@ function renderEngagementListItem(engagement, isSelected) {
 }
 
 function renderEngagementDetail(campaign, engagement) {
-  if (!engagement) return `<div class="ctox-empty">${escapeFn(translate('selectEngagement', 'Engagement wählen'))}</div>`;
+  if (!engagement) return '';
   const messages = stateRef.engagementMessages
     .filter((m) => m.engagement_id === engagement.id)
     .sort((a, b) => (a.created_at_ms || 0) - (b.created_at_ms || 0));
@@ -471,7 +440,7 @@ function renderEngagementDetail(campaign, engagement) {
         <button type="button" class="ctox-button" data-action="ao-open-sender" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('changeSender', 'Sender ändern'))}</button>
       </div>
     </section>
-    ${sequenceMismatch ? `<section class="outbound-outreach-detail-section outbound-outreach-sequence-warning"><h5>${escapeFn(translate('sequenceUpdated', 'Sequenz wurde aktualisiert'))}</h5><p>${escapeFn(translate('sequenceMismatchDescription', 'Dieses Engagement läuft mit Sequenz-Version {0}. Aktuelle Version: {1}.', sequenceMismatch.current, sequenceMismatch.latest))}</p><button type="button" class="ctox-button is-primary" data-action="ao-reapply-sequence" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('reapplySequence', 'Aktuelle Sequenz anwenden'))}</button></section>` : ''}
+    ${sequenceMismatch ? `<section class="outbound-outreach-detail-section"><h5>${escapeFn(translate('sequenceUpdated', 'Sequenz wurde aktualisiert'))}</h5><p>${escapeFn(translate('sequenceMismatchDescription', 'Dieses Engagement läuft mit Sequenz-Version {0}. Aktuelle Version: {1}.', /* v4-allow: label */ sequenceMismatch.current, sequenceMismatch.latest))}</p><button type="button" class="ctox-button is-primary" data-action="ao-reapply-sequence" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('reapplySequence', 'Aktuelle Sequenz anwenden'))}</button></section>` : ''}
     ${renderSkillbookSnapshotSection(lastMessage)}
     ${replyClass ? `<section class="outbound-outreach-detail-section"><h5>${escapeFn(translate('replyClass', 'Antwort-Klassifikation'))}</h5><p><strong>${escapeFn(prettyReplyClass(replyClass))}</strong></p></section>` : ''}
     <section class="outbound-outreach-detail-section">
@@ -527,7 +496,7 @@ function renderEngagementTimeline(engagement, messages) {
       msgId: msg.id,
     });
     if (msg.approval_status === 'awaiting_approval') {
-      entries.push({ ts: msg.updated_at_ms || 0, kind: 'awaiting', label: translate('awaitingApproval', 'Freigabe ausstehend'), msgId: msg.id });
+      entries.push({ ts: msg.updated_at_ms || 0, kind: 'awaiting', label: translate('awaitingApproval', 'Freigabe ausstehend'), msgId: msg.id }); // v4-allow: label
     }
     if (msg.approval_status === 'approved') {
       entries.push({ ts: msg.updated_at_ms || 0, kind: 'approved', label: translate('approved', 'Freigegeben'), msgId: msg.id });
@@ -587,7 +556,7 @@ function renderApprovalInbox(campaign) {
     .filter((m) => m.campaign_id === campaign.id)
     .filter((m) => (m.approval_status || '') === 'awaiting_approval');
   if (messages.length === 0) {
-    return `<div class="ctox-empty">${escapeFn(translate('noApprovalPending', 'Keine Nachrichten warten auf Freigabe.'))}</div>`;
+    return '';
   }
   const slice = messages.slice(0, ACTIVE_OUTREACH_PAGE_SIZE);
   const truncated = messages.length > ACTIVE_OUTREACH_PAGE_SIZE;
@@ -614,7 +583,7 @@ function renderApprovalCard(msg) {
     ? renderReplyContextForMessage(msg)
     : '';
   return `
-    <article class="outbound-outreach-approval" data-message-id="${escapeFn(msg.id)}" data-context-record-id="${escapeFn(msg.id)}" data-context-record-type="outbound_message" data-context-label="${escapeFn(subject || recipient || msg.id)}" aria-busy="${busy}">
+    <article class="ctox-card outbound-outreach-approval" data-message-id="${escapeFn(msg.id)}" data-context-record-id="${escapeFn(msg.id)}" data-context-record-type="outbound_message" data-context-label="${escapeFn(subject || recipient || msg.id)}" aria-busy="${busy}">
       <header>
         <div>
           <strong>${escapeFn(msg.payload?.draft_engine || msg.payload?.message_type || 'draft')}</strong>
@@ -639,7 +608,6 @@ function renderApprovalCard(msg) {
         <button type="button" class="ctox-button" data-action="ao-reject" data-message-id="${escapeFn(msg.id)}" ${busy ? 'disabled' : ''}>${escapeFn(translate('rejectWithComment', 'Ablehnen mit Kommentar'))}</button>
         ${isPhysical ? `<button type="button" class="ctox-button" data-action="ao-print-letter" data-message-id="${escapeFn(msg.id)}">${escapeFn(translate('printLetter', 'Brief PDF/Print'))}</button>` : ''}
       </footer>
-      ${busy ? `<div class="outbound-outreach-busy">${escapeFn(translate('processing', 'Wird verarbeitet…'))}</div>` : ''}
     </article>
   `;
 }
@@ -650,7 +618,7 @@ function renderReadyToSend(campaign) {
     .filter((m) => (m.approval_status || '') === 'approved')
     .filter((m) => !['sent', 'queued_for_provider'].includes(m.send_status || ''));
   if (messages.length === 0) {
-    return `<div class="ctox-empty">${escapeFn(translate('noReadyToSend', 'Keine freigegebenen Nachrichten in der Versand-Queue.'))}</div>`;
+    return '';
   }
   return `
     <ol class="outbound-outreach-ready">
@@ -696,7 +664,7 @@ function renderRepliesView(campaign) {
     .filter((e) => e.campaign_id === campaign.id)
     .filter((e) => (e.status || '') === 'reply_received');
   if (engagements.length === 0) {
-    return `<div class="ctox-empty">${escapeFn(translate('noRepliesYet', 'Noch keine Antworten zugeordnet.'))}</div>`;
+    return '';
   }
   return `
     <ol class="outbound-outreach-replies">
@@ -738,7 +706,7 @@ function renderDoneView(campaign) {
     .filter((e) => e.campaign_id === campaign.id)
     .filter((e) => ['closed', 'meeting_booked'].includes(e.status || ''));
   if (engagements.length === 0) {
-    return `<div class="ctox-empty">${escapeFn(translate('noFinishedYet', 'Noch keine abgeschlossenen Engagements.'))}</div>`;
+    return '';
   }
   return `
     <div class="ctox-table-wrap">
@@ -776,7 +744,7 @@ function renderSenderModal(campaign) {
         <h4 id="ao-sender-modal-title">${escapeFn(translate('chooseSender', 'Sender wählen'))}</h4>
         <ul class="outbound-outreach-sender-list">
           ${candidates.length === 0
-            ? `<li class="ctox-empty">${escapeFn(translate('noSenderCandidates', 'Kein Postfach für diese Campaign verknüpft.'))}</li>`
+            ? ''
             : candidates.map((cand) => `
               <li class="outbound-outreach-sender-item">
                 <button type="button" class="outbound-outreach-sender-pick${cand.healthClass ? ' is-' + cand.healthClass : ''}" data-action="ao-assign-sender" data-engagement-id="${escapeFn(modal.engagementId)}" data-account-key="${escapeFn(cand.account_key)}">
@@ -811,7 +779,7 @@ function senderCandidatesForCampaign(campaign) {
 function senderHealthLabel(limit) {
   if (!limit) return translate('senderNotLinked', 'Kein Account-Limit verknüpft');
   if (limit.blocked) return translate('senderBlocked', 'Gesperrt');
-  if (['blocked', 'locked', 'suspended', 'disabled'].includes(limit.status)) return translate('senderUnavailable', 'Nicht verfügbar');
+  if (['blocked', 'locked', 'suspended', 'disabled'].includes(limit.status)) return translate('senderUnavailable', 'Nicht verfügbar'); // v4-allow: label
   if (typeof limit.daily_limit === 'number' && typeof limit.daily_sent_count === 'number' && limit.daily_limit > 0 && limit.daily_sent_count >= limit.daily_limit) {
     return translate('senderLimit', 'Tageslimit erreicht');
   }
@@ -972,7 +940,7 @@ function prettyStatus(status) {
     'ready_for_assignment': translate('readyForAssignment', 'Bereit für Sender'),
     'assigned': translate('assigned', 'Sender zugewiesen'),
     'draft_prepared': translate('draftPrepared', 'Draft vorbereitet'),
-    'awaiting_approval': translate('awaitingApproval', 'Freigabe ausstehend'),
+    'awaiting_approval': translate('awaitingApproval', 'Freigabe ausstehend'), // v4-allow: label
     'approved_for_send': translate('approvedForSend', 'Freigegeben'),
     'scheduled_to_send': translate('scheduledToSend', 'Im Versand'),
     'paused': translate('paused', 'Pausiert'),
@@ -1031,109 +999,24 @@ function formatTimestamp(ms) {
 
 // ------------------ command dispatching ------------------
 
-async function dispatchOutboundCommand(type, recordId, payload, options = {}) {
-  if (!stateRef.ctx?.commandBus?.dispatch) {
-    throw new Error('The local command service is not available.');
-  }
-  const commandId = `cmd_${type.replaceAll('.', '_')}_${crypto.randomUUID()}`;
-  const command = {
-    id: commandId,
-    module: 'outbound',
-    type,
+// Befehl ohne Warten auf Annahme. Das zurückgegebene Promise erfüllt sich erst mit dem gepushten Status
+// `done` (Ergebnis in `.result`) bzw. lehnt bei `failed` ab – nur für fachlich abhängige Folgeschritte im
+// Hintergrund; die Handler schreiben ihre Ergebnisse selbst in die Collections (keine lokale Projektion mehr).
+function dispatchOutboundCommand(type, recordId, payload, options = {}) {
+  return sendCommand(type, payload, {
     record_id: recordId || '',
-    payload,
-    client_context: {
-      source_module: 'outbound',
-      ...(options.context || {}),
-    },
-  };
-  const result = await stateRef.ctx.commandBus.dispatch(command);
-  const acknowledged = await waitForOutboundCommandProjection(result?.command_id || commandId, options.timeoutMs || 45000);
-  await projectOutboundCommandResult(acknowledged);
-  return acknowledged;
+    client_context: options.context || {},
+  }).settled;
 }
 
-async function waitForOutboundCommandProjection(commandId, timeoutMs) {
-  const collection = activeCollection('business_commands');
-  if (!collection || !commandId) {
-    throw new Error('business_commands collection is required for outbound command acknowledgements');
-  }
-  const deadline = Date.now() + timeoutMs;
-  let lastStatus = null;
-  while (Date.now() < deadline) {
-    const doc = await collection.findOne(commandId).exec();
-    const command = doc?.toJSON?.() || null;
-    lastStatus = command?.status || null;
-    if (command && command.status && command.status !== 'pending_sync') {
-      if (command.status === 'failed') {
-        throw new Error(command.error || `Outbound command ${commandId} failed`);
-      }
-      return command;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(`Outbound command ${commandId} was not acknowledged by the local service (last status: ${lastStatus || 'missing'}).`);
-}
-
-async function projectOutboundCommandResult(command) {
-  const result = command?.result;
-  if (!result || !stateRef?.ctx?.db) return;
-  const projections = [
-    ['outbound_engagements', result.engagement],
-    ['outbound_messages', result.message],
-    ['outbound_approvals', result.approval],
-    ['outbound_sender_assignments', result.assignment],
-    ['outbound_sequences', result.sequence],
-    ['outbound_skillbooks', result.skillbook],
-    ['outbound_letter_templates', result.template || result.letter_template],
-    ['outbound_meeting_requests', result.meeting_request || result.request],
-  ];
-  for (const [collectionName, record] of projections) {
-    const collection = activeCollection(collectionName);
-    if (!record?.id || !collection) continue;
-    await upsertLocalProjection(collection, record);
-  }
-  if (Array.isArray(result.updated)) {
-    for (const record of result.updated) {
-      const collectionName = record?.collection || record?.collection_name;
-      const payload = record?.record || record?.message || record;
-      const collection = activeCollection(collectionName);
-      if (!collectionName || !payload?.id || !collection) continue;
-      await upsertLocalProjection(collection, payload);
-    }
-  }
-}
-
-async function upsertLocalProjection(collection, record) {
-  if (collection.incrementalUpsert) {
-    await collection.incrementalUpsert(record);
-    return;
-  }
-  if (collection.upsert) {
-    await collection.upsert(record);
-    return;
-  }
-  const existing = await collection.findOne(record.id).exec();
-  if (existing?.incrementalPatch) {
-    await existing.incrementalPatch(record);
-    return;
-  }
-  if (existing?.patch) {
-    await existing.patch(record);
-    return;
-  }
-  await collection.insert(record);
-}
+const OUTREACH_ERROR_CODE = 'outbound.outreach.error';
 
 function setError(msg) {
-  stateRef.activeOutreach.error = msg;
-  triggerRender();
+  reportStatus('error', OUTREACH_ERROR_CODE, msg);
 }
 
 function clearError() {
-  if (!stateRef.activeOutreach.error) return;
-  stateRef.activeOutreach.error = null;
-  triggerRender();
+  clearStatus(OUTREACH_ERROR_CODE);
 }
 
 function withBusyMessage(messageId, fn) {
@@ -1170,7 +1053,7 @@ function selectEngagementInPlace(target) {
   const engagementId = target?.dataset?.id || '';
   if (!engagementId) return;
   stateRef.activeOutreach.selectedEngagementId = engagementId;
-  const host = stateRef.ctx?.host;
+  const host = stateRef.root;
   host?.querySelectorAll?.('[data-action="ao-select-engagement"]').forEach((button) => {
     const selected = button.dataset.id === engagementId;
     button.classList.toggle('is-active', selected);
@@ -1197,8 +1080,7 @@ export async function handleActiveOutreachAction(action, target) {
       triggerRender();
       return;
     case 'ao-dismiss-error':
-      stateRef.activeOutreach.error = null;
-      triggerRender();
+      clearError();
       return;
     case 'ao-select-engagement':
       selectEngagementInPlace(target);
@@ -1284,7 +1166,6 @@ export async function handleActiveOutreachAction(action, target) {
 async function seedSkillbooks() {
   try {
     await dispatchOutboundCommand('outbound.skillbook.seed_defaults', '', {});
-    await loadActiveOutreachData();
     triggerRender();
   } catch (error) {
     setError(error?.message || String(error));
@@ -1293,7 +1174,7 @@ async function seedSkillbooks() {
 
 async function saveSkillbookFromCard(skillbookId) {
   if (!skillbookId) return;
-  const card = stateRef.ctx.host.querySelector(`[data-skillbook-id="${cssEscape(skillbookId)}"]`);
+  const card = stateRef.root?.querySelector(`[data-skillbook-id="${cssEscape(skillbookId)}"]`);
   if (!card) return;
   const mission = card.querySelector('[data-sb-field="mission"]')?.value?.trim() || '';
   const rules = (card.querySelector('[data-sb-field="rules"]')?.value || '')
@@ -1307,7 +1188,6 @@ async function saveSkillbookFromCard(skillbookId) {
       non_negotiable_rules: rules,
       workflow_backbone: workflow,
     });
-    await loadActiveOutreachData();
     triggerRender();
   } catch (error) {
     setError(error?.message || String(error));
@@ -1328,7 +1208,6 @@ async function newLetterTemplate(campaignId) {
       closing: 'Mit freundlichen Grüßen',
       body_template: '',
     });
-    await loadActiveOutreachData();
     triggerRender();
   } catch (error) {
     setError(error?.message || String(error));
@@ -1337,7 +1216,7 @@ async function newLetterTemplate(campaignId) {
 
 async function saveLetterTemplateFromCard(templateId) {
   if (!templateId) return;
-  const card = stateRef.ctx.host.querySelector(`[data-template-id="${cssEscape(templateId)}"]`);
+  const card = stateRef.root?.querySelector(`[data-template-id="${cssEscape(templateId)}"]`);
   if (!card) return;
   const tpl = stateRef.outboundLetterTemplates.find((t) => t.id === templateId);
   const payload = {
@@ -1350,7 +1229,6 @@ async function saveLetterTemplateFromCard(templateId) {
   };
   try {
     await dispatchOutboundCommand('outbound.letter_template.save', templateId, payload);
-    await loadActiveOutreachData();
     triggerRender();
   } catch (error) {
     setError(error?.message || String(error));
@@ -1378,7 +1256,7 @@ async function auditExport() {
     anchor.style.display = 'none';
     // Der App-Host haengt am geteilten Modul-State (stateRef), den das
     // Outbound-Modul beim Mounten setzt.
-    (stateRef?.ctx?.host || document.documentElement).appendChild(anchor);
+    (stateRef?.root || document.documentElement).appendChild(anchor);
     anchor.click();
     anchor.remove();
     URL.revokeObjectURL(url);
@@ -1387,34 +1265,19 @@ async function auditExport() {
   }
 }
 
-async function runSchedulerTickQuiet() {
-  try {
-    const result = await dispatchOutboundCommand('outbound.scheduler.tick', '', {});
-    const actions = result?.result?.actions || result?.actions || [];
-    if (actions.length > 0) {
-      await loadActiveOutreachData();
-      triggerRender();
-    }
-  } catch (error) {
-    // Silent — periodic tick should not spam the UI on transient errors.
-    console.warn('[outbound] periodic scheduler tick failed', error);
-  }
-}
-
 async function schedulerTick() {
   try {
     const result = await dispatchOutboundCommand('outbound.scheduler.tick', '', {});
     const actions = result?.result?.actions || result?.actions || [];
     if (actions.length === 0) {
-      stateRef.activeOutreach.error = null;
+      clearStatus('outbound.scheduler.summary');
     } else {
-      stateRef.activeOutreach.error = translate(
+      reportStatus('info', 'outbound.scheduler.summary', translate(
         'schedulerSummary',
         'Scheduler hat {0} Engagements verarbeitet.',
         actions.length,
-      );
+      ));
     }
-    await loadActiveOutreachData();
     triggerRender();
   } catch (error) {
     setError(error?.message || String(error));
@@ -1440,7 +1303,6 @@ async function bookSlot(meetingRequestId, slotIndex) {
       booked_at_ms: slot.start_ms || Date.now(),
       booked_slot: slot,
     });
-    await loadActiveOutreachData();
     triggerRender();
   } catch (error) {
     setError(error?.message || String(error));
@@ -1467,7 +1329,6 @@ async function regenerateSlots(meetingRequestId, messageId) {
         recipient_email: stateRef.engagementMessages.find((m) => m.id === messageId)?.recipient_email || '',
       }).catch((error) => console.warn('[outbound] regenerate slots draft failed', error));
     }
-    await loadActiveOutreachData();
     triggerRender();
   } catch (error) {
     setError(error?.message || String(error));
@@ -1479,11 +1340,10 @@ async function reconcileProviderStatus() {
     const result = await dispatchOutboundCommand('outbound.provider.reconcile', '', {});
     const updated = result?.result?.updated || result?.updated || [];
     if (updated.length === 0) {
-      stateRef.activeOutreach.error = null;
+      clearError();
       triggerRender();
       return;
     }
-    await loadActiveOutreachData();
     triggerRender();
   } catch (error) {
     setError(error?.message || String(error));
@@ -1496,7 +1356,6 @@ async function reapplySequence(engagementId) {
     await dispatchOutboundCommand('outbound.engagement.reapply_sequence', engagementId, {
       engagement_id: engagementId,
     });
-    await loadActiveOutreachData();
     triggerRender();
   });
 }
@@ -1562,7 +1421,6 @@ async function startEngagementFromLead(leadId, campaign, { autoDraft }) {
       draftPayload.message_id = messageId;
       await dispatchOutboundCommand('outbound.draft.prepare', messageId, draftPayload);
     }
-    await loadActiveOutreachData();
     stateRef.activeOutreach.view = autoDraft ? 'approval_inbox' : 'engagements';
     stateRef.activeOutreach.selectedEngagementId = engagementId;
     triggerRender();
@@ -1612,7 +1470,6 @@ async function prepareDraft(engagementId, draftKind) {
     const messageId = `msg_${crypto.randomUUID()}`;
     payload.message_id = messageId;
     await dispatchOutboundCommand('outbound.draft.prepare', messageId, payload);
-    await loadActiveOutreachData();
     stateRef.activeOutreach.view = 'approval_inbox';
     triggerRender();
   });
@@ -1649,7 +1506,6 @@ async function requestApproval(messageId) {
     await dispatchOutboundCommand('outbound.message.request_approval', messageId, {
       message_id: messageId,
     });
-    await loadActiveOutreachData();
     triggerRender();
   });
 }
@@ -1668,7 +1524,6 @@ async function approveMessage(messageId) {
     await dispatchOutboundCommand('outbound.message.approve', messageId, {
       message_id: messageId,
     });
-    await loadActiveOutreachData();
     stateRef.activeOutreach.view = 'ready_to_send';
     triggerRender();
   });
@@ -1683,7 +1538,6 @@ async function rejectMessage(messageId) {
       message_id: messageId,
       comment: comment || '',
     });
-    await loadActiveOutreachData();
     triggerRender();
   });
 }
@@ -1697,7 +1551,6 @@ async function saveDraftEdits(messageId) {
       ...edits,
     });
     stateRef.activeOutreach.messageEdits.delete(messageId);
-    await loadActiveOutreachData();
     triggerRender();
   });
 }
@@ -1708,7 +1561,6 @@ async function sendApproved(messageId) {
     await dispatchOutboundCommand('outbound.message.send_approved', messageId, {
       message_id: messageId,
     });
-    await loadActiveOutreachData();
     triggerRender();
   });
 }
@@ -1726,7 +1578,6 @@ async function cancelMessage(messageId) {
       message_id: messageId,
       reason: reason || 'manual_cancel',
     });
-    await loadActiveOutreachData();
     triggerRender();
   });
 }
@@ -1742,7 +1593,6 @@ async function pauseEngagement(engagementId) {
       message_id: lastMessage.id,
       reason: reason || 'manual_pause',
     });
-    await loadActiveOutreachData();
     triggerRender();
   });
 }
@@ -1759,7 +1609,6 @@ async function resumeEngagement(engagementId) {
     await dispatchOutboundCommand('outbound.engagement.resume', engagementId, {
       engagement_id: engagementId,
     });
-    await loadActiveOutreachData();
     triggerRender();
   });
 }
@@ -1773,7 +1622,6 @@ async function closeEngagement(engagementId) {
       engagement_id: engagementId,
       reason: reason || 'manual_close',
     });
-    await loadActiveOutreachData();
     triggerRender();
   });
 }
@@ -1786,7 +1634,6 @@ async function assignSender(engagementId, accountKey) {
       sender_account_id: accountKey,
     });
     stateRef.activeOutreach.sender = { engagementId: '', accountKey: '', open: false };
-    await loadActiveOutreachData();
     triggerRender();
   });
 }
@@ -1798,7 +1645,6 @@ async function reclassifyReply(engagementId, classification) {
       engagement_id: engagementId,
       classification,
     });
-    await loadActiveOutreachData();
     triggerRender();
   });
 }
@@ -1809,12 +1655,20 @@ async function printPhysicalLetter(messageId) {
   const subject = msg.subject || msg.payload?.subject || '';
   const body = msg.body_text || msg.payload?.body_text || '';
   const address = msg.recipient_address_text || msg.payload?.recipient_address_text || '';
-  const win = window.open('', '_blank', 'width=720,height=900');
-  if (!win) {
-    setError(translate('popupBlocked', 'Popup geblockt. Bitte Popups erlauben.'));
+  // v4: Druck im App-Fenster (verstecktes iframe in root) statt eines Browser-Popups außerhalb der App.
+  const host = stateRef.root || document.body;
+  const frame = document.createElement('iframe');
+  frame.setAttribute('aria-hidden', 'true');
+  frame.tabIndex = -1;
+  frame.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden';
+  host.appendChild(frame);
+  const doc = frame.contentDocument;
+  if (!doc) {
+    frame.remove();
     return;
   }
-  win.document.write(`
+  doc.open();
+  doc.write(`
     <html>
     <head><title>${escapeFn(subject || translate('letter', 'Brief'))}</title>
     <style>body{font-family:Helvetica,Arial,sans-serif;padding:32px;color:#111;line-height:1.5;}h1{font-size:18px;}pre{white-space:pre-wrap;font-family:inherit;}</style>
@@ -1826,9 +1680,10 @@ async function printPhysicalLetter(messageId) {
     </body>
     </html>
   `);
-  win.document.close();
+  doc.close();
   setTimeout(() => {
-    try { win.print(); } catch (_e) { /* ignore */ }
+    try { frame.contentWindow?.print(); } catch (_e) { /* ignore */ }
+    setTimeout(() => frame.remove(), 1000);
   }, 250);
 }
 
@@ -1840,32 +1695,29 @@ async function addSuppressionFromEngagement(engagementId) {
     setError(translate('noEmailForSuppression', 'Engagement hat keine Mailadresse.'));
     return;
   }
-  const collection = activeCollection('outbound_suppression_entries');
-  if (!collection) {
-    setError(translate('noSuppressionCollection', 'Unterdrückungsliste ist gerade nicht verfügbar.'));
-    return;
-  }
   const id = `supp_${crypto.randomUUID()}`;
-  await collection.insert({
+  const now = Date.now();
+  // Schema form only (collections.schema.json: scope/value/active) – the send gate
+  // reads this form; the legacy email/status form is read for old data only.
+  putDoc('outbound_suppression_entries', {
     id,
-    email: email.toLowerCase(),
+    scope: 'email',
+    value: email.trim().toLowerCase(),
     reason: 'unsubscribe',
-    status: 'active',
+    active: 1,
     source: 'outbound.active_outreach',
-    created_at_ms: Date.now(),
-    updated_at_ms: Date.now(),
+    engagement_id: engagementId,
+    created_at_ms: now,
+    updated_at_ms: now,
   });
   await dispatchOutboundCommand('outbound.engagement.close', engagementId, {
     engagement_id: engagementId,
     reason: 'unsubscribe',
   });
-  await loadActiveOutreachData();
   triggerRender();
 }
 
 async function promptForText(label) {
-  return new Promise((resolve) => {
-    const value = window.prompt(label, '');
-    resolve(value === null ? null : (value || ''));
-  });
+  const value = await promptDialog(label, '');
+  return value === null ? null : (value || '');
 }

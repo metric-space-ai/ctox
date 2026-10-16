@@ -1,0 +1,109 @@
+{
+ "app": "research",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Web Research",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 748
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Research anlegen",
+    "button:Rahmenvertrag über Wartung und",
+    "button:Kundentermin Vorbereitung krau",
+    "button:Budgetplanung Vertrieb Süd ric",
+    "button:Quartalsbericht Q3 2026 mller.",
+    "button:Angebot Wartungsvertrag Halle ",
+    "button:Projektplan Relaunch Kundenpor",
+    "button:Linke Spaltenbreite anpassen",
+    "button:Nachrecherche",
+    "button:Diagramm ausblenden",
+    "check:Thema suchen …",
+    "button:Alle",
+    "button:Themen",
+    "button:Quellen",
+    "button:Belege",
+    "button:Insights ein-/ausblenden",
+    "button:Übersicht",
+    "button:Standard",
+    "button:Tief",
+    "button:Zu 2D wechseln",
+    "button:Graph einpassen",
+    "nav:Quellen (0)",
+    "nav:Kandidaten (0)",
+    "nav:Messpunkte (0)",
+    "nav:Knowledge (0)",
+    "nav:Fachberichte (0)",
+    "button:Als Liste anzeigen",
+    "check:Quelle suchen: Titel, Autor, D",
+    "button:Alle",
+    "button:Rechte Spaltenbreite anpassen",
+    "button:Scoring bearbeiten",
+    "button:In CTOX ansehen"
+   ],
+   "shot": "research/1280-01-open.png"
+  },
+  {
+   "step": "nav Quellen (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "research/1280-02-nav_Quellen_0_.png"
+  },
+  {
+   "step": "nav Kandidaten (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "research/1280-03-nav_Kandidaten_0_.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 1145,
+   "textAfter": 1145
+  },
+  {
+   "step": "suche geleert",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "research",
+  "Web Research"
+ ]
+}

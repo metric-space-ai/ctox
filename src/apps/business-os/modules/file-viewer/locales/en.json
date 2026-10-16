@@ -1,4 +1,14 @@
 {
   "title": "File Viewer",
-  "description": "Securely load stored files, preview supported formats, and download them."
+  "description": "Securely load stored files, preview supported formats, and download them.",
+  "cancel": "Cancel",
+  "download": "Download",
+  "file": "File",
+  "materializeFailed": "Materialization failed",
+  "noFileOpen": "No file open",
+  "noPreview": "No preview available – please download.",
+  "openFailed": "File could not be opened",
+  "openFile": "Open file…",
+  "pickerTitle": "Open file",
+  "search": "Search"
 }

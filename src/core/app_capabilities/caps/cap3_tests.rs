@@ -1939,6 +1939,10 @@ fn app_capabilities_cap3_browser_extract_contract() {
     );
 }
 
+// ------------------------------------------------------------------ E20 sandbox
+#[cfg(target_os = "linux")]
+#[path = "sandbox_tests.rs"]
+mod sandbox_tests;
 #[test]
 fn app_capabilities_cap3_process_untrusted_contract() {
     with_core_owners(|f| {
@@ -1956,9 +1960,20 @@ fn app_capabilities_cap3_process_untrusted_contract() {
             &allowlist.to_string(),
         )
         .unwrap();
-        // Without the E20 sandbox, generated code never runs.
+        crate::inference::runtime_env::set_runtime_env_value(
+            f.root.path(),
+            sandbox::SANDBOX_KEY,
+            r#"{"bwrap":"/missing/e20-bwrap","sandbox_exec":"/missing/e20-sandbox"}"#,
+        )
+        .unwrap();
+        // An unavailable E20 sandbox never falls back to ordinary spawning.
         assert_eq!(
-            code(f.call(&host, "process", "run", json!({"program":"olg-scrape-js","stdin":"console.log(1)","allowed_domains":["example.test"]}))),
+            code(f.call(
+                &host,
+                "process",
+                "run",
+                json!({"program":"olg-scrape-js","stdin":"console.log(1)"})
+            )),
             ErrorCode::Unavailable
         );
         // A shell is never an interpreter for generated code.
@@ -1966,7 +1981,22 @@ fn app_capabilities_cap3_process_untrusted_contract() {
             code(f.call(&host, "process", "run", json!({"program":"olg-scrape-sh"}))),
             ErrorCode::Forbidden
         );
-        // The same interpreter without the flag is an ordinary allowlisted tool.
+        crate::inference::runtime_env::set_runtime_env_value(
+            f.root.path(),
+            sandbox::SANDBOX_KEY,
+            "{}",
+        )
+        .unwrap();
+        // Both domain spellings require the entry's explicit permission.
+        for field in ["allowed_domains", "net_domains"] {
+            let mut args = json!({"program":"trusted-cat"});
+            args[field] = json!(["example.test"]);
+            assert_eq!(
+                code(f.call(&host, "process", "run", args)),
+                ErrorCode::Forbidden
+            );
+        }
+        // The same interpreter without the flag is still sandboxed.
         assert_eq!(
             f.call(&host, "process", "run", json!({"program":"trusted-cat"}))
                 .unwrap()["stdout"],

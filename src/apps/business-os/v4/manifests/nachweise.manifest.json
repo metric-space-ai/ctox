@@ -1,0 +1,410 @@
+{
+  "_capability_evidence": {
+    "audit.event": [
+      "handlers/_ats.js"
+    ],
+    "config.get": [
+      "handlers/_ats.js"
+    ]
+  },
+  "_config_keys": [
+    "CTOX_BUSINESS_OS_REQUIRE_ENTLEIHER_SIGNATURE"
+  ],
+  "_declaration": "modules/nachweise/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/nachweise/index.html",
+  "_rust_basis": "`rs:store_ats_commands.rs` ~210 Z. (`ats.deployment.check` ab `:54`, `ats.leistungsnachweis.signoff` ab `:709`) + geteilte Gates `rs:ats_gates.rs` 683 Z.",
+  "_source_dir": "src/apps/business-os/modules/nachweise",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "nachweise",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [
+    "audit.event",
+    "config.get"
+  ],
+  "collections": {
+    "business_credentials": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/nachweise.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": {
+        "_basis": "v4-manifest.json; modules/nachweise/V4-HANDLERS.md „Rechte (Collection-Lesen)“; policy.rs ADMIN_ONLY_COLLECTIONS",
+        "read": {
+          "roles": [
+            "admin",
+            "chef"
+          ]
+        }
+      },
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "credential_type": {
+            "type": "string"
+          },
+          "document_id": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "subject_id": {
+            "type": "string"
+          },
+          "subject_type": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "valid_from_ms": {
+            "type": "number"
+          },
+          "valid_until_ms": {
+            "type": "number"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "verified_by": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "subject_id",
+          "credential_type",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    }
+  },
+  "command_rights": {
+    "ats.*": {
+      "_basis": "v4-manifest.json; modules/nachweise/V4-HANDLERS.md Abweichung 2 (Rollenprüfung chef/admin bleibt Kern-Policy, is_ats_mutating_command)",
+      "assigned_users": false,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    }
+  },
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {
+    "business_credentials": [
+      "read",
+      "write"
+    ]
+  },
+  "files": {
+    "README.md": "eaa2a450a94e35db7abee2ca83ae27de69912149c2e4120470e6a6e23ca931f9",
+    "V4-HANDLERS.md": "0048f8be542fd9645111c54b33f93ef79d7641d7ae33d88635547d5185cc1ecb",
+    "V4-PORT.md": "6e42be1236c27d87dfd605b344e046cc2325d7e864f358f16be30abed27ed40b",
+    "assets/icon.jpg": "ea439621aa2b989a23b873069a0bd3466b3a0eda1bb5495a4167e4e31af8fa81",
+    "assets/icon@512.jpg": "cb87e39f60605d8c3b97d2172471e078ee7aab101dd3f71741c2c7cfaff73f8a",
+    "collections.schema.json": "e9481be66f1722a676dd969802dce2b7a1c311bf1b9664666b8a0e769a45eea3",
+    "core/credential.js": "fbb0cdbd73023e1a96cb3186e3e49b065135b2ce14a963ead9aa6c00e31956bf",
+    "handlers/_ats.js": "9b61f67b398d511d68dcbca570b5c3a5c8056f5c9e147bca835c6274f4ba8c46",
+    "handlers/ats.credential.verify.js": "921a8f509c9060f207b7b4990e8d54cc2dec6e91957c9f0ead8d01657d857e04",
+    "handlers/ats.deployment.check.js": "fb85cf0785724deb6353f185509027c8c98d981f6212a11d1ff793d3b36a08d1",
+    "handlers/ats.leistungsnachweis.signoff.js": "be09bfad82f95e817389a5e69fa10e60119d41e06ce638f9fddec157302daf3e",
+    "icon.svg": "0fd69e68e833ddfbf52f47ddb2586f02b3857521ec2c65b2ed304889bc5d39a5",
+    "index.css": "d24e8a68f2d9ab0b90c7936f6ece8471d027a79a30b4b12a1e9aaa5945ab7104",
+    "index.html": "a18505eb007c9000e761ac90ac151de0ab62437210a08f44df70d261b4423a75",
+    "index.js": "d13205d81cb0eab42279d6092cc11263f9084e3f53c251d63262dee78714e389",
+    "locales/de.json": "60b2ecd8ab28199275e6cc98ecba21bd99d3a3266aaa88cf0a17c87f6d006de3",
+    "locales/en.json": "2416f39dc266beab25acf6bfc25bccd90d78ff1cff44e90c5f24d34ba3dc2e8c",
+    "module.json": "3dda81d6dac2e786bad08abc56cc691fca537c6dd9bf7a3e3f2dceaaf85424c0",
+    "v4-manifest.json": "13983f9b68eac8a5795039f7b2c05a64c6e6af31c4fc50708e2d4a4cf3cec909"
+  },
+  "foreign_collections": {
+    "accounting_invoices": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:264",
+          "handlers/ats.leistungsnachweis.signoff.js:4",
+          "handlers/ats.leistungsnachweis.signoff.js:64"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/nachweise/V4-HANDLERS.md „Manifest-Wünsche“; TEXT-C Runde 2 (15.10.): Namen statt IDs – Kandidat aus applications (intake), Kunde aus customer_accounts (customers), nur lesen",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read",
+        "write"
+      ],
+      "owner_app": "invoices"
+    },
+    "applications": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/nachweise/V4-HANDLERS.md „Manifest-Wünsche“; TEXT-C Runde 2 (15.10.): Namen statt IDs – Kandidat aus applications (intake), Kunde aus customer_accounts (customers), nur lesen",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "intake"
+    },
+    "business_commands": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:233"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "business_consents": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "consent"
+    },
+    "customer_accounts": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "declaration_basis": "modules/nachweise/V4-HANDLERS.md „Manifest-Wünsche“; TEXT-C Runde 2 (15.10.): Namen statt IDs – Kandidat aus applications (intake), Kunde aus customer_accounts (customers), nur lesen",
+        "sources": [
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "customers"
+    },
+    "interview_meetings": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:198"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "interviews"
+    },
+    "interview_scorecards": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:198"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "interviews"
+    },
+    "offers": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "placements"
+    },
+    "placements": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "placements"
+    },
+    "planning_time_records": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:198",
+          "handlers/ats.leistungsnachweis.signoff.js:7",
+          "handlers/ats.leistungsnachweis.signoff.js:15"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/nachweise/V4-HANDLERS.md „Manifest-Wünsche“; TEXT-C Runde 2 (15.10.): Namen statt IDs – Kandidat aus applications (intake), Kunde aus customer_accounts (customers), nur lesen",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read",
+        "write"
+      ],
+      "owner_app": "shiftflow"
+    },
+    "signature_requests": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:198",
+          "handlers/ats.leistungsnachweis.signoff.js:29",
+          "handlers/ats.leistungsnachweis.signoff.js:31"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/nachweise/V4-HANDLERS.md „Manifest-Wünsche“; TEXT-C Runde 2 (15.10.): Namen statt IDs – Kandidat aus applications (intake), Kunde aus customer_accounts (customers), nur lesen",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "esign"
+    },
+    "submissions": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "submissions"
+    }
+  },
+  "handlers": {
+    "ats.credential.verify": "handlers/ats.credential.verify.js",
+    "ats.deployment.check": "handlers/ats.deployment.check.js",
+    "ats.leistungsnachweis.signoff": "handlers/ats.leistungsnachweis.signoff.js"
+  },
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/nachweise.jpg (shared/operator-icon-selection.js, sha256 cd43c8c297a2…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "category": "Operations",
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 680,
+        "width": 960
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#0891b2",
+        "category": "People",
+        "iconAssetId": "workjet.business-os.nachweise",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "document",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "Nachweise"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "169a0e23659b0c2a4f38e6395f6930c7afa00c005879444e8f1d56f7b21368b2",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "Nachweise",
+  "triggers": [],
+  "version": "0.2.1"
+}

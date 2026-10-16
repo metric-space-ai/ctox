@@ -13,8 +13,9 @@ const { __explorerTestHooks: explorer } = await import(explorerUrl);
 
 describe('Explorer module contract', () => {
   it('uses the Business OS module entry contract and a fragment-only view', () => {
-    assert.match(explorerSource, /export async function mount\(ctx\)/);
-    assert.match(explorerSource, /const container = ctx\.host/);
+    // App-API 4.0 (V4-PORT.md): mount(root, api, {restored}) → {unmount, snapshot}, kein ctx.
+    assert.match(explorerSource, /export async function mount\(root, api, \{ restored \} = \{\}\)/);
+    assert.doesNotMatch(explorerSource, /\bctx\.|desktop_file_chunks|demandFileLoader|\?v=/);
     assert.doesNotMatch(explorerSource, /export const manifest/);
     assert.doesNotMatch(explorerSource, /desktop-apps\//);
     // Single-Column-Workspace: ohne --single erbt die Root die 5-Spuren-
@@ -72,40 +73,26 @@ describe('Explorer helpers', () => {
     ]);
   });
 
-  it('keeps the CTOX-published file area visible at the Files root', async () => {
-    const upserts = [];
-    const db = {
-      collection(name) {
-        if (name !== 'desktop_files') return null;
-        return {
-          findOne: () => ({ exec: async () => null }),
-          upsert: async (doc) => { upserts.push(doc); },
-        };
-      },
-    };
-
-    await explorer.ensureFileSystem(db);
-
-    assert.ok(upserts.some((doc) => (
-      doc.id === 'fs_ctox'
+  it('keeps the CTOX-published file area visible at the Files root', () => {
+    const puts = [];
+    const api = { put: (collection, doc) => { puts.push({ collection, doc }); return {}; }, patch: () => ({}) };
+    explorer.ensureFileSystem(api, []);
+    assert.ok(puts.some(({ collection, doc }) => (
+      collection === 'desktop_files'
+      && doc.id === 'fs_ctox'
       && doc.parent_id === 'fs_root'
       && doc.path === '/CTOX'
       && doc.name === 'CTOX'
     )));
   });
 
-  it('waits for desktop file replication before seeding and rendering Files', () => {
-    const replicationStart = explorerSource.indexOf("startCollection?.('desktop_files')");
-    const seedStart = explorerSource.indexOf('await ensureFileSystem(ctx.db)');
-    const renderStart = explorerSource.indexOf('await selectSource(FILE_SOURCE)');
-
-    assert.ok(replicationStart >= 0, 'Files must explicitly start desktop_files replication');
-    assert.ok(replicationStart < seedStart, 'native file metadata must arrive before browser seeds');
-    assert.ok(seedStart < renderStart, 'the populated collection must be rendered last');
+  it('seeds system folders from the live desktop_files emission instead of waiting for replication', () => {
+    assert.doesNotMatch(explorerSource, /startCollection|awaitInSync|awaitInitialReplication/);
+    assert.match(explorerSource, /collectionId === 'desktop_files' && !state\.query && !state\.seeded/);
   });
 
-  it('replicates every selected source through its declared collection', () => {
-    assert.match(explorerSource, /const collectionId = sourceCollectionId\(state\.activeSource\)[\s\S]*?startCollection\?\.\(collectionId\)/);
+  it('reads every selected source through a live api.query on its declared collection', () => {
+    assert.match(explorerSource, /const collectionId = sourceCollectionId\(state\.activeSource\);[\s\S]*?api\.query\(collectionId, activeDocumentQueryForSource/);
     for (const collection of ['documents', 'spreadsheets', 'knowledge_items', 'matching_objects', 'outbound_companies']) {
       assert.ok(manifest.collections.includes(collection));
       assert.ok(collectionSchemas.collections[collection]);
@@ -118,13 +105,10 @@ describe('Explorer helpers', () => {
     assert.match(explorerHtml, /data-explorer-sort/);
     assert.match(explorerHtml, /<option value="created"/);
     assert.match(explorerSource, /activeData\.filter\(\(item\) => item\.kind !== 'folder'\)\.map\(normalizeFileRow\)/);
-    assert.match(explorerSource, /requireRevision: `files-search:/);
-    assert.match(explorerSource, /\{ name: \{ \$regex: pattern \} \}/);
-  });
-
-  it('keeps the legacy schema-registration capability guarded', () => {
-    assert.match(explorerSource, /ctx\.ensureModuleData\?\.\(source\.moduleId\)/);
-    assert.ok(manifest.collections.includes('documents'));
+    const q = explorer.activeDocumentQueryForSource(explorer.FILE_SOURCE, 'Rep');
+    assert.deepEqual(q.selector.$or[0], { name: { $regex: 'Rep', $options: 'i' } });
+    assert.equal(q.limit, 250);
+    assert.deepEqual(explorer.activeDocumentQueryForSource(explorer.FILE_SOURCE, ''), {});
   });
 
   it('validates new folder and rename inputs before persistence', () => {
@@ -151,7 +135,7 @@ describe('Explorer helpers', () => {
     assert.match(bundledSource, /anchor\.download\s*=\s*row\.label/);
     assert.match(bundledSource, /Herunterladen/);
     assert.match(bundledSource, /Download fehlgeschlagen/);
-    assert.match(bundledSource, /reportFileIntegrityError/);
+    assert.match(bundledSource, /report\('download'/);
   });
 
   it('supports bidirectional desktop file drag without an HTTP data path', () => {
@@ -173,36 +157,25 @@ describe('Explorer helpers', () => {
     assert.equal(explorer.associatedAppFor({ label: 'manual.pdf', mimeType: 'application/pdf' }), '');
     assert.equal(explorer.normalizedMimeType({ label: 'loads.csv', mimeType: 'text/plain' }), 'text/csv');
     assert.equal(explorer.mimeFromName('report.docx'), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-    assert.match(explorerSource, /associatedAppFor\(row\)[\s\S]*?openDesktopApp\(associatedApp/);
+    assert.match(explorerSource, /associatedAppFor\(row\)[\s\S]*?api\.shell\.navigate\(associatedApp/);
   });
 
-  it('stores uploaded file chunks in one bulk write without DataURL materialization', async () => {
+  it('stores uploads through api.files.put and links the ref in desktop_files without DataURL', async () => {
     assert.doesNotMatch(bundledSource, /readAsDataURL/);
-    const chunkWrites = [];
-    const fileWrites = [];
-    const db = {
-      collection(name) {
-        if (name === 'desktop_file_chunks') {
-          return {
-            bulkUpsert: async (docs) => { chunkWrites.push(docs); },
-            upsert: async () => { throw new Error('desktop_file_chunks upsert must not run per chunk'); },
-          };
-        }
-        if (name === 'desktop_files') {
-          return { upsert: async (doc) => { fileWrites.push(doc); } };
-        }
-        return null;
-      },
+    const uploads = [];
+    const writes = [];
+    const api = {
+      files: { put: (blob, meta) => { uploads.push(meta); return { ref: Promise.resolve('a'.repeat(64)), local: Promise.resolve() }; } },
+      put: (collection, doc) => { writes.push({ collection, doc }); return { local: Promise.resolve() }; },
     };
-    const bytes = new Uint8Array(24 * 1024);
-    bytes.fill(65);
-    const file = typeof File === 'function'
-      ? new File([bytes], 'bulk.txt', { type: 'text/plain' })
-      : { type: 'text/plain', size: bytes.length, arrayBuffer: async () => bytes.buffer };
-    await explorer.storeFile(db, 'fs_root', '/', 'bulk.txt', file);
-
-    assert.equal(chunkWrites.length, 1, 'chunks are written through one bulkUpsert call');
-    assert.ok(chunkWrites[0].length > 1, 'test payload spans multiple chunk documents');
-    assert.equal(fileWrites.length, 1, 'file metadata is written once');
+    const bytes = new Uint8Array(24 * 1024).fill(65);
+    const file = new File([bytes], 'bulk.txt', { type: 'text/plain' });
+    const res = await explorer.storeFile(api, 'fs_root', '/', 'bulk.txt', file);
+    assert.equal(uploads.length, 1, 'one blob upload');
+    assert.equal(uploads[0].id, res.id);
+    assert.equal(writes.length, 1, 'file metadata is written once');
+    assert.equal(writes[0].collection, 'desktop_files');
+    assert.equal(writes[0].doc.content_ref, 'a'.repeat(64));
+    assert.equal(writes[0].doc.content_hash_scheme, 'sha256-bytes-v1');
   });
 });

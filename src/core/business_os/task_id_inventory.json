@@ -4,17 +4,17 @@
   "sites": [
     {
       "file": "src/core/business_os/command_plane.rs",
-      "function": "accept_rxdb_business_command_with_guest_runtime",
+      "function": "accept_rxdb_business_command_with_runtimes",
       "occurrence": 1,
-      "semantics": "compatibility_mixed",
-      "target_field": "return explicit execution_task_id/target fields"
+      "semantics": "compatibility_target",
+      "target_field": "target_task_id/target_record_id; execution_task_id stays empty"
     },
     {
       "file": "src/core/business_os/command_plane.rs",
-      "function": "accept_rxdb_business_command_with_guest_runtime",
+      "function": "accept_rxdb_business_command_with_runtimes",
       "occurrence": 2,
-      "semantics": "compatibility_mixed",
-      "target_field": "return explicit execution_task_id/target fields"
+      "semantics": "compatibility_target",
+      "target_field": "target_task_id/target_record_id; execution_task_id stays empty"
     },
     {
       "file": "src/core/business_os/command_plane.rs",

@@ -8,6 +8,7 @@
   "exportAction": "Profile exportieren",
   "reparseAllAction": "Alle reparsen",
   "bandAll": "Alle",
+  "_bandProgress_v4": "v4-allow: label (Band = Werkstatt-Phase)",
   "bandProgress": "In Arbeit",
   "bandReview": "Korrektur",
   "bandApproved": "Freigegeben"

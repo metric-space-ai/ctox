@@ -1,0 +1,174 @@
+{
+  "variant": "neu",
+  "oldRev": "51b796217",
+  "maxDE": 12,
+  "rows": {
+    "notes": {
+      "src": "icon",
+      "topJoint": "#141b24",
+      "leftJoint": "#141b24",
+      "top": 82,
+      "left": 83.7,
+      "cornerTop": 1.8,
+      "cornerLeft": 0,
+      "logoTop": [
+        197,
+        138,
+        43
+      ],
+      "edgeTop": [
+        23,
+        29,
+        36
+      ],
+      "logoLeft": [
+        197,
+        138,
+        43
+      ],
+      "edgeLeft": [
+        20,
+        27,
+        36
+      ],
+      "insetTop": [
+        6,
+        5
+      ],
+      "insetLeft": [
+        6,
+        5
+      ],
+      "skip": null,
+      "fails": [
+        "notes: Naht oben – deckendes Logopixel 197,138,43 ↔ Kante 23,29,36 ΔE 82",
+        "notes: Naht links – deckendes Logopixel 197,138,43 ↔ Kante 20,27,36 ΔE 83.7"
+      ],
+      "shot": "v4/tools/geometry/out/pal/neu-notes.png"
+    },
+    "pal-gradient": {
+      "src": "icon",
+      "topJoint": "#141b24",
+      "leftJoint": "#141b24",
+      "top": 47.3,
+      "left": 48.6,
+      "cornerTop": 0.9,
+      "cornerLeft": 0,
+      "logoTop": [
+        26,
+        109,
+        172
+      ],
+      "edgeTop": [
+        20,
+        28,
+        38
+      ],
+      "logoLeft": [
+        26,
+        108,
+        173
+      ],
+      "edgeLeft": [
+        20,
+        27,
+        36
+      ],
+      "insetTop": [
+        6,
+        5
+      ],
+      "insetLeft": [
+        6,
+        5
+      ],
+      "skip": null,
+      "fails": [
+        "pal-gradient: Naht oben – deckendes Logopixel 26,109,172 ↔ Kante 20,28,38 ΔE 47.3",
+        "pal-gradient: Naht links – deckendes Logopixel 26,108,173 ↔ Kante 20,27,36 ΔE 48.6"
+      ],
+      "shot": "v4/tools/geometry/out/pal/neu-pal-gradient.png"
+    },
+    "real-reports": {
+      "src": "icon",
+      "topJoint": "#b85929",
+      "leftJoint": "#b85928",
+      "top": 1.9,
+      "left": 0.9,
+      "cornerTop": 1.9,
+      "cornerLeft": 1,
+      "logoTop": [
+        185,
+        91,
+        40
+      ],
+      "edgeTop": [
+        183,
+        88,
+        41
+      ],
+      "logoLeft": [
+        184,
+        90,
+        39
+      ],
+      "edgeLeft": [
+        184,
+        89,
+        40
+      ],
+      "insetTop": [
+        0,
+        0
+      ],
+      "insetLeft": [
+        0,
+        0
+      ],
+      "skip": null,
+      "fails": [],
+      "shot": "v4/tools/geometry/out/pal/neu-real-reports.png"
+    },
+    "real-iot": {
+      "src": "icon",
+      "topJoint": "#436150",
+      "leftJoint": "#506d50",
+      "top": 2.7,
+      "left": 1.9,
+      "cornerTop": 3.6,
+      "cornerLeft": 4.4,
+      "logoTop": [
+        70,
+        99,
+        79
+      ],
+      "edgeTop": [
+        66,
+        96,
+        80
+      ],
+      "logoLeft": [
+        82,
+        111,
+        79
+      ],
+      "edgeLeft": [
+        80,
+        109,
+        80
+      ],
+      "insetTop": [
+        0,
+        0
+      ],
+      "insetLeft": [
+        0,
+        0
+      ],
+      "skip": null,
+      "fails": [],
+      "shot": "v4/tools/geometry/out/pal/neu-real-iot.png"
+    }
+  },
+  "pageErrors": []
+}

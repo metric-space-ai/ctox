@@ -1,5 +1,8 @@
+import { matchingStore } from './v4Runtime.js';
+
+// Fensterzustand je Montage; wandert über snapshot()/restored (App-API 4.0), nicht in einen Speicher.
 const VIEW_STATE_PREFIX = 'matching:view-state:';
-let storageScope = null;
+const storageScope = matchingStore;
 
 function asPlainObject(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -8,10 +11,6 @@ function asPlainObject(value) {
 
 function buildKey(viewName) {
   return `${VIEW_STATE_PREFIX}${String(viewName || '').trim()}`;
-}
-
-export function setViewStateStorageScope(nextStorageScope) {
-  storageScope = nextStorageScope?.get && nextStorageScope?.set ? nextStorageScope : null;
 }
 
 export function readViewState(viewName, defaults = {}) {

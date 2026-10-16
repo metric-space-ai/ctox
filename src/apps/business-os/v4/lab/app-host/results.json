@@ -1,0 +1,747 @@
+{
+  "startedAt": "2026-10-15T19:36:40.184Z",
+  "env": {
+    "node": "v26.6.0",
+    "platform": "darwin arm64",
+    "cpus": 10,
+    "browser": "chromium-headless-shell 148.0.7778.96",
+    "reps": 20
+  },
+  "scenarios": {
+    "a-remount-zwei-tabs": {
+      "pass": true,
+      "summary": "20 Remounts v1↔v2 in beiden Tabs; Veröffentlichen→mounted B p50 7.4 ms / p95 10.6 ms, A p50 6.4 / p95 8.8 ms; Abweichungen Wert/Fokus/Auswahl/Scroll: 0.",
+      "data": {
+        "publishToMountedMs": {
+          "tabA_leader": {
+            "n": 20,
+            "p50": 6.4,
+            "p95": 8.8,
+            "min": 4.4,
+            "max": 17.9
+          },
+          "tabB_reader": {
+            "n": 20,
+            "p50": 7.4,
+            "p95": 10.6,
+            "min": 5.2,
+            "max": 18.5
+          }
+        },
+        "rawB": [
+          18.5,
+          9,
+          9.6,
+          8.4,
+          10.6,
+          8.5,
+          6.6,
+          8.2,
+          9.5,
+          7.7,
+          6.6,
+          7.1,
+          7.7,
+          7,
+          7.4,
+          6.2,
+          5.4,
+          7.2,
+          5.2,
+          6
+        ],
+        "phasesB_first2": [
+          {
+            "toSwapStart": null,
+            "snapshot": 0.7,
+            "persist": 1.1,
+            "load": 6.8,
+            "unmount": 1.7,
+            "mount": 2.9
+          },
+          {
+            "toSwapStart": null,
+            "snapshot": 0.7,
+            "persist": 1.2,
+            "load": 0.3,
+            "unmount": 2.2,
+            "mount": 1.1
+          }
+        ],
+        "phaseStatsB": {
+          "snapshot": {
+            "n": 20,
+            "p50": 0.3,
+            "p95": 0.7,
+            "min": 0.1,
+            "max": 0.7
+          },
+          "persist": {
+            "n": 20,
+            "p50": 0.2,
+            "p95": 1.2,
+            "min": 0.1,
+            "max": 2.1
+          },
+          "load": {
+            "n": 20,
+            "p50": 0.2,
+            "p95": 0.3,
+            "min": 0,
+            "max": 6.8
+          },
+          "unmount": {
+            "n": 20,
+            "p50": 1.4,
+            "p95": 2.1,
+            "min": 1,
+            "max": 2.2
+          },
+          "mount": {
+            "n": 20,
+            "p50": 1.4,
+            "p95": 2.9,
+            "min": 0.9,
+            "max": 3.3
+          }
+        },
+        "mismatches": [],
+        "finalState": {
+          "ver": "1",
+          "focus": "beschreibung",
+          "selection": [
+            90,
+            90
+          ],
+          "scroll": {
+            "beschreibung": 120,
+            "liste": 200
+          },
+          "nameValue": "Erika Mustermann",
+          "beschreibungLen": 677,
+          "prio": null
+        }
+      },
+      "durationS": 1.677
+    },
+    "b-generische-sicherung": {
+      "pass": false,
+      "summary": "Abbruch: page.check: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator('[data-window-id=\"v4app:notizen#2\"] input[name=\"wichtig\"]')\n    - locator resolved to <input name=\"wichtig\" type=\"checkbox\"/>\n  - attempting click action\n    2 × waiting for element to be visible, enabled and stable\n      - element is visible, enabled and stable\n      - scrolling into view if needed\n      - done scrolling\n      - <div tabindex=\"0\" role=\"button\" data-window-drag-region=\"\" class=\"shell-window-v2-icon\" aria-label=\"Notizen verschieben\" aria-keyshortcuts=\"ArrowUp ArrowDown ArrowLeft ArrowRight\">…</div> intercepts pointer events\n    - retrying click action\n    - waiting 20ms\n    2 × waiting for element to be visible, enabled and stable\n      - element is visible, enabled and stable\n      - scrolling into view if needed\n      - done scrolling\n      - <div tabindex=\"0\" role=\"button\" data-window-drag-region=\"\" class=\"shell-window-v2-icon\" aria-label=\"Notizen verschieben\" aria-keyshortcuts=\"ArrowUp ArrowDown ArrowLeft ArrowRight\">…</div> intercepts pointer events\n    - retrying click action\n      - waiting 100ms\n    58 × waiting for element to be visible, enabled and stable\n       - element is visible, enabled and stable\n       - scrolling into view if needed\n       - done scrolling\n       - <div tabindex=\"0\" role=\"button\" data-window-drag-region=\"\" class=\"shell-window-v2-icon\" aria-label=\"Notizen verschieben\" aria-keyshortcuts=\"ArrowUp ArrowDown ArrowLeft ArrowRight\">…</div> intercepts pointer events\n     - retrying click action\n       - waiting 500ms\n",
+      "data": {
+        "stack": [
+          "page.check: Timeout 30000ms exceeded.",
+          "Call log:",
+          "  - waiting for locator('[data-window-id=\"v4app:notizen#2\"] input[name=\"wichtig\"]')",
+          "    - locator resolved to <input name=\"wichtig\" type=\"checkbox\"/>",
+          "  - attempting click action",
+          "    2 × waiting for element to be visible, enabled and stable"
+        ]
+      }
+    },
+    "c-rueckfall-v3": {
+      "pass": true,
+      "summary": "v3 (mount hängt, Frist 9 s) → Rückfall auf v2 nach 9018.2 ms (B) / 9022.9 ms (A), ≤ 10 s: true; reportFailed gemeldet (2×), Zeiger danach 2 (zurückgenommen); Zone: „Version 3 startet nicht (mount() nicht binnen 9 s fertig); 2 läuft weiter“; Eingabe-Abweichungen: 0; nach erneutem Veröffentlichen von v2 Zone leer: true.",
+      "data": {
+        "publishToRolledBackMs": {
+          "A": 9022.9,
+          "B": 9018.2
+        },
+        "ver": "2",
+        "zone": {
+          "hidden": false,
+          "level": "error",
+          "text": "Version 3 startet nicht (mount() nicht binnen 9 s fertig); 2 läuft weiter",
+          "inChrome": true
+        },
+        "inputDiffs": [],
+        "pointerAfterRollback": {
+          "ver": "2",
+          "state": "activated",
+          "reverted": true
+        },
+        "reportFailed": [
+          {
+            "ver": "3",
+            "tab": "A"
+          },
+          {
+            "ver": "3",
+            "tab": "B"
+          }
+        ],
+        "afterForwardRollback": {
+          "hidden": true,
+          "entries": []
+        }
+      },
+      "durationS": 9.264
+    },
+    "c2-rueckfall-mount-wirft": {
+      "pass": true,
+      "summary": "v4 (mount wirft) → Rückfall auf v2 nach 12 ms; Zone: „Version 4 startet nicht (v4: Pflichtfeld-Schema fehlt); 2 läuft weiter“; Abweichungen 0.",
+      "data": {
+        "publishToRolledBackMs": 12,
+        "zone": {
+          "level": "error",
+          "text": "Version 4 startet nicht (v4: Pflichtfeld-Schema fehlt); 2 läuft weiter"
+        },
+        "diffs": []
+      },
+      "durationS": 0.077
+    },
+    "d-live-daten": {
+      "pass": true,
+      "summary": "20 Schreibvorgänge Tab A → Liste in Tab B sichtbar p50 2.2 ms / p95 4.1 ms (BroadcastChannel nach IDB-Commit); Befehl in B gesehen: queued→accepted→running→done.",
+      "data": {
+        "putToOtherTabDomMs": {
+          "n": 20,
+          "p50": 2.2,
+          "p95": 4.1,
+          "min": 1.9,
+          "max": 8.5
+        },
+        "putToOwnTabDomMs": {
+          "n": 20,
+          "p50": 0.2,
+          "p95": 0.3,
+          "min": 0.2,
+          "max": 0.8
+        },
+        "commandStatesSeenInB": {
+          "states": [
+            "queued",
+            "accepted",
+            "running",
+            "done"
+          ],
+          "ms": 442.60009765625
+        }
+      },
+      "durationS": 0.682
+    },
+    "e-shell-live-tausch": {
+      "pass": true,
+      "summary": "Shell 1→2 (Doppelpuffer) mit 3 Fenstern (2× formular v2, 1× notizen v2), halbes Formular: stop 2.3 ms + import 20.2 ms + start/umschalten 47.1 ms = 69.6 ms; Abweichungen 0; nie leer: min. sichtbare Fenster mit Inhalt 3 über 29 Mutationen, 3 über 9 Frames; Remount nach Tausch 10.3 ms.",
+      "data": {
+        "swap": {
+          "stopMs": 2.3,
+          "importMs": 20.2,
+          "startMs": 47.1,
+          "totalMs": 69.6,
+          "windows": 3,
+          "snapshotBytes": 2496,
+          "probe": {
+            "moSamples": 29,
+            "moMin": 3,
+            "rafSamples": 9,
+            "rafMin": 3
+          }
+        },
+        "diffs": [],
+        "shellState": {
+          "ver": "2",
+          "desktops": 1,
+          "desktopVer": "2",
+          "shellCss": [
+            "http://127.0.0.1:60053/~a/shell@2/v4/frame/theme/theme.css",
+            "http://127.0.0.1:60053/~a/shell@2/shared/base.css",
+            "http://127.0.0.1:60053/~a/shell@2/shared/shell-v2-chrome.css",
+            "http://127.0.0.1:60053/~a/shell@2/v4/frame/frame.css",
+            "http://127.0.0.1:60053/~a/shell@2/shared/shell-v2-topbar.css"
+          ],
+          "appCss": [
+            "/~a/notizen@1/index.css",
+            "/~a/formular@2/index.css"
+          ]
+        },
+        "remountAfterSwapMs": 10.3,
+        "focusBefore": "name",
+        "focusAfter": "name"
+      },
+      "durationS": 0.234
+    },
+    "f-zustandszone": {
+      "pass": false,
+      "summary": "Abbruch: page.click: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator('[data-window-id=\"v4app:formular#1\"] .v4-status-zone__line')\n    - locator resolved to <span class=\"v4-status-zone__top v4-status-zone__line\">Speichern fehlgeschlagen: Feld „Name“ ist Pflicht…</span>\n  - attempting click action\n    2 × waiting for element to be visible, enabled and stable\n      - element is visible, enabled and stable\n      - scrolling into view if needed\n      - done scrolling\n      - <label>…</label> from <div data-window-content=\"\" class=\"shell-window-content v4f-content\">…</div> subtree intercepts pointer events\n    - retrying click action\n    - waiting 20ms\n    2 × waiting for element to be visible, enabled and stable\n      - element is visible, enabled and stable\n      - scrolling into view if needed\n      - done scrolling\n      - <label>…</label> from <div data-window-content=\"\" class=\"shell-window-content v4f-content\">…</div> subtree intercepts pointer events\n    - retrying click action\n      - waiting 100ms\n    58 × waiting for element to be visible, enabled and stable\n       - element is visible, enabled and stable\n       - scrolling into view if needed\n       - done scrolling\n       - <label>…</label> from <div data-window-content=\"\" class=\"shell-window-content v4f-content\">…</div> subtree intercepts pointer events\n     - retrying click action\n       - waiting 500ms\n",
+      "data": {
+        "stack": [
+          "page.click: Timeout 30000ms exceeded.",
+          "Call log:",
+          "  - waiting for locator('[data-window-id=\"v4app:formular#1\"] .v4-status-zone__line')",
+          "    - locator resolved to <span class=\"v4-status-zone__top v4-status-zone__line\">Speichern fehlgeschlagen: Feld „Name“ ist Pflicht…</span>",
+          "  - attempting click action",
+          "    2 × waiting for element to be visible, enabled and stable"
+        ]
+      }
+    },
+    "h-zehn-fenster-und-css-reihenfolge": {
+      "pass": true,
+      "summary": "10 Fenster in Tab B (9× formular gleichzeitig): Veröffentlichen→alle mounted p50 42.8 ms / p95 55.2 ms (6 Wdh.); Werte erhalten: true; CSS neu geladen vor Entfernen alt: true; danach 2 App-CSS-Links.",
+      "data": {
+        "windowsInTabB": 10,
+        "formularWindows": 9,
+        "publishToAllMountedMs": {
+          "n": 6,
+          "p50": 42.8,
+          "p95": 55.2,
+          "min": 39.9,
+          "max": 55.2
+        },
+        "raw": [
+          44,
+          42.8,
+          44.3,
+          39.9,
+          55.2,
+          40.5
+        ],
+        "valuesKept": true,
+        "cssOrderNewLoadedBeforeOldRemoved": true,
+        "cssLogFirst6": [
+          [
+            "add",
+            "/~a/formular@2/index.css",
+            73058
+          ],
+          [
+            "load",
+            "/~a/formular@2/index.css",
+            73058
+          ],
+          [
+            "remove",
+            "/~a/formular@1/index.css",
+            73093
+          ],
+          [
+            "add",
+            "/~a/formular@1/index.css",
+            73130
+          ],
+          [
+            "load",
+            "/~a/formular@1/index.css",
+            73130
+          ],
+          [
+            "remove",
+            "/~a/formular@2/index.css",
+            73165
+          ]
+        ],
+        "appCssLinksAfter": 2,
+        "usedJsHeapMiB": 10
+      },
+      "durationS": 1.439
+    },
+    "g-kein-reload-kein-datenabruf": {
+      "pass": true,
+      "summary": "102 Anfragen gesamt (document 2, script 76, stylesheet 24), davon unerwartet/Daten: 0; Hauptframe-Navigationen A=1, B=1 (je 1 = nur der erste Aufruf); Seiten-Sentinel unverändert: true; Konsolenfehler: 0.",
+      "data": {
+        "resourceTimingTabB": [
+          {
+            "url": "/~a/shell@1/v4/frame/index.js",
+            "startMs": 16,
+            "durationMs": 0.4
+          },
+          {
+            "url": "/~a/shell@1/shared/taskbar-pins.js",
+            "startMs": 18,
+            "durationMs": 2.5
+          },
+          {
+            "url": "/~a/shell@1/shared/window-manager.js",
+            "startMs": 18,
+            "durationMs": 2.9
+          },
+          {
+            "url": "/~a/shell@1/v4/shell/kernel-adapter.js",
+            "startMs": 18,
+            "durationMs": 4.1
+          },
+          {
+            "url": "/~a/shell@1/v4/shell/app-host.js",
+            "startMs": 18,
+            "durationMs": 3.5
+          },
+          {
+            "url": "/~a/shell@1/v4/shell/status-zone.js",
+            "startMs": 18,
+            "durationMs": 4.6
+          },
+          {
+            "url": "/~a/shell@1/v4/shell/sync-state.js",
+            "startMs": 19,
+            "durationMs": 4.6
+          },
+          {
+            "url": "/~a/shell@1/v4/frame/launcher.js",
+            "startMs": 19,
+            "durationMs": 4.8
+          },
+          {
+            "url": "/~a/shell@1/v4/frame/taskbar.js",
+            "startMs": 19,
+            "durationMs": 4.9
+          },
+          {
+            "url": "/~a/shell@1/v4/shell/report.js",
+            "startMs": 19,
+            "durationMs": 5.1
+          },
+          {
+            "url": "/~a/shell@1/v4/frame/topbar.js",
+            "startMs": 19,
+            "durationMs": 5.1
+          },
+          {
+            "url": "/~a/shell@1/v4/frame/glossary.js",
+            "startMs": 19,
+            "durationMs": 5.2
+          },
+          {
+            "url": "/~a/shell@1/shared/window-layout-resolver.js",
+            "startMs": 23,
+            "durationMs": 1.2
+          },
+          {
+            "url": "/~a/shell@1/shared/window-close-gate.js",
+            "startMs": 23,
+            "durationMs": 1.2
+          },
+          {
+            "url": "/~a/shell@1/v4/shell/column-resizers.js",
+            "startMs": 24,
+            "durationMs": 1.4
+          },
+          {
+            "url": "/~a/shell@1/v4/frame/window-sheet.js",
+            "startMs": 24,
+            "durationMs": 1.4
+          },
+          {
+            "url": "/~a/shell@1/shared/context-chat.js",
+            "startMs": 24,
+            "durationMs": 1.3
+          },
+          {
+            "url": "/~a/shell@1/shared/topbar-apps.js",
+            "startMs": 25,
+            "durationMs": 0.3
+          },
+          {
+            "url": "/~a/shell@1/shared/pane-grammar.js",
+            "startMs": 26,
+            "durationMs": 1
+          },
+          {
+            "url": "/~a/shell@1/shared/resizer.js",
+            "startMs": 26,
+            "durationMs": 0.8
+          },
+          {
+            "url": "/~a/shell@1/v4/frame/pane-heads.js",
+            "startMs": 26,
+            "durationMs": 1
+          },
+          {
+            "url": "/~a/shell@1/v4/frame/theme/theme.css",
+            "startMs": 38,
+            "durationMs": 0.7
+          },
+          {
+            "url": "/~a/shell@1/shared/base.css",
+            "startMs": 38,
+            "durationMs": 0.8
+          },
+          {
+            "url": "/~a/shell@1/shared/shell-v2-chrome.css",
+            "startMs": 38,
+            "durationMs": 0.7
+          },
+          {
+            "url": "/~a/shell@1/shared/shell-v2-topbar.css",
+            "startMs": 38,
+            "durationMs": 0.9
+          },
+          {
+            "url": "/~a/shell@1/v4/frame/frame.css",
+            "startMs": 38,
+            "durationMs": 1
+          },
+          {
+            "url": "/~a/formular@1/index.css",
+            "startMs": 169,
+            "durationMs": 0.5
+          },
+          {
+            "url": "/~a/formular@1/index.js",
+            "startMs": 183,
+            "durationMs": 0.4
+          },
+          {
+            "url": "/~a/formular@2/index.css",
+            "startMs": 718,
+            "durationMs": 3.9
+          },
+          {
+            "url": "/~a/formular@2/index.js",
+            "startMs": 723,
+            "durationMs": 1.9
+          },
+          {
+            "url": "/~a/notizen@1/index.css",
+            "startMs": 1787,
+            "durationMs": 2.8
+          },
+          {
+            "url": "/~a/notizen@1/index.js",
+            "startMs": 1793,
+            "durationMs": 1.7
+          },
+          {
+            "url": "/~a/formular@3/index.css",
+            "startMs": 31947,
+            "durationMs": 4.1
+          },
+          {
+            "url": "/~a/formular@3/index.js",
+            "startMs": 31952,
+            "durationMs": 1.8
+          },
+          {
+            "url": "/~a/formular@4/index.css",
+            "startMs": 41182,
+            "durationMs": 2.1
+          },
+          {
+            "url": "/~a/formular@4/index.js",
+            "startMs": 41184,
+            "durationMs": 1.2
+          },
+          {
+            "url": "/~a/shell@2/v4/frame/index.js",
+            "startMs": 41968,
+            "durationMs": 1.4
+          },
+          {
+            "url": "/~a/shell@2/shared/window-manager.js",
+            "startMs": 41972,
+            "durationMs": 4.9
+          },
+          {
+            "url": "/~a/shell@2/shared/taskbar-pins.js",
+            "startMs": 41972,
+            "durationMs": 3.6
+          },
+          {
+            "url": "/~a/shell@2/v4/shell/kernel-adapter.js",
+            "startMs": 41972,
+            "durationMs": 4.1
+          },
+          {
+            "url": "/~a/shell@2/v4/shell/status-zone.js",
+            "startMs": 41972,
+            "durationMs": 4.7
+          },
+          {
+            "url": "/~a/shell@2/v4/shell/app-host.js",
+            "startMs": 41972,
+            "durationMs": 4.5
+          },
+          {
+            "url": "/~a/shell@2/v4/shell/sync-state.js",
+            "startMs": 41972,
+            "durationMs": 4.7
+          },
+          {
+            "url": "/~a/shell@2/v4/frame/taskbar.js",
+            "startMs": 41972,
+            "durationMs": 8.7
+          },
+          {
+            "url": "/~a/shell@2/v4/frame/topbar.js",
+            "startMs": 41972,
+            "durationMs": 8.8
+          },
+          {
+            "url": "/~a/shell@2/v4/frame/launcher.js",
+            "startMs": 41972,
+            "durationMs": 8.8
+          },
+          {
+            "url": "/~a/shell@2/v4/frame/glossary.js",
+            "startMs": 41972,
+            "durationMs": 8.9
+          },
+          {
+            "url": "/~a/shell@2/v4/shell/report.js",
+            "startMs": 41972,
+            "durationMs": 9.5
+          },
+          {
+            "url": "/~a/shell@2/v4/shell/column-resizers.js",
+            "startMs": 41977,
+            "durationMs": 5
+          },
+          {
+            "url": "/~a/shell@2/v4/frame/window-sheet.js",
+            "startMs": 41977,
+            "durationMs": 7.3
+          },
+          {
+            "url": "/~a/shell@2/shared/context-chat.js",
+            "startMs": 41977,
+            "durationMs": 8.4
+          },
+          {
+            "url": "/~a/shell@2/shared/window-layout-resolver.js",
+            "startMs": 41978,
+            "durationMs": 7.6
+          },
+          {
+            "url": "/~a/shell@2/shared/window-close-gate.js",
+            "startMs": 41978,
+            "durationMs": 7.1
+          },
+          {
+            "url": "/~a/shell@2/shared/topbar-apps.js",
+            "startMs": 41981,
+            "durationMs": 3.7
+          },
+          {
+            "url": "/~a/shell@2/shared/resizer.js",
+            "startMs": 41982,
+            "durationMs": 3.6
+          },
+          {
+            "url": "/~a/shell@2/shared/pane-grammar.js",
+            "startMs": 41982,
+            "durationMs": 5.2
+          },
+          {
+            "url": "/~a/shell@2/v4/frame/pane-heads.js",
+            "startMs": 41982,
+            "durationMs": 5.3
+          },
+          {
+            "url": "/~a/shell@2/v4/frame/theme/theme.css",
+            "startMs": 41990,
+            "durationMs": 1.9
+          },
+          {
+            "url": "/~a/shell@2/shared/base.css",
+            "startMs": 41990,
+            "durationMs": 2
+          },
+          {
+            "url": "/~a/shell@2/shared/shell-v2-chrome.css",
+            "startMs": 41990,
+            "durationMs": 2.4
+          },
+          {
+            "url": "/~a/shell@2/v4/frame/frame.css",
+            "startMs": 41990,
+            "durationMs": 2
+          },
+          {
+            "url": "/~a/shell@2/shared/shell-v2-topbar.css",
+            "startMs": 41990,
+            "durationMs": 2.6
+          }
+        ],
+        "requestsTotal": 102,
+        "byType": {
+          "document": 2,
+          "script": 76,
+          "stylesheet": 24
+        },
+        "unexpected": [],
+        "distinctUrls": [
+          "/?tab=A",
+          "/lab/loader.js",
+          "/lab/api-attrappe.js",
+          "/~a/shell@1/v4/frame/index.js",
+          "/~a/shell@1/shared/window-manager.js",
+          "/~a/shell@1/shared/taskbar-pins.js",
+          "/~a/shell@1/v4/shell/app-host.js",
+          "/~a/shell@1/v4/shell/kernel-adapter.js",
+          "/~a/shell@1/v4/shell/status-zone.js",
+          "/~a/shell@1/v4/shell/sync-state.js",
+          "/~a/shell@1/v4/frame/launcher.js",
+          "/~a/shell@1/v4/frame/taskbar.js",
+          "/~a/shell@1/v4/frame/topbar.js",
+          "/~a/shell@1/v4/shell/report.js",
+          "/~a/shell@1/v4/frame/glossary.js",
+          "/~a/shell@1/shared/window-layout-resolver.js",
+          "/~a/shell@1/shared/window-close-gate.js",
+          "/~a/shell@1/v4/shell/column-resizers.js",
+          "/~a/shell@1/v4/frame/window-sheet.js",
+          "/~a/shell@1/shared/context-chat.js",
+          "/~a/shell@1/shared/topbar-apps.js",
+          "/~a/shell@1/shared/resizer.js",
+          "/~a/shell@1/shared/pane-grammar.js",
+          "/~a/shell@1/v4/frame/pane-heads.js",
+          "/~a/shell@1/v4/frame/theme/theme.css",
+          "/~a/shell@1/shared/base.css",
+          "/~a/shell@1/shared/shell-v2-chrome.css",
+          "/~a/shell@1/shared/shell-v2-topbar.css",
+          "/~a/shell@1/v4/frame/frame.css",
+          "/?tab=B",
+          "/~a/formular@1/index.css",
+          "/~a/formular@1/index.js",
+          "/~a/formular@2/index.css",
+          "/~a/formular@2/index.js",
+          "/~a/notizen@1/index.css",
+          "/~a/notizen@1/index.js",
+          "/~a/formular@3/index.css",
+          "/~a/formular@3/index.js",
+          "/~a/formular@4/index.css",
+          "/~a/formular@4/index.js",
+          "/~a/shell@2/v4/frame/index.js",
+          "/~a/shell@2/shared/window-manager.js",
+          "/~a/shell@2/shared/taskbar-pins.js",
+          "/~a/shell@2/v4/shell/app-host.js",
+          "/~a/shell@2/v4/shell/kernel-adapter.js",
+          "/~a/shell@2/v4/shell/status-zone.js",
+          "/~a/shell@2/v4/shell/sync-state.js",
+          "/~a/shell@2/v4/frame/launcher.js",
+          "/~a/shell@2/v4/frame/taskbar.js",
+          "/~a/shell@2/v4/frame/topbar.js",
+          "/~a/shell@2/v4/shell/report.js",
+          "/~a/shell@2/v4/frame/glossary.js",
+          "/~a/shell@2/v4/shell/column-resizers.js",
+          "/~a/shell@2/v4/frame/window-sheet.js",
+          "/~a/shell@2/shared/context-chat.js",
+          "/~a/shell@2/shared/window-layout-resolver.js",
+          "/~a/shell@2/shared/window-close-gate.js",
+          "/~a/shell@2/shared/topbar-apps.js",
+          "/~a/shell@2/shared/resizer.js",
+          "/~a/shell@2/shared/pane-grammar.js",
+          "/~a/shell@2/v4/frame/pane-heads.js",
+          "/~a/shell@2/v4/frame/theme/theme.css",
+          "/~a/shell@2/shared/base.css",
+          "/~a/shell@2/shared/shell-v2-chrome.css",
+          "/~a/shell@2/v4/frame/frame.css",
+          "/~a/shell@2/shared/shell-v2-topbar.css"
+        ],
+        "mainFrameNavigations": {
+          "A": 1,
+          "B": 1
+        },
+        "sentinelsUnchanged": true,
+        "navEntries": {
+          "A": [
+            "navigate"
+          ],
+          "B": [
+            "navigate"
+          ]
+        },
+        "consoleErrors": []
+      },
+      "durationS": 0.026
+    }
+  },
+  "finishedAt": "2026-10-15T19:37:54.546Z"
+}

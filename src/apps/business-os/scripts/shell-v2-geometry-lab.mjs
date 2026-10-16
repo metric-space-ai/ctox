@@ -84,13 +84,17 @@ function labHtml(app, width = WIDTH) {
           <span class="shell-window-layout-glyph shell-window-layout-glyph--free" aria-hidden="true"></span>
         </button>
         <div class="shell-window-layout-menu" data-window-layout-menu role="menu" hidden>
-          <button type="button" data-window-layout-control="free" role="menuitem" aria-label="Freies Fenster"><span class="shell-window-layout-glyph shell-window-layout-glyph--free" aria-hidden="true"></span></button>
-          <button type="button" data-window-layout-control="maximize" role="menuitem" aria-label="Maximieren"><span class="shell-window-layout-glyph shell-window-layout-glyph--maximize" aria-hidden="true"></span></button>
-          <button type="button" data-window-layout-control="minimize" role="menuitem" aria-label="Minimieren"><span class="shell-window-layout-glyph shell-window-layout-glyph--minimize" aria-hidden="true"></span></button>
-          <button type="button" data-window-layout-control="left" role="menuitem" aria-label="Links anheften"><span class="shell-window-layout-glyph shell-window-layout-glyph--left" aria-hidden="true"></span></button>
-          <button type="button" data-window-layout-control="right" role="menuitem" aria-label="Rechts anheften"><span class="shell-window-layout-glyph shell-window-layout-glyph--right" aria-hidden="true"></span></button>
-          <button type="button" data-window-layout-control="top" role="menuitem" aria-label="Oben anheften"><span class="shell-window-layout-glyph shell-window-layout-glyph--top" aria-hidden="true"></span></button>
-          <button type="button" data-window-layout-control="bottom" role="menuitem" aria-label="Unten anheften"><span class="shell-window-layout-glyph shell-window-layout-glyph--bottom" aria-hidden="true"></span></button>
+          <button type="button" data-window-layout-control="top-left" role="menuitem" aria-label="Oben links anordnen" style="grid-row:1;grid-column:1"><span class="shell-window-layout-glyph shell-window-layout-glyph--top-left" aria-hidden="true"></span></button>
+          <button type="button" data-window-layout-control="top" role="menuitem" aria-label="Obere Hälfte" style="grid-row:1;grid-column:2"><span class="shell-window-layout-glyph shell-window-layout-glyph--top" aria-hidden="true"></span></button>
+          <button type="button" data-window-layout-control="top-right" role="menuitem" aria-label="Oben rechts anordnen" style="grid-row:1;grid-column:3"><span class="shell-window-layout-glyph shell-window-layout-glyph--top-right" aria-hidden="true"></span></button>
+          <button type="button" data-window-layout-control="left" role="menuitem" aria-label="Linke Hälfte" style="grid-row:2;grid-column:1"><span class="shell-window-layout-glyph shell-window-layout-glyph--left" aria-hidden="true"></span></button>
+          <button type="button" data-window-layout-control="maximize" role="menuitem" aria-label="Maximieren" style="grid-row:2;grid-column:2"><span class="shell-window-layout-glyph shell-window-layout-glyph--maximize" aria-hidden="true"></span></button>
+          <button type="button" data-window-layout-control="right" role="menuitem" aria-label="Rechte Hälfte" style="grid-row:2;grid-column:3"><span class="shell-window-layout-glyph shell-window-layout-glyph--right" aria-hidden="true"></span></button>
+          <button type="button" data-window-layout-control="bottom-left" role="menuitem" aria-label="Unten links anordnen" style="grid-row:3;grid-column:1"><span class="shell-window-layout-glyph shell-window-layout-glyph--bottom-left" aria-hidden="true"></span></button>
+          <button type="button" data-window-layout-control="bottom" role="menuitem" aria-label="Untere Hälfte" style="grid-row:3;grid-column:2"><span class="shell-window-layout-glyph shell-window-layout-glyph--bottom" aria-hidden="true"></span></button>
+          <button type="button" data-window-layout-control="bottom-right" role="menuitem" aria-label="Unten rechts anordnen" style="grid-row:3;grid-column:3"><span class="shell-window-layout-glyph shell-window-layout-glyph--bottom-right" aria-hidden="true"></span></button>
+          <button type="button" class="is-wide" data-window-layout-control="free" role="menuitem" aria-label="Freie Größe" style="grid-row:4;grid-column:1 / -1"><span class="shell-window-layout-glyph shell-window-layout-glyph--free" aria-hidden="true"></span><span class="shell-window-layout-label">Freie Größe</span></button>
+          <button type="button" class="is-wide" data-window-layout-control="minimize" role="menuitem" aria-label="Minimieren" style="grid-row:5;grid-column:1 / -1"><span class="shell-window-layout-glyph shell-window-layout-glyph--minimize" aria-hidden="true"></span><span class="shell-window-layout-label">Minimieren</span></button>
         </div>
       </div>
       <button class="shell-window-control shell-window-control--close" aria-label="Schliessen">×</button>

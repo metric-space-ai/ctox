@@ -54,9 +54,9 @@ export function computeTotalMatchScoreFromItems(items) {
 
 export async function recomputeAllMatchScoresOnce() {
   const db = await getDatabase();
-  if (!db?.matches) throw new Error('matching results collection not available');
+  if (!db?.matches) throw new Error('matching results collection missing');
 
-  const docs = await db.matches.find({ selector: {} }).exec();
+  const docs = await db.matches.all({ selector: {} });
   let updated = 0;
   const nowIso = new Date().toISOString();
 
@@ -82,10 +82,10 @@ export async function computeRequirementMatch({
   if (!requirementId || !objectId) throw new Error('computeRequirementMatch: requirementId and objectId are required');
 
   const db = await getDatabase();
-  if (!db?.requirements || !db?.objects) throw new Error('matching database is not available');
+  if (!db?.requirements || !db?.objects) throw new Error('matching collections missing');
 
-  const requirementRx = await db.requirements.findOne({ selector: { id: requirementId } }).exec();
-  const objectRx = await db.objects.findOne({ selector: { id: objectId } }).exec();
+  const requirementRx = await db.requirements.one({ selector: { id: requirementId } });
+  const objectRx = await db.objects.one({ selector: { id: objectId } });
   if (!requirementRx) throw new Error(`Requirement not found: ${requirementId}`);
   if (!objectRx) throw new Error(`Object not found: ${objectId}`);
 
@@ -139,7 +139,7 @@ export async function computeRequirementMatch({
   let persisted = false;
 
   if (persist) {
-    if (!db.matches) throw new Error('matching results collection not available');
+    if (!db.matches) throw new Error('matching results collection missing');
     await db.matches.atomicUpsert({
       id: matchId,
       definitionId,
@@ -216,7 +216,7 @@ export async function generateSyntheticRequirementFromCv() {
 async function loadRequirementMatchScores(db, requirementId) {
   const byObject = new Map();
   if (!db?.matches) return byObject;
-  const docs = await db.matches.find({ selector: { requirementId } }).exec();
+  const docs = await db.matches.all({ selector: { requirementId } });
   for (const docRx of docs) {
     const doc = docRx.toJSON();
     if (doc.removed) continue;
@@ -230,7 +230,7 @@ async function loadObjectsByIds(db, ids) {
   const byId = new Map();
   if (!db?.objects) return byId;
   for (const id of ids) {
-    const rx = await db.objects.findOne({ selector: { id } }).exec();
+    const rx = await db.objects.one({ selector: { id } });
     if (rx) byId.set(id, rx.toJSON());
   }
   return byId;
@@ -303,7 +303,7 @@ export async function shortlistRequirementsForObject({
   const db = await getDatabase();
   const scoreByRequirement = new Map();
   if (db?.matches) {
-    const docs = await db.matches.find({ selector: { objectId } }).exec();
+    const docs = await db.matches.all({ selector: { objectId } });
     for (const docRx of docs) {
       const doc = docRx.toJSON();
       if (doc.removed) continue;
@@ -352,7 +352,7 @@ export const computeRequirementMatchTool = tool({
 
 async function loadNewestRequirementSource(db, requirementId) {
   if (!db?.requirementSources) return null;
-  const docs = await db.requirementSources.find({ selector: { requirementId } }).exec();
+  const docs = await db.requirementSources.all({ selector: { requirementId } });
   const rows = docs.map((doc) => doc.toJSON());
   rows.sort((a, b) => String(b.publishAt || b.updatedAt || b.createdAt || '').localeCompare(String(a.publishAt || a.updatedAt || a.createdAt || '')));
   return rows[0] || null;
@@ -467,7 +467,7 @@ Core scoring principles (IMPORTANT):
 - Do NOT harshly penalize missing professional years if the role is junior/entry: keep matchScore in a fair partial range (e.g., 0.45–0.70) depending on relevance and recency.
 
 2) Abgeschlossenes Studium vs. kurz vor Abschluss (NEAR-COMPLETION RULE):
-- If a base requirement is "abgeschlossenes Studium" (or equivalent) and the CV clearly indicates the candidate is close to completion (e.g., "in den letzten Zügen", "Abschluss in MM/YYYY", "Masterarbeit/Bachelorarbeit läuft", "alle Module abgeschlossen", "Graduation expected"):
+- If a base requirement is "abgeschlossenes Studium" (or equivalent) and the CV clearly indicates the candidate is close to completion (e.g., "in den letzten Zügen", "Abschluss in MM/YYYY", "Masterarbeit/Bachelorarbeit l\u00e4uft", "alle Module abgeschlossen", "Graduation expected"):
   - Treat it as largely fulfilled: matchScore should be 0.80–0.90 by default.
   - Use "partial" (not "none") unless the job explicitly requires the degree already in hand by start date AND the CV timing clearly conflicts.
 - If the job requires degree "zwingend bei Eintritt/Start" or "Urkunde erforderlich" and the candidate finishes later than the stated start:
@@ -664,6 +664,6 @@ function matchLevelSortKey(level) {
 async function updateDoc(docRx, patch) {
   if (typeof docRx.atomicPatch === 'function') return docRx.atomicPatch(patch);
   if (typeof docRx.atomicUpdate === 'function') return docRx.atomicUpdate((prev) => ({ ...prev, ...patch }));
-  if (typeof docRx.incrementalModify === 'function') return docRx.incrementalModify((prev) => ({ ...prev, ...patch }));
+  if (typeof docRx.modify === 'function') return docRx.modify((prev) => ({ ...prev, ...patch }));
   throw new Error('No supported update method on matching result docs');
 }

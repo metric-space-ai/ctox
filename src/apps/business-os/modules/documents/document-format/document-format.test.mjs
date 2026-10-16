@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import JSZip from '../../../vendor/jszip/jszip.mjs';
+import JSZip from '../../../customer-modules/outbound-lead-generation/vendor/jszip/jszip.mjs';
 import {
   createBlankDocx,
   importDocx,
   materializeDocxMergeFields,
   materializeDocxTextReplacements,
   mergeDocxFields,
-} from '../../../vendor/document-format.mjs';
+} from '../vendor/document-format.mjs';
 
 test('creates a real empty DOCX with one editable paragraph', async () => {
   const bytes = await createBlankDocx();

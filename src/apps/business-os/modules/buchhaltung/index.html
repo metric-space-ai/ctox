@@ -4,7 +4,6 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">Finanzwesen</span>
           <h2 class="ctox-pane-title">Belege &amp; Buchungen</h2>
         </div>
         <div class="ctox-pane-actions">
@@ -53,7 +52,6 @@
     <div class="ctox-pane-body ctox-well">
       <div class="ctox-list" data-booking-list></div>
     </div>
-    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
   </aside>
   <button class="fibu-col-resizer ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--fibu-left-width" data-resizer-min="240" data-resizer-max="450" title="Spaltenbreite anpassen" aria-label="Linke Spaltenbreite anpassen"></button>
 
@@ -63,11 +61,11 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-active-category>KONTENRAHMEN</span>
+          <span class="ctox-pane-kicker" data-active-category></span>
           <h2 class="ctox-pane-title" data-active-title>SKR03 Kontenrahmen-Explorer</h2>
         </div>
         <div class="ctox-pane-actions" data-center-actions>
-          <button type="button" class="ctox-pane-icon fibu-toggle-evidence" data-toggle-evidence title="OCR-Evidenz einblenden" aria-label="OCR-Evidenz einblenden" aria-pressed="false" hidden>
+          <button type="button" class="ctox-pane-icon fibu-toggle-evidence" data-toggle-evidence title="Evidenz einblenden" aria-label="Evidenz einblenden" aria-pressed="false" hidden>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
           </button>
         </div>
@@ -76,13 +74,12 @@
         <select class="ctox-select" data-workbench-view aria-label="Arbeitsbereich">
           <option value="skr">Kontenrahmen</option>
           <option value="journal">Journal &amp; Hauptbuch</option>
-          <option value="receipts">Belege &amp; OCR</option>
+          <option value="receipts">Belege</option>
           <option value="banking">Bankabgleich</option>
           <option value="travel">Reisekosten</option>
           <option value="mileage">Fahrtenbuch</option>
           <option value="reports">Bilanz / GuV / UStVA</option>
           <option value="assets">Anlagenspiegel</option>
-          <option value="tests">System &amp; QS</option>
         </select>
         <select id="skr-select" class="ctox-select" aria-label="Kontenrahmen">
           <option value="SKR03">SKR 03</option>
@@ -105,7 +102,7 @@
             <span>Kontenrahmen neu initialisieren</span>
           </button>
         </div>
-        <div class="fibu-scrollable-container ctox-table-wrap">
+        <div class="fibu-scrollable-container ctox-table-wrap" data-scroll-x>
           <table class="ctox-table">
             <thead>
               <tr>
@@ -136,7 +133,7 @@
             <span>Neue manuelle Buchung</span>
           </button>
         </div>
-        <div class="fibu-scrollable-container ctox-table-wrap">
+        <div class="fibu-scrollable-container ctox-table-wrap" data-scroll-x>
           <table class="ctox-table">
             <thead>
               <tr>
@@ -156,7 +153,7 @@
         </div>
       </div>
 
-      <!-- 3. Receipts & OCR Panel -->
+      <!-- 3. Receipts Panel -->
       <div class="fibu-view-panel" data-panel="receipts" hidden>
         <div class="ctox-toolbar fibu-panel-toolbar">
           <div class="fibu-file-dropzone" data-file-dropzone>
@@ -165,7 +162,7 @@
             <input type="file" id="fibu-file-input" style="display:none;" accept="application/pdf,image/*" multiple />
           </div>
         </div>
-        <div class="fibu-scrollable-container ctox-table-wrap">
+        <div class="fibu-scrollable-container ctox-table-wrap" data-scroll-x>
           <table class="ctox-table">
             <thead>
               <tr>
@@ -202,7 +199,7 @@
             </button>
           </div>
         </div>
-        <div class="fibu-scrollable-container ctox-table-wrap">
+        <div class="fibu-scrollable-container ctox-table-wrap" data-scroll-x>
           <table class="ctox-table">
             <thead>
               <tr>
@@ -229,7 +226,7 @@
             <button type="button" class="ctox-pane-tab" role="tab" data-report-tab="bilanz" aria-selected="true">HGB-Bilanz</button>
             <button type="button" class="ctox-pane-tab" role="tab" data-report-tab="guv" aria-selected="false">HGB-GuV</button>
             <button type="button" class="ctox-pane-tab" role="tab" data-report-tab="ustva" aria-selected="false">Umsatzsteuer-Voranmeldung</button>
-            <button type="button" class="ctox-pane-tab" role="tab" data-report-tab="datev" aria-selected="false">DATEV EXTF-Export</button>
+            <button type="button" class="ctox-pane-tab" role="tab" data-report-tab="datev" aria-selected="false">DATEV-Export</button>
           </div>
         </div>
 
@@ -237,8 +234,7 @@
           <!-- Bilanz View -->
           <div class="fibu-report-subpanel" data-report-subpanel="bilanz">
             <div class="fibu-report-header">
-              <h3 class="ctox-pane-title">Erstellung der Bilanz nach § 266 HGB</h3>
-              <span class="ctox-badge" data-report-date-badge>Aktiv</span>
+              <h3 class="ctox-pane-title" title="nach § 266 HGB">Bilanz</h3>
             </div>
             <div class="fibu-bilanz-tree-wrapper">
               <div class="fibu-bilanz-column">
@@ -260,9 +256,9 @@
           <!-- GuV View -->
           <div class="fibu-report-subpanel" data-report-subpanel="guv" hidden>
             <div class="fibu-report-header">
-              <h3 class="ctox-pane-title">Gewinn- und Verlustrechnung (Gesamtkostenverfahren § 275 HGB)</h3>
+              <h3 class="ctox-pane-title" title="Gesamtkostenverfahren nach § 275 HGB">Gewinn- und Verlustrechnung</h3>
             </div>
-            <div class="ctox-callout fibu-guv-wrapper">
+            <div class="ctox-card fibu-guv-wrapper">
               <div class="fibu-tree" data-guv-tree>
                 <!-- Dynamic GuV Tree -->
               </div>
@@ -272,31 +268,31 @@
           <!-- UStVA View -->
           <div class="fibu-report-subpanel" data-report-subpanel="ustva" hidden>
             <div class="fibu-report-header">
-              <h3 class="ctox-pane-title">Umsatzsteuer-Voranmeldung (UStVA / ELSTER)</h3>
+              <h3 class="ctox-pane-title">Umsatzsteuer-Voranmeldung</h3>
             </div>
             <div class="fibu-ustva-container">
               <div class="fibu-ustva-grid">
-                <div class="ctox-callout fibu-ustva-card">
+                <div class="ctox-card fibu-ustva-card">
                   <div class="ustva-card-label">Lieferungen und Leistungen (Umsätze) 19% [Kennziffer 81]</div>
                   <div class="ustva-card-value" data-ustva-field-81>0,00 €</div>
                 </div>
-                <div class="ctox-callout fibu-ustva-card">
+                <div class="ctox-card fibu-ustva-card">
                   <div class="ustva-card-label">Umsatzsteuer auf steuerpflichtige Umsätze 19%</div>
                   <div class="ustva-card-value" data-ustva-tax-81>0,00 €</div>
                 </div>
-                <div class="ctox-callout fibu-ustva-card">
+                <div class="ctox-card fibu-ustva-card">
                   <div class="ustva-card-label">Lieferungen und Leistungen (Umsätze) 7% [Kennziffer 86]</div>
                   <div class="ustva-card-value" data-ustva-field-86>0,00 €</div>
                 </div>
-                <div class="ctox-callout fibu-ustva-card">
+                <div class="ctox-card fibu-ustva-card">
                   <div class="ustva-card-label">Umsatzsteuer auf steuerpflichtige Umsätze 7%</div>
                   <div class="ustva-card-value" data-ustva-tax-86>0,00 €</div>
                 </div>
-                <div class="ctox-callout fibu-ustva-card highlighted">
+                <div class="ctox-card fibu-ustva-card highlighted">
                   <div class="ustva-card-label">Abziehbare Vorsteuer (Einkäufe) [Kennziffer 66]</div>
                   <div class="ustva-card-value" data-ustva-field-66>0,00 €</div>
                 </div>
-                <div class="ctox-callout fibu-ustva-card total">
+                <div class="ctox-card fibu-ustva-card total">
                   <div class="ustva-card-label">Umsatzsteuer-Zahllast / Erstattung [Zahllast]</div>
                   <div class="ustva-card-value" data-ustva-zahllast>0,00 €</div>
                 </div>
@@ -307,23 +303,22 @@
           <!-- DATEV View -->
           <div class="fibu-report-subpanel" data-report-subpanel="datev" hidden>
             <div class="fibu-report-header">
-              <h3 class="ctox-pane-title">DATEV EXTF CSV-Buchungsstapel Export</h3>
+              <h3 class="ctox-pane-title">DATEV-Export</h3>
             </div>
-            <div class="ctox-callout fibu-datev-exporter-box">
-              <p>Generieren Sie eine offizielle DATEV-kompatible Export-CSV für Ihren Steuerberater (Format-Version v7.0/8.0). Der Export enthält alle festgeschriebenen Buchungen.</p>
+            <div class="fibu-datev-exporter-box" title="DATEV-Format v7.0/8.0, enthält alle festgeschriebenen Buchungen">
               <div class="fibu-form-row inline">
                 <div class="fibu-form-group">
-                  <label class="ctox-field-label" for="datev-start">Startdatum:</label>
+                  <label class="ctox-field-label" for="datev-start">Von</label>
                   <input type="date" id="datev-start" class="ctox-input" value="2026-01-01" />
                 </div>
                 <div class="fibu-form-group">
-                  <label class="ctox-field-label" for="datev-end">Enddatum:</label>
+                  <label class="ctox-field-label" for="datev-end">Bis</label>
                   <input type="date" id="datev-end" class="ctox-input" value="2026-12-31" />
                 </div>
               </div>
               <button type="button" class="ctox-button is-primary" data-action="export-datev">
                 <span class="fibu-action-icon" data-icon="CSV" aria-hidden="true"></span>
-                <span>DATEV CSV-Stapel herunterladen (EXTF)</span>
+                <span>Exportieren</span>
               </button>
             </div>
           </div>
@@ -342,7 +337,7 @@
             <span>AfA-Abschreibungslauf triggern</span>
           </button>
         </div>
-        <div class="fibu-scrollable-container ctox-table-wrap">
+        <div class="fibu-scrollable-container ctox-table-wrap" data-scroll-x>
           <table class="ctox-table">
             <thead>
               <tr>
@@ -372,7 +367,7 @@
             <span>Neue Dienstreise erfassen</span>
           </button>
         </div>
-        <div class="fibu-scrollable-container ctox-table-wrap">
+        <div class="fibu-scrollable-container ctox-table-wrap" data-scroll-x>
           <table class="ctox-table">
             <thead>
               <tr>
@@ -405,7 +400,7 @@
             <span>Privatanteil buchen</span>
           </button>
         </div>
-        <div class="fibu-scrollable-container ctox-table-wrap">
+        <div class="fibu-scrollable-container ctox-table-wrap" data-scroll-x>
           <table class="ctox-table">
             <thead>
               <tr>
@@ -426,48 +421,6 @@
         </div>
       </div>
 
-      <!-- 7. E2E UI Tests Panel -->
-      <div class="fibu-view-panel" data-panel="tests" hidden>
-        <div class="ctox-toolbar fibu-panel-toolbar">
-          <div class="fibu-tests-intro">
-            <p>Klick-Simulations-Tests im echten DOM — die aktiven Schritte werden visuell hervorgehoben.</p>
-          </div>
-          <button type="button" class="ctox-button is-primary" data-action="run-all-ui-tests">
-            <span class="fibu-action-icon" data-icon="RUN" aria-hidden="true"></span>
-            <span>Alle UI-Tests ausführen</span>
-          </button>
-        </div>
-        <div class="fibu-scrollable-container fibu-tests-body">
-          <div class="ctox-callout e2e-summary-bar">
-            <div><strong id="ui-test-total">0</strong> Tests spezifiziert</div>
-            <div class="fibu-text-debit"><strong id="ui-test-passed">0</strong> Bestanden</div>
-            <div class="fibu-text-credit"><strong id="ui-test-failed">0</strong> Fehlgeschlagen</div>
-            <div style="display:none;" class="fibu-text-warning" id="ui-test-running-indicator">⏳ Test läuft... <span id="ui-test-active-step"></span></div>
-          </div>
-          <table class="ctox-table">
-            <thead>
-              <tr>
-                <th>Test-ID</th>
-                <th>Name / User Story</th>
-                <th>Ablauf-Schritte</th>
-                <th class="is-center">Status</th>
-                <th class="is-center">Aktionen</th>
-              </tr>
-            </thead>
-            <tbody data-ui-tests-list>
-              <!-- Dynamic E2E Test Cases -->
-            </tbody>
-          </table>
-
-          <!-- Interaktives Log-Panel -->
-          <div class="fibu-e2e-log-section">
-            <h4 class="ctox-field-label">Ausführungsprotokoll (E2E Live Log)</h4>
-            <div id="e2e-live-log" class="fibu-e2e-terminal">
-              <div style="color:var(--muted)">⏳ Bereit für Testausführung. Wählen Sie einen Test oder klicken Sie auf "Alle UI-Tests ausführen".</div>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
 
     <!-- Elegant Slide-up Bottom Drawer (For details and edits, maintaining uncluttered center view) -->
@@ -484,57 +437,26 @@
   </section>
   <button class="fibu-col-resizer ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--fibu-right-width" data-resizer-min="280" data-resizer-max="500" title="Spaltenbreite anpassen" aria-label="Rechte Spaltenbreite anpassen"></button>
 
-  <!-- Third: justified OCR/agent evidence, selection-driven and re-collapsible. -->
-  <aside class="ctox-pane fibu-right" aria-label="OCR und Agenten-Evidenz">
+  <!-- Third: evidence, selection-driven and re-collapsible. -->
+  <aside class="ctox-pane fibu-right" aria-label="Evidenz">
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker">Prüfspur</span>
-          <h2 class="ctox-pane-title">OCR-Evidenz</h2>
+          <h2 class="ctox-pane-title">Evidenz</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button type="button" class="ctox-pane-icon" data-collapse-evidence aria-label="OCR-Evidenz ausblenden" title="OCR-Evidenz ausblenden"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/><path d="m11 9-3 3 3 3"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-collapse-evidence aria-label="Evidenz ausblenden" title="Evidenz ausblenden"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/><path d="m11 9-3 3 3 3"/></svg></button>
         </div>
       </div>
     </header>
-    <nav class="ctox-pane-band fibu-evidence-tabs" aria-label="Evidenzansicht">
-      <div class="ctox-pane-tabs" role="tablist">
-        <button type="button" class="ctox-pane-tab" role="tab" data-right-tab="ocr" aria-selected="true">Dokument &amp; Extraktion</button>
-        <button type="button" class="ctox-pane-tab" role="tab" data-right-tab="agent" aria-selected="false">Agentenprotokoll</button>
-      </div>
-    </nav>
-
     <div class="ctox-pane-body">
-      <!-- OCR Document Preview -->
+      <!-- Evidence -->
       <div class="fibu-right-subpanel" data-right-subpanel="ocr">
         <div class="fibu-document-preview-container ctox-pane-scroll" data-ocr-preview-container>
           <div class="ctox-empty">
             <span class="empty-icon">📄</span>
-            <p>Wählen Sie eine Banktransaktion oder einen Beleg aus, um die PDF-Vorschau und OCR-Daten anzuzeigen.</p>
-          </div>
-        </div>
-      </div>
-
-      <!-- AI Agent Companion Chat -->
-      <div class="fibu-right-subpanel" data-right-subpanel="agent" hidden>
-        <div class="fibu-agent-chat-container">
-          <div class="fibu-agent-chat-messages" data-chat-messages>
-            <div class="chat-message system">
-              <span class="ctox-avatar">AI</span>
-              <div class="message-bubble">
-                Hallo! Ich bin dein CTOX Fibu-Agent. Ich unterstütze dich bei:
-                <ul>
-                  <li>OCR-Belegimport & Kontierungsvorschlägen</li>
-                  <li>camt.053/MT940 Kontoauszugs-Zuordnung</li>
-                  <li>GoBD-konformen Stornos & Abschluss-Prüfungen</li>
-                </ul>
-                Frag mich z.B.: "Buche die Hetzner-Rechnung" oder "Gleicht die Banktransaktionen ab".
-              </div>
-            </div>
-          </div>
-          <div class="fibu-agent-chat-input-wrap">
-            <input type="text" class="ctox-input" data-chat-input placeholder="Fibu-Agent fragen..." />
-            <button type="button" class="ctox-pane-icon" data-action="send-chat-msg" aria-label="Nachricht senden" title="Nachricht senden"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12 20 4l-4 16-4.5-6.5L4 12ZM11.5 13.5 20 4"/></svg></button>
+            <p>Beleg oder Buchung wählen.</p>
           </div>
         </div>
       </div>

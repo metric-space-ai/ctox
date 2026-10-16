@@ -60,7 +60,6 @@
     <div class="ctox-pane-body ctox-well">
       <div class="ctox-list shiftflow-shift-list is-cards" role="listbox" data-shift-list></div>
     </div>
-    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
   </aside>
 
   <button class="ctox-column-resizer" type="button" data-t-aria="adjustLeftWidth" aria-label="Linke Spaltenbreite anpassen" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="240" data-resizer-max="440"></button>
@@ -98,7 +97,6 @@
           </div>
         </span>
         <span class="ctox-action-strip__group">
-          <span class="shiftflow-publish-status" id="publishScheduleStatus" aria-live="polite"></span>
           <button type="button" class="ctox-run-control" id="btnPublishSchedule" data-t="publishSchedule">Dienstplan veröffentlichen</button>
         </span>
       </header>
@@ -132,7 +130,7 @@
         <span class="ctox-action-strip__group"><button type="button" class="ctox-button" id="btnCheckConflicts" data-t="aiCheckConflicts">Konflikte & Ruhezeiten prüfen</button></span>
       </header>
       <div class="ctox-pane-scroll shiftflow-conflicts-alert-container os-scrollbar">
-        <div class="shiftflow-conflicts-list" id="conflictsList"><div class="ctox-empty" data-t="noConflictsDetected">Keine aktiven Konflikte erkannt. Der Dienstplan erfüllt alle Vorgaben.</div></div>
+        <div class="shiftflow-conflicts-list" id="conflictsList"></div>
       </div>
     </div>
 

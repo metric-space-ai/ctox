@@ -1,45 +1,51 @@
-const MATCHING_BUILD = '20260831-shell-v2-single-view-toggle';
+// matching – App-API 4.0 (V4-PORT.md). Einstieg mount(root, api, { restored }) → { unmount, snapshot }.
+import { setMatchingDataApi, disposeMatchingData } from './ui/businessOsDataSource.js';
+import { bindMatchingApi, disposeMatchingRuntime, onMatchingUnmount, snapshotMatchingStore } from './ui/v4Runtime.js';
+import { initBusinessOsControls } from './ui/businessOsControls.js';
+import { mountMatchingDashboard, snapshotMatchingDrafts } from './ui/index.js';
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
 
-export async function mount(ctx) {
-  await ensureStyles();
-  const dataSource = await import('./ui/businessOsDataSource.js');
-  dataSource.setBusinessOsDatabaseContext?.(ctx);
-  ctx.host.innerHTML = await loadModuleMarkup();
-  ctx.host.dataset.matchingModule = 'native';
-  wireViewToggles(ctx.host);
-  ctx.left?.replaceChildren?.();
-  ctx.right?.replaceChildren?.();
+const MATCHING_COLLECTIONS = ['matching_requirements', 'matching_objects', 'matching_results'];
 
-  let disposed = false;
-  const dashboardStartup = (async () => {
-    if (ctx.matchingDefinition || globalThis.CTOX_MATCHING_DEFINITION) {
-      const definitionModule = await import('./ui/matchingDefinition.js');
-      if (disposed) return;
-      definitionModule.setActiveMatchingDefinition?.(ctx.matchingDefinition || globalThis.CTOX_MATCHING_DEFINITION);
-    }
-    const controls = await import(`./ui/businessOsControls.js?v=${MATCHING_BUILD}`);
-    controls.setBusinessOsRuntimeContext?.(ctx);
-    if (disposed) return;
-    const matchingUi = await import(`./ui/index.js?v=${MATCHING_BUILD}`);
-    if (disposed) return;
-    await matchingUi.mountMatchingDashboard?.(ctx);
-  })().catch((error) => {
-    if (disposed) return;
-    console.error('[matching] dashboard startup failed:', error);
-    ctx.notifications?.show?.({
-      type: 'error',
-      title: 'Matching konnte nicht geladen werden',
-      message: String(error?.message || error),
-      time: 9000
-    });
-  });
+export async function mount(root, api, { restored } = {}) {
+  if (!root.dataset.app) root.dataset.app = 'matching';
+  bindMatchingApi(api, { restored });
+  api.shell.setTitle('Matching');
+  api.setVisible(MATCHING_COLLECTIONS);
+  setMatchingDataApi(api);
+  onMatchingUnmount(disposeMatchingData);
 
-  return () => {
-    disposed = true;
-    try { window.teardownRxdbLiveUiSync?.(); } catch {}
-    dashboardStartup.catch(() => {});
-    ctx.host.replaceChildren();
-    delete ctx.host.dataset.matchingModule;
+  root.innerHTML = await loadModuleMarkup();
+  root.dataset.matchingModule = 'native';
+  wireViewToggles(root, restored);
+  autoWirePaneGrammar(root);
+
+  try {
+    initBusinessOsControls({ host: root });
+    await mountMatchingDashboard({ host: root, restored });
+  } catch (error) {
+    console.error('[matching] dashboard startup failed:', error, error?.stack);
+    api.status.report({ level: 'error', code: 'matching.mount', text: `Matching: ${String(error?.message || error)}` });
+  }
+
+  let unmounted = false;
+  return {
+    unmount() {
+      if (unmounted) return;
+      unmounted = true;
+      disposeMatchingRuntime();
+      root.replaceChildren();
+      delete root.dataset.matchingModule;
+    },
+    snapshot() {
+      return {
+        v: 1,
+        store: snapshotMatchingStore(),
+        views: Object.fromEntries([...root.querySelectorAll('[data-matching-view-toggle]')]
+          .map((button, index) => [String(index), button.dataset.matchingView === 'list' ? 'list' : 'cards'])),
+        drafts: snapshotMatchingDrafts(),
+      };
+    },
   };
 }
 
@@ -59,8 +65,9 @@ const VIEW_TOGGLE_LABELS = {
   list: { label: 'Als Karten anzeigen', title: 'Als Karten anzeigen' }
 };
 
-function wireViewToggles(host) {
-  for (const button of host.querySelectorAll('[data-matching-view-toggle]')) {
+function wireViewToggles(host, restored) {
+  const savedViews = restored && typeof restored === 'object' && restored.views && typeof restored.views === 'object' ? restored.views : {};
+  [...host.querySelectorAll('[data-matching-view-toggle]')].forEach((button, index) => {
     const pane = button.closest('.ctox-pane');
     const apply = (view) => {
       const next = view === 'list' ? 'list' : 'cards';
@@ -74,7 +81,7 @@ function wireViewToggles(host) {
       button.title = copy.title;
       button.removeAttribute('aria-pressed');
     };
-    apply(pane?.dataset.pgDefaultView || button.dataset.matchingView || 'cards');
+    apply(savedViews[String(index)] || pane?.dataset.pgDefaultView || button.dataset.matchingView || 'cards');
     button.addEventListener('click', () => {
       apply(button.dataset.matchingView === 'list' ? 'cards' : 'list');
       if (!pane) return;
@@ -85,26 +92,13 @@ function wireViewToggles(host) {
         pane.dispatchEvent(new CustomEvent('ctox-pane-grammar-change', { detail, bubbles: true }));
       } catch {}
     });
-  }
+  });
 }
 
-async function ensureStyles() {
-  const cssVersion = String(import.meta.url).split('?v=')[1] || MATCHING_BUILD;
-  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
-  let link = document.querySelector('link[data-matching-style]');
-  if (!link) {
-    link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.dataset.matchingStyle = 'true';
-    document.head.append(link);
-  }
-  if (link.getAttribute('href') !== cssHref) link.href = cssHref;
-}
-
+// Markup relativ zur App, ohne Cache-Buster (der Service Worker liefert versioniert, §16.15).
+// CSS lädt die Shell aus dem Manifest.
 async function loadModuleMarkup() {
-  const markupVersion = String(import.meta.url).split('?v=')[1] || MATCHING_BUILD;
-  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
-  const html = await fetch(markupHref).then((res) => res.text());
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
   return doc.body.innerHTML;

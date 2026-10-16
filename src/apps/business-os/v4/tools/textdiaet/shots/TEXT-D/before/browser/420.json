@@ -1,0 +1,118 @@
+{
+ "app": "browser",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Browser",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neue Sitzung",
+    "button:Sitzungen importieren",
+    "button:Sitzungen exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Alle (6)",
+    "nav:Aktiv (1)",
+    "nav:Beendet (5)",
+    "nav:Scraping",
+    "row:○ Lieferantenbewertung 2026 Ru",
+    "row:👤 Onboarding neue Mitarbeiten",
+    "row:○ Rahmenvertrag über Wartung u",
+    "row:○ Kundentermin Vorbereitung Ru",
+    "row:○ Budgetplanung Vertrieb Süd R",
+    "row:○ Quartalsbericht Q3 2026 Ruhe",
+    "button:Sitzungsliste ein-/ausblenden",
+    "button:Präzise Eingabe",
+    "button:Erweiterte Aktionen",
+    "nav:Ansicht",
+    "nav:Skript",
+    "button:Tab schließen",
+    "button:Zurueck",
+    "button:Vor",
+    "button:Neu laden",
+    "button:Adresse löschen",
+    "button:Adresse öffnen",
+    "row:Kundentermin Vorbereitung ×"
+   ],
+   "shot": "browser/420-01-open.png"
+  },
+  {
+   "step": "nav Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "browser/420-02-nav_Alle_6_.png"
+  },
+  {
+   "step": "nav Aktiv (1)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "browser/420-03-nav_Aktiv_1_.png"
+  },
+  {
+   "step": "nav Beendet (5)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "browser/420-04-nav_Beendet_5_.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 740,
+   "shot": "browser/420-05-suche_ohne_Treffer.png",
+   "textAfter": 184
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "browser/420-06-suche_geleert.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "browser",
+  "Browser"
+ ]
+}

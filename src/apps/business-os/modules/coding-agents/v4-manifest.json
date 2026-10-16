@@ -1,0 +1,21 @@
+{
+  "_basis": {
+    "foreign_collections": "modules/coding-agents/V4-PORT.md OFFEN 1",
+    "multi_instance": "modules/coding-agents/V4-PORT.md OFFEN 2; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "foreign_collections_coding_turns": "Strang AGENT: Übersicht der Agent-Läufe liest die Plattform-Collection coding_turns (§16.44, Stub-Pin 51b1e33, Typ CodingTurn)"
+  },
+  "_format": "ctox-shell-v4-app-declaration-1",
+  "_note": "Deklaration für gen-manifest.mjs (Strang MAN): nur Angaben, die sich nicht aus dem Code ableiten lassen. _basis = Fundstelle je Feld.",
+  "foreign_collections": {
+    "business_apps": [
+      "read"
+    ],
+    "business_commands": [
+      "read"
+    ],
+    "coding_turns": [
+      "read"
+    ]
+  },
+  "multi_instance": false
+}

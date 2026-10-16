@@ -1,174 +1,175 @@
-import { loadModuleMessages } from '../../shared/i18n.js';
-import { showBusinessPrompt } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
-import { renderCrewReference, crewModeForTaskState } from '../../shared/crew-renderer.js?v=20260928-crew-truth-v7';
-import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-truth-v7';
-import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
+// App-API 4.0 (Shell v4): mount(root, api, {restored}) -> {unmount, snapshot}. Daten nur über api.query,
+// Befehle über api.command (nie warten), Zustand nur über api.status.report. Protokoll: V4-PORT.md.
+// Die Ticket-Fachlogik liegt im Kern (mission::tickets, Fähigkeit cap.ctox.ticket) bzw. in handlers/.
+import { renderCrewReference, crewModeForTaskState } from 'ctox:shared/crew-renderer.js';
+import { startCrewMotion } from 'ctox:shared/crew-motion.js';
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
 
 const REFRESH_DEBOUNCE_MS = 80;
-const TICKET_PRIMARY_COLLECTION = 'ctox_ticket_items';
+const SNAPSHOT_VERSION = 1;
+// Recht für die Crew-Zuweisung (Spiegel von shared/permissions.js BusinessOsPermissions.CrewManage).
+const CREW_MANAGE_PERMISSION = 'ctox.crew.manage';
+const CREW_MANAGE_ROLES = ['owner', 'admin', 'chef'];
 
+// Eingebettete Texte (locales/*.json eingemischt, früher per HTTP geladen) = Rückfall; api.shell.t('tickets.<key>')
+// übersteuert, wenn es mehr als den Schlüssel liefert (Schlüsselraum offen, app-api.d.ts OFFEN-B).
 const labels = {
   de: {
     kicker: "Crew",
-    listTitle: 'Tickets',
-    createTicket: 'Ticket anlegen',
-    import: 'Importieren',
-    export: 'Exportieren',
-    imported: 'Importiert',
-    importInvalid: 'Ungültige JSON-Datei.',
-    importEmpty: 'Keine Datensätze in der Datei.',
-    search: 'Suchen...',
-    showAsList: 'Als Liste anzeigen',
-    showAsCards: 'Als Karten anzeigen',
-    allStatus: 'Alle Status',
-    open: 'Offen',
-    pending: "Wartet",
-    blocked: 'Blockiert',
-    closed: 'Geschlossen',
-    bandAll: 'Alle',
-    bandOpen: 'Offen',
-    bandPending: 'Wartend',
-    bandClosed: 'Geschlossen',
-    entries: 'Einträge',
+    listTitle: "Tickets",
+    createTicket: "Ticket anlegen",
+    import: "Importieren",
+    export: "Exportieren",
+    importInvalid: "Ungültige JSON-Datei.",
+    importEmpty: "Keine Datensätze in der Datei.",
+    search: "Suchen...",
+    showAsList: "Als Liste anzeigen",
+    showAsCards: "Als Karten anzeigen",
+    allStatus: "Alle Status",
+    open: "Offen",
+    pending: "Wartet", // v4-allow: label
+    blocked: "Blockiert",
+    closed: "Geschlossen",
+    bandAll: "Alle",
+    bandOpen: "Offen",
+    bandPending: "Wartend",
+    bandClosed: "Geschlossen",
+    entries: "Einträge",
     openOps: "Aktionen einblenden",
     closeOps: "Aktionen ausblenden",
     operations: "Aktionen",
-    loadingTickets: 'Tickets werden geladen...',
-    loadingTicketsDetail: "Die Ticketdaten werden geladen.",
-    syncingTickets: 'Tickets werden synchronisiert.',
-    syncingTicketsDetail: "Die Ticketdaten werden aktualisiert.",
-    noTickets: 'Noch keine Tickets verfügbar.',
-    noTicketsDetail: "Neue Tickets erscheinen hier, sobald sie vorliegen.",
-    noTicketsFiltered: 'Kein Ticket passt zum Filter.',
-    selectTicket: 'Wähle links ein Ticket aus.',
-    selectTicketDetail: "Verlauf, Nachweise und Aktionen erscheinen danach hier.",
     timeline: "Verlauf",
-    evidence: 'Nachweise',
+    evidence: "Nachweise",
     verification: "Prüfung",
     writebacks: "Übertragene Ergebnisse",
     cases: "Vorgänge",
     selfWork: "Arbeit der Crew",
     approvals: "Freigaben",
-    source: 'Quelle',
+    source: "Quelle",
     requester: "Anfragende Person",
-    priority: 'Priorität',
-    updated: 'Aktualisiert',
-    noEvents: "Noch keine Ereignisse.",
-    noCase: "Kein Vorgang für dieses Ticket.",
-    noSelfWork: "Noch kein Crew-Auftrag verknüpft.",
-    clarifications: 'Rückfragen',
-    noClarifications: 'Keine offenen Rückfragen.',
+    priority: "Priorität",
+    updated: "Aktualisiert",
+    clarifications: "Rückfragen",
     approve: "Freigeben",
     reject: "Ablehnen",
     execute: "Ausführen",
     verify: "Prüfen",
-    internalNote: 'Interne Notiz',
-    publicReply: 'Antwort',
+    internalNote: "Interne Notiz",
+    publicReply: "Antwort",
     close: "Schließen",
-    requestClarification: 'Rückfrage',
-    publishClarification: 'Geprüft senden',
-    resolveClarification: 'Antwort erfassen',
+    requestClarification: "Rückfrage",
+    publishClarification: "Geprüft senden",
+    resolveClarification: "Antwort erfassen",
     runbooks: "Arbeitsanleitungen",
-    noRunbooks: "Keine Arbeitsanleitungen.",
-    promptQuestion: 'Rückfrage',
-    promptMissingInputs: 'Fehlende Werte (kommagetrennt)',
-    promptReviewSummary: 'Prüfnotiz',
-    promptResponseKey: 'Antwort-Referenz',
-    promptResponseBody: 'Antwortinhalt',
-    commandPending: "Aktion wird ausgeführt…",
-    commandDone: "Aktion abgeschlossen.",
-    commandUnavailable: 'Ticket-Aktionen sind gerade nicht verfügbar.',
-    promptTicketTitle: 'Ticket-Titel',
-    promptTicketBody: 'Beschreibung',
-    promptRationale: 'Begründung',
-    promptSummary: 'Zusammenfassung',
-    promptEvidence: 'Nachweis',
-    promptInternalNote: 'Interne Notiz',
-    promptReply: 'Antwort',
-    promptConfirm: 'Übernehmen',
-    promptCancel: 'Abbrechen',
+    promptQuestion: "Rückfrage",
+    promptMissingInputs: "Fehlende Werte (kommagetrennt)",
+    promptReviewSummary: "Prüfnotiz",
+    promptResponseKey: "Antwort-Referenz",
+    promptResponseBody: "Antwortinhalt",
+    promptTicketTitle: "Ticket-Titel",
+    promptTicketBody: "Beschreibung",
+    promptRationale: "Begründung",
+    promptSummary: "Zusammenfassung",
+    promptEvidence: "Nachweis",
+    promptInternalNote: "Interne Notiz",
+    promptReply: "Antwort",
+    promptConfirm: "Übernehmen",
+    promptCancel: "Abbrechen",
+    crew: "Crew",
+    crewUnassigned: "Crew, noch niemand zugeordnet",
+    assignMember: "Zuweisen",
+    assignChoose: "Mitglied wählen",
+    crewFailed: "gescheitert",
+    crewBlocked: "blockiert",
+    waitsFor: "wartet auf", // v4-allow: label
+    retryAt: "Wiederholung um",
+    crewWorking: "im Einsatz",
+    crewQueued: "wartet in der Queue", // v4-allow: label
+    holdTechnical: "technischer Halt",
+    holdMissingReviewEvidence: "Review-Nachweis fehlt",
+    holdMissingArtifact: "Ergebnis fehlt",
+    holdWaitingExternal: "wartet auf Rückmeldung", // v4-allow: label
+    holdAbortedByOwner: "vom Owner abgebrochen",
+    entryOne: "Eintrag"
   },
   en: {
     kicker: "Crew",
-    listTitle: 'Tickets',
-    createTicket: 'Create ticket',
-    import: 'Import',
-    export: 'Export',
-    imported: 'Imported',
-    importInvalid: 'Invalid JSON file.',
-    importEmpty: 'No records in the file.',
-    search: 'Search...',
-    showAsList: 'Show as list',
-    showAsCards: 'Show as cards',
-    allStatus: 'All status',
-    open: 'Open',
-    pending: 'Pending',
-    blocked: 'Blocked',
-    closed: 'Closed',
-    bandAll: 'All',
-    bandOpen: 'Open',
-    bandPending: 'Wartend',
-    bandClosed: 'Closed',
-    entries: 'entries',
-    entryOne: 'entry',
-    openOps: 'Show operations',
-    closeOps: 'Hide operations',
-    operations: 'Operations',
-    loadingTickets: 'Loading tickets...',
-    loadingTicketsDetail: "Loading ticket data.",
-    syncingTickets: 'Syncing tickets.',
-    syncingTicketsDetail: "Updating ticket data.",
-    noTickets: 'No tickets available yet.',
-    noTicketsDetail: "New tickets appear here as they become available.",
-    noTicketsFiltered: 'No ticket matches the filter.',
-    selectTicket: 'Select a ticket on the left.',
-    selectTicketDetail: 'Timeline, evidence, and operations appear here after selection.',
-    timeline: 'Timeline',
-    evidence: 'Evidence',
-    verification: 'Verification',
+    listTitle: "Tickets",
+    createTicket: "Create ticket",
+    import: "Import",
+    export: "Export",
+    importInvalid: "Invalid JSON file.",
+    importEmpty: "No records in the file.",
+    search: "Search...",
+    showAsList: "Show as list",
+    showAsCards: "Show as cards",
+    allStatus: "All status",
+    open: "Open",
+    pending: "Pending",
+    blocked: "Blocked",
+    closed: "Closed",
+    bandAll: "All",
+    bandOpen: "Open",
+    bandPending: "Pending",
+    bandClosed: "Closed",
+    entries: "entries",
+    entryOne: "entry",
+    openOps: "Show operations",
+    closeOps: "Hide operations",
+    operations: "Operations",
+    timeline: "Timeline",
+    evidence: "Evidence",
+    verification: "Verification",
     writebacks: "Transferred results",
-    cases: 'Cases',
+    cases: "Cases",
     selfWork: "Crew work",
-    approvals: 'Approvals',
-    source: 'Source',
-    requester: 'Requester',
-    priority: 'Priority',
-    updated: 'Updated',
-    noEvents: 'No events available.',
-    noCase: 'No case for this ticket.',
-    noSelfWork: "No crew task linked yet.",
-    clarifications: 'Clarifications',
-    noClarifications: 'No open clarifications.',
-    approve: 'Approve',
-    reject: 'Reject',
-    execute: 'Execute',
-    verify: 'Verify',
-    internalNote: 'Internal note',
-    publicReply: 'Reply',
-    close: 'Close',
-    requestClarification: 'Clarify',
-    publishClarification: 'Send reviewed',
-    resolveClarification: 'Record answer',
-    runbooks: 'Runbooks',
-    noRunbooks: "No work instructions.",
-    promptQuestion: 'Clarification question',
-    promptMissingInputs: 'Missing values (comma-separated)',
-    promptReviewSummary: 'Review note',
-    promptResponseKey: 'Answer reference',
-    promptResponseBody: 'Answer body',
-    commandPending: "Action in progress…",
-    commandDone: "Action completed.",
-    commandUnavailable: 'Ticket actions are unavailable right now.',
-    promptTicketTitle: 'Ticket title',
-    promptTicketBody: 'Description',
-    promptRationale: 'Rationale',
-    promptSummary: 'Summary',
-    promptEvidence: 'Evidence',
-    promptInternalNote: 'Internal note',
-    promptReply: 'Reply',
-    promptConfirm: 'Apply',
-    promptCancel: 'Cancel',
-  },
+    approvals: "Approvals",
+    source: "Source",
+    requester: "Requester",
+    priority: "Priority",
+    updated: "Updated",
+    clarifications: "Clarifications",
+    approve: "Approve",
+    reject: "Reject",
+    execute: "Execute",
+    verify: "Verify",
+    internalNote: "Internal note",
+    publicReply: "Reply",
+    close: "Close",
+    requestClarification: "Clarify",
+    publishClarification: "Send reviewed",
+    resolveClarification: "Record answer",
+    runbooks: "Runbooks",
+    promptQuestion: "Clarification question",
+    promptMissingInputs: "Missing values (comma-separated)",
+    promptReviewSummary: "Review note",
+    promptResponseKey: "Answer reference",
+    promptResponseBody: "Answer body",
+    promptTicketTitle: "Ticket title",
+    promptTicketBody: "Description",
+    promptRationale: "Rationale",
+    promptSummary: "Summary",
+    promptEvidence: "Evidence",
+    promptInternalNote: "Internal note",
+    promptReply: "Reply",
+    promptConfirm: "Apply",
+    promptCancel: "Cancel",
+    crew: "Crew",
+    crewUnassigned: "Crew, nobody assigned yet",
+    assignMember: "Assign",
+    assignChoose: "Choose member",
+    crewFailed: "failed",
+    crewBlocked: "blocked",
+    waitsFor: "waiting for", // v4-allow: label
+    retryAt: "retry at",
+    crewWorking: "on duty",
+    crewQueued: "waiting in the queue", // v4-allow: label
+    holdTechnical: "technical hold",
+    holdMissingReviewEvidence: "review evidence missing",
+    holdMissingArtifact: "result missing",
+    holdWaitingExternal: "waiting for a reply", // v4-allow: label
+    holdAbortedByOwner: "aborted by the owner"
+  }
 };
 
 const collectionNames = [
@@ -204,7 +205,9 @@ const ICON = {
 };
 
 const state = {
-  ctx: null,
+  api: null,
+  root: null,
+  disposers: [],
   lang: 'de',
   t: (key, fallback) => fallback || key,
   selectedId: '',
@@ -219,10 +222,9 @@ const state = {
   // it, 'open' pins it open, 'closed' pins it hidden. Reset to 'auto' on select.
   opsMode: 'auto',
   renderTimer: null,
-  cleanup: null,
-  loading: false,
-  ticketReadiness: null,
+  crew: { tasks: [], members: [] },
   data: Object.fromEntries(collectionNames.map((name) => [name, []])),
+  pendingRestore: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -328,86 +330,166 @@ export function ticketRowHtml(row, opts = {}) {
 
 export function renderTicketList(rows, opts = {}) {
   const list = Array.isArray(rows) ? rows : [];
-  if (!list.length) {
-    return '<div class="ctox-empty"><strong>' + escapeHtml(opts.emptyText || 'Noch keine Einträge.') + '</strong></div>';
-  }
+  // v4 (PORTING.md R11): an empty list renders nothing.
+  if (!list.length) return '';
   return list.map((row) => ticketRowHtml(row, { view: opts.view, selected: row.id && row.id === opts.selectedId })).join('');
-}
-
-export function resolveTicketListState({ loading = false, sourceCount = 0, readiness = null } = {}) {
-  if (loading) return 'loading';
-  if (Number(sourceCount) > 0) return 'content';
-  return readiness?.ready === false ? 'syncing' : 'empty';
 }
 
 // ---------------------------------------------------------------------------
 // Mount
 // ---------------------------------------------------------------------------
 
-export async function mount(ctx) {
-  state.ctx = ctx;
-  state.requestedRecordId = String(ctx.args?.record || ctx.args?.record_id || ctx.args?.case_id || '').trim();
-  state.returnThreadId = String(ctx.args?.return_thread_id || '').trim();
+export async function mount(root, api, { restored } = {}) {
+  state.api = api;
+  state.root = root;
+  state.disposers = [];
+  // Subscriptions belong to THIS mount (PORTING.md §4 Falle 1).
+  const disposers = state.disposers;
+  if (!root.dataset.app) root.dataset.app = api.app?.id || 'tickets';
+  state.requestedRecordId = '';
+  state.returnThreadId = '';
   state.focusedCaseId = '';
-  state.lang = ctx.locale === 'en' ? 'en' : 'de';
-  const messages = await loadModuleMessages(import.meta.url, state.lang, labels);
-  state.t = (key, fallback) => messages[key] ?? fallback ?? key;
+  setLanguage(api.shell.locale.get());
   state.selectedId = '';
   state.opsMode = 'auto';
-  await ensureStyles();
-  const markupVersion = String(import.meta.url).split('?v=')[1] || '';
-  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
-  const html = await fetch(markupHref).then((res) => res.text());
-  ctx.host.innerHTML = html;
-  ctx.left.replaceChildren();
-  ctx.right.replaceChildren();
-  state.loading = true;
-  state.ticketReadiness = readPrimaryTicketReadiness();
+  state.search = '';
+  state.status = 'all';
+  state.band = 'all';
+  state.view = 'cards';
+  state.crew = { tasks: [], members: [] };
+  state.data = Object.fromEntries(collectionNames.map((name) => [name, []]));
+  state.pendingRestore = restored && typeof restored === 'object' && restored.v === SNAPSHOT_VERSION ? restored : null;
+  // CSS lädt die Shell aus dem Manifest; index.html liefert der Service Worker versioniert (§16.15).
+  root.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  api.shell.setTitle('Tickets');
   applyStaticLabels();
+  applyRestoredView();
   seedGrammarState();
   wireUi();
-  const onAppLaunch = (event) => {
-    const args = event?.detail?.args || {};
+  // Pane-Grammatik verdrahtet die App selbst (PORTING.md R14).
+  autoWirePaneGrammar(root);
+  syncViewToggle();
+  render();
+  for (const name of collectionNames) {
+    disposers.push(api.query(name, {}).subscribe((rows) => {
+      state.data[name] = (Array.isArray(rows) ? rows : []).filter((doc) => doc && !doc.is_deleted);
+      scheduleRefresh();
+    }));
+  }
+  // Crew on tickets: bounded live reads (same selectors/limits as before).
+  disposers.push(api.query('ctox_queue_tasks', { selector: { ticket_key: { $gt: '' } }, limit: 200 }).subscribe((rows) => {
+    state.crew = { ...state.crew, tasks: (rows || []).filter((doc) => doc && doc.ticket_key) };
+    scheduleRefresh();
+  }));
+  disposers.push(api.query('ctox_crew_members', { selector: { archived: false }, limit: 64 }).subscribe((rows) => {
+    state.crew = { ...state.crew, members: rows || [] };
+    scheduleRefresh();
+  }));
+  // Deep link (früher ctx.args + DOM-Ereignis 'ctox-business-os-app-launch'): api.shell.onRoute.
+  disposers.push(api.shell.onRoute((event) => {
+    const args = event?.params || {};
     const recordId = String(args.record || args.record_id || args.case_id || '').trim();
     if (!recordId) return;
     state.requestedRecordId = recordId;
     state.returnThreadId = String(args.return_thread_id || '').trim();
-    focusRequestedTicket();
+    scheduleRefresh();
+  }));
+  disposers.push(api.shell.locale.subscribe((locale) => {
+    const before = state.lang;
+    setLanguage(locale);
+    if (before === state.lang) return;
+    applyStaticLabels();
     render();
-    scrollFocusedTicketCase();
-  };
-  ctx.host.addEventListener('ctox-business-os-app-launch', onAppLaunch);
-  const stopReadiness = wireTicketReadiness();
-  state.cleanup = stopReadiness;
-  render();
-  await refreshTickets();
-  const stopRealtime = wireRealtime();
-  state.cleanup = () => {
-    stopReadiness();
-    stopRealtime();
-    ctx.host.removeEventListener('ctox-business-os-app-launch', onAppLaunch);
-  };
-  return () => {
-    state.cleanup?.();
-    if (state.renderTimer) window.clearTimeout(state.renderTimer);
+  }));
+  return {
+    unmount() {
+      if (state.renderTimer) window.clearTimeout(state.renderTimer);
+      state.renderTimer = null;
+      for (const dispose of disposers.splice(0)) {
+        try { dispose(); } catch (error) { console.warn('[tickets] unsubscribe failed', error); }
+      }
+      root.replaceChildren();
+      if (state.root === root) {
+        state.api = null;
+        state.root = null;
+      }
+    },
+    snapshot: ticketsSnapshot,
   };
 }
 
-async function ensureStyles() {
-  const cssVersion = String(import.meta.url).split('?v=')[1] || '';
-  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
-  let link = document.querySelector('link[data-tickets-style]');
-  if (!link) {
-    link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.dataset.ticketsStyle = 'true';
-    document.head.append(link);
+function setLanguage(locale) {
+  state.lang = String(locale || '').toLowerCase().startsWith('en') ? 'en' : 'de';
+  const fallback = labels[state.lang] || labels.de;
+  const api = state.api;
+  state.t = (key, text) => {
+    const scoped = `tickets.${key}`;
+    const value = typeof api?.shell?.t === 'function' ? api.shell.t(scoped) : scoped;
+    if (value && value !== scoped) return value;
+    return fallback[key] ?? text ?? key;
+  };
+}
+
+// snapshot(): structured-clone values only (PORTING.md §2).
+function ticketsSnapshot() {
+  const el = root();
+  return {
+    v: SNAPSHOT_VERSION,
+    selectedId: state.selectedId || '',
+    focusedCaseId: state.focusedCaseId || '',
+    opsMode: state.opsMode,
+    search: el?.querySelector('[data-pg-search]')?.value || '',
+    view: state.view,
+    band: state.band,
+    status: state.status,
+    trayOpen: el?.querySelector('[data-pg-tray]') ? !el.querySelector('[data-pg-tray]').hidden : false,
+    listScrollTop: el?.querySelector('.tickets-left .ctox-pane-body')?.scrollTop || 0,
+  };
+}
+
+// View state into the markup before autoWirePaneGrammar reads it; the selection waits for live data.
+function applyRestoredView() {
+  const r = state.pendingRestore;
+  const el = root();
+  if (!r || !el) return;
+  const search = el.querySelector('[data-pg-search]');
+  if (search && typeof r.search === 'string') search.value = r.search;
+  const toggle = el.querySelector('[data-tickets-view-toggle]');
+  if (toggle && (r.view === 'list' || r.view === 'cards')) toggle.dataset.pgView = r.view;
+  if (['all', 'open', 'pending', 'closed'].includes(r.band)) {
+    el.querySelectorAll('[data-pg-band]').forEach((tab) => {
+      const on = tab.dataset.pgBand === r.band;
+      tab.setAttribute('aria-selected', String(on));
+      tab.classList.toggle('is-active', on);
+    });
   }
-  if (link.getAttribute('href') !== cssHref) link.href = cssHref;
+  const status = el.querySelector('[data-pg-filter][data-pg-name="status"]');
+  if (status && typeof r.status === 'string' && [...status.options].some((o) => o.value === r.status)) status.value = r.status;
+  if (r.trayOpen === true) {
+    const tray = el.querySelector('[data-pg-tray]');
+    if (tray) tray.hidden = false;
+    el.querySelector('[data-pg-tray-toggle]')?.setAttribute('aria-expanded', 'true');
+  }
+  if (['auto', 'open', 'closed'].includes(r.opsMode)) state.opsMode = r.opsMode;
+  if (typeof r.focusedCaseId === 'string') state.focusedCaseId = r.focusedCaseId;
+}
+
+function applyPendingSelection() {
+  const r = state.pendingRestore;
+  if (!r || !r.selectedId) { state.pendingRestore = null; return; }
+  if (!state.data.ctox_ticket_items.some((ticket) => ticket.id === r.selectedId)) return;
+  state.pendingRestore = null;
+  state.selectedId = r.selectedId;
+  if (Number.isFinite(r.listScrollTop) && r.listScrollTop > 0) {
+    requestAnimationFrame(() => {
+      const body = root()?.querySelector('.tickets-left .ctox-pane-body');
+      if (body) body.scrollTop = r.listScrollTop;
+    });
+  }
 }
 
 function root() {
-  return state.ctx.host.querySelector('[data-tickets-root]');
+  return state.root?.querySelector('[data-tickets-root]') || null;
 }
 
 function applyStaticLabels() {
@@ -500,12 +582,12 @@ function onRootClick(event) {
   if (!target) return;
   const clarification = target.closest('[data-clarification-action]');
   if (clarification) {
-    runClarificationAction(clarification).catch((error) => setCommandStatus(error?.message || String(error), true));
+    runClarificationAction(clarification).catch((error) => reportTicketError('tickets.action.failed', error));
     return;
   }
   const caseAction = target.closest('[data-ticket-action]');
   if (caseAction) {
-    runCaseAction(caseAction).catch((error) => setCommandStatus(error?.message || String(error), true));
+    runCaseAction(caseAction).catch((error) => reportTicketError('tickets.action.failed', error));
     return;
   }
   const action = target.closest('[data-action]');
@@ -513,7 +595,7 @@ function onRootClick(event) {
     onAction(action.dataset.action);
     return;
   }
-  const list = state.ctx.host.querySelector('[data-ticket-list]');
+  const list = root()?.querySelector('[data-ticket-list]');
   const row = target.closest('[data-context-record-id]');
   if (row && list && list.contains(row)) {
     selectRecord(row.getAttribute('data-context-record-id') || '');
@@ -523,7 +605,7 @@ function onRootClick(event) {
 function onListKey(event) {
   if (event.key !== 'Enter' && event.key !== ' ') return;
   const target = event.target instanceof Element ? event.target : null;
-  const list = state.ctx.host.querySelector('[data-ticket-list]');
+  const list = root()?.querySelector('[data-ticket-list]');
   const row = target?.closest('[data-context-record-id]');
   if (!row || !list || !list.contains(row)) return;
   event.preventDefault();
@@ -532,7 +614,7 @@ function onListKey(event) {
 
 function onAction(action) {
   if (action === 'new') {
-    createLocalTicket().catch((error) => setCommandStatus(error?.message || String(error), true));
+    createLocalTicket().catch((error) => reportTicketError('tickets.action.failed', error));
   } else if (action === 'import') {
     importTickets();
   } else if (action === 'export') {
@@ -546,51 +628,17 @@ function onAction(action) {
   }
 }
 
-function ticketCollection(name) {
-  return state.ctx?.db?.collection?.(name) || null;
-}
-
-function wireRealtime() {
-  const subscriptions = [...collectionNames, 'ctox_queue_tasks', 'ctox_crew_members']
-    .map((name) => ticketCollection(name)?.$?.subscribe?.(
-      () => scheduleRefresh(), { invalidateOnly: true },
-    ))
-    .filter(Boolean);
-  return () => subscriptions.forEach((sub) => {
-    try { sub.unsubscribe?.(); } catch {}
-  });
-}
-
-function readPrimaryTicketReadiness() {
-  const read = state.ctx?.sync?.collectionReadiness;
-  return typeof read === 'function'
-    ? read.call(state.ctx.sync, TICKET_PRIMARY_COLLECTION)
-    : null;
-}
-
-function wireTicketReadiness() {
-  const subscribe = state.ctx?.sync?.subscribeCollectionReadiness;
-  if (typeof subscribe !== 'function') return () => {};
-  const unsubscribe = subscribe.call(state.ctx.sync, TICKET_PRIMARY_COLLECTION, (snapshot) => {
-    state.ticketReadiness = snapshot;
-    render();
-  });
-  return typeof unsubscribe === 'function' ? unsubscribe : () => {};
-}
-
 function scheduleRefresh() {
-  if (state.renderTimer) return;
+  if (state.renderTimer || !state.api) return;
   state.renderTimer = window.setTimeout(() => {
     state.renderTimer = null;
-    refreshTickets().catch((error) => console.warn('[tickets] refresh failed', error));
+    if (!state.api) return;
+    refreshTickets();
   }, REFRESH_DEBOUNCE_MS);
 }
 
-async function refreshTickets() {
-  const entries = await Promise.all(collectionNames.map(async (name) => [name, await loadCollection(name)]));
-  state.data = Object.fromEntries(entries);
-  state.crew = await loadCrewForTickets();
-  state.loading = false;
+function refreshTickets() {
+  applyPendingSelection();
   syncSelectionToVisible();
   focusRequestedTicket();
   render();
@@ -601,7 +649,7 @@ function scrollFocusedTicketCase() {
   if (!state.focusedCaseId) return;
   const caseId = state.focusedCaseId;
   requestAnimationFrame(() => {
-    const card = [...state.ctx.host.querySelectorAll('[data-context-record-type="ticket_case"]')]
+    const card = [...(root()?.querySelectorAll('[data-context-record-type="ticket_case"]') || [])]
       .find((item) => item.dataset.contextRecordId === caseId);
     card?.scrollIntoView?.({ block: 'nearest' });
   });
@@ -609,18 +657,19 @@ function scrollFocusedTicketCase() {
 
 function focusRequestedTicket() {
   const recordId = state.requestedRecordId;
-  if (!recordId || state.loading) return;
+  if (!recordId) return;
   const ticketCase = state.data.ctox_ticket_cases.find((item) => item.id === recordId || item.case_id === recordId);
   const ticket = state.data.ctox_ticket_items.find((item) => item.id === recordId || item.ticket_key === recordId)
     || (ticketCase && state.data.ctox_ticket_items.find((item) => item.ticket_key === ticketCase.ticket_key));
   if (!ticket) {
-    setCommandStatus(`Verknüpftes Ticket ${recordId} ist hier nicht verfügbar.`, true);
-    if (['ctox_ticket_items', 'ctox_ticket_cases'].every((name) =>
-      state.ctx?.sync?.collectionReadiness?.(name)?.ready === true)) {
-      reportTicketFocus('unavailable', recordId);
-    }
+    // Unknown route parameter → status zone, never a silent fallback (PORTING.md R13). Live queries are
+    // local and complete, so the readiness gate of v3 is gone.
+    state.api?.status.report({ level: 'warn', code: 'tickets.route.unknown_record', text: `Verknüpftes Ticket ${recordId} ist hier nicht verfügbar.`, ref: recordId });
+    state.requestedRecordId = '';
+    reportTicketFocus('unavailable', recordId);
     return;
   }
+  state.api?.status.clear('tickets.route.unknown_record');
   state.search = '';
   state.band = 'all';
   state.status = 'all';
@@ -630,13 +679,14 @@ function focusRequestedTicket() {
   state.focusedCaseId = ticketCase?.case_id || '';
   if (ticketCase) state.opsMode = 'open';
   state.requestedRecordId = '';
-  setCommandStatus(ticketCase ? 'Verknüpfter Ticket-Fall geöffnet.' : 'Verknüpftes Ticket geöffnet.');
   queueMicrotask(() => reportTicketFocus('record_focused', recordId));
 }
 
 function reportTicketFocus(status, recordId) {
   if (!state.returnThreadId) return;
-  state.ctx.host.dispatchEvent(new CustomEvent('ctox-business-os-record-focus', {
+  // OFFEN-2 (V4-PORT.md): 4.0 has no API for this reply to the opening thread; the bubbling DOM event
+  // from the app root stays until the shell strand decides.
+  root()?.dispatchEvent(new CustomEvent('ctox-business-os-record-focus', {
     bubbles: true,
     detail: { module: 'tickets', status, recordId, returnThreadId: state.returnThreadId },
   }));
@@ -645,29 +695,7 @@ function reportTicketFocus(status, recordId) {
 // --- Crew on tickets: the member holding a ticket's queue task -----------------
 // Ticket-born work reaches the harness as a queue task carrying `ticket_key`;
 // the task's `crew_member_id` is the member at work, its routing fields say
-// why it waits. Both reads are bounded; nothing here is a second data path.
-async function loadCrewForTickets() {
-  const tasks = ticketCollection('ctox_queue_tasks');
-  const members = ticketCollection('ctox_crew_members');
-  const readBounded = async (collection, selector, limit) => {
-    if (!collection) return [];
-    try {
-      const docs = await collection.find({ selector, limit }).exec();
-      return docs.map((doc) => doc.toJSON());
-    } catch {
-      return [];
-    }
-  };
-  const [taskDocs, memberDocs] = await Promise.all([
-    readBounded(tasks, { ticket_key: { $gt: '' } }, 200),
-    readBounded(members, { archived: false }, 64),
-  ]);
-  return {
-    tasks: taskDocs.filter((doc) => doc && doc.ticket_key),
-    members: memberDocs,
-  };
-}
-
+// why it waits. Both reads are bounded live queries (see mount); nothing here is a second data path.
 function taskForTicket(ticketKey) {
   const key = String(ticketKey || '').trim();
   if (!key) return null;
@@ -690,12 +718,12 @@ function crewWaitSentence(task) {
     technical: t('holdTechnical', 'technischer Halt'),
     missing_review_evidence: t('holdMissingReviewEvidence', 'Review-Nachweis fehlt'),
     missing_artifact: t('holdMissingArtifact', 'Ergebnis fehlt'),
-    waiting_external: t('holdWaitingExternal', 'wartet auf Rückmeldung'),
+    waiting_external: t('holdWaitingExternal', 'wartet auf Rückmeldung'), // v4-allow: label
     aborted_by_owner: t('holdAbortedByOwner', 'vom Owner abgebrochen'),
   }[hold] || (hold ? hold.replace(/[_:]+/g, ' ') : '');
   if (status === 'failed') return `${t('crewFailed', 'gescheitert')}${holdText ? ` · ${holdText}` : ''}`;
   if (status === 'blocked') {
-    const waits = task.wait_entity_id ? ` ${t('waitsFor', 'wartet auf')} ${task.wait_entity_type || ''} ${task.wait_entity_id}`.replace(/\s+/g, ' ') : '';
+    const waits = task.wait_entity_id ? ` ${t('waitsFor', 'wartet auf')} ${task.wait_entity_type || ''} ${task.wait_entity_id}`.replace(/\s+/g, ' ') : ''; // v4-allow: label
     return `${t('crewBlocked', 'blockiert')}${holdText ? ` · ${holdText}` : ''}${waits}`;
   }
   if (task.retry_not_before) {
@@ -703,7 +731,7 @@ function crewWaitSentence(task) {
     return `${t('retryAt', 'Wiederholung um')} ${Number.isFinite(at.getTime()) ? at.toLocaleTimeString(state.lang === 'en' ? 'en-GB' : 'de-DE', { hour: '2-digit', minute: '2-digit' }) : ''}`.trim();
   }
   if (status === 'leased' || status === 'running') return t('crewWorking', 'im Einsatz');
-  if (status === 'pending' || status === 'queued') return t('crewQueued', 'wartet in der Queue');
+  if (status === 'pending' || status === 'queued') return t('crewQueued', 'wartet in der Queue'); // v4-allow: label
   return displayStatus(status || 'open');
 }
 
@@ -711,7 +739,7 @@ function crewWaitSentence(task) {
 // exists once per screen (crew bar seat or CTOX map), Owner 28.09.2026.
 function crewReferenceFor(task, size = 24) {
   const member = crewMemberFor(task);
-  startCrewMotion(); // installs the shared crew stylesheet (portrait included)
+  startCrewMotion(state.root || undefined); // installs the shared crew stylesheet (portrait included), scoped to the app root
   const status = String(task?.route_status || task?.status || '').toLowerCase();
   const taskState = ['leased', 'running', 'processing'].includes(status) ? 'running'
     : ['failed', 'error', 'cancelled', 'canceled'].includes(status) ? 'failed'
@@ -719,14 +747,12 @@ function crewReferenceFor(task, size = 24) {
   return renderCrewReference({ appearance: member ? { id: member.id, name: member.name, shape: member.shape, color: member.color } : null, size, mode: crewModeForTaskState(taskState, task?.execution_progress?.phase) });
 }
 
+// Only a mirror for the UI (api.actor); the core decides (PORTING.md R9).
 function mayAssignCrew() {
-  return canUseBusinessPermission({
-    session: state.ctx?.session,
-    governance: state.ctx?.governance,
-    permission: BusinessOsPermissions.CrewManage,
-    scopeType: 'record',
-    scopeId: 'ctox.crew.assign',
-  });
+  const actor = state.api?.actor;
+  if (!actor) return false;
+  const permissions = actor.permissions?.get?.() || [];
+  return permissions.includes(CREW_MANAGE_PERMISSION) || CREW_MANAGE_ROLES.includes(String(actor.role || '').toLowerCase());
 }
 
 function crewCardHtml(ticket) {
@@ -753,27 +779,16 @@ function crewCardHtml(ticket) {
                 ${(state.crew.members || []).map((item) => `<option value="${escapeAttr(item.id)}" ${item.id === task.crew_assigned_member_id ? 'selected' : ''}>${escapeHtml(item.name)}</option>`).join('')}
               </select>
             </label>` : ''}
-          <small data-crew-assign-status></small>
         </div>
       </div>
     </section>`;
 }
 
-async function assignCrewMember(taskId, memberId, statusNode) {
-  try {
-    await dispatchTicketCommand('ctox.crew.assign', taskId, { task_id: taskId, member_id: memberId });
-    if (statusNode) statusNode.textContent = state.t('assigned', 'Zugewiesen.');
-    await refreshTickets();
-  } catch (error) {
-    if (statusNode) statusNode.textContent = String(error?.message || error);
-  }
-}
-
-async function loadCollection(name) {
-  const collection = ticketCollection(name);
-  if (!collection) return [];
-  const docs = await collection.find().exec();
-  return docs.map((doc) => doc.toJSON()).filter((doc) => !doc.is_deleted && !doc._deleted);
+// Success is silent (the task row updates live); failure goes to the status zone and re-enables the select.
+function assignCrewMember(taskId, memberId, select) {
+  dispatchTicketCommand('ctox.crew.assign', taskId, { task_id: taskId, member_id: memberId }, {
+    onFailed: () => select?.removeAttribute('disabled'),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -799,7 +814,8 @@ function shapeTicket(ticket) {
   const task = taskForTicket(ticket.ticket_key);
   return {
     id: ticket.id,
-    key: ticket.ticket_key || ticket.id,
+    // DARK: nur der fachliche Ticketschlüssel (z. B. SUP-123); die Datensatz-ID („item-001“) erscheint nie.
+    key: ticket.ticket_key || '',
     crew: task ? { html: crewReferenceFor(task, 20), name: crewMemberFor(task)?.name || '', sentence: crewWaitSentence(task) } : null,
     title: ticket.title || ticket.ticket_key || 'Ticket',
     status: ticket.remote_status || 'open',
@@ -831,7 +847,7 @@ function selectRecord(id) {
 }
 
 function applyListSelection() {
-  const list = state.ctx.host.querySelector('[data-ticket-list]');
+  const list = root()?.querySelector('[data-ticket-list]');
   list?.querySelectorAll('[data-context-record-id]').forEach((rowEl) => {
     const on = (rowEl.getAttribute('data-context-record-id') || '') === String(state.selectedId || '');
     rowEl.classList.toggle('is-selected', on);
@@ -864,14 +880,8 @@ function renderCountsAndFooter() {
       if (node) node.textContent = ` (${value})`;
     }
   }
-  const scopeLabel = {
-    all: state.t('bandAll', 'Alle'),
-    open: state.t('bandOpen', 'Offen'),
-    pending: state.t('bandPending', 'Pending'),
-    closed: state.t('bandClosed', 'Geschlossen'),
-  }[state.band] || state.t('bandAll', 'Alle');
-  const visibleCount = visibleTickets().length;
-  const footerText = `${visibleCount} ${visibleCount === 1 ? state.t('entryOne', 'Eintrag') : state.t('entries', 'Einträge')} · ${scopeLabel}`;
+  // Textdiät R2: der Fuß wiederholte nur den Reiterzähler („6 Einträge · Alle“).
+  const footerText = '';
   if (pg && typeof pg.setFooter === 'function') {
     pg.setFooter(footerText);
   } else {
@@ -881,30 +891,18 @@ function renderCountsAndFooter() {
 }
 
 function renderList() {
-  const list = state.ctx.host.querySelector('[data-ticket-list]');
+  const list = root()?.querySelector('[data-ticket-list]');
   if (!list) return;
-  const listState = resolveTicketListState({
-    loading: state.loading,
-    sourceCount: state.data.ctox_ticket_items.length,
-    readiness: state.ticketReadiness,
-  });
-  if (listState === 'loading' || listState === 'syncing') {
-    list.innerHTML = renderTicketLoadingState(listState);
-    return;
-  }
   const rows = visibleTickets().map(shapeTicket);
-  const emptyText = state.data.ctox_ticket_items.length
-    ? state.t('noTicketsFiltered', 'Kein Ticket passt zum Filter.')
-    : state.t('noTickets', 'Noch keine Tickets verfügbar.');
-  list.innerHTML = renderTicketList(rows, { view: state.view, selectedId: state.selectedId, emptyText });
+  list.innerHTML = renderTicketList(rows, { view: state.view, selectedId: state.selectedId });
   // Export ist nur mit Daten sinnvoll; der Knopf startet statisch deaktiviert
   // (data-empty-disabled in index.html) und folgt hier dem Datenbestand.
-  const exportBtn = state.ctx.host.querySelector('[data-action="export"][data-empty-disabled]');
+  const exportBtn = root()?.querySelector('[data-action="export"][data-empty-disabled]');
   if (exportBtn) exportBtn.disabled = state.data.ctox_ticket_items.length === 0;
 }
 
 function renderDetail() {
-  const detail = state.ctx.host.querySelector('[data-ticket-detail]');
+  const detail = root()?.querySelector('[data-ticket-detail]');
   if (!detail) return;
   // The pane head is static markup from index.html and must exist in every
   // state; this renderer only refines its texts/actions and owns the body.
@@ -916,20 +914,11 @@ function renderDetail() {
   const ticket = selectedTicket();
   if (!ticket) {
     clearRecordContext(detail);
-    headKicker.textContent = state.t('kicker', 'Crew');
+    headKicker.textContent = '';
     headTitle.textContent = state.t('detailColumnTitle', 'Ticket');
     headActions.innerHTML = '';
-    body.innerHTML = state.loading
-      ? renderTicketLoadingState('loading')
-      : (sortedTickets().length
-        ? renderEmptyState(
-          state.t('selectTicket', 'Wähle links ein Ticket aus.'),
-          state.t('selectTicketDetail', 'Verlauf, Nachweise und Operationen erscheinen danach hier.'),
-        )
-        : renderEmptyState(
-          state.t('noTicketsYet', 'Noch keine Tickets.'),
-          state.t('noTicketsYetDetail', 'Neue Tickets erscheinen hier, sobald die Crew oder jemand aus dem Team eines anlegt.'),
-        ));
+    // No selection: the stage stays empty (no hint copy, R11).
+    body.innerHTML = '';
     return;
   }
   applyTicketContext(detail, ticket, 'detail');
@@ -937,21 +926,19 @@ function renderDetail() {
   const primary = casesForTicket(ticket.ticket_key).find((item) => item.case_id === state.focusedCaseId)
     || casesForTicket(ticket.ticket_key)[0] || null;
   const verifications = primary ? verificationsForCase(primary.case_id) : [];
-  const writebacks = primary ? writebacksForCase(primary.case_id) : [];
   const opsOpen = resolveOpsVisible(state.opsMode, ticketFlowActive(ticket));
   const opsLabel = opsOpen ? state.t('closeOps', 'Operationen ausblenden') : state.t('openOps', 'Operationen einblenden');
-  const evidenceHtml = (verifications.length || writebacks.length)
+  const evidenceHtml = displayStatus(verifications[0]?.status)
     ? `<section class="ctox-card">
         <header>${escapeHtml(state.t('evidence', 'Nachweise'))}</header>
         <div class="ctox-card-body">
           <dl class="ctox-fields">
-            ${verifications.length ? fact(state.t('verification', 'Verification'), displayStatus(verifications[0].status || '')) : ''}
-            ${writebacks.length ? fact(state.t('writebacks', 'Writebacks'), String(writebacks.length)) : ''}
+            ${fact(state.t('verification', 'Verification'), displayStatus(verifications[0].status))}
           </dl>
         </div>
       </section>`
     : '';
-  headKicker.textContent = ticket.ticket_key || ticket.id;
+  headKicker.textContent = '';
   headTitle.innerHTML = `${escapeHtml(ticket.title || ticket.ticket_key || 'Ticket')} <span class="ctox-badge ${statusBadgeClass(ticket.remote_status)}">${escapeHtml(displayStatus(ticket.remote_status || 'open'))}</span>`;
   headActions.innerHTML = `
     ${primary ? caseActionIconsHtml(primary) : ''}
@@ -971,12 +958,12 @@ function renderDetail() {
         </div>
       </section>
       ${crewCardHtml(ticket)}
-      <section class="ctox-card">
+      ${events.length ? `<section class="ctox-card">
         <header>${escapeHtml(state.t('timeline', 'Timeline'))}</header>
         <div class="ctox-card-body">
-          ${events.length ? `<ol class="ticket-timeline">${events.map(renderEvent).join('')}</ol>` : `<p class="tickets-inline-empty">${escapeHtml(state.t('noEvents', 'Keine Events vorhanden.'))}</p>`}
+          <ol class="ticket-timeline">${events.map(renderEvent).join('')}</ol>
         </div>
-      </section>
+      </section>` : ''}
       ${evidenceHtml}
     </div>
   `;
@@ -985,12 +972,12 @@ function renderDetail() {
     const memberId = String(select.value || '');
     if (!memberId) return;
     select.setAttribute('disabled', 'disabled');
-    assignCrewMember(select.dataset.crewAssign, memberId, body.querySelector('[data-crew-assign-status]'));
+    assignCrewMember(select.dataset.crewAssign, memberId, select);
   });
 }
 
 function renderOps() {
-  const ops = state.ctx.host.querySelector('[data-ticket-ops]');
+  const ops = root()?.querySelector('[data-ticket-ops]');
   if (!ops) return;
   // Static pane head (index.html) exists in every state; this renderer only
   // refines its texts/actions and owns the body.
@@ -999,11 +986,11 @@ function renderOps() {
   const headActions = ops.querySelector('[data-ops-actions]');
   const body = ops.querySelector('[data-ticket-ops-body]');
   if (!headKicker || !headTitle || !headActions || !body) return;
-  headKicker.textContent = state.t('operations', 'Operationen');
+  headKicker.textContent = '';
   const ticket = selectedTicket();
   if (!ticket) {
     clearRecordContext(ops);
-    headTitle.textContent = state.t('detailColumnTitle', 'Ticket');
+    headTitle.textContent = state.t('operations', 'Aktionen');
     headActions.innerHTML = '';
     body.innerHTML = '';
     return;
@@ -1013,28 +1000,28 @@ function renderOps() {
   const selfWork = selfWorkForTicket(ticket.ticket_key);
   const clarifications = clarificationsForTicket(ticket.ticket_key);
   const bundles = state.data.ctox_ticket_control_bundles;
-  headTitle.textContent = ticket.ticket_key || ticket.id;
+  headTitle.textContent = state.t('operations', 'Aktionen');
   headActions.innerHTML = `
     <button type="button" class="ctox-pane-icon" data-action="close-ops" aria-label="${escapeAttr(state.t('closeOps', 'Operationen ausblenden'))}" title="${escapeAttr(state.t('closeOps', 'Operationen ausblenden'))}">${iconSvg(ICON.collapseOps)}</button>
   `;
   body.innerHTML = `
     <div class="ctox-pane-scroll tickets-ops-scroll os-scrollbar">
-      <section class="tickets-section">
+      ${cases.length ? `<section class="tickets-section">
         <h3 class="ctox-field-label">${escapeHtml(state.t('cases', 'Cases'))}</h3>
-        ${cases.length ? cases.map(renderCase).join('') : `<p class="tickets-inline-empty">${escapeHtml(state.t('noCase', 'Kein Case für dieses Ticket.'))}</p>`}
-      </section>
-      <section class="tickets-section">
+        ${cases.map(renderCase).join('')}
+      </section>` : ''}
+      ${selfWork.length ? `<section class="tickets-section">
         <h3 class="ctox-field-label">${escapeHtml(state.t('selfWork', 'Self-work'))}</h3>
-        ${selfWork.length ? selfWork.map(renderSelfWork).join('') : `<p class="tickets-inline-empty">${escapeHtml(state.t('noSelfWork', 'Kein Self-work verknüpft.'))}</p>`}
-      </section>
-      <section class="tickets-section">
+        ${selfWork.map(renderSelfWork).join('')}
+      </section>` : ''}
+      ${clarifications.length ? `<section class="tickets-section">
         <h3 class="ctox-field-label">${escapeHtml(state.t('clarifications', 'Rückfragen'))}</h3>
-        ${clarifications.length ? clarifications.map(renderClarification).join('') : `<p class="tickets-inline-empty">${escapeHtml(state.t('noClarifications', 'Keine offenen Rückfragen.'))}</p>`}
-      </section>
-      <section class="tickets-section">
+        ${clarifications.map(renderClarification).join('')}
+      </section>` : ''}
+      ${bundles.length ? `<section class="tickets-section">
         <h3 class="ctox-field-label">${escapeHtml(state.t('runbooks', 'Runbooks'))}</h3>
-        ${bundles.length ? bundles.slice(0, 8).map(renderBundle).join('') : `<p class="tickets-inline-empty">${escapeHtml(state.t('noRunbooks', 'Keine Control Bundles.'))}</p>`}
-      </section>
+        ${bundles.slice(0, 8).map(renderBundle).join('')}
+      </section>` : ''}
     </div>
   `;
 }
@@ -1088,7 +1075,6 @@ function renderEvent(event) {
 function renderCase(item) {
   const approvals = state.data.ctox_ticket_approvals.filter((approval) => approval.case_id === item.case_id);
   const verifications = verificationsForCase(item.case_id);
-  const writebacks = writebacksForCase(item.case_id);
   const clarifications = state.data.ctox_ticket_clarification_requests.filter((clarification) => clarification.case_id === item.case_id);
   const actions = caseActionIconsHtml(item);
   return `
@@ -1099,17 +1085,15 @@ function renderCase(item) {
     submodule: 'cases',
   })}>
       <header>
-        <span>${escapeHtml([item.state || 'case', item.risk_level].filter(Boolean).join(' · '))}</span>
+        <span>${escapeHtml(displayStatus(item.state))}</span>
         ${actions ? `<span class="tickets-card-actions">${actions}</span>` : ''}
       </header>
       <div class="ctox-card-body">
         <strong class="tickets-context-item-title">${escapeHtml(item.label || item.case_id)}</strong>
-        <p class="tickets-context-item-meta">${escapeHtml(item.approval_mode || '')} · A${escapeHtml(String(item.autonomy_level || '').replace(/^A/i, ''))}</p>
         <dl class="ctox-fields">
-          ${fact(state.t('approvals', 'Approvals'), String(approvals.length))}
-          ${fact(state.t('verification', 'Verification'), verifications[0]?.status || '')}
-          ${fact(state.t('writebacks', 'Writebacks'), String(writebacks.length))}
-          ${fact(state.t('clarifications', 'Rückfragen'), String(clarifications.length))}
+          ${approvals.length ? fact(state.t('approvals', 'Approvals'), String(approvals.length)) : ''}
+          ${fact(state.t('verification', 'Verification'), displayStatus(verifications[0]?.status))}
+          ${clarifications.length ? fact(state.t('clarifications', 'Rückfragen'), String(clarifications.length)) : ''}
         </dl>
       </div>
     </article>
@@ -1153,10 +1137,10 @@ function renderSelfWork(item) {
     label: item.title || item.work_id,
     submodule: 'self-work',
   })}>
-      <header>${escapeHtml([item.kind || 'self-work', item.state].filter(Boolean).join(' · '))}</header>
+      <header>${escapeHtml(displayStatus(item.state))}</header>
       <div class="ctox-card-body">
         <strong class="tickets-context-item-title">${escapeHtml(item.title || item.work_id)}</strong>
-        <p class="tickets-context-item-meta">${escapeHtml([item.assigned_to, `${notes.length} notes`].filter(Boolean).join(' · '))}</p>
+        <p class="tickets-context-item-meta">${escapeHtml([item.assigned_to, notes.length ? `${notes.length} ${state.lang === 'en' ? (notes.length === 1 ? 'note' : 'notes') : (notes.length === 1 ? 'Notiz' : 'Notizen')}` : ''].filter(Boolean).join(' · '))}</p>
       </div>
     </article>
   `;
@@ -1218,7 +1202,7 @@ async function createLocalTicket() {
   const title = await promptText(state.t('promptTicketTitle', 'Ticket-Titel'), '', true);
   if (!title?.trim()) return;
   const body = await promptText(state.t('promptTicketBody', 'Beschreibung'));
-  await dispatchTicketCommand('ctox.ticket.local.create', `local:${title.trim()}`, {
+  dispatchTicketCommand('ctox.ticket.local.create', `local:${title.trim()}`, {
     title: title.trim(),
     body: body || '',
     status: 'open',
@@ -1231,22 +1215,22 @@ async function runCaseAction(actionEl) {
   const caseId = actionEl.getAttribute('data-case-id');
   if (!action || !caseId) return;
   if (action === 'approve') {
-    await dispatchTicketCommand('ctox.ticket.approve', caseId, { case_id: caseId, status: 'approved' });
+    dispatchTicketCommand('ctox.ticket.approve', caseId, { case_id: caseId, status: 'approved' });
   } else if (action === 'reject') {
     const rationale = await promptText(state.t('promptRationale', 'Begründung'));
-    await dispatchTicketCommand('ctox.ticket.approve', caseId, { case_id: caseId, status: 'rejected', rationale });
+    dispatchTicketCommand('ctox.ticket.approve', caseId, { case_id: caseId, status: 'rejected', rationale });
   } else if (action === 'execute') {
     const summary = await promptText(state.t('promptSummary', 'Zusammenfassung'), '', true);
-    if (!summary.trim()) return;
-    await dispatchTicketCommand('ctox.ticket.execute', caseId, { case_id: caseId, summary });
+    if (!summary?.trim()) return;
+    dispatchTicketCommand('ctox.ticket.execute', caseId, { case_id: caseId, summary });
   } else if (action === 'verify') {
     const summary = await promptText(state.t('promptEvidence', 'Nachweis'));
-    await dispatchTicketCommand('ctox.ticket.verify', caseId, { case_id: caseId, status: 'passed', summary });
+    dispatchTicketCommand('ctox.ticket.verify', caseId, { case_id: caseId, status: 'passed', summary });
   } else if (action === 'request-clarification') {
     const question = await promptText(state.t('promptQuestion', 'Rückfrage'), '', true);
     if (!question?.trim()) return;
     const missingCsv = await promptText(state.t('promptMissingInputs', 'Fehlende Werte (kommagetrennt)'));
-    await dispatchTicketCommand('ctox.ticket.request_clarification', caseId, {
+    dispatchTicketCommand('ctox.ticket.request_clarification', caseId, {
       case_id: caseId,
       question,
       missing_inputs: parseCsvInput(missingCsv || ''),
@@ -1264,15 +1248,15 @@ async function runCaseAction(actionEl) {
       '',
       true,
     );
-    if (!body.trim()) return;
-    await dispatchTicketCommand('ctox.ticket.writeback_comment', caseId, {
+    if (!body?.trim()) return;
+    dispatchTicketCommand('ctox.ticket.writeback_comment', caseId, {
       case_id: caseId,
       body,
       internal: action === 'internal-note',
     });
   } else if (action === 'close') {
     const summary = await promptText(state.t('promptSummary', 'Zusammenfassung'));
-    await dispatchTicketCommand('ctox.ticket.close', caseId, { case_id: caseId, summary });
+    dispatchTicketCommand('ctox.ticket.close', caseId, { case_id: caseId, summary });
   }
 }
 
@@ -1287,9 +1271,9 @@ async function runClarificationAction(actionEl) {
       true,
     );
     if (!reviewSummary?.trim()) return;
-    await dispatchTicketCommand('ctox.ticket.publish_clarification', clarificationId, {
+    dispatchTicketCommand('ctox.ticket.publish_clarification', clarificationId, {
       clarification_id: clarificationId,
-      reviewed_by: state.ctx?.session?.user?.id || 'business-os',
+      reviewed_by: state.api?.actor?.id || 'business-os',
       review_summary: reviewSummary,
     });
     return;
@@ -1298,66 +1282,83 @@ async function runClarificationAction(actionEl) {
   const responseKey = await promptText(state.t('promptResponseKey', 'Antwort-Referenz'), `manual:${Date.now()}`, true);
   if (!responseKey?.trim()) return;
   const body = await promptText(state.t('promptResponseBody', 'Antwortinhalt'));
-  await dispatchTicketCommand('ctox.ticket.resolve_clarification', clarificationId, {
+  dispatchTicketCommand('ctox.ticket.resolve_clarification', clarificationId, {
     clarification_id: clarificationId,
     response_key: responseKey,
     body: body || '',
   });
 }
 
+// Prompts go through api.shell.dialog inside the app window (R7; spec form open, OFFEN-A). The stub
+// answers `spec.default ?? null`; null = cancelled.
 async function promptText(title, defaultValue = '', required = false) {
-  const value = await showBusinessPrompt(title, {
+  const value = await state.api?.shell?.dialog?.({
+    kind: 'prompt',
     title,
-    message: required ? title : '',
-    defaultValue,
-    confirmLabel: state.t('promptConfirm', 'Übernehmen'),
-    cancelLabel: state.t('promptCancel', 'Abbrechen'),
-    kind: 'info',
+    text: required ? title : '',
+    default: defaultValue,
+    confirm_label: state.t('promptConfirm', 'Übernehmen'),
+    cancel_label: state.t('promptCancel', 'Abbrechen'),
   });
-  if (value === null) return null;
+  if (value === null || value === undefined) return null;
   const text = String(value || '').trim();
   return required && !text ? null : text;
 }
 
-async function dispatchTicketCommand(commandType, recordId, payload) {
-  if (!state.ctx.commandBus?.dispatch) {
-    throw new Error(state.t('commandUnavailable', 'Ticket-Aktionen sind gerade nicht verfügbar.'));
-  }
-  await state.ctx.sync?.startCollection?.('business_commands');
-  const commandId = `cmd_${randomId()}`;
-  setCommandStatus(state.t('commandPending', 'Befehl wird verarbeitet...'));
-  const command = {
-    id: commandId,
-    module: 'tickets',
-    type: commandType,
-    command_type: commandType,
-    record_id: recordId || '',
-    inbound_channel: 'tickets',
-    payload,
+// Befehle: api.command legt das Befehlsdokument lokal an und liefert sofort; die UI wartet nie auf
+// Annahme (früher: Warten auf Annahme + Neuladen). Payload = Handler-Payload (V4-HANDLERS.md) plus
+// client_context; record_id über opts (§16.19 Nr. 8). Fehlschläge → Zustandszone, Erfolg bleibt still.
+function dispatchTicketCommand(commandType, recordId, payload, { onFailed } = {}) {
+  const api = state.api;
+  if (!api) return null;
+  const code = `tickets.command.${commandType}`;
+  const body = {
+    ...payload,
     client_context: {
       source: 'business-os.tickets',
       module_id: 'tickets',
-      actor: actorContext(state.ctx.session),
+      actor: actorContext(api.actor),
     },
   };
-  const accepted = await state.ctx.commandBus.dispatch(command, { until: 'accepted' });
-  if (accepted?.status === 'failed') {
-    throw new Error(commandFailureMessage(accepted, commandId));
+  let handle;
+  try {
+    handle = api.command(commandType, body, recordId ? { record_id: recordId } : undefined);
+  } catch (error) {
+    api.status.report({ level: 'error', code, text: `${commandType}: ${error?.code || 'local'} ${error?.message || error}` });
+    onFailed?.(error);
+    return null;
   }
-  setCommandStatus(state.t('commandDone', 'Befehl abgeschlossen.'));
-  await refreshTickets();
+  let off = null;
+  let finished = false;
+  const stop = () => { finished = true; off?.(); off = null; };
+  off = handle.status.subscribe((value) => {
+    if (finished) return;
+    if (value?.status === 'failed') {
+      api.status.report({ level: 'error', code, text: `${commandType}: ${commandFailureMessage(value, handle.id)}`, ref: handle.id });
+      stop();
+      onFailed?.(value);
+    } else if (value?.status === 'done') {
+      api.status.clear(code);
+      stop();
+    }
+  });
+  if (finished) off?.();
+  handle.local.catch((error) => {
+    if (finished) return;
+    api.status.report({ level: 'error', code, text: `${commandType}: ${error?.code || 'local'} ${error?.message || error}`, ref: handle.id });
+    stop();
+    onFailed?.(error);
+  });
+  state.disposers.push(stop);
+  return handle;
 }
 
 function commandFailureMessage(data, commandId) {
   return data?.error || data?.result?.error || `Aktion ${commandId} ist fehlgeschlagen.`;
 }
 
-function setCommandStatus(message, isError = false) {
-  const el = state.ctx.host.querySelector('[data-ticket-command-status]');
-  if (!el) return;
-  el.hidden = !message;
-  el.textContent = message || '';
-  el.dataset.state = isError ? 'error' : 'info';
+function reportTicketError(code, error) {
+  state.api?.status.report({ level: 'error', code, text: String(error?.message || error) });
 }
 
 // ---------------------------------------------------------------------------
@@ -1378,8 +1379,10 @@ function exportTickets() {
     root()?.appendChild(anchor);
     anchor.click();
     anchor.remove();
+    state.api?.status.clear('tickets.export.failed');
   } catch (error) {
     console.error('[tickets] export failed', error);
+    reportTicketError('tickets.export.failed', error);
   } finally {
     if (url) window.setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 4000);
   }
@@ -1394,53 +1397,54 @@ function importTickets() {
   input.addEventListener('change', async () => {
     const file = input.files && input.files[0];
     if (!file) return;
-    let parsed;
-    try { parsed = JSON.parse(await file.text()); } catch {
-      setCommandStatus(state.t('importInvalid', 'Ungültige JSON-Datei.'), true);
-      return;
-    }
-    const items = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : []);
-    const candidates = items.filter((item) => item && typeof item === 'object' && String(item.title || '').trim());
-    if (!candidates.length) {
-      setCommandStatus(state.t('importEmpty', 'Keine Datensätze in der Datei.'), true);
-      return;
-    }
-    let count = 0;
-    for (const item of candidates) {
-      try {
-        await dispatchTicketCommand('ctox.ticket.local.create', `local:${String(item.title).trim()}`, {
-          title: String(item.title).trim(),
-          body: String(item.body || item.body_text || '').trim(),
-          status: 'open',
-          priority: String(item.priority || 'normal'),
-        });
-        count += 1;
-      } catch (error) {
-        console.error('[tickets] import failed', error);
-      }
-    }
-    setCommandStatus(`${state.t('imported', 'Importiert')}: ${count}`);
+    importTicketsText(await file.text());
   });
   input.click();
+}
+
+// Problems → status zone; success is silent (the created tickets appear live).
+function importTicketsText(text) {
+  const api = state.api;
+  if (!api) return 0;
+  let parsed;
+  try { parsed = JSON.parse(text); } catch {
+    api.status.clear('tickets.import.empty');
+    api.status.report({ level: 'warn', code: 'tickets.import.invalid', text: state.t('importInvalid', 'Ungültige JSON-Datei.') });
+    return 0;
+  }
+  api.status.clear('tickets.import.invalid');
+  const items = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : []);
+  const candidates = items.filter((item) => item && typeof item === 'object' && String(item.title || '').trim());
+  if (!candidates.length) {
+    api.status.report({ level: 'warn', code: 'tickets.import.empty', text: state.t('importEmpty', 'Keine Datensätze in der Datei.') });
+    return 0;
+  }
+  api.status.clear('tickets.import.empty');
+  let count = 0;
+  for (const item of candidates) {
+    const handle = dispatchTicketCommand('ctox.ticket.local.create', `local:${String(item.title).trim()}`, {
+      title: String(item.title).trim(),
+      body: String(item.body || item.body_text || '').trim(),
+      status: 'open',
+      priority: String(item.priority || 'normal'),
+    });
+    if (handle) count += 1;
+  }
+  return count;
 }
 
 // ---------------------------------------------------------------------------
 // Selectors + utils
 // ---------------------------------------------------------------------------
 
-function actorContext(session) {
-  const user = session?.user || {};
+// Provenance only (the core decides with its own actor): mirrored from api.actor.
+function actorContext(actor) {
+  const role = String(actor?.role || 'user');
   return {
-    id: user.id || 'business-os-user',
-    display_name: user.display_name || user.name || user.id || 'Business OS User',
-    role: user.role || 'user',
-    is_admin: Boolean(user.is_admin),
+    id: actor?.id || 'business-os-user',
+    display_name: actor?.display_name || actor?.id || 'Business OS User',
+    role,
   };
-}
-
-function randomId() {
-  return globalThis.crypto?.randomUUID?.().replaceAll('-', '')
-    || `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
 }
 
 function selectedTicket() {
@@ -1492,30 +1496,6 @@ function fact(label, value) {
 
 function iconSvg(paths) {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
-}
-
-function renderEmptyState(title, body = '') {
-  return `
-    <div class="ctox-empty">
-      <strong>${escapeHtml(title)}</strong>
-      ${body ? `<span>${escapeHtml(body)}</span>` : ''}
-    </div>
-  `;
-}
-
-function renderTicketLoadingState(kind) {
-  if (kind === 'loading') {
-    return renderEmptyState(
-      state.t('loadingTickets', 'Tickets werden geladen...'),
-      state.t('loadingTicketsDetail', 'Die Ticketdaten werden geladen.'),
-    );
-  }
-  return `
-    <div class="ctox-empty ctox-syncing">
-      <strong>${escapeHtml(state.t('syncingTickets', 'Tickets werden synchronisiert.'))}</strong>
-      <span>${escapeHtml(state.t('syncingTicketsDetail', 'Die Ticketdaten werden gerade aus dem CTOX-Datenstrom geladen.'))}</span>
-    </div>
-  `;
 }
 
 function applyTicketContext(element, ticket, submodule) {
@@ -1579,10 +1559,20 @@ function statusBadgeClass(value) {
   return '';
 }
 
+// Textdiät Regel 4: Status nur in deutschen Nutzerbegriffen (Zendesk DE); unbekannte Rohwerte bleiben unsichtbar.
+const STATUS_LABELS_DE = Object.freeze({
+  new: 'Neu', open: 'Offen', pending: 'Wartend', waiting: 'Wartend', clarification: 'Rückfrage', on_hold: 'Angehalten',
+  in_progress: 'In Arbeit', running: 'In Arbeit', blocked: 'Blockiert', failed: 'Fehlgeschlagen', error: 'Fehler',
+  rejected: 'Abgelehnt', resolved: 'Gelöst', solved: 'Gelöst', closed: 'Geschlossen', done: 'Erledigt',
+  completed: 'Erledigt', cancelled: 'Abgebrochen', verified: 'Geprüft', passed: 'Bestanden', approved: 'Freigegeben',
+  approval_pending: 'Freigabe ausstehend', needs_approval: 'Freigabe ausstehend', pending_approval: 'Freigabe ausstehend', // v4-allow: label (Freigabestatus, Fachbegriff wie outbound)
+  writeback_pending: 'Geprüft', draft: 'Entwurf', queued: 'Wartend', executing: 'In Arbeit',
+});
 function displayStatus(value) {
-  return String(value || '')
-    .replace(/[_-]+/g, ' ')
-    .replace(/\b\w/g, (char) => char.toUpperCase());
+  const key = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (!key) return '';
+  if (state.lang === 'en') return key.replace(/_+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+  return STATUS_LABELS_DE[key] || '';
 }
 
 function parseCsvInput(value) {
@@ -1623,13 +1613,6 @@ export const __ticketTestHooks = {
     label: ticketRecordLabel(ticket),
     submodule: 'inbox',
   }),
-  setCommandStatusForSmoke(ctx, message, isError = false) {
-    const previousCtx = state.ctx;
-    state.ctx = ctx;
-    try {
-      setCommandStatus(message, isError);
-    } finally {
-      state.ctx = previousCtx;
-    }
-  },
+  importTicketsText,
+  dispatchTicketCommand,
 };

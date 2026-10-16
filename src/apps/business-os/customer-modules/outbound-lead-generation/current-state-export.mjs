@@ -36,18 +36,24 @@ export function captureResearchExport(leads, recipientStatus, capturedAt = Date.
   };
 }
 
+// App-API 4.0: die Datei geht ueber api.files (actions.ablegen → ref), die Spreadsheet-App bekommt ihre
+// Routenform flach in params (modules/spreadsheets/index.js handleRoute: file_ref, name, mime und die
+// Herkunft source_kind/open_purpose/report_snapshot). Ein File-Objekt kann nicht in Routenparameter.
 export async function openResearchSnapshot(actions, blob, fileName, snapshot, cryptoApi = globalThis.crypto) {
-  if (typeof actions?.openApp !== 'function') throw new Error('Spreadsheet-Anwendung kann hier nicht geöffnet werden.');
+  if (typeof actions?.ablegen !== 'function' || typeof actions?.navigate !== 'function') throw new Error('Spreadsheet-Anwendung kann hier nicht geöffnet werden.');
   if (!snapshot.sourceRecordIds.length) throw new Error('Dem Export fehlen gespeicherte Lead-IDs.');
   const file = new File([blob], fileName, { type: blob.type });
   const digest = await cryptoApi.subtle.digest('SHA-256', await file.arrayBuffer());
   const fileSha256 = Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('');
-  return actions.openApp('spreadsheets', { openFile: {
-    file, source_kind: 'research_generated', open_purpose: 'snapshot_report',
+  const fileRef = String(await actions.ablegen(file) || '').trim();
+  if (!fileRef) throw new Error('Die Excel-Datei wurde nicht abgelegt.');
+  return actions.navigate('spreadsheets', {
+    file_ref: fileRef, name: fileName, mime: blob.type,
+    source_kind: 'research_generated', open_purpose: 'snapshot_report',
     report_snapshot: {
       source_module: 'outbound-lead-generation', source_collection: 'outbound_lead_generation_leads',
       source_record_ids: snapshot.sourceRecordIds.slice(), captured_at_ms: snapshot.capturedAt,
       file_sha256: fileSha256,
     },
-  } });
+  });
 }

@@ -1,0 +1,449 @@
+{
+ "app": "mail",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Mail",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 748
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neue Mail",
+    "button:Einstellungen",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Ordner (6)",
+    "nav:E-Mail-Gruppen (6)",
+    "button:Posteingang 6 Ungelesen 6",
+    "button:Gesendet Versendete Nachrichte",
+    "button:Alle Nachrichten Posteingang u",
+    "button:Freigabe Wartet auf Freigabe 0",
+    "button:Fehler Prüfung erforderlich 0",
+    "button:Geroutete E-Mails App-Übergabe",
+    "button:Navigationsbreite anpassen",
+    "button:Mails importieren",
+    "button:Mails exportieren",
+    "nav:Alle (6)",
+    "nav:Eingang (6)",
+    "nav:Gesendet (0)",
+    "nav:Aktion nötig (6)",
+    "row:Nachrichten Zeit",
+    "check:Sichtbare Seite auswählen",
+    "row:communication--001 3 neu Budge",
+    "check:Budgetplanung Vertrieb Süd aus",
+    "row:communication--002 12 neu Quar",
+    "check:Quartalsbericht Q3 2026 auswäh",
+    "row:communication--003 1 neu Angeb",
+    "check:Angebot Wartungsvertrag Halle ",
+    "row:communication--004 7 neu Proje",
+    "check:Projektplan Relaunch Kundenpor",
+    "row:communication--005 24 neu Lief",
+    "check:Lieferantenbewertung 2026 ausw",
+    "row:communication--006 5 neu Onboa",
+    "check:Onboarding neue Mitarbeitende "
+   ],
+   "shot": "mail/1280-01-open.png"
+  },
+  {
+   "step": "nav Ordner (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "mail/1280-02-nav_Ordner_6_.png"
+  },
+  {
+   "step": "nav E-Mail-Gruppen (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "mail/1280-03-nav_E-Mail-Gruppen_6_.png"
+  },
+  {
+   "step": "nav Alle (6)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Eingang (6)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Gesendet (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "mail/1280-04-nav_Gesendet_0_.png"
+  },
+  {
+   "step": "nav Aktion nötig (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "mail/1280-05-nav_Aktion_n_tig_6_.png"
+  },
+  {
+   "step": "zurück zu Reiter Ordner (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "mail/1280-06-zur_ck_zu_Reiter_Ordner_6_.png"
+  },
+  {
+   "step": "row Nachrichten Zeit",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "mail/1280-07-row_Nachrichten_Zeit.png"
+  },
+  {
+   "step": "row communication--001 3 neu Budgetplanung Vertrieb Süd 13.10.",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "mail/1280-08-row_communication--001_3_neu_Budgetplanu.png"
+  },
+  {
+   "step": "button Neue Mail",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear mail.composer"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "mail/1280-09-button_Neue_Mail.png"
+  },
+  {
+   "step": "formular 3 Felder → Freigeben & senden",
+   "changed": 1,
+   "ops": [],
+   "zone": [
+    "{\"level\":\"warn\",\"code\":\"mail.composer\",\"text\":\"Bitte eine gültige Empfängeradresse eingeben.\"}"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "mail/1280-10-formular_3_Felder_Freigeben_senden.png"
+  },
+  {
+   "step": "button Einstellungen",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear mail.composer",
+    "clear mail.mailserver.health",
+    "clear mail.mailserver",
+    "clear mail.mailserver.health",
+    "clear mail.mailserver"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "mail/1280-11-button_Einstellungen.png"
+  },
+  {
+   "step": "formular 4 Felder → Domain hinzufügen",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear mail.mailserver.health",
+    "{\"level\":\"error\",\"code\":\"mail.mailserver\",\"text\":\"Bitte eine gültige Versanddomain eingeben.\"}"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "mail/1280-12-formular_4_Felder_Domain_hinzuf_gen.png"
+  },
+  {
+   "step": "button Als Liste anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "mail/1280-13-button_Als_Liste_anzeigen.png"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "mail/1280-14-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "mail/1280-15-button_Filter.png"
+  },
+  {
+   "step": "button Importieren",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "mail/1280-16-button_Importieren.png"
+  },
+  {
+   "step": "formular 1 Felder → In Serien-E-Mail übernehmen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "mail/1280-17-formular_1_Felder_In_Serien-E-Mail_berne.png"
+  },
+  {
+   "step": "Overlay geschlossen (Escape/Schließen) vor Exportieren"
+  },
+  {
+   "step": "button Exportieren",
+   "changed": 1,
+   "ops": [],
+   "zone": [
+    "{\"level\":\"info\",\"code\":\"mail.notice\",\"text\":\"6 Datensätze exportiert.\"}"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "mail/1280-18-button_Exportieren.png"
+  },
+  {
+   "step": "button Posteingang 6 Ungelesen 6",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "mail/1280-19-button_Posteingang_6_Ungelesen_6.png"
+  },
+  {
+   "step": "button Gesendet Versendete Nachrichten 0",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "mail/1280-20-button_Gesendet_Versendete_Nachrichten_0.png"
+  },
+  {
+   "step": "button Alle Nachrichten Posteingang und Gesendet 6",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "mail/1280-21-button_Alle_Nachrichten_Posteingang_und_.png"
+  },
+  {
+   "step": "button Freigabe Wartet auf Freigabe 0",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "mail/1280-22-button_Freigabe_Wartet_auf_Freigabe_0.png"
+  },
+  {
+   "step": "button Fehler Prüfung erforderlich 0",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "mail/1280-23-button_Fehler_Pr_fung_erforderlich_0.png"
+  },
+  {
+   "step": "button Geroutete E-Mails App-Übergaben 0",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "mail/1280-24-button_Geroutete_E-Mails_App-_bergaben_0.png"
+  },
+  {
+   "step": "button Navigationsbreite anpassen: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button Mails importieren: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button Mails exportieren: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button Schließen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "mail/1280-25-button_Schlie_en.png"
+  },
+  {
+   "step": "auswahl Postfach → communication--002",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "mail/1280-26-auswahl_Postfach_communication--002.png"
+  },
+  {
+   "step": "nav Alle (1)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear mail.notice"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 642,
+   "shot": "mail/1280-27-suche_ohne_Treffer.png",
+   "textAfter": 421
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "mail/1280-28-suche_geleert.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "mail",
+  "Mail"
+ ]
+}

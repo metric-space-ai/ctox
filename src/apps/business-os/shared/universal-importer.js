@@ -151,8 +151,10 @@ export async function openUniversalImporter(ctx, config = {}) {
 
     listEl.innerHTML = '<div class="explorer-loading">Lade Dateien...</div>';
 
+    // The caller names the collection that holds its files (config.fileCollection);
+    // shared code carries no app collection of its own.
     const db = ctx?.db;
-    const collection = db?.collection?.('desktop_files');
+    const collection = config.fileCollection ? db?.collection?.(config.fileCollection) : null;
     if (!collection) {
       listEl.innerHTML = '<div class="explorer-error">Fehler: Keine Verbindung zur OS-Datenbank.</div>';
       return;
@@ -255,6 +257,7 @@ export async function openUniversalImporter(ctx, config = {}) {
 
     try {
       const blob = await readBusinessOsFileFromDemand(ctx, fileId, fileDoc.mime_type || guessMimeType(fileDoc.name), {
+        fileCollection: config.fileCollection,
         contentGenerationId: fileDoc.content_generation_id || '',
         contentHash: fileDoc.content_hash || '',
         contentHashScheme: fileDoc.content_hash_scheme || '',
@@ -328,7 +331,7 @@ export async function openUniversalImporter(ctx, config = {}) {
         module: config.moduleId || 'business-os',
         type: config.commandType || `${config.moduleId || 'business-os'}.source.import`,
         record_id: payload.record_id,
-        inbound_channel: config.inboundChannel || `business_os.${config.moduleId || 'importer'}`,
+        inbound_channel: config.inboundChannel || `business_os.${config.moduleId || 'business-os'}`,
         payload,
         client_context: {
           source_module: config.moduleId || '',
@@ -388,7 +391,7 @@ export async function openUniversalImporter(ctx, config = {}) {
 }
 
 async function readBusinessOsFileFromDemand(ctx, fileId, mimeType = 'application/octet-stream', options = {}) {
-  const loader = await fileDemandLoaderFor(ctx).catch(() => null);
+  const loader = await fileDemandLoaderFor(ctx, options.fileCollection).catch(() => null);
   if (!loader?.fetchFile) {
     throw new Error('Dateiinhalt ist noch nicht über den Sync-Demand-Pfad verfügbar.');
   }
@@ -396,9 +399,9 @@ async function readBusinessOsFileFromDemand(ctx, fileId, mimeType = 'application
   return readStoredFileFromDemandChunks(chunks, mimeType, options);
 }
 
-async function fileDemandLoaderFor(ctx) {
-  if (!ctx?.sync?.startCollection) return null;
-  const bridge = await ctx.sync.startCollection('desktop_files');
+async function fileDemandLoaderFor(ctx, fileCollection) {
+  if (!fileCollection || !ctx?.sync?.startCollection) return null;
+  const bridge = await ctx.sync.startCollection(fileCollection);
   await waitForReplicationBridge(bridge, 15000);
   return bridge?.state?.demandFileLoader || null;
 }
@@ -937,7 +940,8 @@ function importerTemplate(config) {
     { id: 'excel', label: 'Excel' },
   ];
   const defaultSource = config.defaultSource || sources[0]?.id || 'text';
-  const showFileExplorer = config.showFileExplorer !== false;
+  // The Business OS file explorer needs the caller's file collection (config.fileCollection).
+  const showFileExplorer = config.showFileExplorer !== false && Boolean(config.fileCollection);
   return `
     <div class="universal-importer-panel">
       <header>

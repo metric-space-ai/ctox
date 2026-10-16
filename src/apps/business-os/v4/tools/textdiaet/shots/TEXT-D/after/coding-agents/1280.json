@@ -1,0 +1,88 @@
+{
+ "app": "coding-agents",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [
+    "command ctox.coding.models local=ok result=accepted {\"record_id\":\"coding-agents:coding-models\",\"module\":\"coding-agents\",\"module_id\":\"coding-agents\",\"client_context\":{\"sourc"
+   ],
+   "title": "pi Coding Agent",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 748
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [
+    "HTTP 404 /~a/shell@lab/icon.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)"
+   ],
+   "zoneText": "",
+   "cands": [
+    "button:Aktualisieren",
+    "button:coding-agents",
+    "button:shell",
+    "button:Projekt-Spalte anpassen",
+    "button:Sichtbare Session-Daten export",
+    "button:Quelltext der App öffnen",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Verlauf (0)",
+    "nav:Delegationen (0)",
+    "select:Modell",
+    "button:▶ Delegieren",
+    "button:Artefakt-Spalte anpassen"
+   ],
+   "shot": "coding-agents/1280-01-open.png"
+  },
+  {
+   "step": "nav Verlauf (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "coding-agents/1280-02-nav_Verlauf_0_.png"
+  },
+  {
+   "step": "nav Delegationen (0)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "zurück zu Reiter Verlauf (0)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "command",
+   "coll": "ctox.coding.models",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "coding-agents",
+  "pi Coding Agent"
+ ]
+}

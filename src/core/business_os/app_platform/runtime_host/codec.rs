@@ -201,12 +201,17 @@ impl StoreCodec for RuntimeCodec {
                 return Err(invalid("conflict: transaction snapshot changed"));
             }
         }
-        let permit = permit(
-            tx,
-            app,
-            &a,
-            text(&binding["command"], "type").map_err(sql_error)?,
-        )?;
+        let core = origin::delivery_permit(tx, &binding["command"], &a)?;
+        let permit = if core {
+            None
+        } else {
+            Some(permit(
+                tx,
+                app,
+                &a,
+                text(&binding["command"], "type").map_err(sql_error)?,
+            )?)
+        };
         let mut results = Vec::new();
         for operation in operations {
             let name = &operation.collection;
@@ -281,7 +286,7 @@ impl StoreCodec for RuntimeCodec {
                 name,
                 before.as_ref(),
                 after.as_ref(),
-                Some(&permit),
+                permit.as_ref(),
             )
             .map_err(sql_error)?;
             let rev = format!("native:{}", uuid::Uuid::new_v4());

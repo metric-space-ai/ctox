@@ -1,0 +1,52 @@
+{
+ "app": "coding-agents",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Coding-Agenten",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 744
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [],
+   "shot": "coding-agents/1280-01-open.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 70,
+   "textAfter": 70
+  },
+  {
+   "step": "suche geleert",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "coding-agents",
+  "Coding-Agenten"
+ ]
+}

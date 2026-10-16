@@ -3,8 +3,8 @@
            wires search / view toggle / tray / reset / active-dot / band /
            counts / footer (autoWirePaneGrammar); the module only renders
            lists and listens to ctox-pane-grammar-change. This file is the
-           single source of truth for the module markup: index.js fetches it
-           with the JS cache-buster (loadModuleMarkup), like ctox and
+           single source of truth for the module markup: index.js fetches it (v4: versioned via the Service Worker, no cache-buster)
+           (loadModuleMarkup), like ctox and
            coding-agents. -->
       <section class="ctox-pane knowledge-pane knowledge-left" aria-label="Knowledge" data-pg-default-view="cards">
         <!-- Row 1: title + management-only icons (top-right). -->
@@ -63,9 +63,7 @@
             <button type="button" class="ctox-chip" data-flag="tables" aria-pressed="false">Tabellen</button>
           </div>
         </div>
-        <div class="knowledge-scroll" data-knowledge-list tabindex="-1">
-          <div class="ctox-empty"><strong>Knowledge wird geladen</strong></div>
-        </div>
+        <div class="knowledge-scroll" data-knowledge-list tabindex="-1"></div>
         <footer class="ctox-pane-footer knowledge-pane-footer"><span data-pg-footer></span></footer>
       </section>
 

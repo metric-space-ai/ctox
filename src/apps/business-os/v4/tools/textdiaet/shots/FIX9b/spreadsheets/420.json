@@ -1,0 +1,118 @@
+{
+ "app": "spreadsheets",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [
+    "put spreadsheet_runbooks/spreadsheet.summarize local=ok result=accepted {\"id\":\"spreadsheet.summarize\",\"document_type\":\"spreadsheet\",\"title\":\"Tabelle zusammenfassen\",\"description\":\"Fasse das au",
+    "put spreadsheet_runbooks/spreadsheet.audit-formulas local=ok result=accepted {\"id\":\"spreadsheet.audit-formulas\",\"document_type\":\"spreadsheet\",\"title\":\"Formeln auditieren\",\"description\":\"Finde sämtl",
+    "put spreadsheet_runbooks/spreadsheet.risk-review local=ok result=accepted {\"id\":\"spreadsheet.risk-review\",\"document_type\":\"spreadsheet\",\"title\":\"Finanzielle Risikoanalyse\",\"description\":\"Identif"
+   ],
+   "title": "Tabellen",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 812
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [
+    "console: Access to script at 'ctox:lib/ctox-office@1/ctox-office-spreadsheet.mjs' from origin 'http://127.0.0.1:52493' has been blocked by CORS policy: Cross origin requests are only supported for protocol schemes: chrome, chrome",
+    "console: Failed to load resource: net::ERR_FAILED",
+    "console: [spreadsheets] editor open failed TypeError: Failed to fetch dynamically imported module: ctox:lib/ctox-office@1/ctox-office-spreadsheet.mjs"
+   ],
+   "zoneText": "1 Editor konnte nicht geladen werden: Failed to fetch dynamically imported module: ctox:lib/ctox-office@1/ctox-office-spreadsheet.mjs",
+   "cands": [
+    "button:Dateiliste öffnen"
+   ],
+   "shot": "spreadsheets/420-01-open.png"
+  },
+  {
+   "step": "button Dateiliste öffnen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "spreadsheets/420-02-button_Dateiliste_ffnen.png"
+  },
+  {
+   "step": "button Leere Tabelle erstellen",
+   "changed": true,
+   "ops": [
+    "put spreadsheet_versions/sheet_a13fc619-918e-4f4c-ba93-e643deb0b3c6_v1 local=ok result=accepted {\"id\":\"sheet_a13fc619-918e-4f4c-ba93-e643deb0b3c6_v1\",\"spreadsheet_id\":\"sheet_a13fc619-918e-4f4c-ba93-e643deb0b3c6\",\"version\":1,\"source_kind",
+    "put spreadsheets/sheet_a13fc619-918e-4f4c-ba93-e643deb0b3c6 local=ok result=accepted {\"id\":\"sheet_a13fc619-918e-4f4c-ba93-e643deb0b3c6\",\"title\":\"Neue Tabelle\",\"filename\":\"neue-tabelle.csv\",\"mime_type\":\"text/csv\",\"status\":\"Dra"
+   ],
+   "zone": [
+    "clear spreadsheets.format.unsupported",
+    "clear spreadsheets.version.missing",
+    "clear spreadsheets.create",
+    "{\"level\":\"error\",\"code\":\"spreadsheets.editor\",\"text\":\"Editor konnte nicht geladen werden: Failed to fetch dynamically imported module: ctox:lib/ctox-office@1/ctox-office-spreadsheet.mjs\"}"
+   ],
+   "dialogs": [],
+   "errors": [
+    "console: [spreadsheets] editor open failed TypeError: Failed to fetch dynamically imported module: ctox:lib/ctox-office@1/ctox-office-spreadsheet.mjs"
+   ],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "spreadsheets/420-03-button_Leere_Tabelle_erstellen.png"
+  },
+  {
+   "step": "button Zurück zur Liste: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button Dateiliste schließen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "spreadsheets/420-04-button_Dateiliste_schlie_en.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "spreadsheet_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "spreadsheet_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "spreadsheet_runbooks",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "spreadsheet_versions",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "spreadsheets",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "spreadsheets",
+  "Tabellen"
+ ]
+}

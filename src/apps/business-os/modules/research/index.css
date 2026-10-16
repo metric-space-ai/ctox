@@ -4,7 +4,7 @@
    only the genuinely module-specific pieces (portfolio map, discovery graph,
    source cards, run panel, reports explorer). */
 
-.research-module {
+[data-app="research"] .research-module {
   --research-bg: var(--bg);
   --research-surface: var(--surface);
   --research-surface-2: var(--surface-2);
@@ -26,12 +26,12 @@
   min-width: 0;
 }
 
-.research-left,
-.research-center,
-.research-right,
-.research-workbench,
-.research-sources-shards-wrapper,
-.research-source-card {
+[data-app="research"] .research-left,
+[data-app="research"] .research-center,
+[data-app="research"] .research-right,
+[data-app="research"] .research-workbench,
+[data-app="research"] .research-sources-shards-wrapper,
+[data-app="research"] .research-source-card {
   min-width: 0;
 }
 
@@ -43,42 +43,38 @@
    right). The pane heads of the top row must keep those zones free, otherwise
    the icon lands on the column title and the close button on the content.
    -------------------------------------------------------------------------- */
-.shell-window[data-shell-contract="v2"] .research-module .ctox-pane-header {
+[data-app="research"] .research-module .ctox-pane-header {
   box-sizing: border-box;
   display: flex;
   align-items: center;
-  height: var(--shell-v2-header-row-size, 37px);
   min-height: var(--shell-v2-header-row-size, 37px);
   padding-top: 0;
   padding-bottom: 0;
 }
 
-.shell-window[data-shell-contract="v2"] .research-module .ctox-pane-header .ctox-pane-title-row {
+[data-app="research"] .research-module .ctox-pane-header .ctox-pane-title-row {
   width: 100%;
-  height: 100%;
   min-width: 0;
 }
 
-/* Kicker and title share the single 37px row instead of stacking. */
-.shell-window[data-shell-contract="v2"] .research-module .ctox-pane-header .ctox-pane-titles {
+/* Kicker and title share the 37px row instead of stacking. VIS3: no ellipsis
+   (frame kit) - when the pair does not fit, the title moves to its own line
+   and wraps at word boundaries; the head grows past the 37px band. */
+[data-app="research"] .research-module .ctox-pane-header .ctox-pane-titles {
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  gap: 0 8px;
   min-width: 0;
   padding-top: 0;
-  overflow: hidden;
 }
 
-/* Kuerzungs-Reihenfolge in der einen 37px-Zeile (Betreiber-Befund 31.08.):
-   Kicker und Titel sind Flex-Geschwister und schrumpften proportional, bis der
-   Kicker als Fragment stehen blieb ("CONTEXT" -> "CO..."), waehrend der Titel
-   noch Platz hatte. Der Kicker schrumpft jetzt nicht mehr; die Ellipse traegt
-   zuerst der Titel. Die 55%-Schranke verhindert nur, dass ein sehr langer
-   Kicker (Knowledge-Domain im Mittelkopf) den Titel ganz verdraengt - gekuerzt
-   wird er dann auf mehr als die halbe Zeile, nie auf ein Fragment. */
-.shell-window[data-shell-contract="v2"] .research-module .ctox-pane-header .ctox-pane-kicker {
-  flex: 0 0 auto;
-  max-width: 55%;
+/* Betreiber-Befund 31.08.: der Kicker darf nie als Fragment stehen bleiben
+   ("CONTEXT" -> "CO..."). Er schrumpft nicht; passt er nicht neben den Titel,
+   rutscht der Titel in die naechste Zeile (VIS3, keine Ellipse mehr). */
+[data-app="research"] .research-module .ctox-pane-header .ctox-pane-kicker {
+  flex: 0 1 auto;
+  max-width: 100%;
 }
 
 /* Zweite Haelfte derselben Regel: "bei Platznot ausblenden". Dreispaltig teilt
@@ -89,32 +85,28 @@
    Domain steht weiterhin in der Kontextspalte und an jeder Aufgabe der Liste.
    Ab dem 1024er-Haltepunkt fuehrt der Graph die volle Breite, dort kommt der
    Kicker zurueck (Regel weiter unten). */
-.shell-window[data-shell-contract="v2"] .research-module .research-center > .ctox-pane-header .ctox-pane-kicker {
+[data-app="research"] .research-module .research-center > .ctox-pane-header .ctox-pane-kicker {
   display: none;
 }
 
-.shell-window[data-shell-contract="v2"] .research-module .ctox-pane-header .ctox-pane-title {
-  min-width: 0;
+[data-app="research"] .research-module .ctox-pane-header .ctox-pane-title {
   flex: 0 1 auto;
   margin-top: 0;
   line-height: 1.1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* The action block must never claim flex space from the title; the hint text
    truncates before the title does. */
-.shell-window[data-shell-contract="v2"] .research-module .ctox-pane-header .ctox-pane-actions {
+[data-app="research"] .research-module .ctox-pane-header .ctox-pane-actions {
   flex: 0 0 auto;
   min-width: 0;
 }
 
-.shell-window[data-shell-contract="v2"] .research-module .ctox-pane-header .ctox-pane-icon {
+[data-app="research"] .research-module .ctox-pane-header .ctox-pane-icon {
   flex: 0 0 auto;
 }
 
-.shell-window[data-shell-contract="v2"] .research-module .ctox-pane-header .research-map-hint {
+[data-app="research"] .research-module .ctox-pane-header .research-map-hint {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -122,7 +114,7 @@
 
 /* Three columns: the icon sits over the left head, the window control over
    the right head. */
-.shell-window[data-shell-contract="v2"] .research-module .research-left > .ctox-pane-header {
+[data-app="research"] .research-module .research-left > .ctox-pane-header {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
 }
 
@@ -130,21 +122,21 @@
    icon's second row lies over the list area. Start the left scroll column one
    header row lower so no content is painted inside the icon zone (knowledge
    solves the same overlap with its indented second header row). */
-.shell-window[data-shell-contract="v2"] .research-module .research-left > .research-left-scroll {
+[data-app="research"] .research-module .research-left > .research-left-scroll {
   padding-top: var(--shell-v2-header-row-size, 37px);
 }
 
 /* Like the reference module, the icon-reserved head carries no eyebrow: with
    94px gone to the icon zone the duplicate label would squeeze the title. */
-.shell-window[data-shell-contract="v2"] .research-module .research-left > .ctox-pane-header .ctox-pane-kicker {
+[data-app="research"] .research-module .research-left > .ctox-pane-header .ctox-pane-kicker {
   display: none;
 }
 
-.shell-window[data-shell-contract="v2"] .research-module .research-right > .ctox-pane-header {
-  padding-right: 70px;
+[data-app="research"] .research-module .research-right > .ctox-pane-header {
+  padding-right: var(--shell-v2-control-inset, 70px);
 }
 
-.research-map-hint {
+[data-app="research"] .research-map-hint {
   margin-right: 6px;
   color: var(--research-muted);
   font-size: 11px;
@@ -152,27 +144,27 @@
   white-space: nowrap;
 }
 
-.research-left-scroll,
-.research-right-scroll,
-.research-center-body,
-.research-table-host {
+[data-app="research"] .research-left-scroll,
+[data-app="research"] .research-right-scroll,
+[data-app="research"] .research-center-body,
+[data-app="research"] .research-table-host {
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
 }
 
-.research-section {
+[data-app="research"] .research-section {
   display: grid;
   gap: 7px;
   padding: 9px;
 }
 
-.research-section + .research-section {
+[data-app="research"] .research-section + .research-section {
   border-top: 1px solid color-mix(in srgb, var(--research-line) 78%, transparent);
 }
 
-.research-section-head,
-.research-map-head {
+[data-app="research"] .research-section-head,
+[data-app="research"] .research-map-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -180,31 +172,31 @@
   padding: 2px 3px;
 }
 
-.research-context-actions {
+[data-app="research"] .research-context-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
 
-.research-context-actions > * {
+[data-app="research"] .research-context-actions > * {
   flex: 1 1 120px;
   min-width: 0;
   text-align: center;
 }
 
-.research-section-head.flush {
+[data-app="research"] .research-section-head.flush {
   padding: 0 0 8px;
 }
 
-.research-section-head strong,
-.research-map-head strong {
+[data-app="research"] .research-section-head strong,
+[data-app="research"] .research-map-head strong {
   font-size: 12px;
   font-weight: 820;
 }
 
-.research-section-head span,
-.research-map-head span,
-.research-status-line {
+[data-app="research"] .research-section-head span,
+[data-app="research"] .research-map-head span,
+[data-app="research"] .research-status-line {
   color: var(--research-muted);
   font-size: 12px;
 }
@@ -213,7 +205,7 @@
    gerade nicht verfuegbar") ist eine eigene Zeile unter dem Kopf. Ohne
    Innenabstand stand sie einspaltig als loser Text zwischen Kopf und
    Graph-Karte (Befund 02.09.2026, 375px und 719px). */
-.research-center > .research-status-line {
+[data-app="research"] .research-center > .research-status-line {
   padding: 6px 18px 0;
   min-width: 0;
   overflow: hidden;
@@ -221,17 +213,17 @@
   text-overflow: ellipsis;
 }
 
-.research-task-list,
-.research-ranking-list,
-.research-note-stack,
-.research-knowledge-list {
+[data-app="research"] .research-task-list,
+[data-app="research"] .research-ranking-list,
+[data-app="research"] .research-note-stack,
+[data-app="research"] .research-knowledge-list {
   display: grid;
   gap: 5px;
 }
 
-.research-task-item,
-.research-rank-row,
-.research-knowledge-list button {
+[data-app="research"] .research-task-item,
+[data-app="research"] .research-rank-row,
+[data-app="research"] .research-knowledge-list button {
   display: grid;
   width: 100%;
   min-width: 0;
@@ -242,96 +234,88 @@
   text-align: left;
 }
 
-.research-task-item {
+[data-app="research"] .research-task-item {
   gap: 2px;
   padding: 9px;
 }
 
-.research-task-item strong,
-.research-knowledge-list strong {
-  overflow: hidden;
+/* Listentitel und Zeile darunter brechen um statt abgeschnitten zu werden (Geometrie G4). */
+[data-app="research"] .research-task-item strong,
+[data-app="research"] .research-knowledge-list strong {
   font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
-.research-task-item span,
-.research-knowledge-list span {
-  overflow: hidden;
+[data-app="research"] .research-task-item span,
+[data-app="research"] .research-knowledge-list span {
   color: var(--research-muted);
   font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
-.research-task-item:hover,
-.research-task-item.is-active,
-.research-rank-row:hover,
-.research-rank-row.is-selected,
-.research-knowledge-list button:hover {
+[data-app="research"] .research-task-item:hover,
+[data-app="research"] .research-task-item.is-active,
+[data-app="research"] .research-rank-row:hover,
+[data-app="research"] .research-rank-row.is-selected,
+[data-app="research"] .research-knowledge-list button:hover {
   border-color: color-mix(in srgb, var(--research-accent) 42%, var(--research-line));
   background: color-mix(in srgb, var(--research-accent) 8%, var(--research-surface));
 }
 
-.research-rank-row {
+[data-app="research"] .research-rank-row {
   grid-template-columns: 42px minmax(0, 1fr) auto 44px;
   align-items: center;
   gap: 8px;
   padding: 7px 8px;
 }
 
-.research-rank {
+[data-app="research"] .research-rank {
   color: var(--research-muted);
   font-weight: 820;
 }
 
-.research-rank-main {
+[data-app="research"] .research-rank-main {
   min-width: 0;
 }
 
-.research-rank-main strong,
-.research-rank-main small {
+[data-app="research"] .research-rank-main strong,
+[data-app="research"] .research-rank-main small {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.research-rank-main small {
+[data-app="research"] .research-rank-main small {
   color: var(--research-muted);
   font-size: 12px;
 }
 
-.research-score {
+[data-app="research"] .research-score {
   color: var(--research-muted);
   font-weight: 820;
   text-align: right;
 }
 
-.research-center-body {
+[data-app="research"] .research-center-body {
   display: grid;
   grid-template-rows: minmax(460px, 2.15fr) minmax(230px, 0.85fr);
   gap: 12px;
   padding: 12px;
 }
 
-/* The centre head lives in the shell's single 37px header row — a two-line
-   clamp would overflow it, so the title stays on one line with an ellipsis
-   (shared .ctox-pane-title behaviour). */
-.research-center-header .ctox-pane-title {
+/* VIS3: the centre head grows with its title - a long task title wraps at word
+   boundaries like the frame kit instead of ending in an ellipsis. */
+[data-app="research"] .research-center-header .ctox-pane-title {
   display: block;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
-.research-graph-shell {
+[data-app="research"] .research-graph-shell {
   min-height: 460px;
   overflow: hidden;
 }
 
-.research-graph-stage {
+[data-app="research"] .research-graph-stage {
   position: relative;
   width: 100%;
   height: 100%;
@@ -345,31 +329,31 @@
   isolation: isolate;
 }
 
-.research-graph-canvas,
-.research-graph-canvas > div,
-.research-graph-canvas canvas {
+[data-app="research"] .research-graph-canvas,
+[data-app="research"] .research-graph-canvas > div,
+[data-app="research"] .research-graph-canvas canvas {
   position: absolute !important;
   inset: 0;
   width: 100% !important;
   height: 100% !important;
 }
 
-.research-graph-canvas {
+[data-app="research"] .research-graph-canvas {
   cursor: grab;
   touch-action: none;
   transition: right 160ms ease;
 }
 
-.research-graph-stage.has-insights .research-graph-canvas {
+[data-app="research"] .research-graph-stage.has-insights .research-graph-canvas {
   right: 316px;
   width: auto !important;
 }
 
-.research-graph-canvas:active {
+[data-app="research"] .research-graph-canvas:active {
   cursor: grabbing;
 }
 
-.research-graph-loading {
+[data-app="research"] .research-graph-loading {
   position: absolute;
   inset: 0;
   z-index: 2;
@@ -383,16 +367,16 @@
   text-align: center;
 }
 
-.research-graph-loading.is-error {
+[data-app="research"] .research-graph-loading.is-error {
   padding: 24px;
 }
 
-.research-graph-loading.is-error strong {
+[data-app="research"] .research-graph-loading.is-error strong {
   color: #f0f4f6;
   font-size: 15px;
 }
 
-.research-graph-meta {
+[data-app="research"] .research-graph-meta {
   position: absolute;
   top: 16px;
   left: 18px;
@@ -409,7 +393,7 @@
   pointer-events: none;
 }
 
-.research-graph-meta > div {
+[data-app="research"] .research-graph-meta > div {
   display: grid;
   gap: 3px;
   min-width: 0;
@@ -420,28 +404,30 @@
    0 Verknuepfungen · 0 Themenfelder") in der schmalen Dreispaltenansicht auf
    zwei Zeilen, malte sie ueber die Umschaltung (Betreiber-Befund 31.08.).
    Beide Zeilen bleiben deshalb einzeilig und kuerzen mit Ellipse; die Hoehe
-   des Blocks ist damit konstant und stapelt sauber ueber der Umschaltung. */
-.research-graph-meta strong,
-.research-graph-meta > div > span {
+   des Blocks ist damit konstant und stapelt sauber ueber der Umschaltung.
+   Fachlich gewollt (VIS3): index.js setzt data-v4-allow-ellipsis auf den
+   Block, die Zusammenfassung traegt ihren vollen Text als title. */
+[data-app="research"] .research-graph-meta strong,
+[data-app="research"] .research-graph-meta > div > span {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.research-graph-meta strong {
+[data-app="research"] .research-graph-meta strong {
   color: #f5f8f9;
   font-size: 13px;
   font-weight: 760;
   letter-spacing: -0.01em;
 }
 
-.research-graph-meta span {
+[data-app="research"] .research-graph-meta span {
   color: #7f8d94;
   font-size: 11px;
 }
 
-.research-graph-live {
+[data-app="research"] .research-graph-live {
   flex: 0 0 auto;
   border: 1px solid #2d373d;
   border-radius: 999px;
@@ -454,12 +440,12 @@
   text-transform: uppercase;
 }
 
-.research-graph-live.is-live {
+[data-app="research"] .research-graph-live.is-live {
   border-color: #277b71;
   color: #64d4c2 !important;
 }
 
-.research-graph-search {
+[data-app="research"] .research-graph-search {
   position: absolute;
   top: 14px;
   right: 74px;
@@ -476,7 +462,7 @@
   color: #8c9aa1;
 }
 
-.research-graph-search input {
+[data-app="research"] .research-graph-search input {
   width: 100%;
   min-width: 0;
   border: 0;
@@ -487,12 +473,12 @@
   font-size: 12px;
 }
 
-.research-graph-search input::placeholder {
+[data-app="research"] .research-graph-search input::placeholder {
   color: #647179;
 }
 
 /* Rechtes Glied der unteren Buehnenleiste (siehe .research-graph-bottombar). */
-.research-graph-rail {
+[data-app="research"] .research-graph-rail {
   position: static;
   flex: 0 0 auto;
   display: flex;
@@ -506,7 +492,7 @@
   background: rgba(12, 15, 17, 0.78);
 }
 
-.research-graph-tool {
+[data-app="research"] .research-graph-tool {
   display: grid;
   place-items: center;
   width: 28px;
@@ -520,19 +506,19 @@
   cursor: pointer;
 }
 
-.research-graph-tool:hover,
-.research-graph-tool.is-active {
+[data-app="research"] .research-graph-tool:hover,
+[data-app="research"] .research-graph-tool.is-active {
   border-color: #425a70;
   background: #202838;
   color: #ffffff;
 }
 
-.research-graph-dimension {
+[data-app="research"] .research-graph-dimension {
   font-size: 10px;
   letter-spacing: 0;
 }
 
-.research-graph-detail {
+[data-app="research"] .research-graph-detail {
   display: flex;
   gap: 2px;
   width: auto;
@@ -542,7 +528,7 @@
   background: #171b25;
 }
 
-.research-graph-detail button {
+[data-app="research"] .research-graph-detail button {
   min-width: 52px;
   height: 28px;
   overflow: visible;
@@ -559,13 +545,13 @@
   cursor: pointer;
 }
 
-.research-graph-detail button:hover,
-.research-graph-detail button.is-active {
+[data-app="research"] .research-graph-detail button:hover,
+[data-app="research"] .research-graph-detail button.is-active {
   background: #263746;
   color: #eef8fb;
 }
 
-.research-graph-layer-switch {
+[data-app="research"] .research-graph-layer-switch {
   position: absolute;
   top: 58px;
   left: 18px;
@@ -578,8 +564,8 @@
   background: rgba(13, 16, 18, 0.88);
 }
 
-.research-graph-layer-switch button,
-.research-graph-insights-tabs button {
+[data-app="research"] .research-graph-layer-switch button,
+[data-app="research"] .research-graph-insights-tabs button {
   border: 0;
   border-radius: 4px;
   padding: 5px 8px;
@@ -590,15 +576,15 @@
   cursor: pointer;
 }
 
-.research-graph-layer-switch button:hover,
-.research-graph-layer-switch button.is-active,
-.research-graph-insights-tabs button:hover,
-.research-graph-insights-tabs button.is-active {
+[data-app="research"] .research-graph-layer-switch button:hover,
+[data-app="research"] .research-graph-layer-switch button.is-active,
+[data-app="research"] .research-graph-insights-tabs button:hover,
+[data-app="research"] .research-graph-insights-tabs button.is-active {
   background: #263039;
   color: #f0f5f7;
 }
 
-.research-graph-insights {
+[data-app="research"] .research-graph-insights {
   position: absolute;
   top: 60px;
   right: 12px;
@@ -612,7 +598,7 @@
   background: rgba(12, 15, 17, 0.9);
 }
 
-.research-graph-insights-tabs {
+[data-app="research"] .research-graph-insights-tabs {
   position: sticky;
   top: 0;
   z-index: 1;
@@ -623,7 +609,7 @@
   background: #111517;
 }
 
-.research-graph-topics {
+[data-app="research"] .research-graph-topics {
   display: grid;
   gap: 1px;
   margin: 0;
@@ -631,7 +617,7 @@
   list-style: none;
 }
 
-.research-graph-topics button {
+[data-app="research"] .research-graph-topics button {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr) auto;
   align-items: center;
@@ -646,17 +632,17 @@
   cursor: pointer;
 }
 
-.research-graph-topics button:hover {
+[data-app="research"] .research-graph-topics button:hover {
   background: #1b2226;
 }
 
-.research-graph-topics span,
-.research-graph-topics small {
+[data-app="research"] .research-graph-topics span,
+[data-app="research"] .research-graph-topics small {
   color: #68757c;
   font-size: 9px;
 }
 
-.research-graph-topics strong {
+[data-app="research"] .research-graph-topics strong {
   overflow: hidden;
   font-size: 11px;
   font-weight: 620;
@@ -664,7 +650,7 @@
   white-space: nowrap;
 }
 
-.research-graph-metrics {
+[data-app="research"] .research-graph-metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1px;
@@ -672,27 +658,27 @@
   padding: 6px;
 }
 
-.research-graph-metrics div {
+[data-app="research"] .research-graph-metrics div {
   display: grid;
   gap: 2px;
   padding: 7px;
   background: #171d20;
 }
 
-.research-graph-metrics dt {
+[data-app="research"] .research-graph-metrics dt {
   color: #6e7b82;
   font-size: 8px;
   text-transform: uppercase;
 }
 
-.research-graph-metrics dd {
+[data-app="research"] .research-graph-metrics dd {
   margin: 0;
   color: #edf4f6;
   font-size: 16px;
   font-weight: 740;
 }
 
-.research-graph-insights > p {
+[data-app="research"] .research-graph-insights > p {
   margin: 0;
   padding: 4px 12px 10px;
   color: #7d8a90;
@@ -700,7 +686,7 @@
   line-height: 1.45;
 }
 
-.research-graph-inspector {
+[data-app="research"] .research-graph-inspector {
   display: grid;
   gap: 3px;
   margin: 0 6px 6px;
@@ -711,13 +697,13 @@
   line-height: 1.35;
 }
 
-.research-graph-inspector strong { color: #eef5f7; font-size: 11px; }
-.research-graph-inspector small { color: #7f8e95; overflow-wrap: anywhere; }
-.research-graph-inspector ul { display: grid; gap: 3px; margin: 2px 0 0; padding: 0; list-style: none; }
-.research-graph-inspector li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 6px; }
-.research-graph-inspector li small { grid-column: 1 / -1; }
+[data-app="research"] .research-graph-inspector strong { color: #eef5f7; font-size: 11px; }
+[data-app="research"] .research-graph-inspector small { color: #7f8e95; overflow-wrap: anywhere; }
+[data-app="research"] .research-graph-inspector ul { display: grid; gap: 3px; margin: 2px 0 0; padding: 0; list-style: none; }
+[data-app="research"] .research-graph-inspector li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 6px; }
+[data-app="research"] .research-graph-inspector li small { grid-column: 1 / -1; }
 
-.research-graph-contract-error {
+[data-app="research"] .research-graph-contract-error {
   position: absolute;
   top: 128px;
   left: 50%;
@@ -738,7 +724,7 @@
    unter die Steuerung (z-index 6 > 5) — in der Dreispaltenansicht bei 1180px
    um 34px, gemessen 31.08. Bei knappem Platz faellt statt der Ueberdeckung
    die Beschriftung der Aktionszeile weg (Schwelle am Dateiende). */
-.research-graph-bottombar {
+[data-app="research"] .research-graph-bottombar {
   position: absolute;
   right: 12px;
   bottom: 12px;
@@ -753,11 +739,11 @@
   pointer-events: none;
 }
 
-.research-graph-bottombar > * {
+[data-app="research"] .research-graph-bottombar > * {
   pointer-events: auto;
 }
 
-.research-graph-actions {
+[data-app="research"] .research-graph-actions {
   position: static;
   display: flex;
   min-width: 0;
@@ -765,7 +751,7 @@
   gap: 5px;
 }
 
-.research-graph-action {
+[data-app="research"] .research-graph-action {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -782,38 +768,40 @@
 }
 
 /* Bei knappem Platz schrumpfen die Aktionsknoepfe, statt die Steuerung zu
-   ueberdecken: Glyphe bleibt, die Beschriftung kuerzt mit Ellipse. */
-.research-graph-action > span {
+   ueberdecken: Glyphe bleibt, die Beschriftung kuerzt mit Ellipse. Fachlich
+   gewollt (VIS3): jeder Knopf traegt den vollen Namen als title/aria-label,
+   index.js setzt data-v4-allow-ellipsis auf die Aktionszeile. */
+[data-app="research"] .research-graph-action > span {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.research-graph-action > svg {
+[data-app="research"] .research-graph-action > svg {
   flex: 0 0 auto;
 }
 
-.research-graph-action:hover {
+[data-app="research"] .research-graph-action:hover {
   border-color: #48748b;
   color: #f4f8fa;
 }
 
-.research-graph-action:disabled {
+[data-app="research"] .research-graph-action:disabled {
   cursor: wait;
   opacity: 0.5;
 }
 
-.research-graph-tool:focus-visible,
-.research-graph-layer-switch button:focus-visible,
-.research-graph-insights button:focus-visible,
-.research-graph-action:focus-visible,
-.research-graph-search:focus-within {
+[data-app="research"] .research-graph-tool:focus-visible,
+[data-app="research"] .research-graph-layer-switch button:focus-visible,
+[data-app="research"] .research-graph-insights button:focus-visible,
+[data-app="research"] .research-graph-action:focus-visible,
+[data-app="research"] .research-graph-search:focus-within {
   outline: 2px solid #78b6d5;
   outline-offset: 2px;
 }
 
-.research-sr-only {
+[data-app="research"] .research-sr-only {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -823,7 +811,7 @@
   white-space: nowrap;
 }
 
-.research-workbench {
+[data-app="research"] .research-workbench {
   min-height: 0;
   overflow: hidden;
   border: 1px solid var(--research-line);
@@ -831,19 +819,19 @@
   background: color-mix(in srgb, var(--research-surface-2) 55%, var(--research-surface));
 }
 
-.research-map-panel {
+[data-app="research"] .research-map-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
 }
 
-.research-map-head {
+[data-app="research"] .research-map-head {
   min-height: 32px;
   padding: 0 4px 7px;
 }
 
-.research-map-head > div:first-child {
+[data-app="research"] .research-map-head > div:first-child {
   display: flex;
   align-items: baseline;
   gap: 4px;
@@ -851,11 +839,11 @@
   flex: 1 1 auto;
 }
 
-.research-map-head strong {
+[data-app="research"] .research-map-head strong {
   margin-right: 0;
 }
 
-.research-portfolio-map {
+[data-app="research"] .research-portfolio-map {
   position: relative;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--research-line) 82%, transparent);
@@ -865,27 +853,27 @@
   touch-action: none;
 }
 
-.research-portfolio-map.is-panning {
+[data-app="research"] .research-portfolio-map.is-panning {
   cursor: grabbing;
 }
 
-.research-map-grid,
-.research-map-content {
+[data-app="research"] .research-map-grid,
+[data-app="research"] .research-map-content {
   position: absolute;
   inset: 0;
 }
 
-.research-map-grid {
+[data-app="research"] .research-map-grid {
   background: color-mix(in srgb, var(--research-surface-2) 34%, transparent);
   pointer-events: none;
 }
 
-.research-map-content {
+[data-app="research"] .research-map-content {
   transform-origin: center center;
   transition: transform 80ms ease-out;
 }
 
-.research-map-axis {
+[data-app="research"] .research-map-axis {
   position: absolute;
   z-index: 5;
   display: flex;
@@ -904,14 +892,14 @@
   box-shadow: none;
 }
 
-.research-map-axis span {
+[data-app="research"] .research-map-axis span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.research-map-axis select {
+[data-app="research"] .research-map-axis select {
   width: min(190px, 42vw);
   min-width: 136px;
   height: 20px;
@@ -923,18 +911,18 @@
   cursor: pointer;
 }
 
-.research-map-axis-y {
+[data-app="research"] .research-map-axis-y {
   left: 12px;
   top: 12px;
 }
 
-.research-map-axis-x {
+[data-app="research"] .research-map-axis-x {
   left: 50%;
   bottom: 12px;
   transform: translateX(-50%);
 }
 
-.research-map-point {
+[data-app="research"] .research-map-point {
   position: absolute;
   left: var(--x);
   top: var(--y);
@@ -955,39 +943,39 @@
   transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
 }
 
-.research-map-point span {
+[data-app="research"] .research-map-point span {
   display: none;
 }
 
-.research-map-point.is-labelled {
+[data-app="research"] .research-map-point.is-labelled {
   width: auto;
   height: auto;
   max-width: 148px;
   padding: 4px 8px;
 }
 
-.research-map-point.is-labelled span {
+[data-app="research"] .research-map-point.is-labelled span {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.research-map-point.is-compact {
+[data-app="research"] .research-map-point.is-compact {
   opacity: 0.78;
 }
 
-.research-map-point:hover,
-.research-map-point.is-selected {
+[data-app="research"] .research-map-point:hover,
+[data-app="research"] .research-map-point.is-selected {
   transform: translate(-50%, -50%) scale(1.06);
   background: color-mix(in srgb, var(--research-accent) 14%, var(--research-surface));
 }
 
-.research-map-point.is-selected {
+[data-app="research"] .research-map-point.is-selected {
   z-index: 4;
 }
 
-.research-discovery-edges {
+[data-app="research"] .research-discovery-edges {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -996,21 +984,21 @@
   pointer-events: none;
 }
 
-.research-discovery-edge {
+[data-app="research"] .research-discovery-edge {
   stroke: color-mix(in srgb, var(--research-muted) 40%, transparent);
   stroke-width: 0.32;
 }
 
-.research-discovery-edge-source {
+[data-app="research"] .research-discovery-edge-source {
   stroke: color-mix(in srgb, var(--research-accent) 48%, transparent);
 }
 
-.research-discovery-edge-measurement {
+[data-app="research"] .research-discovery-edge-measurement {
   stroke: color-mix(in srgb, var(--research-warn) 52%, transparent);
   stroke-dasharray: 1.8 1.6;
 }
 
-.research-graph-node {
+[data-app="research"] .research-graph-node {
   position: absolute;
   left: var(--x);
   top: var(--y);
@@ -1033,62 +1021,62 @@
   box-shadow: none;
 }
 
-.research-graph-node span,
-.research-graph-node small {
+[data-app="research"] .research-graph-node span,
+[data-app="research"] .research-graph-node small {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.research-graph-node small {
+[data-app="research"] .research-graph-node small {
   color: var(--research-muted);
   font-size: 10px;
   font-weight: 760;
 }
 
-.research-graph-node-knowledge {
+[data-app="research"] .research-graph-node-knowledge {
   color: var(--research-good);
 }
 
-.research-graph-node-class {
+[data-app="research"] .research-graph-node-class {
   color: var(--research-muted);
 }
 
-.research-graph-node-source-strong {
+[data-app="research"] .research-graph-node-source-strong {
   color: var(--research-good);
 }
 
-.research-graph-node-measurement {
+[data-app="research"] .research-graph-node-measurement {
   color: var(--research-warn);
   min-width: 58px;
 }
 
-.research-graph-node:hover,
-.research-graph-node.is-selected {
+[data-app="research"] .research-graph-node:hover,
+[data-app="research"] .research-graph-node.is-selected {
   transform: translate(-50%, -50%) scale(1.04);
   z-index: 4;
 }
 
-.research-point-a {
+[data-app="research"] .research-point-a {
   color: var(--research-good);
 }
 
-.research-point-c {
+[data-app="research"] .research-point-c {
   color: var(--research-warn);
 }
 
-.research-point-d {
+[data-app="research"] .research-point-d {
   color: var(--research-risk);
 }
 
-.research-workbench {
+[data-app="research"] .research-workbench {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
 }
 
 /* Table cell content inside the kit table (source title button, sub id). */
-.research-table-host .ctox-table td button {
+[data-app="research"] .research-table-host .ctox-table td button {
   display: grid;
   gap: 2px;
   max-width: 360px;
@@ -1101,57 +1089,62 @@
   cursor: pointer;
 }
 
-.research-table-host .ctox-table td span {
+[data-app="research"] .research-table-host .ctox-table td span {
   color: var(--research-muted);
 }
 
-.research-knowledge-list {
+[data-app="research"] .research-knowledge-list {
   padding: 8px;
 }
 
-.research-knowledge-list button {
+[data-app="research"] .research-knowledge-list button {
   padding: 9px;
 }
 
-.research-context-block {
+[data-app="research"] .research-context-block {
   display: grid;
   gap: 8px;
   padding: 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--research-line) 78%, transparent);
 }
 
-.research-context-block > strong {
+/* Textdiät E: ohne gewählte Quelle kein leerer Abschnitt. */
+[data-app="research"] .research-context-block[hidden] {
+  display: none;
+}
+
+[data-app="research"] .research-context-block > strong {
   font-size: 14px;
 }
 
 /* Ohne ausgewaehlte Aufgabe traegt dieses <strong> keinen Domainnamen, sondern
    die Leerzustands-Ueberschrift ("Keine Domain ausgewaehlt") - dann gilt die
    Leerzustands-Stufe, nicht der Datenton. */
-.research-context-block > strong.research-context-empty {
+[data-app="research"] .research-context-block > strong.research-context-empty {
   color: var(--research-empty);
   font-weight: 700;
 }
 
-.research-context-block p,
-.research-context-block small {
+[data-app="research"] .research-context-block p,
+[data-app="research"] .research-context-block small {
   margin: 0;
   color: var(--research-empty);
 }
 
-.research-metric-grid {
+[data-app="research"] .research-metric-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   border-bottom: 1px solid var(--research-line);
 }
 
-.research-metric-grid div {
+[data-app="research"] .research-metric-grid div {
   display: grid;
   gap: 2px;
   padding: 10px 12px;
   border-right: 1px solid color-mix(in srgb, var(--research-line) 72%, transparent);
 }
 
-.research-metric-grid strong {
+[data-app="research"] .research-metric-grid strong {
   overflow: hidden;
   font-size: 17px;
   line-height: 1.1;
@@ -1159,33 +1152,33 @@
   white-space: nowrap;
 }
 
-.research-metric-grid span {
+[data-app="research"] .research-metric-grid span {
   color: var(--research-muted);
   font-size: 11px;
   font-weight: 780;
   text-transform: uppercase;
 }
 
-.research-run-panel {
+[data-app="research"] .research-run-panel {
   display: grid;
   gap: 10px;
   padding: 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--research-line) 78%, transparent);
 }
 
-.research-run-panel p {
+[data-app="research"] .research-run-panel p {
   margin: 0;
   color: var(--research-muted);
 }
 
-.research-run-panel .ctox-fields dd {
+[data-app="research"] .research-run-panel .ctox-fields dd {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.research-run-state {
+[data-app="research"] .research-run-state {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
@@ -1193,7 +1186,7 @@
   min-width: 0;
 }
 
-.research-run-state > span {
+[data-app="research"] .research-run-state > span {
   width: 10px;
   height: 10px;
   border-radius: 999px;
@@ -1202,12 +1195,12 @@
   outline-offset: 2px;
 }
 
-.research-run-state div {
+[data-app="research"] .research-run-state div {
   min-width: 0;
 }
 
-.research-run-state strong,
-.research-run-state small {
+[data-app="research"] .research-run-state strong,
+[data-app="research"] .research-run-state small {
   display: block;
   min-width: 0;
   overflow: hidden;
@@ -1215,34 +1208,34 @@
   white-space: nowrap;
 }
 
-.research-run-state small {
+[data-app="research"] .research-run-state small {
   color: var(--research-muted);
 }
 
-.research-run-queued > span,
-.research-run-running > span {
+[data-app="research"] .research-run-queued > span,
+[data-app="research"] .research-run-running > span {
   background: var(--research-warn);
 }
 
-.research-run-running > span {
+[data-app="research"] .research-run-running > span {
   animation: research-pulse 1.3s ease-out infinite;
 }
 
-.research-run-completed > span {
+[data-app="research"] .research-run-completed > span {
   background: var(--research-good);
 }
 
-.research-run-failed > span,
-.research-run-blocked > span {
+[data-app="research"] .research-run-failed > span,
+[data-app="research"] .research-run-blocked > span {
   background: var(--research-risk);
 }
 
-.research-run-actions {
+[data-app="research"] .research-run-actions {
   display: flex;
   justify-content: flex-start;
 }
 
-.research-run-control {
+[data-app="research"] .research-run-control {
   width: 100%;
   margin-top: 10px;
 }
@@ -1252,7 +1245,7 @@
   100% { opacity: 1; }
 }
 
-.research-note {
+[data-app="research"] .research-note {
   display: grid;
   gap: 3px;
   border: 1px solid color-mix(in srgb, var(--research-accent) 28%, var(--research-line));
@@ -1261,22 +1254,22 @@
   background: color-mix(in srgb, var(--research-accent) 5%, transparent);
 }
 
-.research-note-risk {
+[data-app="research"] .research-note-risk {
   border-color: color-mix(in srgb, var(--research-risk) 32%, var(--research-line));
   background: color-mix(in srgb, var(--research-risk) 5%, transparent);
 }
 
-.research-note span {
+[data-app="research"] .research-note span {
   color: var(--research-muted);
   font-size: 12px;
 }
 
-.research-scoring-list {
+[data-app="research"] .research-scoring-list {
   display: grid;
   gap: 5px;
 }
 
-.research-scoring-list div {
+[data-app="research"] .research-scoring-list div {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1287,40 +1280,40 @@
   color: var(--research-muted);
 }
 
-.research-scoring-list div.is-active {
+[data-app="research"] .research-scoring-list div.is-active {
   border-color: color-mix(in srgb, var(--research-accent) 58%, var(--research-line));
   background: color-mix(in srgb, var(--research-accent) 8%, var(--research-surface));
 }
 
-.research-scoring-list strong,
-.research-scoring-list span {
+[data-app="research"] .research-scoring-list strong,
+[data-app="research"] .research-scoring-list span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.research-scoring-list strong {
+[data-app="research"] .research-scoring-list strong {
   color: var(--research-text);
 }
 
-.research-scoring-list span {
+[data-app="research"] .research-scoring-list span {
   color: var(--research-muted);
   font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
 }
 
-.research-axis-select {
+[data-app="research"] .research-axis-select {
   display: grid;
   gap: 2px;
 }
 
-.research-axis-select span {
+[data-app="research"] .research-axis-select span {
   font-size: 10px;
 }
 
-.research-axis-select select {
+[data-app="research"] .research-axis-select select {
   max-width: 168px;
   padding: 0 8px;
   min-height: 30px;
@@ -1336,17 +1329,17 @@
    (#939393). Vorher standen die Ueberschriften auf Fliesstext-Helligkeit
    (#D4D4D8) und die Seitenpane-Leertexte auf --muted (#818181) - beide neben
    dem Kit (UI-Review 31.08.). */
-.research-module .ctox-empty strong,
-.research-module .ctox-empty.research-empty-card strong {
+[data-app="research"] .research-module .ctox-empty strong,
+[data-app="research"] .research-module .ctox-empty.research-empty-card strong {
   color: inherit;
 }
 
-.research-empty {
+[data-app="research"] .research-empty {
   color: var(--research-empty);
   font-size: 13px;
 }
 
-.research-empty-card {
+[data-app="research"] .research-empty-card {
   display: grid;
   gap: 3px;
   border: 1px dashed color-mix(in srgb, var(--research-line) 88%, transparent);
@@ -1355,23 +1348,23 @@
   padding: 10px;
 }
 
-.research-empty-card strong,
-.research-empty-card span {
+[data-app="research"] .research-empty-card strong,
+[data-app="research"] .research-empty-card span {
   min-width: 0;
 }
 
-.research-empty-card strong {
+[data-app="research"] .research-empty-card strong {
   color: inherit;
   font-size: 12px;
   font-weight: 820;
 }
 
-.research-empty-card span {
+[data-app="research"] .research-empty-card span {
   color: inherit;
   font-size: 12px;
 }
 
-.research-center-empty-body {
+[data-app="research"] .research-center-empty-body {
   display: grid;
   grid-template-rows: minmax(180px, 0.9fr) minmax(180px, 0.7fr);
   gap: 12px;
@@ -1379,7 +1372,7 @@
   padding: 12px;
 }
 
-.research-empty-state-panel {
+[data-app="research"] .research-empty-state-panel {
   min-height: 0;
   border: 1px dashed color-mix(in srgb, var(--research-line) 88%, transparent);
   border-radius: var(--surface-radius);
@@ -1387,16 +1380,16 @@
   padding: 18px;
 }
 
-.research-empty-state-panel strong,
-.research-empty-state-panel span {
+[data-app="research"] .research-empty-state-panel strong,
+[data-app="research"] .research-empty-state-panel span {
   max-width: 68ch;
 }
 
-.research-empty-workbench {
+[data-app="research"] .research-empty-workbench {
   min-height: 0;
 }
 
-.research-empty-workbench-body {
+[data-app="research"] .research-empty-workbench-body {
   display: grid;
   align-content: start;
   gap: 10px;
@@ -1406,12 +1399,12 @@
   font-size: 12px;
 }
 
-.research-empty-workbench-body p {
+[data-app="research"] .research-empty-workbench-body p {
   margin: 0;
   max-width: 72ch;
 }
 
-.research-empty-search-row {
+[data-app="research"] .research-empty-search-row {
   display: grid;
   gap: 5px;
   max-width: 560px;
@@ -1421,31 +1414,31 @@
   text-transform: uppercase;
 }
 
-.research-drawer {
+[data-app="research"] .research-drawer {
   display: grid;
   gap: 12px;
   padding: 14px;
   color: var(--research-text);
 }
 
-.research-drawer header,
-.research-context-chat header,
-.research-context-chat footer {
+[data-app="research"] .research-drawer header,
+[data-app="research"] .research-context-chat header,
+[data-app="research"] .research-context-chat footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.research-drawer form,
-.research-drawer-body,
-.research-context-chat {
+[data-app="research"] .research-drawer form,
+[data-app="research"] .research-drawer-body,
+[data-app="research"] .research-context-chat {
   display: grid;
   gap: 10px;
 }
 
-.research-drawer label,
-.research-context-chat label {
+[data-app="research"] .research-drawer label,
+[data-app="research"] .research-context-chat label {
   display: grid;
   gap: 5px;
   color: var(--research-muted);
@@ -1453,7 +1446,7 @@
   font-weight: 780;
 }
 
-.research-drawer pre {
+[data-app="research"] .research-drawer pre {
   max-height: 44vh;
   overflow: auto;
   border: 1px solid var(--research-line);
@@ -1471,8 +1464,8 @@
    ([data-research-root], `position: relative`) und liegen nur ueber dem
    eigenen Fensterinhalt. Referenz: modules/app-store/index.css.
    -------------------------------------------------------------------------- */
-.research-module-overlay,
-.shell-window[data-shell-contract="v2"] .research-module-overlay {
+[data-app="research"] .research-module-overlay,
+[data-app="research"] .research-module-overlay {
   position: absolute;
   inset: 0;
   z-index: 240;
@@ -1481,12 +1474,12 @@
 
 /* Der Prompt-Viewer kann ueber dem Task-Dialog geoeffnet werden. Die Regel
    muss die Spezifitaet der Overlay-Regel oben schlagen. */
-.research-module-overlay.research-prompt-viewer,
-.shell-window[data-shell-contract="v2"] .research-module-overlay.research-prompt-viewer {
+[data-app="research"] .research-module-overlay.research-prompt-viewer,
+[data-app="research"] .research-module-overlay.research-prompt-viewer {
   z-index: 250;
 }
 
-.research-prompt-viewer-text {
+[data-app="research"] .research-prompt-viewer-text {
   margin-top: 0;
   max-height: 380px;
   font-size: 11px;
@@ -1494,31 +1487,31 @@
 }
 
 /* Task dialog (ctox-modal) — module-specific form layout. */
-.research-task-dialog label {
+[data-app="research"] .research-task-dialog label {
   display: grid;
   gap: 6px;
   min-width: 0;
 }
 
-.research-task-dialog form {
+[data-app="research"] .research-task-dialog form {
   display: grid;
   gap: 12px;
 }
 
-.research-task-dialog .ctox-textarea {
+[data-app="research"] .research-task-dialog .ctox-textarea {
   min-height: 86px;
   max-height: 180px;
 }
 
-.research-field-note,
-.research-validation {
+[data-app="research"] .research-field-note,
+[data-app="research"] .research-validation {
   margin: 0;
   color: var(--research-muted);
   font-size: 11.5px;
   line-height: 1.35;
 }
 
-.research-validation:not(:empty) {
+[data-app="research"] .research-validation:not(:empty) {
   border: 1px solid color-mix(in srgb, var(--research-warn) 45%, var(--research-line));
   border-radius: 6px;
   background: color-mix(in srgb, var(--research-warn) 8%, transparent);
@@ -1526,7 +1519,7 @@
   padding: 7px 9px;
 }
 
-.research-context-menu {
+[data-app="research"] .research-context-menu {
   position: absolute;
   z-index: 90;
   width: min(560px, calc(100vw - 24px));
@@ -1540,7 +1533,7 @@
   padding: 6px;
 }
 
-.research-context-chat {
+[data-app="research"] .research-context-chat {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 10px;
@@ -1548,8 +1541,8 @@
   padding: 12px;
 }
 
-.research-context-chat header,
-.research-context-chat footer {
+[data-app="research"] .research-context-chat header,
+[data-app="research"] .research-context-chat footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1557,12 +1550,12 @@
   min-width: 0;
 }
 
-.research-context-chat header div {
+[data-app="research"] .research-context-chat header div {
   min-width: 0;
 }
 
-.research-context-chat strong,
-.research-context-chat span {
+[data-app="research"] .research-context-chat strong,
+[data-app="research"] .research-context-chat span {
   display: block;
   min-width: 0;
   overflow: hidden;
@@ -1570,28 +1563,28 @@
   white-space: nowrap;
 }
 
-.research-context-chat strong {
+[data-app="research"] .research-context-chat strong {
   color: var(--research-text);
   font-size: 12.5px;
   font-weight: 820;
 }
 
-.research-context-chat span {
+[data-app="research"] .research-context-chat span {
   color: var(--research-muted);
   font-size: 11px;
   font-weight: 700;
 }
 
-.research-context-mode {
+[data-app="research"] .research-context-mode {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.research-context-chat .ctox-textarea {
+[data-app="research"] .research-context-chat .ctox-textarea {
   min-height: 92px;
   max-height: 180px;
 }
 
-.research-context-chat footer > span {
+[data-app="research"] .research-context-chat footer > span {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1606,7 +1599,7 @@
    Spaltenbreite kommt weiter aus --research-left-width, der linke Resizer
    bleibt bedienbar. */
 @container business-app-window (max-width: 1024px) {
-  .ctox-workspace.research-module {
+  [data-app="research"] .ctox-workspace.research-module {
     grid-template-columns: var(--research-left-width) 6px minmax(0, 1fr);
     grid-template-rows: minmax(420px, 1fr) minmax(240px, auto);
     grid-template-areas:
@@ -1619,54 +1612,54 @@
     row-gap: 6px;
   }
 
-  .research-left {
+  [data-app="research"] .research-left {
     grid-area: research-left;
   }
 
-  .research-center {
+  [data-app="research"] .research-center {
     grid-area: research-center;
   }
 
-  .research-right {
+  [data-app="research"] .research-right {
     grid-area: research-right;
   }
 
-  .research-left,
-  .research-center,
-  .research-right {
+  [data-app="research"] .research-left,
+  [data-app="research"] .research-center,
+  [data-app="research"] .research-right {
     display: grid !important;
     min-height: 220px;
     height: auto;
   }
 
-  .research-module > .ctox-column-resizer[data-resizer="left"] {
+  [data-app="research"] .research-module > .ctox-column-resizer[data-resizer="left"] {
     grid-area: research-left-fugue;
   }
 
-  .research-module > .ctox-column-resizer[data-resizer="right"] {
+  [data-app="research"] .research-module > .ctox-column-resizer[data-resizer="right"] {
     display: none !important;
   }
 
-  .research-graph-shell,
-  .research-graph-stage {
+  [data-app="research"] .research-graph-shell,
+  [data-app="research"] .research-graph-stage {
     min-height: 430px;
   }
 
   /* Der Graph reicht jetzt bis an den rechten Fensterrand: sein Kopf haelt
      die 74px-Fenstersteuerung frei, die vorher die Kontextspalte trug. */
-  .shell-window[data-shell-contract="v2"] .research-module .research-center > .ctox-pane-header {
-    padding-right: calc(var(--shell-v2-header-row-size, 37px) * 2);
+  [data-app="research"] .research-module .research-center > .ctox-pane-header {
+    padding-right: var(--shell-v2-control-inset, calc(var(--shell-v2-header-row-size, 37px) * 2));
   }
 
   /* Zweispaltig fuehrt der Graph die volle Breite: der Mittelkopf hat wieder
      Platz fuer Kicker UND Titel. */
-  .shell-window[data-shell-contract="v2"] .research-module .research-center > .ctox-pane-header .ctox-pane-kicker {
+  [data-app="research"] .research-module .research-center > .ctox-pane-header .ctox-pane-kicker {
     display: block;
   }
 
   /* Die Kontextspalte steht in der zweiten Zeile — dort liegt keine
      Shell-Zone mehr ueber ihr. */
-  .shell-window[data-shell-contract="v2"] .research-module .research-right > .ctox-pane-header {
+  [data-app="research"] .research-module .research-right > .ctox-pane-header {
     padding-right: 14px;
   }
 }
@@ -1675,7 +1668,7 @@
    fuehrt den Stapel an und uebernimmt damit beide Shell-Zonen von den
    Seitenspalten. */
 @container business-app-window (max-width: 768px) {
-  .ctox-workspace.research-module {
+  [data-app="research"] .ctox-workspace.research-module {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(690px, auto) minmax(220px, auto) minmax(240px, auto);
     grid-template-areas:
@@ -1687,109 +1680,108 @@
     padding: 0;
   }
 
-  .research-module > .ctox-column-resizer {
+  [data-app="research"] .research-module > .ctox-column-resizer {
     display: none !important;
   }
 
   /* Das Icon ist per Definition zwei Kopfzeilen hoch (Vertrag §2). Der
      fuehrende Kopf ist deshalb ebenfalls zwei Zeilen hoch — sonst laege das
      untere Drittel der 80x74-Icon-Zone auf dem Graphen statt auf dem Kopf. */
-  .shell-window[data-shell-contract="v2"] .research-module .research-center > .ctox-pane-header {
-    height: calc(var(--shell-v2-header-row-size, 37px) * 2);
+  [data-app="research"] .research-module .research-center > .ctox-pane-header {
     min-height: calc(var(--shell-v2-header-row-size, 37px) * 2);
     padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
-    padding-right: calc(var(--shell-v2-header-row-size, 37px) * 2);
+    padding-right: var(--shell-v2-control-inset, calc(var(--shell-v2-header-row-size, 37px) * 2));
   }
 
-  .shell-window[data-shell-contract="v2"] .research-module .research-center > .ctox-pane-header .ctox-pane-kicker {
+  [data-app="research"] .research-module .research-center > .ctox-pane-header .ctox-pane-kicker {
     display: none;
   }
 
   /* Aufgaben- und Kontextspalte stehen unterhalb der Shell-Zonen und geben
      die Einrueckungen wieder frei. */
-  .shell-window[data-shell-contract="v2"] .research-module .research-left > .ctox-pane-header {
+  [data-app="research"] .research-module .research-left > .ctox-pane-header {
     padding-left: 14px;
     padding-right: 14px;
   }
 
-  .shell-window[data-shell-contract="v2"] .research-module .research-left > .research-left-scroll {
+  [data-app="research"] .research-module .research-left > .research-left-scroll {
     padding-top: 0;
   }
 
-  .shell-window[data-shell-contract="v2"] .research-module .research-left > .ctox-pane-header .ctox-pane-kicker {
+  [data-app="research"] .research-module .research-left > .ctox-pane-header .ctox-pane-kicker {
     display: block;
   }
 
-  .research-center-empty-body {
+  [data-app="research"] .research-center-empty-body {
     grid-template-rows: minmax(150px, 0.75fr) minmax(180px, 0.8fr);
   }
 
-  .research-center-body {
+  [data-app="research"] .research-center-body {
     grid-template-rows: minmax(420px, 1fr) minmax(220px, 0.8fr);
   }
 
-  .research-graph-shell,
-  .research-graph-stage {
+  [data-app="research"] .research-graph-shell,
+  [data-app="research"] .research-graph-stage {
     min-height: 420px;
   }
 
-  .research-graph-meta {
+  [data-app="research"] .research-graph-meta {
     right: 14px;
     max-width: none;
   }
 
-  .research-center-header .research-map-hint {
+  [data-app="research"] .research-center-header .research-map-hint {
     display: none;
   }
 
-  .research-tabs-container .ctox-pane-tabs {
+  [data-app="research"] .research-tabs-container .ctox-pane-tabs {
     flex-wrap: wrap;
     overflow: visible;
   }
 
-  .research-tabs-container .ctox-pane-tabs > button {
+  [data-app="research"] .research-tabs-container .ctox-pane-tabs > button {
     flex: 1 1 112px;
     white-space: normal;
   }
 
-  .research-graph-meta > div > span,
-  .research-graph-live {
+  [data-app="research"] .research-graph-meta > div > span,
+  [data-app="research"] .research-graph-live {
     display: none;
   }
 
-  .research-graph-search {
+  [data-app="research"] .research-graph-search {
     top: 52px;
     right: 14px;
     left: 14px;
     width: auto;
   }
 
-  .research-graph-layer-switch {
+  [data-app="research"] .research-graph-layer-switch {
     top: 94px;
     left: 14px;
   }
 
-  .research-graph-tool {
+  [data-app="research"] .research-graph-tool {
     width: 40px;
     height: 40px;
   }
 
-  .research-graph-detail {
+  [data-app="research"] .research-graph-detail {
     width: auto;
     height: 40px;
     align-items: center;
   }
 
-  .research-graph-detail { gap: 1px; }
-  .research-graph-detail button { width: 48px; min-width: 48px; height: 40px; padding-inline: 0; font-size: 8.5px; }
+  [data-app="research"] .research-graph-detail { gap: 1px; }
+  [data-app="research"] .research-graph-detail button { width: 48px; min-width: 48px; height: 40px; padding-inline: 0; font-size: 8.5px; }
 
-  .research-graph-tool[data-graph-command="zoom-in"],
-  .research-graph-tool[data-graph-command="zoom-out"],
-  .research-graph-tool[data-graph-command="fit"] {
+  [data-app="research"] .research-graph-tool[data-graph-command="zoom-in"],
+  [data-app="research"] .research-graph-tool[data-graph-command="zoom-out"],
+  [data-app="research"] .research-graph-tool[data-graph-command="fit"] {
     display: none;
   }
 
-  .research-graph-insights {
+  [data-app="research"] .research-graph-insights {
     inset: auto 8px 54px;
     height: 170px;
     width: auto;
@@ -1798,21 +1790,21 @@
 
   /* Die Beschriftung der Aktionszeile ist hier bereits ueber die
      1240px-Schwelle am Dateiende ausgeblendet. */
-  .research-graph-bottombar {
+  [data-app="research"] .research-graph-bottombar {
     right: 8px;
     bottom: 8px;
     left: 8px;
     gap: 6px;
   }
 
-  .research-graph-rail {
+  [data-app="research"] .research-graph-rail {
     display: flex;
     transform: none;
     gap: 2px;
     flex-wrap: nowrap;
   }
 
-  .research-graph-stage.has-insights .research-graph-canvas {
+  [data-app="research"] .research-graph-stage.has-insights .research-graph-canvas {
     right: 0;
     bottom: 232px;
     width: 100% !important;
@@ -1821,17 +1813,17 @@
 }
 
 @media (pointer: coarse) {
-  .research-graph-tool {
+  [data-app="research"] .research-graph-tool {
     width: 42px;
     height: 42px;
   }
 
-  .research-graph-detail {
+  [data-app="research"] .research-graph-detail {
     width: auto;
     height: 42px;
   }
 
-  .research-graph-detail button { width: 48px; min-width: 48px; height: 40px; padding-inline: 0; font-size: 8.5px; }
+  [data-app="research"] .research-graph-detail button { width: 48px; min-width: 48px; height: 40px; padding-inline: 0; font-size: 8.5px; }
 }
 
 /* Beschriftung der Aktionszeile: erst ab einer Buehne, die sie NEBEN der
@@ -1843,11 +1835,11 @@
    Schwelle ist bewusst monoton: keine Beschriftung, die beim Verbreitern
    erscheint, wieder verschwindet und dann erneut erscheint. */
 @container business-app-window (max-width: 1240px) {
-  .research-graph-actions span {
+  [data-app="research"] .research-graph-actions span {
     display: none;
   }
 
-  .research-graph-action {
+  [data-app="research"] .research-graph-action {
     justify-content: center;
     padding: 6px;
   }
@@ -1855,16 +1847,16 @@
 
 /* Research Shards & View Toggle styles */
 
-.research-center-body.has-hidden-map {
+[data-app="research"] .research-center-body.has-hidden-map {
   grid-template-rows: auto 1fr;
 }
 
-.research-center-body.has-hidden-map .research-map-panel,
-.research-center-body.has-hidden-map .research-graph-shell {
+[data-app="research"] .research-center-body.has-hidden-map .research-map-panel,
+[data-app="research"] .research-center-body.has-hidden-map .research-graph-shell {
   display: none;
 }
 
-.research-tabs-container {
+[data-app="research"] .research-tabs-container {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -1875,15 +1867,16 @@
   min-width: 0;
 }
 
-.research-tabs-container > .ctox-pane-tabs:first-child {
+/* VIS3: the tab bar wraps into further rows instead of scrolling sideways
+   (Geometrie-Labor G1, research 1280: 642 > 586). */
+[data-app="research"] .research-tabs-container > .ctox-pane-tabs:first-child {
   display: flex;
+  flex-wrap: wrap;
   width: 100%;
   min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: thin;
 }
 
-.research-counted-tab {
+[data-app="research"] .research-counted-tab {
   display: inline-flex;
   flex: 0 0 auto;
   min-width: 126px;
@@ -1893,35 +1886,32 @@
   padding-inline: 7px;
 }
 
-.research-tab-label {
+[data-app="research"] .research-tab-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.research-tab-count {
+[data-app="research"] .research-tab-count {
   flex: none;
   margin-left: 4px;
   color: var(--research-muted);
   font-variant-numeric: tabular-nums;
 }
 
-.research-counted-tab.is-active .research-tab-count {
+[data-app="research"] .research-counted-tab.is-active .research-tab-count {
   color: currentColor;
 }
 
 @container business-app-window (max-width: 1024px) {
   /* Der Umschalter ist seit dem 31.08.2026 ein einzelner Knopf und bleibt
-     deshalb auch schmal neben der Tab-Leiste stehen; nur die Tabs rollen. */
-  .research-tabs-container > .ctox-pane-tabs:first-child {
-    overflow-x: auto;
-  }
-
-  .research-counted-tab {
+     deshalb auch schmal neben der Tab-Leiste stehen; nur die Tabs brechen um
+     (Regel oben, VIS3). */
+  [data-app="research"] .research-counted-tab {
     font-size: 10px;
   }
 
-  .research-tab-label {
+  [data-app="research"] .research-tab-label {
     overflow: visible;
     text-overflow: clip;
     white-space: nowrap;
@@ -1929,18 +1919,18 @@
 }
 
 /* Icon-only view-switch tabs can be narrower than text tabs. */
-.research-view-toggle .ctox-pane-tab {
+[data-app="research"] .research-view-toggle .ctox-pane-tab {
   min-width: 32px;
 }
 
-.research-sources-shards-wrapper {
+[data-app="research"] .research-sources-shards-wrapper {
   display: flex;
   flex-direction: column;
   height: 100%;
   overflow: hidden;
 }
 
-.research-sources-shards-toolbar {
+[data-app="research"] .research-sources-shards-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1950,13 +1940,13 @@
   background: color-mix(in srgb, var(--research-surface-2) 30%, var(--research-surface));
 }
 
-.research-sources-shards-toolbar .ctox-input {
+[data-app="research"] .research-sources-shards-toolbar .ctox-input {
   flex: 1 1 220px;
   width: auto;
   min-width: min(220px, 100%);
 }
 
-.research-sources-shards-filters {
+[data-app="research"] .research-sources-shards-filters {
   display: flex;
   flex-wrap: nowrap;
   gap: 6px;
@@ -1966,34 +1956,34 @@
   scrollbar-width: thin;
 }
 
-.research-table-host .ctox-table {
+[data-app="research"] .research-table-host .ctox-table {
   min-width: 1060px;
 }
 
-.research-table-host .ctox-table th,
-.research-table-host .ctox-table td {
+[data-app="research"] .research-table-host .ctox-table th,
+[data-app="research"] .research-table-host .ctox-table td {
   overflow-wrap: break-word;
   vertical-align: top;
 }
 
-.research-measurement-mode {
+[data-app="research"] .research-measurement-mode {
   display: inline-flex;
   margin: 10px 12px 0;
   max-width: calc(100% - 24px);
   overflow-x: auto;
 }
 
-.research-measurement-mode .ctox-pane-tab {
+[data-app="research"] .research-measurement-mode .ctox-pane-tab {
   flex: 0 0 auto;
   min-width: 190px;
 }
 
-.research-measurement-mode .ctox-pane-tab span {
+[data-app="research"] .research-measurement-mode .ctox-pane-tab span {
   margin-left: 6px;
   color: var(--research-muted);
 }
 
-.research-measurement-note {
+[data-app="research"] .research-measurement-note {
   margin: 0;
   padding: 10px 12px;
   border-bottom: 1px solid var(--research-line);
@@ -2001,19 +1991,19 @@
   line-height: 1.45;
 }
 
-.research-table-host {
+[data-app="research"] .research-table-host {
   overflow: auto;
   overscroll-behavior: contain;
 }
 
-.research-sources-shards-scroll {
+[data-app="research"] .research-sources-shards-scroll {
   flex: 1;
   overflow: auto;
   padding: 12px;
   overscroll-behavior: contain;
 }
 
-.research-sources-shards-grid {
+[data-app="research"] .research-sources-shards-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
   gap: 14px;
@@ -2021,7 +2011,7 @@
 
 /* Karten sind die luftige Ansicht: drei Zeilen, grosszuegiges Padding. Die
    dichte Gegenform ist .research-source-list (eine Zeile je Quelle). */
-.research-source-card {
+[data-app="research"] .research-source-card {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -2036,18 +2026,18 @@
   overflow: hidden;
 }
 
-.research-source-card:hover {
+[data-app="research"] .research-source-card:hover {
   border-color: color-mix(in srgb, var(--research-accent) 55%, var(--research-line));
   background: color-mix(in srgb, var(--research-accent) 4%, var(--research-surface));
 }
 
-.research-source-card.is-selected {
+[data-app="research"] .research-source-card.is-selected {
   border-color: var(--research-accent);
   background: color-mix(in srgb, var(--research-accent) 5%, var(--research-surface));
   box-shadow: none;
 }
 
-.research-source-card-top {
+[data-app="research"] .research-source-card-top {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
@@ -2055,7 +2045,7 @@
   min-width: 0;
 }
 
-.research-source-card-title {
+[data-app="research"] .research-source-card-title {
   min-width: 0;
   font-size: 14px;
   font-weight: 850;
@@ -2067,7 +2057,7 @@
 }
 
 /* Zeile 2: die wichtigsten Detailfelder der Quelle in einer Zeile. */
-.research-source-card-meta {
+[data-app="research"] .research-source-card-meta {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -2079,28 +2069,28 @@
   min-width: 0;
 }
 
-.research-source-card-meta.is-verified {
+[data-app="research"] .research-source-card-meta.is-verified {
   color: var(--research-good);
 }
 
-.research-source-card-dot {
+[data-app="research"] .research-source-card-dot {
   color: color-mix(in srgb, var(--research-muted) 60%, transparent);
 }
 
-.research-source-card-open {
+[data-app="research"] .research-source-card-open {
   margin-left: auto;
   color: var(--research-accent);
   font-weight: 800;
   text-decoration: none;
 }
 
-.research-source-card-open:hover {
+[data-app="research"] .research-source-card-open:hover {
   text-decoration: underline;
 }
 
 /* Zeile 3: ein Detailfeld, einzeilig gekappt — die Karte bleibt bei drei
    Zeilen, alles Weitere gehoert der Quellen-Schublade. */
-.research-source-card-detail {
+[data-app="research"] .research-source-card-detail {
   font-size: 12px;
   line-height: 1.4;
   color: var(--research-text);
@@ -2109,7 +2099,7 @@
   white-space: nowrap;
 }
 
-.research-source-card-badge {
+[data-app="research"] .research-source-card-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2122,19 +2112,19 @@
   white-space: nowrap;
 }
 
-.research-source-card-badge.a { background: color-mix(in srgb, var(--research-good) 12%, transparent); color: var(--research-good); }
-.research-source-card-badge.b { background: color-mix(in srgb, var(--research-accent) 12%, transparent); color: var(--research-accent); }
-.research-source-card-badge.c { background: color-mix(in srgb, var(--research-warn) 12%, transparent); color: var(--research-warn); }
-.research-source-card-badge.d { background: color-mix(in srgb, var(--research-risk) 12%, transparent); color: var(--research-risk); }
+[data-app="research"] .research-source-card-badge.a { background: color-mix(in srgb, var(--research-good) 12%, transparent); color: var(--research-good); }
+[data-app="research"] .research-source-card-badge.b { background: color-mix(in srgb, var(--research-accent) 12%, transparent); color: var(--research-accent); }
+[data-app="research"] .research-source-card-badge.c { background: color-mix(in srgb, var(--research-warn) 12%, transparent); color: var(--research-warn); }
+[data-app="research"] .research-source-card-badge.d { background: color-mix(in srgb, var(--research-risk) 12%, transparent); color: var(--research-risk); }
 
 /* Listenansicht: die dichte Gegenform zur Karte — genau eine Zeile je Quelle,
    Titel links, Kurz-Meta rechts, keine Innenabstaende ausser der Zeilenhoehe. */
-.research-source-list {
+[data-app="research"] .research-source-list {
   display: flex;
   flex-direction: column;
 }
 
-.research-source-row {
+[data-app="research"] .research-source-row {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -2142,15 +2132,15 @@
   border-bottom: 1px solid color-mix(in srgb, var(--research-line) 70%, transparent);
 }
 
-.research-source-row:hover {
+[data-app="research"] .research-source-row:hover {
   background: color-mix(in srgb, var(--research-accent) 4%, transparent);
 }
 
-.research-source-row.is-selected {
+[data-app="research"] .research-source-row.is-selected {
   background: color-mix(in srgb, var(--research-accent) 8%, transparent);
 }
 
-.research-source-row-title {
+[data-app="research"] .research-source-row-title {
   flex: 1 1 auto;
   min-width: 0;
   height: 28px;
@@ -2168,11 +2158,11 @@
   white-space: nowrap;
 }
 
-.research-source-row.is-selected .research-source-row-title {
+[data-app="research"] .research-source-row.is-selected .research-source-row-title {
   color: var(--research-accent);
 }
 
-.research-source-row-meta {
+[data-app="research"] .research-source-row-meta {
   flex: 0 0 auto;
   padding-right: 10px;
   color: var(--research-muted);
@@ -2183,17 +2173,17 @@
   text-decoration: none;
 }
 
-.research-source-row-meta.is-success { color: var(--research-good); }
-.research-source-row-meta.is-info { color: var(--research-accent); }
-.research-source-row-meta.is-warning { color: var(--research-warn); }
-.research-source-row-meta.is-danger { color: var(--research-risk); }
+[data-app="research"] .research-source-row-meta.is-success { color: var(--research-good); }
+[data-app="research"] .research-source-row-meta.is-info { color: var(--research-accent); }
+[data-app="research"] .research-source-row-meta.is-warning { color: var(--research-warn); }
+[data-app="research"] .research-source-row-meta.is-danger { color: var(--research-risk); }
 
-a.research-source-row-meta:hover {
+[data-app="research"] a.research-source-row-meta:hover {
   text-decoration: underline;
 }
 
 /* RESEARCH REPORTS (FACHBERICHTE) EXPLORER */
-.explorer-layout {
+[data-app="research"] .explorer-layout {
   display: grid;
   grid-template-columns: 240px 1fr;
   gap: 20px;
@@ -2202,11 +2192,11 @@ a.research-source-row-meta:hover {
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.research-center-body.has-hidden-map .explorer-layout {
+[data-app="research"] .research-center-body.has-hidden-map .explorer-layout {
   height: calc(100vh - 180px);
 }
 
-.explorer-sidebar {
+[data-app="research"] .explorer-sidebar {
   border-right: 1px solid var(--research-line);
   overflow-y: auto;
   padding-right: 10px;
@@ -2215,7 +2205,7 @@ a.research-source-row-meta:hover {
   gap: 6px;
 }
 
-.doc-item {
+[data-app="research"] .doc-item {
   padding: 10px 12px;
   border-radius: 6px;
   cursor: pointer;
@@ -2228,17 +2218,17 @@ a.research-source-row-meta:hover {
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.doc-item:hover {
+[data-app="research"] .doc-item:hover {
   background: var(--research-surface-2);
 }
 
-.doc-item.active {
+[data-app="research"] .doc-item.active {
   background: color-mix(in srgb, var(--research-accent) 12%, var(--research-surface));
   border-color: color-mix(in srgb, var(--research-accent) 30%, var(--research-line));
   font-weight: 600;
 }
 
-.doc-item-cat {
+[data-app="research"] .doc-item-cat {
   font-size: 10px;
   font-weight: 800;
   color: var(--research-accent);
@@ -2246,67 +2236,67 @@ a.research-source-row-meta:hover {
   margin-bottom: 2px;
 }
 
-.explorer-viewer {
+[data-app="research"] .explorer-viewer {
   overflow-y: auto;
   padding: 0 20px;
   background: var(--research-surface);
 }
 
-.markdown-body {
+[data-app="research"] .markdown-body {
   line-height: 1.6;
   font-size: 13.5px;
   color: var(--research-text);
 }
 
-.markdown-body h1, .markdown-body h2, .markdown-body h3 {
+[data-app="research"] .markdown-body h1, [data-app="research"] .markdown-body h2, [data-app="research"] .markdown-body h3 {
   color: var(--research-text);
   margin: 1.5em 0 0.5em 0;
   font-weight: 700;
 }
 
-.markdown-body h1 {
+[data-app="research"] .markdown-body h1 {
   font-size: 18px;
   border-bottom: 1px solid var(--research-line);
   padding-bottom: 0.4em;
 }
 
-.markdown-body h2 { font-size: 15px; }
-.markdown-body h3 { font-size: 13px; }
+[data-app="research"] .markdown-body h2 { font-size: 15px; }
+[data-app="research"] .markdown-body h3 { font-size: 13px; }
 
-.markdown-body p {
+[data-app="research"] .markdown-body p {
   margin-bottom: 1em;
   color: color-mix(in srgb, var(--research-text) 85%, transparent);
 }
 
-.markdown-body ul, .markdown-body ol {
+[data-app="research"] .markdown-body ul, [data-app="research"] .markdown-body ol {
   margin-bottom: 1em;
   padding-left: 20px;
 }
 
-.markdown-body li {
+[data-app="research"] .markdown-body li {
   margin-bottom: 0.25em;
   color: color-mix(in srgb, var(--research-text) 85%, transparent);
 }
 
-.markdown-body table {
+[data-app="research"] .markdown-body table {
   width: 100%;
   border-collapse: collapse;
   margin-bottom: 1.5em;
   font-size: 12px;
 }
 
-.markdown-body th, .markdown-body td {
+[data-app="research"] .markdown-body th, [data-app="research"] .markdown-body td {
   border: 1px solid var(--research-line);
   padding: 6px 10px;
   text-align: left;
 }
 
-.markdown-body th {
+[data-app="research"] .markdown-body th {
   background: var(--research-surface-2);
   font-weight: 700;
 }
 
-.markdown-body code {
+[data-app="research"] .markdown-body code {
   font-family: var(--font-mono, ui-monospace, monospace);
   background: var(--research-surface-2);
   padding: 2px 4px;
@@ -2314,7 +2304,7 @@ a.research-source-row-meta:hover {
   font-size: 11px;
 }
 
-.markdown-body pre {
+[data-app="research"] .markdown-body pre {
   background: var(--research-surface-2);
   padding: 12px;
   border-radius: var(--surface-radius);
@@ -2323,13 +2313,13 @@ a.research-source-row-meta:hover {
   margin-bottom: 1.5em;
 }
 
-.markdown-body pre code {
+[data-app="research"] .markdown-body pre code {
   padding: 0;
   background: none;
 }
 
 /* KI WARNING BANNER & PROMPTS */
-.ai-warning-banner {
+[data-app="research"] .ai-warning-banner {
   background: color-mix(in srgb, var(--research-accent) 6%, var(--research-surface));
   border: 1px solid color-mix(in srgb, var(--research-accent) 25%, var(--research-line));
   border-radius: var(--surface-radius);
@@ -2337,21 +2327,21 @@ a.research-source-row-meta:hover {
   margin-bottom: 12px;
 }
 
-.research-report-loading,
-.research-report-error {
+[data-app="research"] .research-report-loading,
+[data-app="research"] .research-report-error {
   padding: 24px;
   text-align: center;
 }
 
-.research-report-loading {
+[data-app="research"] .research-report-loading {
   color: var(--research-muted);
 }
 
-.research-report-error {
+[data-app="research"] .research-report-error {
   color: var(--research-warn);
 }
 
-.research-spinner {
+[data-app="research"] .research-spinner {
   display: inline-block;
   width: 18px;
   height: 18px;
@@ -2363,7 +2353,7 @@ a.research-source-row-meta:hover {
   animation: research-spin 1s linear infinite;
 }
 
-.research-ai-banner-row {
+[data-app="research"] .research-ai-banner-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2371,45 +2361,45 @@ a.research-source-row-meta:hover {
   flex-wrap: wrap;
 }
 
-.research-ai-banner-title {
+[data-app="research"] .research-ai-banner-title {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.research-ai-banner-icon {
+[data-app="research"] .research-ai-banner-icon {
   font-size: 18px;
   line-height: 1;
 }
 
-.research-ai-banner-title strong,
-.research-ai-banner-title span {
+[data-app="research"] .research-ai-banner-title strong,
+[data-app="research"] .research-ai-banner-title span {
   display: block;
 }
 
-.research-ai-banner-title strong {
+[data-app="research"] .research-ai-banner-title strong {
   color: var(--research-text);
   font-size: 12px;
 }
 
-.research-ai-banner-title span {
+[data-app="research"] .research-ai-banner-title span {
   color: var(--research-muted);
   font-size: 11px;
   margin-top: 2px;
 }
 
-.research-ai-prompt {
+[data-app="research"] .research-ai-prompt {
   border-top: 1px dashed var(--research-line);
   padding-top: 8px;
   margin-top: 8px;
   text-align: left;
 }
 
-.research-ai-prompt details {
+[data-app="research"] .research-ai-prompt details {
   width: 100%;
 }
 
-.research-ai-prompt summary {
+[data-app="research"] .research-ai-prompt summary {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -2420,7 +2410,7 @@ a.research-source-row-meta:hover {
   user-select: none;
 }
 
-.research-ai-prompt-pre {
+[data-app="research"] .research-ai-prompt-pre {
   margin-top: 8px;
   max-height: 180px;
   overflow-y: auto;
@@ -2442,17 +2432,17 @@ a.research-source-row-meta:hover {
 }
 
 /* METRIC PROFILING PROGRESS BARS */
-.research-metric-profile {
+[data-app="research"] .research-metric-profile {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.research-metric-progress-wrapper {
+[data-app="research"] .research-metric-progress-wrapper {
   margin-bottom: 4px;
 }
 
-.research-metric-progress-label {
+[data-app="research"] .research-metric-progress-label {
   display: flex;
   justify-content: space-between;
   font-size: 11px;
@@ -2460,28 +2450,28 @@ a.research-source-row-meta:hover {
   margin-bottom: 4px;
 }
 
-.research-metric-progress-bar-bg {
+[data-app="research"] .research-metric-progress-bar-bg {
   height: 6px;
   background: var(--research-surface-2);
   border-radius: 3px;
   overflow: hidden;
 }
 
-.research-metric-progress-bar-fill {
+[data-app="research"] .research-metric-progress-bar-fill {
   height: 100%;
   border-radius: 3px;
   transition: width 0.3s ease;
 }
 
-.research-metric-progress-bar-fill.accent {
+[data-app="research"] .research-metric-progress-bar-fill.accent {
   background: var(--research-accent);
 }
 
-.research-metric-progress-bar-fill.good {
+[data-app="research"] .research-metric-progress-bar-fill.good {
   background: var(--research-good);
 }
 
-.research-metric-progress-bar-fill.warn {
+[data-app="research"] .research-metric-progress-bar-fill.warn {
   background: var(--research-warn);
 }
 
@@ -2492,15 +2482,15 @@ a.research-source-row-meta:hover {
    (.research-table-host, min-width 1060px) — never the page.
    -------------------------------------------------------------------------- */
 @container business-app-window (max-width: 768px) {
-  .explorer-layout,
-  .research-center-body.has-hidden-map .explorer-layout {
+  [data-app="research"] .explorer-layout,
+  [data-app="research"] .research-center-body.has-hidden-map .explorer-layout {
     grid-template-columns: minmax(0, 1fr);
     gap: 10px;
     height: auto;
     min-height: 0;
   }
 
-  .explorer-sidebar {
+  [data-app="research"] .explorer-sidebar {
     border-right: 0;
     border-bottom: 1px solid var(--research-line);
     padding-right: 0;
@@ -2508,16 +2498,16 @@ a.research-source-row-meta:hover {
     max-height: 30vh;
   }
 
-  .explorer-viewer {
+  [data-app="research"] .explorer-viewer {
     padding: 0 4px;
   }
 
   /* Wide measurement-mode tabs shrink so at least two fit the viewport. */
-  .research-measurement-mode .ctox-pane-tab {
+  [data-app="research"] .research-measurement-mode .ctox-pane-tab {
     min-width: 0;
   }
 
-  .research-counted-tab {
+  [data-app="research"] .research-counted-tab {
     min-width: 108px;
   }
 }
@@ -2526,50 +2516,50 @@ a.research-source-row-meta:hover {
    in the module reaches the 44px minimum — source-card action buttons (28px
    desktop), report list items, task/rank rows and the graph overlay rails. */
 @media (pointer: coarse) {
-  .research-module button,
-  .research-module input:not([type="checkbox"]):not([type="radio"]),
-  .research-module select,
-  .research-module textarea,
-  .research-module summary {
+  [data-app="research"] .research-module button,
+  [data-app="research"] .research-module input:not([type="checkbox"]):not([type="radio"]),
+  [data-app="research"] .research-module select,
+  [data-app="research"] .research-module textarea,
+  [data-app="research"] .research-module summary {
     min-height: 44px;
   }
 
-  .research-module .ctox-pane-icon {
+  [data-app="research"] .research-module .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
 
-  .research-module .ctox-pane-tab {
+  [data-app="research"] .research-module .ctox-pane-tab {
     min-height: 44px;
   }
 
-  .research-task-item,
-  .research-rank-row,
-  .research-knowledge-list button,
-  .doc-item {
+  [data-app="research"] .research-task-item,
+  [data-app="research"] .research-rank-row,
+  [data-app="research"] .research-knowledge-list button,
+  [data-app="research"] .doc-item {
     min-height: 44px;
   }
 
-  .research-source-card-open,
-  .research-source-row-meta {
+  [data-app="research"] .research-source-card-open,
+  [data-app="research"] .research-source-row-meta {
     display: inline-flex;
     align-items: center;
     min-height: 44px;
   }
 
-  .research-source-row-title {
+  [data-app="research"] .research-source-row-title {
     height: auto;
     line-height: 1.3;
   }
 
-  .research-graph-tool,
-  .research-graph-action {
+  [data-app="research"] .research-graph-tool,
+  [data-app="research"] .research-graph-action {
     min-width: 44px;
     min-height: 44px;
   }
 
-  .research-graph-detail,
-  .research-graph-detail button {
+  [data-app="research"] .research-graph-detail,
+  [data-app="research"] .research-graph-detail button {
     height: 44px;
   }
 }
@@ -2577,29 +2567,29 @@ a.research-source-row-meta:hover {
 /* Knowledge = consolidated engineering claims (table `claims`). One block per statement: identity and
    provenance in the header, the claim itself as prose, its limitations muted, the verbatim evidence behind a
    disclosure. Filters reuse the pane-tab look of the measurement mode switch. */
-.research-claim-filters {
+[data-app="research"] .research-claim-filters {
   flex-wrap: wrap;
   gap: 4px;
   margin-bottom: 6px;
 }
 
-.research-claim-list {
+[data-app="research"] .research-claim-list {
   display: grid;
   gap: 2px;
   min-width: 0;
 }
 
-.research-claim {
+[data-app="research"] .research-claim {
   padding: 8px 10px;
   border-bottom: 1px solid var(--research-line);
   min-width: 0;
 }
 
-.research-claim:last-child {
+[data-app="research"] .research-claim:last-child {
   border-bottom: 0;
 }
 
-.research-claim header {
+[data-app="research"] .research-claim header {
   display: flex;
   flex-wrap: wrap;
   gap: 3px 9px;
@@ -2609,24 +2599,24 @@ a.research-source-row-meta:hover {
   font-size: 11.5px;
 }
 
-.research-claim header b {
+[data-app="research"] .research-claim header b {
   color: var(--research-accent);
   font-weight: 600;
 }
 
-.research-claim p {
+[data-app="research"] .research-claim p {
   margin: 0;
   font-size: 13px;
   line-height: 1.45;
 }
 
-.research-claim-limits {
+[data-app="research"] .research-claim-limits {
   margin-top: 3px !important;
   color: var(--research-muted);
   font-size: 12px !important;
 }
 
-.research-claim-source {
+[data-app="research"] .research-claim-source {
   border: 0;
   background: none;
   color: var(--research-accent);
@@ -2635,21 +2625,21 @@ a.research-source-row-meta:hover {
   padding: 0;
 }
 
-.research-claim-source:hover {
+[data-app="research"] .research-claim-source:hover {
   text-decoration: underline;
 }
 
-.research-claim details {
+[data-app="research"] .research-claim details {
   margin-top: 4px;
 }
 
-.research-claim summary {
+[data-app="research"] .research-claim summary {
   color: var(--research-muted);
   cursor: pointer;
   font-size: 12px;
 }
 
-.research-claim-evidence {
+[data-app="research"] .research-claim-evidence {
   display: grid;
   gap: 1px;
   padding: 5px 0 5px 10px;
@@ -2658,22 +2648,135 @@ a.research-source-row-meta:hover {
   font-size: 12px;
 }
 
-.research-claim-evidence b {
+[data-app="research"] .research-claim-evidence b {
   color: var(--research-accent);
   font-weight: 600;
 }
 
-.research-claim-evidence span {
+[data-app="research"] .research-claim-evidence span {
   color: var(--research-muted);
 }
 
-.research-claim-evidence q {
+[data-app="research"] .research-claim-evidence q {
   color: var(--research-muted);
   font-style: italic;
 }
 
-.research-claim-more {
+[data-app="research"] .research-claim-more {
   margin: 8px 0 0;
   color: var(--research-muted);
   font-size: 12px;
+}
+
+/* Textdiät R2 (15.10.): schmale Fenster – Spaltentitel einzeilig mit Ellipse statt Wort-/Silbenbruch
+   (420: „Kunden / konten“, „Kampagnen / & Sequenzen“). Voller Titel bleibt im title-Attribut bzw. im Fenster. */
+@container business-app-window (max-width: 768px) {
+  [data-app="research"] .ctox-pane-titles { min-width: 0; }
+  [data-app="research"] .ctox-pane-title { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; hyphens: manual; overflow-wrap: normal; }
+}
+
+/* FIX9b: Leerzustand der Quellenliste – ein Satz, eine Aktion. */
+[data-app="research"] .research-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 28px 16px;
+  color: var(--muted);
+  text-align: center;
+}
+[data-app="research"] .research-empty p {
+  margin: 0;
+}
+
+/* ----------------------------------------------------------------------------
+   Messwerte (FIX10): feste Spalten ohne Seitwärts-Scroll. Die breite
+   Mindestbreite der Quellen-Tabelle (1060px) gilt hier nicht; jede Zelle ist
+   einzeilig mit Ellipse, der volle Wert steht im Tooltip (title). In der
+   einspaltigen Stufe der Shell (Fenster ≤ 768px, Container business-app-window,
+   nie @media) wird jede Zeile zur Karte „Beschriftung: Wert“.
+   -------------------------------------------------------------------------- */
+[data-app="research"] .research-table-host .ctox-table.research-measurements {
+  min-width: 0;
+}
+
+[data-app="research"] .research-table-host .research-measurements th,
+[data-app="research"] .research-table-host .research-measurements td {
+  padding-inline: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+[data-app="research"] .research-table-host .research-measurements th > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+[data-app="research"] .research-table-host .research-measurements-empty td {
+  white-space: normal;
+}
+
+@container business-app-window (max-width: 768px) {
+  [data-app="research"] .research-table-host .research-measurements,
+  [data-app="research"] .research-table-host .research-measurements tbody {
+    display: block;
+    width: 100%;
+  }
+
+  [data-app="research"] .research-table-host .research-measurements colgroup,
+  [data-app="research"] .research-table-host .research-measurements thead {
+    display: none;
+  }
+
+  [data-app="research"] .research-table-host .research-measurements tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 2px 12px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--research-line);
+  }
+
+  [data-app="research"] .research-table-host .research-measurements td {
+    display: flex;
+    justify-content: space-between;
+    gap: 6px;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    text-align: right;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  [data-app="research"] .research-table-host .research-measurements td::before {
+    content: attr(data-label);
+    flex: 0 0 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--research-muted);
+    text-align: left;
+  }
+
+  /* Quelle und Methode tragen die Karte über die volle Breite. */
+  [data-app="research"] .research-table-host .research-measurements td:first-child,
+  [data-app="research"] .research-table-host .research-direct-measurements td:last-child {
+    grid-column: 1 / -1;
+  }
+
+  [data-app="research"] .research-table-host .research-measurements td:first-child {
+    font-weight: 600;
+  }
+
+  [data-app="research"] .research-table-host .research-measurements-empty td {
+    display: block;
+    text-align: left;
+  }
+
+  [data-app="research"] .research-table-host .research-measurements-empty td::before {
+    content: none;
+  }
 }

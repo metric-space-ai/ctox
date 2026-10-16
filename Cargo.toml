@@ -24,6 +24,7 @@ local-speech-openblas = ["ctox-voxtral-4b-tts-2603/openblas"]
 [dependencies]
 ctox-app-runtime = { path = "src/core/app_runtime" }
 ctox-store = { path = "src/core/store" }
+ctox-process-network = { path = "src/core/app_capabilities/process-network" }
 anyhow = "1"
 async-trait = "0.1"
 base64 = "0.22"

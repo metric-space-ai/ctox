@@ -1,12 +1,11 @@
+// App-API 4.0 (Shell v4): mount(root, api, {restored}) -> {unmount, snapshot}.
 import {
   CREDENTIAL_TYPES,
   credentialStatus,
   daysUntilExpiry,
   isDeploymentBlocking,
 } from './core/credential.js';
-import { renderListOrState } from '../../shared/list-state.js';
 
-const MOD_BUILD = '20260721-nachweise-ia';
 const MODULE_ID = 'nachweise';
 const PRIMARY = 'business_credentials';
 const DEPLOY_COMMAND = 'ats.deployment.check';
@@ -26,33 +25,31 @@ const COPY = {
     searchPlaceholder: 'Suchen...', closeDetail: 'Details schließen', deployCheckRow: 'Einsatz prüfen',
     showAsList: 'Als Liste anzeigen', showAsCards: 'Als Karten anzeigen',
     bandAll: 'Alle', bandValid: 'Gültig', bandExpiring: 'Ablaufend', bandCritical: 'Kritisch',
-    statusAll: 'Alle Status', entries: 'Einträge', emptyFiltered: 'Kein Nachweis passt zum Filter.',
+    statusAll: 'Alle Status', entries: 'Einträge',
     imported: 'Importiert', importInvalid: 'Ungültige JSON-Datei.', importEmpty: 'Keine Datensätze in der Datei.',
-    subjectLabel: 'Subjekt', credentialTypeLabel: 'Nachweistyp', validUntilLabel: 'Gültig bis', deploymentSubjectLabel: 'Einsatz-Subjekt', requiredTypesLabel: 'Pflicht-Typen', recordLabel: 'Leistungsnachweis', rateLabel: 'Verrechnungssatz', clientLabel: 'Entleiher', signatureLabel: 'Signatur-Anfrage', collectionLabel: 'Collection',
+    subjectLabel: 'Person', credentialTypeLabel: 'Nachweistyp', validUntilLabel: 'Gültig bis', deploymentSubjectLabel: 'Einsatz-Subjekt', requiredTypesLabel: 'Pflicht-Typen', recordLabel: 'Leistungsnachweis', rateLabel: 'Verrechnungssatz', clientLabel: 'Entleiher', signatureLabel: 'Signatur-Anfrage', collectionLabel: 'Collection',
     subjectPlaceholder: 'Subjekt-ID (Kandidat/Mitarbeiter)', issuerPlaceholder: 'Aussteller', addCredential: 'Nachweis hinzufügen',
     deploymentSubjectPlaceholder: 'Subjekt-ID für Einsatz-Prüfung', requiredTypesPlaceholder: 'Pflicht-Typen (kommagetrennt)',
     checkReadiness: 'Einsatzbereitschaft prüfen', recordPlaceholder: 'Leistungsnachweis-ID (Sign-off)',
     ratePlaceholder: 'Verrechnungssatz €/h (Pflicht für Abrechnung)', clientAccountPlaceholder: 'Entleiher-Account-ID (Rechnungsempfänger)',
     signaturePlaceholder: 'Signatur-Anfrage-ID (falls Entleiher-Signatur erzwungen)', collectionPlaceholder: 'Collection (optional, Standard: planning_time_records)',
-    releaseBilling: 'Entleiher-Sign-off → Abrechnung freigeben', credentials: 'Nachweise', empty: 'Noch keine Nachweise erfasst.',
-    commandOffline: 'Offline: Befehlsdienst nicht verfügbar.', checking: 'Prüfe Einsatzbereitschaft…', dispatchOffline: 'Offline: Befehl konnte nicht gesendet werden.',
-    blockedReason: 'blockiert', notReady: 'Nicht einsatzbereit', ready: 'Einsatzbereit', databaseUnavailable: 'Datenbank nicht verfügbar.',
-    databaseOffline: 'Offline: Datenbank nicht verfügbar.', subjectRequired: 'Subjekt-ID erforderlich.', saveFailed: 'Nachweis konnte nicht gespeichert werden.',
-    recordRequired: 'Leistungsnachweis-ID erforderlich.', signoffRunning: 'Sign-off läuft…', signoffBlocked: 'Sign-off blockiert.',
+    releaseBilling: 'Entleiher-Sign-off → Abrechnung freigeben', credentials: 'Nachweise',
+    blockedReason: 'blockiert', notReady: 'Nicht einsatzbereit', ready: 'Einsatzbereit',
+    subjectRequired: 'Subjekt-ID erforderlich.', saveFailed: 'Nachweis konnte nicht gespeichert werden.',
+    recordRequired: 'Leistungsnachweis-ID erforderlich.', signoffBlocked: 'Sign-off blockiert.',
     signoffSaved: 'Entleiher-Sign-off gespeichert.', performanceRecord: 'Leistungsnachweis', billingReleased: 'Abrechnung freigegeben',
-    invoice: 'Rechnung', net: 'Netto', yes: 'ja', no: 'nein', subject: 'Subjekt', issuer: 'Aussteller',
+    invoice: 'Rechnung', net: 'Netto', yes: 'ja', no: 'nein', subject: 'Person', issuer: 'Aussteller',
     expiredAgo: 'abgelaufen vor', daysRemaining: 'noch', days: 'Tage', noExpiry: 'kein Ablauf', verifiedBy: 'verifiziert von',
     deploymentCheck: 'Einsatz prüfen', deploymentBlocking: 'Einsatz blockierend', credential: 'Nachweis',
     statusValid: 'gültig', statusExpiring: 'läuft ab', statusExpired: 'abgelaufen', statusNotYetValid: 'noch nicht gültig', statusUnverified: 'nicht verifiziert',
-    syncing: 'Daten werden synchronisiert.',
   },
   en: {
-    title: 'Credentials', kicker: 'ATS', listTitle: 'Credentials', newTitle: 'New credential',
+    title: 'Credentials', kicker: 'ATS', listTitle: 'Credentials', newTitle: 'New credential', // v4-allow: en
     actionsLabel: 'Checks & sign-off', newAction: 'New credential', importAction: 'Import', exportAction: 'Export',
     searchPlaceholder: 'Search...', closeDetail: 'Close details', deployCheckRow: 'Check deployment',
     showAsList: 'Show as list', showAsCards: 'Show as cards',
     bandAll: 'All', bandValid: 'Valid', bandExpiring: 'Expiring', bandCritical: 'Critical',
-    statusAll: 'All statuses', entries: 'records', emptyFiltered: 'No credential matches the filter.',
+    statusAll: 'All statuses', entries: 'records',
     imported: 'Imported', importInvalid: 'Invalid JSON file.', importEmpty: 'No records in the file.',
     subjectLabel: 'Subject', credentialTypeLabel: 'Credential type', validUntilLabel: 'Valid until', deploymentSubjectLabel: 'Deployment subject', requiredTypesLabel: 'Required types', recordLabel: 'Performance record', rateLabel: 'Charge rate', clientLabel: 'Client', signatureLabel: 'Signature request', collectionLabel: 'Collection',
     subjectPlaceholder: 'Subject ID (candidate/employee)', issuerPlaceholder: 'Issuer', addCredential: 'Add credential',
@@ -60,17 +57,15 @@ const COPY = {
     checkReadiness: 'Check deployment readiness', recordPlaceholder: 'Performance record ID (sign-off)',
     ratePlaceholder: 'Charge rate €/h (required for billing)', clientAccountPlaceholder: 'Client account ID (invoice recipient)',
     signaturePlaceholder: 'Signature request ID (when client signature is enforced)', collectionPlaceholder: 'Collection (optional, default: planning_time_records)',
-    releaseBilling: 'Client sign-off → release billing', credentials: 'credentials', empty: 'No credentials recorded yet.',
-    commandOffline: 'Offline: command service unavailable.', checking: 'Checking deployment readiness…', dispatchOffline: 'Offline: command could not be sent.',
-    blockedReason: 'blocked', notReady: 'Not ready for deployment', ready: 'Ready for deployment', databaseUnavailable: 'Database unavailable.',
-    databaseOffline: 'Offline: database unavailable.', subjectRequired: 'Subject ID is required.', saveFailed: 'Credential could not be saved.',
-    recordRequired: 'Performance record ID is required.', signoffRunning: 'Sign-off in progress…', signoffBlocked: 'Sign-off blocked.',
+    releaseBilling: 'Client sign-off → release billing', credentials: 'credentials',
+    blockedReason: 'blocked', notReady: 'Not ready for deployment', ready: 'Ready for deployment', // v4-allow: label
+    subjectRequired: 'Subject ID is required.', saveFailed: 'Credential could not be saved.',
+    recordRequired: 'Performance record ID is required.', signoffBlocked: 'Sign-off blocked.',
     signoffSaved: 'Client sign-off saved.', performanceRecord: 'Performance record', billingReleased: 'Billing released',
     invoice: 'Invoice', net: 'Net', yes: 'yes', no: 'no', subject: 'Subject', issuer: 'Issuer',
     expiredAgo: 'expired', daysRemaining: 'expires in', days: 'days', noExpiry: 'no expiry', verifiedBy: 'verified by',
     deploymentCheck: 'Check deployment', deploymentBlocking: 'Blocks deployment', credential: 'Credential',
     statusValid: 'valid', statusExpiring: 'expiring', statusExpired: 'expired', statusNotYetValid: 'not yet valid', statusUnverified: 'unverified',
-    syncing: 'Syncing data.',
   },
 };
 let text = COPY.de;
@@ -162,7 +157,7 @@ export function credentialRow(r, opts = {}) {
   const now = Number(opts.nowMs) || 0;
   const status = statusOf(r, now);
   const title = typeLabel(r.credential_type, locale);
-  const subject = r.subject_id || '—';
+  const subject = refName(r, 'subject', locale);
   const badge = '<span class="ctox-badge' + badgeStateClass(status) + '" data-status="' + esc(status) + '">' + esc(statusLabel(status)) + '</span>';
   const id = r.id || '';
   const attrs = ' class="ctox-list-item nachweise-row nachweise-row--' + view + (selected ? ' is-selected' : '') + '"'
@@ -194,20 +189,13 @@ export function credentialRow(r, opts = {}) {
     + '</div>';
 }
 
-// The list body markup (shards or compact rows), or the empty/sync state.
-// Rows always win; the kit syncing shell shows only when the caller passes a
-// readiness snapshot with ready === false (unfiltered source empty, initial
-// replication pending). Filter/search empties and absent readiness APIs keep
-// the plain empty copy.
+// The list body markup (shards or compact rows). An empty list renders
+// nothing (App-API 4.0: no state text in the content; state lives only in the
+// shell status zone).
 export function renderRecordList(rows, opts = {}) {
-  const list = Array.isArray(rows) ? rows : [];
-  return renderListOrState(list, opts.readiness || null, {
-    renderRows: (rs) => rs
-      .map((r) => credentialRow(r, { view: opts.view, nowMs: opts.nowMs, selected: r.id && r.id === opts.selectedId }))
-      .join(''),
-    empty: opts.emptyText || text.empty,
-    syncing: opts.syncingText || text.syncing,
-  });
+  return (Array.isArray(rows) ? rows : [])
+    .map((r) => credentialRow(r, { view: opts.view, nowMs: opts.nowMs, selected: r.id && r.id === opts.selectedId }))
+    .join('');
 }
 
 // Read-only detail card for the selected credential (auto-reveal target).
@@ -220,11 +208,10 @@ export function recordDetailHtml(r, nowMs) {
     ? (days < 0 ? text.expiredAgo + ' ' + Math.abs(days) + ' ' + text.days : text.daysRemaining + ' ' + days + ' ' + text.days)
     : text.noExpiry;
   const rows = [];
-  rows.push(field(text.subject, esc(r.subject_id || '—')));
+  rows.push(field(text.subject, esc(refName(r, 'subject', locale))));
   if (r.issuer) rows.push(field(text.issuer, esc(r.issuer)));
   rows.push(field(text.validUntilLabel, esc(daysLabel)));
   if (r.verified_by) rows.push(field(text.verifiedBy, esc(r.verified_by)));
-  if (r.id) rows.push(field('ID', '<span class="ats-tag">' + esc(r.id) + '</span>'));
   return '<header class="nachweise-detail-head">'
     + '<div class="nachweise-detail-titles">'
     + '<span class="ctox-badge' + badgeStateClass(status) + '" data-status="' + esc(status) + '">' + esc(statusLabel(status)) + '</span>'
@@ -237,6 +224,13 @@ export function recordDetailHtml(r, nowMs) {
     + '</div>'
     + '</header>'
     + '<dl class="ctox-fields ctox-fields--stacked">' + rows.join('') + '</dl>';
+}
+
+// Namen statt IDs (Textdiät Regel 4): Anzeigename aus dem Datensatz (<basis>_name / <basis>.name / <basis>_title),
+// sonst „Unbekannt“ – nie die technische ID.
+function refName(r, base, lang = 'de') {
+  const v = r?.[base + '_name'] ?? r?.[base]?.name ?? r?.[base + '_title'];
+  return v ? String(v) : (lang === 'en' ? 'Unknown' : 'Unbekannt'); // v4-allow: en
 }
 
 function field(label, valueHtml) {
@@ -270,25 +264,24 @@ export function prepareImport(raw, nowMs, salt = '') {
 }
 
 // ---------------------------------------------------------------------------
-// Mount
+// Mount (App-API 4.0): mount(root, api, { restored }) -> { unmount, snapshot }
 // ---------------------------------------------------------------------------
 
-export async function mount(ctx) {
-  locale = String(ctx.locale || document.documentElement.lang || 'de').toLowerCase().startsWith('en') ? 'en' : 'de';
-  text = COPY[locale];
-  await ensureStyles();
-  ctx.host.innerHTML = await loadMarkup();
-  ctx.host.dataset.atsModule = MODULE_ID;
-  ctx.host.dataset.nachweiseModule = 'native';
-  ctx.left?.replaceChildren?.();
-  ctx.right?.replaceChildren?.();
+const SNAPSHOT_VERSION = 1;
+const FORM_FIELDS = {
+  form: ['subject_id', 'credential_type', 'issuer', 'valid_until'],
+  gate: ['subject_id', 'required_types'],
+  signoff: ['record_id', 'charge_rate', 'entleiher_account_id', 'signature_request_id', 'collection'],
+};
 
-  const root = ctx.host.querySelector('[data-ats-root]');
-  root?.setAttribute('lang', locale);
+export async function mount(host, api, { restored } = {}) {
+  if (!host.dataset.app) host.dataset.app = api.app?.id || MODULE_ID;
+  setLocale(api, api.shell.locale.get());
+  // CSS laedt die Shell aus dem Manifest; index.html liefert der Service Worker versioniert (§16.15).
+  host.innerHTML = await loadMarkup();
+  const disposers = [];
+  const root = host.querySelector('[data-ats-root]');
   const t = (key) => text[key] || COPY.de[key] || key;
-  root?.querySelectorAll('[data-i18n]').forEach((node) => { node.textContent = t(node.dataset.i18n); });
-  root?.querySelectorAll('[data-i18n-placeholder]').forEach((node) => { node.placeholder = t(node.dataset.i18nPlaceholder); });
-  root?.querySelectorAll('[data-i18n-title]').forEach((node) => { node.title = node.ariaLabel = t(node.dataset.i18nTitle); });
 
   const rail = root?.querySelector('.nachweise-rail');
   const listEl = root?.querySelector('[data-ats-list]');
@@ -296,51 +289,90 @@ export async function mount(ctx) {
   const formEl = root?.querySelector('[data-ats-form]');
   const gateFormEl = root?.querySelector('[data-ats-gate-form]');
   const signoffFormEl = root?.querySelector('[data-ats-signoff-form]');
-  const gateEl = root?.querySelector('[data-ats-gate]');
   const titleEl = root?.querySelector('[data-ats-title]');
   const subEl = root?.querySelector('[data-ats-sub]');
   const toggleActionsEl = root?.querySelector('[data-toggle-actions]');
   const viewToggleEl = root?.querySelector('[data-ats-view-toggle]');
   const typeSelect = root?.querySelector('[data-credential-type]');
-  if (subEl) subEl.textContent = ctx.manifest?.description || '';
-  if (typeSelect) {
-    typeSelect.innerHTML = CREDENTIAL_TYPES
-      .map((type) => '<option value="' + esc(type.key) + '">' + esc(typeLabel(type.key, locale)) + '</option>')
-      .join('');
-  }
+  const forms = { form: formEl, gate: gateFormEl, signoff: signoffFormEl };
+  const restore = isPlainObject(restored) && restored.v === SNAPSHOT_VERSION ? restored : null;
+  applyCopy();
 
   let rowsCache = [];
-  let selectedId = null;
-  let userCollapsed = false;
-  // Collection readiness snapshot for the record list (shell-owned sync
-  // contract); null when the shell exposes no readiness API → the previous
-  // empty-state behaviour.
-  let credReadiness = readCredentialsReadiness();
+  let selectedId = restore && typeof restore.selectedId === 'string' ? restore.selectedId : null;
+  let userCollapsed = Boolean(restore && restore.userCollapsed === true);
+  let pendingScrollTop = restore && Number(restore.listScrollTop) > 0 ? Number(restore.listScrollTop) : 0;
   const nowMs = () => Date.now();
-  const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || null; } catch { return null; } };
+  if (restore) restoreView(restore);
 
-  // Shell-owned readiness for the primary collection; absent API (older
-  // shells, tests) reads as null.
-  function readCredentialsReadiness() {
-    const read = ctx.sync?.collectionReadiness;
-    if (typeof read !== 'function') return null;
-    try { return read.call(ctx.sync, PRIMARY) || null; } catch { return null; }
+  // Die Spalten-Grammatik verdrahtet die App selbst (keine DOM-Heuristik der Shell).
+  const { autoWirePaneGrammar } = await import('ctox:shared/pane-grammar.js');
+  autoWirePaneGrammar(root);
+
+  // Zustand nur ueber die Zustandszone der Shell, stabile Codes je Fall.
+  const report = (level, code, str, ref) => api.status.report(ref ? { level, code, text: str, ref } : { level, code, text: str });
+  const clear = (code) => api.status.clear(code);
+
+  function applyCopy() {
+    root?.setAttribute('lang', locale);
+    root?.querySelectorAll('[data-i18n]').forEach((node) => { node.textContent = t(node.dataset.i18n); });
+    root?.querySelectorAll('[data-i18n-placeholder]').forEach((node) => { node.placeholder = t(node.dataset.i18nPlaceholder); });
+    root?.querySelectorAll('[data-i18n-title]').forEach((node) => { node.title = node.ariaLabel = t(node.dataset.i18nTitle); });
+    const select = root?.querySelector('[data-credential-type]');
+    if (select) {
+      const current = select.value;
+      select.innerHTML = CREDENTIAL_TYPES
+        .map((type) => '<option value="' + esc(type.key) + '">' + esc(typeLabel(type.key, locale)) + '</option>')
+        .join('');
+      if (current) select.value = current;
+    }
+    api.shell.setTitle(t('title'));
   }
 
-  // Gate result → kit callout state (base.css .ctox-callout modifiers).
-  const GATE_KINDS = { ok: 'is-success', block: 'is-danger', offline: 'is-warning' };
-  function setGate(html, kind) {
-    if (!gateEl) return;
-    gateEl.className = 'ctox-callout' + (GATE_KINDS[kind] ? ' ' + GATE_KINDS[kind] : '');
-    gateEl.innerHTML = html || '';
-    gateEl.hidden = !html;
+  function restoreView(snap) {
+    const search = rail?.querySelector('[data-pg-search]');
+    if (search && typeof snap.search === 'string') search.value = snap.search;
+    if (rail && (snap.view === 'list' || snap.view === 'cards')) rail.dataset.pgDefaultView = snap.view;
+    const tabs = [...(rail?.querySelectorAll('[data-pg-band]') || [])];
+    if (typeof snap.band === 'string' && tabs.some((tab) => tab.dataset.pgBand === snap.band)) {
+      tabs.forEach((tab) => {
+        const on = tab.dataset.pgBand === snap.band;
+        tab.setAttribute('aria-selected', String(on));
+        tab.classList.toggle('is-active', on);
+      });
+    }
+    const statusSel = rail?.querySelector('[data-pg-filter][data-pg-name="status"]');
+    if (statusSel && typeof snap.status === 'string' && [...statusSel.options].some((o) => o.value === snap.status)) statusSel.value = snap.status;
+    const tray = rail?.querySelector('[data-pg-tray]');
+    if (tray && snap.trayOpen === true) { tray.hidden = false; rail.querySelector('[data-pg-tray-toggle]')?.setAttribute('aria-expanded', 'true'); }
+    if (snap.actionsOpen === true) {
+      root?.classList.remove('is-actions-hidden');
+      toggleActionsEl?.setAttribute('aria-pressed', 'true');
+    }
+    if (isPlainObject(snap.forms)) {
+      for (const [key, names] of Object.entries(FORM_FIELDS)) {
+        const values = snap.forms[key];
+        if (!isPlainObject(values)) continue;
+        for (const name of names) {
+          const el = forms[key]?.querySelector('[name="' + name + '"]');
+          if (el && typeof values[name] === 'string') el.value = values[name];
+        }
+      }
+    }
   }
 
-  // Read the SHELL-wired grammar state straight from the pane DOM. The view is
-  // the ONE piece the shell no longer owns: with a single toggle button there
-  // is no pressed/unpressed pair to read, so the current view lives on the pane
-  // as [data-pg-default-view] — the same attribute the shell's own
-  // wirePaneGrammar() falls back to, so declarative consumers stay in sync.
+  function formValues() {
+    const out = {};
+    for (const [key, names] of Object.entries(FORM_FIELDS)) {
+      out[key] = {};
+      for (const name of names) out[key][name] = forms[key]?.querySelector('[name="' + name + '"]')?.value ?? '';
+    }
+    return out;
+  }
+
+  // Read the grammar state straight from the pane DOM. The view lives on the
+  // pane as [data-pg-default-view] — the same attribute wirePaneGrammar() falls
+  // back to, so declarative consumers stay in sync.
   function readGrammar() {
     return {
       search: (rail?.querySelector('[data-pg-search]')?.value || '').trim().toLowerCase(),
@@ -361,10 +393,7 @@ export async function mount(ctx) {
     viewToggleEl.title = label;
     viewToggleEl.removeAttribute('aria-pressed');
     viewToggleEl.querySelectorAll('[data-ats-view-icon]').forEach((icon) => {
-      // toggleAttribute, not `.hidden`: these are SVG elements, and SVGElement
-      // does not implement the HTMLElement `hidden` IDL property — assigning it
-      // sets a JS expando the stylesheet never sees, so the icon would silently
-      // never swap.
+      // toggleAttribute, not `.hidden`: these are SVG elements (no HTMLElement `hidden` IDL property).
       icon.toggleAttribute('hidden', icon.dataset.atsViewIcon !== next);
     });
   }
@@ -373,16 +402,14 @@ export async function mount(ctx) {
     if (!rail) return;
     rail.dataset.pgDefaultView = readGrammar().view === 'list' ? 'cards' : 'list';
     applyViewToggle();
-    // Reuse the shell's own change channel: it clears the recorded scroll
-    // offsets (a view switch is an intentional reset) and drives render()
-    // through the already-bound onGrammarChange listener.
+    // Reuse the grammar change channel: it clears the recorded scroll offsets (a
+    // view switch is an intentional reset) and drives render() via onGrammarChange.
     try {
       rail.dispatchEvent(new CustomEvent('ctox-pane-grammar-change', { detail: readGrammar(), bubbles: true }));
     } catch { render(); }
   }
 
-  // Counts/footer via the shell handle when it has wired the pane, else plain
-  // textContent (the shell wires asynchronously after mount).
+  // Counts/footer via the pane-grammar handle (wired above by the app itself).
   function writeCounts(counts) {
     const pg = rail?.__ctoxPaneGrammar;
     if (pg && typeof pg.setCounts === 'function') { pg.setCounts(counts); return; }
@@ -408,42 +435,28 @@ export async function mount(ctx) {
     if (show) {
       detailEl.setAttribute('data-context-record-id', rec.id || '');
       detailEl.setAttribute('data-context-record-type', 'nachweis');
-      detailEl.setAttribute('data-context-label', typeLabel(rec.credential_type, locale) + ' · ' + (rec.subject_id || ''));
+      detailEl.setAttribute('data-context-label', typeLabel(rec.credential_type, locale) + ' · ' + refName(rec, 'subject', locale));
     }
-    if (titleEl) titleEl.textContent = rec ? (typeLabel(rec.credential_type, locale) + ' · ' + (rec.subject_id || '—')) : text.newTitle;
+    if (titleEl) titleEl.textContent = rec ? (typeLabel(rec.credential_type, locale) + ' · ' + refName(rec, 'subject', locale)) : text.newTitle;
   }
 
   function render() {
     const g = readGrammar();
     const now = nowMs();
     const filtered = filterRows(rowsCache, g, now);
-    if (listEl) {
-      const emptyText = rowsCache.length ? text.emptyFiltered : text.empty;
-      listEl.innerHTML = renderRecordList(filtered, {
-        view: g.view, selectedId, nowMs: now, emptyText,
-        // Gate only the data-driven empty (unfiltered source empty); filter
-        // empties keep the plain copy.
-        readiness: rowsCache.length ? null : credReadiness,
-        syncingText: text.syncing,
-      });
-    }
+    if (listEl) listEl.innerHTML = renderRecordList(filtered, { view: g.view, selectedId, nowMs: now });
     writeCounts(countsFor(rowsCache, now));
     const scope = { all: text.bandAll, valid: text.bandValid, expiring: text.bandExpiring, critical: text.bandCritical }[g.band] || text.bandAll;
     writeFooter(filtered.length + ' ' + text.entries + ' · ' + scope);
     renderDetail();
+    const scroller = listEl?.closest('.ctox-pane-body');
+    if (pendingScrollTop && scroller && rowsCache.length) { scroller.scrollTop = pendingScrollTop; pendingScrollTop = 0; }
   }
 
-  async function load() {
-    const col = collection();
-    let rows = [];
-    if (col?.find) {
-      try {
-        const docs = await col.find({ selector: {} }).exec();
-        rows = docs.map((d) => (typeof d.toJSON === 'function' ? d.toJSON() : d)).filter((r) => !r._deleted);
-      } catch (e) { console.error('[nachweise] load failed:', e); }
-    }
-    rows.sort((a, b) => (Number(b.updated_at_ms || b.created_at_ms || 0) - Number(a.updated_at_ms || a.created_at_ms || 0)));
-    rowsCache = rows;
+  function setRows(rows) {
+    const list = (Array.isArray(rows) ? rows : []).filter((r) => r && !r._deleted);
+    list.sort((a, b) => (Number(b.updated_at_ms || b.created_at_ms || 0) - Number(a.updated_at_ms || a.created_at_ms || 0)));
+    rowsCache = list;
   }
 
   function fillForm(rec) {
@@ -464,7 +477,6 @@ export async function mount(ctx) {
     userCollapsed = false;
     const rec = selectedId ? rowsCache.find((r) => r.id === selectedId) : null;
     if (rec) fillForm(rec);
-    setGate('');
     // Selection is an in-place class flip — a list rebuild resets the
     // operator's scroll (design-guide: re-renders never move the operator).
     applyListSelection();
@@ -483,7 +495,6 @@ export async function mount(ctx) {
     selectedId = null;
     userCollapsed = false;
     try { formEl?.reset(); } catch {}
-    setGate('');
     render();
     formEl?.querySelector('[name="subject_id"]')?.focus?.();
   }
@@ -498,7 +509,7 @@ export async function mount(ctx) {
       a.href = url;
       a.download = 'nachweise-credentials.json';
       a.rel = 'noopener';
-      root?.appendChild(a);
+      host.appendChild(a);
       a.click();
       a.remove();
     } catch (e) {
@@ -508,82 +519,87 @@ export async function mount(ctx) {
     }
   }
 
+  // Import: jede Zeile ein lokaler Write (api.put), sichtbar ueber das Live-Abo.
+  async function importFile(file) {
+    let parsed;
+    try { parsed = JSON.parse(await file.text()); } catch { report('error', 'nachweise.import.invalid', text.importInvalid); return; }
+    clear('nachweise.import.invalid');
+    const items = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : []);
+    if (!items.length) { report('warn', 'nachweise.import.empty', text.importEmpty); return; }
+    clear('nachweise.import.empty');
+    const stamp = nowMs();
+    let count = 0;
+    for (const raw of items) {
+      try { await api.put(PRIMARY, prepareImport(raw, stamp, String(count))).local; count += 1; }
+      catch (e) { console.error('[nachweise] import failed:', e); }
+    }
+    if (count < items.length) report('warn', 'nachweise.import.partial', text.imported + ': ' + count + '/' + items.length);
+    else clear('nachweise.import.partial');
+  }
+
   function importRecords() {
-    const col = collection();
-    if (!col?.upsert) { setGate(text.databaseOffline, 'offline'); return; }
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'application/json,.json';
-    input.addEventListener('change', async () => {
+    input.addEventListener('change', () => {
       const file = input.files && input.files[0];
-      if (!file) return;
-      let parsed;
-      try { parsed = JSON.parse(await file.text()); } catch { setGate(text.importInvalid, 'block'); return; }
-      const items = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : []);
-      if (!items.length) { setGate(text.importEmpty, 'block'); return; }
-      const stamp = nowMs();
-      let count = 0;
-      for (const raw of items) {
-        try { await col.upsert(prepareImport(raw, stamp, String(count))); count += 1; }
-        catch (e) { console.error('[nachweise] import failed:', e); }
-      }
-      setGate('<strong>' + esc(text.imported) + '</strong>: ' + count, 'ok');
-      await load();
-      render();
+      if (file) importFile(file);
     });
     input.click();
   }
 
-  async function runDeploymentCheck(subjectId, requiredTypes) {
-    const dispatch = ctx.commandBus?.dispatch;
-    if (typeof dispatch !== 'function') { setGate(t('commandOffline'), 'offline'); return; }
-    setGate(t('checking'));
-    let result;
-    try {
-      const decision = await dispatch({
-        module: MODULE_ID,
-        command_type: DEPLOY_COMMAND,
-        payload: { subject_id: subjectId, required_types: requiredTypes },
-      });
-      result = decision?.result || decision;
-    } catch (e) {
-      console.warn('[nachweise] deployment gate check failed:', e);
-      setGate(t('dispatchOffline'), 'offline');
-      return;
-    }
-    const blockers = result?.blockers || [];
-    const ready = result?.ready === true && !(Array.isArray(blockers) && blockers.length);
-    if (!ready) {
-      const items = (Array.isArray(blockers) ? blockers : [blockers])
-        .filter(Boolean)
-        .map((b) => '<li>' + esc(typeLabel(b?.credential_type, locale) + ' — ' + (b?.reason || t('blockedReason'))) + '</li>')
-        .join('');
-      setGate(
-        '<strong>✗ ' + esc(t('notReady')) + ': ' + esc(subjectId) + '</strong>'
-        + (items ? '<ul class="ats-blockers">' + items + '</ul>' : ''),
-        'block'
-      );
-      return;
-    }
-    setGate('<strong>✓ ' + esc(t('ready')) + ': ' + esc(subjectId) + '</strong>', 'ok');
+  // Befehl: api.command legt das Befehlsdokument lokal an und liefert sofort; die UI wartet nie.
+  // Fehlschlag → Zone (error). Ergebnis (done) wertet onDone aus.
+  function sendCommand(type, payload, onDone) {
+    const handle = api.command(type, payload);
+    const code = 'nachweise.command.' + type;
+    let off = null;
+    let finished = false;
+    const stop = () => { finished = true; off?.(); off = null; };
+    off = handle.status.subscribe((s) => {
+      if (s?.status === 'failed') {
+        report('error', code, type + ': ' + (s.error || 'failed'), handle.id);
+        stop();
+      } else if (s?.status === 'done') {
+        clear(code);
+        try { onDone?.(s.result, handle); } catch (e) { console.error('[nachweise] result failed:', e); }
+        stop();
+      }
+    });
+    if (finished) off?.();
+    handle.local.catch((e) => report('error', code, type + ': ' + (e?.code || 'local') + ' ' + (e?.message || e), handle.id));
+    disposers.push(stop);
+    return handle;
   }
 
-  // Create a credential (plain RxDB write — no native command for capture).
+  // Server-authoritative deployment-readiness gate (ats.deployment.check). Das Ergebnis ist die
+  // Antwort auf die Pruefung und hat sonst keine sichtbare Wirkung → Zustandszone (info/warn).
+  function runDeploymentCheck(subjectId, requiredTypes) {
+    sendCommand(DEPLOY_COMMAND, { subject_id: subjectId, required_types: requiredTypes }, (raw) => {
+      const result = raw?.result || raw;
+      const blockers = result?.blockers || [];
+      const ready = result?.ready === true && !(Array.isArray(blockers) && blockers.length);
+      if (!ready) {
+        const items = (Array.isArray(blockers) ? blockers : [blockers])
+          .filter(Boolean)
+          .map((b) => typeLabel(b?.credential_type, locale) + ' — ' + (b?.reason || t('blockedReason')));
+        report('warn', 'nachweise.deployment.check', '✗ ' + t('notReady') + ': ' + subjectId + (items.length ? ' · ' + items.join(' · ') : ''), subjectId);
+        return;
+      }
+      report('info', 'nachweise.deployment.check', '✓ ' + t('ready') + ': ' + subjectId, subjectId);
+    });
+  }
+
+  // Create a credential (plain collection write — no native command for capture).
   // The insert flow is unchanged: submit always creates a fresh record; select
   // pre-fills the form as a starting point, "Neu" clears it.
-  async function onSubmit(event) {
+  function onSubmit(event) {
     event.preventDefault();
-    setGate('');
-    const col = collection();
-    if (!col?.insert) {
-      ctx.notifications?.show?.({ type: 'error', title: t('title'), message: t('databaseUnavailable') });
-      setGate(t('databaseOffline'), 'offline');
-      return;
-    }
     const data = new FormData(formEl);
     const f = Object.fromEntries(data.entries());
     const subjectId = String(f.subject_id || '').trim();
-    if (!subjectId) { setGate(t('subjectRequired'), 'block'); return; }
+    if (!subjectId) { report('warn', 'nachweise.form.subject_required', t('subjectRequired')); return; }
+    clear('nachweise.form.subject_required');
     const validUntil = String(f.valid_until || '');
     const now = Date.now();
     const record = {
@@ -599,46 +615,42 @@ export async function mount(ctx) {
       updated_at_ms: now,
       _deleted: false,
     };
-    try {
-      await col.insert(record);
+    const handle = api.put(PRIMARY, record);
+    handle.local.then(() => {
+      clear('nachweise.credential.save_failed');
       selectedId = null;
       try { formEl.reset(); } catch {}
-      await load();
       render();
-    } catch (e) {
+    }, (e) => {
       console.error('[nachweise] insert failed:', e);
-      setGate(t('saveFailed'), 'block');
-    }
+      report('error', 'nachweise.credential.save_failed', t('saveFailed') + ' ' + (e?.code || '') + ' ' + (e?.message || ''));
+    });
   }
-  formEl?.addEventListener('submit', onSubmit);
 
-  // Server-authoritative deployment-readiness gate (ats.deployment.check).
-  async function onGateCheck(event) {
+  function onGateCheck(event) {
     event.preventDefault();
     const data = new FormData(gateFormEl);
     const subjectId = String(data.get('subject_id') || '').trim();
-    if (!subjectId) { setGate(t('subjectRequired'), 'block'); return; }
+    if (!subjectId) { report('warn', 'nachweise.form.subject_required', t('subjectRequired')); return; }
+    clear('nachweise.form.subject_required');
     const requiredTypes = String(data.get('required_types') || '')
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
-    await runDeploymentCheck(subjectId, requiredTypes);
+    runDeploymentCheck(subjectId, requiredTypes);
   }
-  gateFormEl?.addEventListener('submit', onGateCheck);
 
   // Entleiher sign-off → billing release (ats.leistungsnachweis.signoff).
-  async function onSignoff(event) {
+  function onSignoff(event) {
     event.preventDefault();
-    setGate('');
-    const dispatch = ctx.commandBus?.dispatch;
-    if (typeof dispatch !== 'function') { setGate(t('commandOffline'), 'offline'); return; }
     const data = new FormData(signoffFormEl);
     const recordId = String(data.get('record_id') || '').trim();
-    if (!recordId) { setGate(t('recordRequired'), 'block'); return; }
+    if (!recordId) { report('warn', 'nachweise.form.record_required', t('recordRequired')); return; }
+    clear('nachweise.form.record_required');
     const collectionName = String(data.get('collection') || '').trim();
     const payload = { record_id: recordId };
     if (collectionName) payload.collection = collectionName;
-    // Billing-critical fields the native signoff handler reads (store.rs):
+    // Billing-critical fields the signoff handler reads (store_ats_commands.rs):
     // charge_rate (Verrechnungssatz, must be a finite number > 0 unless already
     // on the record), entleiher_account_id (invoice recipient), and
     // signature_request_id (only consulted when Entleiher-signature is enforced).
@@ -651,48 +663,34 @@ export async function mount(ctx) {
     if (entleiherId) payload.entleiher_account_id = entleiherId;
     const signatureRequestId = String(data.get('signature_request_id') || '').trim();
     if (signatureRequestId) payload.signature_request_id = signatureRequestId;
-    setGate(t('signoffRunning'));
-    let result;
-    try {
-      const decision = await dispatch({
-        module: MODULE_ID,
-        command_type: SIGNOFF_COMMAND,
-        payload,
-      });
-      result = decision?.result || decision;
-    } catch (e) {
-      console.warn('[nachweise] signoff failed:', e);
-      setGate(t('dispatchOffline'), 'offline');
-      return;
-    }
-    const blockers = result?.blockers || result?.errors || null;
-    const blocked = result?.ok === false || result?.status === 'blocked'
-      || (Array.isArray(blockers) && blockers.length > 0);
-    if (blocked) {
-      const items = (Array.isArray(blockers) ? blockers : [blockers])
-        .filter(Boolean)
-        .map((b) => '<li>' + esc(typeof b === 'string' ? b : (b?.message || b?.reason || JSON.stringify(b))) + '</li>')
-        .join('');
-      setGate('<strong>' + esc(t('signoffBlocked')) + '</strong>' + (items ? '<ul class="ats-blockers">' + items + '</ul>' : ''), 'block');
-      return;
-    }
-    const signedId = result?.record_id ?? recordId;
-    const released = result?.billing_released === true;
-    const invoiceId = result?.invoice_id ? String(result.invoice_id) : '';
-    const netTotal = result?.net_total;
-    setGate(
-      '<strong>' + esc(t('signoffSaved')) + '</strong>'
-      + '<div class="ats-result-row">' + esc(t('performanceRecord')) + ': ' + esc(signedId) + '</div>'
-      + '<div class="ats-result-row">' + esc(t('billingReleased')) + ': ' + esc(released ? t('yes') : t('no')) + '</div>'
-      + (invoiceId ? '<div class="ats-result-row">' + esc(t('invoice')) + ': ' + esc(invoiceId) + '</div>' : '')
-      + (netTotal != null ? '<div class="ats-result-row">' + esc(t('net')) + ': ' + esc(String(netTotal)) + ' €</div>' : ''),
-      'ok'
-    );
-    try { signoffFormEl.reset(); } catch {}
-    await load();
-    render();
+    const submitted = JSON.stringify(formValues().signoff);
+    sendCommand(SIGNOFF_COMMAND, payload, (raw) => {
+      const result = raw?.result || raw;
+      const blockers = result?.blockers || result?.errors || null;
+      const blocked = result?.ok === false || result?.status === 'blocked'
+        || (Array.isArray(blockers) && blockers.length > 0);
+      if (blocked) {
+        const items = (Array.isArray(blockers) ? blockers : [blockers])
+          .filter(Boolean)
+          .map((b) => (typeof b === 'string' ? b : (b?.message || b?.reason || JSON.stringify(b))));
+        report('warn', 'nachweise.signoff.result', t('signoffBlocked') + (items.length ? ' ' + items.join(' · ') : ''), recordId);
+        return;
+      }
+      const signedId = result?.record_id ?? recordId;
+      const released = result?.billing_released === true;
+      const invoiceId = result?.invoice_id ? String(result.invoice_id) : '';
+      const netTotal = result?.net_total;
+      report('info', 'nachweise.signoff.result', [
+        t('signoffSaved'),
+        t('performanceRecord') + ': ' + signedId,
+        t('billingReleased') + ': ' + (released ? t('yes') : t('no')),
+        invoiceId ? t('invoice') + ': ' + invoiceId : '',
+        netTotal != null ? t('net') + ': ' + String(netTotal) + ' €' : '',
+      ].filter(Boolean).join(' · '), String(signedId));
+      // Formular nur leeren, wenn seit dem Absenden nichts Neues eingegeben wurde.
+      if (JSON.stringify(formValues().signoff) === submitted) { try { signoffFormEl.reset(); } catch {} }
+    });
   }
-  signoffFormEl?.addEventListener('submit', onSignoff);
 
   // Row selection → fill form + auto-reveal detail (design-guide outbound idiom).
   function onListClick(event) {
@@ -707,8 +705,6 @@ export async function mount(ctx) {
     event.preventDefault();
     selectRecord(row.getAttribute('data-context-record-id'));
   }
-  listEl?.addEventListener('click', onListClick);
-  listEl?.addEventListener('keydown', onListKey);
 
   // Header + detail icon actions (create / import / export / collapse / per-record deploy check).
   function onAction(event) {
@@ -724,7 +720,6 @@ export async function mount(ctx) {
       if (rec?.subject_id) runDeploymentCheck(rec.subject_id, []);
     }
   }
-  root?.addEventListener('click', onAction);
 
   // Einsatz-Gate and Sign-off forms are hidden by default (is-actions-hidden on
   // root); the header toggle reveals them on demand — threads' / consent's idiom.
@@ -732,53 +727,80 @@ export async function mount(ctx) {
     const hidden = root?.classList.toggle('is-actions-hidden');
     toggleActionsEl?.setAttribute('aria-pressed', hidden ? 'false' : 'true');
   }
+
+  formEl?.addEventListener('submit', onSubmit);
+  gateFormEl?.addEventListener('submit', onGateCheck);
+  signoffFormEl?.addEventListener('submit', onSignoff);
+  listEl?.addEventListener('click', onListClick);
+  listEl?.addEventListener('keydown', onListKey);
+  root?.addEventListener('click', onAction);
   toggleActionsEl?.addEventListener('click', onToggleActions);
   viewToggleEl?.addEventListener('click', onViewToggle);
   applyViewToggle();
-
-  // Re-render when the shell reports a grammar change (search / view / tray /
-  // band). The event bubbles from the wired pane.
+  // Re-render when the pane grammar reports a change (search / view / tray / band).
   const onGrammarChange = () => { render(); };
   rail?.addEventListener('ctox-pane-grammar-change', onGrammarChange);
 
-  let subscription = null;
-  let readinessUnsubscribe = null;
-  const col = collection();
-  if (col?.find) {
-    try { subscription = col.find({ selector: {} }).$?.subscribe?.(() => { load().then(render).catch(() => {}); }); }
-    catch { /* live sync optional */ }
-  }
-  // Re-render the record list when the collection flips its replication state
-  // so the empty list swaps between the syncing shell and the real empty
-  // state without waiting for data changes.
-  if (typeof ctx.sync?.subscribeCollectionReadiness === 'function') {
-    try {
-      const un = ctx.sync.subscribeCollectionReadiness(PRIMARY, (snapshot) => {
-        credReadiness = snapshot || null;
-        render();
-      });
-      if (typeof un === 'function') readinessUnsubscribe = un;
-    } catch { /* readiness optional */ }
-  }
-  await load();
-  render();
+  disposers.push(api.query(PRIMARY, {}).subscribe((rows) => { setRows(rows); render(); }));
+  disposers.push(api.shell.locale.subscribe((next) => {
+    if (!setLocale(api, next)) return;
+    applyCopy();
+    applyViewToggle();
+    render();
+  }));
 
-  return () => {
-    try { subscription?.unsubscribe?.(); } catch {}
-    try { readinessUnsubscribe?.(); } catch {}
-    formEl?.removeEventListener('submit', onSubmit);
-    gateFormEl?.removeEventListener('submit', onGateCheck);
-    signoffFormEl?.removeEventListener('submit', onSignoff);
-    toggleActionsEl?.removeEventListener('click', onToggleActions);
-    viewToggleEl?.removeEventListener('click', onViewToggle);
-    listEl?.removeEventListener('click', onListClick);
-    listEl?.removeEventListener('keydown', onListKey);
-    root?.removeEventListener('click', onAction);
-    rail?.removeEventListener('ctox-pane-grammar-change', onGrammarChange);
-    ctx.host.replaceChildren();
-    delete ctx.host.dataset.atsModule;
-    delete ctx.host.dataset.nachweiseModule;
+  return {
+    unmount() {
+      for (const dispose of disposers.splice(0)) {
+        try { dispose(); } catch (e) { console.warn('[nachweise] unsubscribe failed', e); }
+      }
+      formEl?.removeEventListener('submit', onSubmit);
+      gateFormEl?.removeEventListener('submit', onGateCheck);
+      signoffFormEl?.removeEventListener('submit', onSignoff);
+      toggleActionsEl?.removeEventListener('click', onToggleActions);
+      viewToggleEl?.removeEventListener('click', onViewToggle);
+      listEl?.removeEventListener('click', onListClick);
+      listEl?.removeEventListener('keydown', onListKey);
+      root?.removeEventListener('click', onAction);
+      rail?.removeEventListener('ctox-pane-grammar-change', onGrammarChange);
+      host.replaceChildren();
+    },
+    snapshot() {
+      const g = readGrammar();
+      return {
+        v: SNAPSHOT_VERSION,
+        selectedId,
+        userCollapsed,
+        search: rail?.querySelector('[data-pg-search]')?.value || '',
+        view: g.view,
+        band: g.band,
+        status: g.status,
+        trayOpen: rail?.querySelector('[data-pg-tray]')?.hidden === false,
+        actionsOpen: Boolean(root && !root.classList.contains('is-actions-hidden')),
+        forms: formValues(),
+        listScrollTop: listEl?.closest('.ctox-pane-body')?.scrollTop || 0,
+      };
+    },
   };
+}
+
+function isPlainObject(v) { return Boolean(v) && typeof v === 'object' && !Array.isArray(v); }
+
+// Sprache: api.shell.locale (live) + api.shell.t('nachweise.<key>') uebersteuert die eingebetteten Texte.
+function setLocale(api, value) {
+  const next = String(value || '').toLowerCase().startsWith('en') ? 'en' : 'de';
+  const changed = next !== locale || text === COPY[locale];
+  locale = next;
+  const base = COPY[next];
+  const out = {};
+  for (const key of Object.keys(base)) {
+    const k = MODULE_ID + '.' + key;
+    let v = null;
+    try { v = api?.shell?.t?.(k); } catch {}
+    out[key] = typeof v === 'string' && v && v !== k ? v : base[key];
+  }
+  text = out;
+  return changed;
 }
 
 // Credential status → kit badge state (base.css .ctox-badge modifiers).
@@ -801,18 +823,8 @@ function typeLabel(key, loc = 'de') {
   return (loc === 'en' ? TYPE_LABEL_EN.get(key) : TYPE_LABEL.get(key)) || key || COPY[loc]?.credential || COPY.de.credential;
 }
 
-async function ensureStyles() {
-  const href = new URL('./index.css', import.meta.url).pathname + '?v=' + MOD_BUILD;
-  if (document.querySelector('link[href="' + href + '"]')) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = href;
-  document.head.append(link);
-}
-
 async function loadMarkup() {
-  const url = new URL('./index.html', import.meta.url).pathname + '?v=' + MOD_BUILD;
-  const html = await fetch(url).then((r) => r.text());
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((r) => r.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((n) => n.remove());
   return doc.body.innerHTML;
