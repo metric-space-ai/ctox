@@ -45,6 +45,40 @@
       "handlers/_lib/research-adapter.js"
     ]
   },
+  "_commands_in_evidence": {
+    "conversations outbound.message.approve": [
+      "modules/conversations/index.js:1929"
+    ],
+    "conversations outbound.message.reject": [
+      "modules/conversations/index.js:1935"
+    ],
+    "conversations outbound.reply.classify": [
+      "modules/conversations/index.js:1944"
+    ],
+    "conversations outbound.reply.match": [
+      "modules/conversations/index.js:1959"
+    ],
+    "mail outbound.campaign.status.set": [
+      "modules/mail/index.js:1131"
+    ],
+    "mail outbound.message.approve": [
+      "modules/mail/index.js:1144"
+    ],
+    "mail outbound.message.compose": [
+      "modules/mail/index.js:1258"
+    ],
+    "mail outbound.message.request_approval": [
+      "modules/mail/index.js:1142",
+      "modules/mail/index.js:1951"
+    ],
+    "mail outbound.message.send_approved": [
+      "modules/mail/index.js:1146",
+      "modules/mail/index.js:1951"
+    ],
+    "mail outbound.provider.reconcile": [
+      "modules/mail/index.js:1123"
+    ]
+  },
   "_commands_out_evidence": {
     "outbound-lead-generation outbound.research_source.reprobe": [
       "handlers/_lib/owner-app.js:22"
@@ -1438,7 +1472,63 @@
       "roles": []
     }
   },
-  "commands_in": [],
+  "commands_in": [
+    {
+      "from": [
+        "mail"
+      ],
+      "type": "outbound.campaign.status.set"
+    },
+    {
+      "from": [
+        "conversations",
+        "mail"
+      ],
+      "type": "outbound.message.approve"
+    },
+    {
+      "from": [
+        "mail"
+      ],
+      "type": "outbound.message.compose"
+    },
+    {
+      "from": [
+        "conversations"
+      ],
+      "type": "outbound.message.reject"
+    },
+    {
+      "from": [
+        "mail"
+      ],
+      "type": "outbound.message.request_approval"
+    },
+    {
+      "from": [
+        "mail"
+      ],
+      "type": "outbound.message.send_approved"
+    },
+    {
+      "from": [
+        "mail"
+      ],
+      "type": "outbound.provider.reconcile"
+    },
+    {
+      "from": [
+        "conversations"
+      ],
+      "type": "outbound.reply.classify"
+    },
+    {
+      "from": [
+        "conversations"
+      ],
+      "type": "outbound.reply.match"
+    }
+  ],
   "commands_out": [
     {
       "app": "outbound-lead-generation",

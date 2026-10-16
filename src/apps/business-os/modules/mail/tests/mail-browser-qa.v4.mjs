@@ -70,10 +70,7 @@ const NO_V4 = [
 
 // Befunde: V2-Prüfungen, die gegen die v4-App rot sind (App-Code ist nicht Teil dieses Laufs). Streng: der
 // gemessene Verstoß muss genau dieser Liste entsprechen; ist er behoben, wird der Lauf rot, bis der Eintrag fällt.
-const KNOWN_FINDINGS = {
-  // F1: Kopfleiste des Inhaltseditors läuft über (scrollWidth − clientWidth: 12/36/103/129 px, gemessen 16.10.2026).
-  'editor.viewports': ['960x720 commandbar overflow', '640x480 commandbar overflow', '390x844 commandbar overflow', '360x760 commandbar overflow'],
-};
+const KNOWN_FINDINGS = {};
 const geometryLog = [];
 
 const steps = [];

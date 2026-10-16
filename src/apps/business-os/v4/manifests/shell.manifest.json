@@ -7,6 +7,14 @@
       "v4/source/agent-panel.js (ctox.coding.turn, Auftrag aus der Agent-Seitenleiste)"
     ]
   },
+  "_commands_out_evidence": {
+    "ctox business_os.chat.task": [
+      "v4/shell/chat/index.js (commandBus.dispatch → api.command; shared/business-chat.js Standardtyp business_os.chat.task, CHAT4.md)"
+    ],
+    "ctox ctox.chat.task": [
+      "v4/shell/app-host.js:500 (Menüpunkt ctox.ask „CTOX fragen…“ → Eingabeblatt → Standardbefehl ctox.chat.task)"
+    ]
+  },
   "_format": "ctox-shell-v4-app-manifest-draft-1",
   "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
   "_legacy_count": 0,
@@ -31,6 +39,16 @@
   ],
   "collections": {},
   "command_rights": {},
+  "commands_out": [
+    {
+      "app": "ctox",
+      "type": "business_os.chat.task"
+    },
+    {
+      "app": "ctox",
+      "type": "ctox.chat.task"
+    }
+  ],
   "created_at": null,
   "entry": "v4/frame/index.js",
   "exports": {},
@@ -113,11 +131,11 @@
     "shared/workjet-supervisor-route-native.mjs": "7db3fe2068799cce8eed693e765d946b994bac291d12d1f0a65b17e48e18b1b9",
     "shared/workjet-theme.js": "b95ebcc0d6d94e80834abfcdb467f9c09ae36f9cee9dc378e66bcf11cb70c995",
     "shared/workspace-session.js": "ac00f69b26d8af516bdd6290549cdcbf56682aa828a6ca18c8094432c428b875",
-    "v4/frame/crew-bar.js": "b2e57821f2067a4b7dda38e0b128522ef5cbdf9a9a8e67cc52bb5152297d66e1",
+    "v4/frame/crew-bar.js": "caaefe44927952c432117240d44e23ff74346c7bf1102164b1852a67110b8cc8",
     "v4/frame/desktop.js": "be621803003d967b05050a8442ffc72345fc028dc6cb29816f013e9a031064ce",
     "v4/frame/frame.css": "3e2cb79f65a597be66b4b9eed5138a878c98e699ce5c1f1928b465f361c136d6",
     "v4/frame/glossary.js": "496a962b5a5744ffe5c50d275cd0e31d0d4228cfd4d0a6d43f5276288190410e",
-    "v4/frame/index.js": "a8fcee4ad80e7abadf7330fab4a4a747e73b8d09319355c19686c3bf3c3d149b",
+    "v4/frame/index.js": "63d410589d4e87b6382b624631d6c4f5d2c15d73ebabe3de679726cd1124d58b",
     "v4/frame/launcher.js": "e4c141ed28922d3c03d3872633adf09a34e80de9f9e927399641e2066b790cde",
     "v4/frame/pane-heads.js": "5049171627830e5b42a61d4140b0de81f8b79bf67e6296bcee1a373cc92125c1",
     "v4/frame/pane-narrow.js": "85cd2ec7dfc185424ec9dd098f5ccb3d2d7973b01e0cc22a92b1f063da04272d",
@@ -127,6 +145,9 @@
     "v4/frame/topbar.js": "bf46186ac11a6367ada6d2b9d8ba0fb5b54692d83c95da0988557dcb86733aec",
     "v4/frame/window-sheet.js": "a0c508dff3ab4441343ea062744644447424790de099195528820935072bbeaf",
     "v4/shell/app-host.js": "441e564d6ae7678a5dcf5768742163cda4c6cb541eb79ac4b2f6c7b4b476c012",
+    "v4/shell/chat/chat-v2.css": "2b8052b88bf02528c4db3aca499620b9228826a97546acfbe817fe6d88a51317",
+    "v4/shell/chat/index.js": "17217dedda159feba982fa4c7698da363a6e0d0d0662ddecc2360ad12dfaadf5",
+    "v4/shell/chat/raw-db.js": "e0f95f754656563c2f719cc11ce84b454143f0e8b1b53b2697270bd5add5ca87",
     "v4/shell/column-resizers.js": "ccd8e1b9615381987ccc8f710ae8faf01c924f3d7c74a76b3a029469f71c554e",
     "v4/shell/kernel-adapter.js": "d52b5123bacdc2e08db0970f8a4d84cf29006eed2fda01af5a7b603212160eb2",
     "v4/shell/report.js": "2809f32401811004129ad7742c61d72da1e8f25792a5a87b0b94a650460971ff",
@@ -157,6 +178,29 @@
     "v4/sw.js": "4263986afea2f1dfd885b04dee4ff675f1cdf2395ece4fca7f3efc597a8171c3"
   },
   "foreign_collections": {
+    "business_chats": {
+      "_evidence": {
+        "sources": [
+          "v4/shell/chat/index.js CHAT_WRITABLE (shared/business-chat.js hydrateChatsFromRxDb, persistChatDocsRemote, deleteChat)"
+        ]
+      },
+      "ops": [
+        "read",
+        "write"
+      ],
+      "owner_app": "ctox"
+    },
+    "business_commands": {
+      "_evidence": {
+        "sources": [
+          "v4/shell/chat/index.js CHAT_COLLECTIONS (shared/business-chat.js waitForSubmittedTaskId, syncTrackedMessages)"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
     "business_module_reports": {
       "_evidence": {
         "sources": [
@@ -191,6 +235,50 @@
         "write"
       ],
       "owner_app": "ctox"
+    },
+    "ctox_crew_members": {
+      "_evidence": {
+        "sources": [
+          "v4/shell/chat/index.js CHAT_COLLECTIONS (shared/business-chat.js loadCrewMembers, Crew-Pool der Leiste)"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    },
+    "ctox_harness_events": {
+      "_evidence": {
+        "sources": [
+          "v4/shell/chat/index.js CHAT_COLLECTIONS (shared/business-chat.js crewSelectionReason)"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    },
+    "ctox_harness_status": {
+      "_evidence": {
+        "sources": [
+          "v4/shell/chat/index.js CHAT_COLLECTIONS (shared/business-chat.js loadCrewHarnessStatus, Arbeiterwahrheit)"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    },
+    "ctox_queue_tasks": {
+      "_evidence": {
+        "sources": [
+          "v4/shell/chat/index.js CHAT_COLLECTIONS (shared/business-chat.js syncTrackedMessages, loadCrewAppTasks)"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
     },
     "desktop_files": {
       "_evidence": {
@@ -281,7 +369,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "4a3ecc5a070c9771132adeca20797da3231502e123cd9bf8c9d678824d8055d4",
+    "base_hash": "801fe793e736f1a191defbb17f580145935ac270e50695c280f344e54653b92c",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

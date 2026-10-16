@@ -1,5 +1,19 @@
 {
   "_capability_evidence": {},
+  "_commands_out_evidence": {
+    "outbound outbound.message.approve": [
+      "index.js:1929"
+    ],
+    "outbound outbound.message.reject": [
+      "index.js:1935"
+    ],
+    "outbound outbound.reply.classify": [
+      "index.js:1944"
+    ],
+    "outbound outbound.reply.match": [
+      "index.js:1959"
+    ]
+  },
   "_declaration": "modules/conversations/v4-manifest.json",
   "_format": "ctox-shell-v4-app-manifest-draft-1",
   "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
@@ -289,7 +303,24 @@
   },
   "command_rights": {},
   "commands_in": [],
-  "commands_out": [],
+  "commands_out": [
+    {
+      "app": "outbound",
+      "type": "outbound.message.approve"
+    },
+    {
+      "app": "outbound",
+      "type": "outbound.message.reject"
+    },
+    {
+      "app": "outbound",
+      "type": "outbound.reply.classify"
+    },
+    {
+      "app": "outbound",
+      "type": "outbound.reply.match"
+    }
+  ],
   "created_at": null,
   "entry": "index.js",
   "exports": {

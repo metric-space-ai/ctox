@@ -52,6 +52,7 @@ export const FRAME_SNAPSHOT_VERSION = 1;
 const SHELL_STATE_KEY = 'shell'; // kernel.windowState: je Tab und Nutzer (§16.19 Nr. 3)
 const OWNER_PREFIX = 'v4app:';
 const RETIRE_EVENT = 'v4:retire';
+const CHAT_APP_ID = 'ctox'; // CHAT4: Eigentümer von business_chats und Empfänger von business_os.chat.task
 // Längstens so lange steht der alte Rahmen, während der neue montiert. Muss unter der Startfrist des Loaders
 // (shellStartTimeoutMs 9 s, §16.19 Nr. 4) bleiben, sonst fällt der Loader auf die alte Shell zurück.
 const SWITCH_DEADLINE_MS = 8500;
@@ -1049,6 +1050,34 @@ export async function startShell(loaderKernel, options = {}) {
   // Beim Abtreten (Doppelpuffer) bleibt alles sichtbar stehen, bis der Rahmen entfernt wird; nur Menü und Beobachter enden.
   state.unsubs.push(() => { launcher.close({ restore: false }); desktop.disconnect(); });
 
+  // ---------- CHAT4: Chatleiste der Shell-V2 (shared/business-chat.js unverändert, v4/shell/chat) ----------
+  // Steht, solange die ctox-App aktiv ist: ihr gehören business_chats und der Befehl business_os.chat.task; ohne sie
+  // hätte die Leiste weder Verläufe noch einen Empfänger. Montiert tritt die Crew-Leiste ab (eine Leiste unten links).
+  // Ein neuer Rahmen (Doppelpuffer) übernimmt die Leiste im selben Schritt; die alte endet erst mit ihrem Rahmen.
+  // getActiveModule = das fokussierte Fenster (Quelle des Auftrags, wie state.activeModule der Shell-V2).
+  let chatLoading = null;
+  const chatModule = () => {
+    const rec = focusedRec();
+    return rec && !rec.view ? { id: rec.appId, title: rec.title, name: rec.title } : null;
+  };
+  function syncBusinessChat() {
+    const wanted = state.appById.has(CHAT_APP_ID);
+    if (wanted && !state.chat && !chatLoading) {
+      chatLoading = import('../shell/chat/index.js').then((m) => {
+        chatLoading = null;
+        if (state.stopped || state.chat || !state.appById.has(CHAT_APP_ID)) return;
+        const chat = m.mountBusinessChat({ kernel, shellVer, getActiveModule: chatModule });
+        if (!chat) return;
+        state.chat = chat;
+        crewBar.handOver(true);
+      }).catch((e) => { chatLoading = null; console.warn('[v4 frame] business chat', e); });
+    } else if (!wanted && state.chat) {
+      state.chat.unmount();
+      state.chat = null;
+      crewBar.handOver(false);
+    }
+  }
+
   // ---------- „Neue App“ (Quelltext-Modus, neuer Entwurf mit base_app_ver = null) ----------
   // Rechte-Spiegel aus der Shell-App-API; ohne kernel.source(appId) gibt es keinen Einstieg.
   const sourceFn = typeof shellKernel.source === 'function' ? shellKernel.source.bind(shellKernel)
@@ -1220,6 +1249,7 @@ export async function startShell(loaderKernel, options = {}) {
     launcher.setApps(state.apps);
     desktop.setApps(state.apps);
     crewBar.setMembers(crewApps());
+    syncBusinessChat();
     for (const rec of [...state.windows.values()]) {
       if (rec.view) continue; // Shell-Ansicht, keine App
       const app = state.appById.get(rec.appId);
@@ -1363,6 +1393,7 @@ export async function stopShell() {
   root.style.pointerEvents = 'none';
   root.addEventListener(RETIRE_EVENT, () => {
     root.remove();
+    state.chat?.unmount(); // CHAT4: nur, wenn kein neuer Rahmen die Leiste übernommen hat
     for (const rec of recs) Promise.resolve(rec.host?.destroy?.({ keepState: true })).catch(() => {});
   }, { once: true });
   return snapshot;

@@ -165,6 +165,7 @@ for (const id of moduleDirs) {
     }
   }
   // Leftover schema.js (port OFFEN): still must import, its collections count as in V2.
+  // v4-allow: debt L-14 (prüft V2-schema.js bis S9)
   const schemaPath = join(dir, 'schema.js');
   if (existsSync(schemaPath)) {
     try {
@@ -173,6 +174,7 @@ for (const id of moduleDirs) {
         if (!Object.hasOwn(schemaCollections, name)) schemaCollections[name] = definition;
       }
     } catch (error) {
+      // v4-allow: debt L-14 (prüft V2-schema.js bis S9)
       offend('schema-import', `schema.js failed to import in Node: ${String(error?.message || error).slice(0, 160)}`);
     }
   }

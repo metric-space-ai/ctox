@@ -1868,6 +1868,16 @@
       "proposal": false,
       "schema_js_definers": []
     },
+    "planned_steps": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": false,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": []
+    },
     "planning_absences": {
       "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
       "in_contract": true,
@@ -2542,6 +2552,7 @@
           "placements",
           "reports",
           "research",
+          "shell",
           "shiftflow",
           "spreadsheets",
           "submissions",
@@ -2559,6 +2570,7 @@
           "outbound",
           "reports",
           "research",
+          "shell",
           "support",
           "threads",
           "tickets"

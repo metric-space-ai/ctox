@@ -218,6 +218,7 @@ function excluded(file) {
     || file.endsWith('.test.js')
     || file.endsWith('.test.mjs')
     || file.endsWith('/test.mjs')
+    // v4-allow: debt L-14 (prüft V2-schema.js bis S9)
     || file.endsWith('/schema.js')
     // v4 additions (test/tooling locations, see header):
     || /(^|\/)(node_modules|tests|fixtures|testkit)\//.test(file)

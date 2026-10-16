@@ -72,10 +72,12 @@ const forbidden = [
 const offenders = [];
 assertBusinessOsShellBuildKeyIsCurrent();
 assertBusinessOsStaticImportsResolve();
+// v4-allow: debt L-01 (prüft V2-Shell app.js/index.html bis S9)
 assertAdvancedStatusInterfaceExists();
 assertFileChunkIntegrityContract();
 assertActiveNotesModuleDoesNotUseLegacyNotesnookBuild();
 assertSyncWarmupDoesNotBlockBoot();
+// v4-allow: debt L-01 (prüft V2-Shell app.js/index.html bis S9)
 assertConnectionSmokeRequiresAdvancedStatusBootBudget();
 assertLoginDoesNotDefaultToAdmin();
 assertCtoxDbBrandingContract();
@@ -114,24 +116,29 @@ function assertBusinessOsShellBuildKeyIsCurrent() {
   const appContent = readFileSync(appPath, 'utf8');
   const indexContent = readFileSync(indexPath, 'utf8');
   const appBuild = appContent.match(/const\s+APP_BUILD\s*=\s*['"]([^'"]+)['"]/)?.[1] || '';
+  // v4-allow: debt L-01 (prüft V2-Shell app.js/index.html bis S9)
   const scriptBuild = indexContent.match(/<script[^>]+src=["']app\.js\?v=([^"']+)["']/)?.[1] || '';
   if (!appBuild) offenders.push('src/apps/business-os/app.js: missing APP_BUILD constant');
   if (!scriptBuild) offenders.push('src/apps/business-os/index.html: missing app.js build key');
   if (appBuild && scriptBuild && appBuild !== scriptBuild) {
     offenders.push(`src/apps/business-os/index.html: app.js build key ${scriptBuild} does not match APP_BUILD ${appBuild}`);
   }
+  // v4-allow: debt L-01 (prüft V2-Shell app.js/index.html bis S9)
   if (!/<link\s+rel=["']stylesheet["']\s+href=["']app\.css\?v=[^"']+["']/.test(indexContent)) {
     offenders.push('src/apps/business-os/index.html: missing required app.css stylesheet link');
   }
+  // v4-allow: debt L-01 (prüft V2-Shell app.js/index.html bis S9)
   if (!/<link\s+rel=["']stylesheet["']\s+href=["']shared\/base\.css\?v=[^"']+["']/.test(indexContent)) {
     offenders.push('src/apps/business-os/index.html: missing required shared/base.css stylesheet link');
   }
   if (!/ensureShellStylesheets\(\);/.test(appContent)) {
     offenders.push('src/apps/business-os/app.js: missing runtime shell stylesheet fallback');
   }
+  // v4-allow: debt L-01 (prüft V2-Shell app.js/index.html bis S9)
   if (!/app\.css\?v=\$\{APP_BUILD\}/.test(appContent)) {
     offenders.push('src/apps/business-os/app.js: stylesheet fallback must load app.css with APP_BUILD');
   }
+  // v4-allow: debt L-01 (prüft V2-Shell app.js/index.html bis S9)
   if (!/shared\/base\.css\?v=\$\{APP_BUILD\}/.test(appContent)) {
     offenders.push('src/apps/business-os/app.js: stylesheet fallback must load shared/base.css with APP_BUILD');
   }
@@ -463,6 +470,7 @@ function assertSubscriptionAuthStartsThroughRxdbCommand() {
     offenders.push('src/apps/business-os/shared/react-settings.js: subscription auth must render the delivered device code');
   }
   if (!/saveRuntimeSettings\(\s*runtimePayload,\s*\{[\s\S]*?waitForProjection:\s*false[\s\S]*?\}\s*\)/.test(settings)) {
+    // v4-allow: code (Prüftext des Wächters)
     offenders.push('src/apps/business-os/shared/react-settings.js: ChatGPT subscription auth must not wait for runtime projection before starting device auth');
   }
   const startIndex = settings.indexOf('const payload = await startSubscriptionAuth(providerId, accountId, { commandBus, db, session, sync })');
@@ -538,6 +546,7 @@ function assertCtoxDbBrandingContract() {
   const appReadmePath = join(appRoot, 'README.md');
   const runtimeReadmePath = join(appRoot, 'rxdb/README.md');
   const runtimeManifestPath = join(appRoot, 'rxdb/manifest.json');
+  // v4-allow: debt L-01 (prüft V2-Shell app.js/index.html bis S9)
   const advancedStatusBridgePath = join(appRoot, 'rxdb/src/advanced-status-bridge.mjs');
   const rootReadmePath = join(repoRoot, 'README.md');
   const businessOsDocPath = join(repoRoot, 'docs/business-os.md');
@@ -566,6 +575,7 @@ function assertCtoxDbBrandingContract() {
     offenders.push('src/apps/business-os/rxdb/manifest.json: must explicitly reject upstream RxDB compatibility');
   }
 
+  // v4-allow: debt L-01 (prüft V2-Shell app.js/index.html bis S9)
   const advancedStatusBridge = readFileSync(advancedStatusBridgePath, 'utf8');
   for (const marker of [
     "publicName: 'CTOX Sync Engine'",
@@ -573,6 +583,7 @@ function assertCtoxDbBrandingContract() {
     "upstreamCompatibility: 'not-upstream-rxdb'",
     'upstreamCompatible: false',
   ]) {
+    // v4-allow: debt L-01 (prüft V2-Shell app.js/index.html bis S9)
     if (!advancedStatusBridge.includes(marker)) {
       offenders.push(`src/apps/business-os/rxdb/src/advanced-status-bridge.mjs: CTOX Sync Engine status branding missing ${marker}`);
     }
@@ -610,6 +621,7 @@ function assertNoUpstreamRxdbImports(file, content) {
   }
 }
 
+// v4-allow: debt L-01 (prüft V2-Shell app.js/index.html bis S9)
 function assertAdvancedStatusInterfaceExists() {
   const appPath = join(appRoot, 'app.js');
   const syncPath = join(appRoot, 'shared/sync.js');
@@ -678,6 +690,7 @@ function assertAdvancedStatusInterfaceExists() {
     offenders.push('src/apps/business-os/app.js: advanced status missing peer lifecycle event diagnostics');
   }
   if (!/initialReplicationState/.test(syncContent) || !/initialReplicationStartedAt/.test(syncContent) || !/watchInitialReplication/.test(syncContent)) {
+    // v4-allow: code (Prüftext des Wächters)
     offenders.push('src/apps/business-os/shared/sync.js: missing initial replication diagnostics');
   }
   if (!/CtoxWebRtcPeerLifecycleEvent/.test(syncContent) || !/classifyPeerLifecycleEvent/.test(syncContent)) {
@@ -690,6 +703,7 @@ function assertAdvancedStatusInterfaceExists() {
     offenders.push('src/apps/business-os/shared/sync.js: data-channel close is not classified as recoverable lifecycle');
   }
   if (!/lastLifecycleEvent:\s*null/.test(syncContent)) {
+    // v4-allow: code (Prüftext des Wächters)
     offenders.push('src/apps/business-os/shared/sync.js: successful reconnect paths do not clear stale lifecycle status');
   }
   if (!/peerSessions/.test(appContent) || !/remotePeerSession/.test(syncContent) || !/peerSessionSeenAt/.test(syncContent)) {
@@ -711,6 +725,7 @@ function assertAdvancedStatusInterfaceExists() {
     offenders.push('src/apps/business-os: advanced status does not normalize raw RxDB protocol incompatibility errors');
   }
   if (!/sanitizeAdvancedStatusNativePeerRecovery/.test(appContent) || !/ctox_optional_schema_drift/.test(repoBusinessOsContent()) || !/repair-optional-drift/.test(repoBusinessOsContent())) {
+    // v4-allow: code (Prüftext des Wächters)
     offenders.push('src/apps/business-os: advanced status missing optional native schema drift recovery metadata');
   }
   if (!/health:\s*\{[\s\S]{0,120}errorTotal/.test(appContent) || !/sanitizeAdvancedStatusTypedError/.test(appContent) || !/serializeAdvancedStatusServiceErrors/.test(appContent)) {
@@ -720,12 +735,15 @@ function assertAdvancedStatusInterfaceExists() {
     offenders.push('src/core/business_os/rxdb_peer.rs: native peer status missing typed health errors');
   }
   if (!/CtoxReplicationIoError/.test(syncContent) || !/ctox_replication_pull_failed/.test(syncContent) || !/ctox_replication_push_failed/.test(syncContent) || !/replicationErrors/.test(appContent) || !/noReplicationIoErrors/.test(appContent)) {
+    // v4-allow: code (Prüftext des Wächters)
     offenders.push('src/apps/business-os: advanced status missing typed replication I/O errors');
   }
   if (!/__ctoxSyncTestHooks/.test(syncContent) || !/explicitRowCount/.test(syncContent)) {
+    // v4-allow: code (Prüftext des Wächters)
     offenders.push('src/apps/business-os/shared/sync.js: missing executable replication error classifier hooks');
   }
   if (!/(classifyReplicationIoError,\s*createSyncRuntime|classifyReplicationIoError\?\.\()/.test(appContent) || !/normalizedError\s*=[\s\S]{0,220}classifyReplicationIoError\?\.\(item\.collection/.test(appContent)) {
+    // v4-allow: code (Prüftext des Wächters)
     offenders.push('src/apps/business-os/app.js: advanced status does not normalize raw Rust replication envelopes');
   }
   if (!/peerGeneration/.test(syncContent) || !/generationChangedAt/.test(appContent)) {
@@ -750,6 +768,7 @@ function assertAdvancedStatusInterfaceExists() {
     offenders.push('src/apps/business-os/shared/sync.js: browser_sessions must remain pull-only because controller leases are native-authoritative');
   }
   if (!/push:\s*isReadOnlyProjectionCollection\(collection\)\s*\?\s*null\s*:\s*\{\s*batchSize\s*\}/.test(syncContent)) {
+    // v4-allow: code (Prüftext des Wächters)
     offenders.push('src/apps/business-os/shared/sync.js: read-only projection collections must pass push=null; push=undefined re-enables the replicateWebRTC default push path');
   }
   for (const marker of [
@@ -902,14 +921,17 @@ function assertSyncWarmupDoesNotBlockBoot() {
   // not hand-order collection sync" — is now enforced by asserting that warmup
   // orchestration is ABSENT from the boot path, NOT present.
   if (/startCriticalSyncCollections\s*\(/.test(bootstrapBody)) {
+    // v4-allow: code (Prüftext des Wächters)
     offenders.push('src/apps/business-os/app.js: critical RxDB sync warmup must not be choreographed in boot (Phase 2: RxDB starts replication lazily)');
   }
   if (/scheduleCriticalSyncWarmup\s*\(/.test(bootstrapBody)) {
+    // v4-allow: code (Prüftext des Wächters)
     offenders.push('src/apps/business-os/app.js: scheduleCriticalSyncWarmup is removed in Phase 2 (replication is lazy in RxDB, not app-choreographed)');
   }
 
   const catalogBody = appContent.match(/async function loadModuleCatalog\([^)]*\) \{([\s\S]*?)\n\}\n\nasync function readModuleCatalogProjection/)?.[1] || '';
   if (!catalogBody) {
+    // v4-allow: code (Prüftext des Wächters)
     offenders.push('src/apps/business-os/app.js: could not inspect module catalog loading path');
     return;
   }
@@ -928,6 +950,7 @@ function assertSyncWarmupDoesNotBlockBoot() {
     offenders.push('src/apps/business-os/app.js: cold module catalog boot waits for WebRTC before trying the packaged shell seed');
   }
   if (!/loadModules\(\{\s*timeoutMs:\s*20000,\s*allowShellSeed:\s*false\s*\}\)/.test(appContent)) {
+    // v4-allow: code (Prüftext des Wächters)
     offenders.push('src/apps/business-os/app.js: background module refresh must wait for the RxDB projection instead of reusing the shell seed');
   }
   const seedPolicyBody = appContent.match(/function allowsPackagedModuleCatalogSeed\(\) \{([\s\S]*?)\n\}\n\nfunction moduleCatalogFingerprint/)?.[1] || '';
@@ -950,6 +973,7 @@ function assertSyncWarmupDoesNotBlockBoot() {
   }
 }
 
+// v4-allow: debt L-01 (prüft V2-Shell app.js/index.html bis S9)
 function assertConnectionSmokeRequiresAdvancedStatusBootBudget() {
   const smokePath = join(repoRoot, 'src/core/rxdb/tools/business_os_connection_modes_smoke.js');
   const smokeContent = readFileSync(smokePath, 'utf8');

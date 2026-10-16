@@ -142,9 +142,11 @@ function assertResult(result) {
     throw new Error(`expected selected task plus running tasks only: ${JSON.stringify(result)}`);
   }
   if (result.selectedIds.length !== 1 || result.selectedIds[0] !== result.selected) throw new Error('selected creature is not marked');
+  // v4-allow: code (Prüftext des Wächters)
   if (result.selected === 'task-waiting' && (result.byTask['task-waiting']?.node !== 'queued' || result.byTask['task-waiting']?.mode !== 'sleeping')) throw new Error('waiting creature is not sleeping at queued');
   if (result.byTask['task-working']?.node !== 'running' || result.byTask['task-working']?.mode !== 'working') throw new Error('working creature is not active at running');
   if (!result.byTask['task-working']?.impulses?.includes('tool')) throw new Error(`fresh durable tool turn did not trigger a finite creature impulse: ${JSON.stringify(result)}`);
+  // v4-allow: code (Prüftext des Wächters)
   if (result.byTask['task-waiting']?.impulses?.length) throw new Error('a waiting creature gets no activity gesture without a durable turn');
   if (!result.motionRunning) throw new Error('visible working crew must be animated');
   if (result.selected === 'task-failed' && (result.byTask['task-failed']?.node !== 'model-failed' || result.byTask['task-failed']?.xEyes !== 2)) throw new Error('failed creature lacks the failed node or X eyes');
@@ -196,13 +198,16 @@ function harnessHtml() {
     body{margin:0;background:var(--background);color:var(--text);font-family:system-ui}main{width:1200px;margin:40px auto}svg{width:100%;height:660px}.proof-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.demo-node{fill:var(--surface);stroke:#314047}.demo-label{fill:var(--text);font:700 18px system-ui;text-anchor:middle}
   </style><link rel="stylesheet" href="/src/apps/business-os/modules/ctox/index.css"></head><body><main><svg viewBox="0 0 1000 620"><g><rect class="demo-node" x="110" y="202" width="140" height="76" rx="12"/><text class="demo-label" x="180" y="246">Queue</text><rect class="demo-node" x="430" y="202" width="140" height="76" rx="12"/><text class="demo-label" x="500" y="246">Working</text><rect class="demo-node" x="750" y="402" width="140" height="76" rx="12"/><text class="demo-label" x="820" y="446">Failed</text></g><g id="crew"></g></svg><div class="proof-only" id="chat"></div><div class="proof-only" data-chat-creature id="chat-creature"></div><div id="bar" style="display:flex;gap:6px;height:32px"></div></main><script type="module">
     import { __ctoxTestHooks } from '/src/apps/business-os/modules/ctox/index.js';
+    // v4-allow: debt L-01 (V2-Generationsmarke im Prüfstand bis S9)
     import { __businessChatTestInternals, crewReferenceHtml, crewCreatureHtml, syncCrewProceduralMotion } from '/src/apps/business-os/shared/business-chat.js?v=20260831-crew-telemetry-v331';
     const crewMembers=[{id:'crew:milo',name:'Milo',shape:'blob',color:'#00aa9a',archived:false},{id:'crew:nori',name:'Nori',shape:'square',color:'#7c6df2',archived:false},{id:'crew:tavi',name:'Tavi',shape:'triangle',color:'#e97255',archived:false}];
     const working={id:'task-working',commandId:'cmd-working',crewMemberId:'crew:milo',title:'Working task',status:'running',executionPhase:'running',executionProgress:{version:1,revision:1,phase:'work',percent:45,current_step:2,completed_steps:1,total_steps:2,steps:[{position:1,label:'Collect',status:'completed',activity_turns:1},{position:2,label:'Verify',status:'in_progress',activity_turns:1}],review:{status:'pending'},activity_turns:{total:2,thinking:1,tools:1,last_kind:'tool'},updated_at_ms:Date.now()-10000}};
     // Milo has a second running task: he is still ONE being on the map (Owner 28.09.2026).
     const working2={...working,id:'task-working-2',commandId:'cmd-working-2',title:'Second working task'};
+    // v4-allow: code (Prüftext des Wächters)
     const waiting={id:'task-waiting',commandId:'cmd-waiting',crewMemberId:'crew:nori',title:'Waiting task',status:'queued',executionPhase:'queued'};
     const failed={id:'task-failed',commandId:'cmd-failed',crewMemberId:'crew:tavi',title:'Failed task',status:'failed',executionPhase:'terminal',terminalStatus:'failed'};
+    // v4-allow: code (Prüftext des Wächters)
     const model={activeTask:working,activeNodeId:'running',tasks:[working,working2,waiting,failed],nodeMap:new Map([['queued',{id:'queued',x:180,y:240}],['running',{id:'running',x:500,y:240}],['model-failed',{id:'model-failed',x:820,y:440}]])};
     window.__selectCrewTask=(id)=>{
       const selected=model.tasks.find(task=>task.id===id);

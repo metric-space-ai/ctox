@@ -42,6 +42,9 @@ export const RUNTIME_TREES = Object.freeze([
   // Shell v4 (M7): Rahmen, Shell-Laufzeit, Code-Ansicht, Boot, Manifeste; Labor/Werkzeuge siehe Ausschlüsse unten.
   'v4',
   'vendor',
+  // E38: Kern-Bootstrap (kernel/boot.mjs, loader.mjs, kernel.mjs, …); der Daemon liefert ihn unter /kernel/* aus.
+  // Tests, Testkit und Fake-Core bleiben draußen (siehe Ausschlüsse).
+  'kernel',
 ]);
 export const MAX_RUNTIME_FILE_COUNT = 20_000;
 export const MAX_RUNTIME_FILE_BYTES = 512 * 1024 * 1024;
@@ -115,7 +118,14 @@ const EXCLUDED_UNWIRED_RUNTIME_PREFIXES = Object.freeze([
   'v4/debt',
   'v4/k24',
   'v4/os-primitives',
+  // E38: nur der Kern-Bootstrap, keine Prüfstände des Kerns.
+  'kernel/tests',
+  'kernel/testkit',
 ]);
+// E38: Fake-Core (Test-Core des Kerns) und Kern-Doku gehören nicht in den Slot.
+const EXCLUDED_KERNEL_FILE = /^kernel\/(?:fake-core[^/]*\.mjs|[^/]*\.md)$/;
+// E38: Einstieg der Shell v4 (Daemon GET / → v4/index.html, Seite lädt v4/boot.js); Pflicht, sobald v4 im Slot ist.
+export const V4_ENTRY_FILES = Object.freeze(['v4/index.html', 'v4/boot.js']);
 const GENERATED_DIRECTORY = /^(?:build|release|cache|local[-_]?state)(?:[._-].*)?$/i;
 const GENERATED_FILE_TOKEN = /(?:^|[._-])(?:build|release|cache|local[-_]?state)(?:[._-]|$)/i;
 const REQUIRED_RUNTIME_PATHS = new Set([
@@ -173,6 +183,7 @@ export function isExcludedRuntimePath(relativePath, { directory = false } = {}) 
   if (EXCLUDED_UNWIRED_RUNTIME_PREFIXES.some((prefix) => (
     relativePath === prefix || relativePath.startsWith(`${prefix}/`)
   ))) return true;
+  if (!directory && EXCLUDED_KERNEL_FILE.test(relativePath)) return true;
   const segments = relativePath.split('/');
   const basename = segments.at(-1);
   const lowerSegments = segments.map((segment) => segment.toLowerCase());
@@ -433,6 +444,11 @@ export async function collectRuntimePayload(sourceRoot) {
   for (const relativePath of REQUIRED_PAYLOAD_FILES) {
     if (!payloadPaths.has(relativePath)) {
       throw new Error(`Required runtime file is missing: ${relativePath}`);
+    }
+  }
+  if ([...payloadPaths].some((p) => p.startsWith('v4/'))) {
+    for (const relativePath of V4_ENTRY_FILES) {
+      if (!payloadPaths.has(relativePath)) throw new Error(`Required runtime file is missing: ${relativePath}`);
     }
   }
   return { directories, files };
