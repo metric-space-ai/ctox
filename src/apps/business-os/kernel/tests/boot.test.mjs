@@ -2,8 +2,9 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {generateKeyPairSync,sign} from 'node:crypto';
 import {bootV4,BootV4Error,parseV4LaunchContext,fetchV4LaunchContext,canonicalJson,STREAM_DOMAIN,SCOPE_DOMAIN} from '../boot.mjs';
-import {decodeHelloFrame,negotiateHello} from '../../rxdb/src/hello.mjs';
+import {decodeHelloFrame,negotiateHello} from '../vendor/hello.mjs';
 import {protocolChannels,FakeNativePeer,offer} from './fake-native-peer.mjs';
+import {WebRTCKernelTransport} from '../transport-webrtc.mjs';
 
 const tick=()=>new Promise(r=>setTimeout(r,5));
 const COLLECTIONS=['business_apps','business_app_versions','business_commands','files','shell_preferences','app_drafts','notes'];
@@ -14,8 +15,8 @@ function scopeToken(collection,{key=KEY,instance='instance',device='test-device'
  const claims={instance_id:instance,scope_hash:`scope:${collection}`,rights_ver:1,device_id:device,exp};
  return b64url(Buffer.from(canonicalJson({claims,signature:b64url(sign(null,Buffer.from(SCOPE_DOMAIN+canonicalJson(claims)),key.privateKey))})));
 }
-function context({instanceId='instance',userId='alice',nonce='B'}={}){
- const hello=offer(instanceId);hello.scopes_wanted=[...COLLECTIONS];hello.device_proof.nonce=nonce.repeat(43);
+function context({instanceId='instance',userId='alice',nonce='B',capabilities=[]}={}){
+ const hello=offer(instanceId);hello.capabilities=capabilities;hello.scopes_wanted=[...COLLECTIONS];hello.device_proof.nonce=nonce.repeat(43);
  return {session:{v2:'untouched'},config:null,designTemplates:[],v4:{instanceId,userId,actor:{id:userId,role:'owner',display_name:'Alice'},
   signaling:{urls:['wss://signal.example/ws'],room:'ctox-v4:instance',peerId:'browser-1',nativePeerId:'native-1',token:'signal-token',iceServers:[{urls:'turn:turn.example:3478',username:'u',credential:'c'}]},
   hello:{offer:hello},packageKeys:[{keyId:'instance-key-1',alg:'Ed25519',publicKey:KEY.publicKey}]}};
@@ -27,12 +28,12 @@ function fetchFake(bodies){
 }
 /** FakeNativePeer with real instance-key signatures for hello_ok scope tokens and pages. */
 class SignedNativePeer extends FakeNativePeer {
- constructor(channels,opts={}){super(channels,{instanceId:'instance',...opts});this.reject=opts.reject;this.tokenFor=opts.tokenFor??(c=>scopeToken(c));this.key=opts.key??KEY;}
+ constructor(channels,opts={}){super(channels,{instanceId:'instance',...opts});this.reject=opts.reject;this.grant=opts.grant??[];this.tokenFor=opts.tokenFor??(c=>scopeToken(c));this.key=opts.key??KEY;}
  async receive(data){
   if(typeof data==='string'&&JSON.parse(data).type!=='ack'){
    const hello=decodeHelloFrame(data);this.messages.push(hello);
    if(this.reject){this.channels[0].send(JSON.stringify({type:'hello_reject',reason:'authentication_failed',required:'fresh device proof'}));return;}
-   const selected=negotiateHello({instance_id:this.instanceId,bootstrap_min:1,bootstrap_max:1,app_api_ver:{min:'4.0',max:'4.0'},capabilities:[],required_capabilities:[],transport:hello.transport},hello);
+   const selected=negotiateHello({instance_id:this.instanceId,bootstrap_min:1,bootstrap_max:1,app_api_ver:{min:'4.0',max:'4.0'},capabilities:this.grant,required_capabilities:[],transport:hello.transport},hello);
    this.channels[0].send(JSON.stringify({type:'hello_ok',protocol_ver:4,instance_id:this.instanceId,...selected,epoch:this.epoch,head_seq:this.head,scope_tokens:hello.scopes_wanted.map(c=>this.tokenFor(c)),rights_ver:'1',core_time_ms:Date.now()}));return;
   }
   return super.receive(data);
@@ -45,7 +46,7 @@ class SignedNativePeer extends FakeNativePeer {
 }
 function harness(peerOpts={}){
  const peers=[],peerCalls=[];
- const createPeer=async(address,identity)=>{peerCalls.push({address,identity});const pair=protocolChannels(),peer=new SignedNativePeer(pair.server,{...peerOpts,onSubscribe:async(sub,p)=>{p.subs=(p.subs??0)+1;if(sub.collection==='notes')await p.page('notes',[{id:peerOpts.docId??'server',data:{id:peerOpts.docId??'server',title:'from core'},seq:p.head,rev:'r'}],peerOpts.pageExtra);}});peers.push(peer);return {channels:pair.client,close:()=>peer.close()};};
+ const createPeer=async(address,identity)=>{peerCalls.push({address,identity});const pair=protocolChannels(),peer=new SignedNativePeer(pair.server,{...peerOpts,onSubscribe:async(sub,p)=>{p.subs=(p.subs??0)+1;if(peerOpts.pages?.[sub.collection])await p.page(sub.collection,peerOpts.pages[sub.collection].map(doc=>({id:doc.id,data:doc,seq:p.head,rev:'r'})));if(sub.collection==='notes')await p.page('notes',[{id:peerOpts.docId??'server',data:{id:peerOpts.docId??'server',title:'from core'},seq:p.head,rev:'r'}],peerOpts.pageExtra);}});peers.push(peer);return {channels:pair.client,close:()=>peer.close()};};
  return {peers,peerCalls,createPeer};
 }
 const loaderOptions={storage:'memory',multiTab:false,serviceWorker:false,latencyMs:0};
@@ -146,5 +147,22 @@ test('a non-function resolveShell is a typed error before any control-plane requ
   const f=fetchFake([context()]);
   await assert.rejects(bootV4({fetchImpl:f.impl,createPeer:harness().createPeer,resolveShell:value,loaderOptions}),e=>e instanceof BootV4Error&&e.reason==='invalid_options'&&e.code==='invalid',String(value));
   assert.equal(f.calls.length,0);
+ }
+});
+
+test('hello_ok capabilities reach the kernel through transport.capabilities (E43.2)',async()=>{
+ const required=['agent.coding.cancel','agent.coding.turn'];
+ const pages={business_apps:[{id:'coder',active_ver:'1'}],business_app_versions:[{id:'coder@1',app_id:'coder',ver:'1',manifest:{name:'Coder',entry:'index.js',files:{},collections:{},capabilities_required:required,min_app_api:'4.0'}}]};
+ const idle=new WebRTCKernelTransport({channels:protocolChannels().client,hello:offer('instance'),resolveScope:()=>null,verifyPackage:async()=>false});
+ assert.equal(idle.capabilities,null,'unknown before the authenticated hello');idle.close();
+ for(const [grant,expected] of [[[...required,'agent.other'],'activated'],[[],'failed']]){
+  const h=harness({grant,pages});
+  const boot=await bootV4({fetchImpl:fetchFake([context({capabilities:[...required,'agent.other']})]).impl,createPeer:h.createPeer,loaderOptions:{...loaderOptions,dbName:`ctox-caps-${expected}-${process.pid}`}});
+  try{
+   assert.deepEqual(boot.transport.capabilities,[...grant].sort());
+   let state;for(let n=0;n<300;n++){state=boot.kernel.activation.get('coder').get();if(['activated','failed'].includes(state?.state))break;await tick();}
+   assert.equal(state?.state,expected,JSON.stringify(state));
+   if(expected==='failed')assert.equal(state.error,'needs_update:agent.coding.cancel,agent.coding.turn');
+  }finally{await boot.loader.close();for(const p of h.peers)p.close();}
  }
 });

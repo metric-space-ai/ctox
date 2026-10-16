@@ -33,8 +33,8 @@ const server=createServer(async(req,res)=>{
   }
   if(path==='/sw.js'){res.setHeader('Content-Type','text/javascript');res.end("self.addEventListener('install',()=>self.skipWaiting());self.addEventListener('message',event=>{if(event.data==='ctox:claim')event.waitUntil(clients.claim());});");return;}
   if(path==='/'){res.setHeader('Content-Type','text/html');res.setHeader('Set-Cookie','ctox_session=fixture; Path=/; SameSite=Strict');res.end('<!doctype html><meta charset="utf-8"><title>bootV4 acceptance</title><pre id="result">Running bootV4 acceptance</pre>');return;}
-  const file=path.startsWith('/rxdb/')||path.startsWith('/shared/')?resolve(app,'.'+path):resolve(kernel,'.'+path);
-  if(!file.startsWith(app+'/'))throw Error('outside root');
+  const file=resolve(kernel,'.'+path);
+  if(!file.startsWith(kernel+'/'))throw Error('outside kernel root (E43.1: no /rxdb/* or /shared/* bootstrap routes)');
   res.setHeader('Content-Type',['.mjs','.js'].includes(extname(file))?'text/javascript':'text/plain');res.end(await readFile(file));
  }catch{res.statusCode=404;res.end('Not found');}
 });
@@ -48,7 +48,7 @@ try{
   const {bootV4,BootV4Error}=await import('/boot.mjs');
   const {canonicalJson,STREAM_DOMAIN,SCOPE_DOMAIN}=await import('/boot.mjs');
   const {FakeNativePeer}=await import('/tests/fake-native-peer.mjs');
-  const {decodeHelloFrame,negotiateHello}=await import('/rxdb/src/hello.mjs');
+  const {decodeHelloFrame,negotiateHello}=await import('/vendor/hello.mjs');
   const enc=s=>new TextEncoder().encode(s),b64url=bytes=>btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
   const key=await crypto.subtle.importKey('jwk',signingJwk,{name:'Ed25519'},false,['sign']);
   const signBytes=async s=>new Uint8Array(await crypto.subtle.sign({name:'Ed25519'},key,enc(s)));
@@ -107,7 +107,7 @@ try{
  },{signingJwk,collections:COLLECTIONS});
  const expect=(cond,label)=>{if(!cond){failed=true;console.error('FAIL',label);}};
  expect(result.online==='online','link online');expect(result.leader===true,'leader');expect(result.storage==='indexeddb','IndexedDB');
- expect(result.serviceWorker?.endsWith('/sw.js')&&new URL(result.swScope).pathname==='/','same-origin /sw.js scope /');
+ expect(result.serviceWorker&&new URL(result.serviceWorker).pathname==='/sw.js'&&new URL(result.serviceWorker).searchParams.get('db')==='ctox-boot-browser-alice'&&new URL(result.swScope).pathname==='/','same-origin /sw.js?db=<kernel IDB> scope /');
  expect(result.helloOffer==='browser-device','native received the launch-context hello');expect(result.scopes===7,'seven verified scope tokens');
  expect(result.receipt==='accepted','write accepted over WebRTC');expect(result.page==='via real WebRTC','signed page verified and applied');
  expect(result.labels.length===6,'six reliable lane channels');expect(result.peerConnection,'real RTCPeerConnection');

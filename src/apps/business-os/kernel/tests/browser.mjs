@@ -17,7 +17,8 @@ await mkdir(out,{recursive:true});
 const server=createServer(async(req,res)=>{
  try{
   if(req.url==='/rxdb/src/hello.mjs'){res.setHeader('Content-Type','text/javascript');res.end(await readFile(resolve('src/apps/business-os/rxdb/src/hello.mjs')));return;}
-  if(req.url==='/sw.js'){res.setHeader('Content-Type','text/javascript');res.end("self.addEventListener('install',()=>self.skipWaiting());self.addEventListener('message',event=>{if(event.data==='ctox:claim')event.waitUntil(clients.claim().then(()=>clients.matchAll()).then(list=>list.forEach(client=>client.postMessage('claimed'))));});");return;}
+  if(new URL(req.url,'http://local').pathname==='/sw.js'){ // E43.3: registered as /sw.js?db=<kernel IDB name>
+res.setHeader('Content-Type','text/javascript');res.end("self.addEventListener('install',()=>self.skipWaiting());self.addEventListener('message',event=>{if(event.data==='ctox:claim')event.waitUntil(clients.claim().then(()=>clients.matchAll()).then(list=>list.forEach(client=>client.postMessage('claimed'))));});");return;}
   if(req.url==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><meta charset="utf-8"><title>Kernel acceptance</title><pre id="result">Running kernel acceptance</pre>');return;}
   const path=resolve(root,'.'+decodeURIComponent(new URL(req.url,'http://local').pathname));
   if(!path.startsWith(root+'/'))throw Error('outside root');

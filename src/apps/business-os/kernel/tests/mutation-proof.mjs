@@ -36,6 +36,13 @@ const cases=[
  ['boot-hello-token','boot.mjs','new WebRTCKernelTransport({authSession,verifyPackage','new WebRTCKernelTransport({verifyPackage','boot.test.mjs','exactly the launch context'],
  ['boot-optional-shell','boot.mjs','...(resolveShell===undefined?{}:{resolveShell})','resolveShell','boot.test.mjs','resolveShell is optional'],
  ['boot-shell-type','boot.mjs',"resolveShell!==undefined&&typeof resolveShell!=='function'",'false','boot.test.mjs','non-function resolveShell'],
+ ["e43-import-guard", "boot.mjs", "from './vendor/hello.mjs'", "from '../rxdb/src/hello.mjs'", "e43.test.mjs", "no import in kernel"],
+ ["e43-vendor-pin", "vendor/hello.mjs", "export const PROTOCOL_VERSION = 4;", "export const PROTOCOL_VERSION = 4; ", "e43.test.mjs", "byte-identical"],
+ ["e43-caps-getter", "transport-webrtc.mjs", "return this.session?[...this.session.capabilities??[]]:null;", "return this.session?[]:null;", "boot.test.mjs", "hello_ok capabilities"],
+ ["e43-caps-kernel", "kernel.mjs", "!(transport.capabilities ?? []).includes(c)", "true", "boot.test.mjs", "hello_ok capabilities"],
+ ["e43-sw-db", "loader.mjs", "url.search='';url.searchParams.set('db',kernel.dbName);", "url.search='';", "e43.test.mjs", "sw.js\\?db"],
+ ["e43-hash-reason", "transport-webrtc.mjs", "{reason:'hash_mismatch'}", "{}", "e43.test.mjs", "transfer hash mismatch"],
+ ["e43-hash-kernel", "kernel.mjs", "return error?.reason === 'hash_mismatch' ? HASH_MISMATCH : null;", "return null;", "e43.test.mjs", "transfer hash mismatch"],
  ['wire-endian','framing.mjs','d.setUint32(0,MAGIC);','d.setUint32(0,MAGIC,true);','webrtc.test.mjs','P4 hello'],
 ];
 const receipts=[];

@@ -5,7 +5,7 @@ import {CtoxError} from './values.mjs';
 import {createLoader} from './loader.mjs';
 import {createKernelSession} from './session.mjs';
 import {WebRTCKernelTransport,createReliableChannels} from './transport-webrtc.mjs';
-import {decodeHelloFrame} from '../rxdb/src/hello.mjs';
+import {decodeHelloFrame} from './vendor/hello.mjs';
 
 export const DEFAULT_LAUNCH_CONTEXT_URL='/api/business-os/launch-context';
 export const STREAM_DOMAIN='ctox.sync.v4.stream\0';

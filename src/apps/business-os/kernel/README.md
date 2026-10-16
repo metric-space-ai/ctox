@@ -74,6 +74,12 @@ The default transport is offline; it NEVER manufactures acceptance. `createStubK
 - `transport-webrtc.mjs`: authenticated P4 hello, canonical scopes, signed progress pages, write results,
   clock metrics, and bounded CAS transfers over reliable RTCDataChannels. The host supplies `hello`,
   `verifyPackage`, `resolveScope` and either channels or `createPeer(address, identity)`; reconnect uses the factory.
+- `vendor/` (E43.1): unchanged copies of `rxdb/src/hello.mjs` and `shared/async-timeout.js` so kernel/ is served
+  self-contained under `/kernel/*`; `tests/e43.test.mjs` pins sha256(copy) == sha256(source) and fails on any import that
+  leaves kernel/. After changing a source, re-copy it unchanged.
+- E43.2/3/4: `WebRTCKernelTransport.capabilities` = capabilities granted in hello_ok (null before), checked by activation
+  against `capabilities_required`; the loader registers `/sw.js?db=<kernel IDB name>` (pathname check unchanged);
+  a CAS transfer hash failure is `CtoxError{reason:'hash_mismatch'}` and fails activation as `hash_mismatch:<path>`.
 - `boot.mjs` (E38.4): `bootV4({launchContextUrl, resolveShell?, fetchImpl?})` is the one-call v4 browser entry used by
   Shell `v4/boot.js` (without `resolveShell`: the loader loads the activated shell's manifest entry via `kernel.loadModule`). It fetches `GET /api/business-os/launch-context` (credentials same-origin) and reads only its `v4`
   member (`V4LaunchContext` in `index.d.ts`: instanceId, userId, actor, signaling, hello.offer, packageKeys), builds
