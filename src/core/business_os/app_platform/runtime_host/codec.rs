@@ -58,8 +58,12 @@ impl RuntimeCodec {
             return Err(invalid("revoked: actor changed"));
         }
         let manifest = self.route(db, &saved)?;
-        let resolved = manifest["app_id"].as_str().ok_or_else(|| invalid("invalid: execution target"))?;
-        if !routing::core_route(text(command, "type").map_err(sql_error)?) && ctox_app_runtime::execution_app(command).map_err(sql_error)? != resolved {
+        let resolved = manifest["app_id"]
+            .as_str()
+            .ok_or_else(|| invalid("invalid: execution target"))?;
+        if !routing::core_route(text(command, "type").map_err(sql_error)?)
+            && ctox_app_runtime::execution_app(command).map_err(sql_error)? != resolved
+        {
             return Err(invalid("revoked: execution target changed"));
         }
         if manifest["app_ver"] != command["app_ver"]
@@ -208,8 +212,12 @@ impl StoreCodec for RuntimeCodec {
                 return Err(invalid("conflict: transaction snapshot changed"));
             }
         }
-        let parent = text(&binding["fence"], "run_id").map_err(sql_error)?.strip_prefix("app-runtime:").ok_or_else(|| invalid("invalid: native run"))?;
-        let canonical = document(tx, "business_commands", parent)?.ok_or_else(|| invalid("revoked: command missing"))?;
+        let parent = text(&binding["fence"], "run_id")
+            .map_err(sql_error)?
+            .strip_prefix("app-runtime:")
+            .ok_or_else(|| invalid("invalid: native run"))?;
+        let canonical = document(tx, "business_commands", parent)?
+            .ok_or_else(|| invalid("revoked: command missing"))?;
         let core = origin::delivery_permit_for(tx, &canonical, &a, &r, app)?;
         let permit = if core {
             None

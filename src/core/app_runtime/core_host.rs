@@ -104,7 +104,9 @@ pub trait StoreCodec: Send + Sync + 'static {
 pub trait CoreAuthority: Send + Sync + 'static {
     fn admit(&self, manifest: &Value, binding: &Value) -> Result<()>;
     /// Core owns the platform inventory; a platform command never starts an app.
-    fn platform_command(&self, kind: &str) -> bool { crate::core_command(kind) }
+    fn platform_command(&self, kind: &str) -> bool {
+        crate::core_command(kind)
+    }
     /// command.submit checks the target app's current command_rights and actor
     /// assignment. It authorizes a new intent; it MUST NOT reinterpret the
     /// originating command/fence as an executor lease for the receiving app.
@@ -775,7 +777,10 @@ impl RuntimeHost for CoreRuntimeHost {
                 let options = args.get(2).cloned().unwrap_or(json!({}));
                 let target = if self.authority.platform_command(kind) {
                     crate::string(&binding["manifest"], "app_id")?.to_owned()
-                } else { crate::declared_target(&binding["manifest"], kind, options["module"].as_str())?.to_owned() };
+                } else {
+                    crate::declared_target(&binding["manifest"], kind, options["module"].as_str())?
+                        .to_owned()
+                };
                 let receiver = if target == binding["manifest"]["app_id"] {
                     binding["manifest"].clone()
                 } else {
@@ -785,7 +790,9 @@ impl RuntimeHost for CoreRuntimeHost {
                         codec.active_manifest(db, &app)
                     }))?
                 };
-                if !self.authority.platform_command(kind) { crate::command_declarations(&binding["manifest"], &receiver, kind, &options)?; }
+                if !self.authority.platform_command(kind) {
+                    crate::command_declarations(&binding["manifest"], &receiver, kind, &options)?;
+                }
                 self.authority.authorize(
                     &target,
                     &binding["command"]["actor"],

@@ -70,7 +70,9 @@ impl RuntimeAuthority {
         let mut command = doc.clone();
         command["actor"] = actor_json(&a);
         command["app_ver"] = manifest["app_ver"].clone();
-        if manifest["app_id"] != command["app_id"] { command["target_app"] = manifest["app_id"].clone(); }
+        if manifest["app_id"] != command["app_id"] {
+            command["target_app"] = manifest["app_id"].clone();
+        }
         Ok(
             json!({"command":command,"manifest":manifest,"fence":{"run_id":format!("app-runtime:{}",lease.command_id),"participant":lease.participant,"fence":lease.fence.0,"expires_at_core_ms":lease.expires_at_core,"rights_ver":rights(db)?.rights_ver}}),
         )
@@ -316,7 +318,11 @@ impl RuntimeAuthority {
             .strip_prefix("app-runtime:")
             .context("invalid: invocation run")?;
         let h = h.get(parent).context("revoked: invocation")?;
-        let scoped = h.callback.as_ref().filter(|c| c["id"] == ctx.command_id).unwrap_or(&h.command);
+        let scoped = h
+            .callback
+            .as_ref()
+            .filter(|c| c["id"] == ctx.command_id)
+            .unwrap_or(&h.command);
         anyhow::ensure!(
             h.command["id"] == ctx.command_id
                 || h.callback
@@ -337,7 +343,9 @@ impl RuntimeAuthority {
     }
 }
 impl CoreAuthority for RuntimeAuthority {
-    fn platform_command(&self, kind: &str) -> bool { routing::core_route(kind) }
+    fn platform_command(&self, kind: &str) -> bool {
+        routing::core_route(kind)
+    }
     fn admit(&self, manifest: &Value, binding: &Value) -> Result<()> {
         let _held = self.live(binding)?;
         let codec = self.codec.clone();

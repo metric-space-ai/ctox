@@ -179,11 +179,27 @@ mod e39_tests {
     use super::*;
     #[test]
     fn callback_metadata_uses_execution_target() {
-        let mut db=rusqlite::Connection::open_in_memory().unwrap();
-        let tx=db.transaction().unwrap();initialize(&tx).unwrap();
-        let binding=json!({"command":{"app_id":"sender","target_app":"receiver","app_ver":"v1","actor":{"id":"owner"}},"manifest":{"handlers":{"done":"handlers/done.js"}},"fence":{"run_id":"app-runtime:parent","fence":1}});
-        apply(&tx,&binding,"completion.register",&json!({"task_id":"command:child","callbacks":{"on_complete":"done"}})).unwrap();
-        let app:String=tx.query_row("SELECT app_id FROM _app_runtime_completions WHERE task_id='command:child'",[],|r|r.get(0)).unwrap();
-        assert_eq!(app,"receiver","E39 callback scope must belong to executing target");
+        let mut db = rusqlite::Connection::open_in_memory().unwrap();
+        let tx = db.transaction().unwrap();
+        initialize(&tx).unwrap();
+        let binding = json!({"command":{"app_id":"sender","target_app":"receiver","app_ver":"v1","actor":{"id":"owner"}},"manifest":{"handlers":{"done":"handlers/done.js"}},"fence":{"run_id":"app-runtime:parent","fence":1}});
+        apply(
+            &tx,
+            &binding,
+            "completion.register",
+            &json!({"task_id":"command:child","callbacks":{"on_complete":"done"}}),
+        )
+        .unwrap();
+        let app: String = tx
+            .query_row(
+                "SELECT app_id FROM _app_runtime_completions WHERE task_id='command:child'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            app, "receiver",
+            "E39 callback scope must belong to executing target"
+        );
     }
 }

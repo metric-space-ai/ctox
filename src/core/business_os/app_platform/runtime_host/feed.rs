@@ -541,10 +541,25 @@ async fn drive(
 
 #[cfg(test)]
 pub(super) mod core_route_probe {
-    use std::{collections::BTreeSet, sync::{Mutex, OnceLock}};
+    use std::{
+        collections::BTreeSet,
+        sync::{Mutex, OnceLock},
+    };
     static CALLS: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
-    pub(super) fn record(id: &str) { CALLS.get_or_init(Default::default).lock().unwrap().insert(id.to_owned()); }
-    pub(crate) fn observed(id: &str) -> bool { CALLS.get_or_init(Default::default).lock().unwrap().contains(id) }
+    pub(super) fn record(id: &str) {
+        CALLS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .insert(id.to_owned());
+    }
+    pub(crate) fn observed(id: &str) -> bool {
+        CALLS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .contains(id)
+    }
 }
 
 async fn dispatch_committed(
@@ -639,10 +654,23 @@ async fn dispatch_committed(
     };
     // A failed handler is a typed terminal result; an uncertain effect stays running.
     let result = result.map_err(|error| {
-        if e25_core && error.downcast_ref::<ctox_app_runtime::HandlerError>().is_none()
-            && (error.to_string().starts_with("unknown_command:") || error.to_string().starts_with("not_found:")) {
-            ctox_app_runtime::HandlerError { uncertain:false, code:"not_found".into(), message:"unknown_command: native Core route unavailable".into(), path:None }.into()
-        } else { error }
+        if e25_core
+            && error
+                .downcast_ref::<ctox_app_runtime::HandlerError>()
+                .is_none()
+            && (error.to_string().starts_with("unknown_command:")
+                || error.to_string().starts_with("not_found:"))
+        {
+            ctox_app_runtime::HandlerError {
+                uncertain: false,
+                code: "not_found".into(),
+                message: "unknown_command: native Core route unavailable".into(),
+                path: None,
+            }
+            .into()
+        } else {
+            error
+        }
     });
     let outcome = match result {
         Ok(value) => json!({"status":"done","result":value}),

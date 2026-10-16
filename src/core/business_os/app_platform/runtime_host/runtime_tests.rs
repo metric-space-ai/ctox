@@ -413,92 +413,253 @@ fn core_only_delivery_requires_native_provenance_and_current_revision() {
 
 // Each assertion below exercises native signed manifests and the current P6 WAL.
 fn route_release(f: &mut Fixture, app: &str, mut manifest: Value, owned: &[&str]) {
-    manifest["app_id"] = json!(app); manifest["app_ver"] = json!("v1");
+    manifest["app_id"] = json!(app);
+    manifest["app_ver"] = json!("v1");
     manifest["author"] = json!("owner");
     let bytes = serde_json::to_vec(&manifest).unwrap();
     let signature = super::super::commands::sign_manifest(f.codec.signer.as_ref(), &bytes).unwrap();
     let tx = f.db.transaction().unwrap();
-    super::super::commands::put(&tx,"business_apps",app,&json!({"id":app,"state":"active","active_ver":"v1"})).unwrap();
+    super::super::commands::put(
+        &tx,
+        "business_apps",
+        app,
+        &json!({"id":app,"state":"active","active_ver":"v1"}),
+    )
+    .unwrap();
     super::super::commands::put(&tx,"business_app_versions",&format!("{app}@v1"),&json!({"id":format!("{app}@v1"),"state":"published","manifest":manifest,"manifest_sha256":digest(&bytes),"signature":signature})).unwrap();
     let r = rights(&tx).unwrap();
-    let mut manifests: Vec<_> = r.manifests.into_iter().filter(|m| serde_json::to_value(m).unwrap()["app_id"] != app).collect();
-    manifests.push(sync_rights::manifest_rules::ManifestRules::from_manifest(app,"v1",owned.iter().map(|s|s.to_string()).collect(),&manifest).unwrap());
-    sync_rights::replace_with_manifests(&tx,r.rights_ver,&r.rules,&manifests).unwrap();
+    let mut manifests: Vec<_> = r
+        .manifests
+        .into_iter()
+        .filter(|m| serde_json::to_value(m).unwrap()["app_id"] != app)
+        .collect();
+    manifests.push(
+        sync_rights::manifest_rules::ManifestRules::from_manifest(
+            app,
+            "v1",
+            owned.iter().map(|s| s.to_string()).collect(),
+            &manifest,
+        )
+        .unwrap(),
+    );
+    sync_rights::replace_with_manifests(&tx, r.rights_ver, &r.rules, &manifests).unwrap();
     tx.commit().unwrap();
 }
 fn routing_fixture() -> Fixture {
-    let mut f=Fixture::new();
-    let tx=f.db.transaction().unwrap();
-    schema::create_collection(&tx,&CollectionDefinition{name:"receiver_rows".into(),app_id:"receiver".into(),schema_ver:1,schema_json:schema_json(),class:"replicated".into(),client_limit:100,byte_budget:1048576,rights_ver:1,app_ver:"v1".into()}).unwrap();
-    let mut r=rights(&tx).unwrap();let mut grant=r.rules[0].clone();grant.collection="receiver_rows".into();r.rules.push(grant);
-    sync_rights::replace_with_manifests(&tx,r.rights_ver,&r.rules,&r.manifests).unwrap();tx.commit().unwrap();
-    route_release(&mut f,"app",json!({"handlers":{"run":"handlers/run.js"},"commands_out":[{"app":"receiver","type":"run"}],"command_rights":{"run":{"roles":["admin"]}}}), &["rows"]);
-    route_release(&mut f,"receiver",json!({"handlers":{"run":"handlers/run.js"},"commands_in":[{"type":"run","from":["app"]}],"command_rights":{"run":{"roles":["admin"]}}}), &["receiver_rows"]);
+    let mut f = Fixture::new();
+    let tx = f.db.transaction().unwrap();
+    schema::create_collection(
+        &tx,
+        &CollectionDefinition {
+            name: "receiver_rows".into(),
+            app_id: "receiver".into(),
+            schema_ver: 1,
+            schema_json: schema_json(),
+            class: "replicated".into(),
+            client_limit: 100,
+            byte_budget: 1048576,
+            rights_ver: 1,
+            app_ver: "v1".into(),
+        },
+    )
+    .unwrap();
+    let mut r = rights(&tx).unwrap();
+    let mut grant = r.rules[0].clone();
+    grant.collection = "receiver_rows".into();
+    r.rules.push(grant);
+    sync_rights::replace_with_manifests(&tx, r.rights_ver, &r.rules, &r.manifests).unwrap();
+    tx.commit().unwrap();
+    route_release(
+        &mut f,
+        "app",
+        json!({"handlers":{"run":"handlers/run.js"},"commands_out":[{"app":"receiver","type":"run"}],"command_rights":{"run":{"roles":["admin"]}}}),
+        &["rows"],
+    );
+    route_release(
+        &mut f,
+        "receiver",
+        json!({"handlers":{"run":"handlers/run.js"},"commands_in":[{"type":"run","from":["app"]}],"command_rights":{"run":{"roles":["admin"]}}}),
+        &["receiver_rows"],
+    );
     f
 }
 #[test]
 fn e39_target_selection_precedes_local_handler() {
-    let mut f=routing_fixture();let doc=document(&f.db,"business_commands","cmd").unwrap().unwrap();
-    assert_eq!(f.codec.route(&f.db,&doc).unwrap()["app_id"],"receiver","E39 must select commands_out target before own handler");
-    route_release(&mut f,"app",json!({"handlers":{"run":"handlers/run.js"},"commands_out":[{"app":"receiver","type":"run"},{"app":"receiver","type":"run"}],"command_rights":{"run":{"roles":["admin"]}}}), &["rows"]);
-    assert!(f.codec.route(&f.db,&doc).is_err(),"E39 several entries require target_app even for repeated destination");
-    let mut explicit=doc;explicit["target_app"]=json!("receiver");
-    assert_eq!(f.codec.route(&f.db,&explicit).unwrap()["app_id"],"receiver");
+    let mut f = routing_fixture();
+    let doc = document(&f.db, "business_commands", "cmd")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        f.codec.route(&f.db, &doc).unwrap()["app_id"],
+        "receiver",
+        "E39 must select commands_out target before own handler"
+    );
+    route_release(
+        &mut f,
+        "app",
+        json!({"handlers":{"run":"handlers/run.js"},"commands_out":[{"app":"receiver","type":"run"},{"app":"receiver","type":"run"}],"command_rights":{"run":{"roles":["admin"]}}}),
+        &["rows"],
+    );
+    assert!(
+        f.codec.route(&f.db, &doc).is_err(),
+        "E39 several entries require target_app even for repeated destination"
+    );
+    let mut explicit = doc;
+    explicit["target_app"] = json!("receiver");
+    assert_eq!(
+        f.codec.route(&f.db, &explicit).unwrap()["app_id"],
+        "receiver"
+    );
 }
 #[test]
 fn e39_missing_inbound_is_forbidden_even_with_target_right() {
-    let mut f=routing_fixture();
-    route_release(&mut f,"receiver",json!({"handlers":{"run":"handlers/run.js"},"command_rights":{"run":{"roles":["admin"]}}}), &["receiver_rows"]);
-    let doc=document(&f.db,"business_commands","cmd").unwrap().unwrap();
-    let err=f.codec.route(&f.db,&doc).unwrap_err();
-    assert!(err.to_string().contains("receiver commands_in missing"),"E39 inbound consent is mandatory despite target right: {err}");
+    let mut f = routing_fixture();
+    route_release(
+        &mut f,
+        "receiver",
+        json!({"handlers":{"run":"handlers/run.js"},"command_rights":{"run":{"roles":["admin"]}}}),
+        &["receiver_rows"],
+    );
+    let doc = document(&f.db, "business_commands", "cmd")
+        .unwrap()
+        .unwrap();
+    let err = f.codec.route(&f.db, &doc).unwrap_err();
+    assert!(
+        err.to_string().contains("receiver commands_in missing"),
+        "E39 inbound consent is mandatory despite target right: {err}"
+    );
 }
 #[test]
 fn e39_missing_handler_is_forbidden_even_with_inbound_and_target_right() {
     let mut f = routing_fixture();
-    route_release(&mut f, "receiver", json!({"handlers":{},"commands_in":[{"type":"run","from":["app"]}],"command_rights":{"run":{"roles":["admin"]}}}), &["receiver_rows"]);
-    let doc = document(&f.db, "business_commands", "cmd").unwrap().unwrap();
+    route_release(
+        &mut f,
+        "receiver",
+        json!({"handlers":{},"commands_in":[{"type":"run","from":["app"]}],"command_rights":{"run":{"roles":["admin"]}}}),
+        &["receiver_rows"],
+    );
+    let doc = document(&f.db, "business_commands", "cmd")
+        .unwrap()
+        .unwrap();
     let err = f.codec.route(&f.db, &doc).unwrap_err();
-    assert!(err.to_string().contains("target handler missing"), "E39 target handler is mandatory: {err}");
+    assert!(
+        err.to_string().contains("target handler missing"),
+        "E39 target handler is mandatory: {err}"
+    );
 }
 
 #[test]
 fn e39_target_user_right_cannot_be_borrowed_from_sender() {
-    let mut f=routing_fixture();
-    route_release(&mut f,"receiver",json!({"handlers":{"run":"handlers/run.js"},"commands_in":[{"type":"run","from":"*"}],"command_rights":{"run":{"roles":["user"]}}}), &[]);
-    let doc=document(&f.db,"business_commands","cmd").unwrap().unwrap();
-    assert!(f.codec.route(&f.db,&doc).is_err(),"E39 sender right must not replace target user right");
+    let mut f = routing_fixture();
+    route_release(
+        &mut f,
+        "receiver",
+        json!({"handlers":{"run":"handlers/run.js"},"commands_in":[{"type":"run","from":"*"}],"command_rights":{"run":{"roles":["user"]}}}),
+        &[],
+    );
+    let doc = document(&f.db, "business_commands", "cmd")
+        .unwrap()
+        .unwrap();
+    assert!(
+        f.codec.route(&f.db, &doc).is_err(),
+        "E39 sender right must not replace target user right"
+    );
 }
 #[test]
 fn e39_unknown_target_rejected_by_command_writer() {
-    let mut f=routing_fixture();let mut doc=document(&f.db,"business_commands","cmd").unwrap().unwrap();
-    route_release(&mut f,"app",json!({"handlers":{"run":"handlers/run.js"},"commands_out":[{"app":"ghost","type":"run"}],"command_rights":{"run":{"roles":["admin"]}}}), &["rows"]);
-    doc["id"]=json!("unknown");doc["target_app"]=json!("ghost");
-    let tx=f.db.transaction().unwrap();
-    assert!(store_command(&tx,&doc).unwrap_err().to_string().contains("unknown_command"),"E27 unknown target must reject before persistence");
-    assert!(document(&tx,"business_commands","unknown").unwrap().is_none());
+    let mut f = routing_fixture();
+    let mut doc = document(&f.db, "business_commands", "cmd")
+        .unwrap()
+        .unwrap();
+    route_release(
+        &mut f,
+        "app",
+        json!({"handlers":{"run":"handlers/run.js"},"commands_out":[{"app":"ghost","type":"run"}],"command_rights":{"run":{"roles":["admin"]}}}),
+        &["rows"],
+    );
+    doc["id"] = json!("unknown");
+    doc["target_app"] = json!("ghost");
+    let tx = f.db.transaction().unwrap();
+    assert!(
+        store_command(&tx, &doc)
+            .unwrap_err()
+            .to_string()
+            .contains("unknown_command"),
+        "E27 unknown target must reject before persistence"
+    );
+    assert!(document(&tx, "business_commands", "unknown")
+        .unwrap()
+        .is_none());
 }
 #[test]
 fn e39_target_scope_writes_and_sender_identity_are_independent() {
-    let mut f=routing_fixture();
+    let mut f = routing_fixture();
     // Receiver has no access to sender's rows despite sender's admin grant.
-    let tx=f.db.transaction().unwrap();let gate=authority::ExecutorGate{codec:f.codec.clone(),participant:"native".into()};
-    let lease=write_contract::claim_command(&tx,"native","cmd",None,now(),&gate).unwrap().unwrap();
-    let mut command=document(&tx,"business_commands","cmd").unwrap().unwrap();command["status"]=json!("running");store_command(&tx,&command).unwrap();
-    command["actor"]=json!({"id":"owner","role":"admin"});command["app_ver"]=json!("v1");command["target_app"]=json!("receiver");
-    let b=json!({"command":command,"manifest":f.codec.manifest(&tx,"receiver").unwrap(),"fence":{"run_id":"app-runtime:cmd","participant":"native","fence":lease.fence.0,"rights_ver":rights(&tx).unwrap().rights_ver}});
-    assert_eq!(b["command"]["app_id"],"app");
-    f.codec.write(&tx,&b,None,&[StoreWrite{collection:"receiver_rows".into(),op:json!({"type":"put","doc":{"id":"legal","n":1}})}]).expect("E39 target own write must succeed");
+    let tx = f.db.transaction().unwrap();
+    let gate = authority::ExecutorGate {
+        codec: f.codec.clone(),
+        participant: "native".into(),
+    };
+    let lease = write_contract::claim_command(&tx, "native", "cmd", None, now(), &gate)
+        .unwrap()
+        .unwrap();
+    let mut command = document(&tx, "business_commands", "cmd").unwrap().unwrap();
+    command["status"] = json!("running");
+    store_command(&tx, &command).unwrap();
+    command["actor"] = json!({"id":"owner","role":"admin"});
+    command["app_ver"] = json!("v1");
+    command["target_app"] = json!("receiver");
+    let b = json!({"command":command,"manifest":f.codec.manifest(&tx,"receiver").unwrap(),"fence":{"run_id":"app-runtime:cmd","participant":"native","fence":lease.fence.0,"rights_ver":rights(&tx).unwrap().rights_ver}});
+    assert_eq!(b["command"]["app_id"], "app");
+    f.codec
+        .write(
+            &tx,
+            &b,
+            None,
+            &[StoreWrite {
+                collection: "receiver_rows".into(),
+                op: json!({"type":"put","doc":{"id":"legal","n":1}}),
+            }],
+        )
+        .expect("E39 target own write must succeed");
 
-    assert!(f.codec.write(&tx,&b,None,&[StoreWrite{collection:"rows".into(),op:json!({"type":"put","doc":{"id":"illegal","n":1}})}]).is_err(),"E39 target cannot borrow sender write scope");
+    assert!(
+        f.codec
+            .write(
+                &tx,
+                &b,
+                None,
+                &[StoreWrite {
+                    collection: "rows".into(),
+                    op: json!({"type":"put","doc":{"id":"illegal","n":1}})
+                }]
+            )
+            .is_err(),
+        "E39 target cannot borrow sender write scope"
+    );
 }
 
 #[test]
 fn e39_platform_routes_never_select_an_app_target() {
-    assert!(routing::core_route("business_os.chat.task"), "E42 chat must go to Core");
-    assert!(routing::core_route("ctox.workjet.project.list"), "E25 native route must go to Core");
-    let mut f=routing_fixture();
-    route_release(&mut f,"app",json!({"handlers":{"ctox.workjet.project.list":"handlers/trap.js"},"commands_out":[{"app":"ghost","type":"ctox.workjet.project.list"}],"command_rights":{"ctox.workjet.project.list":{"roles":["admin"]}}}), &["rows"]);
-    let doc=json!({"id":"platform","app_id":"app","type":"ctox.workjet.project.list","actor_id":"owner","payload":{}});
-    assert_eq!(f.codec.route(&f.db,&doc).unwrap()["app_id"],"app", "E40 platform route must ignore sender outgoing target");
+    assert!(
+        routing::core_route("business_os.chat.task"),
+        "E42 chat must go to Core"
+    );
+    assert!(
+        routing::core_route("ctox.workjet.project.list"),
+        "E25 native route must go to Core"
+    );
+    let mut f = routing_fixture();
+    route_release(
+        &mut f,
+        "app",
+        json!({"handlers":{"ctox.workjet.project.list":"handlers/trap.js"},"commands_out":[{"app":"ghost","type":"ctox.workjet.project.list"}],"command_rights":{"ctox.workjet.project.list":{"roles":["admin"]}}}),
+        &["rows"],
+    );
+    let doc = json!({"id":"platform","app_id":"app","type":"ctox.workjet.project.list","actor_id":"owner","payload":{}});
+    assert_eq!(
+        f.codec.route(&f.db, &doc).unwrap()["app_id"],
+        "app",
+        "E40 platform route must ignore sender outgoing target"
+    );
 }

@@ -313,7 +313,10 @@ async fn native_daemon_hotplug_roundtrip_and_change() -> Result<()> {
     Ok(())
 }
 
-mod routing_proof { use super::*; include!("routing_proof.rs"); }
+mod routing_proof {
+    use super::*;
+    include!("routing_proof.rs");
+}
 
 mod e25_binding {
     use super::*;

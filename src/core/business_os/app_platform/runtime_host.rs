@@ -349,7 +349,9 @@ impl RuntimeOwners {
 
 pub(super) fn store_command(tx: &rusqlite::Transaction<'_>, doc: &Value) -> Result<(), StoreError> {
     let id = text(doc, "id").map_err(sql_error)?;
-    if document(tx, "business_commands", id)?.is_none() { routing::known_target(tx, doc)?; }
+    if document(tx, "business_commands", id)?.is_none() {
+        routing::known_target(tx, doc)?;
+    }
     store_runtime_event(tx, doc)
 }
 // Only the in-process native event owner enters here before stamping its private
