@@ -9,9 +9,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { SEED, TYPED, openDock, typeInChat, measure } from './drive.mjs';
+import { realManifestRoutes } from '../../../tools/port/real-manifest.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/b6624eb');
+process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const { startServer } = await import('../../../frame/lab/serve.mjs');
 const require = createRequire(path.join(os.homedir(), 'Documents/ctox/src/apps/business-os/package.json'));
 const { chromium } = require('playwright');
@@ -34,15 +35,16 @@ async function v4Page(width) {
   const P = await ctx.newPage();
   await P.goto(`${base}/v4/frame/lab/stub-lab.html?inst=chat4g-${width}-${Date.now().toString(36)}`);
   await P.waitForFunction(() => window.__labReady === true && document.querySelector('[data-v4-ready]'));
-  await P.evaluate(async (seed) => {
+  await P.evaluate(async ([seed, ctoxRoutes]) => {
     const { kernel } = window.__lab;
     // Empfänger wie im V2-Bezug: Annahme mit task_id (die ctox-App nimmt business_os.chat.task an).
     kernel.sim.onCommand('business_os.chat.task', (payload) => ({ ok: true, task_id: 'queue-ref-1', chat_id: payload.chat_id, status: 'queued' }));
     const now = Date.now();
     await kernel.sim.push('business_chats', [{ id: seed.id, owner_user_id: kernel.appApi('shell', 'dev').actor.id, title: seed.title, createdAt: now - 60_000,
       updated_at_ms: now - 60_000, open: true, minimized: true, messages: [{ id: 'msg_seed_1', role: 'user', text: seed.text, createdAt: now - 60_000 }] }]);
-    await kernel.sim.publishAppVersion('ctox', '1.0.0', { title: 'CTOX', layout: { category: 'Crew' }, styles: [], collections: { business_chats: {} } });
-  }, SEED);
+    // E48: Eigentümer von business_chats mit echtem Manifest (collections + exports), sonst liest die Shell den Chat nicht.
+    await kernel.sim.publishAppVersion('ctox', '1.0.0', { title: 'CTOX', layout: { category: 'Crew' }, styles: [], manifestExtra: ctoxRoutes });
+  }, [SEED, realManifestRoutes('ctox')]);
   await P.waitForSelector('[data-ctox-chat-root] [data-chat-dock]', { timeout: 8000 });
   return { P, ctx, theme: await P.evaluate(() => document.documentElement.dataset.theme) };
 }
