@@ -73,6 +73,43 @@ pub fn validate_public_identity(identity: &str) -> io::Result<()> {
 pub struct SigningIdentity {
     key: Ed25519KeyPair,
 }
+
+/// Encoder-owned bytes. The private field prevents callers from labelling
+/// arbitrary memory as a canonical instance packet.
+pub struct CanonicalInstancePacket(Vec<u8>);
+impl CanonicalInstancePacket {
+    const DOMAIN: &'static [u8] = b"ctox.sync.v4.stream\0";
+    pub fn encode_stream(mut value: Value) -> io::Result<Self> {
+        if !value.is_object() {
+            return Err(invalid("instance stream object required"));
+        }
+        value.sort_all_objects();
+        let payload = serde_json::to_vec(&value).map_err(|_| invalid("invalid instance stream"))?;
+        if payload.len() > MAX_ENVELOPE_BYTES {
+            return Err(invalid("instance stream exceeds budget"));
+        }
+        let mut bytes = Self::DOMAIN.to_vec();
+        bytes.extend(payload);
+        Ok(Self(bytes))
+    }
+    /// The legacy signer trait carries bytes, so cross that boundary by
+    /// decoding and re-encoding, then require exact encoder equivalence.
+    pub fn from_stream_bytes(bytes: &[u8]) -> io::Result<Self> {
+        if bytes.len() > MAX_ENVELOPE_BYTES + Self::DOMAIN.len() {
+            return Err(invalid("instance stream exceeds budget"));
+        }
+        let payload = bytes
+            .strip_prefix(Self::DOMAIN)
+            .ok_or_else(|| invalid("instance stream domain required"))?;
+        let value =
+            serde_json::from_slice(payload).map_err(|_| invalid("invalid instance stream"))?;
+        let encoded = Self::encode_stream(value)?;
+        if encoded.0 != bytes {
+            return Err(invalid("noncanonical instance stream"));
+        }
+        Ok(encoded)
+    }
+}
 impl SigningIdentity {
     /// Import an existing host key without replacing its confirmed public identity.
     /// Node/OpenSSL PKCS#8 v1 lacks the public half, so require an independent pin.
@@ -101,10 +138,16 @@ impl SigningIdentity {
     pub fn public_identity(&self) -> String {
         format!("ed25519:{}", hex(self.key.public_key().as_ref()))
     }
-    /// Sign an already canonical native instance packet with this same key.
-    /// Callers retain the identity; no key export or secondary keypair exists.
+    /// Compatibility entry: rejected input produces no signature. Production
+    /// adapters use the fallible encoder boundary and propagate its error.
     pub fn sign_canonical_bytes(&self, canonical: &[u8]) -> Vec<u8> {
-        self.key.sign(canonical).as_ref().to_vec()
+        CanonicalInstancePacket::from_stream_bytes(canonical)
+            .map(|encoded| self.sign_instance_packet(&encoded))
+            .unwrap_or_default()
+    }
+    /// The raw Ed25519 primitive only receives an encoder-owned packet.
+    pub fn sign_instance_packet(&self, canonical: &CanonicalInstancePacket) -> Vec<u8> {
+        self.key.sign(&canonical.0).as_ref().to_vec()
     }
     /// A peer signs its own durable, complete copy, never a sender's replica list.
     /// The caller must run filesystem verification off the async control loop.

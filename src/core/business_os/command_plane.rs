@@ -56,6 +56,12 @@ pub(super) use domain_effect_recovery::recover_applied_domain_effect_for_intake;
 #[path = "command_plane_domain_effect_tests.rs"]
 mod domain_effect_tests;
 
+#[path = "command_plane_v4_routes.rs"]
+mod v4_routes;
+pub(crate) use v4_routes::{
+    execute as execute_v4_registered_command, execute_core as execute_v4_core_registered_command,
+};
+
 const BUSINESS_COMMAND_REPLAY_RECEIPT_CONTRACT: &str = "ctox-business-command-replay-receipt-v1";
 const COMMAND_TIMING_PROBE_FIELD: &str = "command_timing_probe";
 const COMMAND_TIMING_RESULT_FIELD: &str = "command_timing";
