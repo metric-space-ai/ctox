@@ -126,6 +126,12 @@ finally:
     if gold is not None:
         product.write_text(gold)
         record['sourceRestored'] = product.read_text() == gold
+        if "fixed" in locals() and fixed.is_file():
+            # Retire the mutable target output too; future owners must not
+            # accidentally launch the invalidation mutant after source restore.
+            destination = Path(os.environ["CARGO_TARGET_DIR"]) / "debug/ctox"
+            shutil.copy2(fixed, destination)
+            record["targetBinaryRestored"] = sha(destination) == sha(fixed)
     record.update(terminal=True, finishedAt=time.time())
     record.pop('pass_',None)
     save()
