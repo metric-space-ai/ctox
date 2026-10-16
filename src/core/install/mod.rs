@@ -3944,7 +3944,18 @@ fn restore_state_backup(backup_root: &Path, state_root: &Path) -> Result<()> {
     if !backup_root.exists() {
         anyhow::bail!("state backup not found: {}", backup_root.display());
     }
+    // The operation's live control store is not historical tenant state.
+    // Restoring its old lease would make an otherwise completed rollback fail
+    // its final ownership check; replacing its WAL under the heartbeat is unsafe.
+    let maintenance = backup_root.join(MAINTENANCE_STORE_FILE_NAME);
     copy_filtered(backup_root, state_root, &|path, _| {
+        if path == maintenance
+            || SQLITE_SIDECAR_SUFFIXES.iter().any(|suffix| {
+                path == backup_root.join(format!("{MAINTENANCE_STORE_FILE_NAME}{suffix}"))
+            })
+        {
+            return true;
+        }
         path.file_name()
             .and_then(OsStr::to_str)
             .is_some_and(|name| name == "backup_manifest.json")
@@ -3956,6 +3967,9 @@ fn restore_state_backup(backup_root: &Path, state_root: &Path) -> Result<()> {
     // ship the sidecars themselves — those were just restored deliberately
     // and carry committed transactions; they must be kept.
     for database in collect_sqlite_database_files(backup_root) {
+        if database == maintenance {
+            continue;
+        }
         let Ok(relative) = database.strip_prefix(backup_root) else {
             continue;
         };
@@ -6515,3 +6529,6 @@ mod tests {
         assert!(args.iter().any(|arg| arg.ends_with("runtime/tools/appsec")));
     }
 }
+
+#[cfg(test)]
+mod rollback_tests;
