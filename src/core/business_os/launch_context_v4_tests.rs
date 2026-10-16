@@ -22,7 +22,7 @@ fn put(tx: &Transaction<'_>, collection: &str, id: &str, doc: &Value) -> rusqlit
     tx.execute(&format!("INSERT INTO {} (id,rev,schema_ver,data,deleted) VALUES(?1,'1',1,?2,0) ON CONFLICT(id) DO UPDATE SET data=excluded.data",quote(&table)),rusqlite::params![id,doc.to_string()])?;
     Ok(())
 }
-async fn fixture() -> Result<(tempfile::TempDir, Foreground, BusinessOsUser)> {
+pub(crate) async fn fixture() -> Result<(tempfile::TempDir, Foreground, BusinessOsUser)> {
     let root = tempfile::Builder::new().prefix("e41-").tempdir()?;
     let fg = Foreground::start(root.path().into(), tokio::runtime::Handle::current())
         .await
@@ -44,11 +44,27 @@ async fn fixture() -> Result<(tempfile::TempDir, Foreground, BusinessOsUser)> {
             let id=format!("{app}@1");
             put(tx,"business_app_versions",&id,&json!({"id":id,"state":"published","manifest":manifest,"manifest_sha256":format!("{:x}",Sha256::digest(bytes)),"signature":sig}))?;
         }
-        let collections=["business_users","business_apps","business_app_versions","business_commands","notes","foreign_rows"].map(str::to_owned);
-        let rights=sync_rights::read(tx)?;
-        sync_rights::replace(tx,rights.rights_ver,&policy::base_release_rights(&collections))?;
         Ok(())
     }))?.await.context("seed native fixture metadata")?;
+    let authority = sync_rights::StoreRightsAuthority::attach(
+        fg.inputs.sync.writer.clone(),
+        fg.inputs.instance_signer()?.instance_id().into(),
+    )
+    .await
+    .map_err(anyhow::Error::msg)?;
+    let collections = [
+        "business_users",
+        "business_apps",
+        "business_app_versions",
+        "business_commands",
+        "notes",
+        "foreign_rows",
+    ]
+    .map(str::to_owned);
+    authority
+        .replace(policy::base_release_rights(&collections), vec![])
+        .await
+        .map_err(anyhow::Error::msg)?;
     let config_root = root.path().to_owned();
     // Existing official Runtime owner; bounded synthetic TURN settings, no network.
     crate::persistence::run_core_sync(move || crate::inference::runtime_env::set_runtime_env_value(&config_root,"CTOX_BUSINESS_OS_ICE_SERVERS",r#"[{"urls":"turn:fixture.invalid:3478","username":"synthetic","credential":"synthetic"}]"#)).await.context("configure isolated TURN fixture")?;
@@ -201,18 +217,23 @@ async fn launch_context_v4_real_owners_shape_signature_freshness_and_rights() ->
         .await
         .context("restore target source owner")?;
     // Revoke coding permission through the same writer: no cached role/grant.
-    fg.inputs
-        .sync
-        .writer
-        .submit(WriteJob::new(Default::default(), |tx| {
-            let mut rights = sync_rights::read(tx)?;
-            rights
-                .rules
-                .retain(|r| !(r.role == "founder" && r.collection == "policy:apps.source.edit"));
-            sync_rights::replace(tx, rights.rights_ver, &rights.rules)?;
-            Ok(())
-        }))?
-        .await?;
+    let authority = sync_rights::StoreRightsAuthority::attach(
+        fg.inputs.sync.writer.clone(),
+        fg.inputs.instance_signer()?.instance_id().into(),
+    )
+    .await
+    .map_err(anyhow::Error::msg)?;
+    let (_, mut rights) = authority
+        .hello_snapshot()
+        .await
+        .map_err(anyhow::Error::msg)?;
+    rights
+        .rules
+        .retain(|r| !(r.role == "founder" && r.collection == "policy:apps.source.edit"));
+    authority
+        .replace(rights.rules, vec![])
+        .await
+        .map_err(anyhow::Error::msg)?;
     assert_eq!(
         hello(&build(&fg.inputs, &user).await?).capabilities,
         vec!["agent.task"]

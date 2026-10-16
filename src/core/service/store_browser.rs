@@ -285,3 +285,7 @@ fn validate_user(
     }
     Ok(())
 }
+
+#[cfg(all(test, unix))]
+#[path = "store_browser_tests.rs"]
+mod tests;

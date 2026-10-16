@@ -475,4 +475,4 @@ fn snapshot(
 }
 #[cfg(all(test, unix))]
 #[path = "launch_context_v4_tests.rs"]
-mod tests;
+pub(crate) mod tests;
