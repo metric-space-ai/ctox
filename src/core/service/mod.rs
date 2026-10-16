@@ -23,6 +23,7 @@ mod store_native;
 pub(crate) mod store_runtime;
 pub(crate) mod store_rxdb;
 pub(crate) mod store_startup;
+pub(crate) mod store_verifier;
 pub mod turn_ledger;
 #[cfg(windows)]
 pub mod windows_service;
