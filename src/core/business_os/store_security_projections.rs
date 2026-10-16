@@ -1030,32 +1030,34 @@ fn read_core_db_business_record(
     if !path.exists() {
         return Ok(None);
     }
-    let conn = Connection::open(&path)
-        .with_context(|| format!("failed to open core db {}", path.display()))?;
-    let exists: bool = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='business_records'",
-            [],
-            |_| Ok(true),
-        )
-        .optional()?
-        .unwrap_or(false);
-    if !exists {
-        return Ok(None);
-    }
-    let payload_json: Option<String> = conn
+    let collection = collection.to_owned();
+    let record_id = record_id.to_owned();
+    crate::lcm::with_lcm_read(&path, move |conn: &Connection| {
+        let exists: bool = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='business_records'",
+                [],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if !exists {
+            return Ok(None);
+        }
+        let payload_json: Option<String> = conn
         .query_row(
             "SELECT payload_json FROM business_records WHERE collection = ?1 AND record_id = ?2",
             params![collection, record_id],
             |row| row.get(0),
         )
         .optional()?;
-    match payload_json {
-        Some(json) => Ok(Some(serde_json::from_str(&json).with_context(|| {
-            format!("invalid core db business_record {collection}/{record_id}")
-        })?)),
-        None => Ok(None),
-    }
+        match payload_json {
+            Some(json) => Ok(Some(serde_json::from_str(&json).with_context(|| {
+                format!("invalid core db business_record {collection}/{record_id}")
+            })?)),
+            None => Ok(None),
+        }
+    })
 }
 
 pub(in crate::business_os) fn find_queue_task_for_command(

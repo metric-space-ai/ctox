@@ -31,7 +31,7 @@ def run(name,filter,features=True):
 try:
  code,text=run('e30-baseline','e30_');assert code==0 and 'e30_native_files_require_exported_row_or_visible_actual_reference' in text and 'e30_real_native_provider_rechecks_rights_before_any_frame' in text,text[-5000:]
  path=pathlib.Path('src/core/business_os/rxdb_peer_v4_files.rs')
- cases=[('e30-owned-file',rb'let own_read\s*=\s*own;',b'let own_read=false;','e30_native_files_require'),('e30-export-row',rb'let mut allowed\s*=\s*own_read;',b'let mut allowed=true;','e30_native_files_require'),('e30-hidden-reference',rb'(?<=\|projected\|)\s*holds_ref\(&projected,\s*reference\)',b'holds_ref(&doc,reference)','e30_native_files_require')]
+ cases=[('e30-owned-file',rb'let own_read\s*=\s*own;',b'let own_read=false;','e30_native_files_require'),('e30-owner-search',rb'let own_metadata\s*=\s*doc\["owner_app"\]\s*==\s*app\s*&&\s*doc\["owner_user"\]\s*==\s*actor_id;',b'let own_metadata=false;','e30_native_files_require'),('e30-export-row',rb'let mut allowed\s*=\s*own_read;',b'let mut allowed=true;','e30_native_files_require'),('e30-hidden-reference',rb'(?<=\|projected\|)\s*holds_ref\(&projected,\s*reference\)',b'holds_ref(&doc,reference)','e30_native_files_require')]
  for name,old,new,test in cases:
   clean=path.read_bytes();candidate,count=re.subn(old,lambda _:new,clean);assert count==1,(name,'production anchor',count)
   try:

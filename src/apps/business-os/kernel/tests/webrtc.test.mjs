@@ -37,7 +37,7 @@ test('CAS upload pipelines four chunks and download/hash crosses frame boundarie
   const bytes=new Uint8Array(280000);let seed=0x12345678;for(let i=0;i<bytes.length;i++){seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;bytes[i]=seed&255;}
   const blob=new Blob([bytes],{type:'application/octet-stream'}),ref=await sha256Hex(blob);await transport.upload(ref,blob);
   assert.deepEqual(new Uint8Array(await(await transport.blob(ref)).arrayBuffer()),bytes);assert.ok(peer.messages.filter(m=>m.type==='transfer_put').length>=4);assert.deepEqual(peer.errors,[]);
-  assert.ok(peer.sent[5]>peer.messages.filter(m=>m.type==='transfer_put'||m.type==='transfer_get').length,'incompressible CAS actually crosses negotiated frame boundaries');
+  assert.ok(peer.framesSent[5]>peer.messages.filter(m=>m.type==='transfer_put'||m.type==='transfer_get').length,'incompressible CAS actually crosses negotiated frame boundaries');
   peer.blobs.set(ref,new Blob(['x'.repeat(blob.size)]));await assert.rejects(transport.blob(ref),e=>e.code==='invalid');
  }finally{transport.close();peer.close();}
 });

@@ -1,170 +1,210 @@
-//! Native K-WJ-2 files.get responder. The already admitted V4 session owns
-//! request routing and response IDs; this adapter owns no peer, socket or store.
-//! Wire chunks are 64 KiB (independent of CAS's larger storage/import chunks).
-use super::super::webrtc_types::WebRTCPublicationGuard;
+//! V4 application routing. Hosts MUST supply the authoritative store adapter.
+//! No collection cache, synthetic data or V3 replication fallback lives here.
 use super::hello::WireSeq;
 use super::lanes::Lane;
-use super::scheduler::NativeSendScheduler;
+use super::scheduler::{Incoming, NativeSendScheduler};
 use crate::rx_error::{new_rx_error, RxResult};
-use base64::{engine::general_purpose::STANDARD, Engine};
-use ctox_store::cas::{Cas, VerifiedBlob};
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::{
-    io::{Read, Seek, SeekFrom},
-    sync::Arc,
+use futures::{future::BoxFuture, stream::BoxStream, StreamExt};
+use serde_json::Value;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
 };
 
-pub const TRANSFER_CHUNK_BYTES: u64 = 64 * 1024;
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TransferGet {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub request_id: String,
-    #[serde(rename = "ref")]
-    pub reference: String,
-    #[serde(rename = "kind")]
-    pub object_kind: String,
-    pub offset: u64,
-    pub limit: u64,
+/// The P8 adapter binds this peer to current identity, issued scopes and rights.
+/// It signs pages, reads the commit-driven change log and uses the ONE writer
+/// transaction for document + op_id result. Replayed requests recheck authority.
+pub trait V4StreamSource: Send + Sync {
+    /// Missing or stale authority is an error, including every retained replay.
+    /// An optional guard would silently turn denied publication into unrestricted IO.
+    fn publication(
+        &self,
+        peer: &str,
+        packet: &Value,
+    ) -> RxResult<Arc<dyn super::super::webrtc_types::WebRTCPublicationGuard>>;
+    fn subscribe(
+        &self,
+        peer: &str,
+        request: Value,
+    ) -> BoxFuture<'static, RxResult<BoxStream<'static, RxResult<Value>>>>;
+    /// Completes after durable ingress, including a bounded pending write behind
+    /// a client_seq gap. It MUST NOT wait for that gap's predecessor/result.
+    fn write(&self, peer: &str, request: Value) -> BoxFuture<'static, RxResult<()>>;
+    /// Ready and expired results from the authoritative writer. A gap-closing
+    /// write may release several results; deadlines use this same stream.
+    /// Subscribe before admitting writes. No default/empty production fallback.
+    fn write_results(&self, peer: &str) -> RxResult<BoxStream<'static, RxResult<Value>>>;
+    fn app_activation(&self, peer: &str, report: Value) -> BoxFuture<'static, RxResult<()>>;
+    fn priority(&self, peer: &str, hint: Value) -> BoxFuture<'static, RxResult<()>>;
 }
-impl TransferGet {
-    fn validate(&self) -> RxResult<()> {
-        if self.kind != "transfer_get"
-            || !["blob", "artifact"].contains(&self.object_kind.as_str())
-            || self.request_id.is_empty()
-            || self.request_id.len() > 180
-            || self.request_id.chars().any(char::is_control)
-            || self.reference.len() != 64
-            || !self
-                .reference
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-            || self.offset > 2_000_000_000
-            || self.offset % TRANSFER_CHUNK_BYTES != 0
-            || self.limit != TRANSFER_CHUNK_BYTES
-        {
-            return Err(error("invalid", "transfer_range"));
+fn invalid() -> crate::rx_error::RxError {
+    new_rx_error("ctox_v4_application_contract", None)
+}
+
+/// Association lifetime owns every lane and subscription task. Dropping it
+/// aborts pending reads; source cursors resume only from committed checkpoints.
+struct SubscriptionTask(tokio::task::JoinHandle<()>);
+impl Drop for SubscriptionTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+pub struct V4Session {
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+}
+impl Drop for V4Session {
+    fn drop(&mut self) {
+        for task in &self.tasks {
+            task.abort();
         }
-        Ok(())
     }
 }
-pub struct AuthorizedTransferBlob {
-    pub blob: VerifiedBlob,
-    pub mime: String,
-    /// Current files/manifest permission AND original session/device authority.
-    /// Re-evaluated before CAS read and for each actual scheduled SCTP frame.
-    pub publication: Arc<dyn WebRTCPublicationGuard>,
-}
-#[async_trait::async_trait]
-pub trait TransferBlobAccess: Send + Sync {
-    /// Resolve only through the schema owner's real files/manifest read path.
-    /// A hash supplied by a peer is NOT permission; no default grant is provided.
-    async fn resolve(&self, request: &TransferGet) -> RxResult<AuthorizedTransferBlob>;
-}
-#[derive(Serialize)]
-struct TransferData {
-    #[serde(rename = "type")]
-    kind: &'static str,
-    request_id: String,
-    #[serde(rename = "ref")]
-    reference: String,
-    offset: u64,
-    total: u64,
-    mime: String,
-    data: String,
-    sha256: String,
-}
-pub struct NativeTransferChunk {
-    payload: Vec<u8>,
-    publication: Arc<dyn WebRTCPublicationGuard>,
-}
-impl NativeTransferChunk {
-    /// The caller supplies the next response application ID from its existing
-    /// session framer, never an offset masquerading as a unique message ID.
-    pub async fn send(self, scheduler: &NativeSendScheduler, response_id: WireSeq) -> RxResult<()> {
-        self.publication.with_current(&mut || Ok(()))?;
-        scheduler
-            .send(
-                Lane::Transfer,
-                response_id,
-                &self.payload,
-                Some(self.publication),
-            )
-            .await
-    }
-}
-pub struct NativeTransferRouter {
-    cas: Cas,
-    access: Arc<dyn TransferBlobAccess>,
-}
-impl NativeTransferRouter {
-    pub fn new(cas: Cas, access: Arc<dyn TransferBlobAccess>) -> Self {
-        Self { cas, access }
-    }
-    pub async fn read(&self, request: TransferGet) -> RxResult<NativeTransferChunk> {
-        request.validate()?;
-        let admitted = self.access.resolve(&request).await?;
-        let total = admitted.blob.size();
-        if admitted.blob.reference() != request.reference
-            || total > 2_000_000_000
-            || request.offset > total
-            || admitted.mime.len() > 160
-            || admitted.mime.chars().any(char::is_control)
-        {
-            return Err(error("invalid", "transfer_metadata"));
-        }
-        let cas = self.cas.clone();
-        let blob = admitted.blob;
-        let offset = request.offset;
-        let guard = admitted.publication.clone();
-        let data = tokio::task::spawn_blocking(move || {
-            let mut bytes = None;
-            guard.with_current(&mut || {
-                if bytes.is_some() {
-                    return Err(error("conflict", "transfer_duplicate_read"));
+impl V4Session {
+    pub fn start(
+        peer: String,
+        scheduler: NativeSendScheduler,
+        source: Arc<dyn V4StreamSource>,
+    ) -> RxResult<Self> {
+        let seq = Arc::new(AtomicU64::new(1));
+        // Acquire every receiver before spawning: an incomplete association
+        // must not leave a detached result/subscription task behind on error.
+        let incoming = Lane::ALL
+            .into_iter()
+            .map(|lane| {
+                scheduler
+                    .take_incoming(Some(lane))
+                    .map(|rx| (lane, rx))
+                    .ok_or_else(invalid)
+            })
+            .collect::<RxResult<Vec<_>>>()?;
+        let mut results = source.write_results(&peer)?;
+        let mut tasks = Vec::new();
+        let (result_sender, result_source, result_peer, result_seq) =
+            (scheduler.clone(), source.clone(), peer.clone(), seq.clone());
+        tasks.push(tokio::spawn(async move {
+            while let Some(result) = results.next().await {
+                let outcome = async {
+                    let result = result?;
+                    if result["type"] != "write_result" {
+                        return Err(invalid());
+                    }
+                    let bytes = serde_json::to_vec(&result).map_err(|_| invalid())?;
+                    let guard = result_source.publication(&result_peer, &result)?;
+                    result_sender
+                        .send(
+                            Lane::Commands,
+                            WireSeq(result_seq.fetch_add(1, Ordering::Relaxed)),
+                            &bytes,
+                            Some(guard),
+                        )
+                        .await
                 }
-                // CAS::reader verifies the complete object against the retained
-                // receipt before a range is trusted. All disk/hash work is off
-                // the async runtime and the canonical writer.
-                let mut file = cas
-                    .reader(&blob)
-                    .map_err(|_| error("invalid", "transfer_object_changed"))?;
-                file.seek(SeekFrom::Start(offset))
-                    .map_err(|_| error("unavailable", "transfer_read"))?;
-                let count = TRANSFER_CHUNK_BYTES.min(total - offset) as usize;
-                let mut chunk = vec![0; count];
-                file.read_exact(&mut chunk)
-                    .map_err(|_| error("unavailable", "transfer_read"))?;
-                bytes = Some(chunk);
-                Ok(())
-            })?;
-            bytes.ok_or_else(|| error("forbidden", "transfer_read_not_admitted"))
-        })
-        .await
-        .map_err(|_| error("unavailable", "transfer_read_worker"))??;
-        let message = TransferData {
-            kind: "transfer_data",
-            request_id: request.request_id,
-            reference: request.reference,
-            offset,
-            total,
-            mime: admitted.mime,
-            sha256: format!("{:x}", Sha256::digest(&data)),
-            data: STANDARD.encode(data),
-        };
-        let payload =
-            serde_json::to_vec(&message).map_err(|_| error("invalid", "transfer_encoding"))?;
-        Ok(NativeTransferChunk {
-            payload,
-            publication: admitted.publication,
-        })
+                .await;
+                if outcome.is_err() {
+                    result_sender.close_now();
+                    return;
+                }
+            }
+            result_sender.close_now();
+        }));
+        for (lane, mut incoming) in incoming {
+            let (sender, source, peer, seq) =
+                (scheduler.clone(), source.clone(), peer.clone(), seq.clone());
+            tasks.push(tokio::spawn(async move {
+                // Per-lane tasks: a slow page never serializes command/control ingress.
+                let mut subscriptions =
+                    std::collections::HashMap::<String, SubscriptionTask>::new();
+                while let Some(item) = incoming.recv().await {
+                    let Incoming::Reliable {
+                        bytes, delivery, ..
+                    } = item
+                    else {
+                        break;
+                    };
+                    let result = async {
+                        let message: Value =
+                            serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+                        match message.get("type").and_then(Value::as_str) {
+                            Some("subscribe") if lane == Lane::Control => {
+                                let collection = message["collection"]
+                                    .as_str()
+                                    .ok_or_else(invalid)?
+                                    .to_owned();
+                                let mut stream = source.subscribe(&peer, message).await?;
+                                subscriptions.remove(&collection);
+                                let (sender, seq, source, peer) =
+                                    (sender.clone(), seq.clone(), source.clone(), peer.clone());
+                                let task = tokio::spawn(async move {
+                                    while let Some(packet) = stream.next().await {
+                                        let Ok(packet) = packet else {
+                                            sender.close_now();
+                                            break;
+                                        };
+                                        let lane = if packet["type"] == "live" {
+                                            Lane::Live
+                                        } else {
+                                            Lane::InitialSync
+                                        };
+                                        let Ok(bytes) = serde_json::to_vec(&packet) else {
+                                            sender.close_now();
+                                            break;
+                                        };
+                                        let Ok(guard) = source.publication(&peer, &packet) else {
+                                            sender.close_now();
+                                            break;
+                                        };
+                                        if sender
+                                            .send(
+                                                lane,
+                                                WireSeq(seq.fetch_add(1, Ordering::Relaxed)),
+                                                &bytes,
+                                                Some(guard),
+                                            )
+                                            .await
+                                            .is_err()
+                                        {
+                                            break;
+                                        }
+                                    }
+                                });
+                                subscriptions.insert(collection, SubscriptionTask(task));
+                            }
+                            Some("write") if lane == Lane::Commands => {
+                                source.write(&peer, message).await?;
+                            }
+                            Some("app_activation") if lane == Lane::Commands => {
+                                source.app_activation(&peer, message).await?
+                            }
+                            Some("priority") if lane == Lane::Control => {
+                                source.priority(&peer, message).await?
+                            }
+                            _ => return Err(invalid()),
+                        }
+                        Ok(())
+                    }
+                    .await;
+                    if result.is_err() {
+                        sender.close_now();
+                        break;
+                    }
+                    if let Some(token) = delivery {
+                        if token.acknowledge().is_err() {
+                            sender.close_now();
+                            break;
+                        }
+                    }
+                }
+                drop(subscriptions);
+            }));
+        }
+        Ok(Self { tasks })
     }
 }
-fn error(code: &str, reason: &str) -> crate::rx_error::RxError {
-    new_rx_error(
-        "V4_TRANSFER",
-        Some(serde_json::json!({"code":code,"reason":reason})),
-    )
-}
+
+// E25 CAS adapter is independent of the P4 session owner.
+#[path = "v4_transfer.rs"]
+mod transfer;
+pub use transfer::{
+    AuthorizedTransferBlob, NativeTransferChunk, NativeTransferRouter, TransferBlobAccess,
+    TransferGet, TRANSFER_CHUNK_BYTES,
+};

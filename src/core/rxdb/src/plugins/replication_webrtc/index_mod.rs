@@ -29,7 +29,7 @@ pub mod lanes;
 pub mod framing;
 #[path = "scheduler.rs"]
 pub mod scheduler;
-#[path="v4_session.rs"]
+#[path = "v4_session.rs"]
 pub mod v4_session;
 
 use super::collection_authority::authorize_collection_for_peer;
@@ -6516,5 +6516,348 @@ mod tests {
             .expect("interactive auxiliary work must have a reserved execution lane");
         drop(ordinary_permits);
         pool.cancel().await;
+    }
+}
+
+/// Typed V4 entry point. Hosts supply authority and signing; room admission
+/// never creates device authority or scope tokens.
+pub mod v4_router {
+    use super::{connection_lifecycle::*, hello::*};
+    use serde_json::Value;
+    use crate::plugins::replication_webrtc::connection_handler_rs::{
+        WebRTCRsConnection, WebRTCRsConnectionHandler,
+    };
+    use crate::plugins::replication_webrtc::webrtc_types::WebRTCConnectionHandler;
+    use crate::rx_error::{new_rx_error, RxResult};
+    use futures::future::BoxFuture;
+    use parking_lot::Mutex;
+    use std::{
+        collections::HashMap,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc, Weak,
+        },
+        time::Duration,
+    };
+
+    pub type CreateLocalHello = Arc<
+        dyn Fn(WebRTCRsConnection, String) -> BoxFuture<'static, Result<Hello, HelloReject>>
+            + Send
+            + Sync,
+    >;
+
+    #[derive(Clone)]
+    pub struct V4RouterConfig {
+        pub policy: HelloPolicy,
+        pub authenticate: AuthenticatePeer,
+        pub create_local_hello: CreateLocalHello,
+        pub handshake_timeout: Duration,
+        pub application: Option<Arc<dyn super::v4_session::V4StreamSource>>,
+    }
+    struct Session {
+        lifecycle: PeerLifecycle,
+        rejection_sent: AtomicBool,
+        application: Mutex<Option<super::v4_session::V4Session>>,
+    }
+    pub struct V4ConnectionRouter {
+        config: V4RouterConfig,
+        registry: PeerLifecycleRegistry,
+        sessions: Mutex<HashMap<WebRTCRsConnection, Arc<Session>>>,
+        reliable: Mutex<HashMap<String, Arc<super::scheduler::session_resume::ReliableSession<super::scheduler::SessionPayload>>>>,
+    }
+    impl V4ConnectionRouter {
+        pub fn new(config: V4RouterConfig) -> RxResult<Self> {
+            if config.handshake_timeout.is_zero()
+                || config.handshake_timeout > Duration::from_secs(60)
+            {
+                return Err(new_rx_error("ctox_v4_invalid_configuration", None));
+            }
+            Ok(Self {
+                config,
+                registry: PeerLifecycleRegistry::default(),
+                sessions: Mutex::new(HashMap::new()),
+                reliable: Mutex::new(HashMap::new()),
+            })
+        }
+        pub fn snapshot(&self, peer: &WebRTCRsConnection) -> Option<ConnectionSnapshot> {
+            self.sessions
+                .lock()
+                .get(peer)
+                .map(|s| s.lifecycle.snapshot())
+        }
+        pub fn is_live(&self, peer: &WebRTCRsConnection) -> bool {
+            self.snapshot(peer)
+                .is_some_and(|s| s.state == ConnectionState::Live)
+        }
+        pub async fn connected(
+            self: &Arc<Self>,
+            handler: &Arc<WebRTCRsConnectionHandler>,
+            peer: WebRTCRsConnection,
+        ) -> RxResult<()> {
+            let nonce = super::fresh_device_proof_nonce();
+            let lifecycle = self
+                .registry
+                .start(
+                    peer.to_string(),
+                    nonce.clone(),
+                    self.config.policy.clone(),
+                    self.config.authenticate.clone(),
+                    self.config.handshake_timeout,
+                )
+                .map_err(|_| new_rx_error("ctox_v4_lifecycle_start", None))?;
+            lifecycle
+                .transport_connected()
+                .await
+                .map_err(|_| new_rx_error("ctox_v4_lifecycle_closed", None))?;
+            let session = Arc::new(Session {
+                lifecycle,
+                rejection_sent: AtomicBool::new(false),
+                application: Mutex::new(None),
+            });
+            self.sessions.lock().insert(peer.clone(), session.clone());
+            // Watch the actor's bounded timeout. Connection teardown owns/aborts
+            // this watcher; it holds no strong reference back to the handler.
+            let router = self.clone();
+            let weak: Weak<WebRTCRsConnectionHandler> = Arc::downgrade(handler);
+            let watch_peer = peer.clone();
+            let mut states = session.lifecycle.subscribe();
+            let task = tokio::spawn(async move {
+                loop {
+                    let state = states.borrow_and_update().clone();
+                    if let Some(rejection) = state.rejection {
+                        if let Some(handler) = weak.upgrade() {
+                            router.reject(&handler, &watch_peer, rejection).await;
+                        }
+                        break;
+                    }
+                    if state.state == ConnectionState::Closed || states.changed().await.is_err() {
+                        break;
+                    }
+                }
+            });
+            handler.track_v4_task(&peer, task);
+            let local = tokio::time::timeout(
+                self.config.handshake_timeout,
+                (self.config.create_local_hello)(peer.clone(), nonce.clone()),
+            )
+            .await;
+            let local = match local {
+                Ok(Ok(hello))
+                    if hello.device_proof.matches_challenge(&nonce)
+                        && hello.instance_id == self.config.policy.instance_id =>
+                {
+                    hello
+                }
+                _ => {
+                    self.reject(
+                        handler,
+                        &peer,
+                        HelloReject::new(
+                            RejectReason::AuthenticationFailed,
+                            "current local signing authority",
+                        ),
+                    )
+                    .await;
+                    return Err(new_rx_error("ctox_v4_local_hello_failed", None));
+                }
+            };
+            if let Err(error) = handler
+                .send_v4_control(&peer, &HelloFrame::Hello(local))
+                .await
+            {
+                handler.close_peer(&peer).await;
+                return Err(error);
+            }
+            Ok(())
+        }
+        pub async fn receive(
+            &self,
+            handler: &Arc<WebRTCRsConnectionHandler>,
+            peer: &WebRTCRsConnection,
+            bytes: &[u8],
+        ) -> RxResult<()> {
+            let session = self
+                .sessions
+                .lock()
+                .get(peer)
+                .cloned()
+                .ok_or_else(|| new_rx_error("ctox_v4_hello_required", None))?;
+            use super::scheduler::{SessionBinding, session_resume::{SessionHello, ReliableSession}};
+            let extension = if self.config.application.is_some() {
+                Some(SessionHello::decode(bytes).map_err(|_| new_rx_error("ctox_v4_session_hello", None))?)
+            } else { None };
+            let device = extension.as_ref().and_then(|(frame, _)| match frame { HelloFrame::Hello(h) => Some(h.device_proof.device_id.clone()), _ => None });
+            let plain = extension.as_ref().map(|(frame, _)| frame.encode()).transpose().map_err(|_| new_rx_error("ctox_v4_session_hello", None))?;
+            let result = session.lifecycle.receive_frame(plain.as_deref().unwrap_or(bytes)).await;
+            match result {
+                Ok(HelloFrame::HelloOk(ok)) => {
+                    let transport = ok.transport.clone();
+                    let binding = if let Some((_, remote)) = &extension {
+                        // This point is AFTER current nonce/device/rights authentication.
+                        let key = serde_json::to_string(&(&ok.instance_id, device, &ok.epoch, ok.rights_ver, &remote.session_id)).unwrap();
+                        let state = {
+                            let mut states = self.reliable.lock();
+                            if !states.contains_key(&key) && states.len() >= 128 { return Err(new_rx_error("ctox_v4_session_capacity", None)); }
+                            states.entry(key).or_insert_with(|| ReliableSession::new(remote.session_id.clone(), [131072,1048576,131072,4194304,8388608,16777216]).expect("validated session limits")).clone()
+                        };
+                        Some(SessionBinding::attach(state, remote)?)
+                    } else { None };
+                    let frame = HelloFrame::HelloOk(ok);
+                    let response = if let Some(binding) = &binding {
+                        let bytes = binding.state.hello().encode(&frame).map_err(|_| new_rx_error("ctox_v4_session_hello", None))?;
+                        let mut value: Value = serde_json::from_slice(&bytes).map_err(|_| new_rx_error("ctox_v4_session_hello", None))?;
+                        value["core_time_ms"] = super::SystemTime::now().duration_since(super::UNIX_EPOCH).unwrap_or_default().as_millis().try_into().unwrap_or(u64::MAX).into();
+                        serde_json::to_vec(&value).map_err(|_| new_rx_error("ctox_v4_session_hello", None))?
+                    } else { frame.encode().map_err(|_| new_rx_error("ctox_v4_invalid_hello", None))? };
+                    if let Err(error) = handler
+                        .send_v4_bootstrap_bytes(peer, &response)
+                        .await
+                    {
+                        handler.publish_v4_error(error.clone());
+                        handler.close_peer(peer).await;
+                        return Err(error);
+                    }
+                    session
+                        .lifecycle
+                        .hello_ok_sent()
+                        .await
+                        .map_err(|_| new_rx_error("ctox_v4_lifecycle_closed", None))?;
+                    if let Some(source) = &self.config.application {
+                        let owner = source.clone();
+                        let remote_peer = peer.to_string();
+                        let sender = handler.activate_v4_session_send_path(peer, transport, binding.ok_or_else(|| new_rx_error("ctox_v4_session_hello", None))?, Arc::new(move |_, _, bytes| {
+                            let packet: Value = serde_json::from_slice(bytes).map_err(|_| new_rx_error("ctox_v4_application_contract", None))?;
+                            owner.publication(&remote_peer, &packet)
+                        })).await?;
+                        *session.application.lock() = Some(super::v4_session::V4Session::start(peer.to_string(), sender, source.clone())?);
+                    }
+                    handler.publish_v4_connected(peer.clone());
+                    Ok(())
+                }
+                Ok(HelloFrame::HelloReject(rejection)) => {
+                    self.reject(handler, peer, rejection).await;
+                    Err(new_rx_error("ctox_v4_hello_rejected", None))
+                }
+                _ => {
+                    self.reject(
+                        handler,
+                        peer,
+                        HelloReject::new(
+                            RejectReason::UnexpectedMessage,
+                            "hello before application traffic",
+                        ),
+                    )
+                    .await;
+                    Err(new_rx_error("ctox_v4_hello_required", None))
+                }
+            }
+        }
+        async fn reject(
+            &self,
+            handler: &Arc<WebRTCRsConnectionHandler>,
+            peer: &WebRTCRsConnection,
+            rejection: HelloReject,
+        ) {
+            let session = self.sessions.lock().get(peer).cloned();
+            if !session.is_some_and(|s| !s.rejection_sent.swap(true, Ordering::AcqRel)) {
+                return;
+            }
+            // Send before closing. The watcher and receive task share one claim,
+            // so a rejection/timeout cannot race into duplicate error events.
+            if let Err(error) = handler
+                .send_v4_control(peer, &HelloFrame::HelloReject(rejection.clone()))
+                .await
+            {
+                handler.publish_v4_error(error);
+            }
+            handler.publish_v4_error(new_rx_error(
+                "ctox_v4_hello_rejected",
+                Some(serde_json::json!({"reason":rejection.reason, "required":rejection.required})),
+            ));
+            handler.close_peer(peer).await;
+        }
+        pub async fn disconnected(&self, peer: &WebRTCRsConnection) {
+            let session = self.sessions.lock().remove(peer);
+            if let Some(session) = session {
+                session.lifecycle.drain().await;
+            }
+        }
+        pub async fn drain(&self) {
+            self.registry.drain_all().await;
+            self.sessions.lock().clear();
+            for (_, state) in self.reliable.lock().drain() { state.retire(); }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::plugins::replication_webrtc::webrtc_types::WebRTCMessage;
+
+        fn config() -> V4RouterConfig {
+            let fixture: serde_json::Value =
+                serde_json::from_str(include_str!("hello_fixture.json")).unwrap();
+            let HelloFrame::Hello(hello) =
+                HelloFrame::decode(&serde_json::to_vec(&fixture["hello"]).unwrap()).unwrap()
+            else {
+                panic!("hello fixture")
+            };
+            V4RouterConfig {
+                policy: HelloPolicy {
+                    instance_id: hello.instance_id.clone(),
+                    bootstrap_min: 4,
+                    bootstrap_max: 4,
+                    app_api_ver: hello.app_api_ver.clone(),
+                    capabilities: hello.capabilities.clone(),
+                    required_capabilities: vec![],
+                    transport: hello.transport.clone(),
+                },
+                handshake_timeout: Duration::from_secs(10),
+                application: None,
+                create_local_hello: Arc::new(move |_, nonce| {
+                    let mut hello = hello.clone();
+                    hello.device_proof.nonce = nonce;
+                    Box::pin(async move { Ok(hello) })
+                }),
+                authenticate: Arc::new(|_, _| {
+                    Box::pin(async {
+                        Err(HelloReject::new(
+                            RejectReason::AuthenticationFailed,
+                            "host authority",
+                        ))
+                    })
+                }),
+            }
+        }
+
+        #[tokio::test]
+        async fn v4_router_never_admits_application_send_before_hello() {
+            let handler = WebRTCRsConnectionHandler::new();
+            handler.configure_v4(config()).unwrap();
+            let peer = WebRTCRsConnection::new("not-authenticated".into(), 1);
+            let frame = WebRTCMessage {
+                id: "early".into(),
+                method: "masterWrite".into(),
+                params: vec![],
+                collection: None,
+            };
+            assert_eq!(
+                handler.send(&peer, frame.into()).await.unwrap_err().code(),
+                "ctox_v4_hello_required"
+            );
+            assert!(handler.v4_snapshot(&peer).is_none());
+            assert_eq!(
+                handler.configure_v4(config()).unwrap_err().code(),
+                "ctox_v4_already_configured"
+            );
+            handler.close().await.unwrap();
+        }
+
+        #[test]
+        fn v4_router_requires_a_bounded_deadline() {
+            let mut config = config();
+            config.handshake_timeout = Duration::ZERO;
+            assert!(V4ConnectionRouter::new(config).is_err());
+        }
     }
 }

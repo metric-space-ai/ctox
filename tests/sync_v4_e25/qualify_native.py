@@ -15,7 +15,7 @@ try:
  cases=[
  ('terminal-event-cursor','v4_native_sessions.rs',b'let mut value = self.feed.current(self.after)?;',b'let mut value = self.feed.current(self.after)?; if terminal(&value) { value = self.feed.current(0)?; }','e25_speech_session_controls_and_native_events_keep_one_opening_identity'),
  ('control-cannot-reset-partial','v4_native_sessions.rs',b'if terminal(&canonical) {',b'if true {','e25_speech_session_controls_and_native_events_keep_one_opening_identity'),
- ('cas-chunk-hash','v4_session.rs',b'Sha256::digest(&data)',b'Sha256::digest(b"wrong chunk")','e25_native_cold_range_sends_complete_hashed_chunks_and_fences_revocation'),
+ ('cas-chunk-hash','v4_transfer.rs',b'Sha256::digest(&data)',b'Sha256::digest(b"wrong chunk")','e25_native_cold_range_sends_complete_hashed_chunks_and_fences_revocation'),
  ]
  for name,file,old,new,test in cases:
   path=pathlib.Path('src/core/rxdb/src/plugins/replication_webrtc')/file;clean=path.read_bytes();assert clean.count(old)==1

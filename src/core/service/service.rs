@@ -1860,7 +1860,7 @@ fn attempt_state_invariant_repair(
     state_invariants::RuntimeStateInvariantReport,
 )> {
     let db_path = crate::paths::core_db(&root);
-    let engine = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
+    let engine = lcm::LcmClient::attach(&db_path)?;
     let mut repair = engine.sync_mission_state_from_continuity_with_repair(conversation_id)?;
     let mut report = state_invariants::evaluate_runtime_state_invariants(root, conversation_id)?;
     let repaired_codes = report
@@ -4033,7 +4033,7 @@ fn handle_service_ipc_request(
         }
         ServiceIpcRequest::CodingModelCapabilities => Ok(ServiceIpcResponse::Json {
             status: 200,
-            payload: crate::coding_agents::pi_sidecar::coding_model_capabilities(root),
+            payload: crate::coding_agents::pi_sidecar::coding_model_capabilities(root)?,
         }),
         ServiceIpcRequest::KnowledgeData { argv } => {
             // Dispatch the knowledge subcommand inside the daemon process so
@@ -7047,7 +7047,7 @@ fn start_prompt_worker(
             // non-success outcomes increment it for status and explicit
             // mission-governance decisions.
             let mut agent_failure_threshold_hit = false;
-            if let Ok(engine) = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default()) {
+            if let Ok(engine) = lcm::LcmClient::attach(&db_path) {
                 if agent_outcome.is_agent_failure() && !retryable_runtime_failure {
                     match engine.increment_mission_agent_failure_count(conversation_id) {
                         Ok(record) => {
@@ -7110,7 +7110,7 @@ fn start_prompt_worker(
             let mut mission_sync_outcome = if founder_visible_mail_turn {
                 None
             } else {
-                lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())
+                lcm::LcmClient::attach(&db_path)
                     .and_then(|engine| engine.sync_mission_state_from_continuity(conversation_id))
                     .ok()
             };
@@ -7132,11 +7132,9 @@ fn start_prompt_worker(
             // missing observability/authority without a competing retry loop.
             if !founder_visible_mail_turn && latest_runtime_error.is_some() {
                 if let Some(work_id) = job.ticket_self_work_id.as_deref() {
-                    let mission_record = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())
-                        .ok()
-                        .and_then(|engine| {
-                            engine.stored_mission_state(conversation_id).ok().flatten()
-                        });
+                    let mission_record = lcm::LcmClient::attach(&db_path).ok().and_then(|engine| {
+                        engine.stored_mission_state(conversation_id).ok().flatten()
+                    });
                     let decision = crate::service::mission_governor::evaluate_loop_governor(
                         &job.goal,
                         mission_record.as_ref(),
@@ -21784,7 +21782,7 @@ fn maybe_redirect_owner_visible_work_to_strategy_setup(
         .unwrap_or_else(|| default_follow_up_thread_key(&job.goal));
     let conversation_id = turn_loop::conversation_id_for_thread_key(Some(thread_key.as_str()));
     let db_path = crate::paths::core_db(&root);
-    let engine = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
+    let engine = lcm::LcmClient::attach(&db_path)?;
     let strategy = engine.active_strategy_snapshot(conversation_id, Some(thread_key.as_str()))?;
     if strategy.active_vision.is_some() && strategy.active_mission.is_some() {
         return Ok(false);
@@ -25309,7 +25307,7 @@ fn recover_mission_after_accepted_attempt(
     if !accepted {
         return Ok(None);
     }
-    let engine = lcm::LcmEngine::open(db_path, lcm::LcmConfig::default())?;
+    let engine = lcm::LcmClient::attach(db_path)?;
     engine
         .reset_mission_agent_failure_count(conversation_id)
         .map(Some)

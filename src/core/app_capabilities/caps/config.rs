@@ -20,13 +20,23 @@ pub const PLATFORM_KEYS: &[&str] = &[PUBLIC_ORIGIN_KEY];
 
 /// The Core HTTPS origin (`https://host[:port]`, no path) from the runtime
 /// config store; anything else is treated as unconfigured.
-pub fn public_origin(root: &Path) -> Option<String> {
-    let value = crate::inference::runtime_env::get_runtime_env_value(root, PUBLIC_ORIGIN_KEY)?;
+pub fn public_origin(root: &Path) -> Result<Option<String>, CtoxError> {
+    let work = root.to_owned();
+    let value = crate::persistence::run_core_blocking_at(root, move || {
+        crate::inference::runtime_env::try_get_runtime_env_value(&work, PUBLIC_ORIGIN_KEY)
+    })
+    .map_err(native_error)?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
     let value = value.trim().trim_end_matches('/').to_owned();
-    let rest = value
+    let Some(rest) = value
         .strip_prefix("https://")
-        .or_else(|| value.strip_prefix("http://"))?;
-    (super::browser::web_url(&value) && !rest.contains(['/', '?', '#'])).then_some(value)
+        .or_else(|| value.strip_prefix("http://"))
+    else {
+        return Ok(None);
+    };
+    Ok((super::browser::web_url(&value) && !rest.contains(['/', '?', '#'])).then_some(value))
 }
 
 #[derive(Deserialize)]
@@ -53,7 +63,7 @@ pub(super) fn execute(
         if !is_platform(ctx) {
             return Err(forbidden("platform configuration"));
         }
-        return Ok(json!({ "key": request.key, "value": public_origin(root) }));
+        return Ok(json!({ "key": request.key, "value": public_origin(root)? }));
     }
     if !ALLOWED_KEYS.contains(&request.key.as_str()) {
         return Err(forbidden("config key is not readable by apps"));
@@ -61,7 +71,11 @@ pub(super) fn execute(
     if crate::secrets::is_secret_key(&request.key) {
         return Err(forbidden("credentials are not configuration"));
     }
-    let value = crate::inference::runtime_env::env_or_config(root, &request.key)
-        .filter(|value| !value.trim().is_empty());
+    let work = root.to_owned();
+    let key = request.key.clone();
+    let value = crate::persistence::run_core_blocking_at(root, move || {
+        crate::inference::runtime_env::try_get_runtime_env_value(&work, &key)
+    })
+    .map_err(native_error)?;
     Ok(json!({ "key": request.key, "value": value }))
 }

@@ -76,14 +76,14 @@ test('query/get live, lokal, ohne Zeilendeckel; Änderungen erreichen alle Abonn
   single.subscribe((d) => { singleVal = d; });
   for (let i = 0; i < 600; i++) a.put('notes', { id: `n${i}`, prio: i % 7, done: i % 3 === 0 });
   assert.equal(lq.get().length, 400, 'lokal sofort sichtbar, kein 200er-Deckel');
-  await tick();
+  await until(() => seen.at(-1) === 400 && singleVal?.id === "n7");
   assert.equal(seen.at(-1), 400);
   assert.equal(singleVal.id, 'n7');
   assert.ok(lq.get()[0].prio === 6 && lq.get()[0].id < lq.get()[1].id);
   assert.throws(() => { lq.get()[0].prio = 1; }, TypeError, 'Ergebnisse sind eingefroren');
   a.patch('notes', 'n7', { done: true });
   a.remove('notes', 'n8');
-  await tick();
+  await until(() => seen.at(-1) === 398 && singleVal?.done === true);
   assert.equal(seen.at(-1), 398);
   assert.equal(singleVal.done, true);
   off();
@@ -478,7 +478,7 @@ test('Dateien: put (Blob + Outbox + files-Dokument), get aus Cache, nach Räumun
   assert.equal(await (await api.files.get(ref)).text(), 'Hallo Datei');
   assert.equal(await k.sim.evictBlobs(), 1);
   assert.equal(await (await api.files.get(ref)).text(), 'Hallo Datei');
-  await assert.rejects(api.files.get('0'.repeat(64)), (e) => e.code === 'not_found');
+  await assert.rejects(api.files.get('0'.repeat(64)), (e) => e.code === 'forbidden', 'E30: unreferenced hashes grant nothing');
   await k.close();
 });
 

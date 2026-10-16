@@ -4855,9 +4855,10 @@ pub(super) async fn sync_runtime_settings_with_database(
     database: &Arc<RxDatabase>,
 ) -> anyhow::Result<usize> {
     let root = root.to_path_buf();
-    let mut document = tokio::task::spawn_blocking(move || store::runtime_settings_for_rxdb(&root))
-        .await
-        .context("join native runtime settings projection load")??;
+    let mut document =
+        crate::persistence::run_core_sync(move || store::runtime_settings_for_rxdb(&root))
+            .await
+            .context("native runtime settings owner read failed")?;
     if let Some(object) = document.as_object_mut() {
         object.remove("_rev");
         object.remove("_meta");

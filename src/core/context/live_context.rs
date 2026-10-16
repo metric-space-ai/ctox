@@ -500,7 +500,7 @@ pub fn render_live_prompt_artifact(
     db_path: &Path,
     conversation_id: i64,
 ) -> Result<LivePromptArtifact> {
-    let engine = lcm::LcmEngine::open(db_path, lcm::LcmConfig::default())?;
+    let engine = lcm::LcmClient::attach(db_path)?;
     let _ = engine.continuity_init_documents(conversation_id)?;
     let snapshot = engine.snapshot(conversation_id)?;
     let continuity = engine.continuity_show_all(conversation_id)?;

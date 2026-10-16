@@ -170,18 +170,21 @@ impl DomainEffectAdmission {
 
 /// Read-only lookup of Core-owned confirmations; historical domain receipts
 /// stay in Policy. Missing pre-migration tables are absence, never schema writes.
-fn core_receipt_connection(root: &std::path::Path) -> anyhow::Result<Option<Connection>> {
+fn with_core_receipt_read<T: Send + 'static>(
+    root: &std::path::Path,
+    operation: impl FnOnce(&Connection) -> anyhow::Result<T> + Send + 'static,
+) -> anyhow::Result<Option<T>> {
     let path = crate::paths::core_db(root);
     if !path.exists() {
         return Ok(None);
     }
-    let conn = Connection::open_with_flags(
-        path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
-    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
-    let exists: bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='business_command_domain_effects')",[],|r|r.get(0))?;
-    Ok(exists.then_some(conn))
+    crate::lcm::with_lcm_read(&path, move |conn| {
+        let exists: bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='business_command_domain_effects')",[],|r|r.get(0))?;
+        if !exists {
+            return Ok(None);
+        }
+        operation(conn).map(Some)
+    })
 }
 
 pub(super) fn identity_at_root(
@@ -190,10 +193,8 @@ pub(super) fn identity_at_root(
     command_id: &str,
 ) -> anyhow::Result<Option<DomainEffectIdentity>> {
     let local = identity(policy, command_id)?;
-    let core = core_receipt_connection(root)?
-        .map(|conn| identity(&conn, command_id))
-        .transpose()?
-        .flatten();
+    let query_command = command_id.to_owned();
+    let core = with_core_receipt_read(root, move |conn| identity(conn, &query_command))?.flatten();
     anyhow::ensure!(
         local.is_none() || core.is_none(),
         "domain receipt exists in two authority stores"
@@ -218,10 +219,13 @@ pub(super) fn load_at_root(
     actor: &str,
 ) -> anyhow::Result<Option<AppliedDomainEffect>> {
     let local = load(policy, command_id, payload_hash, actor)?;
-    let core = core_receipt_connection(root)?
-        .map(|conn| load(&conn, command_id, payload_hash, actor))
-        .transpose()?
-        .flatten();
+    let query_command = command_id.to_owned();
+    let query_payload = payload_hash.to_owned();
+    let query_actor = actor.to_owned();
+    let core = with_core_receipt_read(root, move |conn| {
+        load(conn, &query_command, &query_payload, &query_actor)
+    })?
+    .flatten();
     anyhow::ensure!(
         local.is_none() || core.is_none(),
         "domain receipt exists in two authority stores"

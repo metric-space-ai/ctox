@@ -2,7 +2,7 @@
 // Rückruf an die eigene App. Ersetzt store.rs::record_command + suggested_skill_for_command (:27735-27770) und
 // command_prompt (:27009); die Anweisungstexte standen bis SKL-B2 als Literale in index.js (:2586-2598, :4325-4344,
 // knowledgeRefreshPayload :4768-4779) und liegen jetzt wörtlich in prompts/*.md.
-import { renderPrompt } from 'ctox:shared/prompt-template.js';
+import { fillTemplate, loadPromptTemplate, renderPrompt } from 'ctox:shared/prompt-template.js';
 import { invalid } from './errors.js';
 
 // Core-System-Skill (src/skills/system/research/systematic-research): generische Recherche-Methodik, die auch
@@ -96,11 +96,30 @@ export function knowledgeRefreshValues(command) {
 
 const optional = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 
+/** Template-Name für research.systematic.run: Graph-Nachrecherche (research_mode) oder Hauptlauf. */
+export function systematicRunPromptName(command) {
+  return command?.payload?.research_mode === 'targeted_graph_gap' ? 'graph-gap' : 'systematic-run';
+}
+
+/**
+ * Anweisung für research.systematic.run aus dem Template-Text (prompts/<systematicRunPromptName>.md) und dem Befehl
+ * {record_id, payload}. Einzige Füllung für Handler und UI (RCH2: der Chat-Entwurf ist byte-gleich zur Anweisung,
+ * die dieser Handler aus demselben Befehl erzeugt).
+ */
+export function systematicRunInstruction(template, command, values = systematicRunPromptValues(command)) {
+  return finish(fillTemplate(template, values));
+}
+
+function systematicRunPromptValues(command) {
+  return systematicRunPromptName(command) === 'graph-gap' ? graphGapValues(command) : systematicRunValues(command);
+}
+
 /** research.systematic.run: Hauptlauf oder Graph-Nachrecherche (research_mode), Skill systematic-research. */
 export async function enqueueSystematicRun(command, ctx) {
   const p = command.payload || {};
-  const targeted = p.research_mode === 'targeted_graph_gap';
-  const instruction = finish(await renderPrompt(ctx, targeted ? 'graph-gap' : 'systematic-run', targeted ? graphGapValues(command) : systematicRunValues(command)));
+  // Reihenfolge wie bisher: erst die Werte (fehlende → invalid), dann das Template laden.
+  const values = systematicRunPromptValues(command);
+  const instruction = systematicRunInstruction(await loadPromptTemplate(ctx, systematicRunPromptName(command)), command, values);
   const task = await ctx.cap.agent.task.enqueue({
     title: optional(p.title) ?? `Research · ${p.research_brief?.task_title}`,
     instruction,

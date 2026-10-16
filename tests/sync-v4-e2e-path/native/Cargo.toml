@@ -1,0 +1,23 @@
+[package]
+name = "ctox-sync-v4-e2e-peer"
+version = "0.1.0"
+edition = "2021"
+publish = false
+[workspace]
+[dependencies]
+rxdb = { package = "ctox-rxdb", path = "../../../src/core/rxdb" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "io-std"] }
+futures = "0.3"
+serde_json = "1"
+webrtc = "=0.20.0-alpha.1"
+base64 = "0.22"
+ring = "0.17"
+ctox-store = { path = "../../../src/core/store" }
+rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+[patch.crates-io]
+rtc-turn = { path = "../../../src/core/rxdb/patches/rtc-turn" }
+rtc-ice = { path = "../../../src/core/rxdb/patches/rtc-ice" }
+rtc = { path = "../../../src/core/rxdb/patches/rtc" }
+webrtc = { path = "../../../src/core/rxdb/patches/webrtc" }

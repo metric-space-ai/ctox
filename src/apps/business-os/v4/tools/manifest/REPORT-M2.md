@@ -11,25 +11,27 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 |---|---|
 | Apps (modules + customer-modules) | 41 |
 | Manifeste gesamt (Apps + shell) | 42 |
-| Collections gesamt / App-eigen / ctox-platform | 235 / 220 / 15 |
+| Collections gesamt / App-eigen / ctox-platform | 236 / 221 / 15 |
 | Handler gesamt (Apps mit Handlern) | 399 (29) |
 | Legacy-Rest gesamt (ctx.cap.legacy) | 0 |
 | Capabilities gesamt (verschieden, ohne legacy) | 71 |
 | Trigger | 11 |
 | command_rights-Einträge | 55 |
-| foreign-Deklarationen (davon write / nur Code-Scan) | 281 (31 / 94) |
+| foreign-Deklarationen (davon write / nur Code-Scan) | 293 (32 / 94) |
 | **foreign ohne passendes exports (Soll 0)** | **0** |
 | Plattformzugriffe auf exports beschränkt | 1 |
 | Befehlstypen mit Handlern in mehreren Apps | 8 |
 | eigene Collections ohne Schema | 0 |
 | schema.js noch vorhanden / nicht ladbar | 3 / 0 |
-| Shell-Dateien | 120 |
+| Shell-Dateien | 125 |
 | Apps mit styles / write_guard-Collections | 41 / 1 |
 | offene _todo gesamt | 149 |
 | Deklarationsdateien v4-manifest.json | 40 |
-| commands_out / commands_in | 24 / 12 |
+| commands_out / commands_in | 25 / 13 |
 | **commands ohne Gegenstück (Soll 0)** | **0** |
 | ctx.command mit nicht auflösbarem Ziel | 0 |
+| **UI-Befehle ohne Route (E40, Soll 0)** / mehrdeutig | **0** / 0 |
+| Plattformroute gemeldet (PLATFORM_ROUTES_PENDING) / commands_in aus UI abgeleitet | 13 / 1 |
 | net.ingest-Anmeldungen | 2 |
 | Apps mit multi_instance:false | 40 |
 | Icons: Rasterbild im Paket / nur SVG / generiert (MAN2) | 40 / 1 / 0 |
@@ -48,7 +50,7 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | conversations | 0 | 0 | 0 | 0 | 0 | 5 | 3 | 4 |
 | creator | 0 | 0 | 0 | 0 | 0 | 2 | 0 | 3 |
 | credentials | 3 | 0 | 3 | 0 | 1 | 1 | 0 | 3 |
-| ctox | 22 | 0 | 9 | 0 | 5 | 4 | 14 | 4 |
+| ctox | 22 | 0 | 9 | 0 | 5 | 4 | 16 | 4 |
 | customers | 20 | 0 | 0 | 0 | 0 | 9 | 3 | 3 |
 | cv-print-builder | 3 | 0 | 3 | 0 | 0 | 7 | 0 | 3 |
 | desktop | 0 | 0 | 0 | 0 | 0 | 4 | 2 | 3 |
@@ -187,8 +189,9 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | documents | ctox | `ctox.chat.task` | index.js:658 |
 | knowledge | ctox | `ctox.app.modify.request` | index.js:2857 |
 | knowledge | ctox | `ctox.chat.task` | index.js:2857 |
-| mail | ctox | `ctox.chat.task` | index.js:2559 |
-| mail | support | `support.conversation.open_from_thread` | index.js:2513 |
+| mail | ctox | `ctox.chat.task` | index.js:2561 |
+| mail | outbound | `outbound.message.compose` | index.js:1258 |
+| mail | support | `support.conversation.open_from_thread` | index.js:2515 |
 | matching | ctox | `ctox.app.modify.request` | ui/businessOsControls.js:1175 |
 | matching | ctox | `ctox.chat.task` | ui/businessOsControls.js:1175 |
 | outbound | outbound-lead-generation | `outbound.research_source.reprobe` | handlers/_lib/owner-app.js:22 |
@@ -196,9 +199,9 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | outbound | outbound-lead-generation | `outbound.scrape.script.read` | handlers/_lib/olg-registry.js:167, v4-manifest.json; handlers/_lib/olg-registry.js requestLatestScript/requestTargetUpsert; customer-modules/outbound-lead-generation/OLG725.md (§16.40, §16.47 Nr. 4) |
 | outbound | outbound-lead-generation | `outbound.scrape.target.upsert` | handlers/_lib/olg-registry.js:73, v4-manifest.json; handlers/_lib/olg-registry.js requestLatestScript/requestTargetUpsert; customer-modules/outbound-lead-generation/OLG725.md (§16.40, §16.47 Nr. 4) |
 | outbound | outbound-lead-generation | `outbound.update_digest.send_now` | handlers/_lib/owner-app.js:22 |
-| research | ctox | `ctox.app.modify.request` | index.js:4884 |
-| research | ctox | `ctox.chat.task` | index.js:4884 |
-| research | documents | `research.systematic.report.create` | index.js:2551 |
+| research | ctox | `ctox.app.modify.request` | index.js:4916 |
+| research | ctox | `ctox.chat.task` | index.js:4916 |
+| research | documents | `research.systematic.report.create` | index.js:2552 |
 | research | knowledge | `knowledge.book.ingest` | handlers/_lib/callback.js:212 |
 | spreadsheets | ctox | `ctox.app.modify.request` | index.js:2225 |
 | spreadsheets | ctox | `ctox.chat.task` | index.js:2225 |
@@ -211,6 +214,7 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | ctox | `ctox.chat.task` | * |
 | documents | `research.systematic.report.create` | research |
 | knowledge | `knowledge.book.ingest` | research |
+| outbound | `outbound.message.compose` | mail |
 | outbound-lead-generation | `outbound.research_source.reprobe` | outbound |
 | outbound-lead-generation | `outbound.research_source.test` | outbound |
 | outbound-lead-generation | `outbound.scrape.script.read` | outbound |
@@ -222,6 +226,38 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 Ohne Gegenstück (0, Soll 0):
 
 Nicht auflösbares Ziel (0):
+
+Shell (SHELL_COMMANDS_OUT + UI-Scan v4/frame, v4/shell, v4/source):
+- shell → ctox `business_os.chat.task`: v4/shell/chat/index.js (commandBus.dispatch → api.command; shared/business-chat.js Standardtyp business_os.chat.task, CHAT4.md)
+- shell → ctox `ctox.chat.task`: v4/shell/app-host.js:500 (Menüpunkt ctox.ask „CTOX fragen…“ → Eingabeblatt → Standardbefehl ctox.chat.task)
+
+### commands_in aus der UI-Nutzung abgeleitet (E40, je Absender, nie '*') (1)
+
+- outbound ← mail `outbound.message.compose`: modules/mail/index.js:1258
+
+### UI-Befehle ohne Route: weder Plattformroute (src/core/business_os/business_command_inventory.json + Registry) noch Handler (E40, 0, Soll 0, rot)
+
+keine
+
+### Mehrdeutig: Handler in mehreren Apps (0, Soll 0, rot)
+
+keine
+
+### An den Kern gemeldet, noch keine Plattformroute (PLATFORM_ROUTES_PENDING, 13)
+
+- `browser.http_auth.respond` (V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)): browser modules/browser/index.js:627
+- `browser.observer.grant` (V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)): browser modules/browser/index.js:587
+- `browser.observer.revoke` (V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)): browser modules/browser/index.js:592
+- `browser.upload.select` (V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)): browser modules/browser/index.js:555
+- `browser.webauthn.respond` (V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)): browser modules/browser/index.js:636
+- `ctox.plan.step.retry` (E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen): im UI-Scan keine Fundstelle als Befehlstyp
+- `ctox.workjet.calendar.connect.v1` (E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen): shell v4/shell/workjet/actions/calendar-connect.js:11
+- `ctox.workjet.calendar.read.v1` (E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen): shell v4/shell/workjet/actions/meeting.js:150
+- `ctox.workjet.device.v1` (E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen): shell v4/shell/workjet/actions/device.js:45
+- `ctox.workjet.grok.v1` (E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen): shell v4/shell/workjet/actions/instance.js:18
+- `ctox.workjet.jour_fixe.speech.v1` (E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen): shell v4/shell/workjet/actions/meeting.js:204
+- `ctox.workjet.speech.dictation.v1` (E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen): shell v4/shell/workjet/actions/meeting.js:28
+- `ctox.workjet.speech.settings.v1` (E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen): shell v4/shell/workjet/actions/meeting.js:105
 
 ## foreign ohne passendes exports (0, Soll 0)
 
@@ -298,5 +334,6 @@ keine
 4. handlers = vorhandene handlers/*.js ohne _-Präfix; capabilities_required = im Handler-Code aufgerufene ctx.cap-Pfade (ohne Präfix „ctx.cap.“, wie in den V4-HANDLERS-Vorschlägen) plus `legacy.<typ>` je Legacy-Typ; Handler-Dateien mit „test“ im Befehlstyp sind keine Testdateien.
 5. Shell-Manifest: v4/{frame,shell,source}/** + v4/sw.js + Shell-Dateien laut Dateigrenze; lab/-Prüfstände, Tests und .md ausgenommen.
 6. styles (§16.19 Nr. 6) = index.css der App (+ styles der Deklaration); write_guard (§16.21) nur, wo ein Rust-Schreibwächter belegt ist (OLG-Leads, outbound_field_review.rs:88).
-7. commands_out (§16.40) aus ctx.command im Handler-Code (Literal/Konstante, module-Option, Weiterleitung command.type) und aus UI-Code (shared/context-chat.js; payload.module mit Handler-Typ der Ziel-App); commands_in nur aus v4-manifest.json; jede Seite ohne Gegenstück ist ein Befund.
+7. commands_out (§16.40) aus ctx.command im Handler-Code (Literal/Konstante, module-Option, Weiterleitung command.type) und aus UI-Code (shared/context-chat.js; payload.module mit Handler-Typ der Ziel-App); commands_in aus v4-manifest.json plus je konkretem Absender aus der UI-Nutzung (E39/E40, nie '*'); jede Seite ohne Gegenstück ist ein Befund.
+7a. UI-Befehle (E39/E40): Typ-Position von api.command bzw. app-lokaler Hüllfunktionen (transitiv); eigener Handler → eigene Route, Plattformroute (Inventur exact_control_types/control_prefixes + Registry ctox.app.*, ctox.coding.*) → keine Deklaration, genau eine fremde Handler-App → commands_out/commands_in, sonst rot (commands_unrouted/commands_out_ambiguous) außer PLATFORM_ROUTES_PENDING.
 8. Trigger aus `export const triggers` im Handler oder v4-manifest.json; on-Trigger nur auf eigene oder foreign-watch-Collections. net.ingest-Zustelltypen bekommen command_rights {roles: []} (nur Core-Zustellung).

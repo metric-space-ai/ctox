@@ -15926,7 +15926,8 @@ pub(super) fn handle_workspace_control_command(
                     ))
                 },
                 |_session| {
-                    let outcome = crate::coding_agents::pi_sidecar::coding_model_capabilities(root);
+                    let outcome =
+                        crate::coding_agents::pi_sidecar::coding_model_capabilities(root)?;
                     write_rxdb_control_command_outcome(
                         root,
                         &command,

@@ -1,10 +1,14 @@
 use super::base_release::{self, MigrationEvaluator, ReleasePlan};
+#[path = "tests/cutover.rs"]
+mod cutover;
 #[path = "tests/files.rs"]
 mod files;
 use super::*;
 use crate::{registry::Registry, schema, types::DbId, writer::WriterOptions};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
+#[path = "tests/jour_fixe.rs"]
+mod jour_fixe;
 #[path = "tests/legacy.rs"]
 mod legacy;
 #[path = "tests/profile.rs"]

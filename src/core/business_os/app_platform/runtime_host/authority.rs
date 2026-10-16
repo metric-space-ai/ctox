@@ -353,8 +353,14 @@ impl CoreAuthority for RuntimeAuthority {
         let b = binding.clone();
         let expected = manifest.clone();
         self.query("authority.admit", move |db| {
-            let a = codec.check(db, &b)?;
-            let current = if b["command"]["runtime_completion"] == true {
+            let (a, checked_manifest, snapshot) = codec.checked_snapshot(db, &b)?;
+            // Preserve native-platform admission semantics; ordinary app releases
+            // were already verified by checked_snapshot in this exact WAL view.
+            let native =
+                super::super::commands::handles(text(&b["command"], "type").map_err(sql_error)?);
+            let current = if !native {
+                checked_manifest
+            } else if b["command"]["runtime_completion"] == true {
                 codec.version(
                     db,
                     text(&b["command"], "app_id").map_err(sql_error)?,
@@ -367,7 +373,7 @@ impl CoreAuthority for RuntimeAuthority {
             if current != expected {
                 return Err(invalid("revoked: manifest changed"));
             }
-            origin::delivery_permit(db, &b["command"], &a)?;
+            origin::delivery_permit_with_rights(db, &b["command"], &a, &snapshot)?;
             Ok(())
         })
     }
@@ -582,7 +588,13 @@ impl RuntimeAuthority {
             let author=if let Some(cb)=&expected_callback {text(&cb["actor"],"id").map_err(sql_error)?}else{text(&m,"author").map_err(sql_error)?};
             let a=actor(tx,author)?;
             let kind=expected_callback.as_ref().and_then(|c|c["type"].as_str()).unwrap_or("$runtime.trigger");
-            permit(tx,&app,&a,kind)?;
+            // Only this in-process event owner may admit core-only rules. The
+            // canonical command gets a private receipt below before delivery;
+            // serialized client origin/runtime_event fields confer no authority.
+            let snapshot=rights(tx)?;
+            if !origin::core_only(&snapshot,&app,kind)? {
+                permit_with_rights(tx,&snapshot,&app,&a,kind)?;
+            }
             let payload=if event["kind"]=="trigger"{event["event"].clone()}else{event.clone()};
             let doc=json!({"id":command_id,"app_id":app,"type":kind,"actor_id":a.id,"status":"queued","payload":payload,"client_context":{"trigger_id":event["trigger_id"]},"created_at":chrono::Utc::now().to_rfc3339(),"runtime_event":true,"runtime_completion":expected_callback.is_some(),"native_version":version});
             if document(tx,"business_commands",&command_id)?.is_some(){return Err(invalid("conflict: native event already admitted; reconcile"));}

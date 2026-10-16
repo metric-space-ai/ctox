@@ -77,25 +77,27 @@ pub(super) fn configure(root: &Path, input: &str) -> Result<()> {
 fn load(root: &Path) -> Result<Option<Configuration>> {
     // Distinguish unavailable storage from disabled configuration. No creation,
     // cache or runtime/environment merge can make this decision permissive.
-    let conn = rusqlite::Connection::open_with_flags(
-        crate::inference::runtime_env::runtime_config_path(root),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )?;
-    let exists: bool = conn.query_row(
+    let value = crate::lcm::with_lcm_read(
+        &crate::inference::runtime_env::runtime_config_path(root),
+        |conn: &rusqlite::Connection| {
+            let exists: bool = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_env_kv')",
         [],
         |row| row.get(0),
     )?;
-    if !exists {
-        return Ok(None);
-    }
-    let value: Option<String> = conn
-        .query_row(
-            "SELECT env_value FROM runtime_env_kv WHERE env_key = ?1",
-            [CONFIG_KEY],
-            |row| row.get(0),
-        )
-        .optional()?;
+            if !exists {
+                return Ok(None::<String>);
+            }
+            let value: Option<String> = conn
+                .query_row(
+                    "SELECT env_value FROM runtime_env_kv WHERE env_key = ?1",
+                    [CONFIG_KEY],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok(value)
+        },
+    )?;
     value
         .map(|value| {
             let config: Configuration = serde_json::from_str(&value)?;

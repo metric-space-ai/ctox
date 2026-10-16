@@ -69,16 +69,12 @@ pub(crate) fn normalize_address(value: &str) -> String {
 }
 
 pub(crate) fn load_accounts(root: &Path) -> Result<Vec<EmailAccountConfig>> {
-    let env_map = runtime_env::effective_operator_env_map(root).unwrap_or_default();
-    let raw = env_map
-        .get(REGISTRY_ENV_KEY)
-        .map(String::as_str)
-        .unwrap_or("");
+    let raw = runtime_env::try_get_runtime_env_value(root, REGISTRY_ENV_KEY)?.unwrap_or_default();
     if raw.trim().is_empty() {
         return Ok(Vec::new());
     }
     let accounts: Vec<EmailAccountConfig> =
-        serde_json::from_str(raw).context("CTO_EMAIL_ACCOUNTS ist kein gültiges JSON-Array")?;
+        serde_json::from_str(&raw).context("CTO_EMAIL_ACCOUNTS ist kein gültiges JSON-Array")?;
     Ok(accounts)
 }
 

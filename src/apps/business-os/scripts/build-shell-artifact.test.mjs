@@ -39,6 +39,9 @@ async function makeFixture() {
     await mkdir(join(sourceRoot, tree), { recursive: true });
     await writeFile(join(sourceRoot, tree, 'runtime.txt'), `${tree}\n`);
   }
+  // E38: v4 im Slot verlangt den Einstieg (v4/index.html + v4/boot.js).
+  await writeFile(join(sourceRoot, 'v4', 'index.html'), '<!doctype html><html><head><title>CTOX</title></head><body></body></html>\n');
+  await writeFile(join(sourceRoot, 'v4', 'boot.js'), 'export {};\n');
   await mkdir(join(sourceRoot, 'ui-contract', 'v1'), { recursive: true });
   await writeFile(join(sourceRoot, 'ui-contract', 'v1', 'workjet-ui-contract.css'), ':root {}\n');
   await writeFile(join(sourceRoot, 'ui-contract', 'v1', 'workjet-ui-contract.json'), '{"schema":"workjet.ui.contract.v1"}\n');
@@ -414,4 +417,18 @@ test('Shell v4 im Slot: jede Datei aus v4/manifests/shell.manifest.json liegt im
   assert.ok(v4.includes('v4/frame/index.js') && v4.includes('v4/shell/workjet/index.js') && v4.includes('v4/sw.js'), 'v4-Shell fehlt im Slot');
   const unwanted = v4.filter((p) => p !== 'v4/tools/manifest/out/ownership.json' && (/^v4\/(frame\/lab|lab|tools|debt|k24|os-primitives)\//.test(p) || /\.md$/i.test(p) || /\.test\.m?js$/.test(p)));
   assert.deepEqual(unwanted, [], 'Labor, Werkzeuge, Doku oder Tests im Slot');
+});
+
+test('E38: Kern-Bootstrap im Slot ohne Tests, Testkit, Fake-Core und Doku; v4-Einstieg Pflicht', async () => {
+  const { isExcludedRuntimePath, V4_ENTRY_FILES, RUNTIME_TREES } = await import('./build-shell-artifact.mjs');
+  assert.ok(RUNTIME_TREES.includes('kernel'));
+  for (const path of ['kernel/boot.mjs', 'kernel/loader.mjs', 'kernel/kernel.mjs', 'kernel/transport-webrtc.mjs', 'kernel/index.d.ts']) {
+    assert.equal(isExcludedRuntimePath(path), false, path);
+  }
+  for (const path of ['kernel/tests/kernel.test.mjs', 'kernel/testkit/app-host.mjs', 'kernel/fake-core.mjs', 'kernel/fake-core-runtime.mjs', 'kernel/README.md']) {
+    assert.equal(isExcludedRuntimePath(path), true, path);
+  }
+  assert.equal(isExcludedRuntimePath('kernel/tests', { directory: true }), true);
+  assert.deepEqual([...V4_ENTRY_FILES], ['v4/index.html', 'v4/boot.js']);
+  for (const path of V4_ENTRY_FILES) assert.equal(isExcludedRuntimePath(path), false, path);
 });

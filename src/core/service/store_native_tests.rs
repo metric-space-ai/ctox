@@ -182,3 +182,6 @@ async fn foreground_retains_real_native_authority_after_sixty_seconds_idle() -> 
     }
     Ok(())
 }
+
+#[path = "store_installed_tests.rs"]
+mod installed;

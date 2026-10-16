@@ -80,6 +80,24 @@ fn e30_native_files_require_exported_row_or_visible_actual_reference() {
     );
     put(
         &tx,
+        "files",
+        json!({"id":"zz-owned-metadata","ref":hash,"size":99,"mime":"text/plain","owner_app":"shell","owner_user":"alice"}),
+    );
+    assert!(
+        admit(&tx, &rules(false, FieldMask::All), &actor, "shell", &hash).is_ok(),
+        "CAS deduplication must not let an earlier foreign file hide the user's own file"
+    );
+    let files = schema::active_collection(&tx, "files").unwrap().unwrap();
+    tx.execute(
+        &format!(
+            "DELETE FROM {} WHERE id='zz-owned-metadata'",
+            identifier(&files.table).unwrap()
+        ),
+        [],
+    )
+    .unwrap();
+    put(
+        &tx,
         "desktop_files",
         json!({"id":"desktop-entry","content_ref":hash,"owner_id":"bob"}),
     );

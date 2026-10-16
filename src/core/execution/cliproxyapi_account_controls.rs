@@ -39,18 +39,19 @@ fn read(conn: &Connection, id: &str) -> anyhow::Result<Option<Effect>> {
         .transpose()
 }
 pub(crate) fn has_effect(root: &Path, id: &str) -> anyhow::Result<bool> {
-    let Some(conn) = open_instance_proxy_config_db_read_only(root)? else {
-        return Ok(false);
-    };
-    let exists: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type=\"table\" AND name=?1)",
-        [TABLE],
-        |r| r.get(0),
-    )?;
-    if !exists {
-        return Ok(false);
-    }
-    Ok(read(&conn, id)?.is_some())
+    let id = id.to_owned();
+    Ok(with_instance_proxy_read(root, move |conn| {
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type=\"table\" AND name=?1)",
+            [TABLE],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            return Ok(false);
+        }
+        Ok(read(conn, &id)?.is_some())
+    })?
+    .unwrap_or(false))
 }
 
 /// NEW admitted command only. CAS and its private proof share Runtime COMMIT.

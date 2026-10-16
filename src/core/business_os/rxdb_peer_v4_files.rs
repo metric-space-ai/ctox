@@ -80,8 +80,14 @@ fn admit(
     let mut meta = None;
     any_record(tx, "files", reference, |doc| {
         if doc["ref"] == reference && doc["size"].as_u64().is_some() {
-            meta = Some(doc.clone());
-            true
+            // CAS deduplicates bytes, not file ownership. Import can retain
+            // several files rows for this hash; a foreign row must not hide a
+            // later row belonging to the verified app and original user.
+            let own_metadata = doc["owner_app"] == app && doc["owner_user"] == actor_id;
+            if meta.is_none() || own_metadata {
+                meta = Some(doc.clone());
+            }
+            own_metadata
         } else {
             false
         }

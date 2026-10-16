@@ -1,51 +1,54 @@
 {
   "collections": {
     "notes": {
-      "additionalProperties": true,
-      "primaryKey": "id",
-      "properties": {
-        "content": {
-          "type": "string"
+      "conflictStrategy": "field-merge",
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "folder": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_favorite": {
+            "type": "boolean"
+          },
+          "is_locked": {
+            "type": "boolean"
+          },
+          "is_trashed": {
+            "type": "boolean"
+          },
+          "lock_passcode": {
+            "type": "string"
+          },
+          "notebook": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
         },
-        "folder": {
-          "type": "string"
-        },
-        "id": {
-          "maxLength": 180,
-          "type": "string"
-        },
-        "is_favorite": {
-          "type": "boolean"
-        },
-        "is_locked": {
-          "type": "boolean"
-        },
-        "is_trashed": {
-          "type": "boolean"
-        },
-        "lock_passcode": {
-          "type": "string"
-        },
-        "notebook": {
-          "type": "string"
-        },
-        "tags": {
-          "type": "string"
-        },
-        "title": {
-          "type": "string"
-        },
-        "updated_at_ms": {
-          "type": "number"
-        }
-      },
-      "required": [
-        "id",
-        "title",
-        "updated_at_ms"
-      ],
-      "type": "object",
-      "version": 1
+        "required": [
+          "id",
+          "title",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 1
+      }
     }
   },
   "migration_strategies": {

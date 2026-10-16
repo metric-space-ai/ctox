@@ -2,8 +2,8 @@
 """E13: disable each real E25 route, run the real Kernel/P9 contract, restore.
 Run ONLY through the canonical lane. No remote/profile credentials are read.
 """
-import argparse, hashlib, json, os, pathlib, re, subprocess, time, signal, datetime
-p=argparse.ArgumentParser();p.add_argument('--out',type=pathlib.Path,required=True);p.add_argument('--only',action='append');p.add_argument('--routes-only',action='store_true');p.add_argument('--per-method',action='store_true');p.add_argument('--deadline');a=p.parse_args()
+import argparse, hashlib, json, os, pathlib, re, subprocess, time, signal, datetime, shutil
+p=argparse.ArgumentParser();p.add_argument('--out',type=pathlib.Path,required=True);p.add_argument('--only',action='append');p.add_argument('--routes-only',action='store_true');p.add_argument('--per-method',action='store_true');p.add_argument('--deadline');p.add_argument('--cache-baseline',action='store_true');a=p.parse_args()
 deadline=datetime.datetime.fromisoformat(a.deadline.replace('Z','+00:00')).timestamp() if a.deadline else float('inf')
 def interrupted(_signal,_frame): raise SystemExit(130)
 signal.signal(signal.SIGTERM,interrupted)
@@ -33,7 +33,26 @@ def run(name, selected=command, method=None):
     return code,(a.out/(name+'.log')).read_text()
 receipt={'pass':False,'selected_methods':a.only,'per_method':a.per_method,'routes_only':a.routes_only,'source_sha256':digest,'command':command,'profile':'component, fixture DTOs; not M7/product acceptance','methods':[]}
 try:
-    baseline,text=run('baseline',method=items[0]['method'] if a.only or a.per_method else None);assert baseline==0, text[-4000:]
+    baseline_command=command
+    if a.cache_baseline:
+        # Keep the immutable, source-marked executable, not mutable Cargo output.
+        # Every mutant still rebuilds the actual production route and must fail.
+        code,build=run('compile-baseline',['cargo','test','--locked','-p','ctox-store','--no-run','--message-format=json'])
+        assert code==0,build[-4000:]
+        artifacts=[]
+        for line in build.splitlines():
+            try: artifact=json.loads(line)
+            except ValueError: continue
+            if artifact.get('reason')=='compiler-artifact' and artifact.get('target',{}).get('name')=='ctox_store' and artifact.get('profile',{}).get('test') and artifact.get('executable'):
+                artifacts.append(artifact['executable'])
+        assert len(set(artifacts))==1,artifacts
+        binary=a.out.resolve()/'immutable-baseline'
+        shutil.copy2(artifacts[0],binary)
+        code,marker=run('baseline-source-marker',[str(binary),'e25_all_routes_complete_without_changing_method_payload_or_command_id','--nocapture'])
+        assert code==0 and 'E25_REGISTRY_SOURCE_SHA256 '+digest in marker,marker[-4000:]
+        receipt['immutable_baseline']={'sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'registry_sha256':digest,'marker_log':'baseline-source-marker.log'}
+        baseline_command=[str(binary),'e25_kernel_command_to_native_completion','--nocapture']
+    baseline,text=run('baseline',baseline_command,method=items[0]['method'] if a.only or a.per_method else None);assert baseline==0, text[-4000:]
     assert 'E25_KERNEL_COMPONENT' in text,'missing actual component execution'
     marker='E25_KERNEL_COMPONENT ';baseline_profile=json.loads(text[text.rindex(marker)+len(marker):].splitlines()[0])
     assert baseline_profile['pass'] and baseline_profile['completion_lanes']==[1]
@@ -45,7 +64,7 @@ try:
         # immutable source bytes. Reuse that measured baseline, not another
         # compile of the same restored source before every single route mutant.
         if a.only or a.per_method:
-            baseline,text=run('baseline_'+method.replace('.','_'),method=method);assert baseline==0,text[-4000:]
+            baseline,text=run('baseline_'+method.replace('.','_'),baseline_command,method=method);assert baseline==0,text[-4000:]
             marker='E25_KERNEL_COMPONENT ';baseline_profile=json.loads(text[text.rindex(marker)+len(marker):].splitlines()[0])
         assert any(m['method']==method and m['pass'] for m in baseline_profile['methods']),method
         candidate,n=re.subn(pattern,'',original.decode());assert n==1,(method,n)
@@ -76,7 +95,7 @@ try:
         ('unknown-before-write',root/'src/core/store/write_contract.rs',b'routes::owns_type(kind)',b'false','e25_workjet_inventory_is_registered_before_write','store'),
         ('session-peer-binding',root/'src/core/rxdb/src/plugins/replication_webrtc/v4_native_sessions.rs',b'if parent.peer != *peer',b'if false','e25_speech_session_controls_and_native_events_keep_one_opening_identity','rxdb'),
         ('child-measurement-required',root/'src/core/store/command_routes_e2e.mjs',b"await new Promise((resolve,reject)=>process.stdout.write(JSON.stringify({type:'measured'",b"process.exit(0);await new Promise((resolve,reject)=>process.stdout.write(JSON.stringify({type:'measured'",'e25_kernel_command_to_native_completion','store'),
-        ('cas-chunk-hash',root/'src/core/rxdb/src/plugins/replication_webrtc/v4_session.rs',b'Sha256::digest(&data)',b'Sha256::digest(b"wrong chunk")','e25_native_cold_range_sends_complete_hashed_chunks_and_fences_revocation','rxdb'),
+        ('cas-chunk-hash',root/'src/core/rxdb/src/plugins/replication_webrtc/v4_transfer.rs',b'Sha256::digest(&data)',b'Sha256::digest(b"wrong chunk")','e25_native_cold_range_sends_complete_hashed_chunks_and_fences_revocation','rxdb'),
     ]
     guards += [
         ('canonical-actor',source,b'doc["actor_id"] == command.actor_id',b'true','e25_session_terminal_replay_is_derived_from_the_same_canonical_snapshot','store'),
