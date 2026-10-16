@@ -156,6 +156,17 @@ fn decode(token: &str) -> scope::Result<SignedGrant> {
     Ok(grant)
 }
 
+/// Shell owns the user's preference mirror across app contexts (E51). App
+/// grants keep their app+user filter; writes always use authorize_app_write.
+fn app_read_scope(rights:&RightsSnapshot,app:&str,role:&str,user:&str,collection:&str)->scope::Result<scope::ResolvedScope> {
+    let mut resolved=rights.resolve_app_collection(app,role,user,collection)?;
+    if app=="shell" && collection==ctox_store::preferences::COLLECTION {
+        for projection in &mut resolved.projections {
+            projection.row_filter=scope::RowFilter::Eq{path:"/user_id".into(),value:scope::FilterValue::Literal{value:Value::String(user.into())}};
+        }
+    }
+    Ok(resolved)
+}
 /// Resolves ONLY manifest-declared, user-readable collections in this writer
 /// snapshot. The field mask and resolved row filters feed the P6 scope hash.
 fn resolve(
@@ -185,7 +196,7 @@ fn resolve(
         .chain((include_preferences && !rights.rules.iter().any(|r| r.role == state.role && r.collection == ctox_store::preferences::COLLECTION)).then_some(&preference))
     {
         let scope =
-            match rights.resolve_app_collection(app, &state.role, &state.user, &rule.collection) {
+            match app_read_scope(rights, app, &state.role, &state.user, &rule.collection) {
                 Ok(scope) => scope,
                 Err(_) => continue,
             };
@@ -369,7 +380,7 @@ impl AppGrantSession {
     pub fn scope_in_transaction(&self, tx: &Transaction<'_>, token: &str, collection: &str, now: u64) -> scope::Result<scope::ResolvedScope> {
         self.with_verified_in_transaction(tx, token, now, |claims, rights, state| {
             let base = logical_collection(claims, collection, "read")?;
-            let resolved = rights.resolve_app_collection(&claims.app_id, &state.role, &state.user, &base)?;
+            let resolved = app_read_scope(rights, &claims.app_id, &state.role, &state.user, &base)?;
             let mut projection = resolved.projection(&base).cloned().ok_or("forbidden")?;
             projection.collection = collection.into();
             scope::ResolvedScope::new(rights.rights_ver, vec![projection], &state.user)
@@ -398,13 +409,12 @@ impl AppGrantSession {
     ) -> scope::Result<T> {
         self.with_verified_in_transaction(tx, token, now, |claims, rights, state| {
             let base = logical_collection(claims, collection, "read")?;
-            let projected = rights.authorize_app_read(
-                &claims.app_id,
-                &state.role,
-                &state.user,
-                &base,
-                document,
-            )?;
+            let projected = if claims.app_id=="shell" && base==ctox_store::preferences::COLLECTION {
+                let app=document["app_id"].as_str().ok_or("forbidden")?;
+                let context=ctox_store::preferences::Context::authenticated(app,&state.user,rights.rights_ver)?;
+                if !context.owns(document) {return Err("forbidden".into());}
+                document.clone()
+            } else { rights.authorize_app_read(&claims.app_id,&state.role,&state.user,&base,document)? };
             deliver(projected)
         })
     }

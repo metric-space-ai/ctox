@@ -26,6 +26,11 @@ pub trait ReadAuthority: Send + Sync {
     fn preference_context(&self, _participant: &str) -> Option<crate::preferences::Context> {
         None
     }
+    /// App/user preferences remain private. A verified Shell mirror may read
+    /// multiple app contexts for the SAME authenticated user.
+    fn owns_preference(&self,context:&crate::preferences::Context,id:&str,body:Option<&Value>)->bool {
+        context.owns_id(id) && body.is_none_or(|doc|context.owns(doc))
+    }
     /// Default E51 callers use a single preference scope. E55 adapters override
     /// this only after verifying their aggregate app grant in this snapshot.
     fn authorize_preference_scope(&self, _tx: &Transaction<'_>, key: &SubscriptionKey, context: &crate::preferences::Context) -> rusqlite::Result<()> {
@@ -220,13 +225,13 @@ impl Subscription {
                 let docs = page
                     .docs
                     .iter()
-                    .filter(|doc| prefs.as_ref().is_none_or(|ctx| ctx.owns_id(&doc.id)))
+                    .filter(|doc| prefs.as_ref().is_none_or(|ctx| authority.owns_preference(ctx,&doc.id,None)))
                     .map(|doc| {
                         let body = if doc.op == Operation::Delete {
                             None
                         } else {
                             if prefs.as_ref().is_some_and(|ctx| {
-                                !doc.body.as_ref().is_some_and(|body| ctx.owns(body))
+                                !authority.owns_preference(ctx,&doc.id,doc.body.as_ref())
                             }) {
                                 None
                             } else {

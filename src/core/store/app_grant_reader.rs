@@ -9,6 +9,8 @@ pub struct AppGrantReader {
     session:Arc<AppGrantSession>,key:SubscriptionKey,token:String,
     preferences:Option<ctox_store::preferences::Context>,
     clock:fn()->u64,
+    shell_preferences:bool,
+    rights_ver:u64,
 }
 impl AppGrantReader {
     /// Clock is the host's seconds clock; no caller-supplied identity or policy.
@@ -19,7 +21,9 @@ impl AppGrantReader {
         let preferences=if key.collection==ctox_store::preferences::COLLECTION {
             Some(ctox_store::preferences::Context::authenticated(&claims.app_id,&claims.user_id,claims.rights_ver.parse().map_err(|_|"invalid rights version")?).map_err(str::to_owned)?)
         } else {None};
-        Ok(Self{session,key,token,preferences,clock})
+        let shell_preferences=claims.app_id=="shell" && key.collection==ctox_store::preferences::COLLECTION;
+        let rights_ver=claims.rights_ver.parse().map_err(|_|"invalid rights version")?;
+        Ok(Self{session,key,token,preferences,clock,shell_preferences,rights_ver})
     }
     fn scope(&self,tx:&Transaction<'_>,key:&SubscriptionKey)->rusqlite::Result<scope::ResolvedScope> {
         if key!=&self.key {return Err(invalid("subscription binding"));}
@@ -27,6 +31,12 @@ impl AppGrantReader {
     }
 }
 impl ReadAuthority for AppGrantReader {
+    fn owns_preference(&self,context:&ctox_store::preferences::Context,id:&str,body:Option<&Value>)->bool {
+        if !self.shell_preferences {return context.owns_id(id) && body.is_none_or(|doc|context.owns(doc));}
+        let app=id.split('/').next().unwrap_or("");
+        ctox_store::preferences::Context::authenticated(app,&self.key.participant,self.rights_ver)
+            .is_ok_and(|ctx|ctx.owns_id(id) && body.is_none_or(|doc|ctx.owns(doc)))
+    }
     fn preference_context(&self,participant:&str)->Option<ctox_store::preferences::Context> {
         (participant==self.key.participant).then(||self.preferences.clone()).flatten()
     }

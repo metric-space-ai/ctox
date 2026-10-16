@@ -519,8 +519,8 @@ async fn p6_shell_boot_preference_cursor_uses_real_p8_and_e55_reader() {
     let reader=Arc::new(reader::AppGrantReader::new(f.session.clone(),key.clone(),||1001).unwrap());
     let mut cursor=Subscription::new(f.store.readers(),&f.store.writer(),key,None).unwrap();
     let page=cursor.next_page(100,reader,&*f.key,||1_001_000).await.expect("shell boot preferences cursor rejected aggregate grant");
-    assert_eq!(page.docs.len(),1,"foreign preference row reached real P8 cursor");
-    assert_eq!(page.docs[0].id,"shell/alice/layout");
+    let mut ids=page.docs.iter().map(|d|d.id.as_str()).collect::<Vec<_>>();ids.sort();
+    assert_eq!(ids,vec!["b/alice/layout","shell/alice/layout"],"Shell lost own-app preferences or leaked foreign user");
     assert!(!page.sig.is_empty(),"P8 cursor must use held E22 signer");
     f.close().await;
 }
