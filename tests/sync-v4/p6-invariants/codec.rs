@@ -72,7 +72,7 @@ fn p6_blob_bytes_require_digest_size_and_private_cas() {
     for reference in ["../../outside", "/etc/passwd", "aaaaaaaa/../../outside", &"G".repeat(64)] {
         assert!(f.codec.bytes(reference,1).is_err(),"non-content-addressed reference accepted");
     }
-    assert!(f.codec.bytes(&hash,bytes.len() as u64+1).is_err());
+    assert!(f.codec.bytes(&hash,bytes.len() as u64+1).is_err(),"CAS accepted inconsistent object size");
     assert!(f.codec.bytes(&"b".repeat(64),bytes.len() as u64).is_err());
     assert!(f.codec.bytes(&hash,64*1024*1024+1).is_err());
     let object=f._root.path().join("objects").join(&hash);

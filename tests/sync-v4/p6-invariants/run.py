@@ -23,10 +23,22 @@ resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 ENV = dict(os.environ, RUST_TEST_THREADS='2', TOKIO_WORKER_THREADS='2', CARGO_BUILD_JOBS='2')
 RECORDS = []
 ORIGINALS = {}
+MUTATIONS = []
 ACTIVE = None
+PROCESS_LOCK=ROOT/'src/core/app_runtime/Cargo.lock'
+PROCESS_LOCK_BEFORE=PROCESS_LOCK.read_bytes() if PROCESS_LOCK.exists() else None
 
 def save():
     (OUT / 'results.json').write_text(json.dumps(RECORDS, indent=2) + '\n')
+
+def change(path, before, after, label):
+    file=ROOT/path
+    content=file.read_text()
+    assert content.count(before)==1, (label,'mutation anchor ambiguous')
+    ORIGINALS.setdefault(file,content.encode())
+    MUTATIONS.append(dict(label=label,path=path,line=content[:content.index(before)].count('\n')+1,before=before,after=after))
+    (OUT/'mutation-binding.json').write_text(json.dumps(MUTATIONS,indent=2)+'\n')
+    file.write_text(content.replace(before,after))
 
 def run(name, args, timeout=1200, expected=0):
     global ACTIVE
@@ -51,9 +63,21 @@ def run(name, args, timeout=1200, expected=0):
     red_markers={
         'p6_noncanonical_input_cannot_reach_instance_signing':'raw noncanonical bytes reached the instance signing primitive',
         'p6_core_only_handler_has_native_origin_and_rejects_ui':'native core-origin event denied by E23.1 core-only rights',
+        'mutation-policy-red':'writer used policy from before the transaction',
+        'mutation-signature-red':'invalidly signed manifest authorized an applied document',
+        'mutation-heap-red':'320 MiB old-space allocation succeeded beyond the configured 256 MiB heap limit',
+        'mutation-identity-red':'identity arbitration returned an uncommitted key',
+        'mutation-key-errors-red':'key input leaked through signing import error',
+        'mutation-manifest-red':"app A read app B's declared collection",
+        'mutation-cas-red':'CAS accepted inconsistent object size',
+        'mutation-corrupt-store-red':'corrupt encrypted identity must not regenerate or use fallback',
 
     }
     if expected==101 and name in red_markers and red_markers[name] not in output:
+        code=125
+    if name=='p6_core_only_handler_has_native_origin_and_rejects_ui' and code==101 and 'forbidden' not in output:
+        code=125
+    if name=='mutation-document-signature-red' and ("ERR_ASSERTION" not in output or 'Missing expected rejection' not in output):
         code=125
     record = dict(name=name, command=args, exit=code, expected=expected, elapsed_s=round(time.monotonic()-start,3))
     RECORDS.append(record)
@@ -103,6 +127,7 @@ source_paths = [
     'src/core/sync/src/authority/auth.rs', 'src/core/business_os/app_platform/runtime_host/codec.rs',
     'src/core/business_os/app_platform/runtime_host/authority.rs', 'src/core/app_runtime/lib.rs',
     'src/apps/business-os/kernel/transport-webrtc.mjs', 'src/apps/business-os/kernel/kernel.mjs',
+    'src/core/store/manifest_rules.rs', 'src/core/store/cas/mod.rs',
     *[str(p.relative_to(ROOT)) for p in HERE.glob('*') if p.is_file()],
 ]
 (OUT/'source-binding.json').write_text(json.dumps({
@@ -127,7 +152,7 @@ try:
         old=b"if(!await this.options.verifyPackage(message,this.session))throw new CtoxError('forbidden','Page signature invalid');"
         assert baseline.count(old)==1
         try:
-            transport.write_bytes(baseline.replace(old,b"if(false)throw new CtoxError('forbidden','Page signature invalid');"))
+            change('src/apps/business-os/kernel/transport-webrtc.mjs',old.decode(),"if(false)throw new CtoxError('forbidden','Page signature invalid');",'document-signature')
             run('mutation-document-signature-red',js,60,1)
         finally:
             transport.write_bytes(baseline)
@@ -136,6 +161,11 @@ try:
     inject('src/core/business_os/app_platform/runtime_host/runtime_tests.rs','codec.rs')
     inject('src/core/business_os/app_platform/runtime_host/native_proof.rs','origin.rs')
     inject('src/core/app_runtime/lib.rs','resources.rs',inside_tests=True)
+    # The standalone workspace lock is stale on this snapshot. Resolve entirely
+    # offline from the lane cache and preserve that test-only lock as evidence.
+    if run('process-lock',['cargo','generate-lockfile','--offline','--manifest-path','src/core/app_runtime/Cargo.toml'],120):
+        raise RuntimeError('standalone process lock unverified')
+    (OUT/'process-Cargo.lock').write_bytes(PROCESS_LOCK.read_bytes())
     appcargo=['cargo','test','--locked','--jobs','2','--manifest-path','src/core/app_runtime/Cargo.toml','--lib','--no-run','--message-format=json']
     if run('process-build',appcargo):
         raise RuntimeError('process test build unverified')
@@ -167,7 +197,7 @@ try:
         process_baseline=process.read_text()
         old='--max-old-space-size=256'
         assert process_baseline.count(old)==1
-        process.write_text(process_baseline.replace(old,'--max-old-space-size=512'))
+        change('src/core/app_runtime/lib.rs',old,'--max-old-space-size=512','heap-budget')
         try:
             if run('mutation-heap-build',appcargo)==0:
                 mutated=binary_from_log('mutation-heap-build','ctox_app_runtime')
@@ -177,34 +207,55 @@ try:
         if run('restored-heap-build',appcargo)==0:
             restored=binary_from_log('restored-heap-build','ctox_app_runtime')
             run('restored-heap',[restored,'p6_process_old_space_heap_limit_is_enforced','--nocapture','--test-threads=1'],60)
-        codec=ROOT/'src/core/business_os/app_platform/runtime_host/codec.rs'
-        baseline=codec.read_text()
-        old='if binding["fence"]["rights_ver"].as_u64() != Some(r.rights_ver) {'
-        assert baseline.count(old)==1
-        codec.write_text(baseline.replace(old,'if false && binding["fence"]["rights_ver"].as_u64() != Some(r.rights_ver) {'))
+        codec='src/core/business_os/app_platform/runtime_host/codec.rs'
+        secrets='src/core/secrets.rs'
+        auth='src/core/sync/src/authority/auth.rs'
+        manifest='src/core/store/manifest_rules.rs'
+        cas='src/core/store/cas/mod.rs'
+        baseline={path:(ROOT/path).read_bytes() for path in [codec,secrets,auth,manifest,cas]}
+        stored='return Ok(std::sync::Arc::new(\n                    crate::sync_host::signing_identity_from_record(encoded.as_bytes())?,\n                ));'
+        regenerate='ctox_sync::authority::auth::SigningIdentity::from_pkcs8(&ctox_sync::authority::auth::SigningIdentity::generate_pkcs8()?)?'
+        mutated_targets=[
+            ('mutation-policy-red','p6_revocation_in_writer_transaction_prevents_effect'),
+            ('mutation-signature-red','p6_invalid_release_signature_never_admits_document_effect'),
+            ('mutation-identity-red','p6_identity_concurrent_creators_restart_and_corrupt_store'),
+            ('mutation-key-errors-red','p6_signing_errors_do_not_echo_input_key_material'),
+            ('mutation-manifest-red','p6_manifest_isolates_foreign_collection_read_and_write'),
+            ('mutation-cas-red','p6_blob_bytes_require_digest_size_and_private_cas'),
+        ]
         try:
-            if run('mutation-policy-build',cargo)==0:
-                mutated=binary_from_log('mutation-policy-build','ctox')
-                run('mutation-policy-red',[mutated,'p6_revocation_in_writer_transaction_prevents_effect','--nocapture','--test-threads=1'],30,101)
+            change(codec,'if binding["fence"]["rights_ver"].as_u64() != Some(r.rights_ver) {','if false && binding["fence"]["rights_ver"].as_u64() != Some(r.rights_ver) {','writer-policy')
+            change(codec,'|| record["signature"]\n                != super::super::commands::sign_manifest(self.signer.as_ref(), &bytes)?','|| false','release-signature')
+            change(secrets,stored,'return Ok(std::sync::Arc::new('+regenerate+'));','persisted-identity')
+            change(auth,'map_err(|_| invalid("invalid authority signing key"))?','map_err(|_| invalid(&format!("invalid authority signing key: {}",String::from_utf8_lossy(bytes))))?','redacted-key-errors')
+            change(manifest,'if self.owns(collection) {','if true || self.owns(collection) {','manifest-collection-boundary')
+            change(cas,'fn verify(path: &Path, reference: &str, size: u64) -> Result<(), StoreError> {','fn verify(path: &Path, reference: &str, size: u64) -> Result<(), StoreError> {\n    return Ok(());','cas-verification')
+            if run('mutation-contracts-build',cargo)==0:
+                mutated=binary_from_log('mutation-contracts-build','ctox')
+                for label,test in mutated_targets:
+                    run(label,[mutated,test,'--nocapture','--test-threads=1'],120,101)
         finally:
-            codec.write_text(baseline)
-        old='|| record["signature"]\n                != super::super::commands::sign_manifest(self.signer.as_ref(), &bytes)?'
-        assert baseline.count(old)==1
-        codec.write_text(baseline.replace(old,'|| false'))
+            for path,content in baseline.items(): (ROOT/path).write_bytes(content)
         try:
-            if run('mutation-signature-build',cargo)==0:
-                mutated=binary_from_log('mutation-signature-build','ctox')
-                run('mutation-signature-red',[mutated,'p6_invalid_release_signature_never_admits_document_effect','--nocapture','--test-threads=1'],30,101)
+            fallback='crate::sync_host::signing_identity_from_record(encoded.as_bytes()).or_else(|_| -> anyhow::Result<_> { Ok('+regenerate+') })?'
+            change(secrets,stored,'return Ok(std::sync::Arc::new('+fallback+'));','corrupt-store-no-fallback')
+            if run('mutation-corrupt-store-build',cargo)==0:
+                mutated=binary_from_log('mutation-corrupt-store-build','ctox')
+                run('mutation-corrupt-store-red',[mutated,'p6_identity_concurrent_creators_restart_and_corrupt_store','--nocapture','--test-threads=1'],120,101)
         finally:
-            codec.write_text(baseline)
+            (ROOT/secrets).write_bytes(baseline[secrets])
         if run('restored-build',cargo)==0:
             restored=binary_from_log('restored-build','ctox')
-            for test in ['p6_revocation_in_writer_transaction_prevents_effect','p6_invalid_release_signature_never_admits_document_effect']:
-                run('restored-'+test,[restored,test,'--nocapture','--test-threads=1'],30)
+            for test in dict.fromkeys(test for label,test in mutated_targets):
+                run('restored-'+test,[restored,test,'--nocapture','--test-threads=1'],120)
     # A red target is preserved as red, even when it is the expected review result.
     bad=[r for r in RECORDS if r['exit']!=r['expected']]
     raise SystemExit(1 if bad else 0)
 finally:
     for path, original in ORIGINALS.items():
         path.write_bytes(original)
+    if PROCESS_LOCK_BEFORE is None:
+        PROCESS_LOCK.unlink(missing_ok=True)
+    else:
+        PROCESS_LOCK.write_bytes(PROCESS_LOCK_BEFORE)
     (OUT/'restoration.json').write_text(json.dumps({str(p.relative_to(ROOT)):p.read_bytes()==data for p,data in ORIGINALS.items()},indent=2)+'\n')

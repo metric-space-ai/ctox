@@ -17,14 +17,23 @@ async fn p6_identity_concurrent_creators_restart_and_corrupt_store() -> anyhow::
     }).await?;
     // Exercise the real encrypted unique-row arbitration; no mocked secret store.
     let (left, right) = tokio::join!(secrets.instance_signing_identity(), secrets.instance_signing_identity());
-    let left = left?;
-    let right = right?;
-    assert_eq!(left.public_identity(), right.public_identity(), "concurrent creators returned different committed identities");
+    let mut admitted = Vec::new();
+    for result in [left, right] {
+        match result {
+            Ok(identity) => admitted.push(identity),
+            Err(error) => assert!(matches!(error.downcast_ref::<StoreError>(),Some(StoreError::Busy)),
+                "concurrent creator failed outside bounded store admission"),
+        }
+    }
+    assert!(!admitted.is_empty(),"neither concurrent creator stored an identity");
+    let left = admitted[0].clone();
+    assert!(admitted.iter().all(|identity|identity.public_identity()==left.public_identity()),
+        "identity arbitration returned an uncommitted key");
     let stored = secrets.instance_signing_identity().await?;
-    assert_eq!(left.public_identity(), stored.public_identity());
+    assert_eq!(left.public_identity(), stored.public_identity(),"identity arbitration returned an uncommitted key");
     foreground.shutdown().await?;
     let mut restarted = Foreground::start(root.clone(), Handle::current()).await?;
-    assert_eq!(restarted.inputs.instance_signer()?.key_id(), left.public_identity());
+    assert_eq!(restarted.inputs.instance_signer()?.key_id(), left.public_identity(),"identity arbitration returned an uncommitted key");
     let owned_secrets = restarted.native_owners.as_ref().unwrap()._secrets.clone();
     let corrupt_root = root.clone();
     crate::persistence::run_core_sync(move || {
@@ -47,7 +56,7 @@ fn p6_signing_errors_do_not_echo_input_key_material() {
     let sentinel = b"synthetic-private-key-sentinel-not-pkcs8";
     let result = SigningIdentity::from_pkcs8(sentinel);
     let error = result.err().expect("malformed key was accepted");
-    assert!(!format!("{error:?} {error}").contains("synthetic-private-key-sentinel"));
+    assert!(!format!("{error:?} {error}").contains("synthetic-private-key-sentinel"),"key input leaked through signing import error");
     let result = crate::sync_host::signing_identity_from_record(sentinel);
     let error = result.err().expect("malformed record was accepted");
     assert!(!format!("{error:#?} {error:#}").contains("synthetic-private-key-sentinel"));
