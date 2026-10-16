@@ -648,7 +648,6 @@ export interface StubKernel {
 }
 
 export declare const APP_API_VERSION: '4.0';
-export declare function createStubKernel(opts?: StubKernelOptions): StubKernel;
 export declare function compileQuery(q: Query): unknown;
 export declare function runCompiledQuery<T>(docs: T[], compiled: unknown): T[];
 export declare function uuidv7(): string;

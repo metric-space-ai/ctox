@@ -1,7 +1,7 @@
 // Test-only migration bridge preserving K-1 specialized outcome assertions.
 // The product kernel has no mount API or module registry (§16.19).
 export * from '../kernel.mjs';
-import {createStubKernel as real} from '../kernel.mjs';
+import {createStubKernel as real} from '../testkit.mjs';
 import {createAppHost} from '../testkit/app-host.mjs';
 export function createStubKernel(options={}){
  const kernel=real(options),host=createAppHost(kernel,{mountTimeoutMs:options.remountTimeoutMs??9000});

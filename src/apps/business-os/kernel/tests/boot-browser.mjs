@@ -26,6 +26,7 @@ function launchContext(){
 }
 const server=createServer(async(req,res)=>{
  const path=decodeURIComponent(new URL(req.url,'http://local').pathname);requests.push(path);
+ if(/(?:^|\/)(?:fake-core[^/]*|testkit)\.mjs$/.test(path)){res.statusCode=404;res.end('Excluded from production slot');return;}
  try{
   if(path==='/api/business-os/launch-context'){
    if(req.headers.cookie!=='ctox_session=fixture'){res.statusCode=401;res.end('{}');return;}
@@ -106,6 +107,7 @@ try{
   return out;
  },{signingJwk,collections:COLLECTIONS});
  const expect=(cond,label)=>{if(!cond){failed=true;console.error('FAIL',label);}};
+ expect(!requests.some(path=>/(?:^|\/)(?:fake-core[^/]*|testkit)\.mjs$/.test(path)),'E52 boot never requests unserved fake-core or testkit modules');
  expect(result.online==='online','link online');expect(result.leader===true,'leader');expect(result.storage==='indexeddb','IndexedDB');
  expect(result.serviceWorker&&new URL(result.serviceWorker).pathname==='/sw.js'&&new URL(result.serviceWorker).searchParams.get('db')==='ctox-boot-browser-alice'&&new URL(result.swScope).pathname==='/','same-origin /sw.js?db=<kernel IDB> scope /');
  expect(result.helloOffer==='browser-device','native received the launch-context hello');expect(result.scopes===7,'seven verified scope tokens');

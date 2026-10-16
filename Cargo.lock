@@ -3457,6 +3457,7 @@ dependencies = [
  "async-trait",
  "ctox-protocol",
  "ctox-rxdb",
+ "ctox-store",
  "fs2",
  "futures-util",
  "libc",

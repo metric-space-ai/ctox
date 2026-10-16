@@ -1,12 +1,5 @@
 {
-  "_capability_evidence": {
-    "audit.event": [
-      "handlers/_ats.js"
-    ],
-    "config.get": [
-      "handlers/_ats.js"
-    ]
-  },
+  "_capability_evidence": {},
   "_declaration": "modules/intake/v4-manifest.json",
   "_format": "ctox-shell-v4-app-manifest-draft-1",
   "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
@@ -16,6 +9,7 @@
   "_source_dir": "src/apps/business-os/modules/intake",
   "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
   "_todo": [
+    "command_rights ats.*: kein passender Handler.",
     "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
     "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
     "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
@@ -23,10 +17,7 @@
   "app_id": "intake",
   "app_ver": null,
   "author": null,
-  "capabilities_required": [
-    "audit.event",
-    "config.get"
-  ],
+  "capabilities_required": [],
   "collections": {
     "applications": {
       "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
@@ -89,16 +80,7 @@
       }
     }
   },
-  "command_rights": {
-    "ats.*": {
-      "_basis": "v4-manifest.json; modules/intake/V4-HANDLERS.md Abweichung 2 (Rollenprüfung chef/admin bleibt Kern-Policy, is_ats_mutating_command)",
-      "assigned_users": false,
-      "roles": [
-        "admin",
-        "chef"
-      ]
-    }
-  },
+  "command_rights": {},
   "commands_in": [],
   "commands_out": [],
   "created_at": null,
@@ -320,9 +302,7 @@
       "owner_app": "submissions"
     }
   },
-  "handlers": {
-    "ats.intake.capture": "handlers/ats.intake.capture.js"
-  },
+  "handlers": {},
   "layout": {
     "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/intake.jpg (shared/operator-icon-selection.js, sha256 0a6d81e7d9c1…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
     "_icon_file": "icon.svg",

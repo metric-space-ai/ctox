@@ -89,6 +89,8 @@ const INSTANCE_PROXY_CONFIG_TABLE: &str = "cliproxyapi_runtime_config";
 
 #[path = "cliproxyapi_account_controls.rs"]
 pub(crate) mod account_controls;
+#[path = "cliproxyapi_model_probe.rs"]
+pub(crate) mod model_probe;
 const INSTANCE_PROXY_CONFIG_SCHEMA: &str = "ctox.cliproxyapi.runtime-config.v1";
 const INSTANCE_ANTIGRAVITY_CAPABILITY_REFRESH_SECONDS: u64 = 10 * 60;
 const INSTANCE_SIGNATURE_CACHE_TABLE: &str = "cliproxyapi_signature_cache";
@@ -3797,6 +3799,28 @@ impl fmt::Debug for CtoxCooldownStateStore {
     }
 }
 
+/// Async provider outcomes must use the same real Core owner admission as
+/// their synchronous payload adapters. Merely spawning a blocking task does
+/// not carry CUTOVER's private run_core_sync token to that new thread.
+fn native_cooldown_conductor(store: Arc<CtoxCooldownStateStore>) -> CooldownConductor {
+    CooldownConductor::new(store).with_record_dispatcher(Arc::new(|conductor, result| {
+        Box::pin(async move {
+            if crate::persistence::require_sync_owner_context().is_ok() {
+                // Already on the bounded native caller: do not acquire a
+                // second semaphore slot while that same caller awaits us.
+                return conductor.record(result);
+            }
+            crate::persistence::run_core_sync(move || {
+                conductor
+                    .record(result)
+                    .map_err(|_| anyhow::anyhow!("native cooldown persistence failed"))
+            })
+            .await
+            .map_err(|_| CooldownStoreError::Write)
+        })
+    }))
+}
+
 impl CooldownStateStore for CtoxCooldownStateStore {
     fn load(&self) -> Result<Vec<CooldownStateRecord>, CooldownStoreError> {
         let _guard = self
@@ -3934,7 +3958,7 @@ impl CtoxCliproxyRuntimeFactory {
         account_clock: Arc<dyn AccountStateClock>,
     ) -> Result<ClaudeSubscriptionAccountPool, CtoxCliproxyRuntimeBuildError> {
         let cooldown_store = Arc::new(CtoxCooldownStateStore::new(&self.root));
-        let conductor = Arc::new(CooldownConductor::new(cooldown_store.clone()));
+        let conductor = Arc::new(native_cooldown_conductor(cooldown_store.clone()));
         let router = Arc::new(AccountRouter::with_strategy(
             cooldown_store,
             config.routing_strategy(),
@@ -4037,7 +4061,7 @@ impl CtoxCliproxyRuntimeFactory {
         CtoxCliproxyRuntimeBuildError,
     > {
         let cooldown_store = Arc::new(CtoxCooldownStateStore::new(&self.root));
-        let conductor = Arc::new(CooldownConductor::new(cooldown_store.clone()));
+        let conductor = Arc::new(native_cooldown_conductor(cooldown_store.clone()));
         let router = Arc::new(AccountRouter::with_strategy(
             cooldown_store,
             config.routing_strategy(),
@@ -4098,7 +4122,7 @@ impl CtoxCliproxyRuntimeFactory {
         account_clock: Arc<dyn AccountStateClock>,
     ) -> Result<AntigravitySubscriptionAccountPool, CtoxCliproxyRuntimeBuildError> {
         let cooldown_store = Arc::new(CtoxCooldownStateStore::new(&self.root));
-        let conductor = Arc::new(CooldownConductor::new(cooldown_store.clone()));
+        let conductor = Arc::new(native_cooldown_conductor(cooldown_store.clone()));
         let router = Arc::new(AccountRouter::with_strategy(
             cooldown_store,
             config.routing_strategy(),

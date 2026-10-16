@@ -695,7 +695,12 @@ async fn execute_route_at(
             upstream = upstream.header(&key, value);
         }
     }
-    let data = bounded_response(upstream.send().await?, 32 * 1024 * 1024).await?;
+    let response = upstream.send().await?;
+    ctox_cliproxyapi::internal::api::account_selection::record_upstream_status(
+        response.status().as_u16(),
+        &[],
+    );
+    let data = bounded_response(response, 32 * 1024 * 1024).await?;
     let data = if stream {
         data
     } else {

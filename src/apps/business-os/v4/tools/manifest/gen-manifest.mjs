@@ -16,7 +16,7 @@
 // schema.js ist optional und dient nur noch dem Drift-Bericht.
 // Eigentum: OWNER_RESOLUTIONS (Plattform, OLG) vor ownership-baseline.json (eingefroren) vor Definierer/Präfix.
 // Plattform-Collections gehören 'ctox-platform'; Apps deklarieren sie nur gemäß deren exports
-// (~/.local/state/ctox-sync-v4/docs/v4-manifests/ctox-platform.manifest.json).
+// (src/core/business_os/v4/ctox-platform.manifest.json, E48).
 //
 // Aufruf:
 //   node gen-manifest.mjs                 schreibt ../../manifests/<app_id>.manifest.json (+ lib-<name>), out/* und REPORT-M2.md
@@ -45,7 +45,9 @@ export const DEFAULT_OUT = path.resolve(HERE, '../../manifests');
 export const DEFAULT_REPORT_OUT = path.resolve(HERE, 'out');
 export const DEFAULT_TOOL_OUT = HERE;
 export const DEFAULT_ANALYSIS = path.join(os.homedir(), '.local/state/shell-v4/analysis');
-export const DEFAULT_PLATFORM_MANIFEST = path.join(os.homedir(), '.local/state/ctox-sync-v4/docs/v4-manifests/ctox-platform.manifest.json');
+// E48: einzige Quelle ist das Kern-Manifest im Repo (#904), nicht die frühere Kopie unter ~/.local/state/ctox-sync-v4/docs –
+// die veraltete still (16.10.: app_drafts-Export und app_user_preferences fehlten dort) und gibt es in CI nicht.
+export const PLATFORM_MANIFEST_FILE = 'src/core/business_os/v4/ctox-platform.manifest.json';
 export const DEFAULT_BASELINE = path.join(HERE, 'ownership-baseline.json');
 export const BASE_RELEASE = 'main@4794af03d';
 export const MIN_APP_API = '4.0';
@@ -283,6 +285,24 @@ export function enclosingObjectHasDispatchFalse(text, pos) {
 
 export function isPlatformRoute(type, routes) {
   return routes.exact.has(type) || routes.prefixes.some((p) => type.startsWith(p));
+}
+
+// E42.1: handlers (Typ → Datei) in lebende und von der Plattformroute verdeckte teilen.
+export function splitPlatformHandlers(handlers, routes) {
+  const live = {}, shadowed = {};
+  for (const [type, file] of Object.entries(handlers || {})) (isPlatformRoute(type, routes) ? shadowed : live)[type] = file;
+  return { live, shadowed };
+}
+
+// E42.1-Wächter: Manifest mit Handler für einen Plattform-Typ → Verstoß (main() endet mit Exit 1).
+export function platformHandlerViolations(manifests, routes) {
+  const out = [];
+  for (const m of manifests) {
+    for (const type of Object.keys(m?.handlers || {}).sort()) {
+      if (isPlatformRoute(type, routes)) out.push({ app: m.app_id, kind: 'handler_platform_type', detail: `${type} → ${m.handlers[type]} (Plattformroute der Kern-Inventur, E42.1)` });
+    }
+  }
+  return out;
 }
 
 // AGENT (§16.44): die Code-Ansicht der Shell sendet ctox.coding.turn / ctox.coding.cancel (v4/source/agent-panel.js).
@@ -584,7 +604,11 @@ export function scanHandlerCode(appDir, handlers) {
     if (!caps.has(n)) caps.set(n, new Set());
     caps.get(n).add(file);
   };
-  const files = walk(path.join(appDir, 'handlers')).map((f) => `handlers/${f}`).filter((f) => CODE_EXT_RE.test(f) && !isTestPath(f));
+  // E42.1: tote Handler (Plattform-Typ, nicht in `handlers`) tragen nichts bei; ohne lebenden Handler auch kein _lib-Code.
+  const live = new Set(Object.values(handlers || {}));
+  const isTopLevelHandler = (rel) => /^handlers\/[^/_][^/]*\.js$/.test(rel);
+  const files = !live.size ? [] : walk(path.join(appDir, 'handlers')).map((f) => `handlers/${f}`)
+    .filter((f) => CODE_EXT_RE.test(f) && !isTestPath(f) && (!isTopLevelHandler(f) || live.has(f)));
   for (const rel of files) {
     const text = stripLeadingComments(fs.readFileSync(path.join(appDir, rel), 'utf8'));
     for (const m of text.matchAll(/ctx\??\.cap((?:\??\.[A-Za-z_]\w*)+)/g)) {
@@ -1466,11 +1490,13 @@ export async function generate(options = {}) {
   const baseRelease = options.baseRelease || BASE_RELEASE;
   const analysisDir = options.analysis || DEFAULT_ANALYSIS;
   const appsRoot = path.join(repo, 'src/apps/business-os');
+  // E40/E42/E42.1: Plattformrouten aus der Kern-Inventur, früh geladen – auch das Handler-Lesen hängt davon ab.
+  const routes = loadPlatformRoutes(repo);
   const contractFile = path.join(repo, 'src/core/business_os/business_os_schema_contract.json');
   const contract = fs.existsSync(contractFile) ? readJson(contractFile) : {};
   const baselineFile = options.baseline === undefined ? DEFAULT_BASELINE : options.baseline;
   const baseline = baselineFile && fs.existsSync(baselineFile) ? readJson(baselineFile).owners || {} : {};
-  const platform = loadPlatform(options.platformManifest === undefined ? DEFAULT_PLATFORM_MANIFEST : options.platformManifest);
+  const platform = loadPlatform(options.platformManifest === undefined ? path.join(repo, PLATFORM_MANIFEST_FILE) : options.platformManifest);
   const demandOnly = loadDemandOnly(repo);
   const analysis = loadAnalysisSections(analysisDir);
 
@@ -1492,7 +1518,9 @@ export async function generate(options = {}) {
     const jsonSchema = normalizeCollectionsSchema(raw);
     const schemaJs = await loadSchemaJs(found.dir, appsRoot);
     const files = hashFiles(found.dir);
-    const handlers = listHandlers(found.dir);
+    // E42.1: ein Typ der Kern-Inventur geht immer an den Kern, auch gegen den eigenen Handler der App. Solche Handler
+    // sind tot: nicht ins Manifest, keine Capabilities aus ihrem Code; der Bericht nennt sie (handlers_platform_type).
+    const { live: handlers, shadowed: platformHandlers } = splitPlatformHandlers(listHandlers(found.dir), routes);
     const code = scanHandlerCode(found.dir, handlers);
     const agent = collectAgentPackage(found.dir);
     agent.violations = [
@@ -1504,7 +1532,7 @@ export async function generate(options = {}) {
     const triggerExports = scanTriggerExports(found.dir, handlers);
     apps[id] = {
       id, dir: found.dir, rel: found.rel, moduleJson, jsonSchema, schemaSource, schemaJs: schemaJs.value, schemaJsError: schemaJs.error,
-      files, handlers, code, agent,
+      files, handlers, platformHandlers, code, agent,
       decl: declaration.decl, declPresent: declaration.present,
       declErrors: [...declaration.errors, ...triggerExports.errors.map((e) => ({ app: id, kind: 'trigger_export', detail: `${e.file}: ${e.detail}` }))],
       consts, codeTriggers: triggerExports.triggers,
@@ -1716,7 +1744,7 @@ export async function generate(options = {}) {
   }
 
   // ---- Drift (Schema-Quellen)
-  const drift = { schema_js_vs_json: [], migration_steps: [], schema_js_load_errors: [], contract_only: [], no_owner_app: [], multiple_owners: [], copy_divergence: [], prefix_mismatch: [], schema_missing: [], handler_conflicts: [], platform_clamps: platformClamps, exports_beyond_declaration: exportsBeyondDeclaration };
+  const drift = { schema_js_vs_json: [], migration_steps: [], schema_js_load_errors: [], contract_only: [], no_owner_app: [], multiple_owners: [], copy_divergence: [], prefix_mismatch: [], schema_missing: [], handler_conflicts: [], handlers_platform_type: Object.values(apps).flatMap((a) => Object.entries(a.platformHandlers || {}).map(([type, file]) => ({ app: a.id, type, file }))).sort((x, y) => x.app.localeCompare(y.app) || x.type.localeCompare(y.type)), platform_clamps: platformClamps, exports_beyond_declaration: exportsBeyondDeclaration };
   for (const app of Object.values(apps)) {
     if (app.schemaJsError) drift.schema_js_load_errors.push({ app: app.id, error: app.schemaJsError });
     const js = app.schemaJs?.collections;
@@ -1979,7 +2007,8 @@ export async function generate(options = {}) {
       ...(extras.write_guard ? { write_guard: extras.write_guard } : {}),
       ...(extras._proposed_triggers ? { _proposed_triggers: extras._proposed_triggers } : {}),
       commands_out: [],
-      commands_in: (extras.commands_in || []).map((c) => ({ type: c.type, from: c.from === '*' ? '*' : sortedUnique(c.from) }))
+      // E40/E42.1: commands_in nur für Typen, die die App selbst ausführt – Plattform-Typen gehen an den Kern.
+      commands_in: (extras.commands_in || []).filter((c) => !isPlatformRoute(c.type, routes)).map((c) => ({ type: c.type, from: c.from === '*' ? '*' : sortedUnique(c.from) }))
         .sort((a, b) => a.type.localeCompare(b.type)),
       ...(netIngest.length ? { _net_ingest: netIngest } : {}),
       ...(app.configKeys.length ? { _config_keys: app.configKeys } : {}),
@@ -2033,7 +2062,6 @@ export async function generate(options = {}) {
   // ROUTE (E39/E40): jeder Typ, den eine App (oder die Shell) über api.command sendet, ist Plattformroute ODER geht per
   // commands_out an genau die App mit dem Handler (deren commands_in nimmt den konkreten Absender an, nie '*').
   // Sonst drift.commands_unrouted (rot), außer der Typ steht in PLATFORM_ROUTES_PENDING (gemeldet, Bericht).
-  const routes = loadPlatformRoutes(repo);
   const uiRoute = routeUiCommands({
     senders: [
       ...Object.values(apps).map((a) => ({ id: a.id, rel: a.rel, hits: a.uiCommandTypes })),
@@ -2058,7 +2086,8 @@ export async function generate(options = {}) {
   for (const app of Object.values(apps)) {
     const m = manifests[app.id];
     const evidence = {};
-    const addOut = (target, type, ev) => { (evidence[`${target} ${type}`] ||= new Set()).add(ev); };
+    // E40/E42.1: Plattformrouten brauchen kein commands_out – der Kern führt den Typ aus, egal welche App ihn sendet.
+    const addOut = (target, type, ev) => { if (!isPlatformRoute(type, routes)) (evidence[`${target} ${type}`] ||= new Set()).add(ev); };
     for (const c of app.commandsOutCode) addOut(c.app, c.type, c.evidence);
     for (const c of uiOutBy[app.id] || []) addOut(c.app, c.type, c.evidence);
     for (const c of app.decl.commands_out || []) addOut(c.app, c.type, `${DECLARATION_FILE}${app.decl._basis?.commands_out ? `; ${app.decl._basis.commands_out}` : ''}`);
@@ -2141,6 +2170,7 @@ export async function generate(options = {}) {
     platform_clamps: platformClamps.length,
     exported_collections: Object.values(exportsBy).reduce((s, e) => s + Object.keys(e).length, 0),
     handler_conflicts: drift.handler_conflicts.length,
+    handlers_platform_type: drift.handlers_platform_type.length,
     schema_missing: drift.schema_missing.length,
     schema_js_present: Object.values(apps).filter((a) => a.files['schema.js']).length,
     schema_js_load_errors: drift.schema_js_load_errors.length,
@@ -2186,6 +2216,8 @@ export async function generate(options = {}) {
     violations: [
       ...drift.commands_unrouted.map((d) => ({ app: d.app, kind: 'commands_unrouted', detail: `${d.type} (${d.evidence.join(', ')})` })),
       ...drift.commands_out_ambiguous.map((d) => ({ app: d.app, kind: 'commands_out_ambiguous', detail: `${d.type} → ${d.handlers.join('|')} (${d.evidence.join(', ')})` })),
+      // E42.1-Wächter: kein Manifest deklariert einen Handler für einen Plattform-Typ.
+      ...platformHandlerViolations(Object.values(manifests), routes),
     ],
   };
   return { manifests, libs, ownership, platform: platformOut, drift, stats, capabilities: allCaps, skill_check: skillCheck, declaration_check: declarationCheck, route_check: routeCheck, icons_copied: iconSync.copied };
@@ -2731,6 +2763,8 @@ export function renderReportM2(result) {
   for (const d of drift.platform_clamps) out.push(`- ${d.app}: ${d.collection} gewünscht ${d.wanted.join(',')}, gewährt ${d.granted.join(',') || '–'} (${d.reason})`);
   out.push('', `## Befehlstypen mit Handlern in mehreren Apps (${drift.handler_conflicts.length})`, '');
   for (const d of drift.handler_conflicts) out.push(`- \`${d.command_type}\`: ${d.apps.join(', ')}`);
+  out.push('', `## Tote Handler: Typ ist Plattformroute der Kern-Inventur (E42.1, ${drift.handlers_platform_type.length})`, '');
+  for (const d of drift.handlers_platform_type) out.push(`- \`${d.type}\`: ${d.app} ${d.file} – nicht im Manifest, der Typ geht an den Kern`);
   out.push('', '## Offene _todo (app-spezifisch; die drei Standardpunkte rights/client_limit/app_ver stehen in jedem Manifest)', '');
   const standard = /^(rights je Collection|client_limit\/byte_budget|app_ver\/author\/created_at)/;
   for (const m of Object.values(manifests).sort((a, b) => a.app_id.localeCompare(b.app_id))) {

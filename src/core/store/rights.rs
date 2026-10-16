@@ -329,6 +329,20 @@ impl RightsSnapshot {
         collection: &str,
     ) -> scope::Result<ResolvedScope> {
         use manifest_rules::AppOperation;
+        if collection == ctox_store::preferences::COLLECTION {
+            if !self.manifests.iter().any(|m| m.app_id() == app)
+                || !self
+                    .manifests
+                    .iter()
+                    .any(|m| m.app_id() == "ctox-platform" && m.owns(collection))
+            {
+                return Err("forbidden".into());
+            }
+            let context =
+                ctox_store::preferences::Context::authenticated(app, actor, self.rights_ver)?;
+            return serde_json::from_value(context.resolved_scope())
+                .map_err(|_| "invalid preference scope".into());
+        }
         self.manifests
             .iter()
             .find(|m| m.app_id() == app)
@@ -345,6 +359,12 @@ impl RightsSnapshot {
         doc: &serde_json::Value,
     ) -> scope::Result<serde_json::Value> {
         let scope = self.resolve_app_collection(app, role, actor, collection)?;
+        if collection == ctox_store::preferences::COLLECTION
+            && !ctox_store::preferences::Context::authenticated(app, actor, self.rights_ver)?
+                .owns(doc)
+        {
+            return Err("forbidden".into());
+        }
         let p = scope.projection(collection).ok_or("forbidden")?;
         if !p.row_filter.matches(doc) {
             return Err("forbidden".into());
@@ -362,6 +382,14 @@ impl RightsSnapshot {
         permit: Option<&CommandPermit>,
     ) -> scope::Result<()> {
         use manifest_rules::AppOperation;
+        if collection == ctox_store::preferences::COLLECTION {
+            self.resolve_app_collection(app, role, actor, collection)?;
+            let ctx = ctox_store::preferences::Context::authenticated(app, actor, self.rights_ver)?;
+            if before.into_iter().chain(after).any(|doc| !ctx.owns(doc)) {
+                return Err("forbidden".into());
+            }
+            return Ok(());
+        }
         let caller = self
             .manifests
             .iter()
@@ -383,8 +411,16 @@ impl RightsSnapshot {
             Some(m) => m.filter(&rule.collection, role, actor)?,
             None => RowFilter::All,
         };
+        let own_user = if rule.collection == ctox_store::preferences::COLLECTION {
+            RowFilter::Eq {
+                path: "/user_id".into(),
+                value: scope::FilterValue::ActorId,
+            }
+        } else {
+            RowFilter::All
+        };
         RowFilter::And {
-            filters: vec![rule.row_filter.clone(), policy],
+            filters: vec![rule.row_filter.clone(), policy, own_user],
         }
         .resolve(actor)
     }
@@ -414,7 +450,11 @@ impl RightsSnapshot {
             self.rights_ver,
             self.rules
                 .iter()
-                .filter(|r| r.role == role && r.ops.contains(&Operation::Read))
+                .filter(|r| {
+                    r.role == role
+                        && r.ops.contains(&Operation::Read)
+                        && r.collection != ctox_store::preferences::COLLECTION
+                })
                 .map(|r| {
                     Ok(Projection {
                         collection: r.collection.clone(),
@@ -555,6 +595,9 @@ impl RightsSnapshot {
     }
 }
 
+#[cfg(test)]
+#[path = "preferences_policy_tests.rs"]
+mod preferences_tests;
 #[cfg(test)]
 #[path = "rights_tests.rs"]
 mod tests;

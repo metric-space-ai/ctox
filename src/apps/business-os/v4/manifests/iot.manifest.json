@@ -13,9 +13,6 @@
     "model": [
       "handlers/_codegen.js"
     ],
-    "net.ingest.subscribe": [
-      "handlers/ctox.iot.agent.configure.js"
-    ],
     "net.ingest.webhook.register": [
       "handlers/ctox.iot.webhook.register.js"
     ]
@@ -51,7 +48,6 @@
     "agent.task.get",
     "knowledge.query",
     "model",
-    "net.ingest.subscribe",
     "net.ingest.webhook.register"
   ],
   "collections": {
@@ -951,17 +947,9 @@
     }
   },
   "handlers": {
-    "ctox.iot.agent.configure": "handlers/ctox.iot.agent.configure.js",
-    "ctox.iot.alarm.update": "handlers/ctox.iot.alarm.update.js",
-    "ctox.iot.asset.delete": "handlers/ctox.iot.asset.delete.js",
-    "ctox.iot.asset.upsert": "handlers/ctox.iot.asset.upsert.js",
-    "ctox.iot.attribute.write": "handlers/ctox.iot.attribute.write.js",
     "ctox.iot.dashboard.delete": "handlers/ctox.iot.dashboard.delete.js",
     "ctox.iot.dashboard.upsert": "handlers/ctox.iot.dashboard.upsert.js",
-    "ctox.iot.datapoints.query": "handlers/ctox.iot.datapoints.query.js",
     "ctox.iot.rules.tick": "handlers/ctox.iot.rules.tick.js",
-    "ctox.iot.ruleset.save": "handlers/ctox.iot.ruleset.save.js",
-    "ctox.iot.ruleset.toggle": "handlers/ctox.iot.ruleset.toggle.js",
     "ctox.iot.signal.evaluate": "handlers/ctox.iot.signal.evaluate.js",
     "ctox.iot.task.complete": "handlers/ctox.iot.task.complete.js",
     "ctox.iot.task.failed": "handlers/ctox.iot.task.failed.js",

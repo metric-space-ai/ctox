@@ -1,6 +1,6 @@
 // desktop gegen den eingefrorenen App-API-4.0-Stub (createStubKernel) in echtem Chromium.
 // Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/68b83a3), Muster modules/knowledge.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/desktop/tests/v4-api.test.mjs
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf node --test src/apps/business-os/modules/desktop/tests/v4-api.test.mjs
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -9,9 +9,10 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const APP = 'desktop';
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const SHOTS = join(HERE, 'shots');
@@ -50,12 +51,22 @@ before(async () => {
   page.on('console', (m) => { if (m.type() === 'error') console.error('[page]', m.text()); });
   page.__errors = errors;
   await page.goto(base);
+  // FIXT-R: echte Routen/Rechte/Collections/Fremd-Collections von desktop (v4/manifests/desktop.manifest.json).
+  // Ziel-App ctox (commands_in ctox.chat.task von '*') ebenfalls mit echtem Manifest: Querbefehle brauchen seit E39 eine
+  // aktive Zielversion mit commands_in + handler.
+  await page.evaluate((routes) => { window.__routes = routes; }, { ...realManifestRoutes(APP), _ctox: realManifestRoutes('ctox') });
   await page.evaluate(async (APP) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import(`/modules/${APP}/index.js`);
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false });
     await kernel.ready;
     await kernel.sim.push('business_apps', [{ id: 'desktop', title: 'Desktop' }, { id: 'explorer', title: 'Explorer' }, { id: 'notes', title: 'Notizen' }, { id: 'ctox', title: 'CTOX' }]);
+    // FIXT-R: Eigentümer der Fremd-Collections (ctox-platform, documents, notes) vor der eigenen Version, diese nach der
+    // business_apps-Zeile.
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    const { _ctox, ...routes } = window.__routes;
+    await kernel.sim.publishAppVersion('ctox', '1.0.0', { title: 'CTOX', manifestExtra: _ctox });
+    await kernel.sim.publishAppVersion(APP, '1.0.0', { title: 'Desktop', manifestExtra: routes });
     await kernel.sim.push('desktop_icons', [{ id: 'custom-notes', target_type: 'module', target_module: 'notes', label: 'Meine Notizen', x: 24, y: 24, hidden: false, sort_index: 0, updated_at_ms: 1 }]);
     await kernel.sim.settle();
     window.__k = kernel;

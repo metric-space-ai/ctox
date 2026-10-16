@@ -163,14 +163,44 @@ impl PeerLifecycleRegistry {
         authenticate: AuthenticatePeer,
         handshake_timeout: Duration,
     ) -> Result<PeerLifecycle, LifecycleError> {
+        self.start_inner(
+            peer_id,
+            Some(challenge),
+            policy,
+            authenticate,
+            handshake_timeout,
+        )
+    }
+    /// E50 browser-only responder. The host callback MUST verify and consume
+    /// its full signed launch ticket and revalidate current user/scope authority.
+    /// Native callers continue through start(), which always requires a challenge.
+    pub fn start_browser(
+        &self,
+        peer_id: String,
+        policy: HelloPolicy,
+        admission: AuthenticatePeer,
+        handshake_timeout: Duration,
+    ) -> Result<PeerLifecycle, LifecycleError> {
+        self.start_inner(peer_id, None, policy, admission, handshake_timeout)
+    }
+    fn start_inner(
+        &self,
+        peer_id: String,
+        challenge: Option<String>,
+        policy: HelloPolicy,
+        authenticate: AuthenticatePeer,
+        handshake_timeout: Duration,
+    ) -> Result<PeerLifecycle, LifecycleError> {
         let runtime = tokio::runtime::Handle::try_current()
             .map_err(|_| LifecycleError::InvalidConfiguration)?;
         if peer_id.trim().is_empty()
             || peer_id.len() > 256
-            || challenge.len() != 43
-            || !challenge
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            || challenge.as_ref().is_some_and(|challenge| {
+                challenge.len() != 43
+                    || !challenge
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            })
             || handshake_timeout.is_zero()
             || handshake_timeout > Duration::from_secs(60)
         {
@@ -286,7 +316,7 @@ fn reject(states: &watch::Sender<ConnectionSnapshot>, rejection: HelloReject) {
 #[allow(clippy::too_many_arguments)]
 async fn run_peer(
     peer_id: String,
-    challenge: String,
+    challenge: Option<String>,
     policy: HelloPolicy,
     authenticate: AuthenticatePeer,
     mut commands: mpsc::Receiver<Command>,
@@ -328,7 +358,10 @@ async fn run_peer(
                 }
                 let result = async {
                     let selected = policy.negotiate(&hello)?;
-                    if !hello.device_proof.matches_challenge(&challenge) {
+                    if challenge
+                        .as_ref()
+                        .is_some_and(|challenge| !hello.device_proof.matches_challenge(challenge))
+                    {
                         return Err(HelloReject::new(
                             RejectReason::DeviceProofInvalid,
                             "fresh connection device proof",

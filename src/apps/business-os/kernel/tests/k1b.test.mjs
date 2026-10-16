@@ -4,7 +4,7 @@ import { testLocks } from './web-locks.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { createStubKernel, createShellKernel } from '../kernel.mjs';
+import { createStubKernel, createShellKernel } from '../testkit.mjs';
 
 let n = 0;
 // Jeder Kernel wird auch bei einem roten assert geschlossen: ein offener Kernel hält seinen BroadcastChannel

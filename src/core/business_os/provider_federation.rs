@@ -876,3 +876,43 @@ mod projection;
 pub(super) use projection::{
     repair as repair_projections, visible as projection_visible, COLLECTION as REGISTRY_COLLECTION,
 };
+
+/// Resolve the opaque public reference through the actual native account
+/// registry. A payload never chooses a local credential or a remote holder.
+/// Both probe admission and completion call this under run_core_sync.
+#[derive(PartialEq, Eq)]
+pub(crate) struct ModelProbeTarget {
+    pub provider: String,
+    pub local_account_id: String,
+    owner: String,
+    policy_revision: i64,
+    private_binding: Option<String>,
+}
+pub(crate) fn model_probe_target(
+    root: &Path,
+    actor: &str,
+    id: &str,
+    revision: i64,
+) -> Result<ModelProbeTarget> {
+    bounded_id(id)?;
+    ensure!(revision > 0, "invalid account revision");
+    let conn = store::open_store(root)?;
+    let owner = management_owner(&conn, actor)?;
+    let holder = store::existing_instance_id(root)?;
+    let (provider, local_account_id) = conn
+        .query_row(
+            "SELECT provider,private_local_account_id FROM business_provider_federation_accounts
+         WHERE account_id=?1 AND owner_user_id=?2 AND holder_instance_id=?3
+           AND revision=?4 AND enabled=1 AND credential_ready=1",
+            params![id, owner, holder, revision],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .context("selected account is unavailable or changed")?;
+    Ok(ModelProbeTarget {
+        provider,
+        local_account_id,
+        policy_revision: policy_revision(&conn, &owner)?,
+        private_binding: native_binding(&conn, id)?,
+        owner,
+    })
+}

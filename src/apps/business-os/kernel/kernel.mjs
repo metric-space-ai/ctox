@@ -6,7 +6,6 @@ import { takeoverV3Database } from './migrate-v3.mjs';
 import { snapshotBytes } from './snapshot.mjs';
 import { evictCollection, reclaimCache, CLIENT_CACHE_BUDGET } from './cache.mjs';
 import { KernelTransport, decimalSeq, seqGreater, maxSeq, checkpointKey } from './transport.mjs';
-import { MemoryCoreTransport } from './fake-core.mjs';
 import { assertLeader, acquireGeneration } from './leader.mjs';
 // Local App API 4.0 kernel. Derived from the reviewed executable contract; no legacy runtime imports.
 import { CtoxError, StaleLeader, cloneValue, deepFreeze, deepEqual, jsonEq, liveEqual, mergePatch, fnv1a, uuidv7, sha256Js, sha256Hex, hasBlob, isBlob, isPlainObject } from './values.mjs';
@@ -94,7 +93,7 @@ export function createKernel(opts = {}) {
   const dbName = opts.dbName ?? `ctox-${instanceId}-${userId}`; // §16.7: DB je (Instanz, Nutzer)
   const latencyMs = opts.latencyMs ?? 50;
   const transport = opts.transport ?? new KernelTransport();
-  const fakeCore = transport instanceof MemoryCoreTransport ? transport : null;
+  const fakeCore = transport.kind === 'memory' ? transport : null;
   const subscriptions = new Set();
   const scopeCursors = new Map();
   const expectedScopes = new Map();
@@ -2574,14 +2573,4 @@ export function createKernel(opts = {}) {
     readyResolve();
   })().catch((err) => { console.error('[ctox-kernel] Start fehlgeschlagen', err); readyResolve(Promise.reject(err)); });
   return kernel;
-}
-
-export function createStubKernel(opts = {}) {
-  const namespace = opts.dbName ?? `ctox-${opts.instanceId ?? 'stub'}-${opts.userId ?? opts.actor?.id ?? 'local'}`;
-  const actor = {id:opts.userId??opts.actor?.id??'local',role:'admin',permissions:['apps.source.view','apps.source.edit'],...opts.actor};
-  // K-1c Punkt 4: coreNamespace = ein Core je Instanz für mehrere Nutzer (eigene DB je Nutzer, §16.7); der Core kennt
-  // dann den Nutzer (Rolle, Rechte) und setzt Zeilen-, Collection- und Befehlsrechte durch.
-  const shared = typeof opts.coreNamespace === 'string' && opts.coreNamespace;
-  const transport = new MemoryCoreTransport({namespace:shared?opts.coreNamespace:namespace,latencyMs:opts.latencyMs,user:shared?{...actor,...(opts.coreUser??{}),id:actor.id}:null,everyMs:opts.everyMs,agentDelayMs:opts.agentDelayMs,deviceLabel:opts.deviceLabel,codingDelayMs:opts.codingDelayMs});
-  return createKernel({instanceId:'stub',userId:'local',...opts,actor,transport});
 }

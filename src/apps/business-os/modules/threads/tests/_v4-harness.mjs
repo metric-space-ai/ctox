@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 export const APP = 'threads';
 export const HERE = dirname(fileURLToPath(import.meta.url));
@@ -47,6 +48,9 @@ export async function startHarness() {
   page.on('response', (r) => { if (r.status() >= 400) console.error('[page] HTTP', r.status(), r.url()); });
   page.__errors = errors;
   await page.goto(base);
+  // Befehlsrouten/Deklarationen der echten threads-Version (v4/manifests/threads.manifest.json); ohne aktive Version
+  // lehnt der Kern seit E26/E27 threads.* beim Schreiben mit unknown_command ab.
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes(APP));
   // Kernel mit der Ops-Fixture (tests/fixtures/ops-fixture.mjs), Akteur michael (admin).
   await page.evaluate(async (APP) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
@@ -57,6 +61,10 @@ export async function startHarness() {
       actor: { id: window.__fx.me, display_name: 'Michael Welsch', role: 'admin' } });
     await kernel.ready;
     for (const [name, docs] of Object.entries(window.__fx.collections)) await kernel.sim.push(name, docs);
+    // Nach der business_apps-Zeile der Fixture veröffentlichen (sonst fehlt active_ver).
+    // FIXT-R: Eigentümer der Fremd-Collections (echte Manifeste, inkl. ctox-platform) vor der eigenen Version.
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion(APP, '0.2.4', { title: 'Threads', manifestExtra: window.__routes });
     await kernel.sim.settle();
     window.__k = kernel;
     window.__api = kernel.appApi(APP, '0.2.4');
