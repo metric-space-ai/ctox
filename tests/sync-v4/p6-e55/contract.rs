@@ -193,7 +193,7 @@ async fn p6_e55_foreign_app_collections_never_enter_the_grant() {
     let c = claims(&token);
     assert_eq!(
         c["collections"].as_array().unwrap().len(),
-        1,
+        2,
         "foreign app collection entered grant"
     );
     assert_eq!(c["collections"][0]["collection"], "alpha");
@@ -206,7 +206,7 @@ async fn p6_e55_foreign_app_collections_never_enter_the_grant() {
     assert!(f.read(&token, "beta", 1001).await.is_err());
     // A second app gets its own token, not an aggregate grant.
     let b = f.session.issue("b", 1000).await.unwrap();
-    assert_eq!(claims(&b)["collections"][0]["collection"], "beta");
+    assert!(claims(&b)["collections"].as_array().unwrap().iter().any(|c|c["collection"] == "beta"));
     let no_right = AppGrantSession::new(
         f.auth.clone(),
         f.key.clone(),

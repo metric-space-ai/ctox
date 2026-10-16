@@ -39,7 +39,7 @@ try:
  contract=['cargo','test','--locked','--manifest-path','tests/sync-v4/p6-e55/Cargo.toml','--test','contract','--jobs','2','--','--test-threads=2']
  if run('native-contracts',contract,1500):raise RuntimeError('native contract baseline')
  grant=root/'src/core/store/app_grant.rs';originals[grant]=grant.read_text()
- mutations=[('shell-preferences','app == "shell"','false && app == "shell"','shell boot preferences grant missing'),('foreign-scope','g.claims.scope_hash == h','true || g.claims.scope_hash == h','foreign scope admitted'),('retained-revoke','state.issued.remove(app).map','state.issued.get(app).map','revoked subscription survived')]
+ mutations=[('shell-preferences','let include_preferences = true;','let include_preferences = false;','shell boot preferences grant missing'),('foreign-scope','g.claims.scope_hash == h','true || g.claims.scope_hash == h','foreign scope admitted'),('retained-revoke','state.issued.remove(app).map','state.issued.get(app).map','revoked subscription survived')]
  for name,before,after,reason in mutations:
   original=originals[grant];assert original.count(before)==1,(name,'anchor')
   grant.write_text(original.replace(before,after))

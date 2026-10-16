@@ -176,9 +176,10 @@ fn resolve(
         row_filter: scope::RowFilter::None, field_mask: scope::FieldMask::All,
         ops: [Operation::Read, Operation::Write].into(),
     };
+    let include_preferences = true;
     for rule in rights.rules.iter()
         .filter(|r| r.role == state.role && r.ops.contains(&Operation::Read))
-        .chain((app == "shell" && !rights.rules.iter().any(|r| r.role == state.role && r.collection == ctox_store::preferences::COLLECTION)).then_some(&preference))
+        .chain((include_preferences && !rights.rules.iter().any(|r| r.role == state.role && r.collection == ctox_store::preferences::COLLECTION)).then_some(&preference))
     {
         let scope =
             match rights.resolve_app_collection(app, &state.role, &state.user, &rule.collection) {

@@ -11,6 +11,7 @@ pub(super) struct BrowserWrite {
     // P8 invokes authorize for every drained ordered request, then validates its
     // final merged document synchronously on the same owning writer thread.
     request: Mutex<Option<Write>>,
+    preferences: Mutex<Option<ctox_store::preferences::Context>>,
 }
 impl BrowserWrite {
     pub fn new(admission: Arc<BrowserAdmission>, peer: Arc<BrowserPeer>) -> Self {
@@ -18,6 +19,7 @@ impl BrowserWrite {
             admission,
             peer,
             request: Mutex::new(None),
+            preferences: Mutex::new(None),
         }
     }
     fn actor(&self) -> BusinessOsActor {
@@ -84,7 +86,7 @@ impl BrowserWrite {
             .transpose()
             .map_err(|_| sql_invalid("invalid stored document"))?;
         let app = if matches!(request.collection.as_str(), "business_commands" | "app_user_preferences") {
-            after.and_then(|d| d["app_id"].as_str()).unwrap_or("")
+            after.or(before.as_ref()).and_then(|d| d["app_id"].as_str()).unwrap_or_else(||request.id.split('/').next().unwrap_or(""))
         } else {
             &collection.definition.app_id
         };
@@ -109,6 +111,10 @@ impl BrowserWrite {
     }
 }
 impl WriteAuthority for BrowserWrite {
+    fn preference_context(&self,participant:&str)->Option<ctox_store::preferences::Context> {
+        if participant!=self.peer.device {return None;}
+        self.preferences.lock().ok()?.clone()
+    }
     fn authorize(
         &self,
         tx: &rusqlite::Transaction<'_>,
@@ -116,6 +122,17 @@ impl WriteAuthority for BrowserWrite {
         request: &Write,
     ) -> rusqlite::Result<WritePermission> {
         if self.current(tx, participant).is_err() { return Ok(WritePermission::Reject("revoked".into())); }
+        *self.preferences.lock().map_err(|_|sql_invalid("preference context poisoned"))?=None;
+        if request.collection==ctox_store::preferences::COLLECTION {
+            let session=scope_grant_route::bound_owner(&self.admission,&self.peer).map_err(|_|sql_invalid("grant owner unavailable"))?.session();
+            let app=request.id.split('/').next().unwrap_or("");
+            let context=(|| {
+                let token=session.bound_token(None,&request.collection,request.gen,Some(app))?;
+                let claims=session.verify_in_transaction(tx,&token,now()/1000)?;
+                ctox_store::preferences::Context::authenticated(&claims.app_id,&claims.user_id,claims.rights_ver.parse().map_err(|_|"invalid rights version")?).map_err(str::to_owned)
+            })();
+            match context {Ok(ctx)=>*self.preferences.lock().map_err(|_|sql_invalid("preference context poisoned"))?=Some(ctx),Err(_)=>return Ok(WritePermission::Reject("revoked".into()))}
+        }
         *self
             .request
             .lock()
