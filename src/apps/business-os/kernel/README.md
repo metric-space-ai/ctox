@@ -76,8 +76,12 @@ The default transport is offline; it NEVER manufactures acceptance. `createStubK
   `verifyPackage`, `resolveScope` and either channels or `createPeer(address, identity)`; reconnect uses the factory.
 - `scheduler.mjs`/`ingress.mjs`/`framing.mjs`: control > commands > interactive, then byte DRR 8:3:1
   live/initial/transfer; per-lane ACK windows, aggregate SCTP budget, parallel ordered lane ingress.
-  Frames are at most 16 KiB total. The 32-byte big-endian header is CTX4 magic, lane/codec/reserved,
-  then u32 packet/index/count/encodedBytes/rawBytes/frameSeq. Logical messages are UTF-8 JSON.
+  The default transport uses native P5: at most 16 KiB total, a 37-byte header with CTX4 magic,
+  lane, fragment codec, decimal u64 message ID (length plus a 20-byte field), fragment index/count,
+  and uncompressed fragment length. E14 acknowledges logical messages only after application commit;
+  a retained session replays unacknowledged messages and suppresses duplicate delivery. The independent
+  native test peer uses this format, including cross-language command replay. The older 32-byte
+  scheduler/framer remains an explicitly selected K2 component fixture; browser workflow tests use P5.
   Native P5/P8 must implement this same framing; the executable fake native peer is under tests only.
 - `platform.mjs`: shared collections belong to `ctox-platform`, including user-owned `shell_preferences`.
 - `testkit/app-host.mjs`: explicit reference host for tests/Shell development, never imported by the kernel;

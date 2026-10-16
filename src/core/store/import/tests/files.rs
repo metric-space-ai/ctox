@@ -262,3 +262,158 @@ fn incomplete_chunks_and_escaping_paths_never_reach_cas() -> Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn desktop_chunk_generations_keep_bytes_owner_and_identity_across_replay() -> Result<()> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let dir = tempfile::tempdir()?;
+    let mut source_db = rusqlite::Connection::open(dir.path().join("business-os-rxdb.sqlite3"))?;
+    source_db.execute_batch("CREATE TABLE legacy_desktop_files(id TEXT,data TEXT,deleted INTEGER); CREATE TABLE legacy_desktop_file_chunks(id TEXT,data TEXT,deleted INTEGER);")?;
+    let sha = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+    let metadata = json!({"id":"file","name":"report.txt","mime_type":"text/plain","kind":"file","content_generation_id":"old","content_hash":sha(b"hello"),"size_bytes":5,"owner_id":"owner","created_at_ms":4});
+    source_db.execute(
+        "INSERT INTO legacy_desktop_files VALUES('file',?1,0)",
+        [metadata.to_string()],
+    )?;
+    for (generation, parts, content) in [
+        ("old", ["aGVs", "bG8="], b"hello"),
+        ("new", ["d28=", "cmxk"], b"world"),
+    ] {
+        for (idx, encoded) in parts.into_iter().enumerate() {
+            let id = format!("file-{generation}-{idx}");
+            let value = json!({"id":id,"file_id":"file","generation_id":generation,"content_hash":sha(content),"chunk_hash":sha(encoded.as_bytes()),"idx":idx,"total":2,"encoding":"base64","data":encoded,"created_at_ms":4});
+            source_db.execute(
+                "INSERT INTO legacy_desktop_file_chunks VALUES(?1,?2,0)",
+                rusqlite::params![id, value.to_string()],
+            )?;
+        }
+    }
+    let sources = [
+        source("desktop_files", "desktop"),
+        source("desktop_file_chunks", "desktop"),
+    ];
+    let tx = source_db.transaction()?;
+    let plan = file_import::collect(&tx, &sources, &[], &paths(dir.path()), &budget())?;
+    tx.rollback()?;
+    let cas = crate::cas::Cas::open(dir.path().join("cas"))?;
+    let prepared = file_import::prepare(plan, &cas, dir.path()).await?;
+    assert_eq!(prepared.source_rows["desktop_file_chunks"], 4);
+    assert_eq!(prepared.source_rows["desktop_files"], 1);
+    // Same file id follows the explicit selected generation, even without any
+    // local source file. Every older complete generation remains a files row.
+    assert_eq!(prepared.documents.len(), 3);
+    assert_eq!(
+        prepared
+            .documents
+            .iter()
+            .find(|d| d.id == "file")
+            .unwrap()
+            .body["ref"],
+        sha(b"hello")
+    );
+    let mut actual = std::collections::BTreeSet::new();
+    for doc in &prepared.documents {
+        assert_eq!(doc.body["owner_app"], "desktop");
+        assert_eq!(doc.body["owner_user"], "owner");
+        let blob = cas.verified(
+            doc.body["ref"].as_str().unwrap(),
+            doc.body["size"].as_u64().unwrap(),
+        )?;
+        let mut bytes = Vec::new();
+        cas.reader(&blob)?.read_to_end(&mut bytes)?;
+        actual.insert(bytes);
+    }
+    assert_eq!(
+        actual,
+        std::collections::BTreeSet::from([b"hello".to_vec(), b"world".to_vec()])
+    );
+    let expected = prepared.documents.clone();
+    let writer = Registry.open(
+        DbId::new(dir.path().join("sync.sqlite3"))?,
+        WriterOptions::default(),
+    )?;
+    writer.ready().await?;
+    let mut def = definition("files", "v4-base");
+    def.app_id = "ctox-platform".into();
+    let plan = ReleasePlan {
+        version: "v4-base".into(),
+        manifests: vec![],
+        libs: vec![],
+        collections: BTreeMap::from([("ctox-platform".into(), vec![def])]),
+        migrations: BTreeMap::new(),
+        removed_sync_settings: vec![],
+        field_merge_core_rule: vec![],
+    };
+    base_release::publish(&writer, &plan, &ReleaseMigration, 1).await?;
+    let first = super::super::write_page(&writer, prepared.documents).await?;
+    let before = writer
+        .submit(WriteJob::new(JobOptions::default(), |tx| {
+            sql(crate::change_log::head(tx))
+        }))?
+        .await?;
+    let tx = source_db.transaction()?;
+    let plan = file_import::collect(&tx, &sources, &[], &paths(dir.path()), &budget())?;
+    tx.rollback()?;
+    let replay = file_import::prepare(plan, &cas, dir.path()).await?;
+    assert_eq!(expected, replay.documents);
+    let replay = super::super::write_page(&writer, replay.documents).await?;
+    assert_eq!(replay.collections["files"].inserted, 0);
+    let after = writer
+        .submit(WriteJob::new(JobOptions::default(), |tx| {
+            sql(crate::change_log::head(tx))
+        }))?
+        .await?;
+    assert_eq!(before.head_seq, after.head_seq);
+    let target = writer
+        .submit(WriteJob::new(JobOptions::default(), move |tx| {
+            let def = sql(schema::active_collection(tx, "files"))?.unwrap();
+            let table = sql(crate::change_log::identifier(&def.table))?;
+            let count: usize = sql(tx.query_row(
+                &format!("SELECT count(*) FROM {table} WHERE deleted=0"),
+                [],
+                |r| r.get(0),
+            ))?;
+            assert_eq!(count, expected.len());
+            for doc in expected {
+                let raw: String = sql(tx.query_row(
+                    &format!("SELECT data FROM {table} WHERE id=?1"),
+                    [&doc.id],
+                    |r| r.get(0),
+                ))?;
+                assert_eq!(serde_json::from_str::<Value>(&raw).unwrap(), doc.body);
+            }
+            Ok(count)
+        }))?
+        .await?;
+    // Neither a partial generation nor a corrupt cached chunk may disappear
+    // silently. Both stop the import before any files metadata can be staged.
+    let tx = source_db.transaction()?;
+    tx.execute("UPDATE legacy_desktop_file_chunks SET data=json_set(data,'$.data','eHg=') WHERE id='file-new-0'",[])?;
+    assert!(
+        file_import::collect(&tx, &sources, &[], &paths(dir.path()), &budget())
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("file_chunk_hash")
+    );
+    tx.rollback()?;
+    source_db.execute(
+        "DELETE FROM legacy_desktop_file_chunks WHERE id='file-new-1'",
+        [],
+    )?;
+    let tx = source_db.transaction()?;
+    assert!(
+        file_import::collect(&tx, &sources, &[], &paths(dir.path()), &budget())
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("file_chunk_incomplete")
+    );
+    tx.rollback()?;
+    if let Ok(p) = std::env::var("DESKTOP_IMPORT_PROOF") {
+        fs::write(p,serde_json::to_vec_pretty(&json!({"source_database":"business-os-rxdb.sqlite3","physical_chunk_rows":4,"file_metadata_rows":1,"target_file_rows":target,"first":first,"replay":replay,"head_before":before.head_seq.to_string(),"head_after":after.head_seq.to_string(),"byte_hashes":[sha(b"hello"),sha(b"world")],"payload_equality":true})).unwrap())?;
+    }
+    writer.shutdown().await?;
+    Ok(())
+}

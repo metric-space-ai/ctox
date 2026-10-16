@@ -65,6 +65,44 @@ pub struct PreparedFiles {
     pub source_rows: BTreeMap<String, usize>,
     pub references: BTreeMap<String, String>,
 }
+pub(crate) struct ByteFile {
+    pub id: String,
+    pub name: String,
+    pub mime: String,
+    pub owner_app: String,
+    pub owner_user: Option<String>,
+    pub bytes: Vec<u8>,
+}
+/// Staging adapter for E28 fields. The existing file/CAS importer owns bytes.
+pub(crate) async fn prepare_bytes(
+    files: Vec<ByteFile>,
+    cas: &Cas,
+    scratch: &Path,
+) -> Result<PreparedFiles> {
+    let count = files.len();
+    let pending = files
+        .into_iter()
+        .map(|f| Pending {
+            id: f.id,
+            name: f.name,
+            mime: f.mime,
+            owner_app: f.owner_app,
+            owner_user: f.owner_user,
+            created_at_ms: 0,
+            expected: Some(format!("{:x}", Sha256::digest(&f.bytes))),
+            content: Content::Bytes(f.bytes),
+        })
+        .collect();
+    prepare(
+        FilePlan {
+            pending,
+            source_rows: BTreeMap::from([("jour_fixe_fields".into(), count)]),
+        },
+        cas,
+        scratch,
+    )
+    .await
+}
 /// Attach metadata to the ordinary owner import after bytes are in CAS.
 pub fn attach(
     mut snapshot: super::core_import::CoreImport,
@@ -196,19 +234,24 @@ pub fn collect(
     };
     let mut seen_rows = 0usize;
     let mut seen_bytes = 0usize;
+    let mut records = Vec::new();
     for source in sources {
         if source.owner_app.is_empty()
             || !(source.collection == "desktop_files"
+                || source.collection == "desktop_file_chunks"
                 || source.collection.ends_with("_blob_chunks"))
         {
             return Err(invalid("file_collection_not_allowed"));
+        }
+        if source.collection == "desktop_file_chunks" && source.owner_app != "desktop" {
+            return Err(invalid("desktop_chunks_app_owner"));
         }
         let table = sql(crate::change_log::identifier(&source.table))?;
         let mut stmt = sql(tx.prepare(&format!(
             "SELECT data FROM {table} WHERE deleted=0 ORDER BY id LIMIT ?1"
         )))?;
         let mut cursor = sql(stmt.query([budget.rows.saturating_add(1) as i64]))?;
-        let mut groups: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+        let mut docs = Vec::new();
         while let Some(row) = sql(cursor.next())? {
             let raw: String = sql(row.get(0))?;
             seen_rows += 1;
@@ -222,56 +265,45 @@ pub fn collect(
                 .source_rows
                 .entry(source.collection.clone())
                 .or_default() += 1;
-            if source.collection == "desktop_files" {
-                if value["kind"].as_str() == Some("folder") {
-                    plan.pending.push(Pending {
-                        id: required(&value, "id")?.into(),
-                        name: required(&value, "name")?.into(),
-                        mime: "inode/directory".into(),
-                        owner_app: source.owner_app.clone(),
-                        owner_user: source_owner(&value, source),
-                        created_at_ms: value["created_at_ms"].as_i64().unwrap_or(0),
-                        expected: None,
-                        content: Content::Directory,
-                    });
-                    continue;
-                }
-                let path = value["local_path"]
-                    .as_str()
-                    .or_else(|| value["path"].as_str())
-                    .ok_or_else(|| invalid("desktop_file_path_missing"))?;
-                plan.pending.push(Pending {
-                    id: required(&value, "id")?.into(),
-                    name: required(&value, "name")?.into(),
-                    mime: value["mime_type"]
-                        .as_str()
-                        .unwrap_or("application/octet-stream")
-                        .into(),
-                    owner_app: source.owner_app.clone(),
-                    owner_user: source_owner(&value, source),
-                    created_at_ms: value["created_at_ms"].as_i64().unwrap_or(0),
-                    expected: value["content_hash"]
-                        .as_str()
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_owned),
-                    content: Content::File(copied_path(paths, Path::new(path))?),
-                });
+            docs.push(value);
+        }
+        records.push((source, docs));
+    }
+    // Materialize each generation independently before resolving desktop metadata.
+    // Never mix equal idx values from different generations or guess the newest.
+    let mut desktop_versions: BTreeMap<String, Vec<(String, Vec<u8>)>> = BTreeMap::new();
+    for (source, docs) in records
+        .iter()
+        .filter(|(s, _)| s.collection != "desktop_files")
+    {
+        let desktop = source.collection == "desktop_file_chunks";
+        let mut groups: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
+        for doc in docs {
+            let key = if desktop {
+                json!([
+                    required(doc, "file_id")?,
+                    doc["generation_id"].as_str().unwrap_or("")
+                ])
+                .to_string()
             } else {
-                groups
-                    .entry(required(&value, "blob_id")?.into())
-                    .or_default()
-                    .push(value);
-            }
+                required(doc, "blob_id")?.to_owned()
+            };
+            groups.entry(key).or_default().push(doc);
         }
         for (blob, mut chunks) in groups {
             chunks.sort_by_key(|c| c["idx"].as_u64().unwrap_or(u64::MAX));
-            let first = &chunks[0];
+            let first = chunks[0];
             let total = first["total"]
                 .as_u64()
                 .ok_or_else(|| invalid("file_chunk_total"))?;
             if total == 0 || total != chunks.len() as u64 {
                 return Err(invalid("file_chunk_incomplete"));
             }
+            let expected = if desktop {
+                first["content_hash"].as_str().filter(|s| !s.is_empty())
+            } else {
+                None
+            };
             let mut bytes = Vec::new();
             for (idx, chunk) in chunks.iter().enumerate() {
                 if chunk["idx"].as_u64() != Some(idx as u64)
@@ -280,15 +312,42 @@ pub fn collect(
                 {
                     return Err(invalid("file_chunk_sequence"));
                 }
-                let data = decode(
-                    chunk["data"]
-                        .as_str()
-                        .ok_or_else(|| invalid("file_chunk_data"))?,
-                )?;
+                if desktop
+                    && (chunk["generation_id"] != first["generation_id"]
+                        || chunk["content_hash"] != first["content_hash"])
+                {
+                    return Err(invalid("file_chunk_mixed_generation"));
+                }
+                let encoded = chunk["data"]
+                    .as_str()
+                    .ok_or_else(|| invalid("file_chunk_data"))?;
+                if let Some(expected) = chunk["chunk_hash"]
+                    .as_str()
+                    .filter(|s| desktop && !s.is_empty())
+                {
+                    if format!("{:x}", Sha256::digest(encoded.as_bytes())) != expected {
+                        return Err(invalid("file_chunk_hash"));
+                    }
+                }
+                let data = decode(encoded)?;
                 if bytes.len().saturating_add(data.len()) > budget.bytes {
                     return Err(invalid("file_import_budget"));
                 }
                 bytes.extend(data);
+            }
+            if let Some(sha) = expected {
+                if format!("{:x}", Sha256::digest(&bytes)) != sha {
+                    return Err(invalid("file_content_hash"));
+                }
+            }
+            if desktop {
+                desktop_versions
+                    .entry(required(first, "file_id")?.into())
+                    .or_default()
+                    .push((
+                        first["generation_id"].as_str().unwrap_or("").into(),
+                        bytes.clone(),
+                    ));
             }
             plan.pending.push(Pending {
                 id: blob_file_id(&source.collection, &blob),
@@ -300,8 +359,74 @@ pub fn collect(
                 owner_app: source.owner_app.clone(),
                 owner_user: source_owner(first, source),
                 created_at_ms: first["created_at_ms"].as_i64().unwrap_or(0),
-                expected: None,
+                expected: expected.map(str::to_owned),
                 content: Content::Bytes(bytes),
+            });
+        }
+    }
+    for (source, docs) in records
+        .iter()
+        .filter(|(s, _)| s.collection == "desktop_files")
+    {
+        for value in docs {
+            let id = required(value, "id")?;
+            let directory = value["kind"].as_str() == Some("folder");
+            let content = if directory {
+                Content::Directory
+            } else {
+                let generation = value["active_generation_id"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| {
+                        value["content_generation_id"]
+                            .as_str()
+                            .filter(|s| !s.is_empty())
+                    });
+                let versions = desktop_versions.get(id);
+                let selected = versions.and_then(|v| {
+                    if let Some(g) = generation {
+                        v.iter().find(|(key, _)| key == g)
+                    } else if v.len() == 1 {
+                        v.first()
+                    } else {
+                        None
+                    }
+                });
+                if let Some((_, bytes)) = selected {
+                    if value["size_bytes"]
+                        .as_u64()
+                        .is_some_and(|n| n != bytes.len() as u64)
+                    {
+                        return Err(invalid("desktop_file_size_mismatch"));
+                    }
+                    Content::Bytes(bytes.clone())
+                } else {
+                    let path = value["local_path"]
+                        .as_str()
+                        .or_else(|| value["path"].as_str())
+                        .ok_or_else(|| invalid("desktop_file_path_or_generation_missing"))?;
+                    Content::File(copied_path(paths, Path::new(path))?)
+                }
+            };
+            plan.pending.push(Pending {
+                id: id.into(),
+                name: required(value, "name")?.into(),
+                mime: if directory {
+                    "inode/directory"
+                } else {
+                    value["mime_type"]
+                        .as_str()
+                        .unwrap_or("application/octet-stream")
+                }
+                .into(),
+                owner_app: source.owner_app.clone(),
+                owner_user: source_owner(value, source),
+                created_at_ms: value["created_at_ms"].as_i64().unwrap_or(0),
+                expected: value["content_hash"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned),
+                content,
             });
         }
     }
@@ -349,6 +474,7 @@ pub fn collect(
     }
     Ok(plan)
 }
+
 /// Run outside the source read transaction and the destination writer. Import
 /// bytes with the EXISTING CAS; metadata is committed later by write_page.
 pub async fn prepare(plan: FilePlan, cas: &Cas, scratch: &Path) -> Result<PreparedFiles> {
