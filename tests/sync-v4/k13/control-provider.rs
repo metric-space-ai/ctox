@@ -34,10 +34,10 @@ async fn dispatch(inputs: Arc<StoreInputs>, request: Value, load:&mut Option<Loa
         "sourceRelease" => source_release::publish(inputs,source.to_owned(),text(args,"appId")?.to_owned(),
             BusinessOsActor::new(Some(actor.id),&actor.role)).await,
         "readRights" => {
-            let rights=inputs.sync.readers.read_job(ReadJob::new(Default::default(),|db|{
-                let tx=db.unchecked_transaction()?;let rights=sync_rights::read(&tx)?;
+            let rights=inputs.sync.readers.read(|tx|{
+                let rights=sync_rights::read(tx)?;
                 Ok(json!({"rights_ver":rights.rights_ver,"rules":rights.rules}))
-            })).await?;Ok(rights)
+            }).await?;Ok(rights)
         }
         "processIdentity" => Ok(json!({"pid":std::process::id(),
             "instanceId":inputs.instance_signer()?.instance_id(),
