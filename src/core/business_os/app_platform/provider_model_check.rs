@@ -21,6 +21,20 @@ fn request(payload: &Value) -> Option<ModelCheckRequest> {
         && (1..9_007_199_254_740_991).contains(&r.expected_account_revision))
     .then_some(r)
 }
+/// Writer callbacks have no ambient Tokio policy context. Read the same
+/// canonical P6 rights snapshot as app publication, inside this transaction.
+pub(super) fn permitted(tx: &Transaction<'_>, actor: &BusinessOsActor) -> bool {
+    actor.id.as_deref().is_some_and(|id| !id.is_empty())
+        && policy::sync_rights::read(tx).is_ok_and(|rights| {
+            policy::evaluate_with_rights(
+                &rights,
+                actor,
+                BusinessOsPermission::IntegrationsManage,
+                &BusinessOsScope::workspace(),
+            )
+            .allowed
+        })
+}
 pub(super) fn prepare(
     tx: &Transaction<'_>,
     actor: &BusinessOsActor,
@@ -59,7 +73,7 @@ pub(crate) fn finish(
     let r = request(&command.payload).ok_or_else(|| invalid("invalid admitted model check"))?;
     if (saved["type"].is_string()
         && super::super::runtime_host::actor(tx, actor.id.as_deref().unwrap_or(""))? != *actor)
-        || !provider_permission(actor, BusinessOsPermission::IntegrationsManage)
+        || !permitted(tx, actor)
     {
         return record(
             tx,

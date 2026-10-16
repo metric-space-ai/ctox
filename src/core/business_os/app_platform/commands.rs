@@ -334,7 +334,12 @@ fn provider_command(
     } else {
         BusinessOsPermission::IntegrationsManage
     };
-    if !provider_permission(actor, right) {
+    let permitted = if command.command_type == "instance.providers.models.check" {
+        model_check::permitted(tx, actor)
+    } else {
+        provider_permission(actor, right)
+    };
+    if !permitted {
         return reject(
             "forbidden",
             "permission_denied",
