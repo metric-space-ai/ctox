@@ -41,6 +41,7 @@ impl RunningEngine for FixtureEngine {
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn foreground_owns_real_files_and_drains_engine_before_store() -> anyhow::Result<()> {
+    let _scope = isolate_test_roots().await;
     anyhow::ensure!(
         std::env::var_os("CTOX_STATE_ROOT").is_none(),
         "fixture refuses configured state root"

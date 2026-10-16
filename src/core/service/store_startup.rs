@@ -31,6 +31,25 @@ struct Factories {
     factories: Vec<Arc<dyn EngineFactory>>,
 }
 static FACTORIES: OnceLock<Mutex<Factories>> = OnceLock::new();
+#[cfg(all(test, unix))]
+static TEST_ROOTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+#[cfg(all(test, unix))]
+pub(super) struct ForegroundTestScope(tokio::sync::MutexGuard<'static, ()>);
+#[cfg(all(test, unix))]
+pub(super) async fn isolate_test_roots() -> ForegroundTestScope {
+    ForegroundTestScope(TEST_ROOTS.lock().await)
+}
+#[cfg(all(test, unix))]
+impl Drop for ForegroundTestScope {
+    fn drop(&mut self) {
+        // The production factory registry is process-wide. Contract fixtures
+        // isolate and restore it rather than depending on test-filter ordering.
+        *FACTORIES
+            .get_or_init(Mutex::default)
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Factories::default();
+    }
+}
 /// Called once by native registration code, before run_foreground. Hot-plugged
 /// apps use the already bound app engine; they do not register native engines.
 pub(crate) fn bind_engine(factory: Arc<dyn EngineFactory>) -> Result<(), StoreError> {

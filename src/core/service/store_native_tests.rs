@@ -72,6 +72,7 @@ impl Signal {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn foreground_retains_real_native_authority_after_sixty_seconds_idle() -> anyhow::Result<()> {
+    let _scope = crate::service::store_startup::isolate_test_roots().await;
     anyhow::ensure!(
         std::env::var_os("CTOX_STATE_ROOT").is_none(),
         "fixture refuses configured state root"
