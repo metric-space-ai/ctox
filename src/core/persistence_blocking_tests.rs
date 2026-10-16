@@ -32,6 +32,15 @@ async fn guard_followup_blocking_entry_preserves_owner_and_context_boundaries() 
             );
             Ok(())
         })?;
+        let callback_root = work.clone();
+        crate::business_os::store::run_subscription_persistence(&work, move || {
+            store_text_value(&callback_root, "provider-callback", Some("same-owner"))?;
+            assert_eq!(
+                load_text_value(&callback_root, "provider-callback")?.as_deref(),
+                Some("same-owner")
+            );
+            Ok(())
+        })?;
         assert!(
             require_sync_owner_context().is_err(),
             "admission leaked to the caller"
