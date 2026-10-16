@@ -194,7 +194,10 @@ impl<T> SendQueue<T> {
 
 // Leave one physical frame for DCEP/association overhead. Each strict-priority
 // lane keeps a first frame of credit that lower-priority traffic cannot spend.
-const DATA_BUDGET: usize = ASSOCIATION_BUDGET - FRAME_BYTES;
+// The bootstrap channel is outside the seven V4 channels and can retain a
+// complete unfragmented Hello while those channels open. Keep its original
+// 16-KiB allowance instead of shrinking it with the new 1200-byte DATA size.
+const DATA_BUDGET: usize = ASSOCIATION_BUDGET - super::hello::MAX_HELLO_BYTES;
 fn channel_window(channel: usize) -> usize {
     if channel < 3 || channel == 6 {
         2 * FRAME_BYTES
@@ -218,8 +221,9 @@ impl AssociationBudget {
     fn observe_rtt(&mut self, rtt_ms: u64) { self.rtt_ms = rtt_ms; }
     fn window(&self, channel: usize) -> usize {
         if channel < 3 || channel == 6 { return channel_window(channel); }
-        // 5 MB/s BDP, conservative 20-ms startup floor; never borrow strict credit.
-        let bdp = (self.rtt_ms.max(20) as u128 * 5_000).min(usize::MAX as u128) as usize;
+        // 5 MB/s application payload plus framing/RTT headroom; never borrow
+        // strict credit. The association ceiling remains authoritative.
+        let bdp = (self.rtt_ms.max(20) as u128 * 6_000).min(usize::MAX as u128) as usize;
         bdp.div_ceil(FRAME_BYTES).saturating_mul(FRAME_BYTES).min(channel_window(channel))
     }
 
@@ -1163,7 +1167,16 @@ mod tests {
     fn v4_scheduler_association_budget_covers_all_channels_and_waits_for_low() {
         assert_eq!(FRAME_BYTES, webrtc::data_channel::sctp_data_payload_limit());
         let mut reserved = AssociationBudget::default();
-        assert!(reserved.window(5) >= 100_000, "20-ms BDP must cover 5 MB/s");
+        // The window must hold 20 ms of actual encoded application payload,
+        // not merely 100 KB of physical frames (which include frame headers).
+        let mut seed = 0x1234_5678u32;
+        let payload: Vec<u8> = (0..100_000).map(|_| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 24) as u8
+        }).collect();
+        let required: usize = framer().encode(Lane::Transfer, WireSeq(1), &payload)
+            .unwrap().iter().map(Vec::len).sum();
+        assert!(reserved.window(5) >= required, "20-ms BDP must include application framing");
         let startup = reserved.window(5);
         reserved.observe_rtt(600);
         assert!(reserved.window(5) >= startup);
@@ -1171,7 +1184,7 @@ mod tests {
         for lane in [Lane::Control, Lane::Commands, Lane::Interactive] {
             assert!(reserved.reserve(lane.index(), FRAME_BYTES), "bulk consumed strict-lane credit");
         }
-        assert!(reserved.buffered() <= ASSOCIATION_BUDGET);
+        assert!(reserved.buffered() + super::super::hello::MAX_HELLO_BYTES <= ASSOCIATION_BUDGET);
         assert!(!reserved.reserve(5, ASSOCIATION_BUDGET + 1));
         assert!(!reserved.reserve(7, 1));
         reserved.drained(5);
