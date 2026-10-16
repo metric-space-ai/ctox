@@ -567,13 +567,17 @@ function loadAnalysisSections(analysisDir) {
   return sections;
 }
 
-export function loadPlatform(file) {
+export function loadPlatform(file, repo = DEFAULT_REPO) {
   if (file && fs.existsSync(file)) {
     const m = readJson(file);
     const exports = {};
     for (const [name, ops] of Object.entries(m.exports || {})) if (!name.startsWith('_')) exports[name] = sortOps(ops);
     const collections = Object.keys(m.collections || {}).filter((n) => !n.startsWith('_'));
-    return { exports, collections, source: file.startsWith(os.homedir()) ? `~${file.slice(os.homedir().length)}` : file };
+    // Repo-relativ, sonst hinge die Ausgabe vom Checkout-Pfad ab und --check wäre je Klon/CI anders (16.10.: absoluter Pfad).
+    const abs = path.resolve(file), root = path.resolve(repo);
+    const source = abs.startsWith(root + path.sep) ? path.relative(root, abs).split(path.sep).join('/')
+      : abs.startsWith(os.homedir()) ? `~${abs.slice(os.homedir().length)}` : abs;
+    return { exports, collections, source };
   }
   return { exports: { ...PLATFORM_FALLBACK_EXPORTS }, collections: Object.keys(PLATFORM_FALLBACK_EXPORTS), source: 'PLATFORM_FALLBACK_EXPORTS (gen-manifest.mjs)' };
 }
@@ -1496,7 +1500,7 @@ export async function generate(options = {}) {
   const contract = fs.existsSync(contractFile) ? readJson(contractFile) : {};
   const baselineFile = options.baseline === undefined ? DEFAULT_BASELINE : options.baseline;
   const baseline = baselineFile && fs.existsSync(baselineFile) ? readJson(baselineFile).owners || {} : {};
-  const platform = loadPlatform(options.platformManifest === undefined ? path.join(repo, PLATFORM_MANIFEST_FILE) : options.platformManifest);
+  const platform = loadPlatform(options.platformManifest === undefined ? path.join(repo, PLATFORM_MANIFEST_FILE) : options.platformManifest, repo);
   const demandOnly = loadDemandOnly(repo);
   const analysis = loadAnalysisSections(analysisDir);
 
