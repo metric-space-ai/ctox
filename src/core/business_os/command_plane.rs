@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 146] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 149] = [
     "news.topic.schedule",
     "news.source.auth_assist",
     "ctox.crew.member.create",
