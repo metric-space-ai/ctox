@@ -3,26 +3,30 @@
 
 The root binary is built from the requested train before test-only wiring.
 Private modules are wired only in the lane checkout and restored in finally.
-R13 uses the pinned #827 authority because train7 does not yet include it;
-this explicit composition is recorded, never represented as train7 alone.
+R13 uses the train's actual rights authority. The legacy #827 composition is
+retained only for reproducing the original review baseline.
 """
 import argparse, hashlib, json, os, re, shutil, signal, subprocess, sys, time
 from pathlib import Path
 
 ROOT = Path.cwd()
 HERE = ROOT / 'tests/sync-v4/p6-review-4'
-TRAIN = '59849cee53a9919e657e3a2ed82c8fd1f75595fa'
+TRAIN = '3c6cd65ef3a4721fc5b33776dc3ce0a30cd3dfb6'
 RIGHTS = "7f972f89b72aa4da7af19b5fae07d50f23c6a600"
 USE_CURRENT_RIGHTS = (ROOT / "src/core/store/rights.rs").is_file()
 if USE_CURRENT_RIGHTS:
     RIGHTS = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 
 parser = argparse.ArgumentParser()
+parser.add_argument('--train', default=TRAIN, help='immutable product train revision, including any controller fix')
 parser.add_argument('--only', choices=['all', 'regressions', 'r10', 'r13', 'r14', 'scenarios']
 , default='all')
 parser.add_argument('--deadline',type=float,help='absolute UTC Unix deadline; reserve time for owned-process cleanup')
 parser.add_argument('--expect-red', action='store_true', help='qualify specifically reproduced assertion failures; default remains a red target')
 args = parser.parse_args()
+TRAIN = subprocess.check_output(['git','rev-parse',args.train],text=True).strip()
+subprocess.run(['git','merge-base','--is-ancestor',TRAIN,'HEAD'],check=True)
+subprocess.run(['git','diff','--exit-code',TRAIN,'--','src','Cargo.toml','Cargo.lock'],check=True)
 assert sys.platform == 'linux' and os.environ.get('BUILD_LANE_BIN') and os.environ.get('CARGO_TARGET_DIR'), 'canonical GPU lane required'
 os.environ.setdefault('TOKIO_WORKER_THREADS','2')
 # Existing build-only switch: these contracts never exercise optional local
@@ -64,7 +68,7 @@ def run(name, command, timeout=1200, **kwargs):
     child=subprocess.Popen([str(x) for x in command], stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,text=True,start_new_session=True,**kwargs)
     ACTIVE=child
-    (OUT/(name+'-process.json')).write_text(json.dumps(dict(owner='01a101a1-d8e3',
+    (OUT/(name+'-process.json')).write_text(json.dumps(dict(owner='01a14204-d613',
         pid=child.pid,pgid=child.pid,purpose=name,output=str(OUT),stop=f'terminal or {timeout}s'),indent=2))
     try:
         stdout,_=child.communicate(timeout=timeout)
