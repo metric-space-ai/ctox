@@ -516,6 +516,19 @@ pub(crate) fn apply_write(
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?;
+        // E35: CAS is distinct from base_rev field merge. Check the live row here,
+        // including buffered writes, under the same writer transaction as the effect
+        // and durable rejection receipt. Never merge around an explicit expectation.
+        if request.op == WriteOp::Patch
+            && request.expected_revision.as_ref().is_some_and(|expected| {
+                !row.as_ref()
+                    .is_some_and(|(rev, _, deleted)| !deleted && rev == expected)
+            })
+        {
+            let result = rejected(request, "revision_conflict");
+            remember(tx, participant, request, &result, now_ms)?;
+            return Ok(result);
+        }
         if request.collection == "business_commands"
             && request.op == WriteOp::Put
             && base.is_none()

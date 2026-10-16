@@ -483,6 +483,7 @@ async fn command_kernel_p5_wire_replays_the_native_canonical_document() {
                             collection: "business_commands".into(),
                             id: id.clone(),
                             base_rev: receipt.result.rev.clone(),
+                            expected_revision: None,
                             base_seq: receipt.result.seq,
                             gen: 1,
                             schema_ver: 3,
