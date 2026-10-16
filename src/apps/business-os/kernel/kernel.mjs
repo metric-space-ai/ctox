@@ -1285,6 +1285,58 @@ export function createKernel(opts = {}) {
       if (!mine && docs.length) throw new CtoxError('forbidden', 'Datei gehört einer anderen App', { path: sel.id ? 'id' : 'ref' });
       return mine ?? null;
     }
+    // E30: a CAS hash is not authority. Only canonical, still-readable rows
+    // grant access; an optimistic reference cannot mint a read grant.
+    async function readableFile(sel) {
+      guardAlive();
+      if (!isPlainObject(sel) || (typeof sel.id !== 'string' && typeof sel.ref !== 'string')) throw new CtoxError('invalid', 'files: {id} oder {ref} nötig', {path:'ref'});
+      const docs = fileDocs().filter(d => sel.id ? d.id === sel.id : d.ref === sel.ref);
+      for (const d of docs) {
+        if (d.owner_app !== appId) continue;
+        const row = mirrorGet('files',d.id), base = row?.base;
+        if (row?.revoked) continue;
+        if (!base?.deleted && base?.data?.owner_app === appId && base.data.ref === d.ref) return d;
+        // files.put proves local bytes in the blob transaction, durably across
+        // reload. A plain optimistic files row cannot claim another app's CAS.
+        if (row?.pending && !base?.data && (await db.get('meta',`file-owner:${JSON.stringify([appId,d.id])}`))?.ref === d.ref) return d;
+      }
+      const currentManifest = owner => {
+        const ver = visible(mirrorGet('business_apps',owner))?.active_ver ?? activations.get(owner)?.activated_ver;
+        return versionDoc(owner,ver)?.manifest;
+      };
+      const caller = versionDoc(appId,app.ver)?.manifest;
+      const ownReferenceRows = new Set(['shell_preferences','app_drafts']);
+      function readableNamespace(ns) {
+        const c = ns.replace(/@g[1-9][0-9]*$/,'');
+        if (caller?.collections?.[c]) return ns === resolveNs(app,c);
+        const f = caller?.foreign_collections?.[c];
+        const owner = f?.owner_app ?? f?.app ?? f?.owner;
+        const om = owner && currentManifest(owner);
+        return !!(f?.ops?.includes('read') && om?.collections?.[c] && om?.exports?.[c]?.includes('read') && ns === nsName(c,om.generations?.[c] ?? 1));
+      }
+      const canonicalRows = [];
+      for (const [ns, rows] of mirror) {
+        const declared = readableNamespace(ns);
+        if (!declared && ns !== 'business_commands' && !ownReferenceRows.has(ns)) continue;
+        for (const row of rows.values()) if (!row.deleted && !row.revoked && !row.base?.deleted && row.base?.data && ownRowOk(ns,row.id)) {
+          const d = row.base.data;
+          // Standard API handles already expose own command results and own
+          // platform rows; they need no foreign-collection declaration.
+          if (declared || ownReferenceRows.has(ns) || (ns === 'business_commands' && d.app_id === appId && d.actor_id === userId)) canonicalRows.push([ns,d]);
+        }
+      }
+      const desktop = canonicalRows.find(([ns,d]) => ns.replace(/@g[1-9][0-9]*$/,'') === 'desktop_files' && d.id === sel.id && !d.is_deleted)?.[1];
+      if (desktop) {
+        const ref = [desktop.ref,desktop.content_ref,docs[0]?.ref].find(v => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v));
+        if (typeof ref !== 'string' || !/^[a-f0-9]{64}$/.test(ref)) throw new CtoxError('unavailable','Desktop file has no CAS reference',{path:'id'});
+        const meta = fileDocs().find(d => d.ref === ref);
+        return {...meta,id:desktop.id,ref,name:desktop.name ?? meta?.name,mime:desktop.mime ?? desktop.mime_type ?? meta?.mime,size:desktop.size ?? desktop.size_bytes ?? meta?.size};
+      }
+      const ref = docs[0]?.ref ?? sel.ref;
+      const containsRef = value => value !== null && typeof value === 'object' && (value.ref === ref || value.blob_ref === ref || Object.values(value).some(containsRef));
+      if (typeof ref === 'string' && /^[a-f0-9]{64}$/.test(ref) && canonicalRows.some(([,d]) => containsRef(d))) return docs[0] ?? {ref,id:ref,name:null};
+      throw new CtoxError('forbidden','File needs ownership or a readable reference',{path:sel.id ? 'id' : 'ref'});
+    }
     const fileInfo = (d) => ({ id: d.id, ref: d.ref, name: d.name ?? null, mime: d.mime ?? 'application/octet-stream', size: d.size ?? 0 });
     async function fileBytes(content) {
       if (isPlainObject(content) && typeof content.text === 'string') return { bytes: new TextEncoder().encode(content.text), text: true };
@@ -1309,9 +1361,10 @@ export function createKernel(opts = {}) {
       },
       /** CAP-3b: get({id|ref}) → {found, id, ref, name, size, mime, text? | bytes?}; Text nur für UTF-8 ≤ 512 KiB. String = Altform (Blob). */
       async get(sel) {
-        if (typeof sel === 'string') return getBlob(sel);
+        if (typeof sel === 'string') return getBlob((await readableFile({ref:sel})).ref);
         guardAlive();
-        const d = ownFile(sel);
+        let d = await readableFile(sel);
+        if (sel.range !== undefined && !Number.isSafeInteger(d.size)) d = {...d,size:(await getBlob(d.ref)).size};
         if (!d) return { found: false, ref: sel.ref ?? null, ...(sel.id ? { id: sel.id } : {}) };
         if (sel.range !== undefined) {
           const {start, end} = sel.range ?? {};
@@ -1392,6 +1445,7 @@ export function createKernel(opts = {}) {
             const existing = await t.get('blobs', ref);
             await t.put('blobs', { ref, blob, size: blob.size, type: blob.type, pinned: true, last_used: Date.now(), ...(existing ? {} : {}) });
             await t.put('outbox', { op_id, collection: '__blobs', id: ref, op: 'upload', body: null, app_id: appId, app_ver: app.ver, created_at: Date.now(), origin_tab: tabId });
+            await t.put('meta',{key:`file-owner:${JSON.stringify([appId,id])}`,ref});
           });
           if(cancelledEarly){await db.tx(async t=>{await t.del('outbox',op_id);const b=await t.get('blobs',ref);if(b)await t.put('blobs',{...b,pinned:false});});return;}
           post({ type: 'outbox' });

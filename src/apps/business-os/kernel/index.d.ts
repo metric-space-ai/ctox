@@ -176,7 +176,7 @@ export type FileInfo = { id: string; ref: string; name: string | null; mime: str
 /** CAP-3b (#844): Ergebnis von files.get – Text nur für UTF-8 ≤ 512 KiB, sonst Bytes; nie Base64. */
 export type FileGetResult = ({ found: true } & FileInfo & ({ text: string } | { bytes: Uint8Array })) | { found: false; ref: string | null; id?: string };
 export interface FilesApi {
-  /** CAP-3b: nur Dateien der eigenen App; Datei einer anderen App → forbidden. */
+  /** E30: own file, readable desktop_files row with the same id (including read export), or BlobRef in a readable canonical document; otherwise forbidden. list/delete remain own-app only. */
   /** E26: byte range, end exclusive. Invalid bounds reject with CtoxError invalid/path range. */
   get(sel: ({ ref: string } | { id: string }) & { range: { start: number; end: number } }): Promise<({ found: true } & FileInfo & { bytes: Uint8Array }) | { found: false; ref: string | null; id?: string }>;
   get(sel: ({ ref: string } | { id: string }) & { range?: { start: number; end: number } }): Promise<FileGetResult>;
