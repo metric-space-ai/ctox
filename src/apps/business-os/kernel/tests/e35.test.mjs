@@ -66,7 +66,7 @@ test('E35 patch expectation is checked by the writer after local ack, not agains
 });
 test('E35 rejected file keeps metadata and done rejects with code/reason, also after reload',async t=>{
  const {k,options}=await open(t);
- await k.sim.publishAppVersion('ctox-platform','1',{collections:{files:schema},manifestExtra:{exports:{files:['read']}}});
+ await k.sim.publishAppVersion('ctox-platform','test-e35',{collections:{files:schema},manifestExtra:{exports:{files:['read']}}});
  await k.sim.publishAppVersion('notes','1',{manifestExtra:{foreign_collections:{files:{owner_app:'ctox-platform',ops:['read']}}}});
  await k.sim.setLink({state:'offline'});
  const api=k.appApi('notes','1'),handle=await api.files.put({text:'retained'},{id:'rejected-file',name:'receipt.txt'});
@@ -91,7 +91,7 @@ test('E35 rejected file keeps metadata and done rejects with code/reason, also a
 });
 
 test('E35 explicit CAS rejection completes the file handle and preserves metadata despite accepted write receipt',async t=>{
- const {k}=await open(t);await k.sim.publishAppVersion('ctox-platform','1',{collections:{files:schema},manifestExtra:{exports:{files:['read']}}});
+ const {k}=await open(t);await k.sim.publishAppVersion('ctox-platform','test-e35',{collections:{files:schema},manifestExtra:{exports:{files:['read']}}});
  await k.sim.publishAppVersion('notes','1',{manifestExtra:{foreign_collections:{files:{owner_app:'ctox-platform',ops:['read']}}}});
  await k.sim.setLink({state:'offline'});const api=k.appApi('notes','1'),file=await api.files.put({text:'CAS rejected bytes'},{id:'cas-rejected'});
  k.sim.rejectNextUpload({code:'quota',reason:'CAS quota denied'});
@@ -108,7 +108,7 @@ test('E35 explicit CAS rejection completes the file handle and preserves metadat
 test('E35 file completion resumes when a reader takes over after lost broadcasts',async t=>{
  const options={instanceId:`e35-handoff-${process.pid}-${++serial}`,userId:'alice',storage:'memory',locks:testLocks,latencyMs:0};
  const leader=createStubKernel(options);await leader.ready;t.after(()=>leader.close());
- await leader.sim.publishAppVersion('ctox-platform','1',{collections:{files:schema},manifestExtra:{exports:{files:['read']}}});
+ await leader.sim.publishAppVersion('ctox-platform','test-e35',{collections:{files:schema},manifestExtra:{exports:{files:['read']}}});
  await leader.sim.publishAppVersion('notes','1',{manifestExtra:{foreign_collections:{files:{owner_app:'ctox-platform',ops:['read']}}}});
  const reader=createStubKernel(options);await reader.ready;t.after(()=>reader.close());reader.sim.dropBroadcasts(true);
  const file=reader.appApi('notes','1').files.put(new Blob(['durable takeover bytes']),{id:'handoff-file'});await file.local;

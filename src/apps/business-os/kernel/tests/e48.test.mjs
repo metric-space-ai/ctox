@@ -11,6 +11,8 @@ test('E48 Shell news v4-api gets business_commands through automatically publish
  const platform=await k.shell.artifacts.manifest('ctox-platform','1');assert.ok(platform.collections.business_commands);assert.ok(platform.exports.business_commands.includes('read'));
  await k.sim.publishAppVersion('outsider','1',{collections:{own:definition}});
  assert.throws(()=>k.appApi('outsider','1').query('business_commands',{}),e=>e.code==='forbidden');
+ await k.sim.publishAppVersion('claimant','1',{collections:{business_commands:definition}});
+ assert.throws(()=>k.appApi('claimant','1').query('business_commands',{}),e=>e.code==='forbidden','an app cannot claim ownership of a platform collection');
 });
 test('E48 navigation grants exactly one files.get for the exact ref, expires, cannot delegate and is audited',async t=>{
  const k=await open(t);for(const id of ['vault','viewer','other'])await k.sim.publishAppVersion(id,'1',{collections:{[id+'_rows']:definition}});

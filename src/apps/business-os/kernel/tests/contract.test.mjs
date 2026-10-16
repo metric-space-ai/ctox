@@ -1,3 +1,4 @@
+import {installFixtureApp} from './platform-fixture.mjs';
 import {testLocks} from './web-locks.mjs';
 // node --test test/  (Node ≥ 22; ohne IndexedDB läuft der In-Memory-Speicher mit gleicher Schnittstelle)
 import { test, afterEach } from 'node:test';
@@ -151,7 +152,7 @@ test('migrated → archived_ref, entfernte Felder im Core-Archiv', async () => {
   const r = await api.put('notes', { id: 'm', title: 't', legacy: 42 }).result;
   assert.equal(r.status, 'migrated');
   assert.match(r.archived_ref, /^core_archive:/);
-  assert.deepEqual({ ...api.get('notes', 'm').get() }, { id: 'm', title: 't' });
+  assert.deepEqual({ ...api.get('notes', 'm').get() }, { id: 'm', title: 't', _rev:r.rev, _pending:false });
   await k.close();
 });
 
@@ -232,6 +233,7 @@ test('Outbox überlebt Neustart (gleiche Instanz+Nutzer), cancel nur vor dem Sen
 
 test('command: Dokument mit gepushtem Status queued → accepted → running → done | failed', async () => {
   const k = await mk();
+  await installFixtureApp(k,'writer',{platform:['business_commands']});
   const api = k.appApi('writer', '1');
   k.sim.onCommand('notes.export', async (payload) => ({ count: payload.n * 2 }));
   const c = api.command('notes.export', { n: 21 });
@@ -387,6 +389,7 @@ test('windowState je Tab und Nutzer; shell_preferences nur eigene Zeile (§16.19
   const t2 = createStubKernel({locks:testLocks, ...opts, tabKey: 'tab-B' });
   await t2.ready;
   assert.equal(await t2.windowState.get('layout'), null, 'anderer Tab sieht nichts');
+  await installFixtureApp(t2,'shell',{platform:['shell_preferences']});
   const api = t2.appApi('shell', '1');
   assert.equal((await api.put('shell_preferences', { id: 'mia', pins: ['crm'], launcher_order: ['crm', 'mail'] }).result).status, 'accepted');
   await assert.rejects(api.put('shell_preferences', { id: 'tom', pins: [] }).local, (e) => e.code === 'forbidden');
@@ -398,6 +401,7 @@ test('windowState je Tab und Nutzer; shell_preferences nur eigene Zeile (§16.19
 
 test('registerHeader nimmt ein Element; link.state nur online|offline (§16.19 Nr. 5, 7)', async () => {
   const k = await mk();
+  await installFixtureApp(k,'notes',{platform:['business_commands']});
   const api = k.appApi('notes', '1');
   const el = { tagName: 'DIV', id: 'kopf' }; // in Node gibt es kein HTMLElement; im Browser wird instanceof geprüft
   api.shell.registerHeader(el);
@@ -464,6 +468,7 @@ test('Zustandszone: report/clear je App, live, gleicher code ersetzt', async () 
 
 test('Dateien: put (Blob + Outbox + files-Dokument), get aus Cache, nach Räumung über „Spur 4“', async () => {
   const k = await mk();
+  await installFixtureApp(k,'docs',{platform:['files']});
   const api = k.appApi('docs', '1');
   const blob = new Blob(['Hallo Datei'], { type: 'text/plain' });
   const h = api.files.put(blob, { name: 'gruss.txt' });

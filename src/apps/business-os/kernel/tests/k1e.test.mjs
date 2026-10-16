@@ -1,3 +1,4 @@
+import {installFixtureApp} from './platform-fixture.mjs';
 // K-1e: §16.45 Collection-Liveness in kernel.metrics + kernel.reconnect(), §16.43 identity.device_id.
 import { testLocks } from './web-locks.mjs';
 import { test } from 'node:test';
@@ -20,6 +21,7 @@ const page = (k, collection, backlog, complete = true) => k.receivePage({ collec
 
 test('§16.45: metrics.collections – live nur bei Verbindung oben und Backlog 0 nach vollständiger Seite, sonst catching_up/offline', async (t) => {
   const k = await mk(t);
+  await installFixtureApp(k,'crm',{platform:['files']});
   await until(() => allLive(k), 4000, 'alle live');
   const c0 = cols(k).files;
   assert.deepEqual([c0.state, c0.backlog, c0.gen, typeof c0.since_ms], ['live', 0, 1, 'number']);

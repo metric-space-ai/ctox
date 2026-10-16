@@ -33,7 +33,7 @@ test('real transport feeds atomic IDB-style pages with canonical per-collection 
 test('platform collections use the platform schema rather than the calling app schema',async()=>{
  const k=createStubKernel({instanceId:'platform-schema',userId:'alice',storage:'memory',multiTab:false});
  try{await k.ready;
-  await k.sim.publishAppVersion('ctox-platform','1',{collections:{shell_preferences:{schema:{type:'object',required:['pins'],properties:{pins:{type:'array'}}}}}});
+  await k.sim.publishAppVersion('ctox-platform','test-schema',{collections:{shell_preferences:{schema:{type:'object',required:['pins'],properties:{pins:{type:'array'}}}}}});
   await k.sim.publishAppVersion('notes','1',{collections:{shell_preferences:{schema:{type:'object',required:['wrong']}}}});
   const api=k.appApi('notes','1');await assert.rejects(api.put('shell_preferences',{id:'alice'}).local,e=>e.code==='invalid');
   assert.equal((await api.put('shell_preferences',{id:'alice',pins:[]}).result).status,'accepted');
