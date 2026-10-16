@@ -35,3 +35,13 @@ test('V4 transport admits verified instance scopes and rejects invalid grants wi
  assert.equal(requests,0,'denied V4 never consults legacy authority');
  }finally{globalThis.fetch=prior;delete globalThis.CTOX_BUSINESS_OS_SESSION;}
 });
+
+
+test('native enrollment challenge reaches the device proof producer and cannot be substituted',async()=>{
+ const nonce='D'.repeat(43);let received;
+ const session=createKernelSession({instanceId:'instance',userId:'alice',hello:async(identity,challenge)=>{received=challenge;const value=offer(identity.instanceId);value.device_proof.nonce=challenge.nonce;return value;},verifyScopeToken:async()=>true});
+ const challenge={nonce};const value=await session.hello({instanceId:'instance',userId:'alice'},challenge);
+ assert.equal(received,challenge);assert.equal(value.device_proof.nonce,nonce);assert.throws(()=>session.tokens(),e=>e.code==='forbidden');
+ const stale=createKernelSession({instanceId:'instance',userId:'alice',hello:()=>offer('instance'),verifyScopeToken:async()=>true});
+ await assert.rejects(stale.hello({instanceId:'instance',userId:'alice'},challenge),e=>e.code==='forbidden');session.close();stale.close();
+});

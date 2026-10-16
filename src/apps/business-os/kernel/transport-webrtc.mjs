@@ -13,11 +13,11 @@ function deferred(){let resolve,reject;const promise=new Promise((r,j)=>{resolve
  * HTTP records nor V3 query/replication fallbacks exist in this adapter.
  */
 export class WebRTCKernelTransport extends KernelTransport {
- constructor(options){super();this.options=options;this.now=options.now??clock;this.readyState=deferred();this.ready=this.readyState.promise;this.listeners=[];this.pending=new Map();this.closed=false;this.scopes=new Map();this.samples=0;this.offset=null;}
+ constructor(options){super();this.options=options.authSession?{...options,hello:(...args)=>options.authSession.hello(...args)}:options;this.now=options.now??clock;this.readyState=deferred();this.ready=this.readyState.promise;this.listeners=[];this.pending=new Map();this.closed=false;this.scopes=new Map();this.samples=0;this.offset=null;}
  async connect(identity,events){
   if(this.events)throw new CtoxError('conflict','Transport already bound');this.identity={...identity};this.events=events;this.started=this.now();
   try {
-   const hello=this.options.authSession?await this.options.authSession.hello(identity):typeof this.options.hello==='function'?await this.options.hello(identity):this.options.hello;
+   const hello=typeof this.options.hello==='function'?await this.options.hello(identity):this.options.hello;
    if(hello?.instance_id!==identity.instanceId)throw new CtoxError('forbidden','Hello identity mismatch');
    if(typeof this.options.verifyPackage!=='function')throw new CtoxError('forbidden','Authenticated package verifier required');
    this.hello=new HelloConnection(hello,state=>{if(state.state==='closed'&&state.rejection)this.fail(new CtoxError('unavailable',`hello rejected: ${state.rejection.reason}`));},{handshakeTimeoutMs:this.options.handshakeTimeoutMs??10000});

@@ -171,11 +171,11 @@ export function createKernelSession({instanceId,userId,hello,verifyScopeToken,re
   if(!instanceId || !userId || typeof hello!=='function' || typeof verifyScopeToken!=='function')throw new CtoxError('forbidden','Authenticated bootstrap and scope verifier required');
   let selected=null;
   return Object.freeze({
-    async hello(identity) {
+    async hello(identity,challenge) {
       selected=null;
       if(identity.instanceId!==instanceId || identity.userId!==userId)throw new CtoxError('forbidden','Session identity mismatch');
-      const offer=decodeHelloFrame(JSON.stringify(await hello(identity)));
-      if(offer.type!=='hello' || offer.instance_id!==instanceId)throw new CtoxError('forbidden','Device hello identity mismatch');
+      const offer=decodeHelloFrame(JSON.stringify(await hello(identity,challenge)));
+      if(offer.type!=='hello' || offer.instance_id!==instanceId || (challenge && offer.device_proof.nonce!==challenge.nonce))throw new CtoxError('forbidden','Device hello identity mismatch');
       return offer;
     },
     async acceptHello(frame) {
