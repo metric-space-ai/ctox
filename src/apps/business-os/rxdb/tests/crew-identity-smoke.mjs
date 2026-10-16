@@ -7,7 +7,7 @@ import migrateLearning from '../../v4/schemas/migrations/ctox/ctox_crew_learning
 const source = (app) => normalizeCollectionsSchema(JSON.parse(readFileSync(
   new URL(`../../v4/schemas/${app}.collections.schema.json`, import.meta.url),
 ))).collections;
-const collections = { ...source('platform'), ...source('ctox') };
+const collections = { ...source('ctox-platform'), ...source('ctox') };
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js';
 const fixture = JSON.parse(readFileSync(new URL('../../../../core/rxdb/tests/fixtures/crew-identity.json', import.meta.url)));
 const contract = JSON.parse(readFileSync(new URL('../../../../core/business_os/business_os_schema_contract.json', import.meta.url)));
