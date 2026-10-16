@@ -89,7 +89,11 @@ fn chat_blob_e30_reference_and_cas_contract() -> anyhow::Result<()> {
     let db = fixture(&hash, bytes.len())?;
     let root = tempfile::tempdir()?;
     let cas = Cas::open(crate::paths::runtime_dir(root.path()).join("transfers"))?;
-    let mut upload = cas.receive("chat-test", &hash, bytes.len() as u64)?;
+    let mut upload = cas.receive(
+        &format!("{:x}", Sha256::digest(b"isolated-chat-transfer")),
+        &hash,
+        bytes.len() as u64,
+    )?;
     upload.append(0, bytes)?;
     upload.finish()?;
     for (chat, code) in [
@@ -206,6 +210,12 @@ fn chat_blob_intake_does_not_silently_drop_missing_or_invalid_references() {
     );
     let root = tempfile::tempdir().unwrap();
     command.client_context = json!({"actor":{"id":"alice","role":"admin","trusted":true}});
+    command.payload["instruction"] = json!("Inspect the attached document");
+    let error = preflight(root.path(), "forged", &command, None).unwrap_err();
+    assert_eq!(
+        failure_outcome("forged", &error).unwrap()["code"],
+        "forbidden"
+    );
     let error =
         materialize_business_chat_attachments(root.path(), "forged", &command, None).unwrap_err();
     assert_eq!(

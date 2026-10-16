@@ -47,6 +47,35 @@ pub(super) fn materialize(
     native_authorization: Option<&Value>,
     reference: &Value,
 ) -> anyhow::Result<MaterializedBusinessChatAttachment> {
+    let attachment =
+        authorize_reference(root, command_id, command, native_authorization, reference)?;
+    materialize_verified(root, command_id, attachment)
+}
+
+/// Reject unknown referring documents BEFORE the legacy chat owner claim can
+/// create a chat projection. Materialization checks current authority again.
+pub(super) fn preflight(
+    root: &Path,
+    command_id: &str,
+    command: &BusinessCommand,
+    native_authorization: Option<&Value>,
+) -> anyhow::Result<()> {
+    for reference in business_chat_attachment_refs(command) {
+        if reference.get("kind").and_then(Value::as_str) == Some("blob") {
+            command_instruction(command)?;
+            authorize_reference(root, command_id, command, native_authorization, &reference)?;
+        }
+    }
+    Ok(())
+}
+
+fn authorize_reference(
+    root: &Path,
+    command_id: &str,
+    command: &BusinessCommand,
+    native_authorization: Option<&Value>,
+    reference: &Value,
+) -> anyhow::Result<Attachment> {
     // This receipt is a native argument, not a field accepted from payload.
     // Revalidate it, or use the existing origin-aware native authentication; a peer actor claim never grants authority.
     let session = if let Some(authorization) = native_authorization {
@@ -62,11 +91,10 @@ pub(super) fn materialize(
     let chat_id = business_chat_id(command, command_id);
     let attachment: Attachment = serde_json::from_value(reference.clone())
         .map_err(|_| rejection("invalid", "blob_attachment_metadata"))?;
-    let attachment = crate::service::store_inputs::owned_read(root, true, move |db| {
+    crate::service::store_inputs::owned_read(root, true, move |db| {
         Ok(authorize(db, &app, &user_id, &chat_id, attachment))
     })
-    .map_err(|_| rejection("unavailable", "attachment_store_unavailable"))??;
-    materialize_verified(root, command_id, attachment)
+    .map_err(|_| rejection("unavailable", "attachment_store_unavailable"))?
 }
 
 fn has_reference(value: &Value, reference: &str) -> bool {

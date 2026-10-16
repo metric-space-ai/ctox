@@ -6815,6 +6815,7 @@ fn record_command_inner(
     if let (Some(authority), Some(receipt)) = (authority, native_authorization.as_mut()) {
         receipt["managed_mcp_authority"] = authority.receipt()?;
     }
+    chat_blob::preflight(root, &command_id, &command, native_authorization.as_ref())?;
     {
         let conn = open_store(root)?;
         if let Some(denied) = claim_or_reject_business_chat(root, &conn, &command_id, &command)? {
