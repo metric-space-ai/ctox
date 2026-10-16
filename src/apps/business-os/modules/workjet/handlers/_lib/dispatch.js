@@ -276,6 +276,7 @@ async function complete(tx, ctx, actor, args, now) {
   const revision = revisionArg(args.revision, 'revision');
   const intentId = text(args.intent_id, 128, 'intent_id');
   const record = await load(tx, actor.id, args.registration_id);
+  await requireLeaseSubstitute(tx, actor, record);
   await checkSource(tx, actor, ctx, record, revision);
   const row = await intentRow(tx, intentId, args.registration_id, revision, 'worker dispatch intent unavailable');
   validateResult(row.intent, args.result);
@@ -285,6 +286,17 @@ async function complete(tx, ctx, actor, args, now) {
     await tx.patch(INTENTS, intentId, { result: clone(args.result), status: 'completed', updated_at_ms: now });
   }
   return { contract: CONTRACT, intentId, registrationId: args.registration_id, revision, result: clone(args.result) };
+}
+
+// E54.3c (Kern, eng statt offen): Ersatz für die native Supervisor-Lease (current_lease :37), bis der Kern
+// workjet_supervisor_leases projiziert. dispatch, complete und report_outcome nur, wenn der Akteur Rolle admin hat,
+// Projekt-Owner ist, die Bindung über workjet_project_chats passt und seine capability_epoch der Epoche der Quelle
+// entspricht. Alles andere → forbidden (keine Öffnung für chef).
+export async function requireLeaseSubstitute(tx, actor, source) {
+  const { role, epoch } = await currentActor(tx, actor);
+  if (role !== 'admin') fail('forbidden', 'worker dispatch requires the supervisor lease (admin until projected, E54.3c)');
+  const bound = await currentProject(tx, actor, source.projectId, source.sourceSupervisorThreadId);
+  if (bound !== epoch || epoch !== source.authorityEpoch) fail('forbidden', 'supervisor authority epoch differs from the source');
 }
 
 // ref: :591-700 dispatch_in_native_scope
@@ -302,6 +314,7 @@ async function dispatch(tx, ctx, actor, args, now) {
   const epoch = await currentProject(tx, actor, project, thread);
   const record = await sourceFor(tx, actor.id, project);
   if (!record) fail('not_found', 'no Workjet source registered for this supervisor');
+  await requireLeaseSubstitute(tx, actor, record);
   if (record.state !== 'active' || record.authorityEpoch !== epoch || record.sourceSupervisorThreadId !== thread) {
     fail('conflict', 'Workjet source binding stale');
   }
@@ -425,6 +438,7 @@ async function reportOutcome(tx, ctx, actor, args, now) {
   const checked = validateWorkerOutcomeValue('WorkerTerminalReceipt', receipt);
   if (!checked.ok) fail('invalid', checked.error);
   const source = await load(tx, actor.id, registrationId);
+  await requireLeaseSubstitute(tx, actor, source);
   await checkSource(tx, actor, ctx, source, revision);
   const row = await intentRow(tx, intentId, registrationId, revision, 'worker outcome intent unavailable');
   const { intent } = row;

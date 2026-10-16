@@ -210,3 +210,33 @@ test('Eingaben: task > 16384 Bytes → invalid, unbekannte Felder/Aktion → inv
   // _context ist Transportmetadaten und wird ignoriert (ref: :329-334)
   assert.equal((await dispatch(h, { dispatch_key: 'k10', _context: { gateway: 1 } })).state, 'pending');
 });
+
+// E54.3c (Kern, eng statt offen): bis der Kern workjet_supervisor_leases projiziert, ersetzen Rolle admin + Projekt-Owner +
+// Bindung über workjet_project_chats + capability_epoch = Epoche der Quelle die native Supervisor-Lease – für dispatch,
+// complete und report_outcome. Eine chef-Rolle mit sonst passender Bindung bekommt forbidden.
+test('E54.3c: dispatch/complete/report_outcome nur für admin mit passender Epoche; chef und fremde Epoche → forbidden', async () => {
+  const chef = { id: OWNER, role: 'chef' };
+  const setRole = (h, role) => h.ctx.patch('business_users', 'bu-owner', { role });
+  // chef registriert seine Quelle (wie nativ), darf aber nichts ausschicken.
+  const hc = makeCtx();
+  await setRole(hc, 'chef');
+  await run(hc, { action: 'register_source', source_environment_id: ENV, source_supervisor_thread_id: THREAD, project_id: PROJECT }, chef);
+  await rejects(dispatch(hc, {}, chef), 'forbidden', /E54\.3c/);
+  assert.equal(hc.docs('workjet_worker_dispatch_intents').length, 0);
+  // admin legt Absicht an und bestätigt; danach Rolle → chef: complete und report_outcome forbidden.
+  const h = makeCtx();
+  const reg = await register(h);
+  const a = await dispatch(h, { dispatch_key: 'a' });
+  await setRole(h, 'chef');
+  await rejects(run(h, { action: 'complete', registration_id: reg.registrationId, revision: 1, intent_id: a.intent.intentId, result: startup(a.intent) }, chef), 'forbidden', /E54\.3c/);
+  await setRole(h, 'admin');
+  await run(h, { action: 'complete', registration_id: reg.registrationId, revision: 1, intent_id: a.intent.intentId, result: startup(a.intent) });
+  await setRole(h, 'chef');
+  await rejects(run(h, { action: 'report_outcome', registration_id: reg.registrationId, revision: 1, intent_id: a.intent.intentId, receipt: receipt(a.intent) }, chef), 'forbidden', /E54\.3c/);
+  assert.equal(h.docs('workjet_worker_dispatch_outcomes').length, 0);
+  // Epoche: Quelle mit Epoche 0 registriert, capability_epoch jetzt 2 → admin bekommt forbidden.
+  const he = makeCtx();
+  await register(he);
+  await he.ctx.patch('business_users', 'bu-owner', { capability_epoch: 2 });
+  await rejects(dispatch(he, { dispatch_key: 'e' }), 'forbidden', /epoch differs/);
+});
