@@ -378,3 +378,38 @@ fn cutover_specialized_tracking_keeps_raw_rows_and_adds_native_projection() -> R
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn verification_retries_only_deadlines_and_never_reopens_a_closed_owner() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let fixture =
+        crate::testkit::StoreFixture::open(DbId::new(root.path().join("verify.sqlite3"))?).await?;
+    let pool = fixture.readers();
+    let mut calls = 0;
+    let result = verified_read(&pool, "fixture", || {
+        calls += 1;
+        crate::ReadJob::new(
+            JobOptions {
+                deadline: Some(std::time::Instant::now() - Duration::from_secs(1)),
+                ..Default::default()
+            },
+            |_| Ok(0usize),
+        )
+    })
+    .await;
+    assert!(matches!(result, Err(StoreError::DeadlineExceeded)));
+    assert_eq!(calls, 3, "verification must be bounded");
+    fixture.shutdown().await?;
+    let mut closed_calls = 0;
+    let result = verified_read(&pool, "fixture", || {
+        closed_calls += 1;
+        crate::ReadJob::new(JobOptions::default(), |_| Ok(0usize))
+    })
+    .await;
+    assert!(matches!(result, Err(StoreError::Closed)));
+    assert_eq!(
+        closed_calls, 1,
+        "closed generation must not be retried or replaced"
+    );
+    Ok(())
+}

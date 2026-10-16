@@ -423,6 +423,25 @@ impl core_import::DataframeImporter for NoDataframe {
         Err(invalid("cutover_dataframe_owner_required"))
     }
 }
+/// Schema publication invalidates pooled SQLite schema caches. A first read
+/// may finish hydration but exceed its execution budget. Retry only the same
+/// read, with a fresh owner snapshot, never writes or generation/authority errors.
+async fn verified_read<T: Send + 'static>(
+    pool: &crate::read_pool::ReadPool,
+    phase: &'static str,
+    mut make: impl FnMut() -> crate::ReadJob<T> + Send,
+) -> Result<T> {
+    for attempt in 1..=3 {
+        match pool.read_job(make()).await {
+            Err(StoreError::DeadlineExceeded) if attempt < 3 => {
+                eprintln!("ctox_cutover_read phase={phase} attempt={attempt} error=deadline");
+                tokio::task::yield_now().await;
+            }
+            result => return result,
+        }
+    }
+    unreachable!("bounded verification loop returns its final result")
+}
 pub async fn execute(
     writer: WriterHandle,
     readers: crate::read_pool::ReadPool,
@@ -490,6 +509,7 @@ pub async fn execute(
         }
         imported = file_import::attach(imported, prepared_files)?;
     }
+    eprintln!("ctox_cutover_import phase=publish_schema");
     base_release::publish(
         &writer,
         &prepared.plan,
@@ -497,15 +517,18 @@ pub async fn execute(
         prepared.snapshot.imported_at_ms as i64,
     )
     .await?;
+    eprintln!("ctox_cutover_import phase=apply_documents");
     report.import = Some(
         core_import::apply(&writer, imported, &mut NoDataframe, &report.snapshot_sha256).await?,
     );
+    eprintln!("ctox_cutover_import phase=verify_targets");
     for (key, targets) in &report.audit.target_documents {
         let mut actual = 0;
-        for page in targets.iter().cloned().collect::<Vec<_>>().chunks(128) {
+        for page in targets.iter().cloned().collect::<Vec<_>>().chunks(8) {
             let page = page.to_vec();
-            actual += readers
-                .read_job(crate::ReadJob::new(JobOptions::default(), move |tx| {
+            actual += verified_read(&readers, "targets", || {
+                let page = page.clone();
+                crate::ReadJob::new(JobOptions::default(), move |tx| {
                     for (collection, id) in &page {
                         let table: String = tx.query_row(
                             "SELECT table_name FROM _collections WHERE name=?1 AND state='active'",
@@ -522,8 +545,9 @@ pub async fn execute(
                         }
                     }
                     Ok(page.len())
-                }))
-                .await?;
+                })
+            })
+            .await?;
         }
         for table in &mut report.tables {
             if format!("{}:{}", table.database, table.table) == *key {
@@ -538,6 +562,7 @@ pub async fn execute(
     {
         table.target_rows = Some(0);
     }
+    eprintln!("ctox_cutover_import phase=verify_retained");
     for table in report.tables.iter_mut().filter(|t| t.retained_source) {
         let Some(file) = report
             .audit
@@ -556,19 +581,29 @@ pub async fn execute(
         };
         let name = table.table.clone();
         let protected = table.source_sha256.is_none();
-        let measured = pool
-            .read_job(crate::ReadJob::new(JobOptions::default(), move |db| {
+        let measured = verified_read(pool, "retained", || {
+            let name = name.clone();
+            crate::ReadJob::new(JobOptions::default(), move |db| {
                 if protected {
                     let name = crate::change_log::identifier(&name)?;
                     let count =
                         db.query_row(&format!("SELECT count(*) FROM {name}"), [], |r| r.get(0))?;
                     Ok((count, None))
                 } else {
-                    let m = freeze::measure(db, &name)?;
-                    Ok((m.row_count, Some(m.source_table_hash)))
+                    let captured = freeze::capture(db, &name, 2_000_000, 256 * 1024 * 1024)?;
+                    Ok((0, Some(captured)))
                 }
-            }))
-            .await?;
+            })
+        })
+        .await?;
+        let measured = if let Some(captured) = measured.1 {
+            let measured = tokio::task::spawn_blocking(move || captured.measure())
+                .await
+                .map_err(|_| StoreError::Panicked)?;
+            (measured.row_count, Some(measured.source_table_hash))
+        } else {
+            (measured.0, None)
+        };
         if Some(measured.0) != table.source_rows || measured.1 != table.source_sha256 {
             return Err(invalid("cutover_retained_core_changed"));
         }
@@ -576,6 +611,7 @@ pub async fn execute(
         table.expected_target_rows = measured.0;
         table.retained_current_verified = !protected;
     }
+    eprintln!("ctox_cutover_import phase=complete");
     report.content_complete = report
         .tables
         .iter()
