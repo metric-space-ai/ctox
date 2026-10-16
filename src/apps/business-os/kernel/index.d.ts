@@ -188,8 +188,10 @@ export type FileInfo = { id: string; ref: string; name: string | null; mime: str
 /** CAP-3b (#844): Ergebnis von files.get – Text nur für UTF-8 ≤ 512 KiB, sonst Bytes; nie Base64. */
 export type FileGetResult = ({ found: true } & FileInfo & ({ text: string } | { bytes: Uint8Array })) | { found: false; ref: string | null; id?: string };
 export interface FilesApi {
-  /** CAP-3b: nur Dateien der eigenen App; Datei einer anderen App → forbidden. */
-  get(sel: { ref: string } | { id: string }): Promise<FileGetResult>;
+  /** E30: own file, readable desktop_files row with the same id (including read export), or BlobRef in a readable canonical document; otherwise forbidden. list/delete remain own-app only. */
+  /** E26: byte range, end exclusive. Invalid bounds reject with CtoxError invalid/path range. */
+  get(sel: ({ ref: string } | { id: string }) & { range: { start: number; end: number } }): Promise<({ found: true } & FileInfo & { bytes: Uint8Array }) | { found: false; ref: string | null; id?: string }>;
+  get(sel: ({ ref: string } | { id: string }) & { range?: { start: number; end: number } }): Promise<FileGetResult>;
   /** @deprecated Altform (K-1): Blob aus dem Cache bzw. über Spur 4. */
   get(ref: string): Promise<Blob>;
   /** CAP-3b: put(bytes | {text}, {name, mime}) → {id, ref} nach lokalem Commit; Upload über Spur 4. */
@@ -222,10 +224,11 @@ export interface CtoxAppApi {
   remove(collection: string, id: string): WriteHandle;
   // Befehle – Dokument mit gepushtem Status
   /** opts.record_id (§16.19 Nr. 8): optionaler Bezug des Befehls auf einen Datensatz. */
+  /** E26: idempotency_key ≤128 characters per app + actor; SHA-256(app|user|key) → UUIDv8; repeat reuses stored intent/state. */
   /** opts.on_complete/on_failed: Rückruf-Befehlstypen der eigenen App (§16.39 Nr. 3), als Felder am Befehlsdokument.
    *  §16.44: ctox.coding.turn {app_id, draft_id, base_draft_rev, prompt, model?, turn_id?}, ctox.coding.cancel {turn_id};
    *  Ablehnung im write_result {status:'rejected', code, reason}. */
-  command(type: string, payload: object, opts?: { record_id?: string; on_complete?: string; on_failed?: string }): CommandHandle;
+  command(type: string, payload: object, opts?: { record_id?: string; on_complete?: string; on_failed?: string; idempotency_key?: string }): CommandHandle;
   // Priorität (E1) – reiner Hinweis
   setVisible(collections: string[]): void;
   // Zustand – nur an die Zustandszone der Shell (Anf. 27)

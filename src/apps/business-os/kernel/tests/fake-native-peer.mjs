@@ -97,12 +97,13 @@ export class FakeNativePeer {
  }
  async apply(m,lane){
   this.messages.push(m);
+  if(m.type.startsWith('transfer_')&&lane!==5)throw Error('CAS outside transfer lane');
   if(m.type==='subscribe'){if(lane!==0)throw Error('subscribe outside control');if(this.onSubscribe)await this.onSubscribe(m,this);return;}
   if(m.type==='write'){if(lane!==1||(m.base_seq!==null&&typeof m.base_seq!=='string')||!m.op_id)throw Error('invalid write wire');await this.send('commands',{type:'write_result',op_id:m.op_id,status:'accepted',rev:'core-rev',seq:String(BigInt(this.head)+1n)});return;}
   if(m.type==='priority'||m.type==='app_activation')return;
   if(m.type==='transfer_get'){
    const blob=this.blobs.get(m.ref);if(!blob)throw Error('missing CAS test object');const bytes=new Uint8Array(await blob.slice(m.offset,m.offset+m.limit).arrayBuffer());let text='';for(const b of bytes)text+=String.fromCharCode(b);
-   await this.send('transfer',{type:'transfer_data',request_id:m.request_id,ref:m.ref,offset:m.offset,total:blob.size,mime:blob.type,data:btoa(text)});return;
+   await this.send('transfer',{type:'transfer_data',request_id:m.request_id,ref:m.ref,offset:m.offset,total:blob.size,mime:blob.type,sha256:await sha256Hex(bytes),data:btoa(text)});return;
   }
   if(m.type==='transfer_put'){
    const chunks=this.uploads.get(m.ref)??[];chunks.push({offset:m.offset,data:Uint8Array.from(atob(m.data),c=>c.charCodeAt(0))});this.uploads.set(m.ref,chunks);
