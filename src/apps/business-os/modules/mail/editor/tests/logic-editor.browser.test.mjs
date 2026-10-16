@@ -5,7 +5,17 @@ import { readFile, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright';
+import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
+// Lader (OLDTEST): playwright aus dem Klon, sonst PLAYWRIGHT_MODULE, sonst aus dem Haupt-Checkout
+// ~/Documents/ctox/src/apps/business-os/node_modules (wie die v4-api-Tests). Nicht installieren.
+const requireDev = createRequire(import.meta.url);
+function loadDev(name, envVar) {
+  try { return requireDev(name); } catch {
+    return requireDev(process.env[envVar] || join(homedir(), 'Documents/ctox/src/apps/business-os/node_modules', name));
+  }
+}
+const { chromium } = loadDev('playwright', 'PLAYWRIGHT_MODULE');
 
 const repoRoot = findRepoRoot(dirname(fileURLToPath(import.meta.url)));
 const businessOsRoot = join(repoRoot, 'src/apps/business-os');

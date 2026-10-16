@@ -1,0 +1,1500 @@
+{
+  "_capability_evidence": {},
+  "_declaration": "modules/customers/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/customers/index.html",
+  "_rust_basis": "`store_customer_commands.rs` (2005, 49 Funktionen, `handle_customers_active_command` `:20`), `store.rs` `is_customers_active_command` (`:21445`), `store_policy.rs` (6 Treffer) → ~2,0k. Die CRUD-Fachlogik der App liegt damit komplett im Rust",
+  "_source_dir": "src/apps/business-os/modules/customers",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "customers",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [],
+  "collections": {
+    "customer_accounts": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/customers.collections.schema.json",
+      "_schema_wrapper": {
+        "conflictStrategy": "field-merge"
+      },
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "domain",
+          "account_owner_id",
+          "account_status",
+          "customer_stage",
+          "health_status",
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          [
+            "account_owner_id",
+            "updated_at_ms"
+          ],
+          [
+            "customer_stage",
+            "updated_at_ms"
+          ],
+          [
+            "health_status",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "account_owner_id": {
+            "type": "string"
+          },
+          "account_status": {
+            "type": "string"
+          },
+          "address": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annual_recurring_revenue_cents": {
+            "type": "number"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "customer_stage": {
+            "type": "string"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "employee_count": {
+            "type": "number"
+          },
+          "health_status": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "ideal_customer_profile": {
+            "type": "boolean"
+          },
+          "industry": {
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "last_activity_at_ms": {
+            "type": "number"
+          },
+          "linkedin_url": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "next_action_at_ms": {
+            "type": "number"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "search_text": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_record_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "website_url": {
+            "type": "string"
+          },
+          "x_url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "account_status",
+          "customer_stage",
+          "health_status",
+          "search_text",
+          "is_deleted",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "customer_activities": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/customers.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "activity_type",
+          "account_id",
+          "contact_id",
+          "opportunity_id",
+          "communication_message_key",
+          "happens_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          [
+            "is_deleted",
+            "happens_at_ms"
+          ],
+          [
+            "account_id",
+            "happens_at_ms"
+          ],
+          [
+            "opportunity_id",
+            "happens_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "activity_type": {
+            "type": "string"
+          },
+          "actor_id": {
+            "type": "string"
+          },
+          "communication_message_key": {
+            "type": "string"
+          },
+          "contact_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "happens_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 220,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "linked_record_id": {
+            "type": "string"
+          },
+          "linked_record_name": {
+            "type": "string"
+          },
+          "linked_record_type": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "opportunity_id": {
+            "type": "string"
+          },
+          "properties": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_record_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "happens_at_ms",
+          "activity_type",
+          "name",
+          "properties",
+          "is_deleted",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "customer_contacts": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/customers.collections.schema.json",
+      "_schema_wrapper": {
+        "conflictStrategy": "field-merge"
+      },
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "account_id",
+          "email",
+          "contact_owner_id",
+          "is_primary_contact",
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          [
+            "account_id",
+            "updated_at_ms"
+          ],
+          [
+            "contact_owner_id",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "contact_owner_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "email": {
+            "type": "string"
+          },
+          "first_name": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "is_primary_contact": {
+            "type": "boolean"
+          },
+          "job_title": {
+            "type": "string"
+          },
+          "last_activity_at_ms": {
+            "type": "number"
+          },
+          "last_name": {
+            "type": "string"
+          },
+          "linkedin_url": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "search_text": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_record_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "x_url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "account_id",
+          "first_name",
+          "last_name",
+          "email",
+          "is_primary_contact",
+          "search_text",
+          "is_deleted",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "customer_dedupe_candidates": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/customers.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "object_type",
+          "match_key",
+          "match_type",
+          "status",
+          "import_batch_id",
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          [
+            "object_type",
+            "match_key"
+          ],
+          [
+            "status",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "confidence": {
+            "type": "number"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "decided_at_ms": {
+            "type": "number"
+          },
+          "decided_by_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "existing_record_id": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 220,
+            "type": "string"
+          },
+          "import_batch_id": {
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "match_key": {
+            "type": "string"
+          },
+          "match_type": {
+            "type": "string"
+          },
+          "object_type": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "source_record_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "object_type",
+          "match_key",
+          "match_type",
+          "status",
+          "confidence",
+          "is_deleted",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "customer_files": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/customers.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "account_id",
+          "contact_id",
+          "opportunity_id",
+          "document_id",
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "contact_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "document_id": {
+            "type": "string"
+          },
+          "file_url": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "opportunity_id": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "size_bytes": {
+            "type": "number"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "filename",
+          "mime_type",
+          "is_deleted",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "customer_import_batches": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/customers.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "source",
+          "source_record_id",
+          "status",
+          "object_type",
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "created_at_ms": {
+            "type": "number"
+          },
+          "dedupe_count": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "failed_count": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "imported_count": {
+            "type": "number"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "object_type": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "skipped_count": {
+            "type": "number"
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_filename": {
+            "type": "string"
+          },
+          "source_record_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "status",
+          "object_type",
+          "imported_count",
+          "skipped_count",
+          "failed_count",
+          "dedupe_count",
+          "is_deleted",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "customer_notes": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/customers.collections.schema.json",
+      "_schema_wrapper": {
+        "conflictStrategy": "field-merge"
+      },
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "author_id",
+          "account_id",
+          "contact_id",
+          "opportunity_id",
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          [
+            "account_id",
+            "updated_at_ms"
+          ],
+          [
+            "opportunity_id",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "author_id": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "body_format": {
+            "type": "string"
+          },
+          "contact_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "linked_note_id": {
+            "type": "string"
+          },
+          "opportunity_id": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "search_text": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "body",
+          "body_format",
+          "search_text",
+          "is_deleted",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "customer_opportunities": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/customers.collections.schema.json",
+      "_schema_wrapper": {
+        "conflictStrategy": "field-merge"
+      },
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "account_id",
+          "primary_contact_id",
+          "owner_id",
+          "stage",
+          "opportunity_type",
+          "close_date_ms",
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          [
+            "stage",
+            "position"
+          ],
+          [
+            "owner_id",
+            "updated_at_ms"
+          ],
+          [
+            "account_id",
+            "updated_at_ms"
+          ],
+          [
+            "opportunity_type",
+            "close_date_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "amount_cents": {
+            "type": "number"
+          },
+          "close_date_ms": {
+            "type": "number"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "last_stage_changed_at_ms": {
+            "type": "number"
+          },
+          "lost_reason": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "opportunity_type": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "position": {
+            "type": "number"
+          },
+          "primary_contact_id": {
+            "type": "string"
+          },
+          "probability": {
+            "type": "number"
+          },
+          "search_text": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_record_id": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "account_id",
+          "stage",
+          "opportunity_type",
+          "amount_cents",
+          "currency",
+          "position",
+          "search_text",
+          "is_deleted",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "customer_tasks": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/customers.collections.schema.json",
+      "_schema_wrapper": {
+        "conflictStrategy": "field-merge"
+      },
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "status",
+          "assignee_id",
+          "account_id",
+          "contact_id",
+          "opportunity_id",
+          "due_at_ms",
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          [
+            "assignee_id",
+            "due_at_ms"
+          ],
+          [
+            "account_id",
+            "updated_at_ms"
+          ],
+          [
+            "opportunity_id",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "assignee_id": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "contact_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "due_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "opportunity_id": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "position": {
+            "type": "number"
+          },
+          "search_text": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "search_text",
+          "is_deleted",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "customer_view_filters": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/customers.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "view_id",
+          "field_name",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          [
+            "view_id",
+            "position"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "field_name": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "operator": {
+            "type": "string"
+          },
+          "position": {
+            "type": "number"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "value": {
+            "type": "string"
+          },
+          "value_json": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "view_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "view_id",
+          "field_name",
+          "operator",
+          "position",
+          "is_deleted",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "customer_view_sorts": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/customers.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "view_id",
+          "field_name",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          [
+            "view_id",
+            "position"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "direction": {
+            "type": "string"
+          },
+          "field_name": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "position": {
+            "type": "number"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "view_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "view_id",
+          "field_name",
+          "direction",
+          "position",
+          "is_deleted",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "customer_views": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/customers.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "object_type",
+          "view_type",
+          "visibility",
+          "owner_id",
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          [
+            "object_type",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "aggregate_field": {
+            "type": "string"
+          },
+          "column_order": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "group_by_field": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "object_type": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "view_type": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string"
+          },
+          "visible_columns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "object_type",
+          "view_type",
+          "visibility",
+          "is_deleted",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    }
+  },
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {
+    "customer_accounts": [
+      "read"
+    ],
+    "customer_activities": [
+      "read"
+    ],
+    "customer_contacts": [
+      "read"
+    ]
+  },
+  "files": {
+    "V4-HANDLERS.md": "cf83a1b241c9a4771b7d0aa6b31536523868a990b11eb93294ec0616f311f488",
+    "V4-PORT.md": "25c8e62136c6c1f4c02c4e4a86b3cbd82c6dfadd59851311e5bb448f37cecb36",
+    "assets/icon.jpg": "1b15a944de072f9d8bdc70a63813ca82a39b248d7f40e3a64a809638d6ae4e3d",
+    "assets/icon@512.jpg": "8cfc6a6f3e884019f6ba14f0f6670e9d5ec0b5c7a528e5bb75214597a2a399ab",
+    "collections.schema.json": "7df98b853f5b887f0c48699b124814fe44af76c23bc5a884ea6fcb21367fd82e",
+    "handlers/_lib.js": "5f70b411b685b7277f3df0cea031bc9fc72e6ae71fb7b1de9c127471b33852dd",
+    "handlers/customers.account.archive.js": "ac26319dd72726cd762dd9acd1bf9b17db47f0ebe7b76f4a5edae850ab22b4fa",
+    "handlers/customers.account.create.js": "af849b67ebcb2cabd085d48b376f1fbf74a3ccb03a1ea01643d80f3ce746cabb",
+    "handlers/customers.account.update.js": "0dc9fac75edfd4c24844f621aafc49c4e94ee77cad3eb060424a1597b571655f",
+    "handlers/customers.activity.record.js": "5d48c4e177c2ba93bc0d68cf8255387d9b659984f864d99847e81c64d9cd0c20",
+    "handlers/customers.contact.archive.js": "2c99916bc1df06950914dfd1cec13321fa617dc3cd21e38553707fa344e6eb70",
+    "handlers/customers.contact.create.js": "86d2e59d86cd39a1870d141ff9c520954105d24914f5b298c0eba32678bf5878",
+    "handlers/customers.contact.update.js": "bb219e834019c652d6696e545509d20abbf0beecc3c85faeeb8667a781f1e5db",
+    "handlers/customers.dedupe.resolve.js": "7192d0cb0fd7f2437c0c8a9f1f4f7f98eae8f801884b9b2f83b2cf33841dee74",
+    "handlers/customers.import.from_outbound.js": "c16f389b92456274f7e4bc13e707c803b28aa176923b1784f531801c2db83369",
+    "handlers/customers.note.create.js": "077271de5ee161821ad87a51a0872f6e3c14c26646b7cad149ef2dd2b6860fbe",
+    "handlers/customers.note.update.js": "904f28e1b54292167a33ff7ed33a9d23e1b01a7b4bffda662c0182a3e2d22b5a",
+    "handlers/customers.opportunity.close_lost.js": "445fde370c79b9b6b57ef635d3ad1ffd090b93fa75572b473497de246604c9ce",
+    "handlers/customers.opportunity.close_won.js": "00ac09c9f1a1d951a1e01cc1a2e4ace3c98e57b79c7fc6c3abf1246df40a5829",
+    "handlers/customers.opportunity.create.js": "beb9849f855fefa410eb9b2eb2f59886a8864a91b28cc653cb245ae084bef018",
+    "handlers/customers.opportunity.move_stage.js": "c410c2fd79c93c9824868f1c2ff8e96e513ae6b4928e23c23ac0e0eba19896ef",
+    "handlers/customers.opportunity.update.js": "5bdb3ac10d2483f3de8ac49b5020c1021490d8daf3a2608310c705dd8f8320df",
+    "handlers/customers.task.complete.js": "c8854cc9f1a5a18d491cf48bb8ab4f237e5776f231ff78b3868e1c3060f3a498",
+    "handlers/customers.task.create.js": "8f381168ed308e146d88ec9921aef55698d9d82aa5527b1d0921f562a7b20a00",
+    "handlers/customers.task.update.js": "fc496556d97de1af7097e559df868867f69e5d2249b1b1abaf77c2377ab76885",
+    "handlers/customers.view.save.js": "c400296e50c5eba109c679507f9adaa5d8ec69d9c86fb4e7947d462eac04c9b7",
+    "icon.svg": "96494d50e7d395fdefb352a33acc3df6632da77eb6f5448dcf1b31992aa57909",
+    "index.css": "725b304085ca95685ee49c2a551a3186136339a16760f997868cce18603205f7",
+    "index.html": "0f55ab8ca1bca9888069c29258716bf3e1b185090a0d77ad7afb8e820ac1a15c",
+    "index.js": "e7d6569a9960d92cd56d1cbb8903e785c86ac2ef538ef891b33e98b4731f736c",
+    "locales/de.json": "0d7543cb169886bb33ed95019ff4e42cd8a9ea13f2707a737d9b93c76ce358ca",
+    "locales/en.json": "91997dab3bce684c201263c4117eec4531c3a741efca95d9e806322f1fc37de7",
+    "module.json": "c692e77a2d068f1da403877399342a89623c27ca0c4c1d6c2ba19e6f5470c3d1",
+    "v4-manifest.json": "bf925b9b2a850aa487b222baeffba5ca11293bd9f6e7c8c9e645caa7536be394"
+  },
+  "foreign_collections": {
+    "business_commands": {
+      "_evidence": {
+        "code_read": [
+          "index.js:4343"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "calendar_events": {
+      "_evidence": {
+        "code_read": [
+          "index.js:25",
+          "index.js:3904",
+          "index.js:4359"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "calendar"
+    },
+    "communication_messages": {
+      "_evidence": {
+        "code_read": [
+          "index.js:24",
+          "index.js:3889",
+          "index.js:4358"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "conversations"
+    },
+    "documents": {
+      "_evidence": {
+        "code_read": [
+          "index.js:26",
+          "index.js:3837",
+          "index.js:3917"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "documents"
+    },
+    "files": {
+      "_evidence": {
+        "code_read": [
+          "index.js:1188",
+          "index.js:1612",
+          "index.js:1637"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "notes": {
+      "_evidence": {
+        "code_read": [
+          "index.js:27",
+          "index.js:1188",
+          "index.js:1611"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "notes"
+    },
+    "outbound_companies": {
+      "_evidence": {
+        "code_read": [
+          "handlers/customers.import.from_outbound.js:3",
+          "handlers/customers.import.from_outbound.js:53",
+          "index.js:20"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/customers/V4-HANDLERS.md W3",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "outbound"
+    },
+    "outbound_pipeline_items": {
+      "_evidence": {
+        "code_read": [
+          "handlers/customers.import.from_outbound.js:3",
+          "handlers/customers.import.from_outbound.js:25",
+          "handlers/customers.import.from_outbound.js:55"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/customers/V4-HANDLERS.md W3",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "outbound"
+    },
+    "spreadsheets": {
+      "_evidence": {
+        "code_read": [
+          "index.js:28",
+          "index.js:3839",
+          "index.js:3931"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "spreadsheets"
+    }
+  },
+  "handlers": {
+    "customers.account.archive": "handlers/customers.account.archive.js",
+    "customers.account.create": "handlers/customers.account.create.js",
+    "customers.account.update": "handlers/customers.account.update.js",
+    "customers.activity.record": "handlers/customers.activity.record.js",
+    "customers.contact.archive": "handlers/customers.contact.archive.js",
+    "customers.contact.create": "handlers/customers.contact.create.js",
+    "customers.contact.update": "handlers/customers.contact.update.js",
+    "customers.dedupe.resolve": "handlers/customers.dedupe.resolve.js",
+    "customers.import.from_outbound": "handlers/customers.import.from_outbound.js",
+    "customers.note.create": "handlers/customers.note.create.js",
+    "customers.note.update": "handlers/customers.note.update.js",
+    "customers.opportunity.close_lost": "handlers/customers.opportunity.close_lost.js",
+    "customers.opportunity.close_won": "handlers/customers.opportunity.close_won.js",
+    "customers.opportunity.create": "handlers/customers.opportunity.create.js",
+    "customers.opportunity.move_stage": "handlers/customers.opportunity.move_stage.js",
+    "customers.opportunity.update": "handlers/customers.opportunity.update.js",
+    "customers.task.complete": "handlers/customers.task.complete.js",
+    "customers.task.create": "handlers/customers.task.create.js",
+    "customers.task.update": "handlers/customers.task.update.js",
+    "customers.view.save": "handlers/customers.view.save.js"
+  },
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/customers.jpg (shared/operator-icon-selection.js, sha256 3a03210ceaa9…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "_multi_instance_basis": "v4-manifest.json; modules/customers/V4-PORT.md OFFEN 5; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "category": "Sales",
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-customers\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-customers\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\" /><stop offset=\"100%\" stop-color=\"#2563eb\" /></linearGradient></defs><path d=\"M4 20V7a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3v13\" fill=\"url(#grad-customers)\" fill-opacity=\"0.12\" stroke=\"url(#grad-customers)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M8 20v-5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v5\" stroke=\"url(#grad-customers)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M8 8h2M14 8h2M8 11h8\" stroke=\"url(#grad-customers)\" stroke-width=\"1.8\" stroke-linecap=\"round\"></path><circle cx=\"18\" cy=\"6\" r=\"3\" fill=\"#ffffff\" stroke=\"url(#grad-customers)\" stroke-width=\"1.5\"></circle><path d=\"M16.9 6h2.2M18 4.9v2.2\" stroke=\"url(#grad-customers)\" stroke-width=\"1.3\" stroke-linecap=\"round\"></path></svg>",
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 780,
+        "width": 1180
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#059669",
+        "category": "Sales",
+        "iconAssetId": "workjet.business-os.customers",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "list-detail",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "Kunden"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "ca41d31d4698160ff8dec3118983e68ecaecc6dc5c26273af2d8486670b51874",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "Kunden",
+  "triggers": [],
+  "version": "1.0.1"
+}

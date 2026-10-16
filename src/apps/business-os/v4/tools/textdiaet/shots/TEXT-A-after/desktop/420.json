@@ -1,0 +1,37 @@
+{
+ "app": "desktop",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [
+    "put desktop_layout/layout local=ok result=accepted {\"id\":\"layout\",\"wallpaper_url\":\"\",\"wallpaper_mode\":\"cover\",\"taskbar_pins\":[],\"grid_cell_w\":120,\"grid_cell_h\":140,\"grid_o"
+   ],
+   "title": "Desktop",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [],
+   "shot": "desktop/420-01-open.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "desktop_layout",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "desktop",
+  "Desktop"
+ ]
+}

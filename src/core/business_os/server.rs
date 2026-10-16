@@ -164,6 +164,11 @@ pub fn serve_business_os(root: &Path, options: BusinessOsServeOptions) -> anyhow
     {
         eprintln!("[business-os] reconciled release-managed module shadows: {reconciled}");
     }
+    // Prepare the generation-bound bootstrap catalog before accepting its
+    // first document request. Later installs are detected by the same reader.
+    if let Err(err) = store::cached_module_catalog_for_bootstrap(root) {
+        eprintln!("[business-os] bootstrap catalog admission failed: {err:#}");
+    }
     // Claim the HTTP surface before opening the store or starting the native
     // peer. A legacy standalone shell may still own the address during an
     // upgrade; failing here keeps that ownership conflict away from SQLite.
@@ -312,6 +317,11 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
     if method == Method::Options {
         respond_options(request)?;
         return Ok(());
+    }
+    // net.ingest (§16.38): cookie-less generic ingress; it never reads a
+    // session, so it is answered before session/cross-origin handling.
+    if crate::app_capabilities::cap3::ingest::serves(root, path) {
+        return respond_ingest(root, request, &url);
     }
     if rejects_cross_origin_browser_mutation(
         &method,
@@ -3870,7 +3880,7 @@ fn launch_config_value(
     sync_config: &store::BusinessOsSyncConfig,
 ) -> anyhow::Result<Value> {
     let mut value = serde_json::to_value(sync_config)?;
-    if let Ok(catalog) = store::module_catalog_for_rxdb(root) {
+    if let Ok(catalog) = store::cached_module_catalog_for_bootstrap(root) {
         if let Some(object) = value.as_object_mut() {
             object.insert("module_catalog_snapshot".to_owned(), catalog);
             object.insert(
@@ -4017,6 +4027,58 @@ fn respond_status(request: Request, status: u16, body: &str) -> anyhow::Result<(
     let mut response = Response::from_string(body.to_string()).with_status_code(status);
     add_cors_headers(&mut response);
     add_common_response_headers(&mut response);
+    request.respond(response)?;
+    Ok(())
+}
+
+/// One net.ingest request: bounded body, headers as received (the capability
+/// strips private ones), the handler's admissible response or the registered
+/// default after 3 s. Bodies above 16 MiB are refused before dispatch.
+fn respond_ingest(root: &Path, mut request: Request, url: &str) -> anyhow::Result<()> {
+    use crate::app_capabilities::cap3::ingest;
+    use std::io::Read as _;
+    const MAX_INGEST_BYTES: u64 = 16 * 1024 * 1024;
+    let mut body = Vec::new();
+    request
+        .as_reader()
+        .take(MAX_INGEST_BYTES + 1)
+        .read_to_end(&mut body)?;
+    if body.len() as u64 > MAX_INGEST_BYTES {
+        return respond_status(request, 413, "");
+    }
+    let (path, query) = url.split_once('?').unwrap_or((url, ""));
+    let incoming = ingest::IngressRequest {
+        method: request.method().to_string(),
+        path: path.to_owned(),
+        query: query.to_owned(),
+        headers: request
+            .headers()
+            .iter()
+            .map(|h| {
+                (
+                    h.field.as_str().as_str().to_owned(),
+                    h.value.as_str().to_owned(),
+                )
+            })
+            .collect(),
+        body,
+        received_at_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0),
+    };
+    let answer = ingest::handle_ingress(
+        root,
+        &ingest::CoreIngestRuntime { root },
+        &incoming,
+        ingest::RESPONSE_WAIT,
+    );
+    let mut response = Response::from_data(answer.body).with_status_code(answer.status);
+    for (name, value) in &answer.headers {
+        if let Ok(header) = Header::from_bytes(name.as_bytes(), value.as_bytes()) {
+            response.add_header(header);
+        }
+    }
     request.respond(response)?;
     Ok(())
 }

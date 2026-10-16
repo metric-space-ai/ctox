@@ -2,8 +2,6 @@
   "title": "Rechnungen",
   "scope": "invoices.scope.label",
   "create_button": "+ Neue Rechnung",
-  "empty_hint": "Wähle eine Rechnung aus der Liste oder erstelle einen neuen Entwurf.",
-  "list_empty": "Noch keine Rechnungen vorhanden.",
   "state": {
     "draft": "Entwurf",
     "posted": "Gebucht",

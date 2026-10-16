@@ -40,6 +40,34 @@ The default transport is offline; it NEVER manufactures acceptance. `createStubK
   A write may return its result or deliver `write_result`; duplicate results are harmless. The adapter receives
   op_id/prev_op_id/base_rev/base_seq/gen/app_ver. Pages carry decimal-string seq/cursor_to, epoch, scope_hash,
   gen, docs, complete and per-subscription backlog. Signature verification is the adapter's responsibility.
+- `schema-diff.mjs`: `collections.schema.json` parsing and schema diff (§16.22 A6/A9), byte-identical rules to the stub;
+  compatible change vs. new generation, a generation needs a migration (`from_ver` = draft base, `migrate_fn` or `steps`).
+- Shell API additions (K-1b, §16.19): `kernel.activation.reportFailed(appId, ver, reason)` (failed for this client,
+  pointer back to the last good version, `app_activation{state:'failed'}`), `kernel.windowState.get/put/del(key)` per
+  tab (`tabKey`, sessionStorage) and user in IDB `window_state`, `kernel.apps` entries carry `layout` (9 fields, missing =
+  null) and `styles`. `shell_preferences` is a ctox-platform collection: one row per user (`id = actor.id`), only the
+  own row is readable/writable. Draft publish (§16.22/§16.26): `manifest.json` is never a draft file, references to
+  missing files are `invalid`, and every non-computed base manifest field (triggers, command_rights, …) is inherited (B4).
+  Artifacts are bytes: `string` stays UTF-8, `Blob`/`ArrayBuffer`/`Uint8Array` are hashed and stored as bytes.
+- K-1c/K-1d (§16.39): `artifacts.url(appId, ver, path, {shellVer?})` is synchronous and remembers nothing; the root carries
+  `~shell@<sv>` and `~lib:<name>@<M.m>` for every library of the shell manifest (`libs`). `artifacts.bind(appId, ver)` is
+  called once per mount (testkit app host, loader via loadModule) and freezes that binding. Every activation (app, shell)
+  and every fetched lib minor writes meta `files:<appId>@<ver>` = {path: sha256}; the SW resolves path → sha256 there and
+  reads `artifacts[sha256].content` (string | Uint8Array). There is no `manifests` store. Libraries are
+  platform artifacts `lib:<name>` (never activated eagerly); the SW reports `ctox:lib-miss` (kernel fetches exactly the
+  URL's minor, sha256-checked) and `ctox:lib-hit` (LRU over IDB `artifacts` within `libByteBudget`). Source drafts live in
+  the platform collection `app_drafts` (`<user>/<app>`, files as sha256 in the local CAS). `kernel.shell.publishApp|
+  updateApp|rollbackApp|releaseApp|removeApp` issue `ctox.app.*` with CAS on `base_app_ver`. Publishing the same app twice
+  queues (no `busy`). An activated version clears kernel status entries of other versions in every tab.
+- K-1e: `kernel.metrics.collections[name] = {state: live|catching_up|offline|error, backlog, gen, since_ms, error?}` (§16.45;
+  live = link online and backlog 0 after a complete page for the subscribed scope; follower tabs get it via the leader),
+  `kernel.reconnect()` re-brings-up the transport (never a page reload), `kernel.identity.device_id` (§16.43, from
+  `opts.deviceId`; fake core deterministic per instance+user+device).
+- `fake-core.mjs` + `fake-core-runtime.mjs` (tests/Shell development only): one core per `coreNamespace` for several users
+  (own DB each, core-authoritative role), row/collection/command rights, in-process handler runtime routed by
+  (app_id, type) with relative imports and `ctx.read/get/put/patch/remove/command/asset/cap`, `on`/`every` triggers
+  (foreign collections only with owner `exports:['watch']`), `audit.event` and `agent.task.*` with a fake harness and
+  exactly-once callbacks, and `ctox.app.*` (archives, never deletes). Commands without a handler fail with `no_handler`.
 - `fake-core.mjs`: explicit in-memory core from the executable stub contract; isolated from client IDB.
 - `shell-api.mjs`/`loader.mjs`: Shell-only API and live Shell bootstrap/replacement. `/sw.js` belongs to Shell v4;
   artifact route `/~a/<app>@<version>~shell@<shellVersion>/<path>` and `ctox:claim` before every Shell import.
@@ -48,8 +76,12 @@ The default transport is offline; it NEVER manufactures acceptance. `createStubK
   `verifyPackage`, `resolveScope` and either channels or `createPeer(address, identity)`; reconnect uses the factory.
 - `scheduler.mjs`/`ingress.mjs`/`framing.mjs`: control > commands > interactive, then byte DRR 8:3:1
   live/initial/transfer; per-lane ACK windows, aggregate SCTP budget, parallel ordered lane ingress.
-  Frames are at most 16 KiB total. The 32-byte big-endian header is CTX4 magic, lane/codec/reserved,
-  then u32 packet/index/count/encodedBytes/rawBytes/frameSeq. Logical messages are UTF-8 JSON.
+  The default transport uses native P5: at most 16 KiB total, a 37-byte header with CTX4 magic,
+  lane, fragment codec, decimal u64 message ID (length plus a 20-byte field), fragment index/count,
+  and uncompressed fragment length. E14 acknowledges logical messages only after application commit;
+  a retained session replays unacknowledged messages and suppresses duplicate delivery. The independent
+  native test peer uses this format, including cross-language command replay. The older 32-byte
+  scheduler/framer remains an explicitly selected K2 component fixture; browser workflow tests use P5.
   Native P5/P8 must implement this same framing; the executable fake native peer is under tests only.
 - `platform.mjs`: shared collections belong to `ctox-platform`, including user-owned `shell_preferences`.
 - `testkit/app-host.mjs`: explicit reference host for tests/Shell development, never imported by the kernel;
@@ -63,6 +95,7 @@ Both initial catch-up and changes use `page`; data and the scoped checkpoint com
 
 On the admitted GPU lane: `node --test --test-concurrency=2 src/apps/business-os/kernel/tests/*.test.mjs`.
 Browser: `PLAYWRIGHT_MODULE=<existing package> CHROME_BIN=<existing chromium> node src/apps/business-os/kernel/tests/browser.mjs`.
+PNG icon round trip (K-1b): same variables, `node src/apps/business-os/kernel/tests/browser-png.mjs` (runs on macOS with Google Chrome).
 The latter starts only its own bounded loopback static fixture and isolated headless context; no tenant or credentials.
 The explicit Node lock adapter is test-only; browsers use actual navigator.locks and IndexedDB.
 

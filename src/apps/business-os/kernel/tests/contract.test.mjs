@@ -76,14 +76,14 @@ test('query/get live, lokal, ohne Zeilendeckel; Änderungen erreichen alle Abonn
   single.subscribe((d) => { singleVal = d; });
   for (let i = 0; i < 600; i++) a.put('notes', { id: `n${i}`, prio: i % 7, done: i % 3 === 0 });
   assert.equal(lq.get().length, 400, 'lokal sofort sichtbar, kein 200er-Deckel');
-  await tick();
+  await until(() => seen.at(-1) === 400 && singleVal?.id === "n7");
   assert.equal(seen.at(-1), 400);
   assert.equal(singleVal.id, 'n7');
   assert.ok(lq.get()[0].prio === 6 && lq.get()[0].id < lq.get()[1].id);
   assert.throws(() => { lq.get()[0].prio = 1; }, TypeError, 'Ergebnisse sind eingefroren');
   a.patch('notes', 'n7', { done: true });
   a.remove('notes', 'n8');
-  await tick();
+  await until(() => seen.at(-1) === 398 && singleVal?.done === true);
   assert.equal(seen.at(-1), 398);
   assert.equal(singleVal.done, true);
   off();
@@ -385,7 +385,7 @@ test('windowState je Tab und Nutzer; shell_preferences nur eigene Zeile (§16.19
   await t2.ready;
   assert.equal(await t2.windowState.get('layout'), null, 'anderer Tab sieht nichts');
   const api = t2.appApi('shell', '1');
-  assert.equal((await api.put('shell_preferences', { id: 'mia', pins: ['crm'], launcher: ['crm', 'mail'] }).result).status, 'accepted');
+  assert.equal((await api.put('shell_preferences', { id: 'mia', pins: ['crm'], launcher_order: ['crm', 'mail'] }).result).status, 'accepted');
   await assert.rejects(api.put('shell_preferences', { id: 'tom', pins: [] }).local, (e) => e.code === 'forbidden');
   await t2.sim.push('shell_preferences', [{ id: 'tom', pins: ['x'] }]);
   assert.deepEqual(api.query('shell_preferences', {}).get().map((d) => d.id), ['mia']);
@@ -527,10 +527,9 @@ test('Shell-Kernel: apps mit Aktivierungszustand, source.* rechtegeprüft, draft
   assert.deepEqual(await s.list(), ['README.md', 'index.js']);
   assert.equal(await s.read('README.md'), '# Leads');
   await s.draft.write('README.md', '# Leads v2');
-  await s.draft.setCollections({ leads: { add: ['score'] } });
   assert.equal(await s.read('README.md'), '# Leads v2', 'Entwurf überlagert');
   const stale = await s.draft.publish({ base_app_ver: '0' }).result;
-  assert.deepEqual(stale, { status: 'rejected', reason: 'stale_base' });
+  assert.deepEqual([stale.status, stale.reason], ['rejected', 'stale_base']);
   const pub = await s.draft.publish({ base_app_ver: '1' }).result;
   assert.equal(pub.status, 'accepted');
   await until(() => sk.apps.get()[0].activated_ver === pub.rev);

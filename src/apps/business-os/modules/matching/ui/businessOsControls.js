@@ -2,27 +2,27 @@ import {
   bindUniversalImportSourceSwitching,
   buildUniversalImportCommandPayloadFromDrawer,
   renderUniversalImportDrawerMarkup
-} from '../../../shared/universal-importer.js';
+} from 'ctox:shared/universal-importer.js';
+import { contextChatModeMarkup, normalizeContextChatMode, sendContextChat } from 'ctox:shared/context-chat.js';
 import { getActiveMatchingDefinition } from './matchingDefinition.js';
+import { getMatchingApi, matchingNavigate, matchingStore, onMatchingUnmount, sendMatchingCommand } from './v4Runtime.js';
 
 const THEME_KEY = 'ctox.businessOs.requirementMatching.theme';
 const LANG_KEY = 'ctox.businessOs.requirementMatching.lang';
 const COLUMN_SETTINGS_KEY = 'ctox.businessOs.requirementMatching.columnSettings';
 const SEARCH_SORT_SETTINGS_KEY = 'ctox.businessOs.requirementMatching.searchSortSettings';
 const TRANSLATION_SETTINGS_KEY = 'ctox.businessOs.requirementMatching.translations';
-const IMPORT_STATUS_KEY = 'ctox.businessOs.matching.importStatus';
-const COMMAND_TIMEOUT_MS = 8000;
 const SUPPORTED_LANGUAGES = ['de', 'en'];
 const pendingTranslationRequests = new Set();
-let runtimeContext = null;
-let controlsInitialized = false;
+let controlsRoot = null;
 
+// Fensterzustand je Montage (App-API 4.0: snapshot/restored statt storageScope).
 function storageGet(key) {
-  try { return runtimeContext?.storageScope?.get?.(key) || null; } catch { return null; }
+  return matchingStore.get(key);
 }
 
 function storageSet(key, value) {
-  try { runtimeContext?.storageScope?.set?.(key, String(value)); } catch {}
+  matchingStore.set(key, String(value));
 }
 
 const MATCHING_DEFINITION = getActiveMatchingDefinition();
@@ -424,7 +424,7 @@ Core scoring principles (IMPORTANT):
 - Do NOT harshly penalize missing professional years if the role is junior/entry: keep matchScore in a fair partial range (e.g., 0.45–0.70) depending on relevance and recency.
 
 2) Abgeschlossenes Studium vs. kurz vor Abschluss (NEAR-COMPLETION RULE):
-- If a base requirement is "abgeschlossenes Studium" (or equivalent) and the CV clearly indicates the candidate is close to completion (e.g., "in den letzten Zügen", "Abschluss in MM/YYYY", "Masterarbeit/Bachelorarbeit läuft", "alle Module abgeschlossen", "Graduation expected"):
+- If a base requirement is "abgeschlossenes Studium" (or equivalent) and the CV clearly indicates the candidate is close to completion (e.g., "in den letzten Zügen", "Abschluss in MM/YYYY", "Masterarbeit/Bachelorarbeit l\u00e4uft", "alle Module abgeschlossen", "Graduation expected"):
   - Treat it as largely fulfilled: matchScore should be 0.80–0.90 by default.
   - Use "partial" (not "none") unless the job explicitly requires the degree already in hand by start date AND the CV timing clearly conflicts.
 - If the job requires degree "zwingend bei Eintritt/Start" or "Urkunde erforderlich" and the candidate finishes later than the stated start:
@@ -621,20 +621,19 @@ All other existing rules still apply:
   }
 };
 
-export function setBusinessOsRuntimeContext(ctx = {}) {
-  runtimeContext = ctx;
-  setBusinessOsCommandBus(ctx.commandBus);
-  if (controlsInitialized) return;
-  controlsInitialized = true;
+// Je Montage einmal: der root ist bei jedem mount neu.
+export function initBusinessOsControls({ host } = {}) {
+  controlsRoot = host || null;
+  pendingTranslationRequests.clear();
   initTheme();
   initLanguage();
   initColumnLabels();
   initColumnDrawers();
-  renderImportStatuses();
+  onMatchingUnmount(() => { controlsRoot = null; });
 }
 
 function getMatchingRoot() {
-  return document.querySelector('[data-matching-module="native"]') || document.body;
+  return controlsRoot?.isConnected ? controlsRoot : (controlsRoot || document.createElement('div'));
 }
 
 function queryMatchingAll(selector) {
@@ -655,12 +654,6 @@ function initTheme() {
       applyTheme(theme);
     });
   }
-  window.addEventListener('message', (event) => {
-    if (event.origin !== window.location.origin) return;
-    if (!isTrustedShellMessageSource(event)) return;
-    if (event.data?.type !== 'ctox-business-os-preferences') return;
-    applyTheme(event.data.theme);
-  });
 }
 
 function applyTheme(theme) {
@@ -690,12 +683,16 @@ function initLanguage() {
       applyLanguage(lang, { reloadForGerman: true });
     });
   }
-  window.addEventListener('message', (event) => {
-    if (event.origin !== window.location.origin) return;
-    if (!isTrustedShellMessageSource(event)) return;
-    if (event.data?.type !== 'ctox-business-os-preferences') return;
-    applyLanguage(event.data.language, { reloadForGerman: false });
-  });
+  // Sprache live aus der Shell (api.shell.locale statt postMessage).
+  const locale = getMatchingApi()?.shell.locale;
+  if (locale) {
+    let first = true;
+    const off = locale.subscribe((lang) => {
+      if (first) { first = false; if (requested || storageGet(LANG_KEY)) return; }
+      applyLanguage(lang, { reloadForGerman: false });
+    });
+    onMatchingUnmount(off);
+  }
 }
 
 function applyLanguage(lang, { reloadForGerman = false } = {}) {
@@ -789,11 +786,8 @@ function requestMissingTranslation({ lang, kind, text }) {
   const key = `${lang}:${kind}:${text}`;
   if (pendingTranslationRequests.has(key)) return;
   pendingTranslationRequests.add(key);
-  dispatchCtoxCommand({
-    module: 'matching',
-    command_type: 'business_os.i18n.translate',
+  sendMatchingCommand('business_os.i18n.translate', {
     record_id: key.slice(0, 128),
-    payload: {
       lang,
       kind,
       text,
@@ -804,29 +798,13 @@ function requestMissingTranslation({ lang, kind, text }) {
             [text]: 'translated text'
           }
         }
-      }
-    },
+      },
     client_context: {
       action: 'missing-translation',
       lang,
       kind
     }
-  }, { timeoutMs: 1000 }).catch(() => {});
-}
-
-let commandBus = null;
-
-export function setBusinessOsCommandBus(nextCommandBus) {
-  commandBus = nextCommandBus?.dispatch ? nextCommandBus : null;
-}
-
-function dispatchCtoxCommand(command, { timeoutMs = COMMAND_TIMEOUT_MS } = {}) {
-  if (!commandBus?.dispatch) return Promise.resolve({ ok: false, status: 'unavailable', error: 'CTOX command bus is unavailable' });
-  return commandBus.dispatch(command, { timeoutMs });
-}
-
-function isTrustedShellMessageSource(event) {
-  return event.source === window || event.source === parent;
+  });
 }
 
 function commandContextFromElement(target) {
@@ -953,7 +931,7 @@ function initColumnDrawers() {
   const drawers = Array.from(root.querySelectorAll('[data-column-drawer]'));
   if (!backdrop || !drawers.length) return;
 
-  document.addEventListener('click', (event) => {
+  root.addEventListener('click', (event) => {
     const actionButton = event.target.closest('[data-column-action]');
     if (!actionButton) return;
     if (!root.contains(actionButton)) return;
@@ -963,7 +941,7 @@ function initColumnDrawers() {
   });
 
   backdrop.addEventListener('click', closeColumnDrawers);
-  document.addEventListener('keydown', (event) => {
+  root.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') closeColumnDrawers();
   });
 
@@ -1025,7 +1003,6 @@ function initColumnDrawers() {
   function bindImportCommand(drawer, column) {
     drawer.querySelector('[data-import-run]')?.addEventListener('click', async (event) => {
       const button = event.currentTarget;
-      button.textContent = 'Command wird an CTOX übergeben...';
       button.disabled = true;
       let payload = null;
       try {
@@ -1034,30 +1011,26 @@ function initColumnDrawers() {
         if (!commandType) {
           throw new Error('Matches werden aus ausgewählter Anforderung und ausgewähltem Objekt erzeugt, nicht als Import.');
         }
-        const command = {
-          module: 'matching',
-          command_type: commandType,
+        // Nie warten (App-API 4.0): Status kommt über den CommandHandle in die Zustandszone.
+        const handle = sendMatchingCommand(commandType, {
+          ...payload,
           record_id: payload.record_id,
-          payload,
           client_context: {
             action: 'import',
             column,
             entity_type: payload.entity_type,
             source_type: payload.source_type
           }
-        };
-        const result = await dispatchCtoxCommand(command);
-        recordImportStatus(payload, result);
-        renderImportStatuses();
+        });
+        await handle?.local;
         closeColumnDrawers();
       } catch (error) {
-        if (payload) {
-          recordImportStatus(payload, { ok: false, status: 'failed', error: String(error?.message || error) });
-          renderImportStatuses();
-          closeColumnDrawers();
-        } else {
-          button.textContent = `Import-Command fehlgeschlagen`;
-        }
+        getMatchingApi()?.status.report({
+          level: 'error',
+          code: `matching.import.${column}`,
+          text: `Import fehlgeschlagen: ${String(error?.message || error)}`
+        });
+        if (payload) closeColumnDrawers();
         console.error('[business-os] import command failed', error);
       } finally {
         button.disabled = false;
@@ -1099,67 +1072,6 @@ async function buildImportCommandPayload(drawer, column) {
   });
 }
 
-function readImportStatuses() {
-  try {
-    const parsed = JSON.parse(storageGet(IMPORT_STATUS_KEY) || '[]');
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isVisibleImportStatus);
-  } catch {
-    return [];
-  }
-}
-
-function writeImportStatuses(items) {
-  storageSet(IMPORT_STATUS_KEY, JSON.stringify((items || []).filter(isVisibleImportStatus).slice(0, 30)));
-}
-
-function isVisibleImportStatus(item) {
-  if (!item || typeof item !== 'object') return false;
-  if (!['requirements', 'objects', 'matches'].includes(String(item.column || ''))) return false;
-  const state = normalizeTaskState(item.taskStatus || item.status || item.state);
-  if (state === 'completed' || state === 'failed') return false;
-  const createdAt = Date.parse(item.createdAt || '');
-  if (Number.isFinite(createdAt) && Date.now() - createdAt > 2 * 60 * 60 * 1000) return false;
-  return true;
-}
-
-function recordImportStatus(payload, commandResult) {
-  const result = commandResult?.result || {};
-  const accepted = Boolean(commandResult?.ok && result?.ok !== false);
-  const status = accepted
-    ? String(result.status || 'queued')
-    : String(result.status || commandResult?.status || 'pending');
-  const commandId = result.command_id || commandResult?.command_id || payload.record_id;
-  const taskId = result.task_id || commandResult?.task_id || '';
-  const taskStatus = result.task_status || commandResult?.task_status || status;
-  const item = {
-    id: `${payload.record_id}_${Date.now()}`,
-    recordId: payload.record_id,
-    commandId,
-    taskId,
-    taskStatus,
-    moduleId: 'matching',
-    column: payload.column,
-    entityType: payload.entity_type,
-    sourceType: payload.source_type,
-    sourceLabel: describeImportSource(payload),
-    status: taskStatus,
-    state: accepted ? normalizeTaskState(taskStatus) : status === 'failed' ? 'failed' : 'pending',
-    createdAt: new Date().toISOString(),
-    error: commandResult?.error || ''
-  };
-  const next = [item, ...readImportStatuses().filter((existing) => existing.recordId !== payload.record_id)];
-  writeImportStatuses(next);
-}
-
-function normalizeTaskState(status) {
-  const value = String(status || '').toLowerCase();
-  if (['running', 'leased', 'working'].includes(value)) return 'running';
-  if (['completed', 'done', 'handled'].includes(value)) return 'completed';
-  if (['failed', 'blocked', 'cancelled'].includes(value)) return 'failed';
-  return 'queued';
-}
-
 function describeImportSource(payload) {
   const source = payload?.source || {};
   if (payload?.source_type === 'url') return source.url || 'URL ohne Adresse';
@@ -1173,90 +1085,6 @@ function describeImportSource(payload) {
   return 'Quelle';
 }
 
-function renderImportStatuses() {
-  const columns = ['requirements', 'matches', 'objects'];
-  const items = readImportStatuses();
-  for (const column of columns) {
-    const host = ensureImportStatusHost(column);
-    if (!host) continue;
-    const columnItems = items.filter((item) => item.column === column).slice(0, 3);
-    host.innerHTML = columnItems.map(renderImportStatusCard).join('');
-    host.hidden = !columnItems.length;
-    bindImportStatusCards(host);
-  }
-}
-
-function ensureImportStatusHost(column) {
-  const root = getMatchingRoot();
-  const selectors = {
-    requirements: '#left .sources',
-    matches: '#center #requirementList',
-    objects: '#right #objectList'
-  };
-  const anchor = root.querySelector(selectors[column]);
-  if (!anchor?.parentElement) return null;
-  let host = root.querySelector(`[data-import-status-host="${column}"]`);
-  if (!host) {
-    host = document.createElement('div');
-    host.className = 'import-status-host';
-    host.dataset.importStatusHost = column;
-    anchor.parentElement.insertBefore(host, anchor);
-  }
-  return host;
-}
-
-function renderImportStatusCard(item) {
-  const meta = getColumnMeta(item.column);
-  const stateLabel = item.state === 'failed'
-    ? 'Fehler'
-    : item.state === 'pending'
-      ? 'Ausstehend'
-      : item.state === 'running'
-        ? 'Running'
-        : item.state === 'completed'
-          ? 'Done'
-          : 'Queued';
-  const summary = item.state === 'failed'
-    ? 'CTOX konnte den Import-Command nicht annehmen.'
-    : item.state === 'pending'
-      ? 'Lokal vorgemerkt. Wartet auf CTOX Verbindung oder Executor.'
-      : item.state === 'running'
-        ? 'CTOX verarbeitet diesen Import gerade.'
-        : item.state === 'completed'
-          ? 'CTOX hat den Task abgeschlossen; Ergebnis wird synchronisiert.'
-          : 'Wartet auf CTOX Parser und schreibt danach JSON in RxDB.';
-  const created = item.createdAt ? new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-  return `
-    <article class="import-status-card" data-import-status="${escapeDrawerHtml(item.id)}" data-ctox-task-id="${escapeDrawerHtml(item.taskId || '')}" data-ctox-command-id="${escapeDrawerHtml(item.commandId || '')}" role="button" tabindex="0" title="Im CTOX Harness öffnen">
-      <div class="import-status-topline">
-        <strong>${escapeDrawerHtml(meta.singular || meta.label || 'Import')} Import</strong>
-        <span class="import-status-pill import-status-${escapeDrawerHtml(item.state || 'queued')}">${escapeDrawerHtml(stateLabel)}</span>
-      </div>
-      <div class="import-status-source">${escapeDrawerHtml(item.sourceLabel || 'Quelle')}</div>
-      <div class="import-status-summary">${escapeDrawerHtml(summary)}</div>
-      <div class="import-status-meta">
-        <span>${escapeDrawerHtml(item.sourceType || 'source')}</span>
-        <span>${escapeDrawerHtml(item.taskId || item.commandId || item.recordId || 'command')}</span>
-        <span>${escapeDrawerHtml(created)}</span>
-      </div>
-      ${item.error ? `<div class="import-status-error">${escapeDrawerHtml(item.error)}</div>` : ''}
-    </article>
-  `;
-}
-
-function bindImportStatusCards(host) {
-  host.querySelectorAll('[data-import-status]').forEach((card) => {
-    const open = () => openCtoxHarnessForTask(card.dataset.ctoxTaskId, card.dataset.ctoxCommandId);
-    card.addEventListener('click', open);
-    card.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        open();
-      }
-    });
-  });
-}
-
 function openCtoxHarnessForTask(taskId, commandId) {
   const focus = {
     taskId: taskId || '',
@@ -1267,16 +1095,7 @@ function openCtoxHarnessForTask(taskId, commandId) {
   const params = new URLSearchParams();
   if (focus.taskId) params.set('task_id', focus.taskId);
   if (focus.commandId) params.set('command_id', focus.commandId);
-  const hash = params.toString() ? `ctox?${params.toString()}` : 'ctox';
-  try {
-    parent.sessionStorage.setItem('ctox.businessOs.focusTask', JSON.stringify(focus));
-    parent.location.hash = hash;
-  } catch {
-    try {
-      sessionStorage.setItem('ctox.businessOs.focusTask', JSON.stringify(focus));
-    } catch {}
-    location.hash = hash;
-  }
+  matchingNavigate('ctox', Object.fromEntries(params));
 }
 
 function initContextMenu() {
@@ -1287,16 +1106,27 @@ function initContextMenu() {
   menu.hidden = true;
   root.append(menu);
 
-  document.addEventListener('click', () => {
+  matchingRoot.addEventListener('click', () => {
     menu.hidden = true;
   });
-  document.addEventListener('keydown', (event) => {
+  matchingRoot.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') menu.hidden = true;
   });
 }
 
+// Nur Spiegel für die Darstellung (R9); entschieden wird im Handler ctox.app.modify.request.
+function canModifyMatchingApp() {
+  const api = getMatchingApi();
+  let permissions = [];
+  try { permissions = api?.actor?.permissions?.get?.() || []; } catch {}
+  if (permissions.includes('apps.source.edit')) return true;
+  const role = String(api?.actor?.role || '').trim().toLowerCase().replace(/^business_os_/, '');
+  return ['admin', 'chef'].includes(role);
+}
+
 function renderContextMenu(menu, context, x, y) {
   const label = context.column ? getColumnMeta(context.column).label : 'Matching';
+  const canModifyApp = canModifyMatchingApp();
   menu.innerHTML = `
     <form class="matching-context-chat" data-matching-context-form>
       <header>
@@ -1307,8 +1137,7 @@ function renderContextMenu(menu, context, x, y) {
         <button type="button" data-context-close aria-label="Schließen">×</button>
       </header>
       <div class="matching-context-mode" role="radiogroup" aria-label="CTOX Aufgabe">
-        <label><input type="radio" name="contextMode" value="data" checked /> Mit Daten arbeiten</label>
-        <label><input type="radio" name="contextMode" value="app" /> App modifizieren</label>
+        ${contextChatModeMarkup({ canModifyApp, includeAsk: false, escape: escapeDrawerHtml })}
       </div>
       <textarea data-context-message placeholder="Was soll CTOX hier tun oder prüfen?"></textarea>
       <footer>
@@ -1337,35 +1166,24 @@ function renderContextMenu(menu, context, x, y) {
       textarea?.focus();
       return;
     }
-    const mode = new FormData(form).get('contextMode') || 'data';
-    status.textContent = 'Gesendet.';
+    const mode = normalizeContextChatMode(new FormData(form).get('contextMode'), { canModifyApp, includeAsk: false });
 
     const title = `${mode === 'app' ? 'Matching App modifizieren' : 'Matching bearbeiten'} · ${context.column || 'Matching'}`;
-    runtimeContext?.businessChat?.submitTask?.({
-      text: instruction,
-      module: 'matching',
-      command_type: mode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
-      record_id: context.fieldId || context.column || 'matching',
-      title,
-      instruction,
-      payload: {
+    // Kontext-Auftrag an die Chat-App ctox über den Baustein (Strang SKL-D, Kern §16.40 commands_out).
+    const api = getMatchingApi();
+    if (api) {
+      sendContextChat(api, {
+        source_app: 'matching',
+        record_ref: context.fieldId || '',
+        text: instruction,
+        mode,
+        canModifyApp,
+        includeAsk: false,
         title,
-        instruction,
-        prompt: instruction,
-        user_message: instruction,
-        mode,
-        target: mode === 'app' ? 'app' : 'data',
-        context,
         thread_key: 'business-os/matching',
-        record_snapshot: context,
-      },
-      client_context: {
-        action: 'context-chat',
-        mode,
-        column: context.column,
-        entity_type: context.entityType,
-      },
-    }).catch?.(() => {});
+        context,
+      }, { send: (type, payload, opts) => sendMatchingCommand(type, { ...payload, record_id: opts.record_id, client_context: { action: 'context-chat', mode, column: context.column, entity_type: context.entityType } }), navigate: false });
+    }
 
     setTimeout(() => { menu.hidden = true; }, 650);
   });

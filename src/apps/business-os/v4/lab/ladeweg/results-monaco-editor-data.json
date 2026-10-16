@@ -1,0 +1,36 @@
+{
+  "at": "2026-10-15T23:09:54.734Z",
+  "mut": "editor-data",
+  "ms": 3008,
+  "shellFiles": 10,
+  "controlled": true,
+  "root": "/~a/shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/",
+  "editor": "monaco",
+  "editorRendered": true,
+  "workers": [
+    "data:text/javascript;charset=utf-8,self.MonacoEnvironment%3D%7BbaseUrl%3A'http%3A%2F%2F127.0.0.1%3A53631%2F~a%2Flib%3Amonaco%400.0~lib%3Actox-office%401.0%2F'%7D%3BimportScripts('http%3A%2F%2F127.0.0.1%3A53631%2F~a%2Flib%3Amonaco%400.0~lib%3Actox-office%401.0%2Fvs%2Fbase%2Fworker%2FworkerMain.js')%3B",
+    "data:text/javascript;charset=utf-8,self.MonacoEnvironment%3D%7BbaseUrl%3A'http%3A%2F%2F127.0.0.1%3A53631%2F~a%2Flib%3Amonaco%400.0~lib%3Actox-office%401.0%2F'%7D%3BimportScripts('http%3A%2F%2F127.0.0.1%3A53631%2F~a%2Flib%3Amonaco%400.0~lib%3Actox-office%401.0%2Fvs%2Fbase%2Fworker%2FworkerMain.js')%3B",
+    "data:text/javascript;charset=utf-8,self.MonacoEnvironment%3D%7BbaseUrl%3A'http%3A%2F%2F127.0.0.1%3A53631%2F~a%2Flib%3Amonaco%400.0~lib%3Actox-office%401.0%2F'%7D%3BimportScripts('http%3A%2F%2F127.0.0.1%3A53631%2F~a%2Flib%3Amonaco%400.0~lib%3Actox-office%401.0%2Fvs%2Fbase%2Fworker%2FworkerMain.js')%3B"
+  ],
+  "workerMisses": [
+    "monaco@0.0/vs/language/typescript/tsWorker.js:artifact"
+  ],
+  "misses": 8,
+  "aborts": [],
+  "hits": 8,
+  "serverHitsUnderA": 3,
+  "serverPathsUnderA": [
+    "/~a/lib:monaco@0.0~lib:ctox-office@1.0/vs/base/worker/workerMain.js",
+    "/~a/lib:monaco@0.0~lib:ctox-office@1.0/vs/base/worker/workerMain.js",
+    "/~a/lib:monaco@0.0~lib:ctox-office@1.0/vs/base/worker/workerMain.js"
+  ],
+  "fallback": [
+    "warning: Could not create web worker(s). Falling back to loading web worker code in main thread, which might cause UI freezes. Please see https://github.com/microsoft/monaco-editor#faq"
+  ],
+  "errors": [
+    "pageerror: Failed to execute 'importScripts' on 'WorkerGlobalScope': The script at 'http://127.0.0.1:53631/~a/lib:monaco@0.0~lib:ctox-office@1.0/vs/base/worker/workerMain.js' failed to load.",
+    "pageerror: Failed to execute 'importScripts' on 'WorkerGlobalScope': The script at 'http://127.0.0.1:53631/~a/lib:monaco@0.0~lib:ctox-office@1.0/vs/base/worker/workerMain.js' failed to load.",
+    "pageerror: Failed to execute 'importScripts' on 'WorkerGlobalScope': The script at 'http://127.0.0.1:53631/~a/lib:monaco@0.0~lib:ctox-office@1.0/vs/base/worker/workerMain.js' failed to load."
+  ],
+  "pass": false
+}

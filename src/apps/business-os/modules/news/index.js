@@ -1,5 +1,5 @@
-import { loadModuleMessages } from '../../shared/i18n.js';
-import { renderHtmlIfChanged } from '../../shared/stable-dom.js';
+import { renderHtmlIfChanged } from 'ctox:shared/stable-dom.js';
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
 import {
   CATEGORIES,
   COMMUNITY_PRESET,
@@ -44,21 +44,11 @@ const RENDER_DEBOUNCE_MS = 60;
 
 const labels = {
   de: {
+    title: 'News',
     topicsTitle: 'Themen',
     trendTitle: 'Im Trend',
-    noTopicSelected: 'Kein Thema ausgewählt',
-    emptyTopicsTitle: 'Lege dein erstes Thema an',
-    emptyTopicsBody: 'Ein Thema bündelt Quellen und einen Rhythmus zu einem eigenen Feed.',
     createTopic: 'Thema anlegen',
-    noTopicsInView: 'Keine Themen in dieser Ansicht.',
-    emptyIssueTitle: 'Noch keine Ausgabe',
-    emptyIssueBody: 'CTOX recherchiert die Quellen und schreibt daraus den Feed.',
-    generateFirst: 'Erste Ausgabe erzeugen',
-    issueRunning: 'Ausgabe wird erstellt',
-    issueRunningBody: 'CTOX liest gerade die Quellen. Der Feed erscheint hier, sobald er fertig ist.',
     issueFailed: 'Ausgabe fehlgeschlagen',
-    retry: 'Erneut erzeugen',
-    noPostsInView: 'Keine Beiträge in dieser Ansicht.',
     showMore: 'Mehr anzeigen',
     showLess: 'Weniger anzeigen',
     sources: 'Quellen',
@@ -76,7 +66,6 @@ const labels = {
     deadlineRequired: 'Wähle einen Stichtag.',
     saveFailed: 'Speichern fehlgeschlagen',
     commandFailed: 'Auftrag konnte nicht an CTOX übergeben werden',
-    commandQueued: 'Auftrag an CTOX übergeben',
     deleteConfirm: 'Nochmal klicken: „{0}“ mit allen Ausgaben löschen',
     deleteTopic: 'Thema löschen',
     groupLab: 'Labs',
@@ -96,7 +85,6 @@ const labels = {
     statusNeedsAuth: 'Anmeldung nötig',
     statusFailed: 'Fehler',
     statusRepairing: 'wird repariert',
-    statusPending: 'in Arbeit',
     statusAuthRequested: 'Anmeldung offen',
     saveTopicFirst: 'Speichere das Thema, bevor du Quellen einrichtest.',
     placeholderLab: 'https://www.example.com/blog',
@@ -115,21 +103,11 @@ const labels = {
     manual: 'Manuell',
   },
   en: {
+    title: 'News',
     topicsTitle: 'Topics',
     trendTitle: 'Trending',
-    noTopicSelected: 'No topic selected',
-    emptyTopicsTitle: 'Create your first topic',
-    emptyTopicsBody: 'A topic bundles sources and a cadence into its own feed.',
     createTopic: 'Create topic',
-    noTopicsInView: 'No topics in this view.',
-    emptyIssueTitle: 'No issue yet',
-    emptyIssueBody: 'CTOX researches the sources and writes the feed from them.',
-    generateFirst: 'Create first issue',
-    issueRunning: 'Issue in progress',
-    issueRunningBody: 'CTOX is reading the sources. The feed appears here when it is done.',
     issueFailed: 'Issue failed',
-    retry: 'Generate again',
-    noPostsInView: 'No posts in this view.',
     showMore: 'Show more',
     showLess: 'Show less',
     sources: 'Sources',
@@ -147,7 +125,6 @@ const labels = {
     deadlineRequired: 'Pick a deadline.',
     saveFailed: 'Saving failed',
     commandFailed: 'Could not hand the task to CTOX',
-    commandQueued: 'Task handed to CTOX',
     deleteConfirm: 'Click again: delete “{0}” with all issues',
     deleteTopic: 'Delete topic',
     groupLab: 'Labs',
@@ -167,7 +144,6 @@ const labels = {
     statusNeedsAuth: 'Sign-in needed',
     statusFailed: 'Error',
     statusRepairing: 'repairing',
-    statusPending: 'in progress',
     statusAuthRequested: 'sign-in open',
     saveTopicFirst: 'Save the topic before setting up sources.',
     placeholderLab: 'https://www.example.com/blog',
@@ -201,7 +177,8 @@ const ICONS = {
 };
 
 const state = {
-  ctx: null,
+  api: null,
+  root: null,
   lang: 'de',
   messages: labels.de,
   topics: [],
@@ -217,51 +194,177 @@ const state = {
   expandedPosts: new Set(),
   drawer: null,
   renderTimer: 0,
-  subscriptions: [],
   disposed: false,
+  commandWatches: new Map(),
 };
 const els = {};
 
-export async function mount(ctx) {
-  state.ctx = ctx;
-  state.disposed = false;
-  state.lang = ctx.locale === 'en' ? 'en' : 'de';
-  state.messages = await loadModuleMessages(import.meta.url, state.lang, labels);
-  ensureStyles();
-  ctx.host.innerHTML = await loadModuleMarkup();
-  bindElements(ctx.host);
-  wireEvents();
-  await loadAll();
-  subscribeAll();
-  render();
-  return unmount;
+function langFrom(locale) {
+  return String(locale || '').toLowerCase().startsWith('en') ? 'en' : 'de';
 }
 
-function unmount() {
-  state.disposed = true;
-  clearTimeout(state.renderTimer);
-  for (const sub of state.subscriptions) {
-    try { sub?.unsubscribe?.(); } catch {}
+// Eingebettete labels sind der Rückfall; api.shell.t('news.<key>') übersteuert (Schlüsselraum offen, OFFEN-B).
+function messagesFor(api, lang) {
+  const base = { ...labels.de, ...labels[lang] };
+  for (const key of Object.keys(base)) {
+    const scoped = `news.${key}`;
+    const value = api?.shell?.t?.(scoped);
+    if (typeof value === 'string' && value && value !== scoped) base[key] = value;
   }
-  state.subscriptions = [];
+  return base;
 }
 
-function ensureStyles() {
-  // The stylesheet carries the module's own cache-buster so fresh JS never
-  // binds against a stale cached sheet.
-  const version = String(import.meta.url).split('?v=')[1] || '';
-  const href = new URL('./index.css', import.meta.url).pathname + (version ? `?v=${version}` : '');
-  if (document.querySelector(`link[href="${href}"]`)) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = href;
-  document.head.append(link);
+function resetState() {
+  Object.assign(state, {
+    topics: [], sources: [], issues: [], posts: [], selectedTopicId: '', selectedIssueId: '',
+    leftGrammar: { search: '', band: 'active', filters: {} }, centerGrammar: { search: '', band: 'all', filters: {} },
+    leftView: 'cards', centerView: 'cards', expandedPosts: new Set(), drawer: null, renderTimer: 0, disposed: false,
+    commandWatches: new Map(),
+  });
+  for (const key of Object.keys(els)) delete els[key];
+}
+
+export async function mount(root, api, { restored } = {}) {
+  resetState();
+  // Abos gehören dieser Montage (PORTING.md §4 Falle 1).
+  const disposers = [];
+  const watches = state.commandWatches;
+  state.api = api;
+  state.root = root;
+  if (!root.dataset.app) root.dataset.app = api.app?.id || 'news';
+  state.lang = langFrom(api.shell.locale.get());
+  state.messages = messagesFor(api, state.lang);
+  // CSS lädt die Shell aus dem Manifest; index.html liefert der Service Worker versioniert (§16.15).
+  root.innerHTML = await loadModuleMarkup();
+  bindElements(root);
+  wireEvents();
+  autoWirePaneGrammar(root);
+  api.shell.setTitle(t('title'));
+  const pendingRestore = restored && typeof restored === 'object' && restored.v === 1 ? restored : null;
+  applyRestoredView(pendingRestore);
+  let drawerRestore = pendingRestore?.drawer || null;
+  // Live-Abos statt RxDB-Einmal-Lesen + Observable + Neuladen.
+  for (const [key, name] of Object.entries(COLLECTIONS)) {
+    disposers.push(api.query(name, {}).subscribe((rows) => {
+      state[key] = Array.isArray(rows) ? rows : [];
+      scheduleRender();
+      if (drawerRestore && restoreDrawer(drawerRestore)) drawerRestore = null;
+    }));
+  }
+  disposers.push(api.shell.locale.subscribe((locale) => {
+    const lang = langFrom(locale);
+    if (lang === state.lang) return;
+    state.lang = lang;
+    state.messages = messagesFor(api, lang);
+    scheduleRender();
+  }));
+  return {
+    unmount() {
+      clearTimeout(state.renderTimer);
+      for (const off of disposers.splice(0)) {
+        try { off(); } catch (error) { console.warn('[news] unsubscribe failed', error); }
+      }
+      for (const off of watches.values()) { try { off(); } catch {} }
+      watches.clear();
+      root.replaceChildren();
+      if (state.root === root) {
+        state.disposed = true;
+        state.api = null;
+        state.root = null;
+      }
+    },
+    snapshot: newsSnapshot,
+  };
+}
+
+function scheduleRender() {
+  clearTimeout(state.renderTimer);
+  state.renderTimer = setTimeout(() => {
+    if (state.disposed || !state.api) return;
+    reconcileSelection();
+    render();
+  }, RENDER_DEBOUNCE_MS);
+}
+
+// Snapshot für den Live-Remount (§10.2a Nr. 1): Auswahl, Ansichten, Grammatik und offener Themen-Drawer samt
+// ungespeicherter Eingaben und Quellen-Entwürfe.
+function newsSnapshot() {
+  const snap = {
+    v: 1,
+    selectedTopicId: state.selectedTopicId,
+    selectedIssueId: state.selectedIssueId,
+    leftGrammar: structuredClone(state.leftGrammar),
+    centerGrammar: structuredClone(state.centerGrammar),
+    leftView: state.leftView,
+    centerView: state.centerView,
+    expandedPosts: [...state.expandedPosts],
+    feedScrollTop: els.feed?.scrollTop || 0,
+  };
+  if (state.drawer && els.drawer && !els.drawer.hidden) {
+    const values = {};
+    for (const el of els.form?.elements || []) {
+      if (!el.name) continue;
+      if (el.type === 'checkbox') { values[el.name] = values[el.name] || []; if (el.checked) values[el.name].push(el.value); }
+      else if (el.type === 'radio') { if (el.checked) values[el.name] = el.value; }
+      else values[el.name] = el.value;
+    }
+    snap.drawer = {
+      persisted: state.drawer.persisted,
+      topicId: state.drawer.topic?.id || '',
+      tab: state.drawer.tab,
+      sources: structuredClone(state.drawer.sources),
+      removed: [...state.drawer.removed],
+      values,
+    };
+  }
+  return snap;
+}
+
+function applyRestoredView(restored) {
+  if (!restored) return;
+  if (typeof restored.selectedTopicId === 'string') state.selectedTopicId = restored.selectedTopicId;
+  if (typeof restored.selectedIssueId === 'string') state.selectedIssueId = restored.selectedIssueId;
+  if (restored.leftGrammar && typeof restored.leftGrammar === 'object') state.leftGrammar = { ...state.leftGrammar, ...restored.leftGrammar };
+  if (restored.centerGrammar && typeof restored.centerGrammar === 'object') state.centerGrammar = { ...state.centerGrammar, ...restored.centerGrammar };
+  if (restored.leftView === 'list' || restored.leftView === 'cards') state.leftView = restored.leftView;
+  if (restored.centerView === 'list' || restored.centerView === 'cards') state.centerView = restored.centerView;
+  if (Array.isArray(restored.expandedPosts)) state.expandedPosts = new Set(restored.expandedPosts.filter((id) => typeof id === 'string'));
+  const leftSearch = els.leftPane?.querySelector('[data-pg-search]');
+  if (leftSearch) leftSearch.value = state.leftGrammar.search || '';
+  const centerSearch = els.centerPane?.querySelector('[data-pg-search]');
+  if (centerSearch) centerSearch.value = state.centerGrammar.search || '';
+  for (const [pane, grammar] of [[els.leftPane, state.leftGrammar], [els.centerPane, state.centerGrammar]]) {
+    pane?.querySelectorAll('[data-pg-band]').forEach((tab) => {
+      tab.setAttribute('aria-selected', String(tab.dataset.pgBand === grammar.band));
+      tab.classList.toggle('is-active', tab.dataset.pgBand === grammar.band);
+    });
+  }
+}
+
+// Offener Drawer: erst wieder öffnen, wenn das gespeicherte Thema in den Live-Daten steht (neues Thema sofort).
+function restoreDrawer(snap) {
+  const topic = snap.persisted ? state.topics.find((item) => item.id === snap.topicId) : null;
+  if (snap.persisted && !topic) return false;
+  openDrawer(topic);
+  if (!state.drawer) return true;
+  if (!snap.persisted && snap.topicId) state.drawer.topic.id = snap.topicId;
+  if (Array.isArray(snap.sources)) state.drawer.sources = snap.sources;
+  if (Array.isArray(snap.removed)) state.drawer.removed = new Set(snap.removed);
+  for (const el of els.form?.elements || []) {
+    if (!el.name || !(el.name in (snap.values || {}))) continue;
+    const v = snap.values[el.name];
+    if (el.type === 'checkbox') el.checked = Array.isArray(v) && v.includes(el.value);
+    else if (el.type === 'radio') el.checked = v === el.value;
+    else el.value = v;
+  }
+  syncCadenceFields?.();
+  renderSourceGroups();
+  if (snap.tab) setDrawerTab(snap.tab);
+  return true;
 }
 
 async function loadModuleMarkup() {
-  const version = String(import.meta.url).split('?v=')[1] || '';
-  const markupHref = new URL('./index.html', import.meta.url).pathname + (version ? `?v=${version}` : '');
-  const html = await fetch(markupHref).then((res) => res.text());
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
   return doc.body.innerHTML;
@@ -304,51 +407,22 @@ function bindElements(host) {
   els.newSourceValue = host.querySelector('[data-new-source-value]');
 }
 
-function collection(name) {
-  return state.ctx?.db?.collection?.(name) || null;
-}
-
-async function readCollection(name) {
-  const handle = collection(name);
-  if (!handle) return [];
-  const docs = await handle.find().exec();
-  return docs.map((doc) => (typeof doc?.toJSON === 'function' ? doc.toJSON() : doc)).filter((doc) => doc && !doc._deleted);
-}
-
-async function loadAll() {
-  const [topics, sources, issues, posts] = await Promise.all([
-    readCollection(COLLECTIONS.topics),
-    readCollection(COLLECTIONS.sources),
-    readCollection(COLLECTIONS.issues),
-    readCollection(COLLECTIONS.posts),
-  ]);
-  state.topics = topics;
-  state.sources = sources;
-  state.issues = issues;
-  state.posts = posts;
-  reconcileSelection();
-}
-
-function subscribeAll() {
-  for (const [key, name] of Object.entries(COLLECTIONS)) {
-    const handle = collection(name);
-    const sub = handle?.$?.subscribe?.(() => scheduleReload(key));
-    if (sub) state.subscriptions.push(sub);
+// Schreiben nur über die App-API; `local`-Ablehnung → Zustandszone (Core-Ablehnungen meldet der Kernel).
+function write(op, name, idOrDoc, patch) {
+  const api = state.api;
+  if (!api) return Promise.resolve(false);
+  let handle;
+  try {
+    handle = op === 'put' ? api.put(name, idOrDoc) : op === 'patch' ? api.patch(name, idOrDoc, patch) : api.remove(name, idOrDoc);
+  } catch (error) {
+    notify('error', t('saveFailed'), error?.message, `write.${name}`);
+    return Promise.resolve(false);
   }
+  return handle.local.then(() => true, (error) => { notify('error', t('saveFailed'), error?.message, `write.${name}`); return false; });
 }
 
-const pendingReloads = new Set();
-function scheduleReload(key) {
-  pendingReloads.add(key);
-  clearTimeout(state.renderTimer);
-  state.renderTimer = setTimeout(async () => {
-    if (state.disposed) return;
-    const keys = [...pendingReloads];
-    pendingReloads.clear();
-    await Promise.all(keys.map(async (k) => { state[k] = await readCollection(COLLECTIONS[k]); }));
-    reconcileSelection();
-    render();
-  }, RENDER_DEBOUNCE_MS);
+function readOne(name, id) {
+  return id && state.api ? state.api.get(name, id).get() : null;
 }
 
 function reconcileSelection() {
@@ -369,6 +443,19 @@ function selectedTopic() {
 
 function selectedIssue() {
   return state.issues.find((issue) => issue.id === state.selectedIssueId) || null;
+}
+
+// Angezeigte Ausgabe (FIX9a): Solange die gewählte Ausgabe noch erstellt wird und keine Beiträge hat, zeigt der
+// Hauptbereich die letzte fertige Ausgabe desselben Themas. Der Erstellstatus steht nur in der Zone und als Punkt
+// am Ausgabeknoten.
+function displayedIssue() {
+  const issue = selectedIssue();
+  if (!issue || !ISSUE_ACTIVE_STATUSES.includes(issue.status)) return issue;
+  if (state.posts.some((post) => post.issue_id === issue.id)) return issue;
+  const ready = issuesForTopic(state.issues, issue.topic_id, Infinity)
+    .find((other) => other.id !== issue.id && !ISSUE_ACTIVE_STATUSES.includes(other.status) && other.status !== 'failed'
+      && state.posts.some((post) => post.issue_id === other.id));
+  return ready || issue;
 }
 
 function wireEvents() {
@@ -495,18 +582,9 @@ function renderLeft() {
   els.leftPane?.__ctoxPaneGrammar?.setCounts?.(counts);
   setCountsFallback(els.leftPane, counts);
   const topics = topicsForBand(state.topics, state.leftGrammar);
-  setFooter(els.leftPane, t('topicsFooter', topics.length));
-  if (!state.topics.length) {
-    renderHtmlIfChanged(els.topicList, `
-      <div class="ctox-empty news-empty">
-        <strong>${esc(t('emptyTopicsTitle'))}</strong>
-        <span>${esc(t('emptyTopicsBody'))}</span>
-        <button class="ctox-button is-primary" type="button" data-action="create-topic">${esc(t('createTopic'))}</button>
-      </div>`);
-    return;
-  }
+  // Leere Liste rendert nichts (PORTING.md R11); „Thema anlegen“ steht im Kopf der Spalte.
   if (!topics.length) {
-    renderHtmlIfChanged(els.topicList, `<div class="ctox-empty"><span>${esc(t('noTopicsInView'))}</span></div>`);
+    renderHtmlIfChanged(els.topicList, '');
     return;
   }
   const compact = state.leftView === 'list';
@@ -553,63 +631,63 @@ function setFooter(pane, text) {
   if (node) node.textContent = text;
 }
 
+// Laufende bzw. fehlgeschlagene Ausgabe der Auswahl → Zustandszone (vorher Leerzustand im Feed).
+function reportIssueState(issue) {
+  const api = state.api;
+  if (!api) return;
+  if (issue && ISSUE_ACTIVE_STATUSES.includes(issue.status)) {
+    api.status.report({ level: 'info', code: 'news.issue.running', text: state.lang === 'en' ? 'Issue in progress' : 'Ausgabe wird erstellt', ref: issue.id });
+  } else api.status.clear('news.issue.running');
+  if (issue && issue.status === 'failed') {
+    api.status.report({ level: 'error', code: 'news.issue.failed', text: issue.error ? `${t('issueFailed')}: ${issue.error}` : t('issueFailed'), ref: issue.id });
+  } else api.status.clear('news.issue.failed');
+}
+
 function renderCenter() {
   if (!els.feed) return;
   const topic = selectedTopic();
-  const issue = selectedIssue();
-  els.feedTitle.textContent = topic ? (issue ? `${topic.title} · ${issueLabel(issue.issue_date, state.lang)}` : topic.title) : t('noTopicSelected');
+  const running = selectedIssue();
+  const issue = displayedIssue();
+  els.feedTitle.textContent = topic ? (issue ? `${topic.title} · ${issueLabel(issue.issue_date, state.lang)}` : topic.title) : '';
   setDisabled('configure-topic', !topic);
-  setDisabled('generate-issue', !topic || Boolean(issue && ISSUE_ACTIVE_STATUSES.includes(issue.status)));
+  setDisabled('generate-issue', !topic || Boolean(running && ISSUE_ACTIVE_STATUSES.includes(running.status)));
   const taskButton = els.host.querySelector('[data-action="open-issue-task"]');
-  if (taskButton) taskButton.hidden = !(issue && (issue.task_id || issue.command_id) && issue.status !== 'ready');
+  if (taskButton) taskButton.hidden = !(running && (running.task_id || running.command_id) && running.status !== 'ready');
 
   const counts = categoryCounts(state.posts, issue?.id);
   els.centerPane?.__ctoxPaneGrammar?.setCounts?.(counts);
   setCountsFallback(els.centerPane, counts);
+  hideEmptyCategoryTabs(counts);
 
-  if (!topic) {
+  reportIssueState(running);
+  if (!topic || !issue) {
+    // Ohne Thema/Ausgabe bleibt der Feed leer; „Ausgabe erzeugen“ steht im Kopf des Feeds.
     setFooter(els.centerPane, '');
-    renderHtmlIfChanged(els.feed, '<div class="ctox-empty"></div>');
-    return;
-  }
-  if (!issue) {
-    setFooter(els.centerPane, '');
-    renderHtmlIfChanged(els.feed, `
-      <div class="ctox-empty news-empty">
-        <strong>${esc(t('emptyIssueTitle'))}</strong>
-        <span>${esc(t('emptyIssueBody'))}</span>
-        <button class="ctox-button is-primary" type="button" data-action="generate-issue">${esc(t('generateFirst'))}</button>
-      </div>`);
+    renderHtmlIfChanged(els.feed, '');
     return;
   }
   const posts = postsForIssue(state.posts, issue.id, state.centerGrammar);
-  setFooter(els.centerPane, t('postsFooter', posts.length, issueLabel(issue.issue_date, state.lang)));
-  if (!counts.all && ISSUE_ACTIVE_STATUSES.includes(issue.status)) {
-    renderHtmlIfChanged(els.feed, `
-      <div class="ctox-empty news-empty">
-        <span class="news-spinner" aria-hidden="true"></span>
-        <strong>${esc(t('issueRunning'))}</strong>
-        <span>${esc(t('issueRunningBody'))}</span>
-      </div>`);
-    return;
-  }
-  if (!counts.all && issue.status === 'failed') {
-    renderHtmlIfChanged(els.feed, `
-      <div class="ctox-empty news-empty">
-        <strong>${esc(t('issueFailed'))}</strong>
-        ${issue.error ? `<span>${esc(issue.error)}</span>` : ''}
-        <button class="ctox-button is-primary" type="button" data-action="generate-issue">${esc(t('retry'))}</button>
-      </div>`);
-    return;
-  }
   if (!posts.length) {
-    renderHtmlIfChanged(els.feed, `<div class="ctox-empty"><span>${esc(t('noPostsInView'))}</span></div>`);
+    renderHtmlIfChanged(els.feed, '');
     return;
   }
   const html = state.centerView === 'list'
     ? `<div class="news-rows">${posts.map(renderPostRow).join('')}</div>`
     : `<div class="news-column">${posts.map(renderPostThread).join('')}</div>`;
   renderHtmlIfChanged(els.feed, html);
+}
+
+// Leere Kategoriereiter (0) ausblenden (FIX9a); „Alle“ bleibt. Steht die Auswahl auf einem leeren Reiter, gilt „Alle“.
+function hideEmptyCategoryTabs(counts) {
+  const tabs = [...(els.centerPane?.querySelectorAll('[data-pg-band]') || [])];
+  let fallback = false;
+  for (const tab of tabs) {
+    const band = tab.dataset.pgBand;
+    const empty = band !== 'all' && !(counts[band] > 0);
+    tab.hidden = empty;
+    if (empty && tab.getAttribute('aria-selected') === 'true') fallback = true;
+  }
+  if (fallback) tabs.find((tab) => tab.dataset.pgBand === 'all')?.click();
 }
 
 function setDisabled(action, disabled) {
@@ -736,8 +814,10 @@ function renderPostRow(post) {
 
 function renderTrends() {
   if (!els.trends) return;
-  const issue = selectedIssue();
+  const issue = displayedIssue();
   const trends = issue ? trendsForIssue(issue, state.posts) : [];
+  // Leere Trend-Spalte ausblenden (FIX9a): Spalte samt Teiler weg, der Feed nimmt die Breite.
+  els.root?.classList.toggle('is-no-trends', !trends.length);
   if (!trends.length) {
     renderHtmlIfChanged(els.trends, '');
     return;
@@ -770,14 +850,9 @@ function toggleExpand(postId) {
 }
 
 async function toggleBookmark(postId) {
-  const handle = collection(COLLECTIONS.posts);
-  const doc = await handle?.findOne(postId).exec();
+  const doc = readOne(COLLECTIONS.posts, postId);
   if (!doc) return;
-  try {
-    await doc.incrementalPatch({ bookmarked: doc.bookmarked !== true, updated_at_ms: Date.now() });
-  } catch (error) {
-    notify('error', t('saveFailed'), error?.message);
-  }
+  await write('patch', COLLECTIONS.posts, postId, { bookmarked: doc.bookmarked !== true, updated_at_ms: Date.now() });
 }
 
 async function copyPostLink(postId) {
@@ -786,28 +861,62 @@ async function copyPostLink(postId) {
   if (!href) return;
   try {
     await navigator.clipboard.writeText(href);
-    notify('success', t('linkCopied'));
+    notify('info', t('linkCopied'), '', 'link.copied');
   } catch {}
 }
 
-function notify(type, title, message = '') {
-  try {
-    state.ctx?.notifications?.show?.({ type, title, message });
-  } catch {}
+// Meldungen nur in die Zustandszone (Anf. 27); stabiler Code je Fall, damit `clear` greift. v4-allow: text (Zonen-Code, keine Klasse)
+function notify(type, title, message = '', code = 'notice') {
+  const api = state.api;
+  if (!api) return;
+  const level = type === 'error' ? 'error' : type === 'warning' ? 'warn' : 'info';
+  api.status.report({ level, code: `news.${code}`, text: message ? `${title}: ${message}` : String(title || '') });
 }
 
 // --- Commands ------------------------------------------------------------
 
-async function dispatch(command) {
-  if (typeof state.ctx?.commandBus?.dispatch !== 'function') throw new Error(t('commandFailed'));
-  return state.ctx.commandBus.dispatch(command);
+// Befehle über api.command, nie warten (R5). Umschlag aus core/news-model.mjs → Typ + Payload (+ record_id,
+// client_context); Status live: failed → Zone (+ optionaler Folgeschritt), done → Zone räumen.
+function dispatch(envelope, { onFailed } = {}) {
+  const api = state.api;
+  if (!api) return null;
+  const type = envelope.command_type;
+  const code = `news.command.${type}`;
+  let handle;
+  try {
+    handle = api.command(type, {
+      ...(envelope.payload || {}),
+      record_id: envelope.record_id,
+      client_context: envelope.client_context,
+      sync_collections: envelope.sync_collections,
+    });
+  } catch (error) {
+    api.status.report({ level: 'error', code, text: `${t('commandFailed')}: ${error?.message || error}` });
+    onFailed?.(error?.message || String(error));
+    return null;
+  }
+  handle.local.catch((error) => {
+    api.status.report({ level: 'error', code, text: `${t('commandFailed')}: ${error?.message || error}`, ref: handle.id });
+    onFailed?.(error?.message || String(error));
+  });
+  const watches = state.commandWatches;
+  const off = handle.status.subscribe((st) => {
+    if (st?.status === 'failed') {
+      api.status.report({ level: 'error', code, text: `${t('commandFailed')}: ${st.error || ''}`.replace(/: $/, ''), ref: handle.id });
+      onFailed?.(st.error || '');
+    } else if (st?.status === 'done') {
+      api.status.clear(code);
+    } else return;
+    off?.();
+    watches.delete(handle.id);
+  });
+  watches.set(handle.id, off);
+  return handle;
 }
 
 async function generateIssue() {
   const topic = selectedTopic();
-  if (!topic) return;
-  const issuesHandle = collection(COLLECTIONS.issues);
-  if (!issuesHandle) return notify('error', t('commandFailed'));
+  if (!topic || !state.api) return;
   const now = Date.now();
   const previous = issuesForTopic(state.issues, topic.id).find((issue) => issue.status === 'ready') || null;
   const issue = {
@@ -825,18 +934,16 @@ async function generateIssue() {
     created_at_ms: now,
     updated_at_ms: now,
   };
-  const command = buildGenerateCommand(topic, state.sources, issue, previous);
-  issue.command_id = command.command_id;
-  try {
-    await issuesHandle.insert(issue);
-    state.selectedIssueId = issue.id;
-      await dispatch(command);
-    notify('success', t('commandQueued'));
-  } catch (error) {
-    const doc = await issuesHandle.findOne(issue.id).exec().catch(() => null);
-    await doc?.incrementalPatch({ status: 'failed', error: String(error?.message || error), updated_at_ms: Date.now() }).catch(() => {});
-    notify('error', t('commandFailed'), error?.message);
-  }
+  const envelope = buildGenerateCommand(topic, state.sources, issue, previous);
+  // Ausgabe lokal anlegen, dann Befehl senden (ohne Warten); die Befehls-ID vergibt der Kernel (OFFEN-2).
+  issue.command_id = envelope.command_id;
+  const stored = write('put', COLLECTIONS.issues, issue);
+  state.selectedIssueId = issue.id;
+  const handle = dispatch(envelope, {
+    onFailed: (message) => write('patch', COLLECTIONS.issues, issue.id, { status: 'failed', error: String(message || t('commandFailed')), updated_at_ms: Date.now() }),
+  });
+  if (handle) stored.then((ok) => { if (ok) write('patch', COLLECTIONS.issues, issue.id, { command_id: handle.id, updated_at_ms: Date.now() }); });
+  scheduleRender();
 }
 
 function focusIssueTask(issue) {
@@ -844,17 +951,10 @@ function focusIssueTask(issue) {
   const taskId = issue.task_id || '';
   const commandId = issue.command_id || '';
   if (!taskId && !commandId) return;
-  try {
-    sessionStorage.setItem('ctox.businessOs.focusTask', JSON.stringify({
-      taskId, commandId, taskStatus: issue.status || '', sourceModule: 'news', openDrawer: true,
-    }));
-  } catch {}
-  const params = new URLSearchParams();
-  if (taskId) params.set('task_id', taskId);
-  if (commandId) params.set('command_id', commandId);
-  params.set('source', 'news');
-  params.set('drawer', '1');
-  location.hash = `#ctox?${params.toString()}`;
+  // Sprung in die CTOX-App über die Shell (R13) statt sessionStorage + location.hash.
+  state.api?.shell.navigate('ctox', {
+    task_id: taskId, command_id: commandId, task_status: issue.status || '', source: 'news', drawer: true,
+  });
 }
 
 async function runSourceCommand(sourceId, kind) {
@@ -862,21 +962,17 @@ async function runSourceCommand(sourceId, kind) {
   const source = state.drawer?.sources.find((item) => item.id === sourceId);
   if (!topic || !source) return;
   if (!state.drawer.persisted || !state.sources.some((item) => item.id === sourceId)) {
-    notify('error', t('saveTopicFirst'));
+    notify('error', t('saveTopicFirst'), '', 'source.unsaved');
     return;
   }
-  const command = kind === 'auth' ? buildAuthCommand(topic, source) : buildAdapterCommand(topic, source);
-  try {
-    const handle = collection(COLLECTIONS.sources);
-    const doc = await handle?.findOne(sourceId).exec();
-    await doc?.incrementalPatch({ status: 'pending', last_error: '', payload: { ...(doc.payload || {}), last_command_id: command.command_id }, updated_at_ms: Date.now() });
-    source.status = 'pending';
-    renderSourceGroups();
-    await dispatch(command);
-    notify('success', t('commandQueued'));
-  } catch (error) {
-    notify('error', t('commandFailed'), error?.message);
+  const envelope = kind === 'auth' ? buildAuthCommand(topic, source) : buildAdapterCommand(topic, source);
+  const doc = readOne(COLLECTIONS.sources, sourceId);
+  if (doc) {
+    write('patch', COLLECTIONS.sources, sourceId, { status: 'pending', last_error: '', payload: { ...(doc.payload || {}), last_command_id: envelope.command_id }, updated_at_ms: Date.now() });
   }
+  source.status = 'pending';
+  renderSourceGroups();
+  dispatch(envelope);
 }
 
 // --- Topic drawer --------------------------------------------------------
@@ -956,7 +1052,8 @@ function syncSourcePlaceholder() {
 }
 
 function sourceStatusPill(source) {
-  const map = { needs_auth: 'statusNeedsAuth', auth_requested: 'statusAuthRequested', failed: 'statusFailed', repairing: 'statusRepairing', pending: 'statusPending' };
+  // `pending` (Einrichtung läuft) ist der Zustand des laufenden Befehls und steht in der Zustandszone (news.command.*).
+  const map = { needs_auth: 'statusNeedsAuth', auth_requested: 'statusAuthRequested', failed: 'statusFailed', repairing: 'statusRepairing' };
   const key = map[source.status];
   if (!key) return '';
   const tone = source.status === 'failed' ? 'is-danger' : source.status === 'pending' || source.status === 'auth_requested' ? '' : 'is-warning';
@@ -1079,27 +1176,20 @@ async function saveTopic() {
   const problem = validateTopic(topic);
   if (problem) {
     setDrawerTab('topic');
-    notify('error', t(problem));
+    notify('error', t(problem), '', 'topic.invalid');
     els.form.elements.title.focus();
     return;
   }
-  const topics = collection(COLLECTIONS.topics);
-  const sources = collection(COLLECTIONS.sources);
-  if (!topics || !sources) return notify('error', t('saveFailed'));
+  state.api?.status.clear('news.topic.invalid');
   const now = Date.now();
-  try {
-    await topics.upsert(topic);
-    for (const source of state.drawer.sources) {
-      await sources.upsert({ ...source, topic_id: topic.id, updated_at_ms: now });
-    }
-    for (const sourceId of state.drawer.removed) {
-      const doc = await sources.findOne(sourceId).exec();
-      await doc?.remove();
-    }
-  } catch (error) {
-    notify('error', t('saveFailed'), error?.message);
-    return;
+  const writes = [write('put', COLLECTIONS.topics, topic)];
+  for (const source of state.drawer.sources) {
+    writes.push(write('put', COLLECTIONS.sources, { ...source, topic_id: topic.id, updated_at_ms: now }));
   }
+  for (const sourceId of state.drawer.removed) {
+    if (readOne(COLLECTIONS.sources, sourceId)) writes.push(write('remove', COLLECTIONS.sources, sourceId));
+  }
+  if (!(await Promise.all(writes)).every(Boolean)) return;
   const previous = state.topics.find((item) => item.id === topic.id);
   const scheduleChanged = !previous
     || previous.cron_expr !== topic.cron_expr
@@ -1107,9 +1197,8 @@ async function saveTopic() {
     || previous.title !== topic.title;
   closeDrawer();
   state.selectedTopicId = topic.id;
-  if (scheduleChanged) {
-    dispatch(buildScheduleCommand(topic)).catch((error) => notify('error', t('commandFailed'), error?.message));
-  }
+  if (scheduleChanged) dispatch(buildScheduleCommand(topic));
+  scheduleRender();
 }
 
 async function deleteTopic() {
@@ -1124,18 +1213,11 @@ async function deleteTopic() {
     button?.setAttribute('aria-label', t('deleteConfirm', topic.title));
     return;
   }
-  try {
-    await dispatch(buildScheduleCommand(topic, { deleted: true }));
-  } catch (error) {
-    notify('error', t('commandFailed'), error?.message);
-    return;
-  }
+  // Zeitplan löschen als Befehl (ohne Warten; Fehler → Zone), Datensätze lokal entfernen.
+  dispatch(buildScheduleCommand(topic, { deleted: true }));
   const removeWhere = async (name, predicate) => {
-    const handle = collection(name);
-    if (!handle) return;
-    const docs = await handle.find().exec();
-    for (const doc of docs) {
-      if (predicate(doc)) await doc.remove();
+    for (const doc of state.api ? state.api.query(name, {}).get() : []) {
+      if (predicate(doc)) await write('remove', name, doc.id);
     }
   };
   await removeWhere(COLLECTIONS.posts, (doc) => doc.topic_id === topic.id);
@@ -1170,24 +1252,23 @@ function importTopics() {
     if (!file) return;
     try {
       const data = JSON.parse(await file.text());
-      const topics = collection(COLLECTIONS.topics);
-      const sources = collection(COLLECTIONS.sources);
       const idMap = new Map();
       const now = Date.now();
       for (const raw of Array.isArray(data.topics) ? data.topics : []) {
         const topic = normalizeTopic({ ...raw, id: newId('topic'), schedule_task_id: '' }, now);
         idMap.set(raw.id, topic.id);
-        await topics.upsert(topic);
-        dispatch(buildScheduleCommand(topic)).catch(() => {});
+        await write('put', COLLECTIONS.topics, topic);
+        dispatch(buildScheduleCommand(topic));
       }
       for (const raw of Array.isArray(data.sources) ? data.sources : []) {
         const topicId = idMap.get(raw.topic_id);
         if (!topicId) continue;
-        await sources.upsert({ ...raw, id: newId('source'), topic_id: topicId, status: authSourceFor(raw) ? 'needs_auth' : 'new', created_at_ms: now, updated_at_ms: now });
+        await write('put', COLLECTIONS.sources, { ...raw, id: newId('source'), topic_id: topicId, status: authSourceFor(raw) ? 'needs_auth' : 'new', created_at_ms: now, updated_at_ms: now });
       }
-      notify('success', t('importDone', idMap.size));
+      state.api?.status.clear('news.import');
+      notify('info', t('importDone', idMap.size), '', 'import.done');
     } catch (error) {
-      notify('error', t('importFailed'), error?.message);
+      notify('error', t('importFailed'), error?.message, 'import');
     }
   });
   input.click();

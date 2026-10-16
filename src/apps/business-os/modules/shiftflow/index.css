@@ -20,13 +20,13 @@
    the in-board detail surface, and the module's responsive re-layout.
    ========================================================================== */
 
-.shiftflow-app {
+[data-app="shiftflow"] .shiftflow-app {
   --shiftflow-icon-document: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6 3h9l5 5v13H6V3Zm2 2v14h10V9h-4V5H8Zm8 .8V7h1.2L16 5.8ZM10 12h6v2h-6v-2Zm0 4h6v2h-6v-2Z'/%3E%3C/svg%3E");
 }
 
 /* View switcher bodies inside the center pane (scheduler/timesheets/billing);
    JS toggles the .hidden hook. */
-.shiftflow-view-content {
+[data-app="shiftflow"] .shiftflow-view-content {
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -34,26 +34,26 @@
   overflow: hidden;
 }
 
-.shiftflow-view-content.hidden {
+[data-app="shiftflow"] .shiftflow-view-content.hidden {
   display: none !important;
 }
 
 /* -------------------------------------------------------------
  * Sidebar layout (left pane content under the kit pane body)
  * ------------------------------------------------------------- */
-.shiftflow-sidebar {
+[data-app="shiftflow"] .shiftflow-sidebar {
   display: flex;
   flex-direction: column;
   gap: 16px;
   padding: 12px;
 }
 
-.shiftflow-sidebar-section {
+[data-app="shiftflow"] .shiftflow-sidebar-section {
   display: flex;
   flex-direction: column;
 }
 
-.shiftflow-section-head {
+[data-app="shiftflow"] .shiftflow-section-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -61,23 +61,23 @@
   margin-bottom: 8px;
 }
 
-.shiftflow-section-head .ctox-field-label {
+[data-app="shiftflow"] .shiftflow-section-head .ctox-field-label {
   margin: 0;
 }
 
-.shiftflow-employee-groups {
+[data-app="shiftflow"] .shiftflow-employee-groups {
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
 
-.shiftflow-employee-list,
-.shiftflow-project-list {
+[data-app="shiftflow"] .shiftflow-employee-list,
+[data-app="shiftflow"] .shiftflow-project-list {
   display: flex;
   flex-direction: column;
 }
 
-.shiftflow-separator {
+[data-app="shiftflow"] .shiftflow-separator {
   border: 0;
   height: 1px;
   margin: 0;
@@ -88,27 +88,26 @@
  * List row content (kit rows are .ctox-list-item; the inner
  * avatar + name/meta layout is module content)
  * ------------------------------------------------------------- */
-.employee-card {
+[data-app="shiftflow"] .employee-card {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-.emp-info {
+[data-app="shiftflow"] .emp-info {
   display: flex;
   flex-direction: column;
   min-width: 0;
   flex: 1;
 }
 
-.emp-name {
+[data-app="shiftflow"] .emp-name {
   font-weight: 700;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* Namen brechen um statt abgeschnitten zu werden (Geometrie G4). */
+  overflow-wrap: anywhere;
 }
 
-.emp-meta {
+[data-app="shiftflow"] .emp-meta {
   font-size: 11.5px;
   color: var(--muted);
   white-space: nowrap;
@@ -118,12 +117,15 @@
 
 /* custom: colored initials avatars carry a presence dot (on-duty state);
    the kit avatar has no presence indicator. */
-.emp-avatar {
+[data-app="shiftflow"] .emp-avatar {
   position: relative;
-  color: var(--accent-foreground);
+  /* DARK: --accent-foreground ist im v4-Fenster hell #52525b bzw. lag weiß auf der hellen Avatarfläche (1,25);
+     die Initialen nehmen die Textfarbe auf einem Schleier der Mitarbeiterfarbe (wie die news-Kürzel). */
+  color: var(--text);
+  background: color-mix(in srgb, var(--emp-color, var(--accent)) 30%, var(--surface));
 }
 
-.emp-avatar::after {
+[data-app="shiftflow"] .emp-avatar::after {
   content: '';
   position: absolute;
   bottom: -1px;
@@ -135,19 +137,19 @@
   background: color-mix(in srgb, var(--muted) 40%, transparent);
 }
 
-.employee-card.active .emp-avatar::after {
+[data-app="shiftflow"] .employee-card.active .emp-avatar::after {
   background: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 55%, var(--surface));
 }
 
-.project-card {
+[data-app="shiftflow"] .project-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
 
-.project-card-info {
+[data-app="shiftflow"] .project-card-info {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -155,14 +157,14 @@
   flex: 1;
 }
 
-.project-card-name {
+[data-app="shiftflow"] .project-card-name {
   font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.project-card-client {
+[data-app="shiftflow"] .project-card-client {
   font-size: 11px;
   color: var(--muted);
   overflow: hidden;
@@ -170,7 +172,7 @@
   white-space: nowrap;
 }
 
-.project-card-meta {
+[data-app="shiftflow"] .project-card-meta {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -178,7 +180,7 @@
 }
 
 /* Project color dot (data-driven color set inline). */
-.project-card-badge {
+[data-app="shiftflow"] .project-card-badge {
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -190,14 +192,79 @@
    abteilungsfarbcodierten Schichtkarten und Drag&Drop-Zielen. Das Kit hat
    kein Kalender-/Timeline-Element, daher eigene Geometrie.
  * ------------------------------------------------------------- */
-.shiftflow-scheduler-container {
+[data-app="shiftflow"] .shiftflow-scheduler-container {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
+  /* Die Woche richtet sich nach der Breite des Planers selbst (nicht des ganzen Fensters):
+     schmal werden Spalten und Tagesnamen kompakt, statt seitlich zu scrollen (Geometrie G1). */
+  container: shiftflow-week / inline-size;
 }
 
-.shiftflow-scheduler-grid-header {
+[data-app="shiftflow"] .day-name-short {
+  display: none;
+}
+
+@container shiftflow-week (max-width: 760px) {
+  [data-app="shiftflow"] .shiftflow-scheduler-grid-header,
+  [data-app="shiftflow"] .scheduler-row {
+    grid-template-columns: minmax(88px, 132px) repeat(7, minmax(0, 1fr));
+    min-width: 0;
+  }
+
+  [data-app="shiftflow"] .grid-day-cell {
+    padding: 6px 2px;
+    min-width: 0;
+  }
+
+  [data-app="shiftflow"] .day-name-long {
+    display: none;
+  }
+
+  [data-app="shiftflow"] .day-name-short {
+    display: inline;
+  }
+
+  [data-app="shiftflow"] .row-employee-cell,
+  [data-app="shiftflow"] .shiftflow-grid-corner-cell {
+    padding: 8px;
+    gap: 6px;
+  }
+
+  [data-app="shiftflow"] .grid-shift-cell {
+    min-width: 0;
+    padding: 3px;
+  }
+
+  [data-app="shiftflow"] .shift-card {
+    min-width: 0;
+  }
+
+  [data-app="shiftflow"] .shift-card * {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  /* Schmale Tageszellen: „+ Schicht“ (64 px) ragte über die Zelle und am Sonntag aus dem Planer.
+     Kompakt bleibt ein kleiner „+“-Knopf; der Name „+ Schicht“ bleibt für Bildschirmleser erhalten. */
+  [data-app="shiftflow"] .grid-shift-cell .add-shift-hover-btn {
+    width: 26px;
+    height: 26px;
+    max-width: calc(100% - 4px);
+    padding: 0;
+    font-size: 0;
+    line-height: 0;
+  }
+
+  [data-app="shiftflow"] .grid-shift-cell .add-shift-hover-btn::before {
+    content: "+";
+    font-size: 15px;
+    line-height: 1;
+  }
+}
+
+[data-app="shiftflow"] .shiftflow-scheduler-grid-header {
   display: grid;
   grid-template-columns: 180px repeat(7, 1fr);
   border-bottom: 1px solid var(--line);
@@ -207,7 +274,7 @@
   z-index: 10;
 }
 
-.shiftflow-grid-corner-cell {
+[data-app="shiftflow"] .shiftflow-grid-corner-cell {
   padding: 12px 16px;
   font-size: 11px;
   font-weight: 700;
@@ -219,7 +286,7 @@
   align-items: center;
 }
 
-.grid-day-cell {
+[data-app="shiftflow"] .grid-day-cell {
   padding: 8px 12px;
   display: flex;
   flex-direction: column;
@@ -232,19 +299,22 @@
   text-align: center;
 }
 
-.grid-day-cell.today {
+[data-app="shiftflow"] .grid-day-cell.today {
   background: color-mix(in srgb, var(--accent) 5%, transparent);
 }
+/* DARK: Wochentag auf dem Heute-Schleier etwas zum Text hin (--muted lag hell bei 4,35). */
+[data-app="shiftflow"] .grid-day-cell.today .day-name-short { color: color-mix(in srgb, var(--text) 30%, var(--muted)); }
 
-.day-number {
+[data-app="shiftflow"] .day-number {
   font-size: 15px;
   font-weight: 800;
   color: var(--text);
   margin-top: 2px;
 }
 
-.grid-day-cell.today .day-number {
-  color: var(--accent);
+[data-app="shiftflow"] .grid-day-cell.today .day-number {
+  /* DARK: Akzent zum Text hin gemischt; reiner Akzent auf dem Akzentschleier lag dunkel bei 3,3. */
+  color: color-mix(in srgb, var(--accent) 60%, var(--text));
   background: color-mix(in srgb, var(--accent) 15%, transparent);
   width: 24px;
   height: 24px;
@@ -253,12 +323,12 @@
   place-items: center;
 }
 
-.shiftflow-scheduler-grid-body {
+[data-app="shiftflow"] .shiftflow-scheduler-grid-body {
   display: flex;
   flex-direction: column;
 }
 
-.scheduler-row {
+[data-app="shiftflow"] .scheduler-row {
   display: grid;
   grid-template-columns: 180px repeat(7, 1fr);
   border-bottom: 1px solid var(--line);
@@ -266,11 +336,11 @@
   background: var(--surface);
 }
 
-.scheduler-row:hover {
+[data-app="shiftflow"] .scheduler-row:hover {
   background: color-mix(in srgb, var(--surface-2) 30%, transparent);
 }
 
-.row-employee-cell {
+[data-app="shiftflow"] .row-employee-cell {
   appearance: none;
   width: 100%;
   padding: 12px 16px;
@@ -287,15 +357,15 @@
   cursor: pointer;
 }
 
-.row-employee-cell:hover {
+[data-app="shiftflow"] .row-employee-cell:hover {
   background: var(--surface-2);
 }
 
-.row-employee-cell.is-dragging {
+[data-app="shiftflow"] .row-employee-cell.is-dragging {
   opacity: 0.5;
 }
 
-.grid-shift-cell {
+[data-app="shiftflow"] .grid-shift-cell {
   border-right: 1px solid var(--line);
   padding: 6px;
   display: flex;
@@ -306,12 +376,12 @@
   min-height: 80px;
 }
 
-.grid-shift-cell.today {
+[data-app="shiftflow"] .grid-shift-cell.today {
   background: color-mix(in srgb, var(--accent) 2%, transparent);
 }
 
 /* Shift cards: department color coding is the planning-relevant signal. */
-.shift-card {
+[data-app="shiftflow"] .shift-card {
   appearance: none;
   --shiftflow-dept: var(--accent);
   --shiftflow-dept-strong: var(--accent);
@@ -333,63 +403,63 @@
   transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 }
 
-.shift-card:hover {
+[data-app="shiftflow"] .shift-card:hover {
   transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--shiftflow-dept-strong) 55%, var(--line));
 }
 
-.shift-card:active {
+[data-app="shiftflow"] .shift-card:active {
   transform: scale(0.98);
 }
 
-.shift-card.is-selected {
+[data-app="shiftflow"] .shift-card.is-selected {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
 
-.shift-card.dept-service {
+[data-app="shiftflow"] .shift-card.dept-service {
   --shiftflow-dept: var(--accent);
   --shiftflow-dept-strong: var(--accent);
 }
 
-.shift-card.dept-kitchen {
+[data-app="shiftflow"] .shift-card.dept-kitchen {
   --shiftflow-dept: var(--warning);
   --shiftflow-dept-strong: var(--warning);
 }
 
-.shift-card.dept-bar {
+[data-app="shiftflow"] .shift-card.dept-bar {
   --shiftflow-dept: var(--success);
   --shiftflow-dept-strong: var(--success);
 }
 
-.shift-card.dept-verwaltung {
+[data-app="shiftflow"] .shift-card.dept-verwaltung {
   --shiftflow-dept: var(--muted);
   --shiftflow-dept-strong: var(--text);
 }
 
-.shift-card.draft {
+[data-app="shiftflow"] .shift-card.draft {
   border-style: dashed;
   opacity: 0.76;
 }
 
-.shift-time {
+[data-app="shiftflow"] .shift-time {
   font-weight: 800;
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
 
-.shift-title {
+[data-app="shiftflow"] .shift-title {
   font-weight: 700;
   margin-top: 2px;
 }
 
-.shift-meta {
+[data-app="shiftflow"] .shift-meta {
   margin-top: 2px;
   font-size: 9px;
 }
 
-.shift-tag {
+[data-app="shiftflow"] .shift-tag {
   align-self: flex-start;
   padding: 1px 4px;
   border-radius: 3px;
@@ -400,7 +470,7 @@
   color: var(--text);
 }
 
-.add-shift-hover-btn {
+[data-app="shiftflow"] .add-shift-hover-btn {
   position: absolute;
   top: 50%;
   left: 50%;
@@ -419,14 +489,14 @@
   z-index: 1;
 }
 
-.grid-shift-cell:hover .add-shift-hover-btn {
+[data-app="shiftflow"] .grid-shift-cell:hover .add-shift-hover-btn {
   opacity: 1;
   pointer-events: auto;
   transform: translate(-50%, -50%) scale(1);
 }
 
 /* Project indicator strip inside schedule slots (data-driven color inline). */
-.project-strip {
+[data-app="shiftflow"] .project-strip {
   height: 4px;
   width: 100%;
   border-radius: 2px;
@@ -434,25 +504,25 @@
 }
 
 /* Drag & drop mechanics for the calendar grid. */
-[draggable="true"] {
+[data-app="shiftflow"] [draggable="true"] {
   cursor: grab;
 }
 
-[draggable="true"]:active {
+[data-app="shiftflow"] [draggable="true"]:active {
   cursor: grabbing;
 }
 
-.employee-card.is-dragging {
+[data-app="shiftflow"] .employee-card.is-dragging {
   opacity: 0.4;
   transform: scale(0.96);
 }
 
-.shiftflow-grid-cell {
+[data-app="shiftflow"] .shiftflow-grid-cell {
   position: relative;
   transition: background 0.2s ease;
 }
 
-.shiftflow-grid-cell.drag-over {
+[data-app="shiftflow"] .shiftflow-grid-cell.drag-over {
   background: color-mix(in srgb, var(--accent) 8%, transparent) !important;
   outline: 2px solid var(--accent) !important;
   outline-offset: -2px;
@@ -462,7 +532,7 @@
 /* -------------------------------------------------------------
  * Timesheets workbench — approval rows under the kit action strip
  * ------------------------------------------------------------- */
-.shiftflow-timesheets-list {
+[data-app="shiftflow"] .shiftflow-timesheets-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -472,7 +542,7 @@
 /* custom: Stundenzettel-Freigabekarte (Avatar + Soll/Ist-Details +
    Stundenblock + Aktionsleiste) — zusammengesetzte Zeile, die die Kit-
    Listenzeile nicht abbildet. */
-.timesheet-card {
+[data-app="shiftflow"] .timesheet-card {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -482,14 +552,14 @@
   background: var(--surface);
 }
 
-.timesheet-card-main {
+[data-app="shiftflow"] .timesheet-card-main {
   display: flex;
   align-items: flex-start;
   gap: 12px;
   min-width: 0;
 }
 
-.timesheet-details {
+[data-app="shiftflow"] .timesheet-details {
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -497,7 +567,7 @@
   flex: 1;
 }
 
-.timesheet-primary {
+[data-app="shiftflow"] .timesheet-primary {
   font-weight: 700;
   color: var(--text);
   white-space: nowrap;
@@ -505,47 +575,47 @@
   text-overflow: ellipsis;
 }
 
-.timesheet-secondary {
+[data-app="shiftflow"] .timesheet-secondary {
   font-size: 11.5px;
   font-weight: 400;
   color: var(--muted);
 }
 
-.timesheet-meta-row {
+[data-app="shiftflow"] .timesheet-meta-row {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 12px;
 }
 
-.timesheet-notes {
+[data-app="shiftflow"] .timesheet-notes {
   font-size: 11.5px;
   font-style: italic;
   color: var(--muted);
 }
 
-.timesheet-hours-block {
+[data-app="shiftflow"] .timesheet-hours-block {
   text-align: right;
   flex: 0 0 auto;
 }
 
-.timesheet-hours {
+[data-app="shiftflow"] .timesheet-hours {
   font-size: 14px;
   font-weight: 800;
   color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
 
-.timesheet-time-range {
+[data-app="shiftflow"] .timesheet-time-range {
   font-size: 11px;
   color: var(--muted);
 }
 
-.timesheet-warning-row {
+[data-app="shiftflow"] .timesheet-warning-row {
   margin-top: 4px;
 }
 
-.timesheet-card-actions {
+[data-app="shiftflow"] .timesheet-card-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
@@ -554,25 +624,25 @@
 /* -------------------------------------------------------------
  * Billing workbench — KPI cards (kit .ctox-card) + aggregation table
  * ------------------------------------------------------------- */
-.shiftflow-billing-date-selector {
+[data-app="shiftflow"] .shiftflow-billing-date-selector {
   gap: 12px;
 }
 
-.shiftflow-date-field {
+[data-app="shiftflow"] .shiftflow-date-field {
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
-.shiftflow-date-field .ctox-field-label {
+[data-app="shiftflow"] .shiftflow-date-field .ctox-field-label {
   margin: 0;
 }
 
-.shiftflow-date-field .ctox-input {
+[data-app="shiftflow"] .shiftflow-date-field .ctox-input {
   width: auto;
 }
 
-.shiftflow-financial-summary {
+[data-app="shiftflow"] .shiftflow-financial-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 12px;
@@ -583,43 +653,43 @@
 }
 
 /* custom: große Kennzahl in den Stat-Kacheln (Hero-Zahl der Karte). */
-.shiftflow-fin-value {
+[data-app="shiftflow"] .shiftflow-fin-value {
   font-size: 20px;
   font-weight: 800;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
 }
 
-.text-revenue {
+[data-app="shiftflow"] .text-revenue {
   color: var(--text);
 }
 
-.text-cost {
+[data-app="shiftflow"] .text-cost {
   color: color-mix(in srgb, var(--text) 60%, var(--danger));
 }
 
-.text-margin {
+[data-app="shiftflow"] .text-margin {
   color: var(--accent);
 }
 
-.shiftflow-billing-content-wrapper {
+[data-app="shiftflow"] .shiftflow-billing-content-wrapper {
   flex: 1 1 auto;
   min-height: 0;
   padding: 12px 16px;
 }
 
-.billing-project-cell {
+[data-app="shiftflow"] .billing-project-cell {
   font-weight: 700;
 }
 
-.billing-project-cell .project-card-badge {
+[data-app="shiftflow"] .billing-project-cell .project-card-badge {
   display: inline-block;
   margin-right: 8px;
   vertical-align: middle;
 }
 
 /* Billing detail rows inside the right drawer. */
-.shiftflow-billing-detail-list {
+[data-app="shiftflow"] .shiftflow-billing-detail-list {
   display: flex;
   flex-direction: column;
   max-height: 400px;
@@ -627,7 +697,7 @@
   margin-top: 4px;
 }
 
-.shiftflow-billing-detail-row {
+[data-app="shiftflow"] .shiftflow-billing-detail-row {
   display: flex;
   justify-content: space-between;
   gap: 10px;
@@ -635,18 +705,18 @@
   border-bottom: 1px solid var(--hairline, var(--line));
 }
 
-.shiftflow-billing-detail-name {
+[data-app="shiftflow"] .shiftflow-billing-detail-name {
   font-weight: 700;
   color: var(--text);
 }
 
-.shiftflow-billing-detail-meta {
+[data-app="shiftflow"] .shiftflow-billing-detail-meta {
   font-size: 11px;
   color: var(--muted);
   margin-top: 2px;
 }
 
-.shiftflow-billing-detail-hours {
+[data-app="shiftflow"] .shiftflow-billing-detail-hours {
   font-weight: 700;
   align-self: center;
   color: var(--text);
@@ -656,62 +726,62 @@
 /* -------------------------------------------------------------
  * Detail inspector (right pane) — kit fields/badges + module extras
  * ------------------------------------------------------------- */
-.shiftflow-detail-pane {
+[data-app="shiftflow"] .shiftflow-detail-pane {
   background: var(--surface);
 }
 
-.shiftflow-detail-body {
+[data-app="shiftflow"] .shiftflow-detail-body {
   min-height: 0;
 }
 
-.shiftflow-inspector {
+[data-app="shiftflow"] .shiftflow-inspector {
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding: 12px;
 }
 
-.shiftflow-inspector-person {
+[data-app="shiftflow"] .shiftflow-inspector-person {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-.shiftflow-inspector-name {
+[data-app="shiftflow"] .shiftflow-inspector-name {
   margin: 0;
   font-size: 14px;
   font-weight: 700;
   color: var(--text);
 }
 
-.shiftflow-inspector-sub {
+[data-app="shiftflow"] .shiftflow-inspector-sub {
   font-size: 11.5px;
   color: var(--muted);
 }
 
-.shiftflow-inspector-hint {
+[data-app="shiftflow"] .shiftflow-inspector-hint {
   margin: 0 0 8px;
   font-size: 11px;
   color: var(--muted);
   line-height: 1.3;
 }
 
-.shiftflow-inspector-actions {
+[data-app="shiftflow"] .shiftflow-inspector-actions {
   display: flex;
   gap: 8px;
   margin-top: 4px;
 }
 
-.shiftflow-inspector-actions > .ctox-button {
+[data-app="shiftflow"] .shiftflow-inspector-actions > .ctox-button {
   flex: 1 1 auto;
 }
 
-.shiftflow-accent-text {
+[data-app="shiftflow"] .shiftflow-accent-text {
   color: var(--accent);
   font-weight: 700;
 }
 
-.shiftflow-badge-row {
+[data-app="shiftflow"] .shiftflow-badge-row {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
@@ -720,24 +790,24 @@
 
 /* custom: Wochenauslastungs-Fortschrittsbalken — das Kit hat keine
    Progress-Anzeige. */
-.shiftflow-progress-head {
+[data-app="shiftflow"] .shiftflow-progress-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 4px;
 }
 
-.shiftflow-progress-head .ctox-field-label {
+[data-app="shiftflow"] .shiftflow-progress-head .ctox-field-label {
   margin: 0;
 }
 
-.shiftflow-progress-value {
+[data-app="shiftflow"] .shiftflow-progress-value {
   font-size: 12px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
-.shiftflow-progress {
+[data-app="shiftflow"] .shiftflow-progress {
   width: 100%;
   height: 6px;
   background: var(--surface-3, var(--surface-2));
@@ -745,19 +815,19 @@
   overflow: hidden;
 }
 
-.shiftflow-progress-bar {
+[data-app="shiftflow"] .shiftflow-progress-bar {
   height: 100%;
   border-radius: 3px;
 }
 
 /* custom: Schnell-Zuweisung — Wochentag-Matrix pro Projekt im Inspector. */
-.shiftflow-quick-assign {
+[data-app="shiftflow"] .shiftflow-quick-assign {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.shiftflow-quick-assign-card {
+[data-app="shiftflow"] .shiftflow-quick-assign-card {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -767,7 +837,7 @@
   border: 1px solid var(--hairline, var(--line));
 }
 
-.shiftflow-quick-assign-title {
+[data-app="shiftflow"] .shiftflow-quick-assign-title {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -776,19 +846,19 @@
   color: var(--text);
 }
 
-.shiftflow-quick-assign-title span:last-child {
+[data-app="shiftflow"] .shiftflow-quick-assign-title span:last-child {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.shiftflow-quick-assign-days {
+[data-app="shiftflow"] .shiftflow-quick-assign-days {
   display: flex;
   gap: 2px;
   margin-top: 2px;
 }
 
-.quick-assign-day-btn {
+[data-app="shiftflow"] .quick-assign-day-btn {
   padding: 3px 5px;
   min-width: 26px;
   font-size: 10px;
@@ -800,31 +870,33 @@
   cursor: pointer;
 }
 
-.quick-assign-day-btn:hover {
+[data-app="shiftflow"] .quick-assign-day-btn:hover {
   background: var(--accent-soft);
   border-color: var(--accent);
 }
 
-/* Conflicts roster (items are kit .ctox-callout.is-danger). */
-.shiftflow-conflicts-alert-container {
+/* Conflicts roster: plain list rows with a red marker (no callout box). */
+[data-app="shiftflow"] .shiftflow-conflicts-alert-container {
   padding: 14px;
   flex: 1 1 auto;
   min-height: 0;
 }
 
-.shiftflow-conflicts-list {
+[data-app="shiftflow"] .shiftflow-conflicts-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.shiftflow-conflict-item {
+[data-app="shiftflow"] .shiftflow-conflict-item {
   display: flex;
   gap: 8px;
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--line);
 }
 
 /* Publish status line inside the scheduler action strip. */
-.shiftflow-publish-status {
+[data-app="shiftflow"] .shiftflow-publish-status {
   min-width: 0;
   max-width: 220px;
   overflow: hidden;
@@ -839,7 +911,7 @@
 /* -------------------------------------------------------------
  * Side drawer forms (shell drawer chrome + kit fields)
  * ------------------------------------------------------------- */
-.shiftflow-drawer-body {
+[data-app="shiftflow"] .shiftflow-drawer-body {
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -847,48 +919,48 @@
   overflow-y: auto;
 }
 
-.shiftflow-drawer-form {
+[data-app="shiftflow"] .shiftflow-drawer-form {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
-.shiftflow-drawer-form label {
+[data-app="shiftflow"] .shiftflow-drawer-form label {
   display: flex;
   flex-direction: column;
   gap: 5px;
 }
 
-.shiftflow-drawer-form label .ctox-field-label {
+[data-app="shiftflow"] .shiftflow-drawer-form label .ctox-field-label {
   margin: 0;
 }
 
-.shiftflow-drawer-form .form-row {
+[data-app="shiftflow"] .shiftflow-drawer-form .form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
 
-.shiftflow-drawer-actions {
+[data-app="shiftflow"] .shiftflow-drawer-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
   margin-top: 14px;
 }
 
-.shiftflow-drawer-actions.has-danger {
+[data-app="shiftflow"] .shiftflow-drawer-actions.has-danger {
   grid-template-columns: 1fr 1fr 1fr;
 }
 
 /* custom: Projekt-Farbwahl als Swatch-Radios — kein Kit-Element. */
-.shiftflow-color-picker {
+[data-app="shiftflow"] .shiftflow-color-picker {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
   padding: 6px 0;
 }
 
-.color-option-label {
+[data-app="shiftflow"] .color-option-label {
   width: 24px;
   height: 24px;
   border-radius: 50%;
@@ -900,23 +972,23 @@
   transition: transform 0.2s ease;
 }
 
-.color-option-label:hover {
+[data-app="shiftflow"] .color-option-label:hover {
   transform: scale(1.15);
 }
 
-.color-option-label input {
+[data-app="shiftflow"] .color-option-label input {
   opacity: 0;
   position: absolute;
   cursor: pointer;
 }
 
-.color-option-label:has(input:checked) {
+[data-app="shiftflow"] .color-option-label:has(input:checked) {
   outline: 2px solid var(--text);
   outline-offset: 2px;
 }
 
 /* Invoice export glyph; routine pane icons come from the shared action set. */
-[data-shiftflow-root] .shiftflow-icon-text-btn::before {
+[data-app="shiftflow"] [data-shiftflow-root] .shiftflow-icon-text-btn::before {
   content: "";
   display: block;
   width: 14px;
@@ -927,32 +999,32 @@
   mask: var(--shiftflow-icon-document) center / contain no-repeat;
 }
 
-.shiftflow-icon-text-btn {
+[data-app="shiftflow"] .shiftflow-icon-text-btn {
   display: inline-flex;
   align-items: center;
   gap: 8px;
 }
 
 @container business-app-window (max-width: 768px) {
-  .shiftflow-scheduler-grid-header,
-  .scheduler-row {
-    grid-template-columns: 140px repeat(7, minmax(92px, 1fr));
-    min-width: 784px;
+  [data-app="shiftflow"] .shiftflow-scheduler-grid-header,
+  [data-app="shiftflow"] .scheduler-row {
+    grid-template-columns: minmax(88px, 132px) repeat(7, minmax(0, 1fr));
+    min-width: 0;
   }
 
-  .row-employee-cell,
-  .shiftflow-grid-corner-cell {
+  [data-app="shiftflow"] .row-employee-cell,
+  [data-app="shiftflow"] .shiftflow-grid-corner-cell {
     padding: 10px;
   }
 
-  .shiftflow-financial-summary {
+  [data-app="shiftflow"] .shiftflow-financial-summary {
     grid-template-columns: 1fr;
   }
 }
 
 /* IA-Karte finishing pass: canonical shift/plan selector + one primary board.
    All repeating pane chrome remains shell-owned through data-pg-* markup. */
-.shiftflow-app {
+[data-app="shiftflow"] .shiftflow-app {
   /* 350: Titelzeile = 94 Icon-Zone + Titel ("Schichten & Pläne" 132px) + drei
      Aktionen (102px) + Fugen - 300px schnitt den Titel auf "Schichte…". */
   --ctox-left-width: 350px;
@@ -964,7 +1036,7 @@
   overflow: hidden;
 }
 
-.shiftflow-left-pane {
+[data-app="shiftflow"] .shiftflow-left-pane {
   grid-column: 1;
   grid-row: 1;
   /* Kopf | Band (Suche, Filter-Tray, Ansichts-Tabs) | Liste | Fuss */
@@ -972,14 +1044,17 @@
   min-width: 0;
 }
 
-.shiftflow-app > [data-resizer="left"] {
+[data-app="shiftflow"] .shiftflow-app > [data-resizer="left"] {
   grid-column: 2;
   grid-row: 1;
 }
 
-.shiftflow-center-pane {
+[data-app="shiftflow"] .shiftflow-center-pane {
   grid-column: 3;
   grid-row: 1;
+  /* Eine Spur in Panebreite: ohne Vorlage wuchs die implizite auto-Spur auf die Inhaltsbreite und schob
+     Kopf, Reiter und Woche rechts aus dem Fenster (Geometrie G1, 420 px). */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto minmax(0, 1fr);
   min-width: 360px;
 }
@@ -989,14 +1064,15 @@
    Die Shell rueckt den App-Inhalt NICHT ein (`.shell-window-content` bekommt
    `inset: 0`) und legt drei Zonen darueber: App-Icon 80x80 oben links,
    Header-Band 37px ueber die Breite, Fenstersteuerung 74x74 oben rechts.
-   Diese Zonen freizuhalten ist Bringschuld der App.
+   Diese Zonen freizuhalten war Bringschuld der App. v4 (Entwurf §6): das Chrome liegt
+   AUSSERHALB von root – die Freihaltungen (Icon 80px, Fensterknopf 70px) sind entfernt.
 
    Nur die oberste Kopfzeile ist betroffen. Der Kopf der Detail-Schublade im
    Board (.shiftflow-board-detail > .ctox-pane-header) liegt tief im Inhalt
    und behaelt seine Kit-Geometrie.
    ========================================================================== */
-.shiftflow-left-pane > .ctox-pane-header,
-.shiftflow-center-pane > .ctox-pane-header {
+[data-app="shiftflow"] .shiftflow-left-pane > .ctox-pane-header,
+[data-app="shiftflow"] .shiftflow-center-pane > .ctox-pane-header {
   box-sizing: border-box;
   display: flex;
   align-items: center;
@@ -1006,25 +1082,20 @@
 }
 
 /* Erster Kopf: Icon-Zone oben links freihalten (80px Icon + 14px Luft). */
-.shiftflow-left-pane > .ctox-pane-header {
-  padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
+[data-app="shiftflow"] .shiftflow-left-pane > .ctox-pane-header {
   padding-right: 8px;
 }
 
 /* Das Icon ist zwei Header-Zeilen hoch und reicht damit bis in die
    Suchzeile — sie wird genauso eingerueckt. */
-.shiftflow-list-band > .ctox-filterbar {
-  padding-left: calc(var(--shell-v2-icon-size, 80px) + 12px);
+[data-app="shiftflow"] .shiftflow-list-band > .ctox-filterbar {
   padding-top: 6px;
 }
 
 /* Letzter Kopf: Platz fuer die 74px-Fenstersteuerung oben rechts. */
-.shiftflow-center-pane > .ctox-pane-header {
-  padding-right: 70px;
-}
 
-.shiftflow-left-pane > .ctox-pane-header > .ctox-pane-title-row,
-.shiftflow-center-pane > .ctox-pane-header > .ctox-pane-title-row {
+[data-app="shiftflow"] .shiftflow-left-pane > .ctox-pane-header > .ctox-pane-title-row,
+[data-app="shiftflow"] .shiftflow-center-pane > .ctox-pane-header > .ctox-pane-title-row {
   flex: 1 1 auto;
   min-width: 0;
   height: 100%;
@@ -1032,8 +1103,8 @@
 
 /* Kicker (10px/1.4) + Titel (15px/1.25) = 33px und passen ohne die
    Kit-Innenabstaende in die 37px-Zeile. */
-.shiftflow-left-pane > .ctox-pane-header .ctox-pane-titles,
-.shiftflow-center-pane > .ctox-pane-header .ctox-pane-titles {
+[data-app="shiftflow"] .shiftflow-left-pane > .ctox-pane-header .ctox-pane-titles,
+[data-app="shiftflow"] .shiftflow-center-pane > .ctox-pane-header .ctox-pane-titles {
   flex: 1 1 auto;
   min-width: 0;
   padding-top: 0;
@@ -1043,8 +1114,8 @@
 /* Der Titel ist der Fenstertitel: wireShellV2ModuleTitle haengt Versions-
    menue und Quelltext-Zugang an das erste `.ctox-pane-header
    .ctox-pane-title`. Er darf nicht zusammengedrueckt werden. */
-.shiftflow-left-pane > .ctox-pane-header .ctox-pane-title,
-.shiftflow-center-pane > .ctox-pane-header .ctox-pane-title {
+[data-app="shiftflow"] .shiftflow-left-pane > .ctox-pane-header .ctox-pane-title,
+[data-app="shiftflow"] .shiftflow-center-pane > .ctox-pane-header .ctox-pane-title {
   min-width: 0;
   margin-top: 0;
   overflow: hidden;
@@ -1053,8 +1124,8 @@
 }
 
 /* Der Aktionsblock beansprucht kein `flex: 1` neben dem Titel. */
-.shiftflow-left-pane > .ctox-pane-header .ctox-pane-actions,
-.shiftflow-center-pane > .ctox-pane-header .ctox-pane-actions {
+[data-app="shiftflow"] .shiftflow-left-pane > .ctox-pane-header .ctox-pane-actions,
+[data-app="shiftflow"] .shiftflow-center-pane > .ctox-pane-header .ctox-pane-actions {
   flex: 0 0 auto;
 }
 
@@ -1062,12 +1133,12 @@
    Knoepfe. Sichtbar ist das Icon der ZIEL-Ansicht - bei Karten das Listen-
    Symbol, bei Liste das Karten-Symbol. Der Knopf ist eine Aktion, kein
    Zustand; er traegt darum keinen aria-pressed-Anstrich. */
-.shiftflow-view-toggle > [data-shift-view-icon] {
+[data-app="shiftflow"] .shiftflow-view-toggle > [data-shift-view-icon] {
   display: none;
 }
 
-.shiftflow-view-toggle[data-shift-view="cards"] > [data-shift-view-icon="list"],
-.shiftflow-view-toggle[data-shift-view="list"] > [data-shift-view-icon="cards"] {
+[data-app="shiftflow"] .shiftflow-view-toggle[data-shift-view="cards"] > [data-shift-view-icon="list"],
+[data-app="shiftflow"] .shiftflow-view-toggle[data-shift-view="list"] > [data-shift-view-icon="cards"] {
   display: block;
 }
 
@@ -1083,20 +1154,20 @@
    Beide Meta-Saetze stehen im Markup (renderShiftListItem); hier entscheidet
    sich, welcher sichtbar ist. Keine neuen Datenfelder.
    ========================================================================== */
-.shiftflow-shift-list {
+[data-app="shiftflow"] .shiftflow-shift-list {
   display: flex;
   flex-direction: column;
 }
 
-.shiftflow-shift-list.is-cards {
+[data-app="shiftflow"] .shiftflow-shift-list.is-cards {
   gap: 4px;
 }
 
-.shiftflow-shift-list.is-list {
+[data-app="shiftflow"] .shiftflow-shift-list.is-list {
   gap: 0;
 }
 
-.shiftflow-shift-item {
+[data-app="shiftflow"] .shiftflow-shift-item {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1109,16 +1180,16 @@
 
 /* Karte: eigene Flaeche auf dem Well-Grund, durch Abstand getrennt. Die
    Auswahlfarbe des Kits (.ctox-list-item.is-selected) bleibt staerker. */
-.shiftflow-shift-list.is-cards .shiftflow-shift-item {
+[data-app="shiftflow"] .shiftflow-shift-list.is-cards .shiftflow-shift-item {
   border-bottom: 0;
   border-radius: var(--control-radius, 6px);
 }
 
-.shiftflow-shift-list.is-cards .shiftflow-shift-item:not(.is-selected) {
+[data-app="shiftflow"] .shiftflow-shift-list.is-cards .shiftflow-shift-item:not(.is-selected) {
   background: var(--surface);
 }
 
-.shiftflow-shift-item::before {
+[data-app="shiftflow"] .shiftflow-shift-item::before {
   content: "";
   position: absolute;
   inset-block: 4px;
@@ -1127,11 +1198,11 @@
   background: transparent;
 }
 
-.shiftflow-shift-item.is-selected::before {
+[data-app="shiftflow"] .shiftflow-shift-item.is-selected::before {
   background: var(--accent);
 }
 
-.shiftflow-shift-select {
+[data-app="shiftflow"] .shiftflow-shift-select {
   display: grid;
   min-width: 0;
   border: 0;
@@ -1142,39 +1213,39 @@
   cursor: pointer;
 }
 
-.shiftflow-shift-select strong,
-.shiftflow-shift-select span {
+[data-app="shiftflow"] .shiftflow-shift-select strong,
+[data-app="shiftflow"] .shiftflow-shift-select span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.shiftflow-shift-select strong {
+[data-app="shiftflow"] .shiftflow-shift-select strong {
   color: var(--text-strong);
   font-size: 12px;
   font-weight: 700;
 }
 
-.shiftflow-shift-select span {
+[data-app="shiftflow"] .shiftflow-shift-select span {
   color: var(--muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
 /* --- Karten: Titel + zwei Meta-Zeilen, grosszuegiges Padding --------------- */
-.shiftflow-shift-list.is-cards .shiftflow-shift-select {
+[data-app="shiftflow"] .shiftflow-shift-list.is-cards .shiftflow-shift-select {
   grid-template-columns: minmax(0, 1fr);
   gap: 3px;
   padding: 10px 12px;
   line-height: 1.35;
 }
 
-.shiftflow-shift-list.is-cards [data-shift-meta="brief"] {
+[data-app="shiftflow"] .shiftflow-shift-list.is-cards [data-shift-meta="brief"] {
   display: none;
 }
 
 /* Wer + Projekt kuerzen, der Status-Marker bleibt immer vollstaendig. */
-.shiftflow-shift-select [data-shift-meta="who"] {
+[data-app="shiftflow"] .shiftflow-shift-select [data-shift-meta="who"] {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1182,14 +1253,14 @@
   overflow: hidden;
 }
 
-.shiftflow-shift-who {
+[data-app="shiftflow"] .shiftflow-shift-who {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.shiftflow-shift-status {
+[data-app="shiftflow"] .shiftflow-shift-status {
   flex: 0 0 auto;
   padding: 0 6px;
   border-radius: 999px;
@@ -1203,13 +1274,13 @@
   text-transform: uppercase;
 }
 
-.shiftflow-shift-status[data-shift-status="published"] {
+[data-app="shiftflow"] .shiftflow-shift-status[data-shift-status="published"] {
   background: var(--accent-soft);
   color: var(--accent);
 }
 
 /* --- Liste: genau eine kompakte Zeile, Kurz-Meta rechts ------------------- */
-.shiftflow-shift-list.is-list .shiftflow-shift-select {
+[data-app="shiftflow"] .shiftflow-shift-list.is-list .shiftflow-shift-select {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 0 10px;
@@ -1217,45 +1288,45 @@
   line-height: 1.5;
 }
 
-.shiftflow-shift-list.is-list [data-shift-meta="when"],
-.shiftflow-shift-list.is-list [data-shift-meta="who"] {
+[data-app="shiftflow"] .shiftflow-shift-list.is-list [data-shift-meta="when"],
+[data-app="shiftflow"] .shiftflow-shift-list.is-list [data-shift-meta="who"] {
   display: none;
 }
 
-.shiftflow-shift-list.is-list [data-shift-meta="brief"] {
+[data-app="shiftflow"] .shiftflow-shift-list.is-list [data-shift-meta="brief"] {
   justify-self: end;
   font-size: 10px;
 }
 
 /* Der Trenner steht zwischen Zeilen, nicht hinter der letzten. */
-.shiftflow-shift-list.is-list .shiftflow-shift-item:last-child {
+[data-app="shiftflow"] .shiftflow-shift-list.is-list .shiftflow-shift-item:last-child {
   border-bottom: 0;
 }
 
-.shiftflow-shift-list.is-list .shiftflow-shift-select strong {
+[data-app="shiftflow"] .shiftflow-shift-list.is-list .shiftflow-shift-select strong {
   font-size: 12px;
   font-weight: 600;
 }
 
 /* In der Listenform bestimmt der Bearbeiten-Knopf sonst die Zeilenhoehe. */
-.shiftflow-shift-list.is-list .shiftflow-shift-item .ctox-pane-icon {
+[data-app="shiftflow"] .shiftflow-shift-list.is-list .shiftflow-shift-item .ctox-pane-icon {
   width: 24px;
   height: 24px;
 }
 
-.shiftflow-shift-item .ctox-pane-icon {
+[data-app="shiftflow"] .shiftflow-shift-item .ctox-pane-icon {
   margin-inline-end: 4px;
 }
 
-.shiftflow-main-view-switch .ctox-pane-tabs {
+[data-app="shiftflow"] .shiftflow-main-view-switch .ctox-pane-tabs {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
-.shiftflow-main-view-switch .ctox-pane-tab {
+[data-app="shiftflow"] .shiftflow-main-view-switch .ctox-pane-tab {
   min-width: 0;
 }
 
-.shiftflow-board-stage {
+[data-app="shiftflow"] .shiftflow-board-stage {
   position: relative;
   display: grid;
   grid-template-columns: minmax(360px, 1fr);
@@ -1264,11 +1335,11 @@
   flex: 1 1 auto;
 }
 
-.shiftflow-board-stage.has-detail {
+[data-app="shiftflow"] .shiftflow-board-stage.has-detail {
   grid-template-columns: minmax(360px, 1fr) minmax(260px, 320px);
 }
 
-.shiftflow-board-detail {
+[data-app="shiftflow"] .shiftflow-board-detail {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
@@ -1277,51 +1348,51 @@
   background: var(--surface);
 }
 
-.shiftflow-board-detail[hidden] {
+[data-app="shiftflow"] .shiftflow-board-detail[hidden] {
   display: none !important;
 }
 
-.shiftflow-conflicts-alert-container {
+[data-app="shiftflow"] .shiftflow-conflicts-alert-container {
   padding: 12px;
 }
 
-.shiftflow-conflict-item {
+[data-app="shiftflow"] .shiftflow-conflict-item {
   align-items: flex-start;
 }
 
-.shiftflow-conflict-item [data-conflict-symbol] {
+[data-app="shiftflow"] .shiftflow-conflict-item [data-conflict-symbol] {
   color: var(--danger);
   font-weight: 800;
 }
 
 @container business-app-window (max-width: 768px) {
-  .shiftflow-app {
+  [data-app="shiftflow"] .shiftflow-app {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(420px, 1fr) minmax(260px, 44vh);
     overflow-y: auto;
   }
 
-  .shiftflow-center-pane {
+  [data-app="shiftflow"] .shiftflow-center-pane {
     grid-column: 1;
     grid-row: 1;
     min-width: 0;
   }
 
-  .shiftflow-left-pane {
+  [data-app="shiftflow"] .shiftflow-left-pane {
     grid-column: 1;
     grid-row: 2;
   }
 
-  .shiftflow-app > [data-resizer="left"] {
+  [data-app="shiftflow"] .shiftflow-app > [data-resizer="left"] {
     display: none;
   }
 
-  .shiftflow-board-stage,
-  .shiftflow-board-stage.has-detail {
+  [data-app="shiftflow"] .shiftflow-board-stage,
+  [data-app="shiftflow"] .shiftflow-board-stage.has-detail {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .shiftflow-board-detail:not([hidden]) {
+  [data-app="shiftflow"] .shiftflow-board-detail:not([hidden]) {
     position: absolute;
     inset: 0 0 0 auto;
     z-index: 20;
@@ -1331,9 +1402,6 @@
 
   /* Gestapelt steht der Planungskopf oben: die Icon-Zone wandert mit ihm,
      der Schichtenkopf darunter braucht sie nicht mehr. */
-  .shiftflow-center-pane > .ctox-pane-header {
-    padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
-  }
 
   /* Das App-Icon ist zwei Header-Zeilen hoch (80px) und reicht damit unter den
      37px-Kopf hinein - gestapelt liegt dort der Ansichts-Umschalter des
@@ -1342,26 +1410,46 @@
      Icon reichender Kasten mit Innenabstand haelt sie nicht frei. Mit dem
      12px-Innenabstand des Kits stehen die Tabs bei 94px und damit exakt unter
      dem Titel des Kopfes. */
-  .shiftflow-center-pane > .shiftflow-main-view-switch {
-    margin-left: calc(var(--shell-v2-icon-size, 80px) + 2px);
-  }
 
-  .shiftflow-left-pane > .ctox-pane-header {
+  [data-app="shiftflow"] .shiftflow-left-pane > .ctox-pane-header {
     padding-left: 14px;
   }
 
-  .shiftflow-list-band > .ctox-filterbar {
+  [data-app="shiftflow"] .shiftflow-list-band > .ctox-filterbar {
     padding-left: 12px;
   }
 }
 
 @container business-app-window (max-width: 768px) {
-  .shiftflow-main-view-switch .ctox-pane-tabs {
+  /* Kit-Reiter sind inline-flex mit min-width: max-content (437 px) und ragten rechts aus dem Pane;
+     schmal stehen die vier Reiter als 2×2-Raster in Panebreite. */
+  [data-app="shiftflow"] .shiftflow-main-view-switch .ctox-pane-tabs {
+    display: grid;
+    min-width: 0;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .shiftflow-billing-date-selector {
+  /* Rundgang RUND2: bei 420 ragte „Filtern“ rechts aus dem Pane (nowrap + Datumsfelder in Eigenbreite).
+     Die Datumsfelder teilen sich jetzt den Platz und schrumpfen; der Knopf behält seine Breite. */
+  [data-app="shiftflow"] .shiftflow-billing-date-selector {
     flex-wrap: nowrap;
+    flex: 1 1 100%;
+    min-width: 0;
+    gap: 8px;
+  }
+
+  [data-app="shiftflow"] .shiftflow-billing-date-selector .shiftflow-date-field {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  [data-app="shiftflow"] .shiftflow-billing-date-selector .shiftflow-date-field .ctox-input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  [data-app="shiftflow"] .shiftflow-billing-date-selector > .ctox-button {
+    flex: 0 0 auto;
   }
 }
 
@@ -1370,21 +1458,21 @@
    collapse above already stacks panes, hides the resizer and turns the
    detail inspector into an overlay;
    this block stacks the drawer form rows and keeps action rows wrappable.
-   The week grid keeps its 784px min-width and scrolls horizontally inside
-   .shiftflow-scheduler-container — never the page.
+   The week grid fits the planner width (container shiftflow-week): compact
+   columns and short weekday names instead of horizontal scrolling.
    -------------------------------------------------------------------------- */
 @container business-app-window (max-width: 768px) {
-  .shiftflow-drawer-form .form-row,
-  .shiftflow-drawer-actions,
-  .shiftflow-drawer-actions.has-danger {
+  [data-app="shiftflow"] .shiftflow-drawer-form .form-row,
+  [data-app="shiftflow"] .shiftflow-drawer-actions,
+  [data-app="shiftflow"] .shiftflow-drawer-actions.has-danger {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .timesheet-card-actions {
+  [data-app="shiftflow"] .timesheet-card-actions {
     flex-wrap: wrap;
   }
 
-  .shiftflow-publish-status {
+  [data-app="shiftflow"] .shiftflow-publish-status {
     max-width: 40%;
   }
 }
@@ -1394,27 +1482,27 @@
    hover-only on desktop (.grid-shift-cell:hover) — on touch it stays
    permanently visible so empty slots remain operable. */
 @media (pointer: coarse) {
-  .shiftflow-app button,
-  .shiftflow-app input:not([type="checkbox"]):not([type="radio"]),
-  .shiftflow-app select,
-  .shiftflow-app textarea,
-  .shiftflow-drawer-body button,
-  .shiftflow-drawer-body input:not([type="checkbox"]):not([type="radio"]),
-  .shiftflow-drawer-body select,
-  .shiftflow-drawer-body textarea {
+  [data-app="shiftflow"] .shiftflow-app button,
+  [data-app="shiftflow"] .shiftflow-app input:not([type="checkbox"]):not([type="radio"]),
+  [data-app="shiftflow"] .shiftflow-app select,
+  [data-app="shiftflow"] .shiftflow-app textarea,
+  [data-app="shiftflow"] .shiftflow-drawer-body button,
+  [data-app="shiftflow"] .shiftflow-drawer-body input:not([type="checkbox"]):not([type="radio"]),
+  [data-app="shiftflow"] .shiftflow-drawer-body select,
+  [data-app="shiftflow"] .shiftflow-drawer-body textarea {
     min-height: 44px;
   }
 
-  .shiftflow-app .ctox-pane-icon {
+  [data-app="shiftflow"] .shiftflow-app .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
 
-  .shiftflow-app .ctox-pane-tab {
+  [data-app="shiftflow"] .shiftflow-app .ctox-pane-tab {
     min-height: 44px;
   }
 
-  .add-shift-hover-btn {
+  [data-app="shiftflow"] .add-shift-hover-btn {
     opacity: 1;
     pointer-events: auto;
     transform: translate(-50%, -50%) scale(1);
@@ -1422,17 +1510,76 @@
     padding-inline: 14px;
   }
 
-  .quick-assign-day-btn {
+  [data-app="shiftflow"] .quick-assign-day-btn {
     min-width: 40px;
     min-height: 40px;
   }
 
-  .color-option-label {
+  [data-app="shiftflow"] .color-option-label {
     width: 44px;
     height: 44px;
   }
 
-  .shiftflow-shift-select {
+  [data-app="shiftflow"] .shiftflow-shift-select {
     min-height: 44px;
+  }
+}
+
+/* v4: Drawer liegen im App-root (4.0 hat keine Drawer-API, app-api.d.ts OFFEN-D). */
+[data-app="shiftflow"] {
+  position: relative;
+}
+
+[data-app="shiftflow"] .shiftflow-app-drawer {
+  position: absolute;
+  inset-block: 0;
+  z-index: 40;
+  width: min(420px, 100%);
+  overflow: auto;
+  background: var(--surface, var(--panel, #fff));
+  border-inline: 1px solid var(--line);
+}
+
+[data-app="shiftflow"] .shiftflow-app-drawer--right {
+  inset-inline-end: 0;
+}
+
+[data-app="shiftflow"] .shiftflow-app-drawer--left {
+  inset-inline-start: 0;
+}
+
+/* Aktionsleisten brechen im App-Fenster um, statt (mit versteckter Leiste) seitlich zu
+   scrollen (Geometrie G1). Gilt nur für diese App; das Kit-Verhalten bleibt unverändert. */
+[data-app="shiftflow"] .ctox-action-strip {
+  flex-wrap: wrap;
+  row-gap: 4px;
+  overflow: visible;
+  /* Umgebrochen (zwei Zeilen) darf die Leiste im Spaltenfluss nicht auf die Kit-Mindesthöhe 36 px
+     schrumpfen, sonst lag „Dienstplan veröffentlichen“ halb unter dem Wochenkopf. */
+  flex-shrink: 0;
+}
+
+/* FIX11 (G4, 420 px): zwischen Icon-Zone (links) und Knopfzone (rechts) kuerzte der Pane-Titel auf wenige Buchstaben.
+   Schmal bricht die Titelzeile um: der Titel behaelt seine volle Breite (Umbruch nur an Wortgrenzen, nie Buchstabe
+   fuer Buchstabe), die Kopfknoepfe rutschen in eine zweite Zeile darunter. Breit bleibt die Kopfzeile unveraendert. */
+@container business-app-window (max-width: 768px) {
+  [data-app="shiftflow"] .ctox-pane .ctox-pane-header > .ctox-pane-title-row,
+  [data-app="shiftflow"] .ctox-pane-header .ctox-pane-title-row {
+    flex-wrap: wrap;
+    row-gap: 4px;
+    height: auto;
+    max-height: none;
+  }
+  [data-app="shiftflow"] .ctox-pane .ctox-pane-header .ctox-pane-titles,
+  [data-app="shiftflow"] .ctox-pane-header .ctox-pane-title-row > .ctox-pane-titles { flex: 1 0 auto; max-width: 100%; min-width: 0; overflow: visible; }
+  [data-app="shiftflow"] .ctox-pane .ctox-pane-header .ctox-pane-title,
+  [data-app="shiftflow"] .ctox-pane-header .ctox-pane-titles > .ctox-pane-title {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: normal;
+    hyphens: manual;
+    -webkit-line-clamp: none;
+    line-clamp: none;
   }
 }

@@ -30,6 +30,12 @@ pub trait ReadAuthority: Send + Sync {
         doc: &ChangeDocument,
     ) -> rusqlite::Result<Option<Value>>;
 }
+/// A generation switch is a control event, never a page bearing another generation's rows.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SubscriptionEvent {
+    Page(StreamPacket),
+    RequiresPage(RequiresPage),
+}
 pub struct Subscription {
     key: SubscriptionKey,
     cursor: u64,
@@ -103,6 +109,7 @@ impl Subscription {
     }
     /// No timer or polling: after catch-up, wait for the writer's retained notification.
     /// A read/signing failure retains needs_read and the old cursor, permitting a safe retry.
+    /// Compatibility entry point. New protocol consumers use next_event for the typed resnapshot.
     pub async fn next_page(
         &mut self,
         limit: usize,
@@ -110,6 +117,25 @@ impl Subscription {
         signer: &dyn InstanceSigner,
         core_sent_at_ms: impl FnOnce() -> u64 + Send,
     ) -> Result<StreamPacket, StoreError> {
+        match self
+            .next_event(limit, authority, signer, core_sent_at_ms)
+            .await?
+        {
+            SubscriptionEvent::Page(page) => Ok(page),
+            SubscriptionEvent::RequiresPage(value) => Err(StoreError::Invalid(format!(
+                "requires_page: collection={} old_gen={} gen={:?}; checkpoint=0",
+                value.collection, value.previous_gen, value.gen
+            ))),
+        }
+    }
+    /// Initial, live and generation control use the same commit-driven snapshot.
+    pub async fn next_event(
+        &mut self,
+        limit: usize,
+        authority: Arc<dyn ReadAuthority>,
+        signer: &dyn InstanceSigner,
+        core_sent_at_ms: impl FnOnce() -> u64 + Send,
+    ) -> Result<SubscriptionEvent, StoreError> {
         if self
             .instance_id
             .as_ref()
@@ -137,7 +163,7 @@ impl Subscription {
         let cursor = self.cursor;
         let epoch = self.epoch.clone();
         let expected_database = self.writer.db_id().path().to_path_buf();
-        let (page, docs) = self
+        let snapshot = self
             .reader
             .read(move |tx| {
                 let file: String = tx.query_row(
@@ -151,6 +177,24 @@ impl Subscription {
                     return Err(invalid("reader database differs from writer owner"));
                 }
                 authority.authorize(tx, &key)?;
+                let state: Option<String> = tx
+                    .query_row(
+                        "SELECT state FROM _collections WHERE name=?1 AND gen=?2",
+                        params![key.collection, integer(key.gen)?],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                if !matches!(state.as_deref(), Some("active" | "preparing")) {
+                    let active = crate::schema::active_collection(tx, &key.collection)?;
+                    return Ok(Err(RequiresPage {
+                        collection: key.collection.clone(),
+                        scope_hash: key.scope_hash.clone(),
+                        previous_gen: key.gen,
+                        gen: active.as_ref().map(|c| c.gen),
+                        checkpoint_seq: Seq(0),
+                        migrated_at_seq: active.and_then(|c| c.migrated_at_seq).map(Seq),
+                    }));
+                }
                 let page = change_log::read_page(tx, &key.collection, key.gen, cursor, limit)?;
                 if epoch.as_ref().is_some_and(|e| e != &page.epoch) {
                     return Err(invalid("epoch changed: resnapshot required"));
@@ -181,10 +225,14 @@ impl Subscription {
                         })
                     })
                     .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok((page, docs))
+                Ok(Ok((page, docs)))
             })
             .await
             .map_err(StoreError::from)?;
+        let (page, docs) = match snapshot {
+            Ok(page) => page,
+            Err(requirement) => return Ok(SubscriptionEvent::RequiresPage(requirement)),
+        };
         let mut packet = StreamPacket {
             kind: if self.initial {
                 StreamKind::Page
@@ -216,9 +264,12 @@ impl Subscription {
         if !self.needs_read {
             self.initial = false;
         }
-        Ok(packet)
+        Ok(SubscriptionEvent::Page(packet))
     }
 }
+
+#[path = "write_contract.rs"]
+pub mod write_contract;
 
 /// Native authority is mandatory, including replay and removes. It may enforce
 /// write_guard/schema validation and resolve old-schema input through the owned migration runner.
@@ -228,6 +279,25 @@ pub enum WritePermission {
     Reject(String),
 }
 pub trait WriteAuthority: Send + Sync {
+    /// Use the command document's app_id as sender, never a payload claim (§16.40).
+    /// Enforce active commands_out/in and the authenticated actor's target right.
+    fn authorize_command_intent(
+        &self,
+        _tx: &Transaction<'_>,
+        _participant: &str,
+        _command: &Value,
+    ) -> rusqlite::Result<WritePermission> {
+        Ok(WritePermission::Reject("forbidden".into()))
+    }
+    /// Native capability/route gate; never inferred from a document claim.
+    fn authorize_command_executor(
+        &self,
+        _tx: &Transaction<'_>,
+        _participant: &str,
+        _command: &Value,
+    ) -> rusqlite::Result<WritePermission> {
+        Ok(WritePermission::Reject("forbidden".into()))
+    }
     fn authorize(
         &self,
         tx: &Transaction<'_>,
@@ -242,6 +312,19 @@ pub trait WriteAuthority: Send + Sync {
         collection: &crate::schema::Collection,
         document: &Value,
     ) -> rusqlite::Result<WritePermission>;
+    /// Prepared mirror for a pending generation; no JS/I/O is allowed in this callback.
+    /// The admission implementation binds output to target definition, op_id and final
+    /// post-merge document. None leaves the whole write uncommitted for a safe retry.
+    fn generation_output(
+        &self,
+        _tx: &Transaction<'_>,
+        _participant: &str,
+        _request: &Write,
+        _target: &crate::schema::Collection,
+        _document: Option<&Value>,
+    ) -> rusqlite::Result<Option<crate::schema::MigrationOutput>> {
+        Ok(None)
+    }
     /// Trusted semantic migration seam. None is a terminal migration_required rejection.
     /// Use prepared, revision-bound output; no I/O or JS in the writer. A transient unavailable runner returns Err.
     fn migrate(
@@ -289,6 +372,7 @@ fn rejected(request: &Write, reason: &str) -> WriteResult {
         rev: None,
         gen: request.gen,
         reason: Some(reason.into()),
+        code: Some(write_contract::rejection_code(reason).into()),
         archived_ref: None,
     }
 }
@@ -313,7 +397,7 @@ fn remember(
 }
 /// Call inside the ONE writer transaction; document, revision history and dedup result commit together.
 /// Missing predecessors return a retryable error without storing a terminal rejection.
-pub fn apply_write(
+pub(crate) fn apply_write(
     tx: &Transaction<'_>,
     participant: &str,
     request: &Write,
@@ -424,6 +508,7 @@ pub fn apply_write(
             base = m.base_rev.clone();
         }
         let table = identifier(&current.table)?;
+
         let row: Option<(String, Option<String>, bool)> = tx
             .query_row(
                 &format!("SELECT rev,data,deleted FROM {table} WHERE id=?1"),
@@ -431,13 +516,51 @@ pub fn apply_write(
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?;
+        if request.collection == "business_commands"
+            && request.op == WriteOp::Put
+            && base.is_none()
+            && row.is_some()
+            && write_contract::duplicate_command(
+                tx,
+                participant,
+                request,
+                row.as_ref().and_then(|r| r.1.as_deref()),
+            )?
+        {
+            let (rev, _, _) = row.as_ref().ok_or_else(|| invalid("command missing"))?;
+            let seq = tx.query_row(
+                "SELECT seq FROM _changes WHERE collection=?1 AND gen=?2 AND id=?3",
+                params![request.collection, integer(current.gen)?, request.id],
+                |r| r.get(0),
+            )?;
+            let result = WriteResult {
+                op_id: request.op_id.clone(),
+                status: WriteStatus::Merged,
+                seq: Some(Seq(seq)),
+                rev: Some(rev.clone()),
+                gen: current.gen,
+                reason: None,
+                code: None,
+                archived_ref: None,
+            };
+            remember(tx, participant, request, &result, now_ms)?;
+            return Ok(result);
+        }
+        if request.collection == "business_commands"
+            && request.op == WriteOp::Delete
+            && !write_contract::command_can_remove(row.as_ref().and_then(|r| r.1.as_deref()))?
+        {
+            let result = rejected(request, "command_delete_forbidden");
+            remember(tx, participant, request, &result, now_ms)?;
+            return Ok(result);
+        }
         // A removed revision cannot resurrect content; an explicit create (no base) may start a new identity revision.
         let conflict = match &row {
             Some((rev, _, deleted)) => {
                 if *deleted {
                     request.op != WriteOp::Put || base.is_some()
                 } else {
-                    base.as_ref() != Some(rev)
+                    base.as_ref() != Some(rev) && (request.op == WriteOp::Delete || base.is_none())
                 }
             }
             None => base.is_some() || request.op != WriteOp::Put,
@@ -447,8 +570,43 @@ pub fn apply_write(
             remember(tx, participant, request, &result, now_ms)?;
             return Ok(result);
         }
+        if request.collection == "business_commands" {
+            if let (Some((_, Some(json), false)), Some(_)) = (&row, &request.body) {
+                let previous: Value =
+                    serde_json::from_str(json).map_err(|e| invalid(e.to_string()))?;
+                if let Some(reason) = write_contract::check_command_input(
+                    tx,
+                    participant,
+                    request,
+                    &previous,
+                    now_ms,
+                    authority,
+                )? {
+                    let result = rejected(request, &reason);
+                    remember(tx, participant, request, &result, now_ms)?;
+                    return Ok(result);
+                }
+            }
+        }
+        let merging = row
+            .as_ref()
+            .is_some_and(|(rev, _, deleted)| !deleted && base.as_ref() != Some(rev));
+        let merge_base: Option<Value> = if merging {
+            let history: Option<Option<String>> = tx.query_row(
+                "SELECT body FROM _revs WHERE collection=?1 AND gen=?2 AND id=?3 AND rev=?4 AND created_at>=?5",
+                params![request.collection, integer(current.gen)?, request.id, base, integer(now_ms.saturating_sub(OP_HORIZON_MS)/1000)?],
+                |r| r.get(0)).optional()?;
+            let Some(Some(json)) = history else {
+                let result = rejected(request, "conflict");
+                remember(tx, participant, request, &result, now_ms)?;
+                return Ok(result);
+            };
+            Some(serde_json::from_str(&json).map_err(|e| invalid(e.to_string()))?)
+        } else {
+            None
+        };
         if let Some(seq) = request.base_seq {
-            if request.prev_op_id.is_none() && !stale {
+            if request.prev_op_id.is_none() && !stale && !merging {
                 let actual: Option<u64> = tx
                     .query_row(
                         "SELECT seq FROM _changes WHERE collection=?1 AND gen=?2 AND id=?3",
@@ -456,6 +614,14 @@ pub fn apply_write(
                         |r| r.get(0),
                     )
                     .optional()?;
+                // The Kernel represents a never-seen document with base_seq=0.
+                // Only an explicit create of an absent row has that sentinel;
+                // a missing change-log row for an existing document is not 0.
+                let actual = if row.is_none() && request.op == WriteOp::Put && base.is_none() {
+                    Some(0)
+                } else {
+                    actual
+                };
                 if actual != Some(seq.0) {
                     let result = rejected(request, "conflict");
                     remember(tx, participant, request, &result, now_ms)?;
@@ -463,12 +629,21 @@ pub fn apply_write(
                 }
             }
         }
+        // Preserve a pre-existing revision too (e.g. imported/backfilled rows).
+        if let Some((prior_rev, Some(prior_body), false)) = &row {
+            tx.execute("INSERT OR IGNORE INTO _revs(collection,id,rev,seq,gen,body,created_at)
+                SELECT ?1,?2,?3,seq,?4,?5,?6 FROM _changes WHERE collection=?1 AND gen=?4 AND id=?2",
+                params![request.collection,request.id,prior_rev,integer(current.gen)?,prior_body,integer(now_ms/1000)?])?;
+        }
         let rev = format!("v4:{}", request.op_id);
         let body = if let Some(m) = &migration {
             m.body.clone()
         } else {
             request.body.clone()
         };
+        let pending = crate::schema::preparing_target(tx, &request.collection, current.gen)?;
+        let mut prepared_mirror = None;
+        let mut final_document = None;
         if request.op == WriteOp::Delete {
             if body.is_some() {
                 let result = rejected(request, "delete_payload");
@@ -491,17 +666,33 @@ pub fn apply_write(
                 return Ok(result);
             };
             let mut document = if request.op == WriteOp::Patch && !stale {
-                let prior = row
-                    .as_ref()
-                    .and_then(|r| r.1.as_ref())
-                    .ok_or_else(|| invalid("patch base unavailable"))?;
-                let mut doc: Value =
-                    serde_json::from_str(prior).map_err(|e| invalid(e.to_string()))?;
-                merge_patch(&mut doc, &input);
+                let mut doc: Value = if let Some(base) = &merge_base {
+                    base.clone()
+                } else {
+                    let prior = row
+                        .as_ref()
+                        .and_then(|r| r.1.as_ref())
+                        .ok_or_else(|| invalid("patch base unavailable"))?;
+                    serde_json::from_str(prior).map_err(|e| invalid(e.to_string()))?
+                };
+                if request.collection == "business_commands" {
+                    write_contract::apply_command_patch(&mut doc, &input);
+                } else {
+                    merge_patch(&mut doc, &input);
+                }
                 doc
             } else {
                 input
             };
+            if let Some(base) = &merge_base {
+                let server: Value = serde_json::from_str(
+                    row.as_ref()
+                        .and_then(|r| r.1.as_deref())
+                        .ok_or_else(|| invalid("merge current unavailable"))?,
+                )
+                .map_err(|e| invalid(e.to_string()))?;
+                document = write_contract::merge_fields(base, &server, &document);
+            }
             if !document.is_object() {
                 let result = rejected(request, "object_required");
                 remember(tx, participant, request, &result, now_ms)?;
@@ -514,6 +705,66 @@ pub fn apply_write(
                 remember(tx, participant, request, &result, now_ms)?;
                 return Ok(result);
             }
+            if request.collection == "business_commands" {
+                let prior: Option<Value> = row
+                    .as_ref()
+                    .and_then(|r| r.1.as_deref())
+                    .map(serde_json::from_str)
+                    .transpose()
+                    .map_err(|e| invalid(e.to_string()))?;
+                if let Some(reason) = write_contract::check_command(
+                    tx,
+                    participant,
+                    request,
+                    prior.as_ref(),
+                    &document,
+                    now_ms,
+                    authority,
+                )? {
+                    let result = rejected(request, &reason);
+                    remember(tx, participant, request, &result, now_ms)?;
+                    return Ok(result);
+                }
+                if prior.as_ref() == Some(&document) {
+                    let (prior_rev, _, _) =
+                        row.as_ref().ok_or_else(|| invalid("command missing"))?;
+                    let seq = tx.query_row(
+                        "SELECT seq FROM _changes WHERE collection=?1 AND gen=?2 AND id=?3",
+                        params![request.collection, integer(current.gen)?, request.id],
+                        |r| r.get(0),
+                    )?;
+                    let result = WriteResult {
+                        op_id: request.op_id.clone(),
+                        status: WriteStatus::Merged,
+                        seq: Some(Seq(seq)),
+                        rev: Some(prior_rev.clone()),
+                        gen: current.gen,
+                        reason: None,
+                        code: None,
+                        archived_ref: None,
+                    };
+                    remember(tx, participant, request, &result, now_ms)?;
+                    return Ok(result);
+                }
+            }
+            if let Some((_, target)) = &pending {
+                prepared_mirror = Some(
+                    authority
+                        .generation_output(tx, participant, request, target, Some(&document))?
+                        .ok_or_else(|| invalid("migration_preparation_required"))?,
+                );
+                if let Some(crate::schema::MigrationOutput::Upsert { body, .. }) = &prepared_mirror
+                {
+                    if let WritePermission::Reject(reason) =
+                        authority.validate_document(tx, participant, target, body)?
+                    {
+                        let result = rejected(request, &reason);
+                        remember(tx, participant, request, &result, now_ms)?;
+                        return Ok(result);
+                    }
+                }
+            }
+            final_document = Some(document.clone());
             // Schemas operate on business JSON; id/rev/deleted are authoritative table columns.
             let json = serde_json::to_string(&mut document).map_err(|e| invalid(e.to_string()))?;
             tx.execute(&format!("INSERT INTO {table}(id,rev,schema_ver,data,deleted) VALUES(?1,?2,?3,?4,0)
@@ -525,10 +776,57 @@ pub fn apply_write(
             params![request.collection, integer(current.gen)?, request.id],
             |r| r.get(0),
         )?;
+        if request.collection == "business_commands" {
+            if request.op == WriteOp::Delete {
+                write_contract::retire_command(tx, &request.id, current.gen, &rev, seq)?;
+            } else {
+                write_contract::project_command(
+                    tx,
+                    &request.id,
+                    current.gen,
+                    &rev,
+                    seq,
+                    final_document
+                        .as_ref()
+                        .ok_or_else(|| invalid("command body missing"))?,
+                )?;
+            }
+        }
+        if let Some((lock, _)) = pending {
+            let output = if request.op == WriteOp::Delete {
+                crate::schema::MigrationOutput::Delete
+            } else {
+                prepared_mirror.ok_or_else(|| invalid("migration_preparation_required"))?
+            };
+            let source = ChangeDocument {
+                id: request.id.clone(),
+                seq,
+                op: if request.op == WriteOp::Delete {
+                    Operation::Delete
+                } else {
+                    Operation::Upsert
+                },
+                rev: rev.clone(),
+                gen: current.gen,
+                schema_ver: current.definition.schema_ver,
+                app_ver: current.definition.app_ver.clone(),
+                body: final_document,
+            };
+            crate::schema::mirror_generation_write(
+                tx,
+                &lock,
+                &request.collection,
+                &source,
+                &output,
+                integer(now_ms / 1000)?,
+            )?;
+        }
         let result = WriteResult {
             op_id: request.op_id.clone(),
             status: if stale {
                 WriteStatus::Migrated
+            } else if merging {
+                WriteStatus::Merged
             } else {
                 WriteStatus::Accepted
             },
@@ -536,6 +834,7 @@ pub fn apply_write(
             rev: Some(rev.clone()),
             gen: current.gen,
             reason: None,
+            code: None,
             archived_ref: migration.and_then(|m| m.archived_ref),
         };
         if request.op != WriteOp::Delete {

@@ -1,6 +1,3 @@
-import { renderListOrState } from '../../shared/list-state.js';
-
-const MOD_BUILD = '20260831-shell-v2';
 const MODULE_ID = 'submissions';
 const PRIMARY = 'submissions';
 const PRESENT_COMMAND = 'ats.submission.present';
@@ -13,92 +10,117 @@ const STATUS_KEY = {
 
 export const COPY = {
   de: {
-    candidate: 'Kandidat-ID', client: 'Kunden-Account-ID', more: 'Weitere Angaben', present: 'Vorstellen', entries: 'Einträge', empty: 'Noch keine Vorstellungen.', idCopied: 'ID kopiert', offlineService: 'Offline: Befehlsdienst nicht verfügbar.', blocked: 'Blockiert.', idsRequired: 'Kandidat-ID und Kunden-Account-ID sind erforderlich.', offlineSend: 'Offline: Befehl konnte nicht gesendet werden.', presented: 'Vorgestellt.', submission: 'Submission', vacancyLabel: 'Vakanz', contactLabel: 'Kontakt', consent: 'Consent', feedback: 'Feedback', sent: 'Gesendet', copyId: 'ID kopieren', unknown: 'unbekannt', conflict: 'Konflikt', status: 'Status',
-    kicker: 'VORSTELLUNGEN', listTitle: 'Kandidaten', allStatus: 'Alle Status', viewAll: 'Alle', viewOpen: 'Offen', viewDone: 'Erledigt', composerKicker: 'NEUE VORSTELLUNG', composerTitle: 'Kandidat vorstellen', composerHint: 'Eintrag wählen oder neue Vorstellung anlegen.', recordKicker: 'VORSTELLUNG', importDone: 'Import abgeschlossen.', exportDone: 'Export erstellt.', invalidFile: 'Datei konnte nicht gelesen werden (JSON erwartet).',
+    title: 'Vorstellungen', candidate: 'Kandidat', client: 'Kunde', more: 'Weitere Angaben', present: 'Vorstellen', entries: 'Einträge', idCopied: 'ID kopiert', blocked: 'Blockiert.', idsRequired: 'Kandidat-ID und Kunden-Account-ID sind erforderlich.', submission: 'Submission', vacancyLabel: 'Vakanz', contactLabel: 'Kontakt', consent: 'Consent', feedback: 'Feedback', sent: 'Gesendet', copyId: 'ID kopieren', unknown: 'unbekannt', conflict: 'Konflikt', status: 'Status',
+    kicker: '', listTitle: 'Vorstellungen', allStatus: 'Alle Status', viewAll: 'Alle', viewOpen: 'Offen', viewDone: 'Erledigt', composerKicker: 'NEUE VORSTELLUNG', composerTitle: 'Kandidat vorstellen', cancelNew: 'Abbrechen', recordKicker: 'VORSTELLUNG', importDone: 'Import:', invalidFile: 'Datei konnte nicht gelesen werden (JSON erwartet).',
     statusSent: 'gesendet', statusHired: 'eingestellt', statusWithdrawn: 'zurückgezogen', statusRejected: 'abgelehnt',
-    syncing: 'Daten werden synchronisiert.',
     showAsList: 'Als Liste anzeigen', showAsCards: 'Als Karten anzeigen', localeTag: 'de-DE',
   },
   en: {
-    candidate: 'Candidate ID', client: 'Client account ID', more: 'More details', present: 'Present candidate', entries: 'records', empty: 'No submissions yet.', idCopied: 'ID copied', offlineService: 'Offline: command service unavailable.', blocked: 'Blocked.', idsRequired: 'Candidate ID and client account ID are required.', offlineSend: 'Offline: command could not be sent.', presented: 'Candidate presented.', submission: 'Submission', vacancyLabel: 'Vacancy', contactLabel: 'Contact', consent: 'Consent', feedback: 'Feedback', sent: 'Sent', copyId: 'Copy ID', unknown: 'unknown', conflict: 'Conflict', status: 'Status',
-    kicker: 'SUBMISSIONS', listTitle: 'Candidates', allStatus: 'All statuses', viewAll: 'All', viewOpen: 'Open', viewDone: 'Closed', composerKicker: 'NEW SUBMISSION', composerTitle: 'Present candidate', composerHint: 'Select a record or start a new submission.', recordKicker: 'SUBMISSION', importDone: 'Import complete.', exportDone: 'Export created.', invalidFile: 'File could not be read (JSON expected).',
+    title: 'Candidate presentations', candidate: 'Candidate ID', client: 'Client account ID', more: 'More details', present: 'Present candidate', entries: 'records', idCopied: 'ID copied', blocked: 'Blocked.', idsRequired: 'Candidate ID and client account ID are required.', submission: 'Submission', vacancyLabel: 'Vacancy', contactLabel: 'Contact', consent: 'Consent', feedback: 'Feedback', sent: 'Sent', copyId: 'Copy ID', unknown: 'unknown', conflict: 'Conflict', status: 'Status',
+    kicker: 'SUBMISSIONS', listTitle: 'Candidates', allStatus: 'All statuses', viewAll: 'All', viewOpen: 'Open', viewDone: 'Closed', composerKicker: 'NEW SUBMISSION', composerTitle: 'Present candidate', cancelNew: 'Cancel', recordKicker: 'SUBMISSION', importDone: 'Import:', invalidFile: 'File could not be read (JSON expected).', // v4-allow: en
     statusSent: 'sent', statusHired: 'hired', statusWithdrawn: 'withdrawn', statusRejected: 'rejected',
-    syncing: 'Syncing data.',
     showAsList: 'Show as list', showAsCards: 'Show as cards', localeTag: 'en-GB',
   },
 };
 let text = COPY.de;
 let locale = 'de';
 
-export async function mount(ctx) {
-  locale = ctx.locale === 'en' ? 'en' : 'de';
-  text = COPY[locale];
-  await ensureStyles();
-  ctx.host.innerHTML = await loadMarkup();
-  ctx.host.dataset.atsModule = MODULE_ID;
-  ctx.left?.replaceChildren?.();
-  ctx.right?.replaceChildren?.();
+// App-API 4.0 (Shell v4): mount(root, api, {restored}) -> {unmount, snapshot}.
+const SNAPSHOT_VERSION = 1;
+const FORM_FIELDS = ['candidate_id', 'client_account_id', 'vacancy_id', 'client_contact_id'];
 
-  const root = ctx.host.querySelector('[data-subs-root]');
+export async function mount(host, api, { restored } = {}) {
+  if (!host.dataset.app) host.dataset.app = api.app?.id || MODULE_ID;
+  setLocale(api, api.shell.locale.get());
+  // CSS laedt die Shell aus dem Manifest; index.html liefert der Service Worker versioniert (§16.15).
+  host.innerHTML = await loadMarkup();
+  const disposers = [];
+  const root = host.querySelector('[data-subs-root]');
   applyStaticCopy(root);
+  api.shell.setTitle(text.title);
 
   const listPane = root?.querySelector('[data-subs-list-pane]');
   const listEl = root?.querySelector('[data-subs-list]');
   const formEl = root?.querySelector('[data-subs-form]');
-  const gateEl = root?.querySelector('[data-subs-gate]');
   const detailEl = root?.querySelector('[data-subs-detail]');
-  const wbKicker = root?.querySelector('[data-subs-wb-kicker]');
   const wbTitle = root?.querySelector('[data-subs-wb-title]');
-  const wbFooter = root?.querySelector('[data-subs-wb-footer]');
   const collapseBtn = root?.querySelector('[data-subs-collapse]');
   const newBtn = root?.querySelector('[data-action="new"]');
   const importBtn = root?.querySelector('[data-action="import"]');
   const exportBtn = root?.querySelector('[data-action="export"]');
+  const restore = isPlainObject(restored) && restored.v === SNAPSHOT_VERSION ? restored : null;
+  if (restore) restoreView(restore);
 
-  const state = { records: [], visible: [], selectedId: '', userCollapsed: false, grammar: readGrammarState(listPane) };
-  const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || null; } catch { return null; } };
+  const state = {
+    records: [], visible: [],
+    selectedId: restore && typeof restore.selectedId === 'string' ? restore.selectedId : '',
+    // Anlegen nur über „+ Neu“ (FIX9a): das leere Formular ist ein eigener Modus, nie über einem Datensatz.
+    composing: Boolean(restore && restore.composing === true),
+    userCollapsed: Boolean(restore && restore.userCollapsed === true),
+    grammar: readGrammarState(listPane),
+  };
+  let pendingScrollTop = restore && Number(restore.listScrollTop) > 0 ? Number(restore.listScrollTop) : 0;
 
-  // Shell-owned readiness for the primary collection; absent API (older
-  // shells, tests) reads as null → the previous empty-state behaviour.
-  function readSubmissionsReadiness() {
-    const read = ctx.sync?.collectionReadiness;
-    if (typeof read !== 'function') return null;
-    try { return read.call(ctx.sync, PRIMARY) || null; } catch { return null; }
+  // Die Spalten-Grammatik verdrahtet die App selbst (keine DOM-Heuristik der Shell).
+  const { autoWirePaneGrammar } = await import('ctox:shared/pane-grammar.js');
+  autoWirePaneGrammar(root);
+
+  // Zustand nur ueber die Zustandszone der Shell, stabile Codes je Fall.
+  const report = (level, code, str, ref) => api.status.report(ref ? { level, code, text: str, ref } : { level, code, text: str });
+  const clear = (code) => api.status.clear(code);
+
+  function restoreView(snap) {
+    const search = listPane?.querySelector('[data-pg-search]');
+    if (search && typeof snap.search === 'string') search.value = snap.search;
+    if (listPane && (snap.view === 'list' || snap.view === 'cards')) listPane.dataset.pgDefaultView = snap.view;
+    const tabs = [...(listPane?.querySelectorAll('[data-pg-band]') || [])];
+    if (typeof snap.band === 'string' && tabs.some((tab) => tab.dataset.pgBand === snap.band)) {
+      tabs.forEach((tab) => {
+        const on = tab.dataset.pgBand === snap.band;
+        tab.setAttribute('aria-selected', String(on));
+        tab.classList.toggle('is-active', on);
+      });
+    }
+    const statusSel = listPane?.querySelector('[data-pg-filter][data-pg-name="status"]');
+    const status = isPlainObject(snap.filters) ? snap.filters.status : null;
+    if (statusSel && typeof status === 'string' && [...statusSel.options].some((o) => o.value === status)) statusSel.value = status;
+    const tray = listPane?.querySelector('[data-pg-tray]');
+    if (tray && snap.trayOpen === true) { tray.hidden = false; listPane.querySelector('[data-pg-tray-toggle]')?.setAttribute('aria-expanded', 'true'); }
+    if (isPlainObject(snap.form)) {
+      for (const name of FORM_FIELDS) {
+        const el = formEl?.querySelector('[name="' + name + '"]');
+        if (el && typeof snap.form[name] === 'string') el.value = snap.form[name];
+      }
+    }
+    const more = formEl?.querySelector('details.subs-more');
+    if (more && snap.moreOpen === true) more.open = true;
   }
-  // Collection readiness snapshot for the record list (shell-owned sync
-  // contract); null when the shell exposes no readiness API.
-  let submissionReadiness = readSubmissionsReadiness();
 
-  // Gate feedback renders in the kit callout; kinds map onto its variants.
-  const GATE_VARIANTS = { ok: 'is-success', block: 'is-danger', offline: 'is-warning' };
-  function setGate(html, kind) {
-    if (!gateEl) return;
-    gateEl.className = 'ctox-callout' + (GATE_VARIANTS[kind] ? ' ' + GATE_VARIANTS[kind] : '');
-    gateEl.innerHTML = html || '';
+  function formValues() {
+    const out = {};
+    for (const name of FORM_FIELDS) out[name] = formEl?.querySelector('[name="' + name + '"]')?.value ?? '';
+    return out;
   }
 
   function selectedRecord() {
     return state.records.find((r) => recordKey(r) === state.selectedId) || null;
   }
 
-  // ---- LEFT column: reactive record list under the shell-wired grammar ------
+  // ---- LEFT column: reactive record list under the pane grammar ------------
   function renderListRegion() {
     const counts = bandCounts(state.records);
     state.visible = filterRecords(state.records, state.grammar);
     const view = state.grammar.view === 'list' ? 'list' : 'cards';
-    // Two load-bearing markers, same convention as placements/customers:
-    // `.is-list-view` on the well is the app-wide view marker, `.is-compact`
-    // on the row (set in renderList) says the row carries the one-line compact
-    // markup, so the dense rules can never land on a card-shaped row.
+    // Two load-bearing markers, same convention as customers: `.is-list-view`
+    // on the well is the app-wide view marker, `.is-compact` on the row (set
+    // in renderList) says the row carries the one-line compact markup, so the
+    // dense rules can never land on a card-shaped row.
     listEl?.classList.toggle('is-list-view', view === 'list');
-    if (listEl) listEl.innerHTML = renderList(state.visible, {
-      view,
-      selectedId: state.selectedId,
-      sourceEmpty: state.records.length === 0,
-      readiness: submissionReadiness,
-    }, text);
+    if (listEl) listEl.innerHTML = renderList(state.visible, { view, selectedId: state.selectedId }, text);
     writeCounts(listPane, counts);
     writeFooter(listPane, `${state.visible.length} ${text.entries} · ${bandLabel(state.grammar, text)}`);
+    const scroller = listEl?.closest('.ctox-pane-body') || listEl;
+    if (pendingScrollTop && scroller && state.records.length) { scroller.scrollTop = pendingScrollTop; pendingScrollTop = 0; }
   }
 
   // ---- MAIN column: workbench bound to the selected record ------------------
@@ -107,30 +129,19 @@ export async function mount(ctx) {
     const hasSel = Boolean(rec);
     const showDetail = computeDetailVisible(hasSel, state.userCollapsed);
     if (collapseBtn) {
-      collapseBtn.hidden = !hasSel; // only reveal the control when there is something to reveal
+      collapseBtn.hidden = !hasSel; // only show the reveal control when there is something to reveal
       collapseBtn.setAttribute('aria-pressed', String(hasSel && state.userCollapsed));
     }
-    if (wbKicker) wbKicker.textContent = hasSel ? text.recordKicker : text.composerKicker;
-    if (wbTitle) wbTitle.textContent = hasSel ? (rec.candidate_id || rec.id || text.composerTitle) : text.composerTitle;
+    if (formEl) formEl.hidden = hasSel || !state.composing;
+    if (wbTitle) wbTitle.textContent = hasSel ? refName(rec, 'candidate') : (state.composing ? text.composerTitle : '');
     if (detailEl) detailEl.innerHTML = showDetail ? renderDetail(rec, text) : '';
-    if (wbFooter) wbFooter.textContent = hasSel ? `${text.submission}: ${rec.id || '—'}` : text.composerHint;
   }
 
-  function fillForm(r) {
-    if (!formEl) return;
-    const set = (name, value) => { const el = formEl.querySelector(`[name="${name}"]`); if (el) el.value = value || ''; };
-    set('candidate_id', r.candidate_id);
-    set('client_account_id', r.client_account_id);
-    set('vacancy_id', r.vacancy_id);
-    set('client_contact_id', r.client_contact_id);
-  }
 
   function selectRecord(id) {
     state.selectedId = id;
     state.userCollapsed = false;
-    const rec = selectedRecord();
-    if (rec) fillForm(rec);
-    setGate('');
+    state.composing = false;
     // Selection is an in-place class flip — a list rebuild resets the
     // operator's scroll (design-guide: re-renders never move the operator).
     applyListSelection();
@@ -148,11 +159,17 @@ export async function mount(ctx) {
   function startNew() {
     state.selectedId = '';
     state.userCollapsed = false;
+    state.composing = true;
     try { formEl?.reset(); } catch {}
-    setGate('');
     renderListRegion();
     renderWorkbench();
     try { formEl?.querySelector('[name="candidate_id"]')?.focus(); } catch {}
+  }
+
+  function cancelNew() {
+    state.composing = false;
+    try { formEl?.reset(); } catch {}
+    renderWorkbench();
   }
 
   function onCollapseToggle() {
@@ -161,21 +178,10 @@ export async function mount(ctx) {
     renderWorkbench();
   }
 
-  async function loadRecords() {
-    const col = collection();
-    let rows = [];
-    if (col?.find) {
-      try {
-        const docs = await col.find({ selector: {} }).exec();
-        rows = docs.map((d) => (typeof d.toJSON === 'function' ? d.toJSON() : d)).filter((r) => !r._deleted);
-      } catch (e) { console.error('[submissions] load failed:', e); }
-    }
-    rows.sort((a, b) => Number(b?.updated_at_ms || b?.sent_at_ms || b?.created_at_ms || 0) - Number(a?.updated_at_ms || a?.sent_at_ms || a?.created_at_ms || 0));
-    state.records = rows;
-  }
-
-  async function refresh() {
-    await loadRecords();
+  function setRecords(rows) {
+    const list = (Array.isArray(rows) ? rows : []).filter((r) => r && !r._deleted);
+    list.sort((a, b) => Number(b?.updated_at_ms || b?.sent_at_ms || b?.created_at_ms || 0) - Number(a?.updated_at_ms || a?.sent_at_ms || a?.created_at_ms || 0));
+    state.records = list;
     renderListRegion();
     renderWorkbench();
   }
@@ -186,10 +192,9 @@ export async function mount(ctx) {
     if (!row || !listEl?.contains(row)) return;
     selectRecord(row.getAttribute('data-subs-row') || '');
   }
-  listEl?.addEventListener('click', onListClick);
 
   // ---- View: ONE button, one action (Betreiber-Direktive 31.08.2026) --------
-  // The shell grammar models the view as N aria-pressed buttons, which a single
+  // The grammar models the view as N aria-pressed buttons, which a single
   // action button cannot express, so the module owns the flip and republishes
   // it through the pane's data-pg-default-view.
   const viewToggleBtn = root?.querySelector('[data-subs-view-toggle]');
@@ -198,10 +203,8 @@ export async function mount(ctx) {
     syncViewToggle(listPane, state.grammar.view, text);
     renderListRegion();
   }
-  viewToggleBtn?.addEventListener('click', onViewToggle);
-  syncViewToggle(listPane, state.grammar.view, text);
 
-  // Re-render the list on any shell-wired grammar change (search/view/tray/band).
+  // Re-render the list on any grammar change (search/view/tray/band).
   function onGrammarChange(event) {
     if (!listPane || !listPane.contains(event.target)) return;
     const detail = event.detail || readGrammarState(listPane);
@@ -211,91 +214,79 @@ export async function mount(ctx) {
     state.grammar = { ...detail, view };
     renderListRegion();
   }
-  root?.addEventListener('ctox-pane-grammar-change', onGrammarChange);
+
+  // Befehl: api.command legt das Befehlsdokument lokal an und liefert sofort; die UI wartet nie.
+  // Fehlschlag → Zone (error). Ergebnis (done) wertet onDone aus.
+  function sendCommand(type, payload, onDone) {
+    const handle = api.command(type, payload);
+    const code = 'submissions.command.' + type;
+    let off = null;
+    let finished = false;
+    const stop = () => { finished = true; off?.(); off = null; };
+    off = handle.status.subscribe((s) => {
+      if (s?.status === 'failed') {
+        report('error', code, type + ': ' + (s.error || 'failed'), handle.id);
+        stop();
+      } else if (s?.status === 'done') {
+        clear(code);
+        try { onDone?.(s.result, handle); } catch (e) { console.error('[submissions] result failed:', e); }
+        stop();
+      }
+    });
+    if (finished) off?.();
+    handle.local.catch((e) => report('error', code, type + ': ' + (e?.code || 'local') + ' ' + (e?.message || e), handle.id));
+    disposers.push(stop);
+    return handle;
+  }
 
   // ---- Record detail: local, non-dispatching id copy (the module has exactly
   // one native command, ats.submission.present; there is no withdraw/feedback
-  // handler, so we never fabricate a server command). ------------------------
+  // handler, so we never fabricate a server command). Die Bestaetigung geht in
+  // die Zustandszone (info), nicht in den Inhalt. ----------------------------
   async function onDetailClick(event) {
     const copyBtn = event.target?.closest?.('[data-copy-id]');
     if (!copyBtn) return;
     const id = copyBtn.getAttribute('data-copy-id') || '';
     if (!id) return;
     try { await navigator.clipboard?.writeText?.(id); } catch {}
-    setGate(`<strong>${esc(text.idCopied)}:</strong> <span class="ats-result-row">` + esc(id) + '</span>', 'ok');
+    report('info', 'submissions.id.copied', `${text.idCopied}: ${id}`, id);
   }
-  detailEl?.addEventListener('click', onDetailClick);
 
   // ---- Present flow (unchanged command type + payload) ----------------------
-  async function onSubmit(event) {
+  function onSubmit(event) {
     event.preventDefault();
-    setGate('');
-    const dispatch = ctx.commandBus?.dispatch;
-    if (typeof dispatch !== 'function') { setGate(text.offlineService, 'offline'); return; }
     const data = new FormData(formEl);
     const f = Object.fromEntries(data.entries());
     const candidate_id = String(f.candidate_id || '').trim();
     const client_account_id = String(f.client_account_id || '').trim();
-    if (!candidate_id || !client_account_id) {
-      setGate(`<strong>${esc(text.blocked)}</strong><div class="ats-result-row">${esc(text.idsRequired)}</div>`, 'block');
-      return;
-    }
+    if (!candidate_id || !client_account_id) { report('warn', 'submissions.form.ids_required', text.idsRequired); return; }
+    clear('submissions.form.ids_required');
     const payload = {
       candidate_id,
       client_account_id,
       vacancy_id: String(f.vacancy_id || '').trim() || null,
       client_contact_id: String(f.client_contact_id || '').trim() || null,
     };
-
-    let outcome;
-    try {
-      outcome = await ctx.commandBus?.dispatch?.({
-        module: MODULE_ID,
-        command_type: PRESENT_COMMAND,
-        payload,
-      });
-    } catch (e) {
-      console.error('[submissions] present dispatch failed:', e);
-      setGate(text.offlineSend, 'offline');
-      return;
-    }
-
-    const result = outcome?.result ?? outcome ?? {};
-    const decision = result?.gate || result?.decision || null;
-    const blockers = result?.blockers || decision?.blockers || result?.errors || null;
-    const blocked = result?.ok === false
-      || result?.allowed === false
-      || result?.status === 'blocked'
-      || decision?.decision === 'block'
-      || (Array.isArray(blockers) && blockers.length > 0);
-
-    if (blocked) {
-      const items = (Array.isArray(blockers) ? blockers : [blockers])
-        .filter(Boolean)
-        .map((b) => '<li>' + esc(blockerText(b)) + '</li>')
-        .join('');
-      setGate(`<strong>${esc(text.blocked)}</strong>` + (items ? '<ul class="ats-blockers">' + items + '</ul>' : ''), 'block');
-      return;
-    }
-
-    const submissionId = result?.submission_id ?? result?.data?.submission_id ?? null;
-    setGate(
-      `<strong>${esc(text.presented)}</strong>`
-      + `<div class="ats-result-row">${esc(text.submission)}: ` + esc(submissionId ?? '—') + '</div>',
-      'ok',
-    );
-    // Return to create-mode (present always creates) while preserving the
-    // success gate — do NOT route through startNew(), which clears the gate.
-    state.selectedId = '';
-    state.userCollapsed = false;
-    try { formEl.reset(); } catch {}
-    await refresh();
+    const submitted = JSON.stringify(formValues());
+    sendCommand(PRESENT_COMMAND, payload, (outcome) => {
+      const blockers = presentBlockers(outcome);
+      if (blockers) {
+        report('warn', 'submissions.present.blocked', text.blocked + (blockers.length ? ' ' + blockers.join(' · ') : ''), candidate_id);
+        return;
+      }
+      clear('submissions.present.blocked');
+      // Die neue Vorstellung erscheint live in der Liste. Zurueck in den Anlege-Modus (present legt
+      // immer neu an), aber nur, wenn seit dem Absenden nichts Neues eingegeben wurde.
+      if (JSON.stringify(formValues()) === submitted) {
+        state.selectedId = '';
+        state.userCollapsed = false;
+        state.composing = true;
+        try { formEl.reset(); } catch {}
+        renderListRegion();
+        renderWorkbench();
+      }
+    });
   }
-  formEl?.addEventListener('submit', onSubmit);
-
-  // ---- Header actions: Neu / Import / Export --------------------------------
-  newBtn?.addEventListener('click', startNew);
-  collapseBtn?.addEventListener('click', onCollapseToggle);
 
   function onExport() {
     const rows = state.visible.length ? state.visible : state.records;
@@ -307,79 +298,142 @@ export async function mount(ctx) {
       anchor.href = url;
       anchor.download = `submissions-${rows.length}.json`;
       anchor.style.display = 'none';
-      (ctx.host || document.documentElement).appendChild(anchor);
+      host.appendChild(anchor);
       anchor.click();
       anchor.remove();
-      ctx.notifications?.info?.(text.exportDone);
     } catch (e) {
       console.error('[submissions] export failed:', e);
     } finally {
       if (url) { try { URL.revokeObjectURL(url); } catch {} }
     }
   }
-  exportBtn?.addEventListener('click', onExport);
+
+  async function importFile(file) {
+    let parsed;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch (e) {
+      console.error('[submissions] import parse failed:', e);
+      report('error', 'submissions.import.invalid', text.invalidFile);
+      return;
+    }
+    clear('submissions.import.invalid');
+    const items = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.records) ? parsed.records : [parsed]);
+    let ok = 0;
+    for (const item of items) {
+      const record = normalizeSubmission(item, { nowMs: Date.now() });
+      if (!record.candidate_id || !record.client_account_id) continue;
+      try { await api.put(PRIMARY, record).local; ok += 1; } catch (e) { console.error('[submissions] import write failed:', e); }
+    }
+    if (ok < items.length) report('warn', 'submissions.import.partial', `${text.importDone} ${ok}/${items.length} ${text.entries}`);
+    else clear('submissions.import.partial');
+  }
 
   function onImport() {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'application/json,.json';
-    input.addEventListener('change', async () => {
+    input.addEventListener('change', () => {
       const file = input.files && input.files[0];
-      if (!file) return;
-      const col = collection();
-      if (!col?.upsert) { setGate(text.offlineService, 'offline'); return; }
-      let parsed;
-      try {
-        parsed = JSON.parse(await file.text());
-      } catch (e) {
-        console.error('[submissions] import parse failed:', e);
-        setGate(text.invalidFile, 'block');
-        return;
-      }
-      const items = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.records) ? parsed.records : [parsed]);
-      let ok = 0;
-      for (const item of items) {
-        const record = normalizeSubmission(item, { nowMs: Date.now() });
-        if (!record.candidate_id || !record.client_account_id) continue;
-        try { await col.upsert(record); ok += 1; } catch (e) { console.error('[submissions] import upsert failed:', e); }
-      }
-      setGate(`<strong>${esc(text.importDone)}</strong><div class="ats-result-row">${ok} ${esc(text.entries)}</div>`, 'ok');
-      await refresh();
+      if (file) importFile(file);
     }, { once: true });
     input.click();
   }
+
+  listEl?.addEventListener('click', onListClick);
+  viewToggleBtn?.addEventListener('click', onViewToggle);
+  syncViewToggle(listPane, state.grammar.view, text);
+  root?.addEventListener('ctox-pane-grammar-change', onGrammarChange);
+  detailEl?.addEventListener('click', onDetailClick);
+  formEl?.addEventListener('submit', onSubmit);
+  newBtn?.addEventListener('click', startNew);
+  const cancelBtn = root?.querySelector('[data-action="cancel-new"]');
+  cancelBtn?.addEventListener('click', cancelNew);
+  collapseBtn?.addEventListener('click', onCollapseToggle);
+  exportBtn?.addEventListener('click', onExport);
   importBtn?.addEventListener('click', onImport);
 
-  // ---- Reactive backbone ----------------------------------------------------
-  let sub = null;
-  let readinessUnsub = null;
-  const col = collection();
-  if (col?.find) { try { sub = col.find({ selector: {} }).$?.subscribe?.(() => { refresh().catch(() => {}); }); } catch {} }
-  // Re-render the record list when the primary collection flips its
-  // replication state so the empty list swaps between the syncing shell and
-  // the real empty state without waiting for data changes.
-  if (typeof ctx.sync?.subscribeCollectionReadiness === 'function') {
-    try {
-      const unsubscribe = ctx.sync.subscribeCollectionReadiness(PRIMARY, (snapshot) => {
-        submissionReadiness = snapshot || null;
-        renderListRegion();
-      });
-      if (typeof unsubscribe === 'function') readinessUnsub = unsubscribe;
-    } catch {}
-  }
-  await refresh();
+  // ---- Reactive backbone: Live-Abo statt Laden/Polling ----------------------
+  disposers.push(api.query(PRIMARY, {}).subscribe(setRecords));
+  disposers.push(api.shell.locale.subscribe((next) => {
+    if (!setLocale(api, next)) return;
+    applyStaticCopy(root);
+    api.shell.setTitle(text.title);
+    syncViewToggle(listPane, state.grammar.view, text);
+    renderListRegion();
+    renderWorkbench();
+  }));
 
-  return () => {
-    try { sub?.unsubscribe?.(); } catch {}
-    try { readinessUnsub?.(); } catch {}
-    formEl?.removeEventListener('submit', onSubmit);
-    listEl?.removeEventListener('click', onListClick);
-    viewToggleBtn?.removeEventListener('click', onViewToggle);
-    detailEl?.removeEventListener('click', onDetailClick);
-    root?.removeEventListener('ctox-pane-grammar-change', onGrammarChange);
-    ctx.host.replaceChildren();
-    delete ctx.host.dataset.atsModule;
+  return {
+    unmount() {
+      for (const dispose of disposers.splice(0)) {
+        try { dispose(); } catch (e) { console.warn('[submissions] unsubscribe failed', e); }
+      }
+      formEl?.removeEventListener('submit', onSubmit);
+      listEl?.removeEventListener('click', onListClick);
+      viewToggleBtn?.removeEventListener('click', onViewToggle);
+      detailEl?.removeEventListener('click', onDetailClick);
+      root?.removeEventListener('ctox-pane-grammar-change', onGrammarChange);
+      newBtn?.removeEventListener('click', startNew);
+      cancelBtn?.removeEventListener('click', cancelNew);
+      collapseBtn?.removeEventListener('click', onCollapseToggle);
+      exportBtn?.removeEventListener('click', onExport);
+      importBtn?.removeEventListener('click', onImport);
+      host.replaceChildren();
+    },
+    snapshot() {
+      const g = readGrammarState(listPane);
+      return {
+        v: SNAPSHOT_VERSION,
+        selectedId: state.selectedId,
+        userCollapsed: state.userCollapsed,
+        search: listPane?.querySelector('[data-pg-search]')?.value || '',
+        view: state.grammar.view === 'list' ? 'list' : 'cards',
+        band: g.band,
+        filters: { ...g.filters },
+        trayOpen: listPane?.querySelector('[data-pg-tray]')?.hidden === false,
+        form: formValues(),
+        composing: state.composing,
+        moreOpen: Boolean(formEl?.querySelector('details.subs-more')?.open),
+        listScrollTop: (listEl?.closest('.ctox-pane-body') || listEl)?.scrollTop || 0,
+      };
+    },
   };
+}
+
+function isPlainObject(v) { return Boolean(v) && typeof v === 'object' && !Array.isArray(v); }
+
+// Sprache: api.shell.locale (live) + api.shell.t('submissions.<key>') uebersteuert die eingebetteten Texte.
+let currentLang = 'de';
+function setLocale(api, value) {
+  const next = String(value || '').toLowerCase().startsWith('en') ? 'en' : 'de';
+  const changed = next !== currentLang || text === COPY[currentLang];
+  currentLang = next;
+  locale = next;
+  const base = COPY[next];
+  const out = {};
+  for (const key of Object.keys(base)) {
+    const k = MODULE_ID + '.' + key;
+    let v = null;
+    try { v = api?.shell?.t?.(k); } catch {}
+    out[key] = typeof v === 'string' && v && v !== k ? v : base[key];
+  }
+  text = out;
+  return changed;
+}
+
+// Ergebnis von ats.submission.present (`outcome.result ?? outcome`, wie vorher): blockiert → Gruende, sonst null.
+export function presentBlockers(outcome) {
+  const result = outcome?.result ?? outcome ?? {};
+  const decision = result?.gate || result?.decision || null;
+  const blockers = result?.blockers || decision?.blockers || result?.errors || null;
+  const blocked = result?.ok === false
+    || result?.allowed === false
+    || result?.status === 'blocked'
+    || decision?.decision === 'block'
+    || (Array.isArray(blockers) && blockers.length > 0);
+  if (!blocked) return null;
+  return (Array.isArray(blockers) ? blockers : [blockers]).filter(Boolean).map(blockerText);
 }
 
 // ---------------------------------------------------------------------------
@@ -444,19 +498,12 @@ export function normalizeSubmission(raw, opts = {}) {
   return record;
 }
 
-// Record-list body via the canonical list-state helper: rows always win; the
-// kit syncing shell shows only when the UNFILTERED source is empty and its
-// collection has not finished initial replication (ready === false).
-// Filter/search empties (source holds rows) and missing readiness APIs keep
-// the plain empty copy.
+// Record list: rows only. An empty list renders nothing (App-API 4.0: no
+// state text in the content; state lives only in the shell status zone).
 export function renderList(records, opts = {}, t = text) {
   const view = opts.view === 'list' ? 'list' : 'cards';
   const selectedId = opts.selectedId || '';
-  return renderListOrState(records, opts.sourceEmpty ? (opts.readiness ?? null) : null, {
-    renderRows: (rows) => rows.map((r) => (view === 'list' ? shardCompact(r, selectedId, t) : shardCard(r, selectedId, t))).join(''),
-    empty: t.empty,
-    syncing: t.syncing,
-  });
+  return (records || []).map((r) => (view === 'list' ? shardCompact(r, selectedId, t) : shardCard(r, selectedId, t))).join('');
 }
 
 function recordKey(r) { return (r && r.id) || ''; }
@@ -486,20 +533,20 @@ function shardCard(r, selectedId, t) {
   // The account id is self-describing (ACC-…), so it carries no label; the
   // selector column is 380px and a labelled chip would ellipsis the vacancy.
   const primary = [
-    r.client_account_id || null,
-    r.vacancy_id ? `${t.vacancyLabel}: ${r.vacancy_id}` : null,
+    r.client_account_id ? refName(r, 'client') : null,
+    r.vacancy_id ? `${t.vacancyLabel}: ${refName(r, 'vacancy')}` : null,
   ].filter(Boolean).map(esc).join(' · ');
   const secondary = [
     fmtDay(r.sent_at_ms || r.created_at_ms) ? `${t.sent}: ${fmtDay(r.sent_at_ms || r.created_at_ms)}` : null,
     outcome ? `${t.feedback}: ${outcome}` : null,
-    r.client_contact_id ? `${t.contactLabel}: ${r.client_contact_id}` : null,
+    r.client_contact_id ? `${t.contactLabel}: ${refName(r, 'client_contact')}` : null,
   ].filter(Boolean).map(esc).join(' · ');
   const badge = ('ctox-badge ' + statusBadgeClass(status)).trim();
   return rowShell(r, key, selectedId, false,
     '<div class="subs-shard">'
     + '<div class="subs-shard-title">'
     + `<span class="${badge}" data-status="${esc(status)}">${esc(statusLabel(status, t))}</span>`
-    + `<strong>${esc(r.candidate_id || key || '—')}</strong>`
+    + `<strong>${esc(refName(r, 'candidate'))}</strong>`
     + '</div>'
     + (primary ? `<small class="subs-shard-meta">${primary}</small>` : '')
     + (secondary ? `<small class="subs-shard-meta">${secondary}</small>` : '')
@@ -513,13 +560,20 @@ function shardCompact(r, selectedId, t) {
   const status = String(r.status || 'sent');
   return rowShell(r, key, selectedId, true,
     '<div class="subs-row-compact">'
-    + `<span class="subs-compact-title">${esc(r.candidate_id || key || '—')}</span>`
+    + `<span class="subs-compact-title">${esc(refName(r, 'candidate'))}</span>`
     + `<span class="subs-compact-tag" data-status="${esc(status)}">${esc(statusLabel(status, t))}</span>`
     + '</div>');
 }
 
+// Namen statt IDs (Textdiät Regel 4): Anzeigename aus dem Datensatz (<basis>_name / <basis>.name / <basis>_title),
+// sonst „Unbekannt“ – nie die technische ID.
+function refName(r, base) {
+  const v = r?.[base + '_name'] ?? r?.[base]?.name ?? r?.[base + '_title'];
+  return v ? String(v) : (locale === 'en' ? 'Unknown' : 'Unbekannt'); // v4-allow: en
+}
+
 function rowShell(r, key, selectedId, compact, inner) {
-  const label = r.candidate_id || key || '—';
+  const label = refName(r, 'candidate');
   const selected = key && key === selectedId;
   return '<button type="button" class="ctox-list-item subs-row' + (selected ? ' is-selected' : '') + (compact ? ' is-compact' : '') + '"'
     + ` data-subs-row="${esc(key)}" aria-selected="${selected ? 'true' : 'false'}"`
@@ -533,22 +587,19 @@ function renderDetail(r, t) {
   const outcome = r.feedback && typeof r.feedback === 'object' ? r.feedback.outcome : '';
   const sentAt = fmtTime(r.sent_at_ms || r.created_at_ms);
   const fields = [
-    detailField(t.candidate, r.candidate_id || '—'),
-    detailField(t.client, r.client_account_id || '—'),
+    detailField(t.candidate, refName(r, 'candidate')),
+    detailField(t.client, refName(r, 'client')),
     detailField(t.status, statusLabel(status, t)),
   ];
   if (outcome) fields.push(detailField(t.feedback, outcome));
   if (sentAt) fields.push(detailField(t.sent, sentAt));
-  fields.push(detailField(t.submission, r.id || '—'));
-  if (r.vacancy_id) fields.push(detailField(t.vacancyLabel, r.vacancy_id));
-  if (r.client_contact_id) fields.push(detailField(t.contactLabel, r.client_contact_id));
-  if (r.consent_id) fields.push(detailField(t.consent, r.consent_id));
-  const copy = r.id
-    ? `<button type="button" class="ctox-pane-icon" data-copy-id="${esc(r.id)}" aria-label="${esc(t.copyId)}" title="${esc(t.copyId)}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>`
-    : '';
+  if (r.vacancy_id) fields.push(detailField(t.vacancyLabel, refName(r, 'vacancy')));
+  if (r.client_contact_id) fields.push(detailField(t.contactLabel, refName(r, 'client_contact')));
+  // Technische Kennungen (Vorstellungs-ID, Consent-ID, „ID kopieren“) stehen nicht im Detail (Regel 4).
+  const copy = '';
   return '<section class="subs-detail-card"'
     + ` data-context-record-id="${esc(r.id || '')}" data-context-record-type="submission"`
-    + ` data-context-label="${esc(r.candidate_id || r.id || '—')}">`
+    + ` data-context-label="${esc(refName(r, 'candidate'))}">`
     + `<div class="subs-detail-actions">${copy}</div>`
     + `<dl class="ctox-fields">${fields.join('')}</dl>`
     + '</section>';
@@ -577,7 +628,7 @@ function blockerText(b) {
 function fmtTime(ms) {
   const n = Number(ms);
   if (!Number.isFinite(n) || n <= 0) return '';
-  try { return new Date(n).toLocaleString(locale === 'en' ? 'en' : 'de'); } catch { return ''; }
+  try { return new Date(n).toLocaleString(locale === 'en' ? 'en' : 'de', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return ''; }
 }
 
 // Card meta lines carry the day only — a full timestamp would wrap the line.
@@ -651,15 +702,8 @@ function applyStaticCopy(root) {
   root?.querySelectorAll?.('[data-copy]').forEach((node) => { node.textContent = text[node.dataset.copy] || node.textContent; });
 }
 
-async function ensureStyles() {
-  const href = new URL('./index.css', import.meta.url).pathname + '?v=' + MOD_BUILD;
-  if (document.querySelector('link[href="' + href + '"]')) return;
-  const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = href; document.head.append(link);
-}
-
 async function loadMarkup() {
-  const url = new URL('./index.html', import.meta.url).pathname + '?v=' + MOD_BUILD;
-  const html = await fetch(url).then((r) => r.text());
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((r) => r.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((n) => n.remove());
   return doc.body.innerHTML;

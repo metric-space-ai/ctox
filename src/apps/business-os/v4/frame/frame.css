@@ -1,0 +1,497 @@
+/* Shell v4 – Rahmen. Haltepunkte nur ueber Container-Queries 1024/768 (Shell-V2-Vertrag). */
+.v4f {
+  --v4f-bg: #eef0f3;
+  --v4f-surface: #ffffff;
+  --v4f-surface-2: #f6f7f9;
+  --v4f-line: #d9dde3;
+  --v4f-fg: #1d232b;
+  --v4f-fg-2: #5b6573;
+  --v4f-accent: #2d5fa8;
+  --v4f-accent-soft: #dfe8f6;
+  /* FR6c: keine Taskleiste unten mehr (einzige Leiste = Reiter der Kopfleiste); Zeile bleibt mit 0 px im Raster. */
+  --v4f-bar-h: 0px;
+  --v4f-icon: 40px;
+  --v4f-radius: 8px;
+  --v4f-font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --v4f-info: #2f6fde;
+  --v4f-warn: #b7791f;
+  --v4f-error: #c53030;
+  --v4f-zone-line: 22px;
+  /* Alias-Tokens der früheren shell/window-chrome.css (gelöscht): v4/source/source-mode.css liest --v4-*. */
+  --v4-bg: var(--v4f-bg);
+  --v4-win-bg: var(--v4f-surface);
+  --v4-win-border: var(--v4f-line);
+  --v4-header-bg: var(--v4f-surface-2);
+  --v4-text: var(--v4f-fg);
+  --v4-muted: var(--v4f-fg-2);
+  --v4-info: var(--v4f-info);
+  --v4-warn: var(--v4f-warn);
+  --v4-error: var(--v4f-error);
+  --v4-zone-line: var(--v4f-zone-line);
+  container: v4f / inline-size;
+  position: fixed;
+  inset: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) var(--v4f-bar-h);
+  background: var(--v4f-bg);
+  color: var(--v4f-fg);
+  font: 13px/1.35 var(--v4f-font);
+  overflow: hidden;
+}
+/* Hell/Dunkel über :root[data-theme] wie theme/theme.css und app.css (ohne Vorgabe setzt der Rahmen es aus
+   prefers-color-scheme, index.js applyTheme). */
+:root[data-theme="dark"] .v4f {
+  --elev-window-shadow: 0 0 0 1px rgb(255 255 255 / 0.17), 0 0 0 2px rgb(0 0 0 / 0.75), 0 32px 90px rgb(0 0 0 / 0.72);
+  --v4f-bg: #15181d;
+  --v4f-surface: #1f242b;
+  --v4f-surface-2: #252b33;
+  --v4f-line: #343b45;
+  --v4f-fg: #e6e9ee;
+  --v4f-fg-2: #9aa4b2;
+  --v4f-accent: #7aa7e8;
+  --v4f-accent-soft: #263548;
+  --v4f-info: #7aa7e8;
+  --v4f-warn: #e0b354;
+  --v4f-error: #f07070;
+}
+.v4f *, .v4f *::before, .v4f *::after { box-sizing: border-box; }
+/* :where = Spezifität 0, damit das Shell-V2-Chrome (Layout-Raster, Hover-Icons) seine eigenen Farben behält.
+   KIT2: .v4f zählt aber mit (0-1-0) und lädt nach base.css; damit überstimmte color: inherit die gleich starke Kit-Regel
+   .ctox-run-control { color: var(--accent-foreground) } – die Beschriftung des Automatik-Knopfs erbte --text (#52525b
+   auf Akzent, 1,15). Der Automatik-Knopf ist darum von der Farb-Rücksetzung ausgenommen; Schrift und alle übrigen
+   Knöpfe bleiben wie bisher. */
+.v4f :where(button) { font: inherit; }
+.v4f :where(button:not(.ctox-run-control)) { color: inherit; }
+
+/* ---------- Desktop, Startmenü, Crew-Leiste (FR6d) ----------
+   Aussehen kommt wörtlich aus der Shell-V2 (shell-v2-desktop.css, erzeugt von lab/extract-desktop-css.mjs). Hier steht
+   nur die Einbettung in den Rahmen: Desktop füllt den Desk hinter den Fenstern; Startmenü und Crew-Leiste liegen wie in
+   der Shell-V2 fest über der Seite. */
+.v4f-desk { position: relative; min-height: 0; overflow: hidden; }
+/* .v4f vererbt 13px/1.35, die Shell-V2-Seite hat line-height normal (wie .v4f-top in shell-v2-topbar.css). */
+.v4f-start, .v4f-desktop, .v4f-crew { line-height: normal; }
+.v4f-desktop { position: absolute; inset: 0; }
+.v4f-desktop > [data-v4-desktop-v2] { position: absolute; inset: 0; }
+/* Geschlossenes Startmenü (Shell-V2: opacity 0, keine Zeiger) zusätzlich aus der Tab-Reihenfolge. */
+.v4f-start > .shell-start-menu-panel:not(.is-active) { visibility: hidden; }
+/* „Neue App“ (nur mit apps.source.edit) im Kopf neben der Suche; Shell-V2 hat dafür keine Stelle. */
+.v4f-start .start-menu-header:has(> .v4f-start-actions:not([hidden])) { display: flex; align-items: center; gap: 8px; }
+.v4f-start .start-menu-header > .start-menu-search-wrapper { flex: 1 1 auto; min-width: 0; }
+.v4f-start-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+.v4f-start-actions[hidden] { display: none; }
+.v4f-start-action { white-space: nowrap; }
+.v4f-launcher-action-glyph { position: relative; width: 12px; height: 12px; flex: 0 0 auto; }
+.v4f-launcher-action-glyph::before, .v4f-launcher-action-glyph::after {
+  content: ""; position: absolute; left: 5px; top: 0; width: 2px; height: 12px; border-radius: 1px; background: currentColor;
+}
+.v4f-launcher-action-glyph::after { transform: rotate(90deg); }
+/* Reihenfolge per Ziehen (FR2-6): Einfügemarke über bzw. unter dem Zieleintrag, gezogener Eintrag blass. */
+.v4f-start .start-menu-item { position: relative; }
+.v4f-start .start-menu-item.is-dragging { opacity: .4; }
+.v4f-start .start-menu-item.is-drop-before::before, .v4f-start .start-menu-item.is-drop-after::after {
+  content: ""; position: absolute; left: 8px; right: 8px; height: 2px; border-radius: 1px; background: var(--accent, #2d5fa8);
+}
+.v4f-start .start-menu-item.is-drop-before::before { top: -1px; }
+.v4f-start .start-menu-item.is-drop-after::after { bottom: -1px; }
+.v4f-crew[hidden] { display: none; }
+/* Fenster einer Shell-Ansicht (z. B. „Neue App“): Inhalt füllt das Fenster. */
+/* Shell-Ansichten halten die reservierten Zonen selbst frei: Inhalt beginnt unter Icon und Knopfcluster. */
+.v4f .shell-window-content.v4f-view { display: flex; min-height: 0; padding-top: var(--shell-zone-height); background: var(--v4f-surface); color: var(--v4f-fg); }
+
+.v4f-icon {
+  width: var(--v4f-icon);
+  height: var(--v4f-icon);
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  overflow: hidden;
+}
+.v4f-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.v4f-icon.is-glyph { background: var(--v4f-accent-soft); color: var(--v4f-accent); font-weight: 600; }
+
+/* ---------- Fenster (Chrome aus shared/window-manager.js, Vertrag v2) ----------
+   Owner 15.10. (FR6a): Der v4-Rahmen sieht exakt aus wie Shell-V2 auf welsch. Das Chrome (großer Icon-Header mit der
+   Rahmenecke verschmolzen, Kantenverlauf aus dem Logo, Eckerweiterungen, oben rechts die zwei Hover-Icons Layout und
+   Schließen) kommt unverändert aus ../../shared/shell-v2-chrome.css (wörtliche Kopie der app.css-Regeln). Hier steht
+   nur, was v4 zusätzlich braucht: Tokens, die app.css sonst liefert, und die RESERVIERTEN ZONEN unter Icon und
+   Knopfcluster, in denen eine App keine Bedienelemente platzieren darf. Maße am Fenster (erben in den Inhaltsroot):
+     --shell-icon-inset / --shell-icon-zone-height          Icon-Header oben links (sichtbar 74 × 74 px + 8 px Luft)
+     --shell-controls-inset / --shell-controls-zone-height  Knopfcluster oben rechts (Breite misst index.js, + 8 px)
+   Das Kit rückt Pane-Kopf-Zeilen, die eine Zone schneiden, automatisch heraus (pane-heads.js). */
+.v4f-layer { position: absolute; inset: 0; pointer-events: none; }
+.v4f-layer > .shell-window { pointer-events: auto; }
+.v4f {
+  /* Fensterschatten wie app.css (hell/dunkel), damit das V2-Chrome identisch wirkt (G0). */
+  --elev-window-shadow: 0 0 0 1px rgb(15 23 42 / 0.1), 0 30px 80px oklch(0.22 0.015 235 / 0.26);
+  --motion-fast: 120ms;
+  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --font-ui: var(--v4f-font);
+}
+.v4f .shell-window {
+  position: absolute;
+  /* Feste px-Werte (Shell-V2: Icon 80 px, davon 74 px im Fenster; Knöpfe 44 px), damit Apps und pane-heads.js sie
+     direkt lesen können (eigene Eigenschaften werden nicht zu px berechnet). */
+  --shell-icon-inset: 82px;
+  --shell-icon-zone-height: 74px;
+  --shell-controls-inset: 96px;
+  --shell-controls-zone-height: 44px;
+  --shell-zone-height: 74px;
+}
+/* Inhalt gehört dem v4-Theme (hell/dunkel), nicht der dunklen V2-Fläche aus app.css: nur das Chrome ist Shell-V2. */
+.v4f .shell-window[data-shell-contract="v2"] > .shell-window-content {
+  background: var(--v4f-surface) !important;
+  color: var(--v4f-fg);
+}
+.v4f .shell-window[data-shell-contract="v2"] { color: var(--v4f-fg); }
+.v4f .shell-window-content {
+  min-height: 0;
+  contain: layout paint;
+  /* FR2-1: Fenster-Container für die Container-Queries der Apps (Haltepunkte 1024/768 wie Shell v2). */
+  container: business-app-window / inline-size;
+  /* Rechte Steuerzone der v2-Apps = gemessene Clusterbreite (R18). Icon- und Kopfband-Maße bleiben die von Shell-V2. */
+  --shell-v2-control-inset: var(--shell-controls-inset);
+}
+/* Kit-Regel: Pane-Kopf-Zeilen bzw. -Bedienelemente, die eine reservierte Zone schneiden, rücken heraus. */
+.v4f .shell-window-content .ctox-filterbar[data-v4-under-icon="pad"] { padding-inline-start: var(--shell-icon-inset) !important; }
+.v4f .shell-window-content .ctox-filterbar[data-v4-under-controls="pad"] { padding-inline-end: var(--shell-controls-inset) !important; }
+.v4f .shell-window-content .ctox-pane-header > [data-v4-under-icon="pad"] { padding-inline-start: var(--shell-icon-inset) !important; }
+.v4f .shell-window-content .ctox-pane-header > [data-v4-under-controls="pad"] { padding-inline-end: var(--shell-controls-inset) !important; }
+.v4f .shell-window-content .ctox-pane-header > [data-v4-under-icon="margin"] { margin-inline-start: var(--shell-icon-inset) !important; }
+.v4f .shell-window-content .ctox-pane-header > [data-v4-under-controls="margin"] { margin-inline-end: var(--shell-controls-inset) !important; }
+/* Flache Zeilen direkt unter dem Kopf (pane-heads.js, Strang KIT1: Detail-Pane am linken Rand bei schmaler Breite). */
+.v4f .shell-window-content .ctox-pane-header ~ [data-v4-under-icon="pad"] { padding-inline-start: var(--shell-icon-inset) !important; }
+.v4f .shell-window-content .ctox-pane-header ~ [data-v4-under-controls="pad"] { padding-inline-end: var(--shell-controls-inset) !important; }
+.v4f .shell-window-content .ctox-pane-header ~ [data-v4-under-icon="margin"] { margin-inline-start: var(--shell-icon-inset) !important; }
+.v4f .shell-window-content .ctox-pane-header ~ [data-v4-under-controls="margin"] { margin-inline-end: var(--shell-controls-inset) !important; }
+.v4f .v4-app-root { position: absolute; inset: 0; overflow: auto; }
+/* ZONE2 (K24, Befund T3-1): Zonen-Garantie für Apps OHNE Kit (pane-heads.js createZoneGuard). Schneidet ein
+   Bedienelement außerhalb eines Kit-Kopfs eine Zone, beginnt die ganze Content-Box unter der Zonenhöhe; schneidet danach
+   noch etwas (z. B. position: fixed), rückt sie zusätzlich rechts um die Clusterbreite ein. Kit-Apps: kein Attribut. */
+.v4f .shell-window-content > .v4-app-root[data-v4-zone-guard~="top"] { top: var(--shell-zone-height, 74px); }
+.v4f .shell-window-content > .v4-app-root[data-v4-zone-guard~="right"] { right: var(--shell-controls-inset, 96px); }
+/* FIX10 (G8): Die Desktop-App im Fenster (modules/desktop) legt ihr erstes Symbol bei 24/24 (breit) bzw. 12/12 (Raster
+   ≤ 767 px) – genau unter den Icon-Header. Die Symbolebene beginnt im Fenster daher unter der höheren der beiden
+   reservierten Zonen; die Desktop-Fläche des Rahmens (.v4f-desktop, FR6d) liegt nicht in .shell-window-content und
+   bleibt unverändert. */
+.v4f .shell-window-content [data-app="desktop"] .desktop-icons { top: max(var(--shell-icon-zone-height, 74px), var(--shell-controls-zone-height, 44px)); }
+/* Code-Ansicht im selben Fenster (App-Menü am Icon: „Code ansehen“ / „Zurück zur App“): App-Inhalt bleibt montiert
+   (nur unsichtbar), die Code-Ansicht liegt im Fenster über dem Inhalt und beginnt unter den reservierten Zonen. */
+.v4f .shell-window > .v4-src-host { position: absolute; inset: 0; z-index: 5; display: flex; min-height: 0; padding-top: var(--shell-zone-height); background: var(--v4f-surface); color: var(--v4f-fg); }
+.v4f .shell-window > .v4-src-host[hidden] { display: none; }
+.v4f .shell-window[data-v4-mode="code"] > .shell-window-content { visibility: hidden; }
+/* App-Menü am Icon-Header (Kopf der Meldungsliste): „Code ansehen“ bzw. „Zurück zur App“. */
+.v4f .v4f-appmenu { display: grid; padding: 4px; border-bottom: 1px solid var(--v4f-line); }
+.v4f .v4f-appmenu button { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--v4f-fg); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.v4f .v4f-appmenu button:hover, .v4f .v4f-appmenu button:focus-visible { background: var(--v4f-accent-soft); color: var(--v4f-accent); outline: none; }
+.v4f .v4f-appmenu kbd { margin-left: auto; color: var(--v4f-fg-2); font: 11px var(--v4f-font); }
+
+/* ---------- Meldungen am App-Icon (M-14, Owner 15.10.; Inhalt aus shell/status-zone.js) ----------
+   Badge am schwebenden Icon: Zahl offener Meldungen, Farbe nach höchster Schwere (Warnung gelb, Fehler rot). Ohne
+   Meldungen kein Badge. Klick auf Icon oder Badge klappt die Liste unter dem Icon auf (im Fenster, Esc schließt).
+   Neue Meldung: kurzer, ruhiger Puls, die Liste öffnet sich nicht von selbst. */
+.v4f .v4f-zone-slot { position: absolute; top: 0; left: 0; width: 0; height: 0; z-index: 36; }
+.v4f .v4-status-zone { position: absolute; left: 56px; top: 56px; }
+.v4f .v4-status-zone[hidden] { display: none; }
+.v4f .v4-status-zone__badge {
+  min-width: 17px; height: 17px; padding: 0 4px; border: 2px solid var(--v4f-surface); border-radius: 9px;
+  background: var(--v4f-info); color: #fff; font: 600 10px/13px var(--v4f-font); text-align: center; cursor: pointer;
+}
+.v4f .v4-status-zone[data-level="warn"] .v4-status-zone__badge { background: var(--v4f-warn); color: #1d1300; }
+.v4f .v4-status-zone[data-level="error"] .v4-status-zone__badge { background: var(--v4f-error); }
+.v4f .v4-status-zone__badge:focus-visible { outline: 2px solid var(--v4f-accent); outline-offset: 1px; }
+.v4f .v4-status-zone.is-pulse .v4-status-zone__badge { animation: v4f-badge-pulse 1.2s ease-out 1; }
+@keyframes v4f-badge-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 0%, transparent); transform: scale(1); } 30% { transform: scale(1.15); box-shadow: 0 0 0 4px rgb(0 0 0 / .08); } 100% { transform: scale(1); box-shadow: 0 0 0 0 transparent; } }
+@media (prefers-reduced-motion: reduce) { .v4f .v4-status-zone.is-pulse .v4-status-zone__badge { animation: none; } }
+.v4f .v4-status-zone__top { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.v4f .v4-status-zone__list {
+  position: absolute; left: 0; top: var(--shell-icon-zone-height, 74px); z-index: 41; width: min(380px, calc(100% - 8px)); max-height: calc(100% - 82px); overflow: auto;
+  background: var(--v4f-surface); border: 1px solid var(--v4f-line); border-radius: 8px; box-shadow: 0 8px 22px rgb(0 0 0 / .16);
+}
+.v4f .v4-status-zone__list[hidden] { display: none; }
+.v4f .v4-status-zone__item { display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 10px; font-size: 12px; border-bottom: 1px solid var(--v4f-line); box-shadow: inset 3px 0 0 var(--v4f-info); }
+.v4f .v4-status-zone__item:last-child { border-bottom: 0; }
+.v4f .v4-status-zone__item > span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.v4f .v4-status-zone__item[data-level="error"] { box-shadow: inset 3px 0 0 var(--v4f-error); }
+.v4f .v4-status-zone__item[data-level="error"] > span { color: var(--v4f-error); }
+.v4f .v4-status-zone__item[data-level="warn"] { box-shadow: inset 3px 0 0 var(--v4f-warn); }
+.v4f .v4-status-zone__action {
+  flex: none; height: 22px; padding: 0 8px; border: 1px solid var(--v4f-line); border-radius: 4px; background: var(--v4f-surface); color: var(--v4f-accent);
+  font: inherit; font-size: 12px; line-height: 1; white-space: nowrap; cursor: pointer;
+}
+.v4f .v4-status-zone__action--hide { color: var(--v4f-fg-2); }
+.v4f .v4-status-zone__action:hover { background: var(--v4f-accent-soft); }
+.v4f .v4-status-zone__action[disabled] { opacity: .6; cursor: default; }
+.v4f [data-v4-snap] { position: absolute; border: 2px solid var(--v4f-accent); background: rgb(45 95 168 / .08); border-radius: var(--v4f-radius); pointer-events: none; z-index: 8999; }
+.v4f [data-v4-snap][hidden] { display: none; }
+
+
+/* ---------- Haltepunkt 768: schmale Darstellung derselben Shell (ersetzt mobile-host) ---------- */
+@container v4f (max-width: 768px) {
+  .v4f-layer > .shell-window:not(.is-minimizing) {
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    border-radius: 0;
+    border: 0;
+  }
+  .v4f .shell-window-resize { display: none; }
+}
+
+/* ---------- Blatt und Menü im App-Fenster (window-sheet.js; api.shell.dialog/menu, Kontextmenü) ----------
+   Liegt IM Fensterelement über dem Inhaltsbereich (Gitterzeile 2 bis Ende), nie über anderen Fenstern. */
+.v4-sheet-overlay {
+  position: absolute; inset: 0; z-index: 25; /* unter Icon und Knopfcluster (z 30): Fenster bleibt verschieb- und schließbar */
+  display: flex; justify-content: center; align-items: flex-start;
+  padding: var(--shell-zone-height, 0px) 16px 16px;
+  background: rgb(20 24 30 / .18);
+}
+.v4-sheet {
+  --v4s-surface: var(--v4f-surface, #fff);
+  --v4s-line: var(--v4f-line, #d9dde3);
+  --v4s-fg: var(--v4f-fg, #1d232b);
+  --v4s-fg-2: var(--v4f-fg-2, #5b6573);
+  --v4s-accent: var(--v4f-accent, #2d5fa8);
+  --v4s-danger: var(--v4f-error, #c53030);
+  width: min(420px, 100%); max-height: 100%; overflow: auto;
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 16px; border: 1px solid var(--v4s-line); border-radius: 10px;
+  background: var(--v4s-surface); color: var(--v4s-fg);
+  font: 13px/1.4 var(--v4f-font, system-ui, sans-serif);
+  box-shadow: 0 12px 32px rgb(0 0 0 / .22);
+}
+.v4-sheet-title { margin: 0; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.v4-sheet-text { margin: 0; color: var(--v4s-fg-2); white-space: pre-line; overflow-wrap: anywhere; }
+.v4-sheet-input {
+  width: 100%; min-height: 30px; padding: 5px 8px; border: 1px solid var(--v4s-line); border-radius: 6px;
+  background: var(--v4s-surface); color: var(--v4s-fg); font: inherit; resize: vertical;
+}
+.v4-sheet-input:focus-visible, .v4-sheet-button:focus-visible, .v4-sheet-option input:focus-visible { outline: 2px solid var(--v4s-accent); outline-offset: 1px; }
+.v4-sheet-require { display: grid; gap: 4px; color: var(--v4s-fg-2); }
+.v4-sheet-options { display: grid; gap: 2px; max-height: 260px; overflow: auto; }
+.v4-sheet-option { display: flex; gap: 8px; align-items: center; padding: 5px 6px; border-radius: 6px; cursor: pointer; overflow-wrap: anywhere; }
+.v4-sheet-option:hover { background: var(--v4f-accent-soft, #dfe8f6); }
+.v4-sheet-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.v4-sheet-button {
+  min-height: 30px; padding: 0 14px; border: 1px solid var(--v4s-line); border-radius: 6px;
+  background: var(--v4s-surface); color: var(--v4s-fg); font: inherit; cursor: pointer; max-width: 100%;
+}
+.v4-sheet-button.is-primary { background: var(--v4s-accent); border-color: var(--v4s-accent); color: #fff; }
+.v4-sheet-button.is-danger { background: var(--v4s-danger); border-color: var(--v4s-danger); color: #fff; }
+.v4-sheet-button:disabled { opacity: .5; cursor: not-allowed; }
+.v4-menu {
+  position: absolute; z-index: 45; min-width: 180px; max-width: min(320px, calc(100% - 8px)); max-height: calc(100% - 8px); overflow: auto;
+  padding: 4px; border: 1px solid var(--v4f-line, #d9dde3); border-radius: 8px;
+  background: var(--v4f-surface, #fff); color: var(--v4f-fg, #1d232b);
+  font: 13px/1.3 var(--v4f-font, system-ui, sans-serif);
+  box-shadow: 0 8px 24px rgb(0 0 0 / .18);
+}
+.v4-menu-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; padding: 0 10px 0 6px;
+  border: 0; border-radius: 5px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.v4-menu-item:focus, .v4-menu-item:hover { outline: none; background: var(--v4f-accent-soft, #dfe8f6); }
+.v4-menu-item.is-danger { color: var(--v4f-error, #c53030); }
+.v4-menu-item.is-disabled { opacity: .45; cursor: not-allowed; }
+.v4-menu-icon { width: 16px; flex: 0 0 auto; text-align: center; color: var(--v4f-fg-2, #5b6573); }
+.v4-menu-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v4-menu-separator { height: 1px; margin: 4px 6px; background: var(--v4f-line, #d9dde3); }
+
+
+/* ---------- Pane-Kit: Reiter einzeilig, Liste → Detail bei schmaler Breite (Strang KIT1, pane-narrow.js) ----------
+   Reiter (.ctox-pane-tabs) brechen nie um: was nicht passt, blendet pane-narrow.js aus und bietet es unter „Mehr ▾“
+   an (aktiver Reiter bleibt sichtbar). Unter 600 px Fensterbreite zeigt ein Workspace mit mehreren Panes EINE Spalte:
+   data-v4-md="list" zeigt die Liste, "detail" das Detail (weitere Panes darunter) mit „Zurück“ im Detail-Kopf. */
+.v4f .shell-window-content .ctox-pane-tabs[data-v4-tabs] { flex-wrap: nowrap !important; min-width: 0 !important; max-width: 100% !important; }
+.v4f .shell-window-content .ctox-pane-tabs[data-v4-tabs] > * { flex-shrink: 0 !important; }
+.v4f .shell-window-content .ctox-pane-tabs[data-v4-tabs] > [data-v4-tab-overflow] { display: none !important; }
+.v4f .shell-window-content .ctox-pane-tabs > .v4-tabs-more {
+  display: inline-flex; align-items: center; justify-content: center; flex: none; height: 24px; padding: 0 9px;
+  border: 1px solid transparent; border-radius: max(2px, calc(var(--control-radius, 6px) - 1px)); background: transparent;
+  color: color-mix(in srgb, var(--text, currentColor) 55%, var(--muted, currentColor)); font: inherit; font-size: var(--fs-meta, 12px);
+  font-weight: 700; line-height: 1; white-space: nowrap; cursor: pointer;
+}
+.v4f .shell-window-content .ctox-pane-tabs > .v4-tabs-more:hover { color: var(--text, currentColor); }
+.v4f .shell-window-content .ctox-pane-tabs > .v4-tabs-more:focus-visible { outline: none; box-shadow: var(--focus-ring, 0 0 0 2px var(--v4f-accent)); }
+.v4f .shell-window-content .ctox-pane-tabs > .v4-tabs-more[hidden] { display: none !important; }
+.v4f .shell-window > .v4-tabs-menu { position: absolute; z-index: 45; }
+.v4f .shell-window-content [data-v4-md-back] { display: none !important; }
+@container business-app-window (max-width: 599.98px) {
+  .v4f .shell-window-content [data-v4-md] {
+    display: flex !important; flex-direction: column !important; overflow-x: hidden !important; overflow-y: auto !important;
+    height: 100% !important; min-height: 0 !important; max-height: 100% !important;
+  }
+  .v4f .shell-window-content [data-v4-md] > :not([data-v4-md-role]) { flex: 0 0 auto; }
+  .v4f .shell-window-content [data-v4-md] > .ctox-column-resizer,
+  .v4f .shell-window-content [data-v4-md] > [data-resizer],
+  .v4f .shell-window-content [data-v4-md="list"] > [data-v4-md-role="detail"],
+  .v4f .shell-window-content [data-v4-md="list"] > [data-v4-md-role="aside"],
+  .v4f .shell-window-content [data-v4-md="detail"] > [data-v4-md-role="list"] { display: none !important; }
+  .v4f .shell-window-content [data-v4-md] > [data-v4-md-role] {
+    order: 0 !important; width: auto !important; min-width: 0 !important; max-width: none !important; height: auto !important;
+    max-height: none !important; grid-column: auto !important; grid-row: auto !important;
+  }
+  .v4f .shell-window-content [data-v4-md="list"] > [data-v4-md-role="list"] { flex: 1 1 auto !important; min-height: 0 !important; }
+  .v4f .shell-window-content [data-v4-md="detail"] > [data-v4-md-role="detail"] { flex: 0 0 100% !important; min-height: 0 !important; }
+  .v4f .shell-window-content [data-v4-md="detail"] > [data-v4-md-role="aside"] { flex: 0 0 auto !important; min-height: 50% !important; }
+  .v4f .shell-window-content [data-v4-md="detail"] > [data-v4-md-role="detail"] [data-v4-md-back] {
+    display: inline-flex !important; align-items: center; flex: none; gap: 4px; height: 28px; margin-inline-end: 8px; padding: 0 10px;
+    position: relative; z-index: 2; order: -1 !important;
+    border: 1px solid var(--hairline, var(--line, currentColor)); border-radius: var(--control-radius, 6px); background: var(--surface, transparent);
+    color: var(--accent, currentColor); font: inherit; font-size: var(--fs-sm, 13px); font-weight: 600; line-height: 1; white-space: nowrap; cursor: pointer;
+  }
+  .v4f .shell-window-content [data-v4-md-back]:focus-visible { outline: none; box-shadow: var(--focus-ring, 0 0 0 2px var(--v4f-accent)); }
+  /* Detail-Kopf am linken Rand: zwischen Icon- und Knopfzone bleibt wenig Platz. Titelzeile darf umbrechen (Aktionen in
+     die zweite Zeile, unterhalb des Knopfclusters), der Titel behält eine Mindestbreite statt auf 0 zu schrumpfen. */
+  .v4f .shell-window-content [data-v4-md="detail"] > [data-v4-md-role="detail"] .ctox-pane-header > .ctox-pane-title-row { display: flex !important; align-items: center; flex-wrap: wrap !important; row-gap: 8px; height: auto !important; max-height: none !important; }
+  /* Inhalt beginnt unter dem Icon-Header: der Detail-Kopf ist mindestens so hoch wie die Icon-Zone. */
+  .v4f .shell-window-content [data-v4-md="detail"] > [data-v4-md-role="detail"] > .ctox-pane-header:first-child { min-height: var(--shell-icon-zone-height, 74px) !important; }
+  .v4f .shell-window-content [data-v4-md="detail"] > [data-v4-md-role="detail"] .ctox-pane-header > .ctox-pane-title-row > .ctox-pane-titles { flex: 1 1 6em !important; min-width: 6em !important; }
+}
+
+/* ---------- WJB-M Mobil-Host (v4-Gegenstück zu V2 mobile-host.css, Pin e35a116ae) ----------
+   Der Workjet-Mobil-Host setzt <html data-workjet-mobile-host="true"> vor jedem Skript; die Hostbrücke
+   (../shell/workjet/host-bridge.js) markiert das aktive Fenster mit data-workjet-mobile-active="true" und setzt
+   body[data-workjet-mobile-presentation]. Workjet liefert die äußere Navigation selbst, darum blendet die Shell ihre
+   doppelte Chrome aus und zeigt nur das aktive Fenster vollflächig. Jede Regel hängt am Attribut: ohne es bleibt der
+   Rahmen pixelgleich (G0, FR6d-G0). Keine eigenen Breiten-Haltepunkte: das Touch-Raster des Desktops (4/5/6 Spalten bei
+   600/840 px) kommt wörtlich aus V2 über shell-v2-desktop.css („===== mobile-host.css =====“); dort hängen auch die
+   V2-Regeln für Desktop-Symbole, 44-px-Ziele und reduzierte Bewegung – aber nur innerhalb der Hüllen [data-v4-v2] bzw.
+   [data-v4-topbar]. Hier steht, was das v4-DOM zusätzlich braucht (Bericht: lab/WJB-M.md). */
+
+/* Doppelte Chrome: Kopfleiste mit Reitern, Konto- und Einstellungsblatt (V2 .topbar, .drawer, .drawer-backdrop,
+   .shell-window-switcher), Startmenü (V2 [data-shell-start-menu]), Crew-Leiste/Chat (V2 [data-chat-dock]) und
+   Meldungen am App-Icon (V2 .shell-notifications). Die Hülle der Kopfleiste trägt aus der V2-Extraktion
+   height: 100% + min-height: 100dvh + Hintergrund und läge sonst mit z-index 60 über dem ganzen Desk. */
+:root[data-workjet-mobile-host="true"] .v4f > .v4f-top,
+:root[data-workjet-mobile-host="true"] .v4f > .v4f-start,
+:root[data-workjet-mobile-host="true"] .v4f > .v4f-crew,
+:root[data-workjet-mobile-host="true"] .v4f .v4f-zone-slot,
+:root[data-workjet-mobile-host="true"] .v4f .v4-status-zone__list {
+  display: none !important;
+}
+/* Ohne Kopfleiste und ohne untere Leiste füllt der Desk (Desktop + Fensterebene) die ganze Fläche (V2: html, body,
+   .app-shell 100 %, overflow hidden). */
+:root[data-workjet-mobile-host="true"] .v4f[data-v4-frame] {
+  grid-template-rows: minmax(0, 1fr);
+}
+:root[data-workjet-mobile-host="true"] .v4f > .v4f-desk {
+  grid-row: 1 / -1;
+  min-width: 0;
+  min-height: 0;
+}
+/* Fensterebene deckt den Desk (V2 .shell-window-layer). */
+:root[data-workjet-mobile-host="true"] .v4f .v4f-layer {
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Nur das aktive Fenster ist sichtbar (V2 .shell-window display none / [data-workjet-mobile-active] sichtbar). Ein
+   minimiertes Fenster behält sein display: none aus dem Fenstermanager. */
+:root[data-workjet-mobile-host="true"] .v4f .shell-window:not([data-workjet-mobile-active="true"]) {
+  display: none !important;
+}
+/* Aktives Fenster vollflächig, ohne Shell-V2-Rahmen (6-px-Verlaufskante, Schatten, Ecken). Die reservierten Zonen unter
+   Icon und Knopfcluster entfallen mit dem Fensterkopf: alle Zonenmaße 0, damit Kit-Köpfe und die ZONE2-Garantie den
+   Inhalt nicht unter einen unsichtbaren Kopf einrücken (index.js setzt --shell-controls-inset inline, daher !important). */
+:root[data-workjet-mobile-host="true"] .v4f .shell-window[data-workjet-mobile-active="true"] {
+  --shell-icon-inset: 0px !important;
+  --shell-icon-zone-height: 0px !important;
+  --shell-controls-inset: 0px !important;
+  --shell-controls-zone-height: 0px !important;
+  --shell-zone-height: 0px !important;
+  left: 0 !important;
+  top: 0 !important;
+  right: auto !important;
+  bottom: auto !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  transform: none !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: var(--v4f-surface) !important;
+  pointer-events: auto;
+}
+/* Fensterkopf: großes App-Icon, Kopfzeile mit Titel und Knopfcluster, Größe-Griffe (V2 .shell-window-header,
+   .shell-window-resize). */
+:root[data-workjet-mobile-host="true"] .v4f .shell-window > .shell-window-v2-icon,
+:root[data-workjet-mobile-host="true"] .v4f .shell-window > .shell-window-header,
+:root[data-workjet-mobile-host="true"] .v4f .shell-window > .shell-window-resize {
+  display: none !important;
+}
+/* Inhalt füllt das Fenster (V2 .shell-window-content, > .shell-window-module-root; v4: > .v4-app-root). */
+:root[data-workjet-mobile-host="true"] .v4f .shell-window[data-workjet-mobile-active="true"] > .shell-window-content {
+  inset: 0 !important;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  border: 0 !important;
+  border-radius: 0 !important;
+}
+
+/* Touch-Mindestmaße für die Apps im Fenster (V2 wörtlich, gleiche Spezifität; die Hüllen-Kopien in
+   shell-v2-desktop.css und shell-v2-topbar.css erreichen den Fensterinhalt nicht). */
+html[data-workjet-mobile-host="true"] :where(button, select, input, [role="button"]) {
+  min-height: 44px;
+  touch-action: manipulation;
+}
+html[data-workjet-mobile-host="true"] :where(button, [role="button"]):has(> svg:only-child) {
+  min-width: 44px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-workjet-mobile-host="true"] *,
+  html[data-workjet-mobile-host="true"] *::before,
+  html[data-workjet-mobile-host="true"] *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+/* „Desktop“ fokussiert die Fläche (index.js showDesktopOnly, tabindex -1); im Mobil-Host zöge das bei jeder Rückkehr
+   einen Fokusrahmen um den ganzen Bildschirm. Die Fläche ist kein Bedienelement; Symbole behalten ihre V2-Regeln. */
+:root[data-workjet-mobile-host="true"] .v4f [data-v4-desktop-surface]:focus {
+  outline: none;
+}
+
+/* ===== Kopfleiste: Überlauf bei schmaler Breite (FRX, Nebenbefund 420 px) =====
+   Shell-V2 (shell-topbar.css) hält Reiter auf max-content und verschiebt, was nicht passt, in „+N“. Der v4-Rahmen hält
+   den Reiter des vorderen Fensters immer sichtbar (FR6c); passt er nicht, markiert topbar.js ihn mit
+   data-v4-tab-shrink: dann schrumpft er auf die freie Breite und kürzt die Beschriftung mit „…“. Der Workspace-Name
+   kürzt ebenfalls mit „…“ und lässt dem Reiter mindestens die Breite neben Punkt und Avatar (100vw − 300 px, nie unter
+   120 px = „Lokaler Workspace“ ungekürzt). Ohne Engpass bleibt alles pixelgleich zu V2 (TOP-1 G0, FR6d-G0). */
+:where([data-v4-topbar]) .topbar .shell-release-line .shell-instance-button { min-width: 0; max-width: 100%; }
+:where([data-v4-topbar]) .topbar .shell-instance-button [data-shell-instance-name] {
+  min-width: 0; max-width: max(120px, 100vw - 300px);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+:where([data-v4-topbar]) .topbar .module-tabs .module-tab[data-v4-tab-shrink] { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+:where([data-v4-topbar]) .topbar .module-tabs .module-tab[data-v4-tab-shrink] .module-tab-label {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+:where([data-v4-topbar]) .topbar .module-tabs .module-tab[data-v4-tab-shrink] .module-tab-count { flex: none; }
+
+/* M-11: Symbol des Layout-Menü-Eintrags „Vollbild“ (index.js) im Strich der übrigen Raster-Symbole
+   (shell-v2-chrome.css .shell-window-layout-glyph): vier Ecken statt Rahmen. */
+.shell-window-layout-glyph--fullscreen {
+  border-color: transparent;
+  background:
+    linear-gradient(currentColor, currentColor) left top / 5px 1.5px no-repeat,
+    linear-gradient(currentColor, currentColor) left top / 1.5px 5px no-repeat,
+    linear-gradient(currentColor, currentColor) right top / 5px 1.5px no-repeat,
+    linear-gradient(currentColor, currentColor) right top / 1.5px 5px no-repeat,
+    linear-gradient(currentColor, currentColor) left bottom / 5px 1.5px no-repeat,
+    linear-gradient(currentColor, currentColor) left bottom / 1.5px 5px no-repeat,
+    linear-gradient(currentColor, currentColor) right bottom / 5px 1.5px no-repeat,
+    linear-gradient(currentColor, currentColor) right bottom / 1.5px 5px no-repeat;
+}
+.shell-window-layout-glyph--fullscreen::after { display: none; }

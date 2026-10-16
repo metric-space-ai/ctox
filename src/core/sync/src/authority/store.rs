@@ -18,12 +18,16 @@ use std::{
     io::{self, Cursor},
     ops::{Bound, RangeBounds},
     path::Path,
-    sync::{Arc, Mutex},
 };
+
+#[path = "../../../store/harness_adapter.rs"]
+mod owner_adapter;
+#[path = "../../../store/authority_adapter.rs"]
+mod owner_factory;
 
 #[derive(Clone)]
 pub struct SqliteStore {
-    connection: Arc<Mutex<Connection>>,
+    owner: owner_factory::BoundedOwner<Connection>,
     timings: Timings,
 }
 
@@ -141,17 +145,16 @@ impl SqliteStore {
         }).await
     }
     pub fn open(path: &Path) -> io::Result<Self> {
-        let connection = Connection::open(path).map_err(other)?;
-        connection
-            .busy_timeout(std::time::Duration::from_secs(5))
-            .map_err(other)?;
-        connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
-            CREATE TABLE IF NOT EXISTS sync_meta(key TEXT PRIMARY KEY,value BLOB NOT NULL);
-            CREATE TABLE IF NOT EXISTS sync_logs(idx TEXT PRIMARY KEY,value BLOB NOT NULL);
-            CREATE TABLE IF NOT EXISTS sync_jobs(key TEXT PRIMARY KEY,value BLOB NOT NULL);
-            CREATE TABLE IF NOT EXISTS sync_receipts(key TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,value BLOB NOT NULL);").map_err(other)?;
+        // Startup is queued on the owner thread. Initialization errors surface
+        // on the first async job, before any Raft acknowledgement.
+        let owner = owner_factory::open_full(path.to_path_buf(), |connection| {
+            connection.execute_batch("CREATE TABLE IF NOT EXISTS sync_meta(key TEXT PRIMARY KEY,value BLOB NOT NULL);
+                CREATE TABLE IF NOT EXISTS sync_logs(idx TEXT PRIMARY KEY,value BLOB NOT NULL);
+                CREATE TABLE IF NOT EXISTS sync_jobs(key TEXT PRIMARY KEY,value BLOB NOT NULL);
+                CREATE TABLE IF NOT EXISTS sync_receipts(key TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,value BLOB NOT NULL);").map_err(other)
+        })?;
         Ok(Self {
-            connection: Arc::new(Mutex::new(connection)),
+            owner,
             timings: Timings::default(),
         })
     }
@@ -160,24 +163,17 @@ impl SqliteStore {
         operation: &'static str,
         f: impl FnOnce(&mut Connection) -> io::Result<T> + Send + 'static,
     ) -> Result<T, StorageError<NodeId>> {
-        let connection = self.connection.clone();
-        // The guard belongs to the blocking work, even if its async caller leaves.
         let mut observation = self.timings.start(operation, Phase::Queued);
-        tokio::task::spawn_blocking(move || {
-            observation.enter(Phase::Waiting);
-            let result = (|| {
-                let mut conn = connection
-                    .lock()
-                    .map_err(|_| io::Error::other("sync SQLite mutex poisoned"))?;
+        self.owner
+            .call(move |connection| {
+                observation.enter(Phase::Waiting);
                 observation.enter(Phase::Running);
-                f(&mut conn)
-            })();
-            observation.finish(result.is_ok());
-            result
-        })
-        .await
-        .map_err(|e| storage_error(other(e)))?
-        .map_err(storage_error)
+                let result = f(connection);
+                observation.finish(result.is_ok());
+                result
+            })
+            .await
+            .map_err(storage_error)
     }
     pub fn diagnostics(&self) -> std::collections::BTreeMap<&'static str, OperationTiming> {
         self.timings.snapshot()
@@ -477,5 +473,66 @@ impl RaftSnapshotBuilder<TypeConfig> for SqliteStore {
             })
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod owner_contract_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn authority_owner_full_bounded_and_connection_local() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("authority.sqlite");
+        let store = SqliteStore::open(&path).unwrap();
+        store.run("owner_contract_init", |connection| {
+            assert_eq!(connection.pragma_query_value(None, "synchronous", |r| r.get::<_, i64>(0)).map_err(other)?, 2);
+            assert_eq!(connection.pragma_query_value(None, "wal_autocheckpoint", |r| r.get::<_, i64>(0)).map_err(other)?, 1000);
+            connection.execute_batch("CREATE TEMP TABLE owner_marker(value INTEGER); INSERT INTO owner_marker VALUES(73);").map_err(other)
+        }).await.unwrap();
+        let duplicate = SqliteStore::open(&path).unwrap();
+        assert!(duplicate.run("duplicate", |_| Ok(())).await.is_err());
+        drop(duplicate);
+        let (entered, started) = tokio::sync::oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let held = store
+            .owner
+            .try_call(move |connection| {
+                let marker: i64 = connection
+                    .query_row("SELECT value FROM owner_marker", [], |r| r.get(0))
+                    .map_err(other)?;
+                assert_eq!(marker, 73);
+                entered.send(()).unwrap();
+                wait.recv().map_err(other)?;
+                Ok(())
+            })
+            .unwrap();
+        started.await.unwrap();
+        for _ in 0..owner_adapter::OWNER_QUEUE_CAPACITY {
+            drop(
+                store
+                    .owner
+                    .try_call(|connection| {
+                        connection
+                            .query_row("SELECT value FROM owner_marker", [], |r| r.get::<_, i64>(0))
+                            .map_err(other)
+                    })
+                    .unwrap(),
+            );
+        }
+        let overflow = store.owner.try_call(|_| Ok(()));
+        assert!(matches!(overflow, Err(error) if error.kind() == io::ErrorKind::WouldBlock));
+        release.send(()).unwrap();
+        held.await.unwrap().unwrap();
+        let mut closed = store.owner.closed_signal();
+        drop(store);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !*closed.borrow_and_update() {
+                closed.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        assert!(owner_adapter::FileOwner::acquire(&path).is_ok());
     }
 }

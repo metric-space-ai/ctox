@@ -10,6 +10,7 @@ name = "rxdb"
 path = "src/lib.rs"
 
 [dependencies]
+ctox-store = { path = "../store" }
 # Async runtime (pinned to match CTOX root)
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
@@ -77,6 +78,7 @@ tempfile = "3"
 
 # Cargo ignores dependency patches; standalone tests must mirror the host.
 [patch.crates-io]
+rtc-turn = { path = "patches/rtc-turn" }
 rtc-ice = { path = "patches/rtc-ice" }
 rtc = { path = "patches/rtc" }
 webrtc = { path = "patches/webrtc" }

@@ -1,0 +1,491 @@
+{
+ "app": "explorer",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [
+    "put desktop_files/fs_root local=ok result=accepted {\"id\":\"fs_root\",\"parent_id\":\"\",\"path\":\"/\",\"name\":\"Files\",\"kind\":\"folder\",\"sort_index\":0,\"mime_type\":\"\",\"extension\":\"\",\"s",
+    "put desktop_files/fs_desktop local=ok result=accepted {\"id\":\"fs_desktop\",\"parent_id\":\"fs_root\",\"path\":\"/Desktop\",\"name\":\"Desktop\",\"kind\":\"folder\",\"sort_index\":10,\"mime_type\":",
+    "put desktop_files/fs_documents local=ok result=accepted {\"id\":\"fs_documents\",\"parent_id\":\"fs_root\",\"path\":\"/Documents\",\"name\":\"Documents\",\"kind\":\"folder\",\"sort_index\":20,\"mime_",
+    "put desktop_files/fs_spreadsheets local=ok result=accepted {\"id\":\"fs_spreadsheets\",\"parent_id\":\"fs_root\",\"path\":\"/Spreadsheets\",\"name\":\"Spreadsheets\",\"kind\":\"folder\",\"sort_index\":",
+    "put desktop_files/fs_downloads local=ok result=accepted {\"id\":\"fs_downloads\",\"parent_id\":\"fs_root\",\"path\":\"/Downloads\",\"name\":\"Downloads\",\"kind\":\"folder\",\"sort_index\":30,\"mime_",
+    "put desktop_files/fs_ctox local=ok result=accepted {\"id\":\"fs_ctox\",\"parent_id\":\"fs_root\",\"path\":\"/CTOX\",\"name\":\"CTOX\",\"kind\":\"folder\",\"sort_index\":40,\"mime_type\":\"\",\"exten"
+   ],
+   "title": "Explorer",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 812
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Aktionen für Auswahl",
+    "button:Neuen Ordner erstellen",
+    "button:Dateien hochladen",
+    "button:FS Dateien",
+    "button:NEU Zuletzt erstellt",
+    "button:ZEIT Zuletzt geändert",
+    "button:DOC Dokumente",
+    "button:XLS Tabellen",
+    "button:KNO Wissen",
+    "button:MAT Matching-Objekte",
+    "button:OUT Outbound",
+    "select:Sortieren",
+    "button:Details",
+    "row:Name Art Geändert",
+    "button:Name",
+    "button:Art",
+    "button:Geändert",
+    "button:CTOX, Ordner",
+    "button:Desktop, Ordner",
+    "button:Documents, Ordner",
+    "button:Downloads, Ordner",
+    "button:Spreadsheets, Ordner"
+   ],
+   "shot": "explorer/420-01-open.png"
+  },
+  {
+   "step": "row Name Art Geändert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "explorer/420-02-row_Name_Art_Ge_ndert.png"
+  },
+  {
+   "step": "button Aktionen für Auswahl",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Neuen Ordner erstellen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "explorer/420-03-button_Neuen_Ordner_erstellen.png"
+  },
+  {
+   "step": "formular 2 Felder → Erstellen",
+   "changed": true,
+   "ops": [
+    "put desktop_files/folder_1792103254059_la4bui local=ok result=accepted {\"id\":\"folder_1792103254059_la4bui\",\"parent_id\":\"fs_root\",\"path\":\"/Rundgang Test\",\"name\":\"Rundgang Test\",\"kind\":\"folder\",\"mime_type\":\"\",\"ext"
+   ],
+   "zone": [
+    "clear explorer.write.folder"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "explorer/420-04-formular_2_Felder_Erstellen.png"
+  },
+  {
+   "step": "button Dateien hochladen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "explorer/420-05-button_Dateien_hochladen.png"
+  },
+  {
+   "step": "Overlay geschlossen (Escape/Schließen) vor FS Dateien"
+  },
+  {
+   "step": "button FS Dateien",
+   "changed": 1,
+   "ops": [],
+   "zone": [
+    "clear explorer.source.desktop_files"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "explorer/420-06-button_FS_Dateien.png"
+  },
+  {
+   "step": "button NEU Zuletzt erstellt",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear explorer.source.desktop_files"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "explorer/420-07-button_NEU_Zuletzt_erstellt.png"
+  },
+  {
+   "step": "button ZEIT Zuletzt geändert",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear explorer.source.desktop_files"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "explorer/420-08-button_ZEIT_Zuletzt_ge_ndert.png"
+  },
+  {
+   "step": "button DOC Dokumente",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear explorer.source.documents"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "explorer/420-09-button_DOC_Dokumente.png"
+  },
+  {
+   "step": "button XLS Tabellen",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear explorer.source.spreadsheets"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "explorer/420-10-button_XLS_Tabellen.png"
+  },
+  {
+   "step": "button KNO Wissen",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear explorer.source.knowledge_items"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "explorer/420-11-button_KNO_Wissen.png"
+  },
+  {
+   "step": "button MAT Matching-Objekte",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear explorer.source.matching_objects"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "explorer/420-12-button_MAT_Matching-Objekte.png"
+  },
+  {
+   "step": "button OUT Outbound",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear explorer.source.outbound_companies"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "explorer/420-13-button_OUT_Outbound.png"
+  },
+  {
+   "step": "button Details",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Name",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Art",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Geändert",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Müller Maschinenbau GmbH, Unternehmen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Schneider Logistik AG, Unternehmen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "explorer/420-14-button_Schneider_Logistik_AG_Unternehmen.png"
+  },
+  {
+   "step": "button Becker & Söhne KG, Unternehmen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "explorer/420-15-button_Becker_S_hne_KG_Unternehmen.png"
+  },
+  {
+   "step": "button Hoffmann Medizintechnik GmbH, Unternehmen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "explorer/420-16-button_Hoffmann_Medizintechnik_GmbH_Unte.png"
+  },
+  {
+   "step": "button Wagner Elektrotechnik GmbH, Unternehmen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "explorer/420-17-button_Wagner_Elektrotechnik_GmbH_Untern.png"
+  },
+  {
+   "step": "button Fischer Software Solutions GmbH, Unternehmen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "explorer/420-18-button_Fischer_Software_Solutions_GmbH_U.png"
+  },
+  {
+   "step": "button Krause Facility Services GmbH, Unternehmen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Richter Bau & Planung GmbH, Unternehmen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "explorer/420-19-button_Richter_Bau_Planung_GmbH_Unterneh.png"
+  },
+  {
+   "step": "button Weiß Lebensmittel GmbH & Co. KG, Unternehmen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "explorer/420-20-button_Wei_Lebensmittel_GmbH_Co._KG_Unte.png"
+  },
+  {
+   "step": "button Schäfer Automotive Zulieferer GmbH, Unternehmen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "explorer/420-21-button_Sch_fer_Automotive_Zulieferer_Gmb.png"
+  },
+  {
+   "step": "button Neumann Energie GmbH, Unternehmen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "explorer/420-22-button_Neumann_Energie_GmbH_Unternehmen.png"
+  },
+  {
+   "step": "button Zimmermann Verlag GmbH, Unternehmen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "explorer/420-23-button_Zimmermann_Verlag_GmbH_Unternehme.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 956,
+   "shot": "explorer/420-24-suche_ohne_Treffer.png",
+   "textAfter": 222
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "explorer/420-25-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "desktop_files",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "desktop_files",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "desktop_files",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "desktop_files",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "desktop_files",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "desktop_files",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "desktop_files",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "explorer",
+  "Explorer"
+ ]
+}

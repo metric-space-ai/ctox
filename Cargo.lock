@@ -2453,6 +2453,7 @@ dependencies = [
  "chrono-tz",
  "crossterm 0.28.1",
  "csv",
+ "ctox-app-runtime",
  "ctox-app-server-client",
  "ctox-app-server-protocol",
  "ctox-appsec-pentest",
@@ -2465,6 +2466,7 @@ dependencies = [
  "ctox-mailserver",
  "ctox-pdf-parse 0.1.0",
  "ctox-postgres-adapter",
+ "ctox-process-network",
  "ctox-protocol",
  "ctox-qwen3-embedding-0-6b",
  "ctox-rxdb",
@@ -2504,6 +2506,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "similar 2.7.0",
  "ssh-key",
  "tempfile",
  "tiny_http",
@@ -2542,6 +2545,32 @@ dependencies = [
  "tracing",
  "tungstenite 0.27.0",
  "url",
+]
+
+[[package]]
+name = "ctox-app-capabilities-contract"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ctox-app-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ctox-app-capabilities-contract",
+ "ctox-store",
+ "libc",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sysinfo",
+ "tokio",
+ "uuid",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3209,6 +3238,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctox-process-network"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "ctox-linux-sandbox",
+ "ctox-network-proxy",
+ "libc",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "ctox-protocol"
 version = "0.0.0"
 dependencies = [
@@ -3278,6 +3321,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "chrono",
+ "ctox-store",
  "dashmap",
  "flate2",
  "futures",
@@ -3399,6 +3443,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "uuid",
@@ -7517,6 +7562,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ntapi"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3b335231dfd352ffb0f8017f3b6027a4917f7df785ea2143d8af2adc66980ae"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7826,6 +7880,16 @@ dependencies = [
  "block2",
  "libc",
  "objc2",
+ "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-io-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33fafba39597d6dc1fb709123dfa8289d39406734be322956a69f0931c73bb15"
+dependencies = [
+ "libc",
  "objc2-core-foundation",
 ]
 
@@ -11263,8 +11327,6 @@ dependencies = [
 [[package]]
 name = "rtc-turn"
 version = "0.20.0-alpha.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c52c4a3b6d9fea3cb7d1365ff88ee1610ac6c57d0ee126b3b4a26b5debdda6f"
 dependencies = [
  "bytes",
  "log",
@@ -13486,6 +13548,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sysinfo"
+version = "0.38.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92ab6a2f8bfe508deb3c6406578252e491d299cbbf3bc0529ecc3313aee4a52f"
+dependencies = [
+ "libc",
+ "memchr",
+ "ntapi",
+ "objc2-core-foundation",
+ "objc2-io-kit",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "system-configuration"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15068,7 +15144,9 @@ dependencies = [
  "futures",
  "log",
  "rtc",
+ "rustls-native-certs",
  "tokio",
+ "tokio-rustls",
 ]
 
 [[package]]

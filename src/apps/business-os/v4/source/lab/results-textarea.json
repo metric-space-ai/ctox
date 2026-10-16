@@ -1,0 +1,341 @@
+{
+  "startedAt": "2026-10-16T00:05:41.082Z",
+  "stub": "/Users/michaelwelsch/.local/state/shell-v4/stub-pins/8489b4e",
+  "editor": "textarea",
+  "checks": [
+    {
+      "id": "seed",
+      "pass": true,
+      "data": {}
+    },
+    {
+      "id": "1-nonadmin-no-toggle",
+      "pass": true,
+      "data": {
+        "nonAdmin": false,
+        "admin": true,
+        "cButtonsInDom": 1
+      }
+    },
+    {
+      "id": "2-publish-live-remount",
+      "pass": true,
+      "data": {
+        "editorKind": "textarea",
+        "draftFiles": {
+          "manifest.json": null,
+          "index.js": "text"
+        },
+        "tree": [
+          "::manifest",
+          "collections.schema.json",
+          "handlers/recount.js",
+          "index.css",
+          "index.js"
+        ],
+        "noManifestFile": true,
+        "newVer": "s11",
+        "bVer": "s11",
+        "bLabel": "Version zwei",
+        "editorStillOpen": true,
+        "ms": 50
+      }
+    },
+    {
+      "id": "3-compatible-no-migration",
+      "pass": true,
+      "data": {
+        "diff": [
+          {
+            "name": "items",
+            "kind": "compatible"
+          }
+        ],
+        "diffSource": "kernel",
+        "deviations": [],
+        "blockers": [],
+        "publishDisabled": false,
+        "newVer": "s15",
+        "generation": 1
+      }
+    },
+    {
+      "id": "4-generation-requires-migration",
+      "pass": true,
+      "data": {
+        "reasons": "Typ von „count“: number → string",
+        "diffSource": "kernel",
+        "deviations": [],
+        "publishDisabledWithout": true,
+        "coreWithout": {
+          "status": "rejected",
+          "reason": "invalid",
+          "detail": "Migration fehlt: items"
+        },
+        "enabledWith": true,
+        "newVer": "s22",
+        "generation": 2,
+        "migratedDoc": {
+          "id": "i1",
+          "title": "Erster",
+          "count": "3"
+        },
+        "migrationEntry": {
+          "items": {
+            "from_ver": "s15",
+            "migrate_fn": "migrations/items.js"
+          }
+        }
+      }
+    },
+    {
+      "id": "5-second-admin-conflict",
+      "pass": true,
+      "data": {
+        "sameBase": [
+          "s22",
+          "s22"
+        ],
+        "adaPublished": "s28",
+        "bertZone": [
+          {
+            "level": "error",
+            "code": "source.conflict",
+            "text": "Veröffentlichen abgelehnt: Basis s22 ist nicht mehr aktiv (aktiv: s28). Dein Entwurf bleibt erhalten."
+          }
+        ],
+        "zoneAction": "Auf aktuelle Version setzen",
+        "bertDraftKept": true,
+        "bertEditorKept": true
+      }
+    },
+    {
+      "id": "8-separate-drafts",
+      "pass": true,
+      "data": {
+        "before": {
+          "ada": "ada/demo",
+          "adaBase": "s22",
+          "bert": "bert/demo",
+          "bertBase": "s22"
+        },
+        "afterAdaPublish": {
+          "adaRow": null,
+          "bertRow": "bert/demo",
+          "bertKeepsText": true
+        }
+      }
+    },
+    {
+      "id": "9-rebase-and-discard",
+      "pass": true,
+      "data": {
+        "rebasedBase": "s28",
+        "keptBertText": true,
+        "zoneAfterRebase": [],
+        "discardedInfo": null,
+        "editorAfterDiscard": "aktive Version (ada)"
+      }
+    },
+    {
+      "id": "10-remove-rename",
+      "pass": true,
+      "data": {
+        "conflictZone": "„index.css“ nicht umbenannt: handlers/recount.js existiert bereits",
+        "draftFiles": {
+          "handlers/zaehlen.js": "text",
+          "handlers/recount.js": null,
+          "index.css": null
+        },
+        "draftManifest": {
+          "handlers": {
+            "demo.recount": "handlers/zaehlen.js"
+          }
+        },
+        "tree": [
+          "Manifest",
+          "Collections",
+          "handlers/zaehlen.js",
+          "migrations/items.js",
+          "index.js"
+        ],
+        "newVer": "s35",
+        "files": [
+          "collections.schema.json",
+          "handlers/zaehlen.js",
+          "index.js",
+          "migrations/items.js"
+        ],
+        "handlers": {
+          "demo.recount": "handlers/zaehlen.js"
+        },
+        "bVer": "s35",
+        "bLabel": "Version drei (ada)"
+      }
+    },
+    {
+      "id": "11-setmanifest-protected",
+      "pass": true,
+      "data": {
+        "zone": "Manifest nicht übernommen: Manifest-Feld app_id ist nicht änderbar",
+        "handlerField": "demo.recount = handlers/zaehlen.js",
+        "rawGenerations": {
+          "ok": false,
+          "code": "invalid",
+          "message": "Manifest-Feld generations ist nicht änderbar"
+        },
+        "draftManifest": {
+          "triggers": [
+            {
+              "type": "schedule",
+              "every": "1d",
+              "command": "demo.recount"
+            }
+          ],
+          "title": "Demo (neu)"
+        },
+        "draftFiles": [],
+        "newVer": "s39",
+        "published": {
+          "app_id": "demo",
+          "triggers": [
+            {
+              "type": "schedule",
+              "every": "1d",
+              "command": "demo.recount"
+            }
+          ],
+          "handlers": {
+            "demo.recount": "handlers/zaehlen.js"
+          }
+        },
+        "titleInB": "Demo (neu)"
+      }
+    },
+    {
+      "id": "12-renamed-handler-republish",
+      "pass": true,
+      "data": {
+        "draftManifestAfterRename": {
+          "handlers": {
+            "demo.recount": "handlers/neu.js"
+          }
+        },
+        "handlerField": "demo.recount = handlers/neu.js",
+        "firstPublish": {
+          "ver": "s43",
+          "handlers": {
+            "demo.recount": "handlers/neu.js"
+          }
+        },
+        "secondDraftManifest": {},
+        "secondPublish": {
+          "ver": "s47",
+          "handlers": {
+            "demo.recount": "handlers/neu.js"
+          },
+          "files": [
+            "collections.schema.json",
+            "handlers/neu.js",
+            "index.js",
+            "migrations/items.js"
+          ]
+        },
+        "handlerFieldAfter": "demo.recount = handlers/neu.js",
+        "triggers": {
+          "afterStep11": true,
+          "first": [
+            {
+              "type": "schedule",
+              "every": "1d",
+              "command": "demo.recount"
+            }
+          ],
+          "second": [
+            {
+              "type": "schedule",
+              "every": "1d",
+              "command": "demo.recount"
+            }
+          ]
+        },
+        "bLabel": "Version vier"
+      }
+    },
+    {
+      "id": "13-dangling-ref-rejected",
+      "pass": true,
+      "data": {
+        "zone": "Veröffentlichen abgelehnt (invalid): Verweis auf fehlende Datei: handlers.demo.recount → handlers/neu.js. Dein Entwurf bleibt erhalten.",
+        "zoneVisible": true,
+        "draftKept": {
+          "base": "s47",
+          "removed": true
+        },
+        "activeUnchanged": true,
+        "fix": {
+          "draftHandlers": {},
+          "newVer": "s52",
+          "publishedHandlers": {},
+          "zoneAfter": []
+        }
+      }
+    },
+    {
+      "id": "6-upload-new-app",
+      "pass": true,
+      "data": {
+        "files": [
+          "collections.schema.json",
+          "index.js",
+          "manifest.json"
+        ],
+        "published": [
+          "collections.schema.json",
+          "index.js"
+        ],
+        "appsInB": [
+          {
+            "id": "demo",
+            "title": "Demo (neu)",
+            "active_ver": "s52",
+            "activated_ver": "s52",
+            "state": "activated"
+          },
+          {
+            "id": "lib:ctox-office",
+            "title": "lib:ctox-office",
+            "active_ver": "1.0",
+            "activated_ver": "1.0",
+            "state": "activated"
+          },
+          {
+            "id": "lib:monaco",
+            "title": "lib:monaco",
+            "active_ver": "0.0",
+            "activated_ver": "0.0",
+            "state": "activated"
+          },
+          {
+            "id": "shell",
+            "title": "Shell",
+            "active_ver": "lab",
+            "activated_ver": "lab",
+            "state": "activated"
+          },
+          {
+            "id": "zettel",
+            "title": "Zettel",
+            "active_ver": "s55",
+            "activated_ver": "s55",
+            "state": "activated"
+          }
+        ],
+        "mounted": "Zettel-App montiert"
+      }
+    }
+  ],
+  "errors": [],
+  "pass": true,
+  "finishedAt": "2026-10-16T00:05:52.713Z"
+}

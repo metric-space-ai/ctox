@@ -1,0 +1,393 @@
+{
+ "app": "knowledge",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Knowledge",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Knowledge Book erstellen",
+    "button:Knowledge Book importieren",
+    "button:Knowledge Books exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "button:DataFrames · Skillbooks (0) · ",
+    "button:Rahmenvertrag über Wartung und",
+    "button:Budgetplanung Vertrieb Süd · S",
+    "button:Quartalsbericht Q3 2026 · Skil"
+   ],
+   "shot": "knowledge/420-01-open.png"
+  },
+  {
+   "step": "button Knowledge Book erstellen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/420-02-button_Knowledge_Book_erstellen.png"
+  },
+  {
+   "step": "formular 4 Felder → Erstellen lassen",
+   "changed": true,
+   "ops": [
+    "command ctox.knowledge.book.create local=ok result=accepted {\"title\":\"Knowledge Book erstellen · Rundgang Test\",\"knowledge_book\":{\"title\":\"Rundgang Test\",\"domain\":\"Rundgang Test\",\"status\":\"draft\",\"sum"
+   ],
+   "zone": [
+    "clear knowledge.command.ctox.knowledge.book.create"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "knowledge/420-03-formular_4_Felder_Erstellen_lassen.png"
+  },
+  {
+   "step": "button Knowledge Book importieren",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/420-04-button_Knowledge_Book_importieren.png"
+  },
+  {
+   "step": "formular 3 Felder → Import starten",
+   "changed": true,
+   "ops": [
+    "command ctox.knowledge.book.import local=ok result=accepted {\"title\":\"Knowledge Book importieren · Rundgang Test\",\"import_request\":{\"source_type\":\"path\",\"source\":\"Rundgang Test\",\"domain\":\"Rundgang Tes"
+   ],
+   "zone": [
+    "clear knowledge.command.ctox.knowledge.book.import"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "knowledge/420-05-formular_3_Felder_Import_starten.png"
+  },
+  {
+   "step": "button Knowledge Books exportieren",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/420-06-button_Knowledge_Books_exportieren.png"
+  },
+  {
+   "step": "formular 2 Felder → Export starten",
+   "changed": true,
+   "ops": [
+    "command ctox.knowledge.book.export local=ok result=accepted {\"title\":\"Knowledge Books exportieren · selected\",\"export_request\":{\"scope\":\"selected\",\"format\":\"markdown_bundle\",\"destination\":\"Rundgang Te"
+   ],
+   "zone": [
+    "clear knowledge.command.ctox.knowledge.book.export"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "knowledge/420-07-formular_2_Felder_Export_starten.png"
+  },
+  {
+   "step": "button Als Liste anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/420-08-button_Als_Liste_anzeigen.png"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/420-09-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/420-10-button_Filter.png"
+  },
+  {
+   "step": "button Sortierrichtung umkehren",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/420-11-button_Sortierrichtung_umkehren.png"
+  },
+  {
+   "step": "button Skillbooks",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/420-12-button_Skillbooks.png"
+  },
+  {
+   "step": "button Runbooks",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/420-13-button_Runbooks.png"
+  },
+  {
+   "step": "button Tabellen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/420-14-button_Tabellen.png"
+  },
+  {
+   "step": "button Rahmenvertrag über Wartung und Instandhaltung der Produktion",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/420-15-button_Rahmenvertrag_ber_Wartung_und_Ins.png"
+  },
+  {
+   "step": "nav Skill (1)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Runbooks (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "knowledge/420-16-nav_Runbooks_0_.png"
+  },
+  {
+   "step": "nav Quellen (7)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "knowledge/420-17-nav_Quellen_7_.png"
+  },
+  {
+   "step": "nav Tabellen (3)",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear knowledge.table.incomplete"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "knowledge/420-18-nav_Tabellen_3_.png"
+  },
+  {
+   "step": "button Zurück zur Liste",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/420-19-button_Zur_ck_zur_Liste.png"
+  },
+  {
+   "step": "auswahl Bereich → user",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "knowledge/420-20-auswahl_Bereich_user.png"
+  },
+  {
+   "step": "auswahl Sortieren nach → created",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "knowledge/420-21-auswahl_Sortieren_nach_created.png"
+  },
+  {
+   "step": "button Filter zurücksetzen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/420-22-button_Filter_zur_cksetzen.png"
+  },
+  {
+   "step": "button DataFrames · Skillbooks (0) · Runbooks (0) · Tabellen (3)",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear knowledge.table.incomplete"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/420-23-button_DataFrames_Skillbooks_0_Runbooks_.png"
+  },
+  {
+   "step": "nav Quellen (3)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "knowledge/420-24-nav_Quellen_3_.png"
+  },
+  {
+   "step": "button Angebot Wartungsvertrag Halle 4",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Projektplan Relaunch Kundenportal",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/420-25-button_Projektplan_Relaunch_Kundenportal.png"
+  },
+  {
+   "step": "button Kundentermin Vorbereitung",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "knowledge/420-26-button_Kundentermin_Vorbereitung.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "command",
+   "coll": "ctox.knowledge.book.create",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "ctox.knowledge.book.import",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "ctox.knowledge.book.export",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "knowledge",
+  "Knowledge"
+ ]
+}

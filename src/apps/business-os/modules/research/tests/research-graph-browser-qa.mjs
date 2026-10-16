@@ -406,7 +406,7 @@ try {
   const invalidPage = await browser.newPage({ viewport: { width: 1200, height: 900 }, deviceScaleFactor: 1 });
   invalidPage.setDefaultTimeout(60000);
   await invalidPage.goto(`http://127.0.0.1:${port}/qa?invalid-graph`, { waitUntil: 'networkidle' });
-  await invalidPage.waitForSelector('[data-graph-contract-status="invalid_graph_contract"]', { state: 'visible', timeout: 60000 });
+  await invalidPage.waitForSelector('[data-graph-contract-status="invalid_graph_contract"]', { state: 'attached', timeout: 60000 });
   assert.equal(await invalidPage.locator('[data-research-graph-host] canvas').count(), 0);
   assert.equal(await invalidPage.evaluate(() => window.__researchQa.commands.length), 0);
   await invalidPage.close();

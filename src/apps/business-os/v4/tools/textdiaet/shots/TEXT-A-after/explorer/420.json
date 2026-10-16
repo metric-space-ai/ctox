@@ -1,0 +1,137 @@
+{
+ "app": "explorer",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [
+    "put desktop_files/fs_root local=ok result=accepted {\"id\":\"fs_root\",\"parent_id\":\"\",\"path\":\"/\",\"name\":\"Files\",\"kind\":\"folder\",\"sort_index\":0,\"mime_type\":\"\",\"extension\":\"\",\"s",
+    "put desktop_files/fs_desktop local=ok result=accepted {\"id\":\"fs_desktop\",\"parent_id\":\"fs_root\",\"path\":\"/Desktop\",\"name\":\"Desktop\",\"kind\":\"folder\",\"sort_index\":10,\"mime_type\":",
+    "put desktop_files/fs_documents local=ok result=accepted {\"id\":\"fs_documents\",\"parent_id\":\"fs_root\",\"path\":\"/Documents\",\"name\":\"Documents\",\"kind\":\"folder\",\"sort_index\":20,\"mime_",
+    "put desktop_files/fs_spreadsheets local=ok result=accepted {\"id\":\"fs_spreadsheets\",\"parent_id\":\"fs_root\",\"path\":\"/Spreadsheets\",\"name\":\"Spreadsheets\",\"kind\":\"folder\",\"sort_index\":",
+    "put desktop_files/fs_downloads local=ok result=accepted {\"id\":\"fs_downloads\",\"parent_id\":\"fs_root\",\"path\":\"/Downloads\",\"name\":\"Downloads\",\"kind\":\"folder\",\"sort_index\":30,\"mime_",
+    "put desktop_files/fs_ctox local=ok result=accepted {\"id\":\"fs_ctox\",\"parent_id\":\"fs_root\",\"path\":\"/CTOX\",\"name\":\"CTOX\",\"kind\":\"folder\",\"sort_index\":40,\"mime_type\":\"\",\"exten"
+   ],
+   "title": "Explorer",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Aktionen für Auswahl",
+    "button:Neuen Ordner erstellen",
+    "button:Dateien hochladen",
+    "button:FS Dateien",
+    "button:NEU Zuletzt erstellt",
+    "button:ZEIT Zuletzt geändert",
+    "button:DOC Dokumente",
+    "button:XLS Tabellen",
+    "button:KNO Wissen",
+    "button:MAT Matching-Objekte",
+    "button:OUT Outbound",
+    "select:Sortieren",
+    "button:Details",
+    "row:Name Art Geändert",
+    "button:Name",
+    "button:Art",
+    "button:Geändert",
+    "button:CTOX, Ordner",
+    "button:Desktop, Ordner",
+    "button:Documents, Ordner",
+    "button:Downloads, Ordner",
+    "button:Spreadsheets, Ordner"
+   ],
+   "shot": "explorer/420-01-open.png"
+  },
+  {
+   "step": "row Name Art Geändert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "explorer/420-02-row_Name_Art_Ge_ndert.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear explorer.source.desktop_files"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 433,
+   "shot": "explorer/420-03-suche_ohne_Treffer.png",
+   "textAfter": 224
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear explorer.source.desktop_files"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "explorer/420-04-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "desktop_files",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "desktop_files",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "desktop_files",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "desktop_files",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "desktop_files",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "desktop_files",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "explorer",
+  "Explorer"
+ ]
+}

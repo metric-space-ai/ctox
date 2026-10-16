@@ -1,0 +1,26 @@
+/* Labor-Chrome (nur Labor). Tokens wie shell/window-chrome.css, damit source-mode.css dieselben Farben findet. */
+:root { --v4-bg: #eef0f3; --v4-win-bg: #fff; --v4-win-border: #c9ced6; --v4-header-bg: #f6f7f9; --v4-text: #1d2330; --v4-muted: #5b6474; --v4-info: #2f6fde; --v4-warn: #b7791f; --v4-error: #c53030; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--v4-bg); font: 13px/1.4 system-ui, sans-serif; color: var(--v4-text); }
+.lab-desktop { position: fixed; inset: 0; overflow: hidden; }
+.lab-win { position: absolute; display: flex; flex-direction: column; background: var(--v4-win-bg); border: 1px solid var(--v4-win-border); border-radius: 8px; box-shadow: 0 6px 24px rgba(20,30,50,.14); overflow: hidden; box-sizing: border-box; }
+.lab-win__header { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 8px; background: var(--v4-header-bg); border-bottom: 1px solid var(--v4-win-border); }
+.lab-win__title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.lab-win__fill { flex: 1 1 auto; }
+.lab-win__controls { display: flex; align-items: center; gap: 2px; }
+.lab-win__close { border: 0; background: none; font-size: 16px; cursor: pointer; color: var(--v4-muted); }
+.lab-win__body { flex: 1 1 auto; min-height: 0; position: relative; overflow: auto; }
+.lab-win__body[hidden] { display: none; }
+.lab-zone { flex: 0 0 auto; border-top: 1px solid var(--v4-win-border); background: var(--v4-header-bg); }
+.lab-zone[hidden] { display: none; }
+.lab-zone:not([hidden]) { display: flex; align-items: center; }
+.lab-zone__line { flex: 1 1 auto; min-width: 0; }
+.lab-zone__act { flex: 0 0 auto; margin-right: 6px; height: 18px; padding: 0 8px; font: inherit; font-size: 11.5px; border: 1px solid var(--v4-win-border); border-radius: 4px; background: var(--v4-win-bg); color: var(--v4-info); cursor: pointer; white-space: nowrap; }
+.lab-zone__act[hidden] { display: none; }
+.lab-zone__line { display: block; width: 100%; height: 22px; line-height: 22px; padding: 0 10px; border: 0; background: none; text-align: left; font: inherit; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; color: inherit; }
+.lab-zone[data-level="error"] .lab-zone__line { box-shadow: inset 3px 0 0 var(--v4-error); color: var(--v4-error); }
+.lab-zone[data-level="warn"] .lab-zone__line { box-shadow: inset 3px 0 0 var(--v4-warn); }
+.lab-zone__list { position: absolute; left: 0; right: 0; bottom: 23px; max-height: 50%; overflow: auto; background: var(--v4-win-bg); border-top: 1px solid var(--v4-win-border); z-index: 2; }
+.lab-zone__list[hidden] { display: none; }
+.lab-zone__item { padding: 4px 10px; font-size: 12px; }
+@media (prefers-color-scheme: dark) { :root { --v4-bg: #14171c; --v4-win-bg: #1d2128; --v4-win-border: #343a45; --v4-header-bg: #232831; --v4-text: #e6e9ef; --v4-muted: #9aa3b2; } }

@@ -10,8 +10,8 @@ export const WORKJET_CATEGORY_IDS = Object.freeze([
   'entertainment',
   'development',
   'engineering',
-  'knowledge',
-  'research',
+  'knowledge', // isolation-allow: Kategoriename des Workjet-UI-Vertrags, keine App-ID
+  'research', // isolation-allow: Kategoriename des Workjet-UI-Vertrags, keine App-ID
   'sales',
   'recruiting',
   'finance',
@@ -32,10 +32,10 @@ const CATEGORY_ALIASES = Object.freeze({
   unterhaltung: 'entertainment',
   games: 'entertainment',
   game: 'entertainment',
-  recherche: 'research',
-  'web-data': 'research',
-  'web-and-data': 'research',
-  'web-data-research': 'research',
+  recherche: 'research', // isolation-allow: Kategoriename des Workjet-UI-Vertrags, keine App-ID
+  'web-data': 'research', // isolation-allow: Kategoriename des Workjet-UI-Vertrags, keine App-ID
+  'web-and-data': 'research', // isolation-allow: Kategoriename des Workjet-UI-Vertrags, keine App-ID
+  'web-data-research': 'research', // isolation-allow: Kategoriename des Workjet-UI-Vertrags, keine App-ID
   dev: 'development',
   engineering: 'engineering',
   unterhaltung: 'entertainment',

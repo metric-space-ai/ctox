@@ -1111,11 +1111,47 @@ fn resume_auth_assist_requesting_task(
     }
 }
 
+/// Replicated/network intake. Always token-authenticated: a document can
+/// never select the Core entry below (§16.46).
 pub(super) async fn apply_browser_runtime_command(
     root: &Path,
     database: &Arc<RxDatabase>,
     document: &Value,
     accepted: &Value,
+) -> anyhow::Result<()> {
+    apply_browser_runtime_command_as(root, database, document, accepted, None).await
+}
+
+/// §16.46: who a browser command acts for. `core_owner` is set only by the
+/// in-process Core entry (`apply_core_browser_command`), from the Core-bound
+/// capability context; otherwise the browser user's WebRTC capability token
+/// is required. Document fields (client_context.actor, owner ids) never count.
+pub(crate) fn resolve_browser_command_owner(
+    root: &Path,
+    document: &Value,
+    core_owner: Option<&str>,
+) -> anyhow::Result<(String, String)> {
+    if let Some(owner) = core_owner {
+        anyhow::ensure!(!owner.trim().is_empty(), "core browser owner is empty");
+        // No token: token-gated paths (credential fill) fail closed.
+        return Ok((owner.to_string(), String::new()));
+    }
+    let capability_token = document
+        .get("client_context")
+        .and_then(|context| context.get("capability_token"))
+        .and_then(Value::as_str)
+        .context("browser command capability token is required")?;
+    let (profile_owner, _) = store::verify_webrtc_capability_actor(root, capability_token)
+        .context("browser command capability token is invalid")?;
+    Ok((profile_owner, capability_token.to_string()))
+}
+
+async fn apply_browser_runtime_command_as(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+    document: &Value,
+    accepted: &Value,
+    core_owner: Option<&str>,
 ) -> anyhow::Result<()> {
     let _browser_runtime_guard = BROWSER_RUNTIME_COMMAND_LOCK.lock().await;
     let command_type = document
@@ -1160,13 +1196,9 @@ pub(super) async fn apply_browser_runtime_command(
         .or_else(|| document.get("updated_at_ms"))
         .and_then(Value::as_u64)
         .unwrap_or_else(|| now_ms() as u64);
-    let capability_token = document
-        .get("client_context")
-        .and_then(|context| context.get("capability_token"))
-        .and_then(Value::as_str)
-        .context("browser command capability token is required")?;
-    let (profile_owner, _) = store::verify_webrtc_capability_actor(root, capability_token)
-        .context("browser command capability token is invalid")?;
+    let (profile_owner, capability_token) =
+        resolve_browser_command_owner(root, document, core_owner)?;
+    let capability_token = capability_token.as_str();
     let tenant_id = store::sync_config(root)
         .context("browser command tenant configuration is unavailable")?
         .instance_id;
@@ -4903,4 +4935,278 @@ mod tests {
             Some(NOW)
         ));
     }
+}
+
+// ---------------------------------------------------------------- §16.46
+// Core-authorized INTERNAL browser entry for app capabilities. Reachable only
+// in-process (pub(crate), re-exported to app_capabilities); the replicated /
+// network intake above always requires the user's capability token. Every
+// use is checked against policy.rs, bound to (app, user) per session and
+// audited in business_events without payload contents.
+
+/// Core-bound identity of the capability call (never from the document).
+pub(crate) struct CoreBrowserBinding<'a> {
+    pub app_id: &'a str,
+    pub user_id: &'a str,
+    pub role: &'a str,
+    pub command_id: &'a str,
+    pub call_id: &'a str,
+}
+/// Engine commands an app may drive. Credential fill stays token-gated
+/// (secrets.manage on the user's own capability), controller leases are
+/// user UI state.
+const CORE_BROWSER_COMMANDS: &[&str] = &[
+    "browser.session.start",
+    "browser.navigate",
+    "browser.reload",
+    "browser.back",
+    "browser.forward",
+    "browser.tab.open",
+    "browser.tab.activate",
+    "browser.tab.close",
+    "browser.dialog.respond",
+    "browser.permission.respond",
+    "browser.clipboard.copy",
+    "browser.clipboard.paste",
+    "browser.clipboard.clear",
+    "browser.session.stop",
+    "web_stack.auth_assist.complete",
+    // §16.48: read/act steps run as Core-owned templates (no app script).
+    "browser.extract",
+    "browser.click",
+    "browser.wait",
+];
+
+/// §16.48: Core-authored page script for extract/click/wait. App input is
+/// only JSON-encoded data (selectors, field specs, limits) – never code.
+/// The extract result is a JSON string so the runner's generic serializer
+/// cannot truncate it.
+fn core_browser_step_script(command_type: &str, payload: &Value) -> anyhow::Result<String> {
+    let text = |key: &str| -> anyhow::Result<String> {
+        let value = payload
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty() && value.len() <= 512)
+            .with_context(|| format!("browser step {key} is required"))?;
+        Ok(serde_json::to_string(value)?)
+    };
+    Ok(match command_type {
+        "browser.click" => format!(
+            "await page.locator({}).first().click({{ timeout: 15000 }}); return {{ clicked: true }};",
+            text("selector")?
+        ),
+        "browser.wait" => match payload.get("ms").and_then(Value::as_u64) {
+            Some(ms) => {
+                anyhow::ensure!((1..=30_000).contains(&ms), "browser wait ms out of range");
+                format!("await page.waitForTimeout({ms}); return {{ waited_ms: {ms} }};")
+            }
+            None => format!(
+                "await page.locator({}).first().waitFor({{ timeout: 30000 }}); return {{ found: true }};",
+                text("selector")?
+            ),
+        },
+        "browser.extract" => {
+            let limit = payload
+                .get("limit")
+                .and_then(Value::as_u64)
+                .filter(|limit| (1..=1000).contains(limit))
+                .context("browser extract limit is required")?;
+            let spec = serde_json::to_string(&json!({
+                "selector": payload.get("selector"),
+                "fields": payload.get("fields"),
+                "limit": limit,
+            }))?;
+            format!(
+                "const spec = {spec}; \
+                 const items = await page.$$eval(spec.selector, (els, spec) => els.slice(0, spec.limit).map((el) => {{ \
+                 const out = {{}}; \
+                 for (const [name, f] of Object.entries(spec.fields)) {{ \
+                 const target = f.selector === ':scope' ? el : el.querySelector(f.selector); \
+                 out[name] = !target ? null : (f.text ? target.innerText : target.getAttribute(f.attr)); }} \
+                 return out; }}), spec); \
+                 return JSON.stringify({{ items }});"
+            )
+        }
+        other => anyhow::bail!("not a browser step: {other}"),
+    })
+}
+
+fn core_browser_audit(
+    root: &Path,
+    binding: &CoreBrowserBinding<'_>,
+    command_type: &str,
+    session_id: &str,
+    decision: &str,
+    reason: &str,
+) -> anyhow::Result<()> {
+    let conn = store::open_store(root)?;
+    conn.execute(
+        "INSERT INTO business_events
+            (event_id, collection, record_id, command_type, payload_json, observed_at_ms)
+         VALUES (?1, 'browser_sessions', ?2, ?3, ?4, ?5)",
+        rusqlite::params![
+            format!("core-browser:{}", uuid::Uuid::new_v4()),
+            session_id,
+            format!("browser.core_entry.{decision}"),
+            json!({"_cap":{"app_id":binding.app_id,"actor_id":binding.user_id,
+                   "command_id":binding.command_id,"call_id":binding.call_id},
+                   "browser_command":command_type,"decision":decision,"reason":reason})
+            .to_string(),
+            now_ms() as i64
+        ],
+    )?;
+    Ok(())
+}
+
+/// Pre-effect gate: command allowlist, policy.rs decision for the bound user
+/// on the calling app, and the persistent (session → app, user) binding.
+/// Every outcome is audited; an audit failure prevents the effect.
+pub(crate) fn core_browser_gate(
+    root: &Path,
+    binding: &CoreBrowserBinding<'_>,
+    command_type: &str,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    let refuse = |reason: &str| -> anyhow::Result<()> {
+        core_browser_audit(root, binding, command_type, session_id, "denied", reason)?;
+        anyhow::bail!("browser core entry refused: {reason}")
+    };
+    if !CORE_BROWSER_COMMANDS.contains(&command_type) {
+        return refuse("command");
+    }
+    // Native module policy for the bound user on the calling app, including
+    // the founder assignment (business_module_acl) and explicit grants.
+    let decision = store::trusted_mcp_actor_policy_decision_with_role(
+        root,
+        binding.user_id,
+        binding.role,
+        BusinessOsPermission::DataWrite,
+        super::policy::BusinessOsScopeType::Module,
+        Some(binding.app_id),
+    );
+    if !decision.as_ref().is_ok_and(|decision| decision.allowed) {
+        return refuse("policy");
+    }
+    let path = crate::paths::core_db(root);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let conn = rusqlite::Connection::open(path)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS app_capability_browser_sessions (
+            session_id TEXT PRIMARY KEY, app_id TEXT NOT NULL,
+            user_id TEXT NOT NULL, bound_at_ms INTEGER NOT NULL)",
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO app_capability_browser_sessions VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![session_id, binding.app_id, binding.user_id, now_ms() as i64],
+    )?;
+    let (bound_app, bound_user): (String, String) = conn.query_row(
+        "SELECT app_id, user_id FROM app_capability_browser_sessions WHERE session_id=?1",
+        [session_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    if bound_app != binding.app_id {
+        return refuse("session belongs to another app");
+    }
+    if bound_user != binding.user_id {
+        return refuse("session belongs to another user");
+    }
+    core_browser_audit(root, binding, command_type, session_id, "allowed", "")
+}
+
+/// The internal entry: gate, then the same engine path as the token intake
+/// with the bound user as session owner (the peer still refuses a session
+/// whose RxDB owner is another user). Returns the engine result.
+pub(crate) fn apply_core_browser_command(
+    root: &Path,
+    binding: &CoreBrowserBinding<'_>,
+    command_type: &str,
+    payload: Value,
+) -> anyhow::Result<Value> {
+    let session_id = payload
+        .get("session_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .context("browser session id is required")?
+        .to_string();
+    core_browser_gate(root, binding, command_type, &session_id)?;
+    let identity = serde_json::to_vec(&(
+        binding.app_id,
+        binding.command_id,
+        binding.call_id,
+        command_type,
+    ))?;
+    let id = format!("core-browser:{:x}", sha2::Sha256::digest(identity));
+    let user = binding.user_id.to_string();
+    let module = binding.app_id.to_string();
+    let command_type = command_type.to_string();
+    super::rxdb_peer::with_business_os_database(
+        root,
+        "failed to create Business OS core browser runtime",
+        true,
+        super::rxdb_peer::TemporaryDatabaseLockScope::TemporaryOnly,
+        |_peer, database| async move {
+            // An app opens its session with navigate; the engine names that start.
+            let existing =
+                find_browser_document(&database, "browser_sessions", &session_id).await?;
+            if matches!(
+                command_type.as_str(),
+                "browser.extract" | "browser.click" | "browser.wait"
+            ) {
+                // Steps act in an existing session of exactly this user.
+                anyhow::ensure!(existing.is_object(), "browser session not found");
+                let owner = existing
+                    .get("owner_user_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                anyhow::ensure!(owner == user, "browser session belongs to another user");
+                let output = browser_session_automation_with_database(
+                    root.to_path_buf(),
+                    &database,
+                    BrowserSessionAutomationRequest {
+                        session_id: session_id.clone(),
+                        dir: None,
+                        timeout_ms: Some(45_000),
+                        source: core_browser_step_script(&command_type, &payload)?,
+                        profile_owner: Some(user.clone()),
+                    },
+                )
+                .await?;
+                let result = output.get("result").cloned().unwrap_or(Value::Null);
+                if command_type == "browser.extract" {
+                    let raw = result
+                        .as_str()
+                        .context("browser extract returned no result")?;
+                    anyhow::ensure!(
+                        raw.len() <= 1024 * 1024,
+                        "browser extract result exceeds 1 MiB"
+                    );
+                    return Ok(serde_json::from_str(raw)?);
+                }
+                return Ok(result);
+            }
+            let command_type = if command_type == "browser.navigate" && !existing.is_object() {
+                "browser.session.start".to_string()
+            } else {
+                command_type
+            };
+            let now = now_ms() as u64;
+            let document = json!({
+                "id": id, "command_id": id, "type": command_type, "command_type": command_type,
+                "module": module, "record_id": session_id, "payload": payload,
+                "client_context": {"core_entry": true, "actor": {"id": user}},
+                "created_at_ms": now, "updated_at_ms": now
+            });
+            let accepted = json!({"id": id, "command_id": id, "status": "accepted"});
+            apply_browser_runtime_command_as(root, &database, &document, &accepted, Some(&user))
+                .await?;
+            let stored = find_browser_document(&database, "business_commands", &id).await?;
+            Ok(stored
+                .get("result")
+                .cloned()
+                .unwrap_or_else(|| json!({"ok": true})))
+        },
+    )
 }

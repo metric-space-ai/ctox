@@ -1,6 +1,6 @@
-import { loadModuleMessages } from '../../shared/i18n.js';
 import { importTemplateToDb } from './templates/skr.js';
-import { showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
+import { contextChatModeMarkup, normalizeContextChatMode, sendContextChat } from 'ctox:shared/context-chat.js';
 
 
 // --- Native ES Module Imports for Fibu Core Engines ---
@@ -12,7 +12,6 @@ import { parseMT940 } from './parsers/mt940.js';
 import { getOperatingGuVResult as getOperatingGuVResultImported, buildHgbBilanzTree, buildHgbGuvTree } from './reports/hgb.js';
 import { calculateElsterUstva } from './reports/elster.js';
 import { generateDatevCsvString } from './exporters/datev.js';
-import { uiTestCases } from './core/ui_e2e_tests.js';
 
 // --- Pure Accounting Extension Core Engines ---
 import { calculateRemainingSplit, validateSplitBalanced, compileSplitJournalLines } from './core/splits.js';
@@ -29,12 +28,10 @@ function truncateArchiveUrl(url) {
 
 // --- Global Fibu State ---
 const state = {
-  ctx: null,
   mountGeneration: 0,
   lang: 'de',
   activeNav: 'skr',
   activeReportTab: 'bilanz',
-  activeRightTab: 'ocr',
   skrName: 'SKR03', // Default
   bookingGrammar: { search: '', view: 'cards', band: 'all', filters: { kind: 'all', sort: 'date', direction: 'desc' } },
   // Die Darstellung (Karten/Liste) haelt das Modul selbst: der Umschalter ist
@@ -63,16 +60,15 @@ const state = {
   ledgerDF: [],
 
   // Subscription cleaners
-  rxCleanup: null,
-  readinessCleanup: null,
+  api: null,
+  root: null,
+  disposers: [],
+  reloadTimer: null,
   contextMenu: null,
   contextMenuCleanup: null,
 
   // UI Element References
   els: {},
-
-  // E2E Test Suite Results Cache
-  uiTestResults: {}
 };
 
 const ACCOUNTING_COLLECTIONS = Object.freeze([
@@ -86,115 +82,54 @@ const ACCOUNTING_COLLECTIONS = Object.freeze([
   'accounting_number_series',
 ]);
 
-const ACCOUNTING_SEED_WRITE_COLLECTIONS = Object.freeze([
-  'accounting_accounts',
-  'accounting_journal_entries',
-  'accounting_journal_entry_lines',
-  'accounting_receipts',
-  'accounting_bank_statements',
-  'accounting_bank_statement_lines',
-]);
+
+// App-API 4.0 (V4-PORT.md): Daten nur über api.query/get/put/patch/remove. Der kleine Speicher-Adapter hält die
+// bisherigen Aufrufstellen lesbar (db.<collection>.rows/byId/add/change/drop); jede Methode ist ein direkter
+// api-Aufruf, Schreiben wartet nur auf den lokalen Commit (h.local), nie auf den Core.
+function fibuStoreCollection(name) {
+  const api = state.api;
+  return Object.freeze({
+    rows: () => api.query(name, {}).get(),
+    byId: (id) => api.get(name, String(id)).get(),
+    add: (doc) => api.put(name, doc).local,
+    change: (id, patch) => api.patch(name, String(id), patch).local,
+    drop: (id) => api.remove(name, String(id)).local,
+  });
+}
 
 function fibuCollection(name) {
-  const facade = state.ctx?.db;
-  if (!facade || !name) return null;
-  if (!canReadCollection(name)) return null;
-  try {
-    return facade.collection?.(name) || null;
-  } catch (error) {
-    if (!isBusinessOsPermissionDenied(error)) {
-      console.warn(`[fibu] collection ${name} is unavailable`, error);
-    }
-    return null;
-  }
+  if (!state.api || !name) return null;
+  return fibuStoreCollection(name);
 }
 
 function fibuDb(requiredCollections = ACCOUNTING_COLLECTIONS) {
-  const entries = requiredCollections.map((name) => [name, fibuCollection(name)]);
-  if (entries.some(([, collection]) => !collection)) return null;
-  return Object.fromEntries(entries);
+  if (!state.api) return null;
+  return Object.fromEntries(requiredCollections.map((name) => [name, fibuStoreCollection(name)]));
 }
 
-function canReadCollection(name) {
-  const permissionCheck = state.ctx?.permissions?.canReadCollection;
-  return typeof permissionCheck !== 'function' || permissionCheck(name) === true;
-}
-
+// Rechte entscheidet der Core (§10.2a Nr. 3); die App spiegelt keine Collection-Sperren mehr.
 function canWriteCollection(name) {
-  const permissionCheck = state.ctx?.permissions?.canWriteCollection;
-  return typeof permissionCheck !== 'function' || permissionCheck(name) === true;
+  return Boolean(state.api && name);
 }
 
-function canWriteSeedData() {
-  return ACCOUNTING_SEED_WRITE_COLLECTIONS.every((name) => canWriteCollection(name));
+
+// Anlagenspiegel nur aus echten Anlagen (state.assets); keine fest verdrahteten Musteranlagen in echten Büchern.
+function assetRows() {
+  return (Array.isArray(state.assets) ? state.assets : []).map((a) => {
+    const cost = Number(a.acquisition_cost_cents ?? a.cost ?? 0) || 0;
+    const prev = Number(a.accumulated_depreciation_cents ?? a.prev ?? 0) || 0;
+    return {
+      nr: String(a.number || a.nr || a.id || ''),
+      name: String(a.name || a.id || ''),
+      date: a.acquisition_date ? formatDateDe(a.acquisition_date) : '',
+      cost,
+      life: Number(a.useful_life_years ?? a.life ?? 0) || 0,
+      method: String(a.depreciation_method || a.method || ''),
+      prev,
+      book: Number(a.book_value_cents ?? a.book ?? (cost - prev)) || 0,
+    };
+  });
 }
-
-function isBusinessOsPermissionDenied(error) {
-  const message = String(error?.message || error || '');
-  return error?.code === 'BUSINESS_OS_PERMISSION_DENIED'
-    || error?.name === 'BusinessOsPermissionDeniedError'
-    || /permission denied|keine datenfreigabe|datenzugriff|data\.read|data\.write/i.test(message);
-}
-
-// --- Canonical collection readiness (shell sync API) ---
-// Collections whose initial replication gates the data-driven empty states.
-const FIBU_READINESS_COLLECTIONS = Object.freeze([
-  'accounting_accounts',
-  'accounting_journal_entries',
-  'accounting_receipts',
-  'accounting_bank_statement_lines',
-]);
-
-function fibuReadiness(name) {
-  const read = state.ctx?.sync?.collectionReadiness;
-  if (typeof read !== 'function') return null;
-  try {
-    return read.call(state.ctx.sync, name) || null;
-  } catch (error) {
-    console.warn(`[fibu] readiness for ${name} unavailable`, error);
-    return null;
-  }
-}
-
-// False as soon as one backing collection reports `ready === false` (initial
-// replication still pending, incl. offline-pending). A missing sync API
-// (tests, legacy hosts) never gates rendering.
-function fibuSourcesReady(names) {
-  return names.every((name) => fibuReadiness(name)?.ready !== false);
-}
-
-function fibuSyncingBlock() {
-  return `<div class="ctox-syncing" role="status" aria-live="polite">${escapeHtml(t('syncingData'))}</div>`;
-}
-
-function fibuSyncingTableRow(colspan) {
-  return `<tr><td colspan="${colspan}" class="fibu-empty-state">${fibuSyncingBlock()}</td></tr>`;
-}
-
-// Re-render lists whenever a backing collection flips its sync state, so the
-// syncing shell resolves into real rows or the true empty state on its own.
-function wireReadinessSubscriptions() {
-  const subscribe = state.ctx?.sync?.subscribeCollectionReadiness;
-  if (typeof subscribe !== 'function') return null;
-  const rerender = () => {
-    renderBookingList();
-    renderActiveView();
-  };
-  const unsubscribes = FIBU_READINESS_COLLECTIONS
-    .map((name) => subscribe.call(state.ctx.sync, name, rerender))
-    .filter((fn) => typeof fn === 'function');
-  return () => {
-    unsubscribes.forEach((fn) => {
-      try { fn(); } catch {}
-    });
-  };
-}
-
-const ASSETS_MOCK = [
-  { nr: 'ANL-2026-01', name: 'MacBook Pro 16 M3 Max', date: '2026-01-15', cost: 420000, life: 3, method: 'Lineaer', prev: 58333, book: 361667 },
-  { nr: 'ANL-2026-02', name: 'Herman Miller Aeron Chair', date: '2026-02-10', cost: 160000, life: 13, method: 'Lineaer', prev: 4102, book: 155898 },
-  { nr: 'ANL-2026-03', name: 'Premium Office Server Cluster', date: '2026-03-01', cost: 1200000, life: 5, method: 'Degressiv (20%)', prev: 200000, book: 1000000 }
-];
 
 // --- Labels for i18n ---
 const labels = {
@@ -208,11 +143,10 @@ const labels = {
     initSuccess: 'Kontenrahmen erfolgreich initialisiert!',
     stornoSuccess: 'Buchung erfolgreich storniert (GoBD-konform).',
     postedSuccess: 'Buchung festgeschrieben und GoBD-gesperrt.',
+    // v4-allow: label (Buchhaltungsbegriff Bankabgleich)
     matchSuccess: 'Transaktion erfolgreich mit Beleg abgeglichen.',
     balancedAlert: 'Ausgeglichen (Soll = Haben)',
     unbalancedAlert: 'Ungleichgewicht! Soll und Haben müssen übereinstimmen.',
-    gobdLockAlert: 'Dieses Dokument ist GoBD-festgeschrieben und schreibgeschützt.',
-    syncingData: 'Daten werden synchronisiert.',
   },
   en: {
     skrExplorer: 'Chart of Accounts Explorer',
@@ -227,114 +161,217 @@ const labels = {
     matchSuccess: 'Transaction reconciled successfully.',
     balancedAlert: 'Balanced (Debit = Credit)',
     unbalancedAlert: 'Imbalance! Debit and Credit must match.',
-    gobdLockAlert: 'This document is GoBD-locked and read-only.',
-    syncingData: 'Syncing data.',
   }
 };
 
 let t = (key) => labels.de[key] ?? key;
 
-const BUCHHALTUNG_ASSET_REVISION = new URL(import.meta.url).searchParams.get('v') || 'ia-l1';
-
-function moduleAssetUrl(relativePath) {
-  const asset = new URL(relativePath, import.meta.url);
-  asset.searchParams.set('v', BUCHHALTUNG_ASSET_REVISION);
-  return asset;
+function langFrom(locale) {
+  return String(locale || '').toLowerCase().startsWith('en') ? 'en' : 'de';
 }
 
-async function ensureStyles() {
-  if (document.querySelector('link[data-module-styles="buchhaltung"]')) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = moduleAssetUrl('./index.css').href;
-  link.dataset.moduleStyles = 'buchhaltung';
-  document.head.append(link);
+// api.shell.t übersteuert die eingebetteten Texte, solange der Schlüsselraum offen ist (app-api.d.ts OFFEN-B).
+function applyLocale(lang) {
+  state.lang = lang;
+  const api = state.api;
+  t = (key) => {
+    const scoped = `buchhaltung.${key}`;
+    const value = api?.shell?.t?.(scoped);
+    if (typeof value === 'string' && value && value !== scoped) return value;
+    return labels[lang]?.[key] ?? labels.de[key] ?? key;
+  };
+}
+
+async function loadModuleMarkup() {
+  // index.html liefert der Service Worker versioniert (§16.15); CSS lädt die Shell aus dem Manifest.
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
+  return doc.body.innerHTML;
+}
+
+// Befehle: api.command legt das Befehlsdokument an und liefert sofort; die UI wartet nie. Fehlschläge gehen in
+// die Zustandszone (code buchhaltung.command.<type>), Erfolg bleibt still.
+function dispatchFibuCommand(type, payload) {
+  const api = state.api;
+  if (!api) return null;
+  const handle = api.command(type, payload);
+  const code = `buchhaltung.command.${type}`;
+  let off = null;
+  let finished = false;
+  const stop = () => { finished = true; off?.(); off = null; };
+  off = handle.status.subscribe((value) => {
+    if (value?.status === 'failed') {
+      api.status.report({ level: 'error', code, text: `${type}: ${value.error || 'failed'}`, ref: handle.id });
+      stop();
+    } else if (value?.status === 'done') {
+      api.status.clear(code);
+      stop();
+    }
+  });
+  if (finished) off?.();
+  handle.local.catch((error) => {
+    api.status.report({ level: 'error', code, text: `${type}: ${error?.code || 'local'} ${error?.message || error}`, ref: handle.id });
+  });
+  state.disposers.push(stop);
+  return handle;
+}
+
+// Meldungen, die früher per alert() kamen, gehen in die Zustandszone (Anf. 27: nichts außerhalb des Fensters).
+function fibuNotice(code, text, level = 'info') {
+  state.api?.status.report({ level, code: `buchhaltung.${code}`, text: String(text) });
+}
+
+const SNAPSHOT_VIEW_KEYS = Object.freeze([
+  'activeNav', 'activeReportTab', 'skrName', 'bookingView', 'selectedBookingKey',
+  'evidenceUserCollapsed', 'selectedAccountId', 'selectedEntryId', 'selectedReceiptId', 'selectedBankLineId', 'selectedAssetId',
+]);
+const INITIAL_VIEW = Object.freeze(Object.fromEntries(SNAPSHOT_VIEW_KEYS.map((key) => [key, state[key]])));
+
+function fibuSnapshot() {
+  const snap = { v: 1 };
+  for (const key of SNAPSHOT_VIEW_KEYS) snap[key] = state[key];
+  const root = state.root;
+  // Offene Eingaben (Suchfelder, Formulare im Arbeitsbereich und in der Schublade) mitnehmen.
+  const inputs = {};
+  root?.querySelectorAll('input[id], textarea[id], select[id], [data-pg-search], [data-search-accounts], [data-search-journal]').forEach((el) => {
+    if (el.type === 'file' || el.type === 'checkbox' || el.type === 'radio') return;
+    const key = el.id ? `#${el.id}` : ['data-pg-search', 'data-search-accounts', 'data-search-journal'].map((a) => (el.hasAttribute(a) ? `[${a}]` : '')).find(Boolean);
+    if (key && el.value) inputs[key] = el.value;
+  });
+  snap.inputs = inputs;
+  return snap;
+}
+
+function applyRestoredView(restored) {
+  if (!restored || typeof restored !== 'object') return;
+  for (const key of SNAPSHOT_VIEW_KEYS) {
+    if (restored[key] === undefined) continue;
+    const initial = INITIAL_VIEW[key];
+    if (initial === null ? (restored[key] === null || typeof restored[key] === 'string') : typeof restored[key] === typeof initial) {
+      state[key] = restored[key];
+    }
+  }
+}
+
+function restoreInputs(restored) {
+  const inputs = restored?.inputs;
+  if (!inputs || typeof inputs !== 'object') return;
+  for (const [selector, value] of Object.entries(inputs)) {
+    if (typeof value !== 'string') continue;
+    let el = null;
+    try { el = state.root?.querySelector(selector); } catch { el = null; }
+    if (el && 'value' in el) el.value = value;
+  }
 }
 
 // =========================================================================
-// 🏁 Lifecycle Mount Hook
+// 🏁 Lifecycle Mount Hook (App-API 4.0)
 // =========================================================================
-export async function mount(ctx) {
+export async function mount(root, api, { restored } = {}) {
   const mountGeneration = ++state.mountGeneration;
-  state.ctx = ctx;
-  state.lang = ctx.locale === 'en' ? 'en' : 'de';
+  // Abos gehören dieser Montage (PORTING.md §4 Falle 1).
+  const disposers = [];
+  state.disposers = disposers;
+  state.api = api;
+  state.root = root;
+  if (!root.dataset.app) root.dataset.app = api.app?.id || 'buchhaltung';
+  applyLocale(langFrom(api.shell.locale.get()));
   state.selectedBookingKey = null;
   state.evidenceUserCollapsed = false;
+  applyRestoredView(restored);
 
-  await ensureStyles();
-  if (state.mountGeneration !== mountGeneration) return () => {};
+  root.innerHTML = await loadModuleMarkup();
+  if (state.mountGeneration !== mountGeneration) return { unmount() {}, snapshot: fibuSnapshot };
 
-  const messages = await loadModuleMessages(import.meta.url, ctx.locale, labels);
-  if (state.mountGeneration !== mountGeneration) return () => {};
-  t = (key) => messages[key] ?? labels.de[key] ?? key;
-
-  // 1. Inject HTML Structure
-  const html = await fetch(moduleAssetUrl('./index.html')).then((res) => res.text());
-  if (state.mountGeneration !== mountGeneration) return () => {};
-  ctx.host.innerHTML = html;
-  ctx.left.replaceChildren();
-  ctx.right.replaceChildren();
-
-  // 2. Bind DOM Elements & Resizers
   state.els.root?.removeAttribute('data-mount-ready');
-  bindElements(ctx.host);
-  const resizerCleanup = setupResizers(ctx.host);
+  bindElements(root);
+  // Pane-Grammatik verdrahtet die App selbst (PORTING.md R14), keine DOM-Heuristik der Shell.
+  autoWirePaneGrammar(root);
+  api.shell.setTitle('Buchhaltung');
 
-  // 3. Register GoBD Immutability Guards in RxDB
-  registerGoBDHooks();
+  if (state.els.skrSelect) state.els.skrSelect.value = state.skrName || 'SKR03';
 
-  // 4. Load Active Kontenrahmen Select Value
-  const savedSKR = state.skrName || 'SKR03';
-  state.skrName = savedSKR;
-  if (state.els.skrSelect) {
-    state.els.skrSelect.value = savedSKR;
-  }
-
-  // 5. Bind and render immediately. Database initialization, demand reads and
-  // optional seed writes must never hold the shell's window-open lifecycle.
   wireEvents();
   if (state.els.root) state.els.root.dataset.mountReady = 'true';
+  restoreInputs(restored);
   renderBookingList();
   switchView(state.activeNav);
   updateEvidencePaneVisibility();
+
+  // Live-Abos statt Readiness/Ladefunktion: subscribe ruft sofort mit dem lokalen Stand.
+  for (const name of FIBU_LIVE_COLLECTIONS) {
+    disposers.push(api.query(name, {}).subscribe(scheduleFibuReload));
+  }
+  disposers.push(api.shell.locale.subscribe((locale) => {
+    const lang = langFrom(locale);
+    if (lang !== state.lang) { applyLocale(lang); renderActiveView(); }
+  }));
+
   let disposed = false;
   Promise.resolve()
     .then(async () => {
       await autoInitializeAccounts();
-      if (disposed || state.ctx !== ctx) return;
+      if (disposed || state.api !== api) return;
       await loadAllFibuData();
-      if (disposed || state.ctx !== ctx) return;
-      await seedMockDataIfEmpty();
-      if (disposed || state.ctx !== ctx) return;
-      state.rxCleanup = wireRealtimeSubscriptions();
-      state.readinessCleanup = wireReadinessSubscriptions();
+      if (disposed || state.api !== api) return;
       renderBookingList();
       renderActiveView();
     })
     .catch((error) => {
-      if (disposed || state.ctx !== ctx) return;
-      console.error('[fibu] background initialization failed', error);
+      if (disposed || state.api !== api) return;
+      api.status.report({ level: 'error', code: 'buchhaltung.init', text: `Buchhaltung: ${error?.message || error}` });
       renderActiveView();
     });
 
-
-  // Return unmount function
-  return () => {
-    disposed = true;
-    if (state.mountGeneration !== mountGeneration) return;
-    state.mountGeneration += 1;
-    state.els.root?.removeAttribute('data-mount-ready');
-    if (state.rxCleanup) state.rxCleanup();
-    if (state.readinessCleanup) {
-      state.readinessCleanup();
-      state.readinessCleanup = null;
-    }
-    state.contextMenuCleanup?.();
-    state.contextMenu?.remove();
-    state.contextMenu = null;
-    unbindEvents();
-    resizerCleanup?.();
+  return {
+    unmount() {
+      revokeReceiptFileUrl();
+      disposed = true;
+      if (state.reloadTimer) clearTimeout(state.reloadTimer);
+      state.reloadTimer = null;
+      for (const dispose of disposers.splice(0)) {
+        try { dispose(); } catch (error) { console.warn('[fibu] unsubscribe failed', error); }
+      }
+      if (state.mountGeneration === mountGeneration) {
+        state.mountGeneration += 1;
+        state.els.root?.removeAttribute('data-mount-ready');
+        state.contextMenuCleanup?.();
+        state.contextMenu?.remove();
+        state.contextMenu = null;
+        unbindEvents();
+      }
+      root.replaceChildren();
+      if (state.root === root) {
+        state.api = null;
+        state.root = null;
+      }
+    },
+    snapshot: fibuSnapshot,
   };
+}
+
+const FIBU_LIVE_COLLECTIONS = Object.freeze([
+  'accounting_accounts',
+  'accounting_journal_entries',
+  'accounting_journal_entry_lines',
+  'accounting_receipts',
+  'accounting_bank_statements',
+  'accounting_bank_statement_lines',
+]);
+
+// Entprellt: mehrere Abos melden sich im selben Takt (erste Emission je Abo sofort).
+function scheduleFibuReload() {
+  if (state.reloadTimer) return;
+  state.reloadTimer = setTimeout(() => {
+    state.reloadTimer = null;
+    if (!state.api) return;
+    loadAllFibuData().then(() => {
+      renderBookingList();
+      renderActiveView();
+      syncOpenReceiptForm();
+    });
+  }, 40);
 }
 
 // =========================================================================
@@ -366,7 +403,6 @@ function bindElements(host) {
       mileage: host.querySelector('[data-panel="mileage"]'),
       reports: host.querySelector('[data-panel="reports"]'),
       assets: host.querySelector('[data-panel="assets"]'),
-      tests: host.querySelector('[data-panel="tests"]')
     },
 
     // Data list containers
@@ -375,7 +411,6 @@ function bindElements(host) {
     receiptsList: host.querySelector('[data-receipts-list]'),
     bankingList: host.querySelector('[data-banking-list]'),
     assetsList: host.querySelector('[data-assets-list]'),
-    uiTestsList: host.querySelector('[data-ui-tests-list]'),
     travelExpensesList: host.querySelector('#travel-expenses-list'),
     mileageLogList: host.querySelector('#mileage-log-list'),
 
@@ -423,18 +458,8 @@ function bindElements(host) {
     drawerContent: host.querySelector('[data-drawer-content-body]'),
     drawerCloseBtn: host.querySelector('[data-action="close-drawer"]'),
 
-    // Right Pane Tab Selectors
-    rightTabBtns: host.querySelectorAll('[data-right-tab]'),
-    rightSubpanels: {
-      ocr: host.querySelector('[data-right-subpanel="ocr"]'),
-      agent: host.querySelector('[data-right-subpanel="agent"]')
-    },
-
     // Auxiliary Panel containers
-    ocrPreviewContainer: host.querySelector('[data-ocr-preview-container]'),
-    chatMessages: host.querySelector('[data-chat-messages]'),
-    chatInput: host.querySelector('[data-chat-input]'),
-    chatSendBtn: host.querySelector('[data-action="send-chat-msg"]')
+    ocrPreviewContainer: host.querySelector('[data-ocr-preview-container]')
   };
 }
 
@@ -450,28 +475,8 @@ function setupResizers(host) {
 // =========================================================================
 // 🔒 GoBD Hook & Security Guards
 // =========================================================================
-function registerGoBDHooks() {
-  const db = fibuDb(['accounting_journal_entries']);
-  if (!db) return;
-
-  const entriesCol = db.accounting_journal_entries;
-  if (entriesCol) {
-    try {
-      entriesCol.preSave(function(data, doc) {
-        if (doc && doc.posted_at) {
-          throw new Error("GoBD-Verstoß: Bereits festgeschriebene Buchungen können nicht bearbeitet werden!");
-        }
-      }, false);
-      entriesCol.preRemove(function(data, doc) {
-        if (doc && doc.posted_at) {
-          throw new Error("GoBD-Verstoß: Bereits festgeschriebene Buchungen können nicht gelöscht werden!");
-        }
-      }, false);
-    } catch (e) {
-      // Hook might already be registered in multi-mount scenario
-    }
-  }
-}
+// GoBD-Sperre: RxDB-preSave/preRemove gibt es in 4.0 nicht (und die Shell-Fassade bot sie nie an – der
+// frühere Aufruf lief ins catch). Festschreibung prüft der Handler (V4-PORT.md OFFEN-2).
 
 // =========================================================================
 // ⚙️ Database Auto-Initialization
@@ -514,10 +519,10 @@ async function ensureRequiredAccountsExist() {
   for (const acct of currentList) {
     const id = `${state.skrName}_${acct.code}`;
     const parentId = acct.parent_id ? `${state.skrName}_${acct.parent_id}` : '';
-    const existing = await db.accounting_accounts.findOne(id).exec();
+    const existing = await db.accounting_accounts.byId(id);
     const existingData = docToRecord(existing);
     if (!existing) {
-      await db.accounting_accounts.insert({
+      await db.accounting_accounts.add({
         id,
         code: acct.code,
         name: acct.name,
@@ -531,7 +536,7 @@ async function ensureRequiredAccountsExist() {
       });
       console.log(`[fibu] Ensured account exists: ${acct.code} in ${state.skrName}`);
     } else if (existingData.parent_id !== parentId) {
-      await existing.patch({
+      await db.accounting_accounts.change(existing.id, {
         parent_id: parentId,
         updated_at_ms: now
       });
@@ -562,12 +567,12 @@ async function autoInitializeAccounts() {
 }
 
 async function collectionRecords(collection) {
-  const docs = await collection?.find?.().exec();
+  const docs = collection?.rows?.();
   return Array.isArray(docs) ? docs.map(docToRecord) : [];
 }
 
 function docToRecord(doc) {
-  return doc?.toJSON?.() || doc || {};
+  return doc || {};
 }
 
 function sortRecordsDesc(records, field) {
@@ -607,39 +612,6 @@ function accountMatchesCurrentSkr(account) {
 // =========================================================================
 // 📡 Realtime Subscriptions & Aggregations
 // =========================================================================
-function wireRealtimeSubscriptions() {
-  const db = fibuDb([
-    'accounting_accounts',
-    'accounting_journal_entries',
-    'accounting_journal_entry_lines',
-    'accounting_receipts',
-    'accounting_bank_statement_lines',
-  ]);
-  if (!db) return null;
-
-  const subs = [];
-
-  // Subscribe to all changes in our Fibu RxDB collections to trigger reactivity
-  const triggerReload = () => {
-    loadAllFibuData().then(() => {
-      renderBookingList();
-      renderActiveView();
-    });
-  };
-
-  subs.push(db.accounting_accounts.$.subscribe(triggerReload));
-  subs.push(db.accounting_journal_entries.$.subscribe(triggerReload));
-  subs.push(db.accounting_journal_entry_lines.$.subscribe(triggerReload));
-  subs.push(db.accounting_receipts.$.subscribe(triggerReload));
-  subs.push(db.accounting_bank_statement_lines.$.subscribe(triggerReload));
-
-  // Initial load
-  triggerReload();
-
-  return () => {
-    subs.forEach(s => s.unsubscribe());
-  };
-}
 
 async function loadAllFibuData() {
   const db = fibuDb([
@@ -796,15 +768,6 @@ function wireEvents() {
     });
   });
 
-  // Right auxiliary tabs
-  els.rightTabBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-      els.rightTabBtns.forEach(b => b.setAttribute('aria-selected', String(b === btn)));
-      const target = btn.getAttribute('data-right-tab');
-      switchRightSubpanel(target);
-    });
-  });
-
   // Bank import file input
   els.bankDropzone?.addEventListener('click', () => els.bankInput?.click());
   els.bankInput?.addEventListener('change', handleBankStatementImport);
@@ -836,35 +799,43 @@ function wireEvents() {
   els.panels.banking?.querySelector('[data-action="run-auto-reconciliation"]')?.addEventListener('click', triggerAutoReconcile);
   els.panels.assets?.querySelector('[data-action="new-asset"]')?.addEventListener('click', requestNewAsset);
   els.panels.assets?.querySelector('[data-action="trigger-depreciations"]')?.addEventListener('click', triggerDepreciationRun);
-  els.panels.tests?.querySelector('[data-action="run-all-ui-tests"]')?.addEventListener('click', () => window.runAllUiTests());
 
   // DATEV Export Click
   els.panels.reports?.querySelector('[data-action="export-datev"]')?.addEventListener('click', triggerDatevExport);
 
   // Drawer close
   els.drawerCloseBtn?.addEventListener('click', closeDrawer);
+}
 
-  // AI Agent message send
-  els.chatSendBtn?.addEventListener('click', handleSendAgentMsg);
-  els.chatInput?.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') handleSendAgentMsg();
+// Früher ctx.contextActions.dispatch('data', …) → Befehl business_os.data.modify (app.js
+// createContextActionsFacade); jetzt derselbe Befehl direkt über api.command.
+function dispatchDataTask(event, title, prompt) {
+  const context = buchhaltungCommandContextFromElement(state, event?.currentTarget);
+  return dispatchFibuCommand('business_os.data.modify', {
+    record_id: context.record_id || 'buchhaltung',
+    title,
+    instruction: prompt,
+    prompt,
+    user_message: prompt,
+    mode: 'data',
+    target: 'data',
+    context,
+    source_context: context,
+    thread_key: `business-os/buchhaltung/${context.record_id || 'module'}`,
+    response_channel: 'business_os_chat',
+    outbound_channel: 'business_os_chat',
+    client_context: { action: 'context-data', module_id: 'buchhaltung' },
   });
 }
 
-async function requestNewAsset(event) {
-  await state.ctx.contextActions.dispatch('data', {
-    target: event?.currentTarget,
-    title: 'Anlagegut erfassen',
-    prompt: 'Erfasse ein neues Anlagegut. Frage die fehlenden Stammdaten ab und lege den Datensatz nach Freigabe an.',
-  });
+function requestNewAsset(event) {
+  // v4-allow: text (Agenten-Auftrag, kein Oberflächentext)
+  dispatchDataTask(event, 'Anlagegut erfassen', 'Erfasse ein neues Anlagegut. Frage die fehlenden Stammdaten ab und lege den Datensatz nach Freigabe an.');
 }
 
-async function triggerDepreciationRun(event) {
-  await state.ctx.contextActions.dispatch('data', {
-    target: event?.currentTarget,
-    title: 'AfA-Abschreibungslauf starten',
-    prompt: 'Starte den AfA-Abschreibungslauf für die aktuelle Buchungsperiode und liefere den Laufstatus sowie die erzeugten Buchungen.',
-  });
+function triggerDepreciationRun(event) {
+  // v4-allow: text (Agenten-Auftrag, kein Oberflächentext)
+  dispatchDataTask(event, 'AfA-Abschreibungslauf starten', 'Starte den AfA-Abschreibungslauf für die aktuelle Buchungsperiode und liefere den Laufstatus sowie die erzeugten Buchungen.');
 }
 
 function unbindEvents() {
@@ -875,6 +846,9 @@ function unbindEvents() {
 // 🚀 View Routing Engine
 // =========================================================================
 function switchView(navId) {
+  // Ein Snapshot kann eine inzwischen entfernte Ansicht tragen (z. B. 'tests'): dann die Standardansicht.
+  const known = state.els.workbenchView ? [...state.els.workbenchView.options].map((o) => o.value) : null;
+  if (known && !known.includes(navId)) navId = INITIAL_VIEW.activeNav;
   state.activeNav = navId;
   if (state.els.workbenchView) state.els.workbenchView.value = navId;
 
@@ -902,19 +876,18 @@ function switchView(navId) {
 
   // Dynamic header text
   const titles = {
-    skr: { cat: 'KONTENRAHMEN', title: `${state.skrName} Kontenrahmen-Explorer` },
-    journal: { cat: 'BUCHUNGEN', title: 'Journal & Hauptbuch (GoBD-Immutable Ledger)' },
-    receipts: { cat: 'BELEGE & OCR', title: 'Eingangsbelege & Vorkontierungs-Inbox' },
-    banking: { cat: 'BANK & KASSE', title: 'Automatisierter SEPA Bankabgleich' },
-    travel: { cat: 'SPESENABRECHNUNG', title: 'Dienstreisen & Verpflegungsmehraufwand (VMA)' },
-    mileage: { cat: 'FAHRTENBUCH', title: 'Fahrtenbuch & Kilometererstattung' },
-    reports: { cat: 'JAHRESABSCHLUSS', title: 'Bilanz, GuV & Umsatzsteuer-Voranmeldung' },
-    assets: { cat: 'ANLAGENVERWALTUNG', title: 'Anlagenspiegel & Abschreibungen (AfA)' },
-    tests: { cat: 'QUALITÄTSSICHERUNG', title: 'Interaktive UI E2E-Testsuite' }
+    skr: { cat: 'KONTENRAHMEN', title: `Kontenrahmen ${state.skrName}` },
+    journal: { cat: 'BUCHUNGEN', title: 'Journal & Hauptbuch' },
+    receipts: { cat: 'BELEGE', title: 'Eingangsbelege' },
+    banking: { cat: 'BANK & KASSE', title: 'Bankabgleich' },
+    travel: { cat: 'SPESENABRECHNUNG', title: 'Dienstreisen' },
+    mileage: { cat: 'FAHRTENBUCH', title: 'Fahrtenbuch' },
+    reports: { cat: 'JAHRESABSCHLUSS', title: 'Auswertungen' },
+    assets: { cat: 'ANLAGENVERWALTUNG', title: 'Anlagenspiegel' },
   };
 
   if (state.els.centerCategory && state.els.centerTitle) {
-    state.els.centerCategory.textContent = titles[navId].cat;
+    state.els.centerCategory.textContent = '';
     state.els.centerTitle.textContent = titles[navId].title;
   }
 
@@ -931,15 +904,6 @@ function switchReportSubpanel(subId) {
   if (active) active.hidden = false;
 
   renderActiveView();
-}
-
-function switchRightSubpanel(subId) {
-  state.activeRightTab = subId;
-  Object.values(state.els.rightSubpanels).forEach(p => {
-    if (p) p.hidden = true;
-  });
-  const active = state.els.rightSubpanels[subId];
-  if (active) active.hidden = false;
 }
 
 function renderActiveView() {
@@ -968,9 +932,6 @@ function renderActiveView() {
     case 'assets':
       renderAssetsList();
       break;
-    case 'tests':
-      renderUiTestsList();
-      break;
   }
 }
 
@@ -982,8 +943,8 @@ function bookingRecords() {
     status: receipt.status === 'posted' ? 'posted' : 'draft',
     date: receipt.invoice_date || '',
     label: receipt.filename || receipt.invoice_number || receipt.id,
-    description: receipt.supplier_name || 'Unbekannter Lieferant',
-    amount: Number(receipt.gross_amount || 0),
+    description: receipt.supplier_name || '',
+    amount: hasAmount(receipt.gross_amount) ? Number(receipt.gross_amount) : null,
     source: receipt,
   }));
   const bookings = state.journalEntries.map((entry) => ({
@@ -1066,9 +1027,8 @@ function renderBookingList() {
 
   container.classList.toggle('is-compact', grammar.view === 'list');
   if (filtered.length === 0) {
-    container.innerHTML = allRecords.length === 0 && !fibuSourcesReady(['accounting_receipts', 'accounting_journal_entries'])
-      ? fibuSyncingBlock()
-      : '<div class="ctox-empty">Keine Belege oder Buchungen in dieser Ansicht.</div>';
+    // Leere Liste rendert nichts (R11); kein Lade- oder Leertext.
+    container.innerHTML = '';
   } else {
     // Zwei echte Dichten statt zweier Varianten derselben Zeile:
     // KARTEN tragen Titel plus zwei Meta-Zeilen (Zuordnung/Status/Datum, dann
@@ -1085,10 +1045,10 @@ function renderBookingList() {
         aria-selected="${selected ? 'true' : 'false'}">`;
       const body = compact
         ? `<strong>${escapeHtml(record.label)}</strong>
-        <span class="fibu-booking-lead">${formatCents(record.amount)}</span>`
+        <span class="fibu-booking-lead">${formatAmountOrDash(record.amount)}</span>`
         : `<strong>${escapeHtml(record.label)}</strong>
-        <span class="fibu-booking-meta">${bookingKindLabel(record.kind)} · <em class="fibu-booking-status is-${record.status}">${bookingStatusLabel(record.status)}</em> · ${escapeHtml(record.date || 'ohne Datum')}</span>
-        <span class="fibu-booking-meta fibu-booking-meta-split"><span class="fibu-booking-desc">${escapeHtml(record.description)}</span><span class="fibu-booking-amount">${formatCents(record.amount)}</span></span>`;
+        <span class="fibu-booking-meta">${bookingKindLabel(record.kind)} · <em class="fibu-booking-status is-${record.status}">${bookingStatusLabel(record.status)}</em> · ${escapeHtml(formatDateDe(record.date) || 'ohne Datum')}</span>
+        <span class="fibu-booking-meta fibu-booking-meta-split"><span class="fibu-booking-desc">${escapeHtml(record.description)}</span><span class="fibu-booking-amount">${formatAmountOrDash(record.amount)}</span></span>`;
       return `${head}${body}</button>`;
     }).join('');
   }
@@ -1147,8 +1107,8 @@ function updateEvidencePaneVisibility() {
   if (state.els.evidenceToggle) {
     state.els.evidenceToggle.hidden = !hasSelection;
     state.els.evidenceToggle.setAttribute('aria-pressed', String(visible));
-    state.els.evidenceToggle.setAttribute('aria-label', visible ? 'OCR-Evidenz ausblenden' : 'OCR-Evidenz einblenden');
-    state.els.evidenceToggle.setAttribute('title', visible ? 'OCR-Evidenz ausblenden' : 'OCR-Evidenz einblenden');
+    state.els.evidenceToggle.setAttribute('aria-label', visible ? 'Evidenz ausblenden' : 'Evidenz einblenden');
+    state.els.evidenceToggle.setAttribute('title', visible ? 'Evidenz ausblenden' : 'Evidenz einblenden');
   }
 }
 
@@ -1169,7 +1129,7 @@ function renderJournalEvidence(entry) {
       <div class="ctox-card-body">
         <dl class="ctox-fields">
           <div><dt>Buchungstext</dt><dd>${escapeHtml(entry.narration || '—')}</dd></div>
-          <div><dt>Datum</dt><dd>${escapeHtml(entry.posting_date || '—')}</dd></div>
+          <div><dt>Datum</dt><dd>${escapeHtml(formatDateDe(entry.posting_date) || '—')}</dd></div>
           <div><dt>Prüfstatus</dt><dd>${entry.posted_at ? 'GoBD-festgeschrieben' : 'Entwurf'}</dd></div>
           <div><dt>Evidenz</dt><dd>${lines.length} Buchungszeilen · kein Belegdokument verknüpft</dd></div>
         </dl>
@@ -1184,7 +1144,7 @@ function downloadJson(filename, value) {
   link.href = url;
   link.download = filename;
   link.style.display = 'none';
-  (state.ctx?.host || document.documentElement).appendChild(link);
+  (state.root || document.documentElement).appendChild(link);
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 0);
@@ -1207,9 +1167,9 @@ async function insertMissingRecords(collectionName, records) {
   let inserted = 0;
   for (const record of records) {
     if (!record?.id) continue;
-    const existing = await collection.findOne(record.id).exec();
+    const existing = await collection.byId(record.id);
     if (existing) continue;
-    await collection.insert(record);
+    await collection.add(record);
     inserted += 1;
   }
   return inserted;
@@ -1230,9 +1190,9 @@ async function importBookingRecords(event) {
     await loadAllFibuData();
     renderBookingList();
     renderActiveView();
-    alert(`${inserted.reduce((sum, value) => sum + value, 0)} Datensätze importiert.`);
+    fibuNotice('import.done', `${inserted.reduce((sum, value) => sum + value, 0)} Datensätze importiert.`);
   } catch (error) {
-    alert(`Import fehlgeschlagen: ${error?.message || error}`);
+    fibuNotice('import.failed', `Import fehlgeschlagen: ${error?.message || error}`, 'error');
   } finally {
     input.value = '';
   }
@@ -1247,9 +1207,8 @@ function renderAccountsList(acctsArray) {
   updateListCount(state.els.accountsCount, acctsArray.length, state.accounts.length, 'Konten');
 
   if (acctsArray.length === 0) {
-    container.innerHTML = state.accounts.length === 0 && !fibuSourcesReady(['accounting_accounts'])
-      ? fibuSyncingTableRow(6)
-      : `<tr><td colspan="6" class="fibu-empty-state">Keine Konten gefunden. Bitte initialisieren.</td></tr>`;
+    // Leere Liste rendert nichts (R11); kein Lade- oder Leertext.
+    container.innerHTML = '';
     return;
   }
 
@@ -1285,7 +1244,7 @@ function renderAccountsList(acctsArray) {
           equity: 'Eigenkapital',
           provisions: 'Rückstellungen'
         }[acct.account_type] || acct.account_type}</span></td>
-        <td><span style="font-size:11px; opacity:0.85;">${taxRate}</span></td>
+        <td><span style="font-size:11px; color: var(--muted);">${taxRate}</span></td>
         <td class="is-num" style="font-weight: ${isGroup ? '700' : 'normal'};">${formatSoll}</td>
         <td class="is-num" style="font-weight: ${isGroup ? '700' : 'normal'};">${formatHaben}</td>
       </tr>
@@ -1331,30 +1290,32 @@ async function forceReInitSKR() {
   const db = fibuDb(['accounting_accounts']);
   if (!db || !canWriteCollection('accounting_accounts')) return;
 
-  const confirmed = await showBusinessConfirm(
-    `Der Kontenrahmen ${state.skrName} wird gelöscht und aus der Vorlage neu aufgebaut.\n\nAlle lokalen Konten dieses Kontenrahmens werden überschrieben. Journalbuchungen bleiben bestehen, können danach aber auf geänderte Konten verweisen.`,
-    {
-      title: `${state.skrName} neu initialisieren`,
-      confirmLabel: 'Kontenrahmen neu initialisieren',
-      cancelLabel: 'Abbrechen',
-      requireText: state.skrName,
-      kind: 'danger'
-    }
-  );
+  // Bestätigung im App-Fenster (api.shell.dialog, Form OFFEN-A); destruktiv → default:false.
+  const confirmed = await state.api.shell.dialog({
+    kind: 'confirm',
+    tone: 'danger',
+    title: `${state.skrName} neu initialisieren`,
+    // v4-allow: text (Pflichtangabe vor destruktiver Aktion)
+    text: `Alle Konten von ${state.skrName} werden aus der Vorlage neu aufgebaut. Buchungen bleiben, können aber auf geänderte Konten verweisen.`,
+    confirm_label: 'Kontenrahmen neu initialisieren',
+    cancel_label: 'Abbrechen',
+    require_text: state.skrName,
+    default: false,
+  });
 
-  if (confirmed) {
+  if (confirmed === true) {
     // Delete existing
-    const allAccountDocs = await db.accounting_accounts.find().exec();
+    const allAccountDocs = await db.accounting_accounts.rows();
     const existing = allAccountDocs
       .filter((doc) => accountMatchesCurrentSkr(normalizeAccountRecord(docToRecord(doc))));
     for (const doc of existing) {
-      await doc.remove();
+      await db.accounting_accounts.drop(doc.id);
     }
     await importTemplateToDb(db, state.skrName);
     await ensureRequiredAccountsExist();
     await loadAllFibuData();
     renderActiveView();
-    alert(t('initSuccess'));
+    fibuNotice('skr.init', t('initSuccess'));
   }
 }
 
@@ -1371,9 +1332,8 @@ function renderJournalRows(entries) {
   updateListCount(state.els.journalCount, entries.length, state.journalEntries.length, 'Buchungen');
 
   if (entries.length === 0) {
-    container.innerHTML = state.journalEntries.length === 0 && !fibuSourcesReady(['accounting_journal_entries'])
-      ? fibuSyncingTableRow(7)
-      : `<tr><td colspan="7" class="fibu-empty-state">Keine Buchungen im Journal vorhanden.</td></tr>`;
+    // Leere Liste rendert nichts (R11); kein Lade- oder Leertext.
+    container.innerHTML = '';
     return;
   }
 
@@ -1393,10 +1353,10 @@ function renderJournalRows(entries) {
 
     html += `
       <tr class="${isStorno ? 'fibu-storno-indicator' : ''} ${state.selectedEntryId === entry.id ? 'is-selected' : ''}" data-entry-click-id="${entry.id}" data-context-record-id="${escapeHtml(entry.id)}" data-context-record-type="accounting_journal_entry" data-context-label="${escapeHtml(entry.number || entry.narration || entry.id)}" aria-selected="${state.selectedEntryId === entry.id ? 'true' : 'false'}" tabindex="0">
-        <td><span class="fibu-mono">${entry.posting_date}</span></td>
+        <td><span class="fibu-mono">${formatDateDe(entry.posting_date)}</span></td>
         <td><span class="fibu-mono">${entry.number || 'Entwurf'}</span></td>
         <td>${escapeHtml(entry.narration || 'Unbenannte Buchung')}</td>
-        <td><span style="font-size:11px; opacity:0.8;">${receiptLabel}</span></td>
+        <td><span style="font-size:11px; color: var(--muted);">${receiptLabel}</span></td>
         <td class="is-num" style="font-weight: 600;">${formattedTotal}</td>
         <td class="is-center">
           <span class="ctox-badge ${isPosted ? 'is-success' : ''}">
@@ -1452,16 +1412,15 @@ function filterJournalView(query) {
 }
 
 // =========================================================================
-// 📁 Rendering View: Receipts & OCR Inbox
+// 📁 Rendering View: Receipts Inbox
 // =========================================================================
 function renderReceiptsList() {
   const container = state.els.receiptsList;
   if (!container) return;
 
   if (state.receipts.length === 0) {
-    container.innerHTML = !fibuSourcesReady(['accounting_receipts'])
-      ? fibuSyncingTableRow(9)
-      : `<tr><td colspan="9" class="fibu-empty-state">Keine Belege vorhanden. Ziehen Sie Dokumente per Drag & Drop in den Importer.</td></tr>`;
+    // Leere Liste rendert nichts (R11); kein Lade- oder Leertext.
+    container.innerHTML = '';
     return;
   }
 
@@ -1475,14 +1434,14 @@ function renderReceiptsList() {
     html += `
       <tr class="${state.selectedReceiptId === r.id ? 'is-selected' : ''}" data-receipt-click-id="${r.id}" data-context-record-id="${escapeHtml(r.id)}" data-context-record-type="accounting_receipt" data-context-label="${escapeHtml(r.filename || r.invoice_number || r.id)}" aria-selected="${state.selectedReceiptId === r.id ? 'true' : 'false'}" tabindex="0">
         <td style="font-weight: 500; color: var(--text-strong);">📄 ${escapeHtml(r.filename)}</td>
-        <td>${escapeHtml(r.supplier_name || 'Unbekannt')}</td>
-        <td><span class="fibu-mono">${r.invoice_date || '—'}</span></td>
-        <td class="is-num">${formatCents(r.net_amount || 0)}</td>
-        <td class="is-num">${r.tax_amount ? '19%' : '0%'}</td>
-        <td class="is-num" style="font-weight: 600;">${formatCents(r.gross_amount || 0)}</td>
-        <td><span style="font-size:11.5px; opacity:0.85;">${suggestedLabel}</span></td>
+        <td>${escapeHtml(r.supplier_name || '—')}</td>
+        <td><span class="fibu-mono">${formatDateDe(r.invoice_date) || '—'}</span></td>
+        <td class="is-num">${formatAmountOrDash(r.net_amount)}</td>
+        <td class="is-num">${hasAmount(r.tax_amount) && hasAmount(r.net_amount) && Number(r.net_amount) ? `${Math.round((Number(r.tax_amount) / Number(r.net_amount)) * 100)}%` : '—'}</td>
+        <td class="is-num" style="font-weight: 600;">${formatAmountOrDash(r.gross_amount)}</td>
+        <td><span style="font-size:11.5px; color: var(--muted);">${suggestedLabel}</span></td>
         <td class="is-center">
-          <span class="ctox-badge ${status === 'posted' ? 'is-success' : 'is-warning'}">${status}</span>
+          <span class="ctox-badge ${status === 'posted' ? 'is-success' : ''}">${status === 'posted' ? 'Gebucht' : 'Offen'}</span>
         </td>
         <td class="is-center" onclick="event.stopPropagation();">
           ${status !== 'posted' ? `<button class="ctox-button is-primary ctox-button--sm" onclick="postReceiptDirectly('${r.id}')">Buchen</button>` : '🔒 Fibu'}
@@ -1517,76 +1476,270 @@ function selectReceipt(id) {
   setSelectedBookingRow(state.selectedBookingKey);
   setSelectedRow(state.els.receiptsList, 'data-receipt-click-id', id);
 
-  // Render Simulated OCR in the Right Auxiliary pane!
   renderOcrInvoicePreview(receipt);
   updateEvidencePaneVisibility();
   openReceiptDrawer(receipt);
 }
 
+// =========================================================================
+// Belegkontierung (BUCH-3): Felder untereinander, Speichern je Änderung per api.patch. Die App-API 4.0 kennt kein
+// expected_revision; die Konfliktprüfung nutzt updated_at_ms des Belegs als Revision der App: beim Öffnen gemerkt,
+// vor jedem Speichern verglichen. Weicht sie ab, wird nichts geschrieben und der Grund steht in der Zone.
+// =========================================================================
+const RECEIPT_TAX_RATES = Object.freeze([19, 7, 0]);
+const RECEIPT_TEXT_FIELDS = Object.freeze(['supplier_name', 'invoice_number', 'invoice_date', 'suggested_account_id']);
+const RECEIPT_AMOUNT_FIELDS = Object.freeze(['net_amount', 'tax_amount', 'gross_amount']);
+
+function parseEuroCents(text) {
+  const raw = String(text ?? '').replace(/[\s€]/g, '');
+  if (!raw) return null;
+  const norm = raw.includes(',') ? raw.replace(/\./g, '').replace(',', '.') : raw;
+  const n = Number(norm);
+  return Number.isFinite(n) ? Math.round(n * 100) : NaN;
+}
+function centsInputValue(cents) {
+  return hasAmount(cents) ? (Number(cents) / 100).toFixed(2).replace('.', ',') : '';
+}
+function suggestedTax(net, rate) {
+  return hasAmount(net) && hasAmount(rate) ? Math.round((Number(net) * Number(rate)) / 100) : null;
+}
+
+function receiptFormMarkup(receipt, isPosted) {
+  const dis = isPosted ? ' disabled' : '';
+  const accounts = (state.accounts || []).filter((a) => !a.is_group && a.account_type !== 'group');
+  const accountOptions = accounts.map((a) => `<option value="${escapeHtml(a.id)}"${a.id === receipt.suggested_account_id ? ' selected' : ''}>${escapeHtml(`${a.code} ${a.name}`)}</option>`).join('');
+  const rate = hasAmount(receipt.tax_rate) ? Number(receipt.tax_rate) : null;
+  const rateOptions = RECEIPT_TAX_RATES.map((r) => `<option value="${r}"${rate === r ? ' selected' : ''}>${r} %</option>`).join('');
+  const row = (label, control) => `<label class="fibu-receipt-row"><span class="ctox-field-label">${label}</span>${control}</label>`;
+  const text = (name, value, extra = '') => `<input class="ctox-input" name="${name}" value="${escapeHtml(value || '')}" autocomplete="off"${extra}${dis} />`;
+  const amount = (name) => `<input class="ctox-input is-num" name="${name}" inputmode="decimal" value="${centsInputValue(receipt[name])}" autocomplete="off"${dis} />`;
+  return `
+      <form class="fibu-receipt-form" data-receipt-form data-receipt-id="${escapeHtml(receipt.id)}" data-base-updated="${Number(receipt.updated_at_ms) || 0}" novalidate>
+        ${row('Lieferant', text('supplier_name', receipt.supplier_name))}
+        ${row('Rechnungsnummer', text('invoice_number', receipt.invoice_number))}
+        ${row('Belegdatum', `<input class="ctox-input" type="date" name="invoice_date" value="${escapeHtml(receipt.invoice_date || '')}"${dis} />`)}
+        ${row('Konto', `<select class="ctox-select" name="suggested_account_id"${dis}><option value=""${receipt.suggested_account_id ? '' : ' selected'}>—</option>${accountOptions}</select>`)}
+        ${row('Netto', amount('net_amount'))}
+        ${row('Steuersatz', `<select class="ctox-select" name="tax_rate"${dis}><option value=""${rate == null ? ' selected' : ''}>—</option>${rateOptions}</select>`)}
+        ${row('Steuer', amount('tax_amount'))}
+        ${row('Brutto', amount('gross_amount'))}
+      </form>`;
+}
+
+function receiptFormFor(receiptId) {
+  const form = state.els.drawerContent?.querySelector('[data-receipt-form]');
+  return form && form.dataset.receiptId === String(receiptId) ? form : null;
+}
+
+// Formularwerte im Speicherformat: Texte getrimmt ('' = leer), Beträge in Cent (null = leer, NaN = ungültig).
+function readReceiptForm(form) {
+  const out = {};
+  for (const name of RECEIPT_TEXT_FIELDS) out[name] = String(form.elements[name]?.value ?? '').trim();
+  const rate = form.elements.tax_rate?.value;
+  out.tax_rate = rate === '' || rate == null ? null : Number(rate);
+  for (const name of RECEIPT_AMOUNT_FIELDS) out[name] = parseEuroCents(form.elements[name]?.value);
+  return out;
+}
+
+// Steuer und Brutto als Vorschlag, solange der Nutzer sie nicht selbst geändert hat (data-manual).
+function applyReceiptSuggestions(form) {
+  const v = readReceiptForm(form);
+  const tax = form.elements.tax_amount;
+  const gross = form.elements.gross_amount;
+  if (tax && tax.dataset.manual !== '1') {
+    const t = suggestedTax(v.net_amount, v.tax_rate);
+    tax.value = t == null ? tax.value : centsInputValue(t);
+  }
+  const taxCents = parseEuroCents(tax?.value);
+  if (gross && gross.dataset.manual !== '1' && hasAmount(v.net_amount) && hasAmount(taxCents)) {
+    gross.value = centsInputValue(Number(v.net_amount) + Number(taxCents));
+  }
+}
+
+function bindReceiptForm(form, receipt) {
+  if (!form) return;
+  // Gespeicherte Abweichungen gelten als Nutzereintrag und bleiben stehen.
+  const rate = hasAmount(receipt.tax_rate) ? Number(receipt.tax_rate) : null;
+  if (hasAmount(receipt.tax_amount) && receipt.tax_amount !== suggestedTax(receipt.net_amount, rate)) form.elements.tax_amount.dataset.manual = '1';
+  if (hasAmount(receipt.gross_amount) && !(hasAmount(receipt.net_amount) && hasAmount(receipt.tax_amount) && Number(receipt.net_amount) + Number(receipt.tax_amount) === Number(receipt.gross_amount))) {
+    form.elements.gross_amount.dataset.manual = '1';
+  }
+  form.addEventListener('submit', (event) => event.preventDefault());
+  form.addEventListener('input', (event) => {
+    form.dataset.dirty = '1';
+    const name = event.target?.name;
+    if (name === 'tax_amount' || name === 'gross_amount') event.target.dataset.manual = event.target.value.trim() ? '1' : '';
+    if (name === 'net_amount' || name === 'tax_amount') applyReceiptSuggestions(form);
+    updateReceiptDrawerOptions(form.dataset.receiptId);
+  });
+  form.addEventListener('change', (event) => {
+    if (event.target?.name === 'tax_rate') applyReceiptSuggestions(form);
+    form.dataset.dirty = '1';
+    updateReceiptDrawerOptions(form.dataset.receiptId);
+    void saveReceiptForm(form);
+  });
+}
+
+// Speichert die geänderten Felder. false = nicht gespeichert (Konflikt, ungültig, Fehler); Grund in der Zone.
+async function saveReceiptForm(form) {
+  const api = state.api;
+  const id = form?.dataset.receiptId;
+  if (!api || !id) return false;
+  const current = api.get('accounting_receipts', id).get();
+  if (!current || current.status === 'posted') return false;
+  const base = Number(form.dataset.baseUpdated) || 0;
+  if ((Number(current.updated_at_ms) || 0) !== base) {
+    fibuNotice('receipt.conflict', `${current.filename || id}: Beleg wurde inzwischen geändert. Eingabe nicht gespeichert, Beleg neu öffnen.`, 'error');
+    return false;
+  }
+  const values = readReceiptForm(form);
+  if (RECEIPT_AMOUNT_FIELDS.some((name) => Number.isNaN(values[name]))) {
+    fibuNotice('receipt.invalid_amount', `${current.filename || id}: Betrag ungültig.`, 'warn');
+    return false;
+  }
+  api.status.clear('buchhaltung.receipt.invalid_amount');
+  const patch = {};
+  for (const [name, value] of Object.entries(values)) {
+    const empty = value === '' || value == null;
+    const had = current[name] !== undefined && current[name] !== null && current[name] !== '';
+    if (empty ? had : current[name] !== value) patch[name] = empty ? null : value;
+  }
+  if (!Object.keys(patch).length) { delete form.dataset.dirty; return true; }
+  const now = Math.max(Date.now(), base + 1);
+  patch.updated_at_ms = now;
+  form.dataset.baseUpdated = String(now);
+  try {
+    const handle = api.patch('accounting_receipts', id, patch);
+    handle.result?.then?.((result) => {
+      if (result?.status === 'rejected') fibuNotice('receipt.save_rejected', `${current.filename || id}: Speichern abgelehnt (${result.reason || 'rejected'})`, 'error');
+    }, () => {});
+    await handle.local;
+  } catch (error) {
+    form.dataset.baseUpdated = String(base);
+    fibuNotice('receipt.save_failed', `${current.filename || id}: Speichern fehlgeschlagen (${error?.code || error?.message || error})`, 'error');
+    return false;
+  }
+  delete form.dataset.dirty;
+  api.status.clear('buchhaltung.receipt.conflict');
+  api.status.clear('buchhaltung.receipt.save_failed');
+  return true;
+}
+
+// Live-Daten: ein unverändertes Formular übernimmt den neuen Stand (Werte + Revision); ein Formular mit offenen
+// Eingaben bleibt unangetastet, damit nichts überschrieben wird (Konflikt meldet dann das Speichern).
+function syncOpenReceiptForm() {
+  const form = state.els.drawerContent?.querySelector('[data-receipt-form]');
+  if (!form || form.dataset.dirty === '1') return;
+  const doc = state.api?.get('accounting_receipts', form.dataset.receiptId).get();
+  if (!doc || (Number(doc.updated_at_ms) || 0) === (Number(form.dataset.baseUpdated) || 0)) return;
+  if (form.contains(document.activeElement)) return;
+  for (const name of RECEIPT_TEXT_FIELDS) if (form.elements[name]) form.elements[name].value = doc[name] || '';
+  if (form.elements.tax_rate) form.elements.tax_rate.value = hasAmount(doc.tax_rate) ? String(Number(doc.tax_rate)) : '';
+  for (const name of RECEIPT_AMOUNT_FIELDS) if (form.elements[name]) form.elements[name].value = centsInputValue(doc[name]);
+  form.dataset.baseUpdated = String(Number(doc.updated_at_ms) || 0);
+}
+
+// Buchen nur mit erfassten Angaben – ein leerer Beleg ergäbe eine Buchung über 0 € ohne Datum.
+function receiptIsComplete(receipt) {
+  return Boolean(receipt?.invoice_date) && Boolean(receipt?.suggested_account_id)
+    && hasAmount(receipt.net_amount) && hasAmount(receipt.tax_amount) && hasAmount(receipt.gross_amount)
+    && Number(receipt.net_amount) + Number(receipt.tax_amount) === Number(receipt.gross_amount);
+}
+
+// Beleg-Evidenz: nur gespeicherte Angaben, keine nachgebildete Rechnung (keine Belegerkennung vorhanden).
+function hasAmount(value) {
+  return value !== undefined && value !== null && value !== '' && Number.isFinite(Number(value));
+}
+function formatAmountOrDash(value) {
+  return hasAmount(value) ? formatCents(Number(value)) : '—';
+}
+function formatFileSize(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toLocaleString('de-DE', { maximumFractionDigits: 1 })} KB`;
+  return `${(n / (1024 * 1024)).toLocaleString('de-DE', { maximumFractionDigits: 1 })} MB`;
+}
+
 function renderOcrInvoicePreview(receipt) {
   const container = state.els.ocrPreviewContainer;
   if (!container) return;
-
-  const ocrHtml = `
-    <div class="fibu-simulated-ocr">
-      <div class="ocr-invoice-header">
-        <div>
-          <div class="ocr-invoice-title">${escapeHtml(receipt.supplier_name || 'EINGANGSRECHNUNG')}</div>
-          <div>StNr / UStID: DE814712499</div>
-        </div>
-        <div class="ocr-invoice-meta">
-          <div>RECHNUNG</div>
-          <div style="font-weight: 700;"># ${escapeHtml(receipt.invoice_number || 'INV-98172')}</div>
-        </div>
+  const field = (label, value) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value || '—')}</dd></div>`;
+  const uploaded = Number(receipt.uploaded_at_ms) > 0 ? new Date(Number(receipt.uploaded_at_ms)).toLocaleString('de-DE') : '';
+  container.innerHTML = `
+    <section class="ctox-card fibu-evidence-summary" data-receipt-evidence>
+      <header><h3>${escapeHtml(receipt.filename || receipt.id)}</h3></header>
+      <div class="ctox-card-body">
+        <dl class="ctox-fields">
+          ${field('Dateityp', receipt.mime_type)}
+          ${field('Größe', formatFileSize(receipt.file_size))}
+          ${field('Hochgeladen', uploaded)}
+          ${field('Lieferant', receipt.supplier_name)}
+          ${field('Rechnungsnummer', receipt.invoice_number)}
+          ${field('Belegdatum', formatDateDe(receipt.invoice_date))}
+          ${field('Netto', formatAmountOrDash(receipt.net_amount))}
+          ${field('Steuer', formatAmountOrDash(receipt.tax_amount))}
+          ${field('Brutto', formatAmountOrDash(receipt.gross_amount))}
+        </dl>
       </div>
-
-      <div class="ocr-invoice-details">
-        <table style="width: 100%; font-size: 11px;">
-          <thead>
-            <tr>
-              <th>Pos</th>
-              <th>Beschreibung</th>
-              <th style="text-align:right;">Gesamt</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>1</td>
-              <td>Dienstleistungen laut Leistungsbeschreibung</td>
-              <td style="text-align:right;">${formatCents(receipt.net_amount)}</td>
-            </tr>
-            <tr style="border-top: 1px solid var(--line);">
-              <td colspan="2" style="text-align:right;">Netto:</td>
-              <td style="text-align:right;">${formatCents(receipt.net_amount)}</td>
-            </tr>
-            <tr>
-              <td colspan="2" style="text-align:right;">MwSt 19%:</td>
-              <td style="text-align:right;">${formatCents(receipt.tax_amount)}</td>
-            </tr>
-            <tr class="ocr-invoice-total-row">
-              <td colspan="2" style="text-align:right;">Bruttobetrag (EUR):</td>
-              <td style="text-align:right;">${formatCents(receipt.gross_amount)}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div class="ctox-card ocr-raw-meta-badge">
-        <header>
-          <span>🤖 CTOX-OCR Metadaten</span>
-          <span class="ctox-badge is-success">99.4% Konfidenz</span>
-        </header>
-        <div class="ctox-card-body">
-          <span class="ctox-field-label">GoBD-Archivpfad</span>
-          <div class="ocr-archive-path-wrapper">
-            <code class="ocr-archive-path" title="${escapeHtml(receipt.file_storage_url || '')}">${truncateArchiveUrl(receipt.file_storage_url || '')}</code>
-            <button type="button" class="ctox-pane-icon" onclick="navigator.clipboard.writeText('${escapeHtml(receipt.file_storage_url || '')}'); alert('Archivpfad in die Zwischenablage kopiert!');" aria-label="Archivpfad kopieren" title="Archivpfad kopieren">📋</button>
-          </div>
+    </section>
+    <section class="ctox-card fibu-receipt-file" data-receipt-file></section>
+    <div class="ctox-card ocr-raw-meta-badge">
+      <div class="ctox-card-body">
+        <span class="ctox-field-label">Datei-Referenz</span>
+        <div class="ocr-archive-path-wrapper">
+          <code class="ocr-archive-path" title="${escapeHtml(receipt.file_storage_url || '')}">${truncateArchiveUrl(receipt.file_storage_url || '')}</code>
+          <button type="button" class="ctox-pane-icon" onclick="window.fibuCopyArchivePath('${escapeHtml(receipt.file_storage_url || '')}')" aria-label="Archivpfad kopieren" title="Archivpfad kopieren">📋</button>
         </div>
       </div>
     </div>
   `;
-  container.innerHTML = ocrHtml;
+  renderReceiptFile(container.querySelector('[data-receipt-file]'), receipt);
+}
+
+// Datei des Belegs aus api.files: PDF und Bild als Vorschau, sonst Name + Öffnen (file-viewer).
+const FILE_REF_RE = /^[0-9a-f]{64}$/;
+function revokeReceiptFileUrl() {
+  if (state.receiptFileUrl) URL.revokeObjectURL(state.receiptFileUrl);
+  state.receiptFileUrl = null;
+}
+function renderReceiptFile(host, receipt) {
+  revokeReceiptFileUrl();
+  if (!host) return;
+  const ref = String(receipt.file_storage_url || '');
+  if (!FILE_REF_RE.test(ref) || !state.api?.files) { host.remove(); return; }
+  const token = (state.receiptFileToken = (state.receiptFileToken || 0) + 1);
+  const name = receipt.filename || receipt.id;
+  const mime = String(receipt.mime_type || '');
+  const openButton = `<button type="button" class="ctox-button ctox-button--sm" data-receipt-file-open>Öffnen</button>`;
+  host.innerHTML = `<header><h3>${escapeHtml(name)}</h3>${openButton}</header>`;
+  host.querySelector('[data-receipt-file-open]')?.addEventListener('click', () => {
+    state.api.shell?.navigate?.('file-viewer', { ref, file_id: receipt.file_id || '', name, mime, size: receipt.file_size });
+  });
+  if (!/^application\/pdf$|^image\//.test(mime)) return;
+  Promise.resolve().then(() => state.api.files.get(ref)).then((blob) => {
+    if (token !== state.receiptFileToken || !host.isConnected || !blob) return;
+    state.api.status.clear('buchhaltung.receipt.file_unavailable');
+    const url = URL.createObjectURL(blob);
+    state.receiptFileUrl = url;
+    const body = document.createElement('div');
+    body.className = 'fibu-receipt-file-view';
+    if (mime.startsWith('image/')) {
+      const img = document.createElement('img');
+      img.src = url;
+      img.alt = name;
+      body.append(img);
+    } else {
+      const frame = document.createElement('iframe');
+      frame.src = url;
+      frame.title = name;
+      body.append(frame);
+    }
+    host.append(body);
+  }, (error) => {
+    if (token !== state.receiptFileToken) return;
+    fibuNotice('receipt.file_unavailable', `${name}: Datei nicht geladen (${error?.code || error?.message || error})`, 'warn');
+  });
 }
 
 // =========================================================================
@@ -1597,9 +1750,8 @@ function renderBankingList() {
   if (!container) return;
 
   if (state.bankStatementLines.length === 0) {
-    container.innerHTML = !fibuSourcesReady(['accounting_bank_statement_lines'])
-      ? fibuSyncingTableRow(7)
-      : `<tr><td colspan="7" class="fibu-empty-state">Keine Banktransaktionen vorhanden. Importieren Sie eine camt.053 XML-Datei.</td></tr>`;
+    // Leere Liste rendert nichts (R11); kein Lade- oder Leertext.
+    container.innerHTML = '';
     return;
   }
 
@@ -1620,7 +1772,7 @@ function renderBankingList() {
         <td><span class="fibu-mono">${line.value_date}</span></td>
         <td>
           <div style="font-weight:600; color:var(--text-strong);">${escapeHtml(line.counterparty_name || 'Unbekannter Empfänger')}</div>
-          <div style="font-size:10.5px; opacity:0.75; font-family:monospace;">${line.counterparty_iban || '—'}</div>
+          <div style="font-size:10.5px; color: var(--muted); font-family:monospace;">${line.counterparty_iban || '—'}</div>
         </td>
         <td style="font-size:12px; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
           ${escapeHtml(line.narration || '')}
@@ -2043,7 +2195,7 @@ function renderAssetsList() {
   if (!container) return;
 
   let html = '';
-  ASSETS_MOCK.forEach(as => {
+  assetRows().forEach(as => {
     html += `
       <tr class="${state.selectedAssetId === as.nr ? 'is-selected' : ''}" data-asset-click-nr="${as.nr}" data-context-record-id="${escapeHtml(as.nr)}" data-context-record-type="accounting_asset" data-context-label="${escapeHtml(as.name)}" aria-selected="${state.selectedAssetId === as.nr ? 'true' : 'false'}" tabindex="0">
         <td><span class="fibu-mono">${as.nr}</span></td>
@@ -2081,7 +2233,7 @@ function renderAssetsList() {
 }
 
 function selectAsset(nr) {
-  const asset = ASSETS_MOCK.find(as => as.nr === nr);
+  const asset = assetRows().find(as => as.nr === nr);
   if (!asset) return;
   state.selectedAssetId = nr;
   setSelectedRow(state.els.assetsList, 'data-asset-click-nr', nr);
@@ -2126,8 +2278,8 @@ function openAccountLedgerDrawer(accountId) {
             <th>Datum</th>
             <th>Belegnr</th>
             <th>Buchungstext</th>
-            <th class="is-num">Soll (Debit)</th>
-            <th class="is-num">Haben (Credit)</th>
+            <th class="is-num">Soll</th>
+            <th class="is-num">Haben</th>
           </tr>
         </thead>
         <tbody>
@@ -2135,7 +2287,7 @@ function openAccountLedgerDrawer(accountId) {
     ledgerLines.forEach(l => {
       linesHtml += `
         <tr>
-          <td><span class="fibu-mono">${l.posting_date}</span></td>
+          <td><span class="fibu-mono">${formatDateDe(l.posting_date)}</span></td>
           <td><span class="fibu-mono">${l.number}</span></td>
           <td>${escapeHtml(l.narration)}</td>
           <td class="fibu-text-debit is-num">${l.debit ? formatCents(l.debit) : '—'}</td>
@@ -2164,7 +2316,7 @@ function openJournalEntryDrawer(entryId) {
       <dt>Buchungstext</dt>
       <dd>${escapeHtml(entry.narration || '')}</dd>
       <dt>Buchungsdatum</dt>
-      <dd class="fibu-mono">${entry.posting_date}</dd>
+      <dd class="fibu-mono">${formatDateDe(entry.posting_date)}</dd>
     </dl>
   `;
 
@@ -2174,8 +2326,8 @@ function openJournalEntryDrawer(entryId) {
         <tr>
           <th>Konto Code</th>
           <th>Kontenbezeichnung</th>
-          <th class="is-num">Soll (Debit)</th>
-          <th class="is-num">Haben (Credit)</th>
+          <th class="is-num">Soll</th>
+          <th class="is-num">Haben</th>
         </tr>
       </thead>
       <tbody>
@@ -2203,13 +2355,7 @@ function openJournalEntryDrawer(entryId) {
     `;
   } else {
     html += `
-      <div class="ctox-callout is-success fibu-security-note">
-        <span aria-hidden="true">🛡️</span>
-        <div>
-          <strong>GoBD-Festgeschrieben (Unveränderbar)</strong>
-          <span>Dieser Belegeintrag ist steuerrechtlich gesperrt. Nachträgliche Korrekturen können nur per Storno vorgenommen werden.</span>
-        </div>
-      </div>
+      <span class="ctox-badge is-success fibu-locked-badge" title="Dieser Belegeintrag ist steuerrechtlich gesperrt. Nachträgliche Korrekturen können nur per Storno vorgenommen werden.">Festgeschrieben</span>
     `;
   }
 
@@ -2224,24 +2370,11 @@ function openReceiptDrawer(receipt) {
 
   let html = `
     <div id="receipt-drawer-advanced-container">
-      <div class="fibu-form-row">
-        <div class="fibu-form-group">
-          <label class="ctox-field-label">Lieferant</label>
-          <input type="text" class="ctox-input" value="${escapeHtml(receipt.supplier_name || '')}" readonly />
-        </div>
-        <div class="fibu-form-group">
-          <label class="ctox-field-label">Rechnungsnummer</label>
-          <input type="text" class="ctox-input" value="${escapeHtml(receipt.invoice_number || '')}" readonly />
-        </div>
-        <div class="fibu-form-group">
-          <label class="ctox-field-label">Belegdatum</label>
-          <input type="text" class="ctox-input" value="${receipt.invoice_date || ''}" readonly />
-        </div>
-      </div>
+      ${receiptFormMarkup(receipt, isPosted)}
 
-      <div class="ctox-callout" style="margin-top:15px;">
+      <div style="margin-top:15px;">
         <div class="fibu-form-group">
-          <label class="ctox-field-label fibu-text-warning">Zahlungsweg (Konto-Gegenbuchung)</label>
+          <label class="ctox-field-label">Zahlungsweg</label>
           <select id="rcpt-payment-method" class="ctox-select" onchange="updateReceiptDrawerOptions('${receipt.id}')" ${isPosted ? 'disabled' : ''}>
             <option value="kreditor">Geschäftskonto (Standard-Kreditor Verbindlichkeiten)</option>
             <option value="privat">Privat bezahlt (Privatauslage des Inhabers)</option>
@@ -2251,37 +2384,31 @@ function openReceiptDrawer(receipt) {
       </div>
 
       <div style="margin-top:15px;">
-        <span class="ctox-field-label fibu-text-warning" style="margin-bottom:8px;">Steuerliche Sonderregeln & Steuerberater-Tricks:</span>
-        <div class="ctox-callout" style="display:flex; flex-direction:column; gap:8px;">
-          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; color:var(--text); font-size:12.5px;">
+        <span class="ctox-field-label" style="margin-bottom:8px;">Steuerliche Sonderregeln</span>
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <label title="70/30 Netto-Split, 100 % Vorsteuer abzugsfähig" style="display:flex; align-items:center; gap:8px; cursor:pointer; color:var(--text); font-size:12.5px;">
             <input type="checkbox" id="rcpt-bewirtung" onchange="updateReceiptDrawerOptions('${receipt.id}')" ${isPosted ? 'disabled' : ''} />
-            Geschäftliche Bewirtung (70/30 Netto-Split, 100% Vorsteuer abzugsfähig)
+            Geschäftliche Bewirtung
           </label>
-          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; color:var(--text); font-size:12.5px;">
+          <label title="Über 35 € automatisch nicht abzugsfähig" style="display:flex; align-items:center; gap:8px; cursor:pointer; color:var(--text); font-size:12.5px;">
             <input type="checkbox" id="rcpt-geschenk" onchange="updateReceiptDrawerOptions('${receipt.id}')" ${isPosted ? 'disabled' : ''} />
-            Geschenk an Partner (schaltet bei &gt; 35 € automatisch auf nicht abzugsfähig)
+            Geschenk an Partner
           </label>
-          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; color:var(--text); font-size:12.5px;">
+          <label title="20 % Privatanteil werden automatisch herausgerechnet" style="display:flex; align-items:center; gap:8px; cursor:pointer; color:var(--text); font-size:12.5px;">
             <input type="checkbox" id="rcpt-phone-private" onchange="updateReceiptDrawerOptions('${receipt.id}')" ${isPosted ? 'disabled' : ''} />
-            Telefon/Internet (zieht automatisch 20% Privatanteil heraus)
+            Telefon/Internet
           </label>
         </div>
       </div>
 
-      <h4 class="ctox-field-label" style="margin:20px 0 10px 0;">Vorgeschlagener GoBD-Buchungssatz (Live-Vorschau):</h4>
+      <h4 class="ctox-field-label" style="margin:20px 0 10px 0;">Buchungssatz</h4>
       <div id="receipt-preview-table-container">
         <!-- Table loaded dynamically -->
       </div>
 
       <div style="margin-top:20px; display:flex; justify-content:flex-end; gap:10px;">
         ${isPosted ? `
-          <div class="ctox-callout is-success fibu-security-note" style="width:100%; margin-top:0;">
-            <span aria-hidden="true">🛡️</span>
-            <div>
-              <strong>GoBD-Festgeschrieben (Unveränderbar)</strong>
-              <span>Dieser Beleg wurde bereits festgeschrieben und verbucht.</span>
-            </div>
-          </div>
+          <span class="ctox-badge is-success fibu-locked-badge" title="Dieser Beleg wurde bereits festgeschrieben und verbucht.">Festgeschrieben</span>
         ` : `
           <button class="ctox-button is-primary" onclick="postReceiptWithAdvancedOptions('${receipt.id}')">✔️ Vorkontierung freigeben & Buchen</button>
         `}
@@ -2289,6 +2416,7 @@ function openReceiptDrawer(receipt) {
     </div>
   `;
   state.els.drawerContent.innerHTML = html;
+  bindReceiptForm(state.els.drawerContent.querySelector('[data-receipt-form]'), receipt);
 
   // Initial draw
   updateReceiptDrawerOptions(receipt.id);
@@ -2316,24 +2444,18 @@ function openBankReconciliationDrawer(lineId) {
 
   if (line.match_status === 'matched') {
     html += `
-      <div class="ctox-callout is-success fibu-security-note" style="margin-top:20px; width:100%;">
-        <span aria-hidden="true">🛡️</span>
-        <div>
-          <strong>Abgeglichen & Verbucht</strong>
-          <span>Diese Banktransaktion wurde GoBD-konform mit einem Beleg verknüpft und festgeschrieben.</span>
-        </div>
-      </div>
+      <!-- v4-allow: label (Buchhaltungsbegriff Bankabgleich) -->
+      <span class="ctox-badge is-success fibu-locked-badge" title="Diese Banktransaktion wurde GoBD-konform mit einem Beleg verknüpft und festgeschrieben.">Abgeglichen & Verbucht</span>
     `;
   } else {
     if (matchedReceipt) {
       html += `
-        <div class="ctox-callout is-info" style="margin-top:20px;">
-          <h4 class="fibu-text-warning" style="margin:0 0 8px 0;">🤖 Automatischer Abgleichsvorschlag:</h4>
-          <p style="font-size:12.5px; margin-bottom:12px;">Wir haben einen offenen Beleg mit exakt demselben Betrag (${formatCents(Math.abs(amountVal))}) gefunden:</p>
+        <div class="ctox-card" style="margin-top:20px; padding:12px;">
+          <h4 class="ctox-field-label" style="margin:0 0 8px 0;">Passender Beleg · ${formatCents(Math.abs(amountVal))}</h4>
           <div style="display:flex; justify-content:space-between; align-items:center;">
             <div>
               <div style="font-weight:700; color:var(--text-strong);">📄 ${escapeHtml(matchedReceipt.filename)}</div>
-              <div style="font-size:11px; opacity:0.8;">Lieferant: ${escapeHtml(matchedReceipt.supplier_name)} | Datum: ${matchedReceipt.invoice_date}</div>
+              <div style="font-size:11px; color: var(--muted);">Lieferant: ${escapeHtml(matchedReceipt.supplier_name)} | Datum: ${formatDateDe(matchedReceipt.invoice_date)}</div>
             </div>
             <button class="ctox-button is-primary" onclick="matchBankLineDirectly('${line.id}', '${matchedReceipt.id}')">Abgleich bestätigen</button>
           </div>
@@ -2436,13 +2558,13 @@ function openManualJournalDrawer() {
 
       <div class="fibu-form-row">
         <div class="fibu-form-group">
-          <label class="ctox-field-label" for="new-entry-soll">Soll-Konto (Debit)</label>
+          <label class="ctox-field-label" for="new-entry-soll">Soll-Konto</label>
           <select id="new-entry-soll" class="ctox-select" required>
             ${state.accounts.filter(a => !a.is_group).map(a => `<option value="${a.id}" ${a.id === defaults.soll ? 'selected' : ''}>${a.code} ${escapeHtml(a.name)}</option>`).join('')}
           </select>
         </div>
         <div class="fibu-form-group">
-          <label class="ctox-field-label" for="new-entry-haben">Haben-Konto (Credit)</label>
+          <label class="ctox-field-label" for="new-entry-haben">Haben-Konto</label>
           <select id="new-entry-haben" class="ctox-select" required>
             ${state.accounts.filter(a => !a.is_group).map(a => `<option value="${a.id}" ${a.id === defaults.haben ? 'selected' : ''}>${a.code} ${escapeHtml(a.name)}</option>`).join('')}
           </select>
@@ -2488,7 +2610,7 @@ function openManualJournalDrawer() {
     const entryId = 'manual-' + Math.random().toString(36).substring(2, 9);
 
     // Insert Entry
-    await db.accounting_journal_entries.insert({
+    await db.accounting_journal_entries.add({
       id: entryId,
       posting_date: date,
       type: 'journal',
@@ -2498,7 +2620,7 @@ function openManualJournalDrawer() {
     });
 
     // Insert Soll Line
-    await db.accounting_journal_entry_lines.insert({
+    await db.accounting_journal_entry_lines.add({
       id: entryId + '-l1',
       journal_entry_id: entryId,
       account_id: soll,
@@ -2509,7 +2631,7 @@ function openManualJournalDrawer() {
     });
 
     // Insert Haben Line
-    await db.accounting_journal_entry_lines.insert({
+    await db.accounting_journal_entry_lines.add({
       id: entryId + '-l2',
       journal_entry_id: entryId,
       account_id: haben,
@@ -2577,7 +2699,7 @@ async function handleBankStatementImport(e) {
   const statementId = 'stmt-' + Date.now();
 
   // 1. Insert Statement
-  await db.accounting_bank_statements.insert({
+  await db.accounting_bank_statements.add({
     id: statementId,
     account_number: 'DE90370400440532013000',
     updated_at_ms: Date.now()
@@ -2595,7 +2717,7 @@ async function handleBankStatementImport(e) {
   // 3. Insert parsed transaction lines
   let count = 0;
   for (const line of parsedLines) {
-    await db.accounting_bank_statement_lines.insert({
+    await db.accounting_bank_statement_lines.add({
       id: `bankline-${statementId}-${count++}`,
       statement_id: statementId,
       value_date: line.value_date,
@@ -2618,38 +2740,41 @@ async function handleBelegeUpload(e) {
   const db = fibuDb();
   if (!db) return;
 
+  // Nur echte Angaben der Datei (Strang BUCH-2): keine erkannten Lieferanten, Nummern, Daten oder Beträge – es gibt
+  // keine Belegerkennung. Die Datei geht über api.files (BUCH-3, Muster cv-print-builder/app-store); file_storage_url
+  // trägt die Datei-Referenz (sha256), file_id das files-Dokument. Ohne gespeicherte Datei kein Beleg.
   for (const file of files) {
     const id = 'rcpt-' + Math.random().toString(36).substring(2, 9);
-
-    // Simulate OCR results
-    let supplier = 'Hetzner Online GmbH';
-    let net = 10000; // 100.00 EUR
-    let gross = 11900; // 119.00 EUR
-    let tax = 1900;
-    let invNum = 'HET-2026-98127';
-    let suggestedCode = state.skrName === 'SKR03' ? '4930' : '6815'; // Software / IT-Kosten
-
-    if (file.name.toLowerCase().includes('telekom') || file.name.toLowerCase().includes('phone')) {
-      supplier = 'Deutsche Telekom AG';
-      invNum = 'TEL-7816-12';
-      suggestedCode = state.skrName === 'SKR03' ? '4600' : '6600'; // Werbekosten / Telefon
+    const fileId = `fibu_receipt_file_${id}`;
+    const mime = file.type || 'application/octet-stream';
+    let ref = '';
+    try {
+      const upload = state.api.files.put(file, { id: fileId, name: file.name, mime });
+      await upload.local;
+      ref = String(await upload.ref || '');
+      upload.result?.then?.((result) => {
+        if (result?.status === 'rejected') fibuNotice(`receipt.upload_rejected.${id}`, `${file.name}: Datei vom Core abgelehnt (${result.reason || 'rejected'})`, 'error');
+      }, () => {});
+    } catch (error) {
+      fibuNotice('receipt.upload_failed', `${file.name}: Datei nicht gespeichert (${error?.code || error?.message || error})`, 'error');
+      continue;
     }
-
-    const suggestedAcct = state.accounts.find(a => a.code === suggestedCode);
-
-    await db.accounting_receipts.insert({
+    if (!ref) {
+      fibuNotice('receipt.upload_failed', `${file.name}: Datei nicht gespeichert (keine Referenz)`, 'error');
+      continue;
+    }
+    state.api.status.clear('buchhaltung.receipt.upload_failed');
+    const now = Date.now();
+    await db.accounting_receipts.add({
       id,
-      file_storage_url: `runtime/business-os/buchhaltung/storage/${file.name}`,
+      file_storage_url: ref,
+      file_id: fileId,
       filename: file.name,
-      supplier_name: supplier,
-      invoice_date: '2026-05-22',
-      invoice_number: invNum,
-      net_amount: net,
-      tax_amount: tax,
-      gross_amount: gross,
-      suggested_account_id: suggestedAcct?.id || '',
+      file_size: Number(file.size) || 0,
+      mime_type: file.type || '',
+      uploaded_at_ms: now,
       status: 'draft',
-      updated_at_ms: Date.now()
+      updated_at_ms: now
     });
   }
 
@@ -2681,16 +2806,16 @@ async function triggerAutoReconcile() {
 
       // If we have a robust match proposal (exact amount matched is 50+ score)
       if (bestReceipt && highestScore >= 50) {
-        const doc = await db.accounting_bank_statement_lines.findOne(line.id).exec();
+        const doc = await db.accounting_bank_statement_lines.byId(line.id);
         if (doc) {
-          await doc.patch({ match_status: 'proposed' });
+          await db.accounting_bank_statement_lines.change(doc.id, { match_status: 'proposed' });
           matchCount++;
         }
       }
     }
   }
 
-  alert(`🤖 Auto-Reconciliation beendet. ${matchCount} matches automatisch vorgeschlagen!`);
+  fibuNotice('bank.auto_reconcile', `🤖 Auto-Reconciliation beendet. ${matchCount} matches automatisch vorgeschlagen!`);
 }
 
 // =========================================================================
@@ -2723,10 +2848,11 @@ function compileReceiptPreviewLines(receipt, paymentMethod, isBewirtung, isGesch
   } else if (isGeschenk) {
     expenseCode = recommendGiftAccount(receipt.net_amount, skr);
   } else {
-    expenseCode = suggestedAcct ? suggestedAcct.code : (skr === 'SKR03' ? '4930' : '6815');
+    // Ohne erfasstes Konto kein vorgeschlagenes Aufwandskonto (BUCH-2: nichts erfinden).
+    expenseCode = suggestedAcct ? suggestedAcct.code : '';
   }
-  const expenseAcct = state.accounts.find(a => a.code === expenseCode);
-  const expenseName = expenseAcct ? expenseAcct.name : 'Aufwandskonto';
+  const expenseAcct = expenseCode ? state.accounts.find(a => a.code === expenseCode) : null;
+  const expenseName = expenseAcct ? expenseAcct.name : (expenseCode ? 'Aufwandskonto' : '—');
 
   if (isBewirtung) {
     // 70/30 split
@@ -2762,8 +2888,11 @@ function compileReceiptPreviewLines(receipt, paymentMethod, isBewirtung, isGesch
 }
 
 window.updateReceiptDrawerOptions = (receiptId) => {
-  const receipt = state.receipts.find(r => r.id === receiptId);
-  if (!receipt) return;
+  const stored = state.receipts.find(r => r.id === receiptId);
+  if (!stored) return;
+  // Vorschau aus dem Formular (auch ungespeicherte Eingaben), sonst aus dem gespeicherten Beleg.
+  const form = receiptFormFor(receiptId);
+  const receipt = form ? { ...stored, ...readReceiptForm(form) } : stored;
 
   const paymentMethod = document.getElementById('rcpt-payment-method').value;
   const isBewirtung = document.getElementById('rcpt-bewirtung').checked;
@@ -2780,8 +2909,8 @@ window.updateReceiptDrawerOptions = (receiptId) => {
         <tr>
           <th>Konto</th>
           <th>Kontenbezeichnung</th>
-          <th class="is-num">Soll (Debit)</th>
-          <th class="is-num">Haben (Credit)</th>
+          <th class="is-num">Soll</th>
+          <th class="is-num">Haben</th>
         </tr>
       </thead>
       <tbody>
@@ -2811,8 +2940,18 @@ window.postReceiptWithAdvancedOptions = async (receiptId) => {
   const db = fibuDb();
   if (!db) return;
 
-  const receipt = state.receipts.find(r => r.id === receiptId);
+  // Offene Eingaben zuerst speichern; gebucht wird der gespeicherte Stand (nicht die evtl. veraltete Liste).
+  const form = receiptFormFor(receiptId);
+  if (form && (await saveReceiptForm(form)) === false) return;
+  const receipt = db.accounting_receipts.byId(receiptId) || state.receipts.find(r => r.id === receiptId);
   if (!receipt) return;
+  if (receipt.status === 'posted') return;
+
+  if (!receiptIsComplete(receipt)) {
+    fibuNotice('receipt.incomplete', 'Beleg unvollständig oder Brutto ≠ Netto + Steuer.', 'warn');
+    return;
+  }
+  state.api?.status.clear('buchhaltung.receipt.incomplete');
 
   const paymentMethod = document.getElementById('rcpt-payment-method').value;
   const isBewirtung = document.getElementById('rcpt-bewirtung').checked;
@@ -2828,7 +2967,7 @@ window.postReceiptWithAdvancedOptions = async (receiptId) => {
   const nextNum = 'J-2026-' + String(state.journalEntries.filter(e => e.posted_at).length + 1).padStart(4, '0');
 
   // 1. Insert Journal Entry
-  await db.accounting_journal_entries.insert({
+  await db.accounting_journal_entries.add({
     id: entryId,
     posting_date: receipt.invoice_date,
     type: 'invoice',
@@ -2847,7 +2986,7 @@ window.postReceiptWithAdvancedOptions = async (receiptId) => {
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
     const acct = state.accounts.find(a => a.code === l.code);
-    await db.accounting_journal_entry_lines.insert({
+    await db.accounting_journal_entry_lines.add({
       id: `${entryId}-l${i+1}`,
       journal_entry_id: entryId,
       account_id: acct?.id || '',
@@ -2859,14 +2998,14 @@ window.postReceiptWithAdvancedOptions = async (receiptId) => {
   }
 
   // 3. Mark receipt as posted
-  const rcptDoc = await db.accounting_receipts.findOne(receiptId).exec();
+  const rcptDoc = await db.accounting_receipts.byId(receiptId);
   if (rcptDoc) {
-    await rcptDoc.patch({ status: 'posted' });
+    await db.accounting_receipts.change(rcptDoc.id, { status: 'posted' });
   }
 
   closeDrawer();
   switchView('journal');
-  alert(t('postedSuccess'));
+  fibuNotice('booking.posted', t('postedSuccess'));
 };
 
 window.toggleBankSplitEditor = (lineId) => {
@@ -2889,8 +3028,8 @@ function renderBankSplitEditor(line) {
   const remaining = calculateRemainingSplit(totalCents, state.activeBankSplits);
 
   let html = `
-    <div class="ctox-callout" style="margin-top:16px;">
-      <h4 class="fibu-text-warning" style="margin:0 0 12px 0;">🥞 Bank-Transaktions-Splits (Aufteilungsbuchung):</h4>
+    <div style="margin-top:16px;">
+      <h4 class="ctox-field-label" style="margin:0 0 12px 0;">Aufteilung</h4>
       <div style="display:flex; flex-direction:column; gap:10px;" id="bank-split-rows-list">
   `;
 
@@ -2966,7 +3105,7 @@ window.postBankSplitReconciliation = async (lineId) => {
   const nextNum = 'J-2026-' + String(state.journalEntries.filter(e => e.posted_at).length + 1).padStart(4, '0');
 
   // 1. Insert Journal Entry
-  await db.accounting_journal_entries.insert({
+  await db.accounting_journal_entries.add({
     id: entryId,
     posting_date: line.value_date,
     type: 'bank',
@@ -2984,7 +3123,7 @@ window.postBankSplitReconciliation = async (lineId) => {
 
   // Bank Asset Line
   const bankAcctDoc = state.accounts.find(a => a.code === bankCode);
-  await db.accounting_journal_entry_lines.insert({
+  await db.accounting_journal_entry_lines.add({
     id: `${entryId}-bank`,
     journal_entry_id: entryId,
     account_id: bankAcctDoc?.id || '',
@@ -2998,7 +3137,7 @@ window.postBankSplitReconciliation = async (lineId) => {
   for (let i = 0; i < state.activeBankSplits.length; i++) {
     const split = state.activeBankSplits[i];
     const splitAcct = state.accounts.find(a => a.code === split.accountCode);
-    await db.accounting_journal_entry_lines.insert({
+    await db.accounting_journal_entry_lines.add({
       id: `${entryId}-split-${i}`,
       journal_entry_id: entryId,
       account_id: splitAcct?.id || '',
@@ -3010,14 +3149,14 @@ window.postBankSplitReconciliation = async (lineId) => {
   }
 
   // 3. Mark bank statement line as matched
-  const bankLineDoc = await db.accounting_bank_statement_lines.findOne(lineId).exec();
+  const bankLineDoc = await db.accounting_bank_statement_lines.byId(lineId);
   if (bankLineDoc) {
-    await bankLineDoc.patch({ match_status: 'matched', reconciled_entry_id: entryId });
+    await db.accounting_bank_statement_lines.change(bankLineDoc.id, { match_status: 'matched', reconciled_entry_id: entryId });
   }
 
   closeDrawer();
   switchView('banking');
-  alert(t('matchSuccess'));
+  fibuNotice('bank.matched', t('matchSuccess'));
 };
 
 // =========================================================================
@@ -3027,8 +3166,18 @@ window.postReceiptDirectly = async (receiptId) => {
   const db = fibuDb();
   if (!db) return;
 
-  const receipt = state.receipts.find(r => r.id === receiptId);
+  // Offene Eingaben zuerst speichern; gebucht wird der gespeicherte Stand (nicht die evtl. veraltete Liste).
+  const form = receiptFormFor(receiptId);
+  if (form && (await saveReceiptForm(form)) === false) return;
+  const receipt = db.accounting_receipts.byId(receiptId) || state.receipts.find(r => r.id === receiptId);
   if (!receipt) return;
+  if (receipt.status === 'posted') return;
+
+  if (!receiptIsComplete(receipt)) {
+    fibuNotice('receipt.incomplete', 'Beleg unvollständig oder Brutto ≠ Netto + Steuer.', 'warn');
+    return;
+  }
+  state.api?.status.clear('buchhaltung.receipt.incomplete');
 
   const entryId = 'j-' + Math.random().toString(36).substring(2, 9);
   const now = Date.now();
@@ -3043,7 +3192,7 @@ window.postReceiptDirectly = async (receiptId) => {
   const nextNum = 'J-2026-' + String(state.journalEntries.filter(e => e.posted_at).length + 1).padStart(4, '0');
 
   // 1. Insert Journal Entry
-  await db.accounting_journal_entries.insert({
+  await db.accounting_journal_entries.add({
     id: entryId,
     posting_date: receipt.invoice_date,
     type: 'invoice',
@@ -3057,7 +3206,7 @@ window.postReceiptDirectly = async (receiptId) => {
 
   // 2. Insert Lines
   // Line 1: Expense (Netto)
-  await db.accounting_journal_entry_lines.insert({
+  await db.accounting_journal_entry_lines.add({
     id: entryId + '-l1',
     journal_entry_id: entryId,
     account_id: receipt.suggested_account_id,
@@ -3068,7 +3217,7 @@ window.postReceiptDirectly = async (receiptId) => {
   });
 
   // Line 2: Vorsteuer (Tax)
-  await db.accounting_journal_entry_lines.insert({
+  await db.accounting_journal_entry_lines.add({
     id: entryId + '-l2',
     journal_entry_id: entryId,
     account_id: vorsteuerAcct?.id || '',
@@ -3079,7 +3228,7 @@ window.postReceiptDirectly = async (receiptId) => {
   });
 
   // Line 3: Kreditoren (Gross)
-  await db.accounting_journal_entry_lines.insert({
+  await db.accounting_journal_entry_lines.add({
     id: entryId + '-l3',
     journal_entry_id: entryId,
     account_id: payablesAcct?.id || '',
@@ -3090,14 +3239,14 @@ window.postReceiptDirectly = async (receiptId) => {
   });
 
   // 3. Mark receipt as posted
-  const rcptDoc = await db.accounting_receipts.findOne(receiptId).exec();
+  const rcptDoc = await db.accounting_receipts.byId(receiptId);
   if (rcptDoc) {
-    await rcptDoc.patch({ status: 'posted' });
+    await db.accounting_receipts.change(rcptDoc.id, { status: 'posted' });
   }
 
   closeDrawer();
   switchView('journal');
-  alert(t('postedSuccess'));
+  fibuNotice('booking.posted', t('postedSuccess'));
 };
 
 window.matchBankLineDirectly = async (lineId, receiptId) => {
@@ -3114,9 +3263,9 @@ window.matchBankLineDirectly = async (lineId, receiptId) => {
   }
 
   // Link bank statement line to the posted transaction
-  const lineDoc = await db.accounting_bank_statement_lines.findOne(lineId).exec();
+  const lineDoc = await db.accounting_bank_statement_lines.byId(lineId);
   if (lineDoc) {
-    await lineDoc.patch({
+    await db.accounting_bank_statement_lines.change(lineDoc.id, {
       match_status: 'matched',
       reconciled_entry_id: receiptId
     });
@@ -3124,7 +3273,23 @@ window.matchBankLineDirectly = async (lineId, receiptId) => {
 
   closeDrawer();
   switchView('banking');
-  alert(t('matchSuccess'));
+  fibuNotice('bank.matched', t('matchSuccess'));
+};
+
+window.fibuCopyArchivePath = async (path) => {
+  // Erfolg erst nach bestätigtem Schreiben melden; verweigerte Zwischenablage ist ein Fehler in der Zone statt einer
+  // unbehandelten Ablehnung mit falscher Erfolgsmeldung (Rundgang RUND1).
+  state.api?.status.clear?.('buchhaltung.archive.copied');
+  state.api?.status.clear?.('buchhaltung.archive.copy_failed');
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('Zwischenablage nicht verfügbar'); // v4-allow: zone (Text geht über fibuNotice in api.status.report)
+    await navigator.clipboard.writeText(String(path || ''));
+  } catch (error) {
+    const reason = error?.name === 'NotAllowedError' ? 'Zugriff auf die Zwischenablage verweigert' : (error?.message || String(error));
+    fibuNotice('archive.copy_failed', `Archivpfad nicht kopiert: ${reason}`, 'error');
+    return;
+  }
+  fibuNotice('archive.copied', 'Archivpfad in die Zwischenablage kopiert!');
 };
 
 window.triggerStorno = async (entryId) => {
@@ -3134,7 +3299,14 @@ window.triggerStorno = async (entryId) => {
   const entry = state.journalEntries.find(e => e.id === entryId);
   if (!entry || entry.reversed_by_id) return;
 
-  if (confirm('Möchten Sie diese Buchung wirklich GoBD-konform stornieren? Es wird eine automatische Gegenbuchung (Storno) erzeugt.')) {
+  const confirmed = await state.api.shell.dialog({
+    kind: 'confirm',
+    title: 'Buchung stornieren',
+    text: 'Es wird eine Gegenbuchung (Storno) erzeugt.',
+    confirm_label: 'Stornieren',
+    default: false,
+  });
+  if (confirmed === true) {
     const lines = state.journalEntryLines.filter(l => l.journal_entry_id === entryId);
 
     const nextNum = 'J-2026-' + String(state.journalEntries.filter(e => e.posted_at).length + 1).padStart(4, '0');
@@ -3142,7 +3314,7 @@ window.triggerStorno = async (entryId) => {
     const now = Date.now();
 
     // 1. Insert Storno Entry
-    await db.accounting_journal_entries.insert({
+    await db.accounting_journal_entries.add({
       id: stornoId,
       posting_date: entry.posting_date,
       type: 'storno',
@@ -3157,7 +3329,7 @@ window.triggerStorno = async (entryId) => {
     // 2. Insert Inverted Lines (Soll/Haben reversed)
     for (let i = 0; i < lines.length; i++) {
       const l = lines[i];
-      await db.accounting_journal_entry_lines.insert({
+      await db.accounting_journal_entry_lines.add({
         id: `${stornoId}-l${i}`,
         journal_entry_id: stornoId,
         account_id: l.account_id,
@@ -3169,14 +3341,14 @@ window.triggerStorno = async (entryId) => {
     }
 
     // 3. Mark original entry as reversed
-    const entryDoc = await db.accounting_journal_entries.findOne(entryId).exec();
+    const entryDoc = await db.accounting_journal_entries.byId(entryId);
     if (entryDoc) {
-      await entryDoc.patch({ reversed_by_id: stornoId });
+      await db.accounting_journal_entries.change(entryDoc.id, { reversed_by_id: stornoId });
     }
 
     closeDrawer();
     switchView('journal');
-    alert(t('stornoSuccess'));
+    fibuNotice('booking.storno', t('stornoSuccess'));
   }
 };
 
@@ -3189,7 +3361,7 @@ function triggerDatevExport() {
 
   const csvContentStr = generateDatevCsvString(state.ledgerDF, start, end);
   if (!csvContentStr) {
-    alert("Keine festgeschriebenen Buchungssätze im gewählten Datumsbereich vorhanden.");
+    fibuNotice('datev.empty', 'Keine festgeschriebenen Buchungssätze im gewählten Datumsbereich vorhanden.', 'warn');
     return;
   }
 
@@ -3199,7 +3371,7 @@ function triggerDatevExport() {
   link.setAttribute("href", url);
   link.setAttribute("download", `DATEV_EXTF_${start}_${end}.csv`);
   link.style.display = "none";
-  (state.ctx?.host || document.documentElement).appendChild(link);
+  (state.root || document.documentElement).appendChild(link);
   link.click();
   setTimeout(() => {
     link.remove();
@@ -3207,317 +3379,8 @@ function triggerDatevExport() {
   }, 1000);
 }
 
-// =========================================================================
-// 🤖 Fibu AI Agent Chat Dialog Interaction
-// =========================================================================
-async function handleSendAgentMsg() {
-  const input = state.els.chatInput;
-  const msg = input.value.trim();
-  if (!msg) return;
-
-  // Add User Message
-  appendChatMessage('👤', msg, 'user');
-  input.value = '';
-
-  // Simulate AI Agent processing with beautiful response
-  appendChatMessage('🤖', 'Analysiere Anfrage...', 'system');
-
-  setTimeout(() => {
-    // Remove analysis indicator
-    const lastMsg = state.els.chatMessages.lastElementChild;
-    if (lastMsg && lastMsg.classList.contains('system')) lastMsg.remove();
-
-    // Generate intelligent responses
-    const lower = msg.toLowerCase();
-    if (lower.includes('rechnung') || lower.includes('hetzner') || lower.includes('telekom')) {
-      appendChatMessage('🤖', `Ich habe das Dokument analysiert und folgendes Vorkontierungs-Entwurf vorgeschlagen:<br>
-      <strong>Hetzner Online GmbH (Rechnung HET-2026-98127)</strong><br>
-      • Soll: Konto <strong>4930 Softwarekosten</strong> (${formatCents(10000)})<br>
-      • Soll: Konto <strong>1576 Vorsteuer 19%</strong> (${formatCents(1900)})<br>
-      • Haben: Konto <strong>1600 Verbindlichkeiten</strong> (${formatCents(11900)})<br>
-      Du findest den Entwurf in der Belegs-Inbox. Klicke dort einfach auf "Buchen" zum Festschreiben.`, 'system');
-      switchView('receipts');
-    } else if (lower.includes('abgleich') || lower.includes('bank')) {
-      triggerAutoReconcile().then(() => {
-        appendChatMessage('🤖', `Bankabgleich erfolgreich durchgeführt! Ich habe 2 neue passende Belege mit exakten Beträgen im camt.053 Auszug gefunden und vorgeschlagen.`, 'system');
-      });
-    } else if (lower.includes('bilanz') || lower.includes('hgb')) {
-      appendChatMessage('🤖', `Die HGB-Bilanz wurde aktualisiert. Aktiva und Passiva gleichen sich perfekt aus (Aktiva = Passiva = ${formatCents(1216000)}).`, 'system');
-      switchView('reports');
-    } else {
-      appendChatMessage('🤖', `Entschuldigung, ich verstehe diese Anweisung im Moment nicht. Du kannst mich bitten: "Buche Hetzner", "Gleiche die Bank aus" oder "Erstelle die Bilanz".`, 'system');
-    }
-  }, 1000);
-}
-
-function appendChatMessage(avatar, text, type) {
-  const container = state.els.chatMessages;
-  if (!container) return;
-
-  const div = document.createElement('div');
-  div.className = `chat-message ${type}`;
-  div.innerHTML = `
-    <span class="ctox-avatar">${avatar}</span>
-    <div class="message-bubble">${text}</div>
-  `;
-  container.appendChild(div);
-  container.scrollTop = container.scrollHeight;
-}
-
-// =========================================================================
-// 🧪 Seed Mock Data (Ensure high fidelity first load)
-// =========================================================================
-async function seedMockDataIfEmpty() {
-  const db = fibuDb(ACCOUNTING_SEED_WRITE_COLLECTIONS);
-  if (!db || !canWriteSeedData()) return;
-
-  if (state.accounts.length === 0) {
-    await loadAllFibuData();
-  }
-
-  const existingEntries = await db.accounting_journal_entries.find().exec();
-  if (existingEntries.length > 0) return;
-
-  console.log('[fibu] seeding beautiful initial mock data...');
-  const now = Date.now();
-
-  const bankCode = state.skrName === 'SKR03' ? '1200' : '1800';
-  const capitalCode = state.skrName === 'SKR03' ? '0800' : '2900';
-
-  const bankAcct = state.accounts.find(a => a.code === bankCode);
-  const capitalAcct = state.accounts.find(a => a.code === capitalCode);
-
-  if (!bankAcct || !capitalAcct) return;
-
-  // Seed 1: Initial capital deposit (10.000,00 EUR)
-  await db.accounting_journal_entries.insert({
-    id: 'mock-j1',
-    posting_date: '2026-01-01',
-    type: 'journal',
-    number: 'J-2026-0001',
-    narration: 'Einzahlung Stammkapital (Gründung)',
-    posted_at: now,
-    updated_at_ms: now
-  });
-
-  await db.accounting_journal_entry_lines.insert({
-    id: 'mock-j1-l1',
-    journal_entry_id: 'mock-j1',
-    account_id: bankAcct.id,
-    debit: 1000000, // 10,000.00 EUR
-    credit: 0,
-    line_no: 1,
-    updated_at_ms: now
-  });
-
-  await db.accounting_journal_entry_lines.insert({
-    id: 'mock-j1-l2',
-    journal_entry_id: 'mock-j1',
-    account_id: capitalAcct.id,
-    debit: 0,
-    credit: 1000000,
-    line_no: 2,
-    updated_at_ms: now
-  });
-
-  // Seed 2: Revenue 19% (2500,00 EUR gross -> 2100,84 net / 399,16 VAT)
-  const revCode = state.skrName === 'SKR03' ? '8400' : '4400';
-  const revAcct = state.accounts.find(a => a.code === revCode);
-  const ustCode = state.skrName === 'SKR03' ? '1776' : '3806';
-  const ustAcct = state.accounts.find(a => a.code === ustCode);
-
-  if (revAcct && ustAcct) {
-    await db.accounting_journal_entries.insert({
-      id: 'mock-j2',
-      posting_date: '2026-02-15',
-      type: 'invoice',
-      number: 'J-2026-0002',
-      narration: 'Umsatzerlöse aus Beratung Dienstleistung',
-      posted_at: now,
-      updated_at_ms: now
-    });
-
-    await db.accounting_journal_entry_lines.insert({
-      id: 'mock-j2-l1',
-      journal_entry_id: 'mock-j2',
-      account_id: bankAcct.id,
-      debit: 250000, // 2500.00 EUR
-      credit: 0,
-      line_no: 1,
-      updated_at_ms: now
-    });
-
-    await db.accounting_journal_entry_lines.insert({
-      id: 'mock-j2-l2',
-      journal_entry_id: 'mock-j2',
-      account_id: revAcct.id,
-      debit: 0,
-      credit: 210084, // Netto
-      line_no: 2,
-      updated_at_ms: now
-    });
-
-    await db.accounting_journal_entry_lines.insert({
-      id: 'mock-j2-l3',
-      journal_entry_id: 'mock-j2',
-      account_id: ustAcct.id,
-      debit: 0,
-      credit: 39916, // MwSt
-      line_no: 3,
-      updated_at_ms: now
-    });
-  }
-
-  // Seed 3: Draft Receipt in Vorrat
-  const suggestedCode = state.skrName === 'SKR03' ? '4930' : '6815';
-  const suggestedAcct = state.accounts.find(a => a.code === suggestedCode);
-
-  await db.accounting_receipts.insert({
-    id: 'mock-rcpt1',
-    file_storage_url: 'runtime/business-os/buchhaltung/storage/Hetzner_Cloud_Bill.pdf',
-    filename: 'Hetzner_Cloud_Bill.pdf',
-    supplier_name: 'Hetzner Online GmbH',
-    invoice_date: '2026-05-18',
-    invoice_number: 'HET-981724',
-    net_amount: 10000, // 100 EUR
-    tax_amount: 1900,  // 19 EUR
-    gross_amount: 11900,
-    suggested_account_id: suggestedAcct?.id || '',
-    status: 'draft',
-    updated_at_ms: now
-  });
-
-  await db.accounting_receipts.insert({
-    id: 'mock-rcpt2',
-    file_storage_url: 'runtime/business-os/buchhaltung/storage/Telekom_DSL_May.pdf',
-    filename: 'Telekom_DSL_May.pdf',
-    supplier_name: 'Deutsche Telekom AG',
-    invoice_date: '2026-05-20',
-    invoice_number: 'TEL-87216-A',
-    net_amount: 5000,
-    tax_amount: 950,
-    gross_amount: 5950,
-    suggested_account_id: state.accounts.find(a => a.code === (state.skrName === 'SKR03' ? '4600' : '6600'))?.id || '',
-    status: 'draft',
-    updated_at_ms: now
-  });
-
-  const statementId = 'mock-stmt1';
-  await db.accounting_bank_statements.insert({
-    id: statementId,
-    account_number: 'DE90370400440532013000',
-    updated_at_ms: now
-  });
-
-  await db.accounting_bank_statement_lines.insert({
-    id: 'mock-bankline1',
-    statement_id: statementId,
-    value_date: '2026-05-22',
-    narration: 'SEPA UEBERWEISUNG HETZNER HET-981724',
-    amount: -11900,
-    counterparty_name: 'Hetzner Online GmbH',
-    counterparty_iban: 'DE81200505501234567890',
-    match_status: 'proposed',
-    updated_at_ms: now
-  });
-
-  const travelExpenseAcct = state.accounts.find(a => a.code === (state.skrName === 'SKR03' ? '4660' : '6670'));
-  const mileageExpenseAcct = state.accounts.find(a => a.code === (state.skrName === 'SKR03' ? '4673' : '6680'));
-  const privateContraAcct = state.accounts.find(a => a.code === (state.skrName === 'SKR03' ? '1890' : '2180'));
-
-  if (travelExpenseAcct && privateContraAcct) {
-    const travelMetadata = {
-      startDate: '2026-05-06',
-      endDate: '2026-05-08',
-      totalAllowance: 5600,
-      days: [
-        { date: '2026-05-06', type: 'arrival' },
-        { date: '2026-05-07', type: 'full', breakfast: true },
-        { date: '2026-05-08', type: 'departure' }
-      ]
-    };
-
-    await db.accounting_journal_entries.insert({
-      id: 'mock-travel1',
-      posting_date: '2026-05-08',
-      type: 'travel',
-      ref_type: 'travel',
-      ref_id: JSON.stringify(travelMetadata),
-      number: '',
-      narration: 'Reisekostenabrechnung: Kundenworkshop Berlin',
-      posted_at: 0,
-      updated_at_ms: now
-    });
-
-    await db.accounting_journal_entry_lines.insert({
-      id: 'mock-travel1-l1',
-      journal_entry_id: 'mock-travel1',
-      account_id: travelExpenseAcct.id,
-      debit: travelMetadata.totalAllowance,
-      credit: 0,
-      line_no: 1,
-      updated_at_ms: now
-    });
-
-    await db.accounting_journal_entry_lines.insert({
-      id: 'mock-travel1-l2',
-      journal_entry_id: 'mock-travel1',
-      account_id: privateContraAcct.id,
-      debit: 0,
-      credit: travelMetadata.totalAllowance,
-      line_no: 2,
-      updated_at_ms: now
-    });
-  }
-
-  if (mileageExpenseAcct && privateContraAcct) {
-    const mileageMetadata = {
-      date: '2026-05-13',
-      purpose: 'business',
-      startKm: 12400,
-      endKm: 12550,
-      km: 150,
-      destination: 'Büro -> Kundentermin Potsdam -> Büro',
-      contactPerson: 'Müller GmbH',
-      reimbursement: 4500
-    };
-
-    await db.accounting_journal_entries.insert({
-      id: 'mock-mileage1',
-      posting_date: '2026-05-13',
-      type: 'mileage',
-      ref_type: 'mileage',
-      ref_id: JSON.stringify(mileageMetadata),
-      number: '',
-      narration: 'Kundenpräsentation und Vertragsabstimmung',
-      posted_at: 0,
-      updated_at_ms: now
-    });
-
-    await db.accounting_journal_entry_lines.insert({
-      id: 'mock-mileage1-l1',
-      journal_entry_id: 'mock-mileage1',
-      account_id: mileageExpenseAcct.id,
-      debit: mileageMetadata.reimbursement,
-      credit: 0,
-      line_no: 1,
-      updated_at_ms: now
-    });
-
-    await db.accounting_journal_entry_lines.insert({
-      id: 'mock-mileage1-l2',
-      journal_entry_id: 'mock-mileage1',
-      account_id: privateContraAcct.id,
-      debit: 0,
-      credit: mileageMetadata.reimbursement,
-      line_no: 2,
-      updated_at_ms: now
-    });
-  }
-
-  // Reload
-  await loadAllFibuData();
-}
+// Fragen an den Agenten: Standard-Kontext-Chat (Rechtsklick → ctox.chat.task, siehe dispatchBuchhaltungContextChat).
+// Die frühere Chat-Attrappe der Evidenzspalte (feste Antworten, simuliertes Tippen) ist entfernt (BUCH.md).
 
 function handleToolbarActions() {
   // Can be used for custom global button bindings
@@ -3531,6 +3394,16 @@ function formatCents(cents) {
   return (cents / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
 }
 
+// Deutsches Datum (TT.MM.JJJJ) aus ISO-Datum oder Millisekunden.
+function formatDateDe(value) {
+  if (value == null || value === '') return '';
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value));
+  if (m) return `${m[3]}.${m[2]}.${m[1]}`;
+  const d = new Date(Number(value));
+  return Number.isFinite(d.getTime()) ? d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) : String(value);
+}
+
+// Anteil (0..1 oder 0..100) als „99,4 %“.
 function escapeHtml(str) {
   if (!str) return '';
   return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
@@ -3553,166 +3426,6 @@ function setSelectedRow(container, attrName, selectedId) {
 }
 
 // =========================================================================
-// 🧪 E2E UI Test Suite Controllers
-// =========================================================================
-function renderUiTestsList() {
-  const container = state.els.uiTestsList;
-  if (!container) return;
-
-  const total = uiTestCases.length;
-  let passed = 0;
-  let failed = 0;
-
-  uiTestCases.forEach(tc => {
-    const res = state.uiTestResults[tc.id];
-    if (res === 'passed') passed++;
-    if (res === 'failed') failed++;
-  });
-
-  const totalEl = document.getElementById('ui-test-total');
-  const passedEl = document.getElementById('ui-test-passed');
-  const failedEl = document.getElementById('ui-test-failed');
-  if (totalEl) totalEl.textContent = total;
-  if (passedEl) passedEl.textContent = passed;
-  if (failedEl) failedEl.textContent = failed;
-
-  let html = '';
-  uiTestCases.forEach(tc => {
-    const status = state.uiTestResults[tc.id] || 'pending';
-    let statusClass = '';
-    let statusText = 'Bereit';
-
-    if (status === 'running') {
-      statusClass = 'is-warning';
-      statusText = '⏳ Läuft...';
-    } else if (status === 'passed') {
-      statusClass = 'is-success';
-      statusText = '✔️ Bestanden';
-    } else if (status === 'failed') {
-      statusClass = 'is-danger';
-      statusText = '❌ Fehlgeschlagen';
-    }
-
-    const stepsHtml = tc.steps.map((step, idx) => `
-      <li id="step-${tc.id}-${idx}" style="margin-bottom: 2px; padding: 2px 4px; border-radius: 4px; transition: all 0.3s ease;">
-        ${escapeHtml(step)}
-      </li>
-    `).join('');
-
-    html += `
-      <tr id="tc-row-${tc.id}" style="transition: all 0.3s ease;">
-        <td><span class="fibu-mono">${tc.id}</span></td>
-        <td>
-          <div style="font-weight:600; color:var(--text-strong); font-size:12px;">${escapeHtml(tc.name)}</div>
-          <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">${escapeHtml(tc.description)}</div>
-        </td>
-        <td>
-          <ol style="margin:0; padding-left:14px; font-size:11px; color:var(--text-muted);">
-            ${stepsHtml}
-          </ol>
-        </td>
-        <td class="is-center">
-          <span class="ctox-badge ${statusClass}">${statusText}</span>
-        </td>
-        <td class="is-center">
-          <button class="ctox-button ctox-button--sm" onclick="window.runSingleUiTest('${tc.id}')" ${status === 'running' ? 'disabled' : ''}>
-            ⚡ Run
-          </button>
-        </td>
-      </tr>
-    `;
-  });
-
-  container.innerHTML = html;
-}
-
-window.runSingleUiTest = async function(testId) {
-  const tc = uiTestCases.find(t => t.id === testId);
-  if (!tc) return;
-
-  // Set status
-  state.uiTestResults[testId] = 'running';
-  renderUiTestsList();
-
-  // Show running indicator
-  const ind = document.getElementById('ui-test-running-indicator');
-  const stepSpan = document.getElementById('ui-test-active-step');
-  if (ind) ind.style.display = 'inline-block';
-
-  // Clear/setup log element
-  const logEl = document.getElementById('e2e-live-log');
-  if (logEl && logEl.innerHTML.includes('Bereit für Testausführung')) {
-    logEl.innerHTML = '';
-  }
-
-  const log = (msg) => {
-    if (logEl) {
-      const time = new Date().toLocaleTimeString('de-DE');
-      logEl.innerHTML += `<div style="margin-bottom:4px;"><span style="color:var(--muted);">[${time}]</span> <span style="color:var(--accent); font-weight:bold;">[${testId}]</span> ${escapeHtml(msg)}</div>`;
-      logEl.scrollTop = logEl.scrollHeight;
-    }
-    if (stepSpan) stepSpan.textContent = msg;
-  };
-
-  log(`▶️ Starte E2E Test: ${tc.name}...`);
-
-  // Scroll row into view
-  const row = document.getElementById(`tc-row-${testId}`);
-  if (row) {
-    row.style.background = 'var(--accent-soft)';
-    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
-
-  try {
-    // Run the actual test
-    await tc.run(state, log, switchView);
-
-    state.uiTestResults[testId] = 'passed';
-    log(`✔️ E2E Test ${testId} ERFOLGREICH bestanden!`);
-  } catch (err) {
-    state.uiTestResults[testId] = 'failed';
-    log(`❌ E2E Test ${testId} FEHLGESCHLAGEN: ${err.message}`);
-    console.error(err);
-  } finally {
-    if (row) {
-      row.style.background = '';
-    }
-    if (ind) ind.style.display = 'none';
-    renderUiTestsList();
-  }
-};
-
-window.runAllUiTests = async function() {
-  const btn = state.els.panels.tests?.querySelector('[data-action="run-all-ui-tests"]');
-  if (btn) btn.disabled = true;
-
-  const logEl = document.getElementById('e2e-live-log');
-  if (logEl) {
-    logEl.innerHTML = `<div style="color:var(--accent); font-weight:bold; margin-bottom:8px; border-bottom:1px solid color-mix(in srgb, var(--accent) 30%, transparent); padding-bottom:6px;">⚡ Starte Massen-Testausführung (Alle 8 E2E Test Cases)...</div>`;
-  }
-
-  // Reset all test results first
-  uiTestCases.forEach(tc => {
-    state.uiTestResults[tc.id] = 'pending';
-  });
-  renderUiTestsList();
-
-  for (const tc of uiTestCases) {
-    await window.runSingleUiTest(tc.id);
-    await new Promise(resolve => setTimeout(resolve, 1000)); // Brief pause between tests
-  }
-
-  if (logEl) {
-    const passedCount = uiTestCases.filter(tc => state.uiTestResults[tc.id] === 'passed').length;
-    const totalCount = uiTestCases.length;
-    logEl.innerHTML += `<div class="${passedCount === totalCount ? 'fibu-text-debit' : 'fibu-text-credit'}" style="font-weight:bold; margin-top:12px; border-top:1px solid var(--line); padding-top:6px;">🏁 Massenausführung beendet. Ergebnis: ${passedCount} / ${totalCount} bestanden.</div>`;
-    logEl.scrollTop = logEl.scrollHeight;
-  }
-
-  if (btn) btn.disabled = false;
-};
-
-// =========================================================================
 // ✈️ Reisekosten & Spesenabrechnung
 // =========================================================================
 window.renderTravelList = function() {
@@ -3722,9 +3435,8 @@ window.renderTravelList = function() {
   const travels = state.journalEntries.filter(e => e.type === 'travel');
 
   if (travels.length === 0) {
-    container.innerHTML = state.journalEntries.length === 0 && !fibuSourcesReady(['accounting_journal_entries'])
-      ? fibuSyncingTableRow(5)
-      : `<tr><td colspan="5" class="fibu-empty-state">Keine Reisekostenabrechnungen erfasst.</td></tr>`;
+    // Leere Liste rendert nichts (R11); kein Lade- oder Leertext.
+    container.innerHTML = '';
     return;
   }
 
@@ -3742,7 +3454,7 @@ window.renderTravelList = function() {
       <tr data-travel-click-id="${escapeHtml(t.id)}" data-context-record-id="${escapeHtml(t.id)}" data-context-record-type="accounting_journal_entry" data-context-label="${escapeHtml(t.narration || `Travel expense ${t.id}`)}">
         <td><strong>✈️ ${escapeHtml(t.narration)}</strong></td>
         <td><span class="fibu-mono">${dateRange}</span></td>
-        <td class="fibu-text-warning is-num" style="font-weight: 600;">${formatCents(totalAllowance)}</td>
+        <td class="is-num" style="font-weight: 600;">${formatCents(totalAllowance)}</td>
         <td>
           <span class="ctox-badge ${isPosted ? 'is-success' : ''}">
             ${isPosted ? 'Verbucht 🔒' : 'Entwurf'}
@@ -3790,9 +3502,9 @@ window.openNewTravelDrawer = function() {
         </div>
       </div>
 
-      <div class="ctox-callout" style="margin-top:15px;">
+      <div style="margin-top:15px;">
         <div class="fibu-form-group">
-          <label class="ctox-field-label fibu-text-warning">Zahlungsweg (Ausgleichs-Gegenkonto)</label>
+          <label class="ctox-field-label">Zahlungsweg</label>
           <select id="travel-payment-method" class="ctox-select">
             <option value="privat">Privat getragen (Privatauslage des Inhabers - Gegenbuchung auf 1890)</option>
             <option value="verrechnung">Gesellschafter-Verrechnungskonto (Gegenbuchung auf 1370)</option>
@@ -3801,8 +3513,8 @@ window.openNewTravelDrawer = function() {
       </div>
 
       <div style="margin-top:20px;">
-        <h4 class="ctox-field-label" style="margin-bottom:8px;">Verpflegungsmehraufwand (VMA) Live-Berechnung:</h4>
-        <div id="travel-days-container" class="ctox-callout" style="display:flex; flex-direction:column; gap:10px;">
+        <h4 class="ctox-field-label" style="margin-bottom:8px;">Verpflegungsmehraufwand</h4>
+        <div id="travel-days-container" style="display:flex; flex-direction:column; gap:10px;">
           <!-- Days list with meal checkboxes loaded live here -->
         </div>
       </div>
@@ -3857,7 +3569,7 @@ window.updateTravelVmaCalculation = function() {
         <div style="display:flex; justify-content:space-between; align-items:center; background:var(--surface); padding:8px 12px; border-radius:6px; border:1px solid var(--line);">
           <div>
             <div style="font-weight:700; color:var(--text-strong); font-size:12.5px;">${dateFormatted} (${typeLabel})</div>
-            <div style="font-size:11px; opacity:0.8;">Pauschale: ${formatCents(dayAllowance)}</div>
+            <div style="font-size:11px; color: var(--muted);">Pauschale: ${formatCents(dayAllowance)}</div>
           </div>
           <div style="display:flex; gap:12px; font-size:11.5px;">
             <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
@@ -3901,7 +3613,7 @@ window.saveTravelExpenseDraft = async function() {
 
   const res = calculateTotalTravelAllowance(state.activeTravelDays);
   if (res.totalAllowance <= 0) {
-    alert("Der berechnete Verpflegungsmehraufwand beträgt 0,00 €. Es kann keine Buchung erzeugt werden.");
+    fibuNotice('travel.zero', 'Verpflegungsmehraufwand 0,00 € – keine Buchung möglich.', 'warn');
     return;
   }
 
@@ -3916,7 +3628,7 @@ window.saveTravelExpenseDraft = async function() {
   };
 
   // 1. Insert Journal Entry with travel type
-  await db.accounting_journal_entries.insert({
+  await db.accounting_journal_entries.add({
     id: travelId,
     posting_date: startVal.split('T')[0],
     type: 'travel',
@@ -3932,7 +3644,7 @@ window.saveTravelExpenseDraft = async function() {
   const expenseCode = state.skrName === 'SKR03' ? '4660' : '6670';
   const expenseAcct = state.accounts.find(a => a.code === expenseCode);
 
-  await db.accounting_journal_entry_lines.insert({
+  await db.accounting_journal_entry_lines.add({
     id: `${travelId}-l1`,
     journal_entry_id: travelId,
     account_id: expenseAcct?.id || '',
@@ -3948,7 +3660,7 @@ window.saveTravelExpenseDraft = async function() {
     : (state.skrName === 'SKR03' ? '1370' : '1486');
   const contraAcct = state.accounts.find(a => a.code === contraCode);
 
-  await db.accounting_journal_entry_lines.insert({
+  await db.accounting_journal_entry_lines.add({
     id: `${travelId}-l2`,
     journal_entry_id: travelId,
     account_id: contraAcct?.id || '',
@@ -3961,7 +3673,7 @@ window.saveTravelExpenseDraft = async function() {
   closeDrawer();
   loadAllFibuData().then(() => {
     switchView('travel');
-    alert("Reisekostenabrechnung erfolgreich als Entwurf angelegt!");
+    fibuNotice('travel.draft', 'Reisekostenabrechnung erfolgreich als Entwurf angelegt!');
   });
 };
 
@@ -3978,9 +3690,9 @@ window.postTravelEntryDirectly = async function(entryId) {
   const now = Date.now();
   const nextNum = 'J-2026-' + String(state.journalEntries.filter(e => e.posted_at).length + 1).padStart(4, '0');
 
-  const doc = await db.accounting_journal_entries.findOne(entryId).exec();
+  const doc = await db.accounting_journal_entries.byId(entryId);
   if (doc) {
-    await doc.patch({
+    await db.accounting_journal_entries.change(doc.id, {
       number: nextNum,
       posted_at: now,
       updated_at_ms: now
@@ -3989,7 +3701,7 @@ window.postTravelEntryDirectly = async function(entryId) {
 
   loadAllFibuData().then(() => {
     switchView('travel');
-    alert("Reisekostenabrechnung erfolgreich verbucht und GoBD-festgeschrieben!");
+    fibuNotice('travel.posted', 'Reisekostenabrechnung erfolgreich verbucht und GoBD-festgeschrieben!');
   });
 };
 
@@ -4004,9 +3716,8 @@ window.renderMileageList = function() {
   const trips = state.journalEntries.filter(e => e.type === 'mileage');
 
   if (trips.length === 0) {
-    actualContainer.innerHTML = state.journalEntries.length === 0 && !fibuSourcesReady(['accounting_journal_entries'])
-      ? fibuSyncingTableRow(8)
-      : `<tr><td colspan="8" class="fibu-empty-state">Keine Fahrten im Fahrtenbuch eingetragen.</td></tr>`;
+    // Leere Liste rendert nichts (R11); kein Lade- oder Leertext.
+    actualContainer.innerHTML = '';
     updateMileageDashboard();
     return;
   }
@@ -4024,11 +3735,11 @@ window.renderMileageList = function() {
 
     html += `
       <tr data-mileage-click-id="${escapeHtml(t.id)}" data-context-record-id="${escapeHtml(t.id)}" data-context-record-type="accounting_journal_entry" data-context-label="${escapeHtml(t.narration || metadata.destination || `Mileage entry ${t.id}`)}">
-        <td><span class="fibu-mono">${t.posting_date}</span></td>
-        <td><strong>🚗 ${escapeHtml(metadata.destination || '')}</strong> <div style="font-size:11px; opacity:0.75;">Zweck: ${escapeHtml(t.narration || '')}</div></td>
+        <td><span class="fibu-mono">${formatDateDe(t.posting_date)}</span></td>
+        <td><strong>🚗 ${escapeHtml(metadata.destination || '')}</strong> <div style="font-size:11px; color: var(--muted);">Zweck: ${escapeHtml(t.narration || '')}</div></td>
         <td>${escapeHtml(metadata.contactPerson || '—')}</td>
         <td class="fibu-mono is-num">${km} km</td>
-        <td class="fibu-text-warning is-num" style="font-weight: 600;">${formatCents(reimbursement)}</td>
+        <td class="is-num" style="font-weight: 600;">${formatCents(reimbursement)}</td>
         <td><span class="ctox-badge ${metadata.purpose === 'business' ? 'is-success' : ''}">${typeLabel}</span></td>
         <td>
           <span class="ctox-badge ${isPosted ? 'is-success' : ''}">
@@ -4147,9 +3858,9 @@ window.openNewMileageDrawer = function() {
         </div>
       </div>
 
-      <div class="ctox-callout" id="mileage-reimbursement-payment-wrap" style="margin-top:15px;">
+      <div id="mileage-reimbursement-payment-wrap" style="margin-top:15px;">
         <div class="fibu-form-group">
-          <label class="ctox-field-label fibu-text-warning">Zahlungsweg (Gegenbuchung)</label>
+          <label class="ctox-field-label">Zahlungsweg</label>
           <select id="mileage-payment-method" class="ctox-select">
             <option value="privat">Privatauslage des Inhabers (Einlage - Gegenbuchung auf 1890)</option>
             <option value="verrechnung">Gesellschafter-Verrechnungskonto (Gegenbuchung auf 1370)</option>
@@ -4201,7 +3912,7 @@ window.saveMileageLogDraft = async function() {
 
   const diff = endKm - startKm;
   if (diff <= 0) {
-    alert("Der End-Kilometerstand muss größer als der Anfangs-Kilometerstand sein.");
+    fibuNotice('mileage.invalid', 'Der End-Kilometerstand muss größer als der Anfangs-Kilometerstand sein.', 'warn');
     return;
   }
 
@@ -4221,7 +3932,7 @@ window.saveMileageLogDraft = async function() {
   };
 
   // 1. Insert Journal Entry
-  await db.accounting_journal_entries.insert({
+  await db.accounting_journal_entries.add({
     id: entryId,
     posting_date: date,
     type: 'mileage',
@@ -4239,7 +3950,7 @@ window.saveMileageLogDraft = async function() {
     const expenseCode = state.skrName === 'SKR03' ? '4673' : '6680';
     const expenseAcct = state.accounts.find(a => a.code === expenseCode);
 
-    await db.accounting_journal_entry_lines.insert({
+    await db.accounting_journal_entry_lines.add({
       id: `${entryId}-l1`,
       journal_entry_id: entryId,
       account_id: expenseAcct?.id || '',
@@ -4255,7 +3966,7 @@ window.saveMileageLogDraft = async function() {
       : (state.skrName === 'SKR03' ? '1370' : '1486');
     const contraAcct = state.accounts.find(a => a.code === contraCode);
 
-    await db.accounting_journal_entry_lines.insert({
+    await db.accounting_journal_entry_lines.add({
       id: `${entryId}-l2`,
       journal_entry_id: entryId,
       account_id: contraAcct?.id || '',
@@ -4269,7 +3980,7 @@ window.saveMileageLogDraft = async function() {
   closeDrawer();
   loadAllFibuData().then(() => {
     switchView('mileage');
-    alert("Fahrt erfolgreich im Fahrtenbuch eingetragen!");
+    fibuNotice('mileage.saved', 'Fahrt erfolgreich im Fahrtenbuch eingetragen!');
   });
 };
 
@@ -4283,9 +3994,9 @@ window.postMileageEntryDirectly = async function(entryId) {
   const now = Date.now();
   const nextNum = 'J-2026-' + String(state.journalEntries.filter(e => e.posted_at).length + 1).padStart(4, '0');
 
-  const doc = await db.accounting_journal_entries.findOne(entryId).exec();
+  const doc = await db.accounting_journal_entries.byId(entryId);
   if (doc) {
-    await doc.patch({
+    await db.accounting_journal_entries.change(doc.id, {
       number: nextNum,
       posted_at: now,
       updated_at_ms: now
@@ -4294,7 +4005,7 @@ window.postMileageEntryDirectly = async function(entryId) {
 
   loadAllFibuData().then(() => {
     switchView('mileage');
-    alert("Dienstreise-Erstattung erfolgreich verbucht und GoBD-festgeschrieben!");
+    fibuNotice('mileage.posted', 'Dienstreise-Erstattung erfolgreich verbucht und GoBD-festgeschrieben!');
   });
 };
 
@@ -4309,7 +4020,7 @@ window.triggerAnnualPrivateCarShare = function() {
 
   const shares = calculateAnnualUsageShares(trips);
   if (shares.totalKm <= 0) {
-    alert("Keine Fahrten vorhanden, um den jährlichen Privatanteil zu berechnen.");
+    fibuNotice('mileage.none', 'Keine Fahrten vorhanden, um den jährlichen Privatanteil zu berechnen.', 'warn');
     return;
   }
 
@@ -4340,8 +4051,8 @@ window.triggerAnnualPrivateCarShare = function() {
         </div>
       </div>
 
-      <div class="ctox-callout" style="margin-top:15px;">
-        <h4 class="fibu-text-warning" style="margin:0 0 8px 0;">Steuerberater-Buchungsvorschlag (inkl. 19% USt):</h4>
+      <div style="margin-top:15px;">
+        <h4 class="ctox-field-label" style="margin:0 0 8px 0;">Buchungssatz (inkl. 19 % USt)</h4>
         <div style="font-size:12px; margin-bottom:10px;">
           Soll: <strong>${state.skrName === 'SKR03' ? '1800' : '2100'} (Privatentnahme)</strong> = <span id="car-share-gross-label">0,00 €</span><br/>
           Haben: <strong>${state.skrName === 'SKR03' ? '8921' : '4645'} (Verw. Gegenstände ohne USt)</strong> = <span id="car-share-net-label">0,00 €</span><br/>
@@ -4402,7 +4113,7 @@ window.postAnnualCarShare = async function() {
   const nextNum = 'J-2026-' + String(state.journalEntries.filter(e => e.posted_at).length + 1).padStart(4, '0');
 
   // 1. Insert Journal Entry
-  await db.accounting_journal_entries.insert({
+  await db.accounting_journal_entries.add({
     id: entryId,
     posting_date: '2026-12-31',
     type: 'mileage_share',
@@ -4417,7 +4128,7 @@ window.postAnnualCarShare = async function() {
   // 2. Soll: Privatentnahme (1800 / 2100)
   const privatCode = state.skrName === 'SKR03' ? '1800' : '2100';
   const privatAcct = state.accounts.find(a => a.code === privatCode);
-  await db.accounting_journal_entry_lines.insert({
+  await db.accounting_journal_entry_lines.add({
     id: `${entryId}-l1`,
     journal_entry_id: entryId,
     account_id: privatAcct?.id || '',
@@ -4430,7 +4141,7 @@ window.postAnnualCarShare = async function() {
   // 3. Haben: Verwendung von Gegenständen (8921 / 4645)
   const useCode = state.skrName === 'SKR03' ? '8921' : '4645';
   const useAcct = state.accounts.find(a => a.code === useCode);
-  await db.accounting_journal_entry_lines.insert({
+  await db.accounting_journal_entry_lines.add({
     id: `${entryId}-l2`,
     journal_entry_id: entryId,
     account_id: useAcct?.id || '',
@@ -4443,7 +4154,7 @@ window.postAnnualCarShare = async function() {
   // 4. Haben: Umsatzsteuer 19% (1776 / 3806)
   const ustCode = state.skrName === 'SKR03' ? '1776' : '3806';
   const ustAcct = state.accounts.find(a => a.code === ustCode);
-  await db.accounting_journal_entry_lines.insert({
+  await db.accounting_journal_entry_lines.add({
     id: `${entryId}-l3`,
     journal_entry_id: entryId,
     account_id: ustAcct?.id || '',
@@ -4456,7 +4167,7 @@ window.postAnnualCarShare = async function() {
   closeDrawer();
   loadAllFibuData().then(() => {
     switchView('mileage');
-    alert("Jährliche Privatnutzung Firmenwagen erfolgreich verbucht!");
+    fibuNotice('car.private_posted', 'Jährliche Privatnutzung Firmenwagen erfolgreich verbucht!');
   });
 };
 
@@ -4465,11 +4176,10 @@ function initBuchhaltungContextMenu(state) {
   const menu = document.createElement('div');
   menu.className = 'ctox-context-menu buchhaltung-context-menu';
   menu.hidden = true;
-  (state.els.root || state.ctx?.host)?.append(menu);
+  (state.els.root || state.root)?.append(menu);
   state.contextMenu = menu;
 
   const handleContextMenu = (event) => {
-    if (state.ctx.module?.id !== 'buchhaltung') return;
     const context = buchhaltungCommandContextFromElement(state, event.target);
     event.preventDefault();
     event.stopPropagation();
@@ -4500,9 +4210,10 @@ function hideBuchhaltungContextMenu(state) {
 }
 
 function canModifyBuchhaltungApp(state) {
-  if (typeof state.ctx.canModifyModule === 'function' && state.ctx.canModifyModule()) return true;
-  const user = state.ctx.session?.user || {};
-  const role = String(user.role || (user.is_admin ? 'admin' : 'user')).trim().toLowerCase().replace(/^business_os_/, '');
+  // Spiegel für die Darstellung (§10.2a Nr. 3); die Mutation entscheidet der Core.
+  const actor = state.api?.actor;
+  if (actor?.permissions?.get?.()?.includes?.('apps.source.edit')) return true;
+  const role = String(actor?.role || 'user').trim().toLowerCase().replace(/^business_os_/, '');
   return ['admin', 'chef'].includes(role);
 }
 
@@ -4597,13 +4308,10 @@ function renderBuchhaltungContextMenu(state, context, x, y) {
         <button type="button" data-buchhaltung-context-close aria-label="${escapeHtml(closeText)}">×</button>
       </header>
       <div class="ctox-context-mode" role="radiogroup" aria-label="${escapeHtml(chatActionLabel)}">
-        <label class="ctox-field-label"><input type="radio" name="contextMode" value="data" checked /> ${escapeHtml(chatWorkDataLabel)}</label>
-        <label class="ctox-field-label"><input type="radio" name="contextMode" value="ask" /> ${escapeHtml(chatAnswerLabel)}</label>
-        ${canModifyApp ? `<label class="ctox-field-label"><input type="radio" name="contextMode" value="app" /> ${escapeHtml(chatModifyAppLabel)}</label>` : ''}
+        ${contextChatModeMarkup({ canModifyApp, escape: escapeHtml, labelClass: 'ctox-field-label', labels: { data: chatWorkDataLabel, ask: chatAnswerLabel, app: chatModifyAppLabel } })}
       </div>
       <textarea data-buchhaltung-context-message placeholder="${escapeHtml(chatPlaceholder)}"></textarea>
       <footer>
-        <span data-buchhaltung-context-status></span>
         <button type="submit">${escapeHtml(sendText)}</button>
       </footer>
     </form>
@@ -4632,30 +4340,20 @@ function renderBuchhaltungContextMenu(state, context, x, y) {
 
 async function dispatchBuchhaltungContextChat(state, context, message, mode = 'data') {
   const trimmed = String(message || '').trim();
-  const status = state.contextMenu?.querySelector('[data-buchhaltung-context-status]');
   if (!trimmed) {
-    if (status) status.textContent = getBuchhaltungText(state, 'chatMissingMessage', 'Nachricht fehlt.');
+    state.api?.status.report({ level: 'warn', code: 'buchhaltung.chat.message_missing', text: getBuchhaltungText(state, 'chatMissingMessage', 'Nachricht fehlt.') });
     return;
   }
+  state.api?.status.clear('buchhaltung.chat.message_missing');
 
-  const safeMode = mode === 'app' && canModifyBuchhaltungApp(state) ? 'app' : (mode === 'ask' ? 'ask' : 'data');
-  if (!document.querySelector('[data-ctox-chat-root]')) {
-    if (status) status.textContent = getBuchhaltungText(state, 'chatNotReady', 'Chat ist noch nicht bereit.');
-    return;
-  }
-  if (status) status.textContent = getBuchhaltungText(state, 'chatOpening', 'Oeffne Chat...');
+  const canModifyApp = canModifyBuchhaltungApp(state);
+  const safeMode = normalizeContextChatMode(mode, { canModifyApp });
   const titlePrefix = safeMode === 'app'
     ? 'Buchhaltung App modifizieren'
     : safeMode === 'ask'
       ? getBuchhaltungText(state, 'chatAnswerLabel', 'Frage beantworten')
       : 'Fibu bearbeiten';
   const title = `${titlePrefix} · ${context.label || 'Buchhaltung'}`;
-  const instruction = safeMode === 'app'
-    ? `Modifiziere die Buchhaltung-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, Buchhaltungsdaten selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
-    : safeMode === 'ask'
-      ? `Beantworte die folgende Frage ausschließlich lesend. Nutze nur vorhandene Daten und Kontext; führe keine Änderungen an Daten, Records, Dateien oder der App aus. Antworte knapp und direkt.\n\n${trimmed}`
-      : trimmed;
-
   let activeRecord = null;
   const activeNav = state.activeNav || 'skr';
   if (activeNav === 'skr' && state.selectedAccountId) {
@@ -4670,32 +4368,18 @@ async function dispatchBuchhaltungContextChat(state, context, message, mode = 'd
     activeRecord = state.assets?.find?.((a) => a.id === state.selectedAssetId);
   }
 
-  const commandId = `cmd_buchhaltung_context_${crypto.randomUUID?.() || Date.now()}`;
-  await state.ctx.commandBus.dispatch({
-    id: commandId,
-    module: 'buchhaltung',
-    command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
-    record_id: safeMode === 'app' ? 'buchhaltung' : (activeRecord?.id || 'buchhaltung'),
-    inbound_channel: 'business_os.buchhaltung',
-    payload: {
-      title,
-      instruction,
-      prompt: trimmed,
-      user_message: trimmed,
-      mode: safeMode,
-      target: safeMode === 'app' ? 'app' : (safeMode === 'ask' ? 'read' : 'data'),
-      selected_record: activeRecord,
-      context,
-      thread_key: 'business-os/buchhaltung',
-    },
-    client_context: {
-      action: 'context-chat',
-      mode: safeMode,
-      column: context.column,
-      record_type: context.record_type,
-      record_id: activeRecord?.id || '',
-      source_module: 'buchhaltung',
-    },
-  });
+  // Kontext-Auftrag an die Chat-App ctox über den Baustein (Strang SKL-D, Kern §16.40 commands_out): Anweisungstext,
+  // Skill und Rückweg liegen bei den Handlern ctox.chat.task / ctox.app.modify.request.
+  sendContextChat(state.api, {
+    source_app: 'buchhaltung',
+    record_ref: activeRecord?.id || context.record_id || '',
+    selection: context.selected_text || '',
+    text: trimmed,
+    mode: safeMode,
+    canModifyApp,
+    title,
+    thread_key: 'business-os/buchhaltung',
+    context: { ...context, active_nav: activeNav },
+  }, { send: (type, payload, opts) => dispatchFibuCommand(type, { ...payload, record_id: opts.record_id, client_context: { action: 'context-chat', mode: safeMode, source_module: 'buchhaltung' } }), navigate: false });
   hideBuchhaltungContextMenu(state);
 }

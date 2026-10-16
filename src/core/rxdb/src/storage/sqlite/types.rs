@@ -72,6 +72,19 @@ pub type SqliteJobTicket = tokio::sync::oneshot::Receiver<RxResult<SqliteJobValu
 /// Success means committed. Reads execute inside one pinned WAL snapshot.
 /// Callbacks must not re-enter the owner or allow SQLite handles to escape.
 pub trait SqliteOwnerJobs: Send + Sync {
+    /// Resolve the ACTIVE P3-06 generation inside the writer transaction. A
+    /// collection is never inferred from its name or silently registered here.
+    fn collection_table(
+        &self,
+        _tx: &rusqlite::Transaction<'_>,
+        _collection: &str,
+        _version: i32,
+    ) -> RxResult<String> {
+        Err(owner_job_error(
+            "collection has no active schema registration",
+        ))
+    }
+
     fn read(&self, job: SqliteOwnerJob) -> RxResult<SqliteJobTicket>;
     /// A stream keeps one snapshot across bounded consumer callbacks. The
     /// daemon may assign a longer typed execution budget than for point reads;

@@ -1,0 +1,1518 @@
+{
+ "at": "2026-10-15T16:03:25.484Z",
+ "variant": "shared-css",
+ "stub": "/Users/michaelwelsch/.local/state/shell-v4/stub-pins/7706796",
+ "widths": [
+  1280,
+  900,
+  420
+ ],
+ "ported": [
+  "buchhaltung",
+  "calendar",
+  "conversations",
+  "ctox",
+  "customers",
+  "outbound",
+  "research",
+  "support"
+ ],
+ "skipped": [],
+ "results": [
+  {
+   "app": "buchhaltung",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    900,
+    768,
+    520
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste h2.ctox-pane-title „Belege & Buchungen“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 916,
+    "visibleElements": 614,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 3804,
+    "scrollTop": 0,
+    "title": "Buchhaltung",
+    "titleCalls": [
+     "Buchhaltung"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/buchhaltung@1.0.0/index.css",
+     "(inline)"
+    ],
+    "undefinedTokens": [
+     "--ctox-left-width×3",
+     "--ctox-right-width×1",
+     "--fibu-terminal-bg×1",
+     "--fibu-terminal-line×1",
+     "--fibu-terminal-ink×1",
+     "--fibu-info×1"
+    ],
+    "undefinedTokenCount": 6
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "buchhaltung/1280.png"
+  },
+  {
+   "app": "buchhaltung",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    900,
+    768,
+    520
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste h2.ctox-pane-title „Belege & Buchungen“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G1 erlaubt: 1 Container mit [data-scroll-x] scrollen seitlich: div.fibu-scrollable-container.ctox-table-wrap 680>520"
+   ],
+   "info": {
+    "elements": 916,
+    "visibleElements": 614,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 3804,
+    "scrollTop": 0,
+    "title": "Buchhaltung",
+    "titleCalls": [
+     "Buchhaltung"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/buchhaltung@1.0.0/index.css",
+     "(inline)"
+    ],
+    "undefinedTokens": [
+     "--ctox-left-width×3",
+     "--ctox-right-width×1",
+     "--fibu-terminal-bg×1",
+     "--fibu-terminal-line×1",
+     "--fibu-terminal-ink×1",
+     "--fibu-info×1"
+    ],
+    "undefinedTokenCount": 6
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "buchhaltung/900.png"
+  },
+  {
+   "app": "buchhaltung",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    900,
+    768,
+    520
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G1 erlaubt: 1 Container mit [data-scroll-x] scrollen seitlich: div.fibu-scrollable-container.ctox-table-wrap 680>412"
+   ],
+   "info": {
+    "elements": 916,
+    "visibleElements": 528,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 3619,
+    "scrollTop": 0,
+    "title": "Buchhaltung",
+    "titleCalls": [
+     "Buchhaltung"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/buchhaltung@1.0.0/index.css",
+     "(inline)"
+    ],
+    "undefinedTokens": [
+     "--ctox-left-width×3",
+     "--ctox-right-width×1",
+     "--fibu-terminal-bg×1",
+     "--fibu-terminal-line×1",
+     "--fibu-terminal-ink×1",
+     "--fibu-info×1"
+    ],
+    "undefinedTokenCount": 6
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "buchhaltung/420.png"
+  },
+  {
+   "app": "calendar",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 385,
+    "visibleElements": 292,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 775,
+    "scrollTop": 0,
+    "title": "Kalender",
+    "titleCalls": [
+     "Kalender"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/calendar@1.0.0/index.css",
+     "/~a/calendar@1.0.0/vendor/event-calendar/event-calendar.min.css"
+    ],
+    "undefinedTokens": [
+     "--ec-border-color×19",
+     "--ec-bg-color×10",
+     "--ec-day-bg-color×9",
+     "--ec-slot-height×6",
+     "--ec-slot-label-periodicity×6",
+     "--ec-direction×6",
+     "--ec-color-300×4",
+     "--ec-slot-width×4"
+    ],
+    "undefinedTokenCount": 35
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "calendar/1280.png"
+  },
+  {
+   "app": "calendar",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 385,
+    "visibleElements": 302,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 886,
+    "scrollTop": 0,
+    "title": "Kalender",
+    "titleCalls": [
+     "Kalender"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/calendar@1.0.0/index.css",
+     "/~a/calendar@1.0.0/vendor/event-calendar/event-calendar.min.css"
+    ],
+    "undefinedTokens": [
+     "--ec-border-color×19",
+     "--ec-bg-color×10",
+     "--ec-day-bg-color×9",
+     "--ec-slot-height×6",
+     "--ec-slot-label-periodicity×6",
+     "--ec-direction×6",
+     "--ec-color-300×4",
+     "--ec-slot-width×4"
+    ],
+    "undefinedTokenCount": 35
+   },
+   "g6": {
+    "jaccard": 0.92,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "calendar/900.png"
+  },
+  {
+   "app": "calendar",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste h2.ctox-pane-title „Kontext“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 385,
+    "visibleElements": 302,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 886,
+    "scrollTop": 0,
+    "title": "Kalender",
+    "titleCalls": [
+     "Kalender"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/calendar@1.0.0/index.css",
+     "/~a/calendar@1.0.0/vendor/event-calendar/event-calendar.min.css"
+    ],
+    "undefinedTokens": [
+     "--ec-border-color×19",
+     "--ec-bg-color×10",
+     "--ec-day-bg-color×9",
+     "--ec-slot-height×6",
+     "--ec-slot-label-periodicity×6",
+     "--ec-direction×6",
+     "--ec-color-300×4",
+     "--ec-slot-width×4"
+    ],
+    "undefinedTokenCount": 35
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "calendar/420.png"
+  },
+  {
+   "app": "conversations",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste span.ctox-pane-kicker „Audit aus CTOX-Sicht“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 535,
+    "visibleElements": 336,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 2430,
+    "scrollTop": 0,
+    "title": "Conversations",
+    "titleCalls": [
+     "Conversations"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/conversations@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "conversations/1280.png"
+  },
+  {
+   "app": "conversations",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste span.ctox-pane-kicker „Audit aus CTOX-Sicht“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 535,
+    "visibleElements": 335,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 2430,
+    "scrollTop": 0,
+    "title": "Conversations",
+    "titleCalls": [
+     "Conversations"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/conversations@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "conversations/900.png"
+  },
+  {
+   "app": "conversations",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G1",
+    "G4"
+   ],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [
+    "1 innere Container scrollen horizontal: nav.conv-channel-tabs 523>404"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste span.ctox-pane-kicker „Audit aus CTOX-Sicht“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 535,
+    "visibleElements": 334,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 2430,
+    "scrollTop": 0,
+    "title": "Conversations",
+    "titleCalls": [
+     "Conversations"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/conversations@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "conversations/420.png"
+  },
+  {
+   "app": "ctox",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 718,
+    "visibleElements": 369,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1514,
+    "scrollTop": 0,
+    "title": "Crew",
+    "titleCalls": [
+     "Crew"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "(inline)",
+     "/~a/ctox@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--crew-color×16",
+     "--ctox-flow-edge×4",
+     "--ctox-flow-muted-fill×2",
+     "--ctox-flow-node-stroke×2",
+     "--ctox-canvas×1",
+     "--ctox-flow-lane-fill×1",
+     "--ctox-flow-lane-stroke×1",
+     "--ctox-flow-channel-fill×1"
+    ],
+    "undefinedTokenCount": 11
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "ctox/1280.png"
+  },
+  {
+   "app": "ctox",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 718,
+    "visibleElements": 365,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1514,
+    "scrollTop": 0,
+    "title": "Crew",
+    "titleCalls": [
+     "Crew"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "(inline)",
+     "/~a/ctox@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--crew-color×16",
+     "--ctox-flow-edge×4",
+     "--ctox-flow-muted-fill×2",
+     "--ctox-flow-node-stroke×2",
+     "--ctox-canvas×1",
+     "--ctox-flow-lane-fill×1",
+     "--ctox-flow-lane-stroke×1",
+     "--ctox-flow-channel-fill×1"
+    ],
+    "undefinedTokenCount": 11
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "ctox/900.png"
+  },
+  {
+   "app": "ctox",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (0 in Listen): Text h2.ctox-pane-title „Lieferantenbewertung 2026“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 718,
+    "visibleElements": 363,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 1514,
+    "scrollTop": 0,
+    "title": "Crew",
+    "titleCalls": [
+     "Crew"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "(inline)",
+     "/~a/ctox@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--crew-color×16",
+     "--ctox-flow-edge×4",
+     "--ctox-flow-muted-fill×2",
+     "--ctox-flow-node-stroke×2",
+     "--ctox-canvas×1",
+     "--ctox-flow-lane-fill×1",
+     "--ctox-flow-lane-stroke×1",
+     "--ctox-flow-channel-fill×1"
+    ],
+    "undefinedTokenCount": 11
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "ctox/420.png"
+  },
+  {
+   "app": "customers",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G1"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [
+    "2 innere Container scrollen horizontal: nav.ctox-view-switch 457>400; nav.ctox-pane-band.customers-workbench-tabs 800>786"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 169,
+    "visibleElements": 121,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1064,
+    "scrollTop": 0,
+    "title": "Kunden",
+    "titleCalls": [
+     "Kunden"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/customers@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "customers/1280.png"
+  },
+  {
+   "app": "customers",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G1",
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [
+    "2 innere Container scrollen horizontal: nav.ctox-view-switch 457>400; nav.ctox-pane-band.customers-workbench-tabs 800>406"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "2 abgeschnittene Texte (0 in Listen): Text h2.ctox-pane-title „Hoffmann Medizintechnik GmbH“; Text p.customers-detail-subtitle „hoffmann.de · Lieferantenbewertung“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 169,
+    "visibleElements": 121,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1064,
+    "scrollTop": 0,
+    "title": "Kunden",
+    "titleCalls": [
+     "Kunden"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 2,
+    "appSheets": [
+     "/~a/customers@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "customers/900.png"
+  },
+  {
+   "app": "customers",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G1",
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [
+    "2 innere Container scrollen horizontal: nav.ctox-view-switch 457>420; nav.ctox-pane-band.customers-workbench-tabs 814>420"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "2 abgeschnittene Texte (0 in Listen): Text h2.ctox-pane-title „Hoffmann Medizintechnik GmbH“; Text p.customers-detail-subtitle „hoffmann.de · Lieferantenbewertung“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 169,
+    "visibleElements": 120,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 1064,
+    "scrollTop": 0,
+    "title": "Kunden",
+    "titleCalls": [
+     "Kunden"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 2,
+    "appSheets": [
+     "/~a/customers@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "customers/420.png"
+  },
+  {
+   "app": "outbound",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G1 erlaubt: 1 Container mit [data-scroll-x] scrollen seitlich: div.outbound-table-scroll-unified 1382>882"
+   ],
+   "info": {
+    "elements": 367,
+    "visibleElements": 282,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1411,
+    "scrollTop": 0,
+    "title": "Outbound",
+    "titleCalls": [
+     "Outbound"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/outbound@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--outbound-info×4",
+     "--row-h×3",
+     "--outbound-info-ink×3",
+     "--outbound-indigo×3",
+     "--outbound-purple×2",
+     "--ctox-left-width×1",
+     "--outbound-purple-ink×1"
+    ],
+    "undefinedTokenCount": 7
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "outbound/1280.png"
+  },
+  {
+   "app": "outbound",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G1 erlaubt: 1 Container mit [data-scroll-x] scrollen seitlich: div.outbound-table-scroll-unified 1382>574"
+   ],
+   "info": {
+    "elements": 367,
+    "visibleElements": 282,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1411,
+    "scrollTop": 0,
+    "title": "Outbound",
+    "titleCalls": [
+     "Outbound"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/outbound@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--outbound-info×4",
+     "--row-h×3",
+     "--outbound-info-ink×3",
+     "--outbound-indigo×3",
+     "--outbound-purple×2",
+     "--ctox-left-width×1",
+     "--outbound-purple-ink×1"
+    ],
+    "undefinedTokenCount": 7
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 5,
+    "viewportColumns": 5,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "outbound/900.png"
+  },
+  {
+   "app": "outbound",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G1 erlaubt: 1 Container mit [data-scroll-x] scrollen seitlich: div.outbound-table-scroll-unified 1382>396"
+   ],
+   "info": {
+    "elements": 367,
+    "visibleElements": 281,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 1411,
+    "scrollTop": 0,
+    "title": "Outbound",
+    "titleCalls": [
+     "Outbound"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/outbound@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--outbound-info×4",
+     "--row-h×3",
+     "--outbound-info-ink×3",
+     "--outbound-indigo×3",
+     "--outbound-purple×2",
+     "--ctox-left-width×1",
+     "--outbound-purple-ink×1"
+    ],
+    "undefinedTokenCount": 7
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 5,
+    "viewportColumns": 5,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "outbound/420.png"
+  },
+  {
+   "app": "research",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G1",
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1240,
+    1024,
+    768
+   ],
+   "G1": [
+    "1 innere Container scrollen horizontal: div.ctox-pane-tabs 642>586"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "3 abgeschnittene Texte (1 in Listen): Liste h2.ctox-pane-title „Rahmenvertrag über Wartung und Instandha“; Text span[data-graph-summary] „0 Elemente · 0 Verknüpfungen · 0 Themenf“; Text span „Report braucht verifizierte Quellen“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 183,
+    "visibleElements": 178,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1145,
+    "scrollTop": 0,
+    "title": "Web Research",
+    "titleCalls": [
+     "Web Research"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 3,
+    "appSheets": [
+     "/~a/research@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--research-line×39",
+     "--research-muted×38",
+     "--research-accent×31",
+     "--research-surface×17",
+     "--research-surface-2×15",
+     "--research-text×15",
+     "--research-warn×12",
+     "--research-good×9"
+    ],
+    "undefinedTokenCount": 16
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "research/1280.png"
+  },
+  {
+   "app": "research",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1240,
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "3 abgeschnittene Texte (1 in Listen): Liste h2.ctox-pane-title „Rahmenvertrag über Wartung und Instandha“; Text strong „Semantischer Research-Graph“; Text span[data-graph-summary] „0 Elemente · 0 Verknüpfungen · 0 Themenf“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 183,
+    "visibleElements": 176,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1106,
+    "scrollTop": 0,
+    "title": "Web Research",
+    "titleCalls": [
+     "Web Research"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 3,
+    "appSheets": [
+     "/~a/research@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--research-line×39",
+     "--research-muted×38",
+     "--research-accent×31",
+     "--research-surface×17",
+     "--research-surface-2×15",
+     "--research-text×15",
+     "--research-warn×12",
+     "--research-good×9"
+    ],
+    "undefinedTokenCount": 16
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "research/900.png"
+  },
+  {
+   "app": "research",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1240,
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste h2.ctox-pane-title „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 183,
+    "visibleElements": 169,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 1012,
+    "scrollTop": 0,
+    "title": "Web Research",
+    "titleCalls": [
+     "Web Research"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/research@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--research-line×39",
+     "--research-muted×38",
+     "--research-accent×31",
+     "--research-surface×17",
+     "--research-surface-2×15",
+     "--research-text×15",
+     "--research-warn×12",
+     "--research-good×9"
+    ],
+    "undefinedTokenCount": 16
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "research/420.png"
+  },
+  {
+   "app": "support",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 234,
+    "visibleElements": 104,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1284,
+    "scrollTop": 0,
+    "title": "Support",
+    "titleCalls": [
+     "Support"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/support@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--ctox-left-width×3",
+     "--ctox-right-width×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "support/1280.png"
+  },
+  {
+   "app": "support",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste h2.ctox-pane-title „Rechnung wurde an die Buchhaltung weiter“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 234,
+    "visibleElements": 104,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1284,
+    "scrollTop": 0,
+    "title": "Support",
+    "titleCalls": [
+     "Support"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/support@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--ctox-left-width×3",
+     "--ctox-right-width×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "support/900.png"
+  },
+  {
+   "app": "support",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste h2.ctox-pane-title „Rechnung wurde an die Buchhaltung weiter“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 234,
+    "visibleElements": 103,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 1284,
+    "scrollTop": 0,
+    "title": "Support",
+    "titleCalls": [
+     "Support"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/support@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--ctox-left-width×3",
+     "--ctox-right-width×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "support/420.png"
+  }
+ ]
+}

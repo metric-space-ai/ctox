@@ -234,6 +234,7 @@ pub struct Write {
 #[serde(rename_all = "snake_case")]
 pub enum WriteStatus {
     Accepted,
+    Merged,
     Rejected,
     Migrated,
 }
@@ -246,21 +247,131 @@ pub struct WriteResult {
     pub rev: Option<String>,
     pub gen: u64,
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     pub archived_ref: Option<String>,
+}
+/// Participant identity is supplied by the admitted native connection, never this payload.
+/// client_seq starts at 1 for an admitted participant/session identity and is a decimal string.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OrderedWrite {
+    pub client_seq: Seq,
+    #[serde(flatten)]
+    pub write: Write,
+}
+impl<'de> Deserialize<'de> for OrderedWrite {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // `deny_unknown_fields` on Write does not survive Serde flattening.
+        // Decode a strict flat wire value so caller metadata and duplicate
+        // fields cannot be silently admitted by the command ingress.
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            client_seq: Seq,
+            op_id: String,
+            prev_op_id: Option<String>,
+            collection: String,
+            id: String,
+            base_rev: Option<String>,
+            base_seq: Option<Seq>,
+            gen: u64,
+            schema_ver: u32,
+            app_ver: String,
+            op: WriteOp,
+            body: Option<Value>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            client_seq: wire.client_seq,
+            write: Write {
+                op_id: wire.op_id,
+                prev_op_id: wire.prev_op_id,
+                collection: wire.collection,
+                id: wire.id,
+                base_rev: wire.base_rev,
+                base_seq: wire.base_seq,
+                gen: wire.gen,
+                schema_ver: wire.schema_ver,
+                app_ver: wire.app_ver,
+                op: wire.op,
+                body: wire.body,
+            },
+        })
+    }
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OrderedWriteResult {
+    pub client_seq: Seq,
+    /// Merged/migrated results carry no unmasked business payload. The consumer MUST
+    /// wait for the authoritative normal page (seq >= result.seq), rather than stamp
+    /// its own optimistic body with this revision/seq. Keep the outbox until then.
+    /// This includes no-write command replays: the producer must replay the normal
+    /// signed read path from at most result.seq-1 even if its live cursor passed it.
+    /// Recipients retain their monotonic checkpoint while admitting that document.
+    pub requires_page: bool,
+    #[serde(flatten)]
+    pub result: WriteResult,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
+    AppActivation(AppActivation),
     Subscribe(Subscribe),
-    Write(Write),
+    Write(OrderedWrite),
     ClockSync(ClockProbe),
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CoreMessage {
-    WriteResult(WriteResult),
+    AppActivationResult(AppActivationReceipt),
+    RequiresPage(RequiresPage),
+    WriteResult(OrderedWriteResult),
     HelloOk(HelloOk),
 }
+/// Restart this collection in its own generation namespace, retaining the old
+/// local view until complete. gen=None means the collection was removed.
+/// Scope admission remains mandatory for the replacement subscription.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequiresPage {
+    pub collection: String,
+    pub scope_hash: String,
+    pub previous_gen: u64,
+    pub gen: Option<u64>,
+    pub checkpoint_seq: Seq,
+    pub migrated_at_seq: Option<Seq>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppActivationState {
+    Received,
+    Activated,
+    Failed,
+}
+/// An authenticated CLIENT acknowledgement, never inferred from sending a manifest
+/// or page. The Kernel commits its local pointer before reporting Activated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppActivation {
+    pub app_id: String,
+    pub app_ver: String,
+    pub state: AppActivationState,
+    pub at_seq: Seq,
+    pub checkpoints: Vec<Checkpoint>,
+    pub reason: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppActivationReceipt {
+    pub app_id: String,
+    pub app_ver: String,
+    pub state: AppActivationState,
+    pub at_seq: Seq,
+    pub reason: Option<String>,
+    pub recorded_at_ms: u64,
+}
+
 /// Scope token values are issued/validated by P6, never minted by this codec.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

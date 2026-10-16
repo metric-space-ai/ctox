@@ -1433,6 +1433,51 @@ fn stamp_attached_canonical_mirror_versions(
     Ok(())
 }
 
+pub(crate) fn retain_owner_projection_extras(canonical: &mut Value, existing: &Value) {
+    retain_noncanonical_queue_projection_fields(canonical, existing);
+}
+
+/// Capture queue/command facts from the Core owner's existing transaction.
+/// No private BOS projection is read or attached to manufacture source truth.
+pub(crate) fn owner_queue_projection_effect(
+    conn: &Connection,
+    task: &channels::QueueTaskView,
+    updated_at_ms: i64,
+) -> anyhow::Result<Value> {
+    let command_id: Option<String> = conn
+        .query_row(
+            "SELECT command_id FROM business_command_task_links WHERE task_id=?1",
+            [&task.message_key],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let snapshot = command_id
+        .as_deref()
+        .map(|id| {
+            channels::load_business_os_queue_mirror_snapshot_from_conn(conn, id, &task.message_key)
+        })
+        .transpose()?
+        .flatten();
+    let terminal = snapshot.as_ref().and_then(|s| s.terminal_status.as_deref());
+    let command = snapshot
+        .as_ref()
+        .and_then(|s| s.command_projection.as_ref());
+    let clock = channels::communication_projection_clock_version(conn)?;
+    let mut queue = queue_task_payload(command_id.as_deref(), task, terminal, updated_at_ms);
+    stamp_canonical_queue_mirror_versions(&mut queue, command, clock);
+    redact_document_client_context_secrets(&mut queue);
+    let mut command = command.cloned();
+    if let Some(body) = command.as_mut() {
+        stamp_canonical_queue_mirror_versions(body, None, clock);
+        redact_document_client_context_secrets(body);
+    }
+    let queue = crate::service::queue_projection::capture(conn, queue)?;
+    let command = command
+        .map(|body| crate::service::queue_projection::capture(conn, body))
+        .transpose()?;
+    Ok(serde_json::json!({"queue":queue,"command":command}))
+}
+
 fn refresh_attached_queue_projections(
     _root: &Path,
     conn: &Connection,
@@ -15300,6 +15345,18 @@ pub(crate) fn install_replicated_secret_sanitizer() {
     ));
 }
 
+/// CAP-3b: the detached intake value of exactly this command and field, for
+/// the Core capability host (`cap3::secrets::CoreSecretIntake`). Consumes it.
+pub(crate) fn take_detached_secret_intake(command_id: &str, field: &str) -> Option<String> {
+    let field: &'static str = ["value", "password"].into_iter().find(|f| *f == field)?;
+    SECRET_INTAKE_VALUES
+        .get()?
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&(command_id.to_string(), field))
+        .map(|(value, _)| value)
+}
+
 /// The secret a handler needs: the value detached at intake, or — for callers
 /// that bypass RxDB intake (CLI, tests) — the value still in the payload.
 fn take_secret_intake_value(command: &BusinessCommand) -> Option<String> {
@@ -28718,7 +28775,7 @@ pub(super) fn existing_instance_id(root: &Path) -> anyhow::Result<String> {
     Ok(trimmed.to_string())
 }
 
-pub(super) fn stable_instance_id(root: &Path) -> anyhow::Result<String> {
+pub(crate) fn stable_instance_id(root: &Path) -> anyhow::Result<String> {
     let runtime = root.join("runtime");
     std::fs::create_dir_all(&runtime)
         .with_context(|| format!("failed to create runtime dir {}", runtime.display()))?;

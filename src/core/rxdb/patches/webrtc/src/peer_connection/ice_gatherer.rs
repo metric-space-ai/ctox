@@ -5,29 +5,49 @@
 //! the ICE servers and state.
 
 use crate::runtime;
+use log::{debug, error};
 use rtc::ice::candidate::CandidateConfig;
 use rtc::peer_connection::configuration::{RTCIceServer, RTCIceTransportPolicy};
+use rtc::peer_connection::state::RTCIceGatheringState;
 use rtc::peer_connection::transport::{
-    CandidateHostConfig, CandidateServerReflexiveConfig, RTCIceCandidate, RTCIceCandidateInit,
+    CandidateHostConfig, CandidateRelayConfig, CandidateServerReflexiveConfig, RTCIceCandidate,
+    RTCIceCandidateInit,
 };
 use rtc::sansio::Protocol;
 use rtc::shared::error::Error;
 use rtc::shared::{FourTuple, TaggedBytesMut, TransportProtocol};
+use rtc::stun::agent::StunEvent;
+use rtc::stun::message::Getter;
+use rtc::stun::xoraddr::XorMappedAddress;
 use rtc::stun::{
     client::Client as StunClient, client::ClientBuilder as StunClientBuilder,
     message::BINDING_REQUEST, message::Message as StunMessage, message::TransactionId,
 };
-/*use rtc::turn::client::{
-    Client as TurnClient, ClientConfig as TurnClientConfig, Event as TurnEvent,
-};*/
-use log::{debug, error};
-use rtc::peer_connection::state::RTCIceGatheringState;
-use rtc::stun::agent::StunEvent;
-use rtc::stun::message::Getter;
-use rtc::stun::xoraddr::XorMappedAddress;
 use std::collections::{HashSet, VecDeque};
 use std::net::SocketAddr;
 use std::time::Instant;
+
+/// Identifies the compiled relay-candidate producer in transport diagnostics.
+pub const NATIVE_TURN_GATHERER_MARKER: &str = "ctox-turn-native-2-zero-related-v1";
+
+/// Build the privacy-preserving relay candidate used by the native gatherer.
+/// A present related address must contain a valid IP even when its port is zero.
+pub fn native_relay_candidate(address: SocketAddr) -> Result<RTCIceCandidateInit, Error> {
+    let candidate = CandidateRelayConfig {
+        base_config: CandidateConfig {
+            network: "udp".to_owned(),
+            address: address.ip().to_string(),
+            port: address.port(),
+            component: 1,
+            ..Default::default()
+        },
+        rel_addr: if address.is_ipv4() { "0.0.0.0" } else { "::" }.to_owned(),
+        rel_port: 0,
+        url: None,
+    }
+    .new_candidate_relay()?;
+    RTCIceCandidate::from(&candidate).to_json()
+}
 
 /// ICEGatherOptions provides options relating to the gathering of ICE candidates.
 #[derive(Default, Debug, Clone)]
@@ -48,6 +68,7 @@ pub enum RTCIceGathererEvent {
 /// This is a Sans-I/O configuration object that holds ICE servers and gathering state.
 pub(crate) struct RTCIceGatherer {
     local_addrs: Vec<SocketAddr>,
+    relay_addrs: Vec<SocketAddr>,
     ice_servers: Vec<RTCIceServer>,
     gather_policy: RTCIceTransportPolicy,
     state: RTCIceGatheringState,
@@ -64,6 +85,7 @@ impl RTCIceGatherer {
     pub(crate) fn new(local_addrs: Vec<SocketAddr>, opts: RTCIceGatherOptions) -> Self {
         Self {
             local_addrs,
+            relay_addrs: Vec::new(),
             ice_servers: opts.ice_servers,
             gather_policy: opts.ice_gather_policy,
             state: RTCIceGatheringState::New,
@@ -74,6 +96,11 @@ impl RTCIceGatherer {
             wouts: VecDeque::new(),
             events: VecDeque::new(),
         }
+    }
+
+    pub(crate) fn with_relays(mut self, relay_addrs: Vec<SocketAddr>) -> Self {
+        self.relay_addrs = relay_addrs;
+        self
     }
 
     pub(crate) fn state(&self) -> RTCIceGatheringState {
@@ -94,8 +121,16 @@ impl RTCIceGatherer {
 
     pub(crate) async fn gather(&mut self) -> Result<(), Error> {
         self.state = RTCIceGatheringState::Gathering;
-        self.gather_host_candidates()?;
-        self.gather_srflx_candidates().await?;
+        if self.gather_policy != RTCIceTransportPolicy::Relay {
+            self.gather_host_candidates()?;
+            self.gather_srflx_candidates().await?;
+        }
+        for address in &self.relay_addrs {
+            self.events
+                .push_back(RTCIceGathererEvent::LocalIceCandidate(
+                    native_relay_candidate(*address)?,
+                ));
+        }
         if self.gathering_clients.is_empty() && self.state != RTCIceGatheringState::Complete {
             self.state = RTCIceGatheringState::Complete;
             self.events

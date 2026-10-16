@@ -3,8 +3,14 @@ import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
-import { build } from 'esbuild';
+// esbuild aus dem Repo; der Klon hat keine node_modules → Rückfall auf den Haupt-Checkout (ESBUILD_MODULE).
+const { build } = await import('esbuild').catch(() => createRequire(import.meta.url)(
+  process.env.ESBUILD_MODULE || join(homedir(), 'Documents/ctox/src/apps/business-os/node_modules/esbuild'),
+));
 
 async function importBrowserBundle(relativePath) {
   const bundledModule = await build({
@@ -13,6 +19,15 @@ async function importBrowserBundle(relativePath) {
     format: 'esm',
     platform: 'browser',
     write: false,
+    // v4: `ctox:shared/x.js` löst sonst nur der Service Worker auf (PORTING §4 Falle 2).
+    plugins: [{
+      name: 'ctox-shared',
+      setup(b) {
+        b.onResolve({ filter: /^ctox:shared\// }, (args) => ({
+          path: fileURLToPath(new URL(`../../shared/${args.path.slice('ctox:shared/'.length)}`, import.meta.url)),
+        }));
+      },
+    }],
   });
 
   const [{ text: bundledSource }] = bundledModule.outputFiles;
@@ -21,6 +36,8 @@ async function importBrowserBundle(relativePath) {
 
 const { __researchTestHooks: hooks } = await importBrowserBundle('./index.js');
 const researchSource = await readFile(new URL('./index.js', import.meta.url), 'utf8');
+// Seit SKL-B2 stehen die Lauf-Anweisungen als Templates im Paket (prompts/), gefüllt im Handler.
+const runPromptSource = await readFile(new URL('./prompts/systematic-run.md', import.meta.url), 'utf8');
 const researchGraphSource = await readFile(new URL('./research-graph.mjs', import.meta.url), 'utf8');
 const researchMarkup = await readFile(new URL('./index.html', import.meta.url), 'utf8');
 const researchCss = await readFile(new URL('./index.css', import.meta.url), 'utf8');
@@ -35,11 +52,15 @@ test('shell-v2 research keeps headers, icons, and overlays module-scoped', () =>
   assert.equal((researchMarkup.match(/data-shell-v2-header-row="1"/g) || []).length, 3);
   assert.match(researchSource, /research-task-dialog research-module-overlay/);
   assert.match(researchSource, /research-prompt-viewer research-module-overlay/);
-  assert.match(researchSource, /const mountTarget = state\.ctx\?\.host\?\.querySelector\('\[data-research-root\]'\)/);
+  // v4: nichts außerhalb des App-Fensters – Overlays und Drawer hängen im App-root.
+  assert.match(researchSource, /const mountTarget = state\.root\?\.querySelector\('\[data-research-root\]'\)/);
   assert.match(researchSource, /if \(mountTarget\) mountTarget\.appendChild\(backdrop\)/);
+  assert.match(researchSource, /\(state\.root\?\.querySelector\('\[data-research-root\]'\) \|\| state\.root\)\?\.append\(drawer\)/);
+  assert.doesNotMatch(researchSource, /openRightDrawer|closeDrawers|document\.body\.append/);
   assert.match(researchSource, /const RESEARCH_ICON_FALLBACK_PATHS = Object\.freeze/);
-  assert.doesNotMatch(researchSource, /onclick="this\.closest\('\.ctox-modal'\)\.remove\(\)"/);
-  assert.match(researchCss, /\.shell-window\[data-shell-contract="v2"\] \.research-module-overlay\s*\{[\s\S]*position:\s*absolute[\s\S]*inset:\s*0/);
+  assert.doesNotMatch(researchSource, /getActionIcon/);
+  assert.doesNotMatch(researchSource, /onclick="/);
+  assert.match(researchCss, /\[data-app="research"\] \.research-module-overlay\s*\{[\s\S]*position:\s*absolute[\s\S]*inset:\s*0/);
 });
 
 test('create dialog validation requires title, local domain, and task prompt', () => {
@@ -243,22 +264,14 @@ test('deleted tasks never lead or join a domain lineage', () => {
   assert.deepEqual(tasks[0].lineage_task_ids, ['task-live']);
 });
 
-test('counts stay hidden until the first reload finished and retries back off after failures', () => {
-  // Fresh module state: nothing loaded yet -> no numbers, only an ellipsis.
-  assert.equal(hooks.researchDataState(), 'syncing');
-  assert.equal(hooks.countText(138), '…');
-  assert.equal(hooks.countText(0), '…');
-  assert.equal(
-    hooks.taskSourceSummary({ id: 'task-x', knowledge_domain: 'drone_bearing_design' }),
-    'Quellen werden synchronisiert …',
-  );
-
-  assert.equal(hooks.failureRetryDelay(0), 5000);
-  assert.equal(hooks.failureRetryDelay(1), 10000);
-  assert.equal(hooks.failureRetryDelay(2), 20000);
-  assert.equal(hooks.failureRetryDelay(3), 40000);
-  assert.equal(hooks.failureRetryDelay(4), 60000);
-  assert.equal(hooks.failureRetryDelay(9), 60000);
+test('counts render from local data at once; no sync placeholder and no retry backoff (v4)', () => {
+  assert.equal(hooks.countText(138), '138');
+  assert.equal(hooks.countText(0), '0');
+  // Ohne lokale Knowledge Base steht in der Aufgabenzeile nichts statt eines Synchronisationstexts.
+  assert.equal(hooks.taskSourceSummary({ id: 'task-x', knowledge_domain: 'drone_bearing_design' }), '');
+  assert.equal(hooks.failureRetryDelay, undefined);
+  assert.equal(hooks.researchDataState, undefined);
+  assert.doesNotMatch(researchSource, /FAILURE_RETRY_|scheduleFailureRetry|reprobeFailedSyncCollections/);
 });
 
 test('a terminal command status overrides a stale open queue projection', () => {
@@ -350,14 +363,15 @@ test('systematic research command context references knowledge tables without em
 test('systematic research keeps discovery candidates out of the verified source registry', () => {
   assert.match(researchSource, /source_candidates:\s*\{\s*title: 'Discovery Candidates'/);
   assert.match(researchSource, /source_catalog:\s*\{\s*title: 'Verified Source Registry'/);
-  assert.match(researchSource, /Behandle Discovery nur als Kandidatenmenge/);
-  assert.match(researchSource, /vom Evidence-Gate zugelassenen Originalquellen/);
+  assert.match(runPromptSource, /Behandle Discovery nur als Kandidatenmenge/);
+  assert.match(runPromptSource, /vom Evidence-Gate zugelassenen Originalquellen/);
   assert.match(researchSource, /source_candidates: task\.candidate_catalog_key \|\| 'source_candidates'/);
   assert.doesNotMatch(researchSource, /Schreibe jede Discovery-Runde sofort nach source_catalog/);
+  assert.doesNotMatch(runPromptSource, /Schreibe jede Discovery-Runde sofort nach source_catalog/);
 });
 
 test('systematic research app delegates workflow policy to the system skill', () => {
-  assert.match(researchSource, /mit dem System-Skill systematic-research/);
+  assert.match(runPromptSource, /mit dem System-Skill systematic-research/);
   assert.match(researchSource, /ctox_scholarly_search/);
   assert.match(researchSource, /ctox_web_read/);
   assert.doesNotMatch(researchSource, /ctox web scholarly search --query/);
@@ -388,7 +402,9 @@ test('knowledge refresh contract preserves living research lineage and source pr
   assert.deepEqual(payload.requested_snapshot_hashes, [snapshotHash]);
   assert.equal(payload.source_lineage[0].source_id, 'source-1');
   assert.equal(payload.evidence_lineage[0].evidence_id, 'evidence-1');
-  assert.match(payload.instruction, /source_id\/source_url/);
+  assert.equal(payload.instruction, undefined, 'Anweisung kommt aus prompts/knowledge-refresh.md (Handler)');
+  assert.equal(payload.research_brief.task_title, 'Bearing loads');
+  assert.equal(payload.required_skills, undefined, 'Skill wählt der Handler (research/knowledge-refresh)');
 });
 
 test('graph document lineage is native-contract-shaped and fail-closed', () => {
@@ -757,15 +773,11 @@ test('research reports contain only live documents with explicit task or domain 
   assert.deepEqual(reports.map((report) => report.id), ['domain-report', 'lineage-report', 'task-report']);
 });
 
-test('diagnostic rows distinguish sync failures from local no-data', () => {
-  const rows = hooks.collectionDiagnosticRows(['research_runs', 'research_notes', 'knowledge_tables'], {
-    research_runs: { sync: { kind: 'failed', message: 'Synchronisierung fehlgeschlagen' } },
-    research_notes: { sync: { kind: 'local', message: 'Lokaler Modus' } },
-    knowledge_tables: { read: { kind: 'ok', message: '0 rows' } },
-  });
-
-  assert.deepEqual(rows.map((row) => row.kind), ['failed', 'local', 'ok']);
-  assert.match(rows[0].label, /Synchronisierung/);
+test('read failures go to the status zone instead of diagnostic rows (v4)', () => {
+  assert.equal(hooks.collectionDiagnosticRows, undefined);
+  assert.match(researchSource, /reportStatus\('error', code, `\$\{name\}: \$\{errorMessage\(error\)\}`\)/);
+  assert.match(researchSource, /const code = `research\.read\.\$\{name\}`/);
+  assert.doesNotMatch(researchSource, /markCollectionDiagnostic|research-status-line/);
 });
 
 test('knowledge base grouping ignores legacy parquet docs without domain and table key', () => {
@@ -840,25 +852,11 @@ test('knowledge base grouping merges replicated table chunks in row order', () =
   assert.deepEqual(grouped[0].tables[0].rows.map((row) => row.source_row), [0, 1, 2]);
 });
 
-test('knowledge table loader derives bounded follow-up reads from base chunks', () => {
-  assert.deepEqual(hooks.knowledgeTableChunkDocumentIds([
-    {
-      id: 'table:sources',
-      payload: {
-        logical_table_id: 'table:sources',
-        chunk_index: 0,
-        chunk_count: 3,
-      },
-    },
-    {
-      id: 'table:single',
-      chunk_index: 0,
-      chunk_count: 1,
-    },
-  ]), [
-    'table:sources:chunk:0001',
-    'table:sources:chunk:0002',
-  ]);
+test('knowledge tables come from one live query; no follow-up chunk reads (v4)', () => {
+  assert.equal(hooks.knowledgeTableChunkDocumentIds, undefined);
+  assert.match(researchSource, /const RESEARCH_LIVE_COLLECTIONS = Object\.freeze\(\[[\s\S]*?'knowledge_tables',[\s\S]*?\]\)/);
+  assert.match(researchSource, /state\.api\.query\(name, \{\}\)\.subscribe\(/);
+  assert.doesNotMatch(researchSource, /findOneDocument|findBySelector|\.exec\(\)/);
 });
 
 test('RxDB documents are detached before chunk cache eviction mutates live values', () => {
@@ -880,51 +878,26 @@ test('RxDB documents are detached before chunk cache eviction mutates live value
   assert.deepEqual(snapshot.payload.rows, [{ candidate_id: 'candidate-1' }]);
 });
 
-test('empty knowledge read retries follow canonical knowledge_tables readiness', () => {
-  const snapshot = (state, ready, syncing) => ({ collection: 'knowledge_tables', state, ready, syncing, updatedAt: ready ? 1 : null });
-
-  // Without a readiness API the optimistic legacy default stays.
-  assert.equal(hooks.shouldRetryEmptyKnowledgeTables(), true);
-  // Live channels may still receive demand-loaded chunks; catching-up
-  // channels may still deliver the initial replication.
-  assert.equal(hooks.shouldRetryEmptyKnowledgeTables(snapshot('live', true, false)), true);
-  assert.equal(hooks.shouldRetryEmptyKnowledgeTables(snapshot('catching-up', false, true)), true);
-  // Known offline/failed or never-synced channels make retries pointless.
-  assert.equal(hooks.shouldRetryEmptyKnowledgeTables(snapshot('offline-pending', false, false)), false);
-  assert.equal(hooks.shouldRetryEmptyKnowledgeTables(snapshot('never-synced', false, true)), false);
+test('an empty knowledge read is not retried: the live subscription delivers later rows (v4)', () => {
+  assert.equal(hooks.shouldRetryEmptyKnowledgeTables, undefined);
+  assert.doesNotMatch(researchSource, /KNOWLEDGE_TABLE_EMPTY_RETRY_DELAYS_MS|collectionReadiness|subscribeCollectionReadiness/);
+  assert.match(researchSource, /function scheduleRecompute\(/);
 });
 
-test('data-driven empties follow collection readiness (syncing vs empty)', () => {
-  assert.equal(hooks.dataEmptyShowsSyncing(true, { ready: false }), true);
-  assert.equal(hooks.dataEmptyShowsSyncing(true, { ready: true }), false);
-  assert.equal(hooks.dataEmptyShowsSyncing(false, { ready: false }), false);
-  assert.equal(hooks.dataEmptyShowsSyncing(true, undefined), false);
-  assert.match(researchSource, /renderListOrState\(tables, collectionReadiness\('knowledge_tables'\)/);
-
-  const live = (collection) => ({ collection, state: 'live', ready: true, syncing: false, updatedAt: 1 });
-
-  // Empty + unready: the syncing shell replaces the empty copy.
-  hooks.setCollectionReadinessForTest('research_tasks', { collection: 'research_tasks', state: 'catching-up', ready: false, syncing: true, updatedAt: null });
-  assert.equal(hooks.emptyStateForNoTask().kind, 'syncing');
-  assert.match(hooks.renderNoTasksEmpty(), /class="ctox-syncing research-empty-card" role="status" aria-live="polite"/);
-  assert.match(hooks.renderNoTaskCenter(), /class="ctox-syncing research-empty-state-panel" role="status" aria-live="polite"/);
-
-  // Empty + ready: the regular empty state renders.
-  hooks.setCollectionReadinessForTest('research_tasks', live('research_tasks'));
-  hooks.setCollectionReadinessForTest('knowledge_tables', live('knowledge_tables'));
-  assert.equal(hooks.emptyStateForNoTask().kind, 'empty');
-  assert.match(hooks.renderNoTasksEmpty(), /class="ctox-empty research-empty research-empty-card"/);
-  assert.match(hooks.renderNoTaskCenter(), /class="ctox-empty research-empty-state-panel"/);
-
-  hooks.setCollectionReadinessForTest('research_tasks', null);
-  hooks.setCollectionReadinessForTest('knowledge_tables', null);
+test('data-driven empties render nothing (R11, v4)', () => {
+  assert.equal(hooks.dataEmptyShowsSyncing, undefined);
+  assert.equal(hooks.renderNoTasksEmpty(), '');
+  const center = hooks.renderNoTaskCenter();
+  assert.doesNotMatch(center, /ctox-syncing|ctox-empty|role="status"|aria-live/);
+  assert.doesNotMatch(researchSource, /renderListOrState|ctox-syncing/);
 });
 
 test('empty dashboard keeps standard header and disabled workbench controls', () => {
   const markup = hooks.renderNoTaskCenter();
 
   assert.match(markup, /ctox-pane-header ctox-pane-band research-center-header/);
-  assert.match(markup, /data-action="refresh"/);
+  // v4: kein Nachladen (Live-Abo) – der Kopf trägt nur das Anlegen.
+  assert.doesNotMatch(markup, /data-action="refresh"/);
   assert.match(markup, /data-action="new-task"/);
   assert.match(markup, /research-empty-workbench/);
   assert.match(markup, /disabled/);
@@ -933,25 +906,19 @@ test('empty dashboard keeps standard header and disabled workbench controls', ()
 });
 
 test('initial research loading cannot masquerade as an empty knowledge base', () => {
+  // v4: kein Lade-/Sync-Text; der erste lokale Stand kommt sofort aus den Live-Abos, leere Daten rendern nichts.
   assert.match(researchSource, /initialDataReady: false/);
-  assert.match(researchSource, /await waitForReplicationBridge\(bridge, collection\)/);
-  assert.match(researchSource, /subscribeCollectionReadiness/);
-  assert.match(researchSource, /dataEmptyShowsSyncing\(true, tasksReadiness\)/);
-  assert.match(researchSource, /Research-Daten werden mit dieser Instanz synchronisiert/);
-  assert.match(researchSource, /await refreshAll\(\{ seed: true, mountToken \}\)[\s\S]*?state\.initialDataReady = true/);
+  assert.match(researchSource, /function recompute\(\) \{[\s\S]*?state\.initialDataReady = true/);
+  assert.doesNotMatch(researchSource, /waitForReplicationBridge|subscribeCollectionReadiness|Research-Daten werden mit dieser Instanz synchronisiert|Knowledge wird geladen/);
 });
 
-test('research and knowledge events use independent refresh timers', () => {
-  assert.match(researchSource, /researchRefreshTimer: null/);
-  assert.match(researchSource, /knowledgeRefreshTimer: null/);
-  assert.match(researchSource, /knowledgeRefreshInFlight: false/);
-  assert.match(researchSource, /function scheduleLocalRefresh[\s\S]*?state\.researchRefreshTimer/);
-  assert.match(researchSource, /function scheduleKnowledgeRefresh[\s\S]*?state\.knowledgeRefreshTimer/);
-  assert.match(researchSource, /if \(state\.knowledgeRefreshInFlight\) return/);
-  assert.match(researchSource, /const active = knowledgeTableLoads\.get\(key\);[\s\S]*?if \(active\) return active/);
-  assert.match(researchSource, /knowledgeLifecycleCollections[\s\S]*?'research_runs'[\s\S]*?'business_commands'[\s\S]*?'ctox_queue_tasks'/);
-  assert.doesNotMatch(researchSource, /readableCollection\('knowledge_tables'\)\?\.\$\?\./);
-  assert.doesNotMatch(researchSource, /state\.refreshTimer/);
+test('live collections feed one debounced recompute; catalog rows have their own subscription (v4)', () => {
+  assert.match(researchSource, /recomputeTimer: null/);
+  assert.match(researchSource, /const RECOMPUTE_DEBOUNCE_MS = 80;/);
+  assert.match(researchSource, /function scheduleRecompute[\s\S]*?state\.recomputeTimer/);
+  assert.match(researchSource, /RESEARCH_LIVE_COLLECTIONS = Object\.freeze\(\[[\s\S]*?'research_runs'[\s\S]*?'business_commands'[\s\S]*?'ctox_queue_tasks'/);
+  assert.match(researchSource, /function syncCatalogRowSubscription[\s\S]*?if \(key === state\.catalogRowsKey\) return/);
+  assert.doesNotMatch(researchSource, /researchRefreshTimer|knowledgeRefreshTimer|knowledgeTableLoads|state\.refreshTimer/);
   assert.match(researchSource, /rowLimitWarnings/);
   assert.match(researchSource, /Anzeige auf \$\{ROW_LIMIT/);
 });
@@ -1206,62 +1173,38 @@ function catalogMeasurementRow(index) {
   };
 }
 
-function matchesKnowledgeSelector(document, selector = {}) {
-  return Object.entries(selector).every(([key, expected]) => {
-    if (Object.prototype.hasOwnProperty.call(document, key) && document[key] !== undefined) {
-      return document[key] === expected;
-    }
-    const payload = document?.payload;
-    return Boolean(payload) && payload[key] === expected;
-  });
-}
-
-function fakeKnowledgeCollection(documents, lookups, writes) {
+// v4-Harness: Knowledge-Tabellen kommen als lokale Live-Zeilen (state.live.knowledge_tables), Katalog-Zeilen aus
+// dem Abo von knowledge_table_rows (state.catalogRows). Kein ctx, kein Loader, kein Nachladen.
+function fakeApi() {
+  const reports = [];
+  const cleared = [];
+  const queries = [];
   return {
-    find({ selector } = {}) {
-      const docs = documents.filter((document) => matchesKnowledgeSelector(document, selector));
-      return { exec: async () => docs.map((document) => ({ toJSON: () => document })) };
-    },
-    findOne(id) {
-      lookups.push(id);
-      const document = documents.find((entry) => entry.id === id) || null;
-      return { exec: async () => (document ? { toJSON: () => document } : null) };
-    },
-    upsert(doc) {
-      writes.push(doc);
-      throw new Error('knowledge rows must stay out of the collection');
-    },
-    insert(doc) {
-      writes.push(doc);
-      throw new Error('knowledge rows must stay out of the collection');
+    reports,
+    cleared,
+    queries,
+    api: {
+      status: { report: (item) => reports.push(item), clear: (code) => cleared.push(code) },
+      query(collection, q) {
+        const entry = { collection, q, subscribed: 0, unsubscribed: 0 };
+        queries.push(entry);
+        return {
+          get: () => [],
+          subscribe: () => { entry.subscribed += 1; return () => { entry.unsubscribed += 1; }; },
+        };
+      },
+      shell: { t: (key) => key },
     },
   };
 }
 
-function installKnowledgeRowsHarness({ documents, loader, lookups = [], writes = [] }) {
+function installKnowledgeRowsHarness({ documents, rowsByTable = {}, api = fakeApi().api }) {
   globalThis.window = globalThis;
   hooks.resetKnowledgeRowsForTest();
   hooks.setStateForTest({
-    ctx: {
-      host: null,
-      db: {
-        collection(name) {
-          return name === 'knowledge_tables'
-            ? fakeKnowledgeCollection(documents, lookups, writes)
-            : null;
-        },
-      },
-      permissions: {
-        canReadCollection: () => true,
-        canWriteCollection: () => false,
-      },
-      sync: {
-        async startCollection(name) {
-          if (name !== 'knowledge_tables') return null;
-          return { state: { knowledgeRowsLoader: loader } };
-        },
-      },
-    },
+    api,
+    mountToken: Symbol('test'),
+    live: { knowledge_tables: documents },
     tasks: [],
     knowledgeBases: [],
     selectedTaskId: '',
@@ -1270,13 +1213,17 @@ function installKnowledgeRowsHarness({ documents, loader, lookups = [], writes =
     sourceModels: [],
     rowLimitWarnings: [],
     chunkDiagnostics: [],
+    reportedCodes: new Set(),
   });
+  for (const [tableId, rows] of Object.entries(rowsByTable)) hooks.setCatalogRowsForTest(tableId, rows);
 }
 
 function restoreKnowledgeRowsHarness() {
   hooks.resetKnowledgeRowsForTest();
   hooks.setStateForTest({
-    ctx: null,
+    api: null,
+    mountToken: null,
+    live: {},
     tasks: [],
     knowledgeBases: [],
     selectedTaskId: '',
@@ -1295,39 +1242,14 @@ function restoreKnowledgeRowsHarness() {
     graphProjection: null,
     rowLimitWarnings: [],
     chunkDiagnostics: [],
-    diagnostics: {
-      collections: {},
-      reloadStartedAt: 0,
-      reloadFinishedAt: 0,
-      reloadCount: 0,
-      postSyncRefreshes: 0,
-      failureRetries: 0,
-      failureRetryAt: 0,
-      loadedOnce: false,
-    },
+    catalogRowsUnsubscribe: null,
+    catalogRowsKey: '',
+    reportedCodes: new Set(),
   });
 }
 
-function deferred() {
-  let resolve;
-  let reject;
-  const promise = new Promise((next, fail) => {
-    resolve = next;
-    reject = fail;
-  });
-  return { promise, resolve, reject };
-}
-
-async function waitUntil(predicate, timeoutMs = 2000) {
-  const started = Date.now();
-  while (!predicate()) {
-    if (Date.now() - started > timeoutMs) throw new Error('timed out waiting for catalog row fetch');
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-}
-
-test('catalog tables do not generate chunk document ids', () => {
-  assert.deepEqual(hooks.knowledgeTableChunkDocumentIds([
+test('catalog tables never carry rows in knowledge_tables; chunk tables merge in row order', () => {
+  const merged = hooks.mergeKnowledgeTableChunks([
     catalogKnowledgeDocument({
       id: 'table:kdt-measurements',
       tableId: 'kdt-measurements',
@@ -1337,25 +1259,22 @@ test('catalog tables do not generate chunk document ids', () => {
       hash: 'hash-5103',
       chunkCount: 9,
     }),
-    {
-      id: 'table:sources',
-      payload: {
-        logical_table_id: 'table:sources',
-        chunk_index: 0,
-        chunk_count: 3,
-      },
-    },
-  ]), [
-    'table:sources:chunk:0001',
-    'table:sources:chunk:0002',
+    { id: 'table:sources', payload: { logical_table_id: 'table:sources', domain: CATALOG_DOMAIN, table_key: 'sources', chunk_index: 0, chunk_count: 2, rows: [{ n: 0 }] } },
+    { id: 'table:sources:chunk:0001', payload: { logical_table_id: 'table:sources', domain: CATALOG_DOMAIN, table_key: 'sources', chunk_index: 1, chunk_count: 2, rows: [{ n: 1 }] } },
   ]);
+  const catalog = merged.find((table) => table.id === 'table:kdt-measurements');
+  const chunked = merged.find((table) => table.id === 'table:sources');
+  assert.equal(catalog.rows, undefined);
+  assert.equal(catalog.row_count, 5103);
+  // Fachverhalten wie v3: die Chunk-Felder fallen aus der kanonischen payload (Kopf behält sie).
+  assert.equal(catalog.payload.chunk_count, undefined);
+  assert.deepEqual(chunked.rows.map((row) => row.n), [0, 1]);
+  // v4: keine Folge-Lesungen einzelner Chunk-Dokumente – alle Dokumente kommen aus einem Live-Abo.
+  assert.doesNotMatch(researchSource, /:chunk:\$\{/);
 });
 
-test('catalog knowledge tables load every row without the chunk cap', async () => {
+test('catalog knowledge tables load every row without the chunk cap', () => {
   const rowCount = 5103;
-  const calls = [];
-  const lookups = [];
-  const writes = [];
   const sourceDoc = catalogKnowledgeDocument({
     id: 'table:kdt-sources',
     tableId: 'kdt-sources',
@@ -1386,37 +1305,20 @@ test('catalog knowledge tables load every row without the chunk cap', async () =
   };
   installKnowledgeRowsHarness({
     documents: [sourceDoc, measurementDoc],
-    lookups,
-    writes,
-    loader: {
-      async fetchAllRows(tableId) {
-        calls.push(tableId);
-        if (tableId === 'kdt-sources') {
-          return { rows: [sourceRow], rowCount: 1, contentHash: 'hash-sources' };
-        }
-        if (tableId === 'kdt-measurements') {
-          return {
-            rows: Array.from({ length: rowCount }, (_, index) => catalogMeasurementRow(index)),
-            rowCount,
-            contentHash: 'hash-5103',
-          };
-        }
-        throw new Error(`unexpected table ${tableId}`);
-      },
+    rowsByTable: {
+      'kdt-sources': [sourceRow],
+      'kdt-measurements': Array.from({ length: rowCount }, (_, index) => catalogMeasurementRow(index)),
     },
   });
 
   try {
-    const bases = await hooks.loadKnowledgeBases({ domains: [CATALOG_DOMAIN] });
+    const bases = hooks.loadKnowledgeBases();
     const measurementTable = bases[0].tables.find((table) => table.table_key === 'measured_load_points');
     const sourceTable = bases[0].tables.find((table) => table.table_key === 'source_catalog');
     assert.equal(measurementTable.rows.length, rowCount);
     assert.equal(measurementTable.rows.at(-1).measurement_id, 'MLP-5103');
     assert.equal(measurementTable.rows_origin, 'rxdb.rows.fetch');
     assert.equal(sourceTable.rows.length, 1);
-    assert.deepEqual(lookups, []);
-    assert.deepEqual(writes, []);
-    assert.deepEqual(calls, ['kdt-sources', 'kdt-measurements']);
 
     const models = hooks.buildSourceModels(task, sourceTable.rows, [], measurementTable.rows);
     assert.equal(models[0].evidenceEligible, true);
@@ -1429,30 +1331,19 @@ test('catalog knowledge tables load every row without the chunk cap', async () =
       claimRows: [],
       evidenceRows: [],
     });
-    hooks.setLoadedOnceForTest();
-    await hooks.loadDashboardData();
+    hooks.loadDashboardData();
     assert.match(hooks.renderMeasurementsTable(), /Direkte Messwerte <span>5\.103<\/span>/);
     assert.doesNotMatch(hooks.renderKnowledgeTables(task), /Anzeige auf/);
 
-    await hooks.loadKnowledgeBases({ domains: [CATALOG_DOMAIN] });
-    assert.deepEqual(calls, ['kdt-sources', 'kdt-measurements']);
-    measurementDoc.content_hash = 'hash-5103-b';
-    measurementDoc.payload.content_hash = 'hash-5103-b';
-    const reloaded = await hooks.loadKnowledgeBases({ domains: [CATALOG_DOMAIN] });
-    const reloadedMeasurements = reloaded[0].tables.find((table) => table.table_key === 'measured_load_points');
-    assert.deepEqual(calls, ['kdt-sources', 'kdt-measurements', 'kdt-measurements']);
-    assert.equal(reloadedMeasurements.rows.length, rowCount);
-    assert.deepEqual(lookups, []);
-    assert.deepEqual(writes, []);
+    // Neuberechnung liest dieselben lokalen Zeilen (kein Nachladen, kein Cache je Inhalts-Hash).
+    const reloaded = hooks.loadKnowledgeBases();
+    assert.equal(reloaded[0].tables.find((table) => table.table_key === 'measured_load_points').rows.length, rowCount);
   } finally {
     restoreKnowledgeRowsHarness();
   }
 });
 
-test('chunk knowledge tables still load embedded rows without the rows loader', async () => {
-  const lookups = [];
-  const writes = [];
-  const calls = [];
+test('chunk knowledge tables still load embedded rows without catalog rows', () => {
   const documents = [
     {
       id: 'table:measurements',
@@ -1483,23 +1374,10 @@ test('chunk knowledge tables still load embedded rows without the rows loader', 
       },
     },
   ];
-  installKnowledgeRowsHarness({
-    documents,
-    lookups,
-    writes,
-    loader: {
-      async fetchAllRows(tableId) {
-        calls.push(tableId);
-        throw new Error(`chunk table must not use fetchAllRows (${tableId})`);
-      },
-    },
-  });
+  installKnowledgeRowsHarness({ documents });
 
   try {
-    const bases = await hooks.loadKnowledgeBases({ domains: ['verified_research'] });
-    assert.deepEqual(calls, []);
-    assert.deepEqual(lookups, ['table:measurements:chunk:0001']);
-    assert.deepEqual(writes, []);
+    const bases = hooks.loadKnowledgeBases();
     assert.equal(bases.length, 1);
     assert.deepEqual(bases[0].tables[0].rows.map((row) => row.source_row), [0, 1, 2]);
     assert.equal(bases[0].tables[0].chunk_count, 2);
@@ -1523,9 +1401,7 @@ test('chunk knowledge tables still load embedded rows without the rows loader', 
   }
 });
 
-test('a retryable rows error stays on that table and leaves the rest of the dashboard', async () => {
-  const lookups = [];
-  const writes = [];
+test('an incomplete catalog table stays on that table (status zone) and leaves the rest of the dashboard', () => {
   const sourceDoc = catalogKnowledgeDocument({
     id: 'table:kdt-sources',
     tableId: 'kdt-sources',
@@ -1553,25 +1429,15 @@ test('a retryable rows error stays on that table and leaves the rest of the dash
     measurements_table_key: 'measured_load_points',
     payload: {},
   };
+  const fake = fakeApi();
   installKnowledgeRowsHarness({
     documents: [sourceDoc, measurementDoc],
-    lookups,
-    writes,
-    loader: {
-      async fetchAllRows(tableId) {
-        if (tableId === 'kdt-measurements') {
-          const error = new Error('Parquet-Fenster fehlgeschlagen');
-          error.retryable = true;
-          error.code = 'ROWS_SOURCE_ERROR';
-          throw error;
-        }
-        return { rows: [verifiedCatalogSourceRow()], rowCount: 1, contentHash: 'hash-sources' };
-      },
-    },
+    rowsByTable: { 'kdt-sources': [verifiedCatalogSourceRow()] },
+    api: fake.api,
   });
 
   try {
-    const bases = await hooks.loadKnowledgeBases({ domains: [CATALOG_DOMAIN] });
+    const bases = hooks.loadKnowledgeBases();
     const sourceTable = bases[0].tables.find((table) => table.table_key === 'source_catalog');
     const measurementTable = bases[0].tables.find((table) => table.table_key === 'measured_load_points');
     assert.equal(sourceTable.rows.length, 1);
@@ -1581,147 +1447,80 @@ test('a retryable rows error stays on that table and leaves the rest of the dash
       tasks: [task],
       selectedTaskId: task.id,
     });
-    hooks.setLoadedOnceForTest();
-    await hooks.loadDashboardData();
+    hooks.loadDashboardData();
 
     const states = hooks.knowledgeTableRowStates();
     assert.equal(states['table:kdt-measurements'].phase, 'error');
-    assert.equal(states['table:kdt-measurements'].retryable, true);
+    assert.match(states['table:kdt-measurements'].message, /0 von 4 Zeilen/);
     assert.equal(states['table:kdt-sources'], undefined);
-    const banner = hooks.renderKnowledgeTableRowStates();
-    assert.match(banner, /data-table-id="table:kdt-measurements"/);
-    assert.match(banner, /data-row-state="error"/);
-    assert.match(banner, /Parquet-Fenster fehlgeschlagen/);
-    assert.match(banner, /Erneut versuchen/);
-    assert.doesNotMatch(banner, /table:kdt-sources/);
+    // Zustand nur in der Zone der Shell, je Tabelle ein stabiler Code; kein Banner, kein Retry-Knopf im Inhalt.
+    const report = fake.reports.find((item) => item.code === 'research.table.rows.table:kdt-measurements');
+    assert.ok(report, 'zone entry for the incomplete table');
+    assert.equal(report.level, 'warn');
+    assert.match(report.text, /Measured load points: unvollständig: 0 von 4 Zeilen/);
+    assert.equal(fake.reports.some((item) => item.code.includes('kdt-sources')), false);
+    assert.doesNotMatch(researchSource, /retry-knowledge-rows|renderKnowledgeTableRowStates/);
     assert.match(hooks.renderSourcesTable(), /Verified propeller source/);
     assert.match(hooks.renderMeasurementsTable(), /Direkte Messwerte <span>0<\/span>/);
-    assert.deepEqual(lookups, []);
-    assert.deepEqual(writes, []);
+
+    // Rows arrive live → the next computation clears the zone entry.
+    hooks.setCatalogRowsForTest('kdt-measurements', Array.from({ length: 4 }, (_, index) => catalogMeasurementRow(index)));
+    hooks.setStateForTest({ knowledgeBases: hooks.loadKnowledgeBases() });
+    hooks.loadDashboardData();
+    assert.equal(hooks.knowledgeTableRowStates()['table:kdt-measurements'], undefined);
+    assert.ok(fake.cleared.includes('research.table.rows.table:kdt-measurements'));
   } finally {
     restoreKnowledgeRowsHarness();
   }
 });
 
-test('a domain change aborts in-flight catalog fetchAllRows', async () => {
-  const lookups = [];
-  const writes = [];
-  const calls = [];
-  const started = deferred();
-  const documents = [
-    catalogKnowledgeDocument({
-      id: 'table:kdt-a',
-      tableId: 'kdt-a',
-      domain: 'domain-a',
-      tableKey: 'measured_load_points',
-      rowCount: 1,
-      hash: 'hash-a',
-      title: 'Domain A',
-    }),
-    catalogKnowledgeDocument({
-      id: 'table:kdt-b',
-      tableId: 'kdt-b',
-      domain: 'domain-b',
-      tableKey: 'measured_load_points',
-      rowCount: 0,
-      hash: 'hash-b',
-      title: 'Domain B',
-    }),
-  ];
-  installKnowledgeRowsHarness({
-    documents,
-    lookups,
-    writes,
-    loader: {
-      async fetchAllRows(tableId, { signal } = {}) {
-        calls.push({ tableId, signal });
-        if (tableId !== 'kdt-a') {
-          return { rows: [], rowCount: 0, contentHash: 'hash-b' };
-        }
-        started.resolve();
-        await new Promise((resolve, reject) => {
-          const cancel = () => {
-            const error = new Error('ROWS_CANCELLED: domain-change');
-            error.name = 'AbortError';
-            error.code = 'ROWS_CANCELLED';
-            reject(error);
-          };
-          if (signal?.aborted) {
-            cancel();
-            return;
-          }
-          signal?.addEventListener('abort', cancel, { once: true });
-        });
-        return { rows: [{ source_id: 'SRC-1' }], rowCount: 1, contentHash: 'hash-a' };
-      },
-    },
-  });
-
+test('catalog rows follow the active domains: one knowledge_table_rows query, resubscribed on domain change', () => {
+  const docs = ['alpha', 'beta'].map((domain) => catalogKnowledgeDocument({
+    id: `table:${domain}-sources`,
+    tableId: `${domain}-sources`,
+    domain: `research_${domain}`,
+    tableKey: 'source_catalog',
+    rowCount: 1,
+    hash: `hash-${domain}`,
+  }));
+  const fake = fakeApi();
+  installKnowledgeRowsHarness({ documents: docs, api: fake.api });
   try {
-    const first = hooks.loadKnowledgeBases({ domains: ['domain-a'] });
-    await started.promise;
-    assert.equal(hooks.knowledgeTableRowStates()['table:kdt-a'].phase, 'loading');
-    const second = hooks.loadKnowledgeBases({ domains: ['domain-b'] });
-    const [basesA, basesB] = await Promise.all([first, second]);
-    assert.equal(calls[0].tableId, 'kdt-a');
-    assert.equal(calls[0].signal.aborted, true);
-    assert.equal(basesA[0].tables[0].rows, undefined);
-    assert.equal(basesB[0].domain, 'domain-b');
-    assert.deepEqual(basesB[0].tables[0].rows, []);
-    assert.equal(hooks.knowledgeTableRowStates()['table:kdt-a'], undefined);
-    assert.deepEqual(lookups, []);
-    assert.deepEqual(writes, []);
+    hooks.setStateForTest({ knowledgeBases: hooks.loadKnowledgeBases(), tasks: [{ id: 't-a', knowledge_domain: 'research_alpha' }] });
+    hooks.syncCatalogRowSubscription();
+    hooks.syncCatalogRowSubscription();
+    assert.equal(fake.queries.length, 1, 'unchanged domain set keeps the subscription');
+    assert.equal(fake.queries[0].collection, 'knowledge_table_rows');
+    assert.deepEqual(fake.queries[0].q.selector, { table_id: { $in: ['alpha-sources'] } });
+    hooks.setStateForTest({ tasks: [{ id: 't-b', knowledge_domain: 'research_beta' }] });
+    hooks.syncCatalogRowSubscription();
+    assert.equal(fake.queries.length, 2);
+    assert.equal(fake.queries[0].unsubscribed, 1, 'previous domain query is released');
+    assert.deepEqual(fake.queries[1].q.selector, { table_id: { $in: ['beta-sources'] } });
+    assert.doesNotMatch(researchSource, /AbortController\(\)[\s\S]*fetchAllRows|knowledgeRowsLoader/);
   } finally {
     restoreKnowledgeRowsHarness();
   }
 });
 
-test('catalog row fetches stay at three tables in flight', async () => {
-  const lookups = [];
-  const writes = [];
-  let active = 0;
-  let maxActive = 0;
-  const releases = [];
-  const documents = [1, 2, 3, 4].map((index) => catalogKnowledgeDocument({
+test('all catalog tables of the active domains share one live query (no fetch pool)', () => {
+  const docs = [0, 1, 2, 3].map((index) => catalogKnowledgeDocument({
     id: `table:kdt-${index}`,
     tableId: `kdt-${index}`,
-    domain: 'domain-pool',
-    tableKey: `measured_load_points_${index}`,
+    domain: CATALOG_DOMAIN,
+    tableKey: `catalog_${index}`,
     rowCount: 1,
     hash: `hash-${index}`,
-    title: `Table ${index}`,
   }));
-  installKnowledgeRowsHarness({
-    documents,
-    lookups,
-    writes,
-    loader: {
-      async fetchAllRows(tableId) {
-        active += 1;
-        maxActive = Math.max(maxActive, active);
-        await new Promise((resolve) => {
-          releases.push(resolve);
-        });
-        active -= 1;
-        return { rows: [{ tableId }], rowCount: 1, contentHash: `hash-${tableId.slice(-1)}` };
-      },
-    },
-  });
-
+  const fake = fakeApi();
+  installKnowledgeRowsHarness({ documents: docs, api: fake.api });
   try {
-    const pending = hooks.loadKnowledgeBases({ domains: ['domain-pool'] });
-    await waitUntil(() => releases.length >= 3);
-    assert.equal(releases.length, 3);
-    assert.equal(maxActive, 3);
-    releases[0]();
-    await waitUntil(() => releases.length === 4);
-    assert.equal(maxActive, 3);
-    releases.slice(1).forEach((release) => release());
-    const bases = await pending;
-    assert.equal(bases[0].tables.length, 4);
-    assert.equal(bases[0].tables.every((table) => table.rows.length === 1), true);
-    assert.deepEqual(lookups, []);
-    assert.deepEqual(writes, []);
+    hooks.setStateForTest({ knowledgeBases: hooks.loadKnowledgeBases(), tasks: [{ id: 't', knowledge_domain: CATALOG_DOMAIN }] });
+    hooks.syncCatalogRowSubscription();
+    assert.equal(fake.queries.length, 1);
+    assert.deepEqual(fake.queries[0].q.selector.table_id.$in, ['kdt-0', 'kdt-1', 'kdt-2', 'kdt-3']);
+    assert.deepEqual(fake.queries[0].q.sort, [{ table_id: 'asc' }, { row_index: 'asc' }]);
+    assert.doesNotMatch(researchSource, /KNOWLEDGE_CATALOG_FETCH_CONCURRENCY|mapPool/);
   } finally {
     restoreKnowledgeRowsHarness();
   }

@@ -1,9 +1,5 @@
 {
-  "refresh": "Aktualisieren",
   "search": "Threads suchen",
-  "noThreads": "Keine relevanten Threads vorhanden.",
-  "syncingThreads": "Threads werden synchronisiert.",
-  "noSelection": "Kein Thread ausgewählt.",
   "commandFailed": "Aktion konnte nicht abgeschlossen werden.",
   "viewShowList": "Als Liste anzeigen",
   "viewShowCards": "Als Karten anzeigen",
@@ -29,5 +25,14 @@
   "approvalCommand": "Befehl",
   "approvalTask": "Aufgabe",
   "approvalHeadingPrefix": "CTOX Freigabe",
-  "presenceViewing": "sieht sich diesen Thread gerade an"
+  "statusRunning": "AI arbeitet",
+  "statusCompleted": "Abgeschlossen",
+  "workFailed": "Fehlgeschlagen",
+  "workRunning": "In Arbeit",
+  "workQueued": "Eingereiht",
+  "workDone": "Abgeschlossen",
+  "workBlocked": "Blockiert",
+  "nameSupervisor": "Supervisor",
+  "nameCtoxWork": "CTOX Arbeit",
+  "detailId": "Kennung"
 }

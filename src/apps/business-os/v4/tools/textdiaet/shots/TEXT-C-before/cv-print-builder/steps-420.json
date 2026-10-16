@@ -1,0 +1,158 @@
+{
+ "app": "cv-print-builder",
+ "width": 420,
+ "steps": [
+  {
+   "label": "Launcher",
+   "role": "launcher",
+   "shot": "420-00.jpg",
+   "effect": "",
+   "log": [],
+   "errors": [
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0~shell@lab/assets/icon/outbound-lead-generation.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0~shell@lab/assets/icon/outbound-lead-generation.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)"
+   ],
+   "dialogs": null,
+   "navigations": null,
+   "openedFiles": null,
+   "probs": []
+  },
+  {
+   "label": "geöffnet",
+   "role": "open",
+   "shot": "420-01.jpg",
+   "effect": "",
+   "log": [],
+   "errors": [],
+   "title": "CV Print Builder",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Suche „Korrektur“ in Suchen...",
+   "role": "search",
+   "shot": "420-02.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "CV Print Builder",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Suche geleert",
+   "role": "search",
+   "shot": "420-03.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "CV Print Builder",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Neuer CV",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-04.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "filechooser",
+     "spec": "Dateiauswahl geöffnet (mehrere Datei)"
+    }
+   ],
+   "errors": [],
+   "title": "CV Print Builder",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "17 weitere Elemente nicht bedient (Grenze --max 1)",
+   "role": "note",
+   "rest": [
+    "button|Profile importieren|1",
+    "button|Profile exportieren|1",
+    "button|Als Liste anzeigen|1",
+    "button|Filter|1",
+    "tab|Alle (6)|1",
+    "tab|In Arbeit (6)|1",
+    "tab|Korrektur (0)|1",
+    "tab|Freigegeben (0)|1",
+    "button|Parsing starten|1",
+    "button|Bühne ausblenden|1",
+    "tab|Original|1",
+    "article|NC Neuer CV PDF geladen Modern · 13.10.26|1",
+    "article|NC Neuer CV PDF geladen Modern · 12.10.26|1",
+    "article|NC Neuer CV PDF geladen Modern · 11.10.26|1",
+    "article|NC Neuer CV PDF geladen Modern · 10.10.26|1",
+    "article|NC Neuer CV PDF geladen Modern · 09.10.26|1",
+    "article|NC Neuer CV PDF geladen Modern · 08.10.26|1"
+   ]
+  }
+ ],
+ "flags": []
+}

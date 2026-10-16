@@ -1,0 +1,565 @@
+{
+ "app": "buchhaltung",
+ "width": 1280,
+ "steps": [
+  {
+   "label": "Launcher",
+   "role": "launcher",
+   "shot": "1280-00.jpg",
+   "effect": "",
+   "log": [],
+   "errors": [
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0~shell@lab/assets/icon/outbound-lead-generation.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0~shell@lab/assets/icon/outbound-lead-generation.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)"
+   ],
+   "dialogs": null,
+   "navigations": null,
+   "openedFiles": null,
+   "probs": []
+  },
+  {
+   "label": "geöffnet",
+   "role": "open",
+   "shot": "1280-01.jpg",
+   "effect": "",
+   "log": [
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_0410",
+     "data": "{\"id\":\"SKR03_0410\",\"code\":\"0410\",\"name\":\"Geschäftsausstattung (Büromöbel, IT)\",\"root_type\":\"asset\",\"account_type\":\"fixed_asset\",\"parent_id\":\"SKR03_0400\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_0400",
+     "data": "{\"id\":\"SKR03_0400\",\"code\":\"0400\",\"name\":\"Sachanlagen\",\"root_type\":\"asset\",\"account_type\":\"group\",\"parent_id\":\"SKR03_0100\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_0100",
+     "data": "{\"id\":\"SKR03_0100\",\"code\":\"0100\",\"name\":\"Anlagevermögen\",\"root_type\":\"asset\",\"account_type\":\"group\",\"parent_id\":\"SKR03_AKTIVA\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1000",
+     "data": "{\"id\":\"SKR03_1000\",\"code\":\"1000\",\"name\":\"Kasse\",\"root_type\":\"asset\",\"account_type\":\"cash\",\"parent_id\":\"SKR03_1200\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1200",
+     "data": "{\"id\":\"SKR03_1200\",\"code\":\"1200\",\"name\":\"Bank (Girokonto)\",\"root_type\":\"asset\",\"account_type\":\"bank\",\"parent_id\":\"SKR03_1100\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1400",
+     "data": "{\"id\":\"SKR03_1400\",\"code\":\"1400\",\"name\":\"Forderungen aus Lieferungen und Leistungen (Debitoren)\",\"root_type\":\"asset\",\"account_type\":\"receivable\",\"parent_id\":\"SKR03_1100\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":179208…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1571",
+     "data": "{\"id\":\"SKR03_1571\",\"code\":\"1571\",\"name\":\"Abziehbare Vorsteuer 7%\",\"root_type\":\"asset\",\"account_type\":\"tax\",\"parent_id\":\"SKR03_1570\",\"is_group\":false,\"tax_rate_id\":\"DE_7\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1576",
+     "data": "{\"id\":\"SKR03_1576\",\"code\":\"1576\",\"name\":\"Abziehbare Vorsteuer 19%\",\"root_type\":\"asset\",\"account_type\":\"tax\",\"parent_id\":\"SKR03_1570\",\"is_group\":false,\"tax_rate_id\":\"DE_19\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1570",
+     "data": "{\"id\":\"SKR03_1570\",\"code\":\"1570\",\"name\":\"Vorsteuerkonten\",\"root_type\":\"asset\",\"account_type\":\"group\",\"parent_id\":\"SKR03_1100\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1100",
+     "data": "{\"id\":\"SKR03_1100\",\"code\":\"1100\",\"name\":\"Umlaufvermögen\",\"root_type\":\"asset\",\"account_type\":\"group\",\"parent_id\":\"SKR03_AKTIVA\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_0800",
+     "data": "{\"id\":\"SKR03_0800\",\"code\":\"0800\",\"name\":\"Gezeichnetes Kapital / Eigenkapital\",\"root_type\":\"liability\",\"account_type\":\"equity\",\"parent_id\":\"SKR03_0800_G\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_0800_G",
+     "data": "{\"id\":\"SKR03_0800_G\",\"code\":\"0800_G\",\"name\":\"Eigenkapital\",\"root_type\":\"liability\",\"account_type\":\"group\",\"parent_id\":\"SKR03_PASSIVA\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_0950",
+     "data": "{\"id\":\"SKR03_0950\",\"code\":\"0950\",\"name\":\"Rückstellungen für Pensionen\",\"root_type\":\"liability\",\"account_type\":\"provisions\",\"parent_id\":\"SKR03_0900\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_0900",
+     "data": "{\"id\":\"SKR03_0900\",\"code\":\"0900\",\"name\":\"Rückstellungen\",\"root_type\":\"liability\",\"account_type\":\"group\",\"parent_id\":\"SKR03_PASSIVA\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1600",
+     "data": "{\"id\":\"SKR03_1600\",\"code\":\"1600\",\"name\":\"Verbindlichkeiten aus Lieferungen und Leistungen (Kreditoren)\",\"root_type\":\"liability\",\"account_type\":\"payable\",\"parent_id\":\"SKR03_1700\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1771",
+     "data": "{\"id\":\"SKR03_1771\",\"code\":\"1771\",\"name\":\"Umsatzsteuer 7%\",\"root_type\":\"liability\",\"account_type\":\"tax\",\"parent_id\":\"SKR03_1770\",\"is_group\":false,\"tax_rate_id\":\"DE_7\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1776",
+     "data": "{\"id\":\"SKR03_1776\",\"code\":\"1776\",\"name\":\"Umsatzsteuer 19%\",\"root_type\":\"liability\",\"account_type\":\"tax\",\"parent_id\":\"SKR03_1770\",\"is_group\":false,\"tax_rate_id\":\"DE_19\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1780",
+     "data": "{\"id\":\"SKR03_1780\",\"code\":\"1780\",\"name\":\"Umsatzsteuer-Vorauszahlungen\",\"root_type\":\"liability\",\"account_type\":\"tax\",\"parent_id\":\"SKR03_1770\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1770",
+     "data": "{\"id\":\"SKR03_1770\",\"code\":\"1770\",\"name\":\"Umsatzsteuerkonten\",\"root_type\":\"liability\",\"account_type\":\"group\",\"parent_id\":\"SKR03_1700\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1700",
+     "data": "{\"id\":\"SKR03_1700\",\"code\":\"1700\",\"name\":\"Verbindlichkeiten\",\"root_type\":\"liability\",\"account_type\":\"group\",\"parent_id\":\"SKR03_PASSIVA\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_8100",
+     "data": "{\"id\":\"SKR03_8100\",\"code\":\"8100\",\"name\":\"Steuerfreie Umsätze\",\"root_type\":\"revenue\",\"account_type\":\"revenue\",\"parent_id\":\"SKR03_8000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_8300",
+     "data": "{\"id\":\"SKR03_8300\",\"code\":\"8300\",\"name\":\"Erlöse 7% USt\",\"root_type\":\"revenue\",\"account_type\":\"revenue\",\"parent_id\":\"SKR03_8000\",\"is_group\":false,\"tax_rate_id\":\"DE_7\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_8400",
+     "data": "{\"id\":\"SKR03_8400\",\"code\":\"8400\",\"name\":\"Erlöse 19% USt\",\"root_type\":\"revenue\",\"account_type\":\"revenue\",\"parent_id\":\"SKR03_8000\",\"is_group\":false,\"tax_rate_id\":\"DE_19\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_8000",
+     "data": "{\"id\":\"SKR03_8000\",\"code\":\"8000\",\"name\":\"Umsatzerlöse\",\"root_type\":\"revenue\",\"account_type\":\"group\",\"parent_id\":\"SKR03_REVENUE\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_3400",
+     "data": "{\"id\":\"SKR03_3400\",\"code\":\"3400\",\"name\":\"Wareneinkauf 19% Vorsteuer\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_3000\",\"is_group\":false,\"tax_rate_id\":\"DE_19\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_3000",
+     "data": "{\"id\":\"SKR03_3000\",\"code\":\"3000\",\"name\":\"Wareneingang / Materialaufwand\",\"root_type\":\"expense\",\"account_type\":\"group\",\"parent_id\":\"SKR03_EXPENSE\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4210",
+     "data": "{\"id\":\"SKR03_4210\",\"code\":\"4210\",\"name\":\"Miete (Büroräume)\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_4000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4600",
+     "data": "{\"id\":\"SKR03_4600\",\"code\":\"4600\",\"name\":\"Werbekosten\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_4000\",\"is_group\":false,\"tax_rate_id\":\"DE_19\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4830",
+     "data": "{\"id\":\"SKR03_4830\",\"code\":\"4830\",\"name\":\"Abschreibungen auf Sachanlagen (AfA)\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_4000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4930",
+     "data": "{\"id\":\"SKR03_4930\",\"code\":\"4930\",\"name\":\"Bürobedarf / IT-Kosten / Software\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_4000\",\"is_group\":false,\"tax_rate_id\":\"DE_19\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4000",
+     "data": "{\"id\":\"SKR03_4000\",\"code\":\"4000\",\"name\":\"Betriebliche Aufwendungen\",\"root_type\":\"expense\",\"account_type\":\"group\",\"parent_id\":\"SKR03_EXPENSE\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098194}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1890",
+     "data": "{\"id\":\"SKR03_1890\",\"code\":\"1890\",\"name\":\"Privateinlage\",\"root_type\":\"equity\",\"account_type\":\"regular\",\"parent_id\":\"SKR03_0800_G\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098196}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1370",
+     "data": "{\"id\":\"SKR03_1370\",\"code\":\"1370\",\"name\":\"Gesellschafter-Verrechnungskonto\",\"root_type\":\"liability\",\"account_type\":\"payable\",\"parent_id\":\"SKR03_1700\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098196}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4650",
+     "data": "{\"id\":\"SKR03_4650\",\"code\":\"4650\",\"name\":\"Bewirtungskosten abzugsfähig\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_4000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098196}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4654",
+     "data": "{\"id\":\"SKR03_4654\",\"code\":\"4654\",\"name\":\"Bewirtungskosten nicht abzugsfähig\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_4000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098196}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4630",
+     "data": "{\"id\":\"SKR03_4630\",\"code\":\"4630\",\"name\":\"Geschenke abzugsfähig\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_4000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098196}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4635",
+     "data": "{\"id\":\"SKR03_4635\",\"code\":\"4635\",\"name\":\"Geschenke nicht abzugsfähig\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_4000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098196}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4660",
+     "data": "{\"id\":\"SKR03_4660\",\"code\":\"4660\",\"name\":\"Reisekosten Arbeitnehmer\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_4000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098196}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4673",
+     "data": "{\"id\":\"SKR03_4673\",\"code\":\"4673\",\"name\":\"Reisekosten Arbeitnehmer (Fahrtkosten)\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_4000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098196}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1800",
+     "data": "{\"id\":\"SKR03_1800\",\"code\":\"1800\",\"name\":\"Privatentnahme\",\"root_type\":\"equity\",\"account_type\":\"regular\",\"parent_id\":\"SKR03_0800_G\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098196}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1880",
+     "data": "{\"id\":\"SKR03_1880\",\"code\":\"1880\",\"name\":\"Unentgeltliche Wertabgaben (Telefon Privatanteil)\",\"root_type\":\"revenue\",\"account_type\":\"revenue\",\"parent_id\":\"SKR03_8000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":179208909819…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_8921",
+     "data": "{\"id\":\"SKR03_8921\",\"code\":\"8921\",\"name\":\"Verwendung von Gegenständen (Kfz-Privatanteil)\",\"root_type\":\"revenue\",\"account_type\":\"revenue\",\"parent_id\":\"SKR03_8000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792089098196}",
+     "result": "accepted"
+    }
+   ],
+   "errors": [],
+   "title": "Buchhaltung",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Suche „Hoffmann“ in Belege oder Buchungen suchen...",
+   "role": "search",
+   "shot": "1280-02.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Buchhaltung",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Suche geleert",
+   "role": "search",
+   "shot": "1280-03.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Buchhaltung",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Suche „Hoffmann“ in Konto oder Code suchen...",
+   "role": "search",
+   "shot": "1280-04.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Buchhaltung",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Suche geleert",
+   "role": "search",
+   "shot": "1280-05.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Buchhaltung",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Neue Buchung",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-06.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Buchhaltung",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "77 weitere Elemente nicht bedient (Grenze --max 1)",
+   "role": "note",
+   "rest": [
+    "button|Neue manuelle Buchung|1",
+    "tr|13.10.2026 2026-01040 Onboarding — 0,00 € Storniert —|1",
+    "td|—|1",
+    "tr|12.10.2026 2026-01041 Rahmenvertrag — 0,00 € Storniert —|1",
+    "td|—|2",
+    "tr|11.10.2026 2026-01042 Kundentermin — 0,00 € Storniert —|1",
+    "td|—|3",
+    "tr|10.10.2026 2026-01043 Budgetplanung — 0,00 € Storniert —|1",
+    "td|—|4",
+    "button|Buchungseditor schließen|1",
+    "select|0410 Geschäftsausstattung (Büromöbel, IT) 0800 Gezeichnetes |1",
+    "select|0410 Geschäftsausstattung (Büromöbel, IT) 0800 Gezeichnetes |2",
+    "button|Buchungen importieren|1",
+    "button|Buchungen exportieren|1",
+    "button|Als Liste anzeigen|1",
+    "button|Filter|1",
+    "tab|Alle (12)|1",
+    "tab|Offen (4)|1",
+    "tab|Gebucht (8)|1",
+    "button|Angebot_Wartung_2026.pdf Beleg · Offen · 14.10.2026 Müller M|1",
+    "button|Protokoll_Kickoff.docx Beleg · Gebucht · 13.10.2026 Schneide|1",
+    "button|2026-01040 Buchung · Gebucht · 13.10.2026 Onboarding 0,00 €|1",
+    "button|Preisliste_Q4.xlsx Beleg · Offen · 12.10.2026 Becker & Söhne|1",
+    "button|2026-01041 Buchung · Gebucht · 12.10.2026 Rahmenvertrag 0,00|1",
+    "button|Lageplan_Halle4.png Beleg · Offen · 11.10.2026 Hoffmann Medi|1",
+    "button|2026-01042 Buchung · Gebucht · 11.10.2026 Kundentermin 0,00 |1",
+    "button|Vertrag_Rahmen_signiert.pdf Beleg · Offen · 10.10.2026 Wagne|1",
+    "button|2026-01043 Buchung · Gebucht · 10.10.2026 Budgetplanung 0,00|1",
+    "button|2026-01044 Buchung · Gebucht · 09.10.2026 Quartalsbericht 0,|1",
+    "button|Notizen_Workshop.md Beleg · Gebucht · 08.10.2026 Fischer Sof|1",
+    "button|2026-01045 Buchung · Gebucht · 08.10.2026 Angebot 0,00 €|1",
+    "separator|Linke Spaltenbreite anpassen|1",
+    "select|Arbeitsbereich|1",
+    "select|Kontenrahmen|1",
+    "button|Kontenrahmen neu initialisieren|1",
+    "tr|0100 📂 Anlagevermögen Gruppe — 0,00 € 0,00 €|1",
+    "tr|0400 📂 Sachanlagen Gruppe — 0,00 € 0,00 €|1",
+    "tr|0410 📄 Geschäftsausstattung (Büromöbel, IT) Anlagevermögen |1",
+    "tr|0800 📄 Gezeichnetes Kapital / Eigenkapital Eigenkapital — 0|1",
+    "tr|0800_G 📂 Eigenkapital Gruppe — 0,00 € 0,00 €|1"
+   ]
+  }
+ ],
+ "flags": []
+}

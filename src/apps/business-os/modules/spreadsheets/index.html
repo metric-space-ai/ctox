@@ -19,7 +19,7 @@
          Titelzeile + Suchleiste zusammen exakt die 74px des Icons abdecken. -->
     <div class="ctox-pane-tools ctox-filterbar spreadsheets-search-bar" data-shell-v2-header-row="2">
       <input class="ctox-pane-search" type="search" data-spreadsheets-search data-pg-search
-             data-sheet-placeholder="searchPlaceholder|Tabelle suchen..."
+             data-sheet-placeholder="searchPlaceholder|Suchen"
              data-sheet-label="searchLabel|Tabellen suchen">
       <button class="ctox-pane-icon" type="button" data-pg-view="list" data-pg-view-cycle="list,cards" aria-pressed="true" aria-label="Als Karten anzeigen" title="Als Karten anzeigen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
       <button class="ctox-pane-icon spreadsheets-filter-toggle" type="button" data-spreadsheets-filter-toggle data-pg-tray-toggle
@@ -43,13 +43,12 @@
       <select class="ctox-pane-filter" data-spreadsheets-tag data-pg-filter data-pg-name="tag" data-sheet-label="tagFilterLabel|Tabellen-Tags filtern"></select>
       <button class="ctox-pane-icon" type="button" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7M4 5v5h5"/></svg></button>
     </div>
-    <div class="ctox-well ctox-list spreadsheets-list" data-spreadsheets-list><div class="ctox-empty">Tabellen werden geladen.</div></div>
+    <div class="ctox-well ctox-list spreadsheets-list" data-spreadsheets-list></div>
     <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
   </aside>
   <button class="ctox-column-resizer spreadsheets-library-resizer" type="button" data-resizer="left" data-shell-resizer="left" data-resizer-var="--shell-col-left" data-resizer-min="300" data-resizer-max="560" aria-label="Breite der Dateiliste ändern" title="Breite der Dateiliste ändern"></button>
   <main class="spreadsheets-editor" data-spreadsheets-editor data-shell-column="center">
-    <header class="ctox-pane-header ctox-pane-band spreadsheets-editor-header"><div class="ctox-pane-title-row"><div class="ctox-pane-titles"><h2 class="ctox-pane-title">Keine Tabelle ausgewählt</h2></div></div></header>
-    <div class="ctox-empty">Tabelle auswählen oder erstellen.</div>
+    <header class="ctox-pane-header ctox-pane-band spreadsheets-editor-header"><div class="ctox-pane-title-row"><div class="ctox-pane-titles"><h2 class="ctox-pane-title">Tabellen</h2></div></div></header>
   </main>
   <button type="button" class="spreadsheets-library-backdrop" data-spreadsheets-library-backdrop aria-label="Dateiliste schließen" hidden></button>
 
@@ -65,7 +64,7 @@
               data-sheet-text="spreadsheetsTitle|CTOX Spreadsheets">CTOX Spreadsheets</h2>
         </div>
         <div class="ctox-pane-actions" data-spreadsheets-editor-actions>
-          <span class="spreadsheets-dirty-badge" role="status" data-spreadsheets-dirty-indicator>
+          <span class="spreadsheets-dirty-badge" aria-hidden="true" data-spreadsheets-dirty-indicator>
             <i class="indicator-dot"></i>
             <span data-spreadsheets-dirty-label></span>
           </span>

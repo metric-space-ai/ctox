@@ -55,7 +55,7 @@ record-focus aliases (`record_id`, `version_id`).
 ## Local Easy Email runtime contract
 
 The adapter either receives `easyEmailRuntime`, `loadEasyEmailRuntime`, or
-loads `../../../vendor/easy-email-editor/index.mjs`. That local module must export:
+loads `../vendor/easy-email-editor/index.mjs` (App-Vendor `modules/mail/vendor/`). That local module must export:
 
 ```js
 export async function createEasyEmailEditor({
