@@ -235,6 +235,8 @@ export const replicationWebRtcTestInternals = Object.freeze({
   localCheckpointValidityKey,
   localCheckpointStillCovers,
   remoteCheckpointStillCovers,
+  remotePushCheckpointStillCovers,
+  localPushCheckpointStillCovers,
   // Eager replicas are never evicted by the demand sidecar.
   demandSidecarPrimaryDelete,
   // Lazy accessors (classes are declared below): let smoke tests drive the
@@ -1647,8 +1649,23 @@ class CtoxWebRtcReplicationState {
         // shares this validity boundary and must be invalidated with them.
         this.firstPullCompletedAtMs = 0;
         this.publishLocalReplicaCoverage();
-        this.retainedCheckpoints = null;
-        clearPersistentCheckpoints(this.checkpointStorageKey);
+        const keepPush = Boolean(retained.push)
+          && remotePushCheckpointStillCovers(retained, validityKey)
+          && localPushCheckpointStillCovers(retained.localValidityKey, localValidityKey)
+          && readPermissionDigestMatches(retained.permissionDigest, readPermissionDigest);
+        if (keepPush) {
+          // Only the pull side is invalid. The push position lives in this
+          // browser's store and stays exact, so pending local writes resume
+          // where they stopped instead of queueing behind a full re-push.
+          if (!this.pushCheckpointsByPeer.has(peerId)) {
+            this.pushCheckpointsByPeer.set(peerId, retained.push);
+          }
+          this.retainedCheckpoints = { ...retained, pull: null, firstPullCompletedAtMs: null };
+          writePersistentCheckpoints(this.checkpointStorageKey, this.retainedCheckpoints);
+        } else {
+          this.retainedCheckpoints = null;
+          clearPersistentCheckpoints(this.checkpointStorageKey);
+        }
       }
     }
     const peerStates = new Map(this.peerStates$.getValue() || new Map());
@@ -2969,6 +2986,47 @@ function remoteCheckpointStillCovers(retained, currentKey, remoteProtocol) {
   return Number.isFinite(retainedLwt)
     && Number.isFinite(remoteHeadLwt)
     && remoteHeadLwt >= retainedLwt;
+}
+
+// The PUSH checkpoint is a position in the BROWSER store (local lwt/id), not
+// in the native one. Native writes move the remote epoch on every lead update,
+// and a demand-only collection has no pull checkpoint, so the pull rule above
+// rejected every retained push checkpoint for such collections on each
+// reconnect. The push then restarted from null and re-sent the browser's whole
+// pushable history oldest-first (each ~110 KiB lead costing a conflict round
+// plus a retry), so the newest local writes never left the browser while the
+// connection kept renegotiating (thesen 16.10.2026: 124 moved leads stuck behind
+// 130 re-pushed research cancellations, the same docs landing twice).
+// A push checkpoint stays valid while the native storage generation,
+// collection and schema are unchanged; any other key shape keeps exact
+// equality, so a native store rewrite still re-pushes conservatively.
+function remotePushCheckpointStillCovers(retained, currentKey) {
+  const retainedKey = retained?.validityKey;
+  if (!retainedKey || !currentKey) return false;
+  if (retainedKey === currentKey) return true;
+  const before = String(retainedKey).split('|');
+  const now = String(currentKey).split('|');
+  if (before.length !== 4 || now.length !== 4) return false;
+  return before[0] === now[0] && before[1] === now[1] && before[2] === now[2];
+}
+
+// Local half of the push rule. Demand-cache eviction bumps the eviction
+// generation but never removes a dirty (unpushed) row, so it does not move the
+// push position. The newest local row must not have gone backwards: a local
+// write lands at least one lwt above the newest row, so a head behind the
+// retained position could hide new writes below the checkpoint.
+function localPushCheckpointStillCovers(retainedKey, currentKey) {
+  if (!retainedKey || !currentKey) return false;
+  if (retainedKey === currentKey) return true;
+  const retained = parseBrowserLocalCheckpointKey(retainedKey);
+  const current = parseBrowserLocalCheckpointKey(currentKey);
+  if (!retained || !current) return false;
+  return retained.collection === current.collection
+    && retained.schemaHash === current.schemaHash
+    && retained.storeGeneration === current.storeGeneration
+    && Number.isFinite(retained.latestLwt)
+    && Number.isFinite(current.latestLwt)
+    && current.latestLwt >= retained.latestLwt;
 }
 
 function localCheckpointValidityKey(checkpoint) {
