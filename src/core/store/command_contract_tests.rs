@@ -434,7 +434,7 @@ async fn kernel_component(e25: bool) {
             .env("KERNEL_URL", format!("file://{}", kernel.display()))
             .env(
                 "COMMAND_CONFIG",
-                json!({"e25":e25,"schema":schema,"epoch":epoch,"manifest":plan.manifests.iter()
+                json!({"e25":e25,"e25_method":if e25 { std::env::var("E25_METHOD").ok() } else { None },"schema":schema,"epoch":epoch,"manifest":plan.manifests.iter()
                     .find(|m|m["app_id"]=="ctox-platform").unwrap()})
                 .to_string(),
             )
@@ -477,6 +477,9 @@ async fn kernel_component(e25: bool) {
                 assert_eq!(write.write.app_ver, "platform-7");
                 let mut doc = write.write.body.clone().unwrap();
                 let id = write.write.id.clone();
+                let completion_lane = if e25 {
+                    Some(routes::resolve(doc["type"].as_str().unwrap()).expect("E25 route must resolve instead of unknown_command").lane)
+                } else { None };
                 let result = ingress.submit("alice".into(), write, now).await.unwrap();
                 assert_eq!(result.results.len(), 1);
                 let receipt = result.results[0].clone();
@@ -528,10 +531,14 @@ async fn kernel_component(e25: bool) {
                             body: Some(doc.clone()),
                         },
                     };
-                    let done = ingress
-                        .submit("executor-a".into(), terminal, now)
-                        .await
-                        .unwrap();
+                    let done = if e25 {
+                        writer.submit(WriteJob::new(JobOptions::default(), move |tx| {
+                            submit_in_transaction(tx, "executor-a", &terminal, now, &Policy)
+                                .map_err(Into::into)
+                        })).unwrap().await.unwrap()
+                    } else {
+                        ingress.submit("executor-a".into(), terminal, now).await.unwrap()
+                    };
                     assert_eq!(done.results[0].result.status, WriteStatus::Accepted);
                     if first.is_none() {
                         writer
@@ -563,7 +570,7 @@ async fn kernel_component(e25: bool) {
                     .next_page(100, Arc::new(Policy), &signer, || now)
                     .await
                     .unwrap();
-                json!({"receipt":CoreMessage::WriteResult(receipt),"page":page})
+                json!({"receipt":CoreMessage::WriteResult(receipt),"page":page,"completion_lane":completion_lane})
             }
             "subscribe" => {
                 let ClientMessage::Subscribe(sub) =

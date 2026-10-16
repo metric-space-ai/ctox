@@ -56,15 +56,15 @@ pub const ROUTES: &[Route] = &[
     ),
     route!(
         "ctox.workjet.calendar.read.v1",
-        "src/core/business_os/rxdb_peer.rs:3168"
+        "src/core/business_os/mcp_workjet_calendar.rs:27"
     ),
     route!(
         "ctox.browser.live.v1",
-        "src/core/business_os/rxdb_peer.rs:3105"
+        "src/core/business_os/rxdb_peer_browser.rs:188"
     ),
     route!(
         "ctox.outbound.sellify_lookup.v1",
-        "src/core/business_os/rxdb_peer.rs:3122"
+        "src/core/business_os/store_outbound_commands.rs:1673"
     ),
 ];
 pub fn resolve(method: &str) -> Result<Route, CommandError> {
@@ -267,7 +267,11 @@ pub fn prepare_completion(
     {
         return Err(error("unavailable", "protected_result_adapter_required"));
     }
-    let (status, value) = if route.streaming {
+    // Only the opening command owns the ongoing stream. Chunk/read/finish/
+    // cancel commands acknowledge their own operation; their snapshots must
+    // not leave a separate permanently running command for every audio chunk.
+    let owns_stream=route.streaming && matches!(command.payload.get("op").and_then(Value::as_str),None|Some("open"));
+    let (status, value) = if owns_stream {
         match native["state"].as_str() {
             Some("finished" | "committed") => ("done", native),
             Some("canceled" | "cancelled") => ("cancelled", Value::Null),
@@ -290,6 +294,9 @@ pub fn prepare_completion(
         error: None,
     })
 }
+fn file_payload<'a>(status:&str,value:&'a Value)->&'a Value {
+    if status=="running" { value.get("partial").unwrap_or(value) } else { value }
+}
 /// Stage these exact JSON DTO bytes in Transfer-CAS OUTSIDE the writer. The
 /// returned ResultFiles adapter only attaches the verified files row inside it.
 pub fn result_file_bytes(
@@ -301,7 +308,7 @@ pub fn result_file_bytes(
         return Ok(None);
     };
     let bytes =
-        serde_json::to_vec(&value).map_err(|_| error("invalid", "native_result_encoding"))?;
+        serde_json::to_vec(file_payload(&prepared.status,&value)).map_err(|_| error("invalid", "native_result_encoding"))?;
     Ok((bytes.len() > INLINE_RESULT_LIMIT || contains_inline_audio(&value)).then_some(bytes))
 }
 /// Run under the retained native publication guard AND the P9 writer fence.
@@ -317,7 +324,7 @@ pub fn completion(
         return Ok(prepared);
     };
     let bytes =
-        serde_json::to_vec(&value).map_err(|_| error("invalid", "native_result_encoding"))?;
+        serde_json::to_vec(file_payload(&prepared.status,&value)).map_err(|_| error("invalid", "native_result_encoding"))?;
     let value = if bytes.len() > INLINE_RESULT_LIMIT || contains_inline_audio(&value) {
         let sink = files.ok_or_else(|| error("unavailable", "files_sink_missing"))?;
         let reference = sink.put_json(tx, command, &bytes)?;
@@ -325,7 +332,8 @@ pub fn completion(
         if reference.r#ref != expected {
             return Err(error("invalid", "files_ref_digest"));
         }
-        serde_json::to_value(reference).map_err(|_| error("invalid", "files_ref_encoding"))?
+        let reference=serde_json::to_value(reference).map_err(|_| error("invalid", "files_ref_encoding"))?;
+        if prepared.status=="running" { json!({"partial":reference}) } else { reference }
     } else {
         value
     };

@@ -46,6 +46,20 @@ pub struct OrderedWriter {
     writer: WriterHandle,
     authority: Arc<dyn WriteAuthority>,
 }
+/// Core adapters already running on this writer use the SAME ordered ingress,
+/// rather than submitting back to the writer (deadlock) or writing tables
+/// directly (bypassing admission/history/dedup). No connection is opened here.
+/// A completion publisher must require its own accepted result in the batch;
+/// buffering/rejection is not a successfully published command completion.
+pub fn submit_in_transaction(
+    tx: &Transaction<'_>,
+    participant: &str,
+    write: &OrderedWrite,
+    now_ms: u64,
+    authority: &dyn WriteAuthority,
+) -> rusqlite::Result<WriteBatch> {
+    ingest(tx, participant, write, now_ms, authority)
+}
 impl OrderedWriter {
     pub fn new(writer: WriterHandle, authority: Arc<dyn WriteAuthority>) -> Self {
         Self { writer, authority }
@@ -60,7 +74,8 @@ impl OrderedWriter {
         let authority = self.authority.clone();
         self.writer
             .submit(WriteJob::new(JobOptions::default(), move |tx| {
-                ingest(tx, &participant, &write, now_ms, authority.as_ref()).map_err(Into::into)
+                submit_in_transaction(tx, &participant, &write, now_ms, authority.as_ref())
+                    .map_err(Into::into)
             }))?
             .await
     }

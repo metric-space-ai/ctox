@@ -28,7 +28,7 @@
     {
       "method": "ctox.workjet.calendar.read.v1",
       "route": "ctox.workjet.calendar.read.v1",
-      "native_handler": "src/core/business_os/rxdb_peer.rs:3168",
+      "native_handler": "src/core/business_os/mcp_workjet_calendar.rs:27",
       "lane": 1,
       "test": "e25_kernel_command_to_native_completion",
       "mutation": "remove exact route -> unknown_command",
@@ -40,7 +40,7 @@
     {
       "method": "ctox.browser.live.v1",
       "route": "ctox.browser.live.v1",
-      "native_handler": "src/core/business_os/rxdb_peer.rs:3105",
+      "native_handler": "src/core/business_os/rxdb_peer_browser.rs:188",
       "lane": 1,
       "test": "e25_kernel_command_to_native_completion",
       "mutation": "remove exact route -> unknown_command",
@@ -52,7 +52,7 @@
     {
       "method": "ctox.outbound.sellify_lookup.v1",
       "route": "ctox.outbound.sellify_lookup.v1",
-      "native_handler": "src/core/business_os/rxdb_peer.rs:3122",
+      "native_handler": "src/core/business_os/store_outbound_commands.rs:1673",
       "lane": 1,
       "test": "e25_kernel_command_to_native_completion",
       "mutation": "remove exact route -> unknown_command",

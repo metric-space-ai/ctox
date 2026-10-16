@@ -23,7 +23,8 @@ class NativeBridge extends FakeNativePeer {
    assert.equal(lane,1,'command must use P1');
    const response=await rpc('write',{message:m});
    await this.send('commands',response.receipt);
-   await this.send('live',response.page);return;
+   assert.equal(response.completion_lane,1,'Core native registry must select P1 completion');
+   await this.send('commands',response.page);return;
   }
   if(m.type==='subscribe'){
    if(m.collection!=='business_commands')return;
@@ -36,13 +37,17 @@ class NativeBridge extends FakeNativePeer {
  }
 }
 const pair=protocolChannels(),peer=new NativeBridge(pair.server,{instanceId:'isolated-core',epoch:config.epoch});
-const transport=new WebRTCKernelTransport({channels:pair.client,hello:offer('isolated-core'),resolveScope:c=>({scope_hash:'rights:1',gen:1,participant:'alice'}),verifyPackage:async packet=>{
+const completionLanes=new Set();
+class MeasuredTransport extends WebRTCKernelTransport {
+ async apply(message,lane){if(message.type==='live'&&message.collection==='business_commands')completionLanes.add(lane);return super.apply(message,lane);}
+}
+const transport=new MeasuredTransport({channels:pair.client,hello:offer('isolated-core'),resolveScope:c=>({scope_hash:'rights:1',gen:1,participant:'alice'}),verifyPackage:async packet=>{
  const {sig,...unsigned}=packet;
  const valid=packet.participant==='alice'&&packet.instance_id==='isolated-core'&&packet.key_id==='rfc8032-public-test-key'&&verify(null,Buffer.concat([Buffer.from('ctox.sync.v4.stream\0'),Buffer.from(canonical(unsigned))]),publicKey,Buffer.from(sig));
  if(valid)verified++;return valid;
 }});
 const k=createKernel({instanceId:'isolated-core',userId:'alice',storage:'memory',multiTab:false,latencyMs:0,transport});
-const timer=setTimeout(()=>{console.error('E25 kernel component deadline');process.exit(1)},20000);
+const timer=setTimeout(()=>{console.error('E25 kernel component deadline');process.exit(1)},60000);
 try {
  await k.ready;await transport.ready;
  while(!transport.scopes.has('business_app_versions'))await new Promise(r=>setTimeout(r,1));
@@ -51,9 +56,11 @@ try {
  await boot('business_app_versions',[{id:'ctox-platform@platform-7',manifest:config.manifest}]);
  const api=k.appApi('sender','99');
  const measured=[];
- for(const method of inventory.methods){
+ const selected=inventory.methods.filter(m=>!config.e25_method||m.method===config.e25_method);
+ assert.ok(selected.length>0,"selected E25 method is missing from the acceptance list");
+ for(const method of selected){
   const samples=[];
-  for(let i=0;i<16;i++){
+  for(let i=0;i<64;i++){
    const fixture_result=method.streaming?{state:'finished',text:'native final'}:{method:method.method,value:i};
    const start=performance.now(),h=api.command(method.method,{fixture_result});
    await h.local;assert.equal((await h.result).status,'accepted');
@@ -63,8 +70,8 @@ try {
   }
   samples.sort((a,b)=>a-b);
   const p95=samples[Math.ceil(samples.length*.95)-1];
-  assert.ok(p95<=150,`${method.method} component P1 p95 ${p95}>150ms`);
-  measured.push({method:method.method,p50_ms:samples[Math.ceil(samples.length*.5)-1],p95_ms:p95,p99_ms:samples.at(-1),samples_ms:samples,lane:1});
+
+  measured.push({method:method.method,p50_ms:samples[Math.ceil(samples.length*.5)-1],p95_ms:p95,p99_ms:samples.at(-1),samples_ms:samples,lane:1,pass:p95<=150});
  }
  assert.deepEqual(await k.sim.outbox(),[]);assert.deepEqual(peer.errors,[]);
  // Replay the same canonical command through ordinary kernel write + signed page.
@@ -76,5 +83,7 @@ try {
  assert.equal((await k.sim.outbox()).length,0);
  assert.ok(replays>0,'canonical receipt must trigger a real page replay');
  if(heldInitial)await peer.send('initial',heldInitial);
- console.log(JSON.stringify({type:'measured',profile:'E25 component, fixture native DTOs, real Kernel/P5/P9 writer/signatures; not product',methods:measured,verified_pages:verified,canonical_replays:replays}));
+ assert.deepEqual([...completionLanes],[1],"native command completions must arrive on P1");
+ console.log(JSON.stringify({type:'measured',profile:'E25 component, fixture native DTOs, real Kernel/P5/P9 writer/signatures; not product',methods:measured,completion_lanes:[...completionLanes],verified_pages:verified,canonical_replays:replays,pass:measured.every(m=>m.pass)}));
+ assert.ok(measured.every(m=>m.pass),"component P1 p95 exceeded 150ms; retain the measured negative result");
 }finally{clearTimeout(timer);await k.close();peer.close();lines.close();}
