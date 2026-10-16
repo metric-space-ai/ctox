@@ -524,49 +524,115 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn inherited_account_metadata_reads_only_the_native_store_and_keeps_configuration(
+    /// `account_metadata` is a synchronous Core caller: it runs with the
+    /// daemon's injected Core/Runtime/Secrets owners on `run_core_sync`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn inherited_account_metadata_reads_only_the_native_store_and_keeps_configuration(
     ) -> anyhow::Result<()> {
         use std::collections::BTreeMap;
         let root = tempfile::tempdir()?;
-        let settings = BTreeMap::from([
-            ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
-            ("CTOX_API_PROVIDER".to_owned(), "ctox_proxy".to_owned()),
-            ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
-            ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
-            (
-                "CTOX_UPSTREAM_BASE_URL".to_owned(),
-                "https://llm.ctox.dev".to_owned(),
-            ),
-            (
-                "CTOX_LLM_PROXY_API_KEY".to_owned(),
-                "fixture-private-proxy".to_owned(),
-            ),
-            (
-                "MINIMAX_API_KEY".to_owned(),
-                "fixture-unrelated-private".to_owned(),
-            ),
-        ]);
-        runtime_env::save_runtime_env_map(root.path(), &settings)?;
-        let before = runtime_env::load_runtime_env_map(root.path())?;
-        let metadata = account_metadata(root.path())?.unwrap();
-        assert_eq!(metadata.provider, "ctox_proxy");
-        let mut rotated = before.clone();
-        rotated.insert(
-            "CTOX_LLM_PROXY_API_KEY".into(),
-            "fixture-rotated-proxy".into(),
-        );
-        runtime_env::save_runtime_env_map(root.path(), &rotated)?;
-        let changed = account_metadata(root.path())?.unwrap();
-        assert_ne!(metadata.private_binding, changed.private_binding);
-        assert_eq!(runtime_env::load_runtime_env_map(root.path())?, rotated);
-        runtime_env::save_runtime_env_map(root.path(), &before)?;
-        assert_eq!(runtime_env::load_runtime_env_map(root.path())?, before);
-        assert!(
-            !root.path().join("coding-agents").exists(),
-            "metadata must not prepare or start Pi"
-        );
-        Ok(())
+        let core = runtime_env::RuntimeOwnerFixture::open(root.path()).await?;
+        let secrets = owned_secrets(root.path()).await?;
+        let path = root.path().to_path_buf();
+        let result = run_core_sync_admitted(move || {
+            let root = path.as_path();
+            let settings = BTreeMap::from([
+                ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
+                ("CTOX_API_PROVIDER".to_owned(), "ctox_proxy".to_owned()),
+                ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
+                ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
+                (
+                    "CTOX_UPSTREAM_BASE_URL".to_owned(),
+                    "https://llm.ctox.dev".to_owned(),
+                ),
+                (
+                    "CTOX_LLM_PROXY_API_KEY".to_owned(),
+                    "fixture-private-proxy".to_owned(),
+                ),
+                (
+                    "MINIMAX_API_KEY".to_owned(),
+                    "fixture-unrelated-private".to_owned(),
+                ),
+            ]);
+            runtime_env::save_runtime_env_map(root, &settings)?;
+            let before = runtime_env::load_runtime_env_map(root)?;
+            let metadata = account_metadata(root)?.unwrap();
+            assert_eq!(metadata.provider, "ctox_proxy");
+            let mut rotated = before.clone();
+            rotated.insert(
+                "CTOX_LLM_PROXY_API_KEY".into(),
+                "fixture-rotated-proxy".into(),
+            );
+            runtime_env::save_runtime_env_map(root, &rotated)?;
+            let changed = account_metadata(root)?.unwrap();
+            assert_ne!(metadata.private_binding, changed.private_binding);
+            assert_eq!(runtime_env::load_runtime_env_map(root)?, rotated);
+            runtime_env::save_runtime_env_map(root, &before)?;
+            assert_eq!(runtime_env::load_runtime_env_map(root)?, before);
+            assert!(
+                !root.join("coding-agents").exists(),
+                "metadata must not prepare or start Pi"
+            );
+            Ok(())
+        })
+        .await;
+        drop(secrets.0);
+        secrets.2.shutdown().await?;
+        secrets.1.shutdown().await?;
+        core.close().await?;
+        result
+    }
+
+    /// The Secrets file owner for a fixture root (schema as at daemon boot).
+    async fn owned_secrets(
+        root: &Path,
+    ) -> anyhow::Result<(
+        crate::secrets::SecretStore,
+        ctox_store::writer::WriterHandle,
+        ctox_store::read_pool::ReadPool,
+    )> {
+        let path = crate::secrets::resolve_db_path(root);
+        anyhow::ensure!(path.starts_with(root), "isolated Secrets fixture required");
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        let (writer, readers) =
+            ctox_store::testkit::StoreFixture::open(ctox_store::DbId::new(&path)?)
+                .await?
+                .into_parts();
+        writer
+            .submit(ctox_store::WriteJob::new(Default::default(), |tx| {
+                crate::secrets::initialize_owned_secret_schema(tx)
+                    .map_err(|_| ctox_store::StoreError::Invalid("secret fixture schema".into()))?;
+                Ok(())
+            }))?
+            .await?;
+        let store =
+            crate::secrets::SecretStore::attach(root, writer.clone(), readers.clone()).await?;
+        Ok((store, writer, readers))
+    }
+
+    /// `run_core_sync` rejects a fifth concurrent caller as Busy without running
+    /// it; wait for a slot instead. An admitted operation never runs twice.
+    async fn run_core_sync_admitted<T: Send + 'static>(
+        operation: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
+    ) -> anyhow::Result<T> {
+        let pending = std::sync::Arc::new(std::sync::Mutex::new(Some(operation)));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+        loop {
+            let slot = pending.clone();
+            let result = crate::persistence::run_core_sync(move || {
+                let operation = slot.lock().unwrap().take().expect("admitted once");
+                operation()
+            })
+            .await;
+            if result.is_err()
+                && pending.lock().unwrap().is_some()
+                && std::time::Instant::now() < deadline
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                continue;
+            }
+            return result;
+        }
     }
 
     #[test]

@@ -336,6 +336,187 @@ fn code(result: Result<Value, CtoxError>) -> ErrorCode {
     result.expect_err("capability must reject").code
 }
 
+/// The capability layer is a synchronous Core caller. Under the injected-owner
+/// contract it runs only with the daemon's owners installed for its root (Core,
+/// Runtime, Secrets), with the current Store rights bound as the policy
+/// authority, and on the bounded `run_core_sync` executor: exactly how a
+/// migrated synchronous caller reaches Core. Nothing here opens a second owner.
+fn with_core_owners(body: impl FnOnce(&Fixture) + Send + 'static) {
+    let f = Fixture::new();
+    let root = f.root.path().to_path_buf();
+    // The fixture (and its root) outlives the body: owners close first.
+    let f = run_with_core_owners(root, move || {
+        body(&f);
+        f
+    });
+    drop(f);
+}
+
+/// Root-based form for sibling capability tests that bring their own root.
+pub(crate) fn run_with_core_owners<T: Send + 'static>(
+    root: std::path::PathBuf,
+    body: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async move {
+        let core = crate::inference::runtime_env::RuntimeOwnerFixture::open(&root)
+            .await
+            .unwrap();
+        let secrets = SecretOwner::open(&root).await;
+        let rights = BoundRights::open(&root).await;
+        let result = run_core_sync_admitted(move || Ok(body())).await;
+        let failed = result.is_err();
+        rights.close(failed).await;
+        secrets.close(failed).await;
+        let closed = core.close().await;
+        let value = result.unwrap();
+        closed.unwrap();
+        value
+    })
+}
+
+/// `run_core_sync` admits at most four waiting compatibility callers and
+/// rejects the fifth as Busy without running it. Parallel tests wait for a
+/// slot instead of failing; an admitted operation is never run twice.
+async fn run_core_sync_admitted<T: Send + 'static>(
+    operation: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
+) -> anyhow::Result<T> {
+    let pending = std::sync::Arc::new(std::sync::Mutex::new(Some(operation)));
+    let deadline = std::time::Instant::now() + Duration::from_secs(300);
+    loop {
+        let slot = pending.clone();
+        let result = crate::persistence::run_core_sync(move || {
+            let operation = slot.lock().unwrap().take().expect("admitted once");
+            operation()
+        })
+        .await;
+        if result.is_err()
+            && pending.lock().unwrap().is_some()
+            && std::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            continue;
+        }
+        return result;
+    }
+}
+
+/// The Secrets file owner for a fixture root (schema as at daemon boot).
+struct SecretOwner {
+    _store: crate::secrets::SecretStore,
+    writer: ctox_store::writer::WriterHandle,
+    readers: ctox_store::read_pool::ReadPool,
+}
+impl SecretOwner {
+    async fn open(root: &std::path::Path) -> Self {
+        let path = crate::secrets::resolve_db_path(root);
+        assert!(path.starts_with(root), "isolated Secrets fixture required");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let (writer, readers) =
+            ctox_store::testkit::StoreFixture::open(ctox_store::DbId::new(&path).unwrap())
+                .await
+                .unwrap()
+                .into_parts();
+        writer
+            .submit(ctox_store::WriteJob::new(Default::default(), |tx| {
+                crate::secrets::initialize_owned_secret_schema(tx)
+                    .map_err(|_| ctox_store::StoreError::Invalid("secret fixture schema".into()))?;
+                Ok(())
+            }))
+            .unwrap()
+            .await
+            .unwrap();
+        let store = crate::secrets::SecretStore::attach(root, writer.clone(), readers.clone())
+            .await
+            .unwrap();
+        Self {
+            _store: store,
+            writer,
+            readers,
+        }
+    }
+    async fn close(self, body_failed: bool) {
+        let Self {
+            _store,
+            writer,
+            readers,
+        } = self;
+        drop(_store);
+        let closed = (readers.shutdown().await, writer.shutdown().await);
+        if !body_failed {
+            closed.0.unwrap();
+            closed.1.unwrap();
+        }
+    }
+}
+
+/// Base-release rights as current Store rows, bound as the process policy
+/// authority (one binding per process: wait while another test holds it).
+struct BoundRights {
+    registration: crate::business_os::policy::PolicyAuthorityRegistration,
+    authority: std::sync::Arc<crate::business_os::policy::sync_rights::StoreRightsAuthority>,
+}
+impl BoundRights {
+    async fn open(root: &std::path::Path) -> Self {
+        use ctox_store::{registry::Registry, writer::WriterOptions, DbId};
+        let writer = Registry
+            .open(
+                DbId::new(root.join("rights-fixture.sqlite3")).unwrap(),
+                WriterOptions {
+                    configure: Some(std::sync::Arc::new(|db| {
+                        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+                        Ok(())
+                    })),
+                    head_seq: Some(std::sync::Arc::new(|db| {
+                        db.query_row("SELECT v FROM _seq WHERE singleton=1", [], |r| r.get(0))
+                            .map_err(Into::into)
+                    })),
+                },
+            )
+            .unwrap();
+        let authority = crate::business_os::policy::sync_rights::StoreRightsAuthority::attach(
+            writer,
+            "cap3-fixture".into(),
+        )
+        .await
+        .unwrap();
+        authority
+            .replace(crate::business_os::policy::base_release_rights(&[]), vec![])
+            .await
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(300);
+        let registration = loop {
+            match crate::business_os::policy::bind_policy_authority(authority.clone()) {
+                Ok(registration) => break registration,
+                Err(error) if std::time::Instant::now() < deadline => {
+                    let _ = error;
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                Err(error) => panic!("policy authority: {error}"),
+            }
+        };
+        Self {
+            registration,
+            authority,
+        }
+    }
+    async fn close(self, body_failed: bool) {
+        let Self {
+            registration,
+            authority,
+        } = self;
+        drop(registration);
+        let closed = authority.writer().shutdown().await;
+        if !body_failed {
+            closed.unwrap();
+        }
+    }
+}
+
 #[test]
 fn app_capabilities_cap3_audit_scope_contract() {
     let f = Fixture::new();
@@ -396,127 +577,130 @@ fn app_capabilities_cap3_audit_scope_contract() {
 
 #[test]
 fn app_capabilities_cap3_config_whitelist_contract() {
-    let f = Fixture::new();
-    let host = Host::new("consent", "owner");
-    crate::inference::runtime_env::set_runtime_env_value(
-        f.root.path(),
-        "CTOX_BUSINESS_OS_REQUIRE_LEGAL_BASIS_EVIDENCE",
-        "1",
-    )
-    .unwrap();
-    crate::inference::runtime_env::set_runtime_env_value(f.root.path(), "CTOX_CHAT_MODEL", "m")
-        .unwrap();
-    let value = f
-        .call(
-            &host,
-            "config",
-            "get",
-            json!({"key":"CTOX_BUSINESS_OS_REQUIRE_LEGAL_BASIS_EVIDENCE"}),
+    with_core_owners(|f| {
+        let host = Host::new("consent", "owner");
+        crate::inference::runtime_env::set_runtime_env_value(
+            f.root.path(),
+            "CTOX_BUSINESS_OS_REQUIRE_LEGAL_BASIS_EVIDENCE",
+            "1",
         )
         .unwrap();
-    assert_eq!(value["value"], "1");
-    assert!(f
-        .call(&host, "config", "get", json!({"key":"CTO_EMAIL_ADDRESS"}))
-        .unwrap()
-        .get("value")
-        .is_some());
-    // A configured, non-whitelisted key stays unreadable.
-    assert_eq!(
-        code(f.call(&host, "config", "get", json!({"key":"CTOX_CHAT_MODEL"}))),
-        ErrorCode::Forbidden
-    );
-    assert_eq!(
-        code(f.call(&host, "config", "get", json!({"key":"OPENAI_API_KEY"}))),
-        ErrorCode::Forbidden
-    );
-    assert_eq!(
-        code(f.call(&host, "config", "get", json!({"key":"x","default":"y"}))),
-        ErrorCode::Invalid
-    );
+        crate::inference::runtime_env::set_runtime_env_value(f.root.path(), "CTOX_CHAT_MODEL", "m")
+            .unwrap();
+        let value = f
+            .call(
+                &host,
+                "config",
+                "get",
+                json!({"key":"CTOX_BUSINESS_OS_REQUIRE_LEGAL_BASIS_EVIDENCE"}),
+            )
+            .unwrap();
+        assert_eq!(value["value"], "1");
+        assert!(f
+            .call(&host, "config", "get", json!({"key":"CTO_EMAIL_ADDRESS"}))
+            .unwrap()
+            .get("value")
+            .is_some());
+        // A configured, non-whitelisted key stays unreadable.
+        assert_eq!(
+            code(f.call(&host, "config", "get", json!({"key":"CTOX_CHAT_MODEL"}))),
+            ErrorCode::Forbidden
+        );
+        assert_eq!(
+            code(f.call(&host, "config", "get", json!({"key":"OPENAI_API_KEY"}))),
+            ErrorCode::Forbidden
+        );
+        assert_eq!(
+            code(f.call(&host, "config", "get", json!({"key":"x","default":"y"}))),
+            ErrorCode::Invalid
+        );
+    });
 }
 
 #[test]
 fn app_capabilities_cap3_secrets_scope_contract() {
-    let f = Fixture::new();
-    let olg = Host::new("outbound-lead-generation", "staff");
-    let canary = "synthetic-cap3-secret-canary";
-    f.intake.stash("command", "value", canary);
-    let put = json!({"command_id":"command","name":"PORTAL_LOGIN","value":{"secret_intake":true}});
-    let stored = f.call(&olg, "secret", "put", put.clone()).unwrap();
-    assert_eq!(stored["scope"], "app:outbound-lead-generation");
-    // The intake is consumed once; a replay has no value to store.
-    assert_eq!(code(f.call(&olg, "secret", "put", put)), ErrorCode::Invalid);
-    let scope = f.call(&olg, "secret", "scope", Value::Null).unwrap()["scope"].clone();
-    let exists = f
-        .call(
-            &olg,
-            "secret",
-            "exists",
-            json!({"scope":scope,"name":"PORTAL_LOGIN"}),
-        )
-        .unwrap();
-    assert_eq!(exists["exists"], true);
-    let listed = f.call(&olg, "secret", "list", json!({})).unwrap();
-    assert_eq!(listed["secrets"][0]["name"], "PORTAL_LOGIN");
-    for output in [&stored, &exists, &listed] {
-        assert!(
-            !output.to_string().contains(canary),
-            "secret value left the Core"
-        );
-    }
-    // Another app cannot name, probe or delete this scope.
-    let news = Host::new("news", "staff");
-    for (function, args) in [
-        (
-            "exists",
-            json!({"scope":"app:outbound-lead-generation","name":"PORTAL_LOGIN"}),
-        ),
-        (
-            "delete",
-            json!({"scope":"app:outbound-lead-generation","name":"PORTAL_LOGIN"}),
-        ),
-        ("list", json!({"scope":"app:outbound-lead-generation"})),
-    ] {
+    with_core_owners(|f| {
+        let olg = Host::new("outbound-lead-generation", "staff");
+        let canary = "synthetic-cap3-secret-canary";
+        f.intake.stash("command", "value", canary);
+        let put =
+            json!({"command_id":"command","name":"PORTAL_LOGIN","value":{"secret_intake":true}});
+        let stored = f.call(&olg, "secret", "put", put.clone()).unwrap();
+        assert_eq!(stored["scope"], "app:outbound-lead-generation");
+        // The intake is consumed once; a replay has no value to store.
+        assert_eq!(code(f.call(&olg, "secret", "put", put)), ErrorCode::Invalid);
+        let scope = f.call(&olg, "secret", "scope", Value::Null).unwrap()["scope"].clone();
+        let exists = f
+            .call(
+                &olg,
+                "secret",
+                "exists",
+                json!({"scope":scope,"name":"PORTAL_LOGIN"}),
+            )
+            .unwrap();
+        assert_eq!(exists["exists"], true);
+        let listed = f.call(&olg, "secret", "list", json!({})).unwrap();
+        assert_eq!(listed["secrets"][0]["name"], "PORTAL_LOGIN");
+        for output in [&stored, &exists, &listed] {
+            assert!(
+                !output.to_string().contains(canary),
+                "secret value left the Core"
+            );
+        }
+        // Another app cannot name, probe or delete this scope.
+        let news = Host::new("news", "staff");
+        for (function, args) in [
+            (
+                "exists",
+                json!({"scope":"app:outbound-lead-generation","name":"PORTAL_LOGIN"}),
+            ),
+            (
+                "delete",
+                json!({"scope":"app:outbound-lead-generation","name":"PORTAL_LOGIN"}),
+            ),
+            ("list", json!({"scope":"app:outbound-lead-generation"})),
+        ] {
+            assert_eq!(
+                code(f.call(&news, "secret", function, args)),
+                ErrorCode::Forbidden
+            );
+        }
         assert_eq!(
-            code(f.call(&news, "secret", function, args)),
+            f.call(&news, "secrets", "exists", json!({"name":"PORTAL_LOGIN"}))
+                .unwrap()["exists"],
+            false
+        );
+        // Intake of another command, plaintext values and instance writes without
+        // secrets.manage are refused before any effect.
+        f.intake.stash("other", "value", canary);
+        assert_eq!(
+            code(f.call(
+                &olg,
+                "secret",
+                "put",
+                json!({"command_id":"other","name":"X","value":{"secret_intake":true}})
+            )),
             ErrorCode::Forbidden
         );
-    }
-    assert_eq!(
-        f.call(&news, "secrets", "exists", json!({"name":"PORTAL_LOGIN"}))
-            .unwrap()["exists"],
-        false
-    );
-    // Intake of another command, plaintext values and instance writes without
-    // secrets.manage are refused before any effect.
-    f.intake.stash("other", "value", canary);
-    assert_eq!(
-        code(f.call(
-            &olg,
-            "secret",
-            "put",
-            json!({"command_id":"other","name":"X","value":{"secret_intake":true}})
-        )),
-        ErrorCode::Forbidden
-    );
-    assert_eq!(
-        code(f.call(
-            &olg,
-            "secret",
-            "put",
-            json!({"command_id":"command","name":"X","value":canary})
-        )),
-        ErrorCode::Invalid
-    );
-    f.intake.stash("command", "value", canary);
-    assert_eq!(
-        code(f.call(&olg, "secret", "put", json!({"command_id":"command","name":"OPENAI_API_KEY","scope":"credentials","value":{"secret_intake":true}}))),
-        ErrorCode::Forbidden
-    );
-    let deleted = f
-        .call(&olg, "secret", "delete", json!({"name":"PORTAL_LOGIN"}))
-        .unwrap();
-    assert_eq!(deleted["deleted"], true);
+        assert_eq!(
+            code(f.call(
+                &olg,
+                "secret",
+                "put",
+                json!({"command_id":"command","name":"X","value":canary})
+            )),
+            ErrorCode::Invalid
+        );
+        f.intake.stash("command", "value", canary);
+        assert_eq!(
+            code(f.call(&olg, "secret", "put", json!({"command_id":"command","name":"OPENAI_API_KEY","scope":"credentials","value":{"secret_intake":true}}))),
+            ErrorCode::Forbidden
+        );
+        let deleted = f
+            .call(&olg, "secret", "delete", json!({"name":"PORTAL_LOGIN"}))
+            .unwrap();
+        assert_eq!(deleted["deleted"], true);
+    });
 }
 
 #[test]
@@ -1101,60 +1285,61 @@ fn app_capabilities_cap3_secret_intake_live_contract() {
 
 #[test]
 fn app_capabilities_cap3_platform_origin_contract() {
-    let f = Fixture::new();
-    crate::inference::runtime_env::set_runtime_env_value(
-        f.root.path(),
-        config::PUBLIC_ORIGIN_KEY,
-        "https://core.example.test/",
-    )
-    .unwrap();
-    let key = json!({"key":config::PUBLIC_ORIGIN_KEY});
-    assert_eq!(
-        code(f.call(
-            &Host::new("outbound", "admin"),
-            "config",
-            "get",
-            key.clone()
-        )),
-        ErrorCode::Forbidden
-    );
-    let platform = f
-        .call(&Host::new("ctox-platform", "admin"), "config", "get", key)
+    with_core_owners(|f| {
+        crate::inference::runtime_env::set_runtime_env_value(
+            f.root.path(),
+            config::PUBLIC_ORIGIN_KEY,
+            "https://core.example.test/",
+        )
         .unwrap();
-    assert_eq!(platform["value"], "https://core.example.test");
-    // The production runtime uses this origin, and refuses while no app
-    // runtime ingress is bound (never a fallback dispatch).
-    let runtime = ingest::CoreIngestRuntime {
-        root: f.root.path(),
-    };
-    use ingest::IngestRuntime as _;
-    assert_eq!(
-        runtime.public_origin().as_deref(),
-        Some("https://core.example.test")
-    );
-    assert_eq!(
-        runtime.has_handler("outbound", "x").unwrap_err().code,
-        ErrorCode::Unavailable
-    );
-    crate::inference::runtime_env::set_runtime_env_value(
-        f.root.path(),
-        config::PUBLIC_ORIGIN_KEY,
-        "https://core.example.test/path",
-    )
-    .unwrap();
-    assert_eq!(config::public_origin(f.root.path()), None);
-    // HTTP routing: /ingest always, a legacy alias only once registered.
-    assert!(ingest::serves(f.root.path(), "/ingest/outbound/tracking"));
-    assert!(!ingest::serves(f.root.path(), "/mail/track/o/abc.gif"));
-    f.call(
-        &Host::new("outbound", "staff"),
-        "net.ingest.webhook",
-        "register",
-        json!({"path":"tracking","command":"outbound.tracking.event","aliases":["/mail/track/o/"]}),
-    )
-    .unwrap();
-    assert!(ingest::serves(f.root.path(), "/mail/track/o/abc.gif"));
-    assert!(!ingest::serves(f.root.path(), "/mail/track/c/abc"));
+        let key = json!({"key":config::PUBLIC_ORIGIN_KEY});
+        assert_eq!(
+            code(f.call(
+                &Host::new("outbound", "admin"),
+                "config",
+                "get",
+                key.clone()
+            )),
+            ErrorCode::Forbidden
+        );
+        let platform = f
+            .call(&Host::new("ctox-platform", "admin"), "config", "get", key)
+            .unwrap();
+        assert_eq!(platform["value"], "https://core.example.test");
+        // The production runtime uses this origin, and refuses while no app
+        // runtime ingress is bound (never a fallback dispatch).
+        let runtime = ingest::CoreIngestRuntime {
+            root: f.root.path(),
+        };
+        use ingest::IngestRuntime as _;
+        assert_eq!(
+            runtime.public_origin().as_deref(),
+            Some("https://core.example.test")
+        );
+        assert_eq!(
+            runtime.has_handler("outbound", "x").unwrap_err().code,
+            ErrorCode::Unavailable
+        );
+        crate::inference::runtime_env::set_runtime_env_value(
+            f.root.path(),
+            config::PUBLIC_ORIGIN_KEY,
+            "https://core.example.test/path",
+        )
+        .unwrap();
+        assert_eq!(config::public_origin(f.root.path()), None);
+        // HTTP routing: /ingest always, a legacy alias only once registered.
+        assert!(ingest::serves(f.root.path(), "/ingest/outbound/tracking"));
+        assert!(!ingest::serves(f.root.path(), "/mail/track/o/abc.gif"));
+        f.call(
+            &Host::new("outbound", "staff"),
+            "net.ingest.webhook",
+            "register",
+            json!({"path":"tracking","command":"outbound.tracking.event","aliases":["/mail/track/o/"]}),
+        )
+        .unwrap();
+        assert!(ingest::serves(f.root.path(), "/mail/track/o/abc.gif"));
+        assert!(!ingest::serves(f.root.path(), "/mail/track/c/abc"));
+    });
 }
 
 #[test]
@@ -1228,129 +1413,131 @@ fn app_capabilities_cap3_files_owner_contract() {
 
 #[test]
 fn app_capabilities_cap3_process_env_contract() {
-    let f = Fixture::new();
-    let host = Host::new("outbound-lead-generation", "staff");
-    crate::inference::runtime_env::set_runtime_env_value(
-        f.root.path(),
-        process::ALLOWLIST_KEY,
-        r#"{"sh":"/bin/sh"}"#,
-    )
-    .unwrap();
-    let run = f
-        .call(&host, "process", "run", json!({"program":"sh","args":["-c","printf '[%s][%s]' \"$HOME\" \"$CTOX_SCRAPE_TARGET\"; pwd"],
-            "env":{"CTOX_SCRAPE_TARGET":"t1"},"cwd_ref":"scrape/t1","timeout_ms":10000}))
-        .unwrap();
-    let stdout = run["stdout"].as_str().unwrap();
-    assert!(
-        stdout.starts_with("[][t1]"),
-        "environment was inherited: {stdout}"
-    );
-    assert!(
-        stdout
-            .trim_end()
-            .ends_with("app-workspaces/outbound-lead-generation/scrape/t1"),
-        "{stdout}"
-    );
-    assert_eq!(run["exit"], 0);
-    let slow = f
-        .call(
-            &host,
-            "process",
-            "run",
-            json!({"program":"sh","args":["-c","while :; do :; done"],"timeout_ms":200}),
+    with_core_owners(|f| {
+        let host = Host::new("outbound-lead-generation", "staff");
+        crate::inference::runtime_env::set_runtime_env_value(
+            f.root.path(),
+            process::ALLOWLIST_KEY,
+            r#"{"sh":"/bin/sh"}"#,
         )
         .unwrap();
-    assert_eq!(slow["timed_out"], true);
-    for args in [
-        json!({"program":"sh","env":{"LD_PRELOAD":"/x.so"}}),
-        json!({"program":"sh","env":{"OPENAI_API_KEY":"k"}}),
-        json!({"program":"sh","cwd_ref":"../other-app"}),
-        json!({"program":"sh","cwd_ref":"/etc"}),
-    ] {
-        assert_eq!(
-            code(f.call(&host, "process", "run", args)),
-            ErrorCode::Invalid
+        let run = f
+            .call(&host, "process", "run", json!({"program":"sh","args":["-c","printf '[%s][%s]' \"$HOME\" \"$CTOX_SCRAPE_TARGET\"; pwd"],
+                "env":{"CTOX_SCRAPE_TARGET":"t1"},"cwd_ref":"scrape/t1","timeout_ms":10000}))
+            .unwrap();
+        let stdout = run["stdout"].as_str().unwrap();
+        assert!(
+            stdout.starts_with("[][t1]"),
+            "environment was inherited: {stdout}"
         );
-    }
-    assert_eq!(
-        code(f.call(&host, "process", "run", json!({"program":"/bin/sh"}))),
-        ErrorCode::Forbidden
-    );
+        assert!(
+            stdout
+                .trim_end()
+                .ends_with("app-workspaces/outbound-lead-generation/scrape/t1"),
+            "{stdout}"
+        );
+        assert_eq!(run["exit"], 0);
+        let slow = f
+            .call(
+                &host,
+                "process",
+                "run",
+                json!({"program":"sh","args":["-c","while :; do :; done"],"timeout_ms":200}),
+            )
+            .unwrap();
+        assert_eq!(slow["timed_out"], true);
+        for args in [
+            json!({"program":"sh","env":{"LD_PRELOAD":"/x.so"}}),
+            json!({"program":"sh","env":{"OPENAI_API_KEY":"k"}}),
+            json!({"program":"sh","cwd_ref":"../other-app"}),
+            json!({"program":"sh","cwd_ref":"/etc"}),
+        ] {
+            assert_eq!(
+                code(f.call(&host, "process", "run", args)),
+                ErrorCode::Invalid
+            );
+        }
+        assert_eq!(
+            code(f.call(&host, "process", "run", json!({"program":"/bin/sh"}))),
+            ErrorCode::Forbidden
+        );
+    });
 }
 
 #[test]
 fn app_capabilities_cap3_directory_policy_contract() {
-    let f = Fixture::new();
-    let decide = json!({"permission":"apps.modify","module":"news"});
-    let admin = f
-        .call(
-            &Host::new("threads", "admin"),
-            "policy",
-            "module_decision",
-            decide.clone(),
-        )
-        .unwrap();
-    let user = f
-        .call(
-            &Host::new("threads", "user"),
-            "policy",
-            "module_decision",
-            decide,
-        )
-        .unwrap();
-    assert_eq!(
-        (admin["allowed"].clone(), user["allowed"].clone()),
-        (json!(true), json!(false))
-    );
-    let forged = json!({"permission":"apps.modify","module":"news","actor":{"role":"admin"}});
-    assert_eq!(
-        code(f.call(
-            &Host::new("threads", "user"),
-            "policy",
-            "module_decision",
-            forged
-        )),
-        ErrorCode::Invalid
-    );
-    assert_eq!(
-        f.call(
-            &Host::new("threads", "user"),
-            "directory",
-            "user",
-            json!({"user_id":"nobody"})
-        )
-        .unwrap()["found"],
-        false
-    );
-    assert!(f.call(&Host::new("kundenpipeline", "user"), "identity.users", "list", json!({"active":true,"roles":["chef","admin"],"order":["created_at_ms:asc","user_id:asc"]})).unwrap()["users"].is_array());
-    // command.get: own app's command intent only.
-    let conn = crate::business_os::store::open_store(f.root.path()).unwrap();
-    conn.execute("INSERT INTO business_commands (command_id,module,command_type,record_id,status,payload_json,client_context_json,observed_at_ms)
-                  VALUES ('cmd-r1','outbound-lead-generation','web_stack.person_research','lead-1','completed','{\"company\":\"ACME\"}','{}',1)", []).unwrap();
-    let own = f
-        .call(
-            &Host::new("outbound-lead-generation", "staff"),
-            "command",
-            "get",
-            json!({"command_id":"cmd-r1"}),
-        )
-        .unwrap();
-    assert_eq!(
-        (own["found"].clone(), own["payload"]["company"].clone()),
-        (json!(true), json!("ACME"))
-    );
-    let foreign = f
-        .call(
-            &Host::new("news", "staff"),
-            "command",
-            "get",
-            json!({"command_id":"cmd-r1"}),
-        )
-        .unwrap();
-    assert_eq!(
-        foreign["found"], false,
-        "command.get crossed the app boundary"
-    );
+    with_core_owners(|f| {
+        let decide = json!({"permission":"apps.modify","module":"news"});
+        let admin = f
+            .call(
+                &Host::new("threads", "admin"),
+                "policy",
+                "module_decision",
+                decide.clone(),
+            )
+            .unwrap();
+        let user = f
+            .call(
+                &Host::new("threads", "user"),
+                "policy",
+                "module_decision",
+                decide,
+            )
+            .unwrap();
+        assert_eq!(
+            (admin["allowed"].clone(), user["allowed"].clone()),
+            (json!(true), json!(false))
+        );
+        let forged = json!({"permission":"apps.modify","module":"news","actor":{"role":"admin"}});
+        assert_eq!(
+            code(f.call(
+                &Host::new("threads", "user"),
+                "policy",
+                "module_decision",
+                forged
+            )),
+            ErrorCode::Invalid
+        );
+        assert_eq!(
+            f.call(
+                &Host::new("threads", "user"),
+                "directory",
+                "user",
+                json!({"user_id":"nobody"})
+            )
+            .unwrap()["found"],
+            false
+        );
+        assert!(f.call(&Host::new("kundenpipeline", "user"), "identity.users", "list", json!({"active":true,"roles":["chef","admin"],"order":["created_at_ms:asc","user_id:asc"]})).unwrap()["users"].is_array());
+        // command.get: own app's command intent only.
+        let conn = crate::business_os::store::open_store(f.root.path()).unwrap();
+        conn.execute("INSERT INTO business_commands (command_id,module,command_type,record_id,status,payload_json,client_context_json,observed_at_ms)
+                      VALUES ('cmd-r1','outbound-lead-generation','web_stack.person_research','lead-1','completed','{\"company\":\"ACME\"}','{}',1)", []).unwrap();
+        let own = f
+            .call(
+                &Host::new("outbound-lead-generation", "staff"),
+                "command",
+                "get",
+                json!({"command_id":"cmd-r1"}),
+            )
+            .unwrap();
+        assert_eq!(
+            (own["found"].clone(), own["payload"]["company"].clone()),
+            (json!(true), json!("ACME"))
+        );
+        let foreign = f
+            .call(
+                &Host::new("news", "staff"),
+                "command",
+                "get",
+                json!({"command_id":"cmd-r1"}),
+            )
+            .unwrap();
+        assert_eq!(
+            foreign["found"], false,
+            "command.get crossed the app boundary"
+        );
+    });
 }
 
 #[test]
@@ -1386,94 +1573,98 @@ fn app_capabilities_cap3_auth_assist_contract() {
 
 #[test]
 fn app_capabilities_cap3_browser_core_entry_contract() {
-    let f = Fixture::new();
-    let root = f.root.path();
-    let binding = |app: &'static str, user: &'static str, role: &'static str| {
-        crate::business_os::CoreBrowserBinding {
-            app_id: app,
-            user_id: user,
-            role,
-            command_id: "cmd",
-            call_id: "call",
-        }
-    };
-    let gate = |b: &crate::business_os::CoreBrowserBinding<'_>, command: &str, session: &str| {
-        crate::business_os::core_browser_gate(root, b, command, session)
-            .map_err(|e| format!("{e:#}"))
-    };
-    gate(
-        &binding("outbound", "u1", "admin"),
-        "browser.navigate",
-        "s1",
-    )
-    .unwrap();
-    // Same session again for the same (app, user): still allowed.
-    gate(&binding("outbound", "u1", "admin"), "browser.reload", "s1").unwrap();
-    let foreign_app = gate(&binding("news", "u1", "admin"), "browser.navigate", "s1").unwrap_err();
-    assert!(foreign_app.contains("another app"), "{foreign_app}");
-    let foreign_user = gate(
-        &binding("outbound", "u2", "admin"),
-        "browser.navigate",
-        "s1",
-    )
-    .unwrap_err();
-    assert!(foreign_user.contains("another user"), "{foreign_user}");
-    let no_right = gate(&binding("outbound", "u1", "user"), "browser.navigate", "s2").unwrap_err();
-    assert!(no_right.contains("policy"), "{no_right}");
-    let token_gated = gate(
-        &binding("outbound", "u1", "admin"),
-        "browser.credential.fill",
-        "s1",
-    )
-    .unwrap_err();
-    assert!(token_gated.contains("command"), "{token_gated}");
-    // Every use is audited, without payload contents.
-    let conn = crate::business_os::store::open_store(root).unwrap();
-    let count = |kind: &str| -> i64 {
-        conn.query_row(
-            "SELECT count(*) FROM business_events WHERE command_type=?1",
-            [kind],
-            |r| r.get(0),
+    with_core_owners(|f| {
+        let root = f.root.path();
+        let binding = |app: &'static str, user: &'static str, role: &'static str| {
+            crate::business_os::CoreBrowserBinding {
+                app_id: app,
+                user_id: user,
+                role,
+                command_id: "cmd",
+                call_id: "call",
+            }
+        };
+        let gate =
+            |b: &crate::business_os::CoreBrowserBinding<'_>, command: &str, session: &str| {
+                crate::business_os::core_browser_gate(root, b, command, session)
+                    .map_err(|e| format!("{e:#}"))
+            };
+        gate(
+            &binding("outbound", "u1", "admin"),
+            "browser.navigate",
+            "s1",
         )
-        .unwrap()
-    };
-    assert_eq!(
-        count("browser.core_entry.allowed"),
-        2,
-        "allowed use not audited"
-    );
-    assert_eq!(count("browser.core_entry.denied"), 4, "refusal not audited");
-    let bodies: Vec<String> = conn
-        .prepare("SELECT payload_json FROM business_events WHERE command_type LIKE 'browser.core_entry.%'")
-        .unwrap()
-        .query_map([], |r| r.get(0))
-        .unwrap()
-        .collect::<Result<_, _>>()
         .unwrap();
-    assert!(bodies
-        .iter()
-        .all(|b| b.contains("\"app_id\"") && !b.contains("url")));
-    // The production engine refuses a foreign session before any engine effect.
-    let engine = browser::PeerBrowserEngine { root };
-    use browser::BrowserEngine as _;
-    let news = Host::new("news", "admin");
-    assert_eq!(
-        engine.session_stop(&news.ctx, "s1").unwrap_err().code,
-        ErrorCode::Forbidden
-    );
-    assert_eq!(
-        engine
-            .op(
-                &news.ctx,
-                "s1",
-                None,
-                "credential_fill",
-                &json!({"credential_ref":"X"})
+        // Same session again for the same (app, user): still allowed.
+        gate(&binding("outbound", "u1", "admin"), "browser.reload", "s1").unwrap();
+        let foreign_app =
+            gate(&binding("news", "u1", "admin"), "browser.navigate", "s1").unwrap_err();
+        assert!(foreign_app.contains("another app"), "{foreign_app}");
+        let foreign_user = gate(
+            &binding("outbound", "u2", "admin"),
+            "browser.navigate",
+            "s1",
+        )
+        .unwrap_err();
+        assert!(foreign_user.contains("another user"), "{foreign_user}");
+        let no_right =
+            gate(&binding("outbound", "u1", "user"), "browser.navigate", "s2").unwrap_err();
+        assert!(no_right.contains("policy"), "{no_right}");
+        let token_gated = gate(
+            &binding("outbound", "u1", "admin"),
+            "browser.credential.fill",
+            "s1",
+        )
+        .unwrap_err();
+        assert!(token_gated.contains("command"), "{token_gated}");
+        // Every use is audited, without payload contents.
+        let conn = crate::business_os::store::open_store(root).unwrap();
+        let count = |kind: &str| -> i64 {
+            conn.query_row(
+                "SELECT count(*) FROM business_events WHERE command_type=?1",
+                [kind],
+                |r| r.get(0),
             )
-            .unwrap_err()
-            .code,
-        ErrorCode::Forbidden
-    );
+            .unwrap()
+        };
+        assert_eq!(
+            count("browser.core_entry.allowed"),
+            2,
+            "allowed use not audited"
+        );
+        assert_eq!(count("browser.core_entry.denied"), 4, "refusal not audited");
+        let bodies: Vec<String> = conn
+            .prepare("SELECT payload_json FROM business_events WHERE command_type LIKE 'browser.core_entry.%'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(bodies
+            .iter()
+            .all(|b| b.contains("\"app_id\"") && !b.contains("url")));
+        // The production engine refuses a foreign session before any engine effect.
+        let engine = browser::PeerBrowserEngine { root };
+        use browser::BrowserEngine as _;
+        let news = Host::new("news", "admin");
+        assert_eq!(
+            engine.session_stop(&news.ctx, "s1").unwrap_err().code,
+            ErrorCode::Forbidden
+        );
+        assert_eq!(
+            engine
+                .op(
+                    &news.ctx,
+                    "s1",
+                    None,
+                    "credential_fill",
+                    &json!({"credential_ref":"X"})
+                )
+                .unwrap_err()
+                .code,
+            ErrorCode::Forbidden
+        );
+    });
 }
 
 #[test]
@@ -1503,93 +1694,94 @@ fn app_capabilities_cap3_browser_internal_only_contract() {
 
 #[test]
 fn app_capabilities_cap3_process_base_env_contract() {
-    let f = Fixture::new();
-    let host = Host::new("outbound-lead-generation", "staff");
-    let script = f.root.path().join("platform-script.sh");
-    std::fs::write(&script, "printf 'script:%s' \"$1\"").unwrap();
-    let allowlist = json!({
-        "sh": {"program":"/bin/sh","env":{"PATH":"/usr/bin:/bin","LANG":"C.UTF-8","CTOX_BIN":"/opt/ctox/bin/ctox"}},
-        "scrape": {"interpreter":"/bin/sh","script":script.to_string_lossy(),"env":{"PATH":"/usr/bin:/bin"}}
+    with_core_owners(|f| {
+        let host = Host::new("outbound-lead-generation", "staff");
+        let script = f.root.path().join("platform-script.sh");
+        std::fs::write(&script, "printf 'script:%s' \"$1\"").unwrap();
+        let allowlist = json!({
+            "sh": {"program":"/bin/sh","env":{"PATH":"/usr/bin:/bin","LANG":"C.UTF-8","CTOX_BIN":"/opt/ctox/bin/ctox"}},
+            "scrape": {"interpreter":"/bin/sh","script":script.to_string_lossy(),"env":{"PATH":"/usr/bin:/bin"}}
+        });
+        crate::inference::runtime_env::set_runtime_env_value(
+            f.root.path(),
+            process::ALLOWLIST_KEY,
+            &allowlist.to_string(),
+        )
+        .unwrap();
+        let env = f
+            .call(&host, "process", "run", json!({"program":"sh","args":["-c","printf '[%s][%s][%s][%s][%s]' \"$PATH\" \"$LANG\" \"$CTOX_BIN\" \"$CTOX_SCRAPE_X\" \"$HOME\""],
+                "env":{"CTOX_SCRAPE_X":"1"}}))
+            .unwrap();
+        assert_eq!(
+            env["stdout"], "[/usr/bin:/bin][C.UTF-8][/opt/ctox/bin/ctox][1][]",
+            "platform base env missing"
+        );
+        // The app adds variables; it cannot replace the platform base.
+        assert_eq!(
+            code(f.call(
+                &host,
+                "process",
+                "run",
+                json!({"program":"sh","env":{"PATH":"/tmp"}})
+            )),
+            ErrorCode::Invalid
+        );
+        // Interpreter + script from the allowlist; the app only supplies args.
+        let scripted = f
+            .call(
+                &host,
+                "process",
+                "run",
+                json!({"program":"scrape","args":["a"]}),
+            )
+            .unwrap();
+        assert_eq!(scripted["stdout"], "script:a");
+        // stdin as text or as a files record of the calling app only.
+        let text = f
+            .call(
+                &host,
+                "process",
+                "run",
+                json!({"program":"sh","args":["-c","cat"],"stdin":"inline"}),
+            )
+            .unwrap();
+        assert_eq!(text["stdout"], "inline");
+        let own = f
+            .call(
+                &host,
+                "files",
+                "put",
+                json!({"name":"in.txt","text":"from-file"}),
+            )
+            .unwrap();
+        let piped = f
+            .call(
+                &host,
+                "process",
+                "run",
+                json!({"program":"sh","args":["-c","cat"],"stdin_ref":{"ref":own["ref"]}}),
+            )
+            .unwrap();
+        assert_eq!(piped["stdout"], "from-file");
+        let foreign = f
+            .call(
+                &Host::new("news", "staff"),
+                "files",
+                "put",
+                json!({"name":"secret.txt","text":"other-app"}),
+            )
+            .unwrap();
+        assert_eq!(
+            code(f.call(
+                &host,
+                "process",
+                "run",
+                json!({"program":"sh","args":["-c","cat"],"stdin_ref":{"ref":foreign["ref"]}})
+            )),
+            ErrorCode::NotFound,
+            "stdin_ref of another app must be refused"
+        );
     });
-    crate::inference::runtime_env::set_runtime_env_value(
-        f.root.path(),
-        process::ALLOWLIST_KEY,
-        &allowlist.to_string(),
-    )
-    .unwrap();
-    let env = f
-        .call(&host, "process", "run", json!({"program":"sh","args":["-c","printf '[%s][%s][%s][%s][%s]' \"$PATH\" \"$LANG\" \"$CTOX_BIN\" \"$CTOX_SCRAPE_X\" \"$HOME\""],
-            "env":{"CTOX_SCRAPE_X":"1"}}))
-        .unwrap();
-    assert_eq!(
-        env["stdout"], "[/usr/bin:/bin][C.UTF-8][/opt/ctox/bin/ctox][1][]",
-        "platform base env missing"
-    );
-    // The app adds variables; it cannot replace the platform base.
-    assert_eq!(
-        code(f.call(
-            &host,
-            "process",
-            "run",
-            json!({"program":"sh","env":{"PATH":"/tmp"}})
-        )),
-        ErrorCode::Invalid
-    );
-    // Interpreter + script from the allowlist; the app only supplies args.
-    let scripted = f
-        .call(
-            &host,
-            "process",
-            "run",
-            json!({"program":"scrape","args":["a"]}),
-        )
-        .unwrap();
-    assert_eq!(scripted["stdout"], "script:a");
-    // stdin as text or as a files record of the calling app only.
-    let text = f
-        .call(
-            &host,
-            "process",
-            "run",
-            json!({"program":"sh","args":["-c","cat"],"stdin":"inline"}),
-        )
-        .unwrap();
-    assert_eq!(text["stdout"], "inline");
-    let own = f
-        .call(
-            &host,
-            "files",
-            "put",
-            json!({"name":"in.txt","text":"from-file"}),
-        )
-        .unwrap();
-    let piped = f
-        .call(
-            &host,
-            "process",
-            "run",
-            json!({"program":"sh","args":["-c","cat"],"stdin_ref":{"ref":own["ref"]}}),
-        )
-        .unwrap();
-    assert_eq!(piped["stdout"], "from-file");
-    let foreign = f
-        .call(
-            &Host::new("news", "staff"),
-            "files",
-            "put",
-            json!({"name":"secret.txt","text":"other-app"}),
-        )
-        .unwrap();
-    assert_eq!(
-        code(f.call(
-            &host,
-            "process",
-            "run",
-            json!({"program":"sh","args":["-c","cat"],"stdin_ref":{"ref":foreign["ref"]}})
-        )),
-        ErrorCode::NotFound,
-        "stdin_ref of another app must be refused"
-    );
 }
 
 #[test]
@@ -1635,42 +1827,44 @@ fn app_capabilities_cap3_browser_automation_contract() {
 
 #[test]
 fn app_capabilities_cap3_policy_assignment_contract() {
-    let f = Fixture::new();
-    let root = f.root.path();
-    let founder = crate::business_os::CoreBrowserBinding {
-        app_id: "outbound",
-        user_id: "u-founder",
-        role: "founder",
-        command_id: "cmd",
-        call_id: "call",
-    };
-    let denied = crate::business_os::core_browser_gate(root, &founder, "browser.navigate", "s-f")
-        .map_err(|e| format!("{e:#}"))
-        .unwrap_err();
-    assert!(denied.contains("policy"), "{denied}");
-    let decide = json!({"permission":"data.write","module":"outbound"});
-    let host = Host::new("threads", "founder");
-    let mut host_founder = host;
-    host_founder.ctx.actor.id = "u-founder".into();
-    assert_eq!(
-        f.call(&host_founder, "policy", "module_decision", decide.clone())
-            .unwrap()["allowed"],
-        false
-    );
-    // Founder assignment in business_module_acl grants module rights.
-    let conn = crate::business_os::store::open_store(root).unwrap();
-    conn.execute(
-        "INSERT INTO business_module_acl (module_id,user_id,role,active,created_at_ms,updated_at_ms)
-         VALUES ('outbound','u-founder','founder',1,1,1)",
-        [],
-    )
-    .unwrap();
-    crate::business_os::core_browser_gate(root, &founder, "browser.navigate", "s-f").unwrap();
-    assert_eq!(
-        f.call(&host_founder, "policy", "module_decision", decide)
-            .unwrap()["allowed"],
-        true
-    );
+    with_core_owners(|f| {
+        let root = f.root.path();
+        let founder = crate::business_os::CoreBrowserBinding {
+            app_id: "outbound",
+            user_id: "u-founder",
+            role: "founder",
+            command_id: "cmd",
+            call_id: "call",
+        };
+        let denied =
+            crate::business_os::core_browser_gate(root, &founder, "browser.navigate", "s-f")
+                .map_err(|e| format!("{e:#}"))
+                .unwrap_err();
+        assert!(denied.contains("policy"), "{denied}");
+        let decide = json!({"permission":"data.write","module":"outbound"});
+        let host = Host::new("threads", "founder");
+        let mut host_founder = host;
+        host_founder.ctx.actor.id = "u-founder".into();
+        assert_eq!(
+            f.call(&host_founder, "policy", "module_decision", decide.clone())
+                .unwrap()["allowed"],
+            false
+        );
+        // Founder assignment in business_module_acl grants module rights.
+        let conn = crate::business_os::store::open_store(root).unwrap();
+        conn.execute(
+            "INSERT INTO business_module_acl (module_id,user_id,role,active,created_at_ms,updated_at_ms)
+             VALUES ('outbound','u-founder','founder',1,1,1)",
+            [],
+        )
+        .unwrap();
+        crate::business_os::core_browser_gate(root, &founder, "browser.navigate", "s-f").unwrap();
+        assert_eq!(
+            f.call(&host_founder, "policy", "module_decision", decide)
+                .unwrap()["allowed"],
+            true
+        );
+    });
 }
 
 // ------------------------------------------------------------------ CAP-3e (§16.48)
@@ -1728,35 +1922,36 @@ fn app_capabilities_cap3_browser_extract_contract() {
 
 #[test]
 fn app_capabilities_cap3_process_untrusted_contract() {
-    let f = Fixture::new();
-    let host = Host::new("outbound-lead-generation", "staff");
-    let host_script = f.root.path().join("host.mjs");
-    std::fs::write(&host_script, "generated code host").unwrap();
-    let allowlist = json!({
-        "olg-scrape-js": {"interpreter":"/bin/cat","script":host_script.to_string_lossy(),"untrusted_code":true,"env":{"PATH":"/usr/bin:/bin"}},
-        "olg-scrape-sh": {"interpreter":"/bin/bash","script":host_script.to_string_lossy(),"untrusted_code":true},
-        "trusted-cat": {"interpreter":"/bin/cat","script":host_script.to_string_lossy()}
+    with_core_owners(|f| {
+        let host = Host::new("outbound-lead-generation", "staff");
+        let host_script = f.root.path().join("host.mjs");
+        std::fs::write(&host_script, "generated code host").unwrap();
+        let allowlist = json!({
+            "olg-scrape-js": {"interpreter":"/bin/cat","script":host_script.to_string_lossy(),"untrusted_code":true,"env":{"PATH":"/usr/bin:/bin"}},
+            "olg-scrape-sh": {"interpreter":"/bin/bash","script":host_script.to_string_lossy(),"untrusted_code":true},
+            "trusted-cat": {"interpreter":"/bin/cat","script":host_script.to_string_lossy()}
+        });
+        crate::inference::runtime_env::set_runtime_env_value(
+            f.root.path(),
+            process::ALLOWLIST_KEY,
+            &allowlist.to_string(),
+        )
+        .unwrap();
+        // Without the E20 sandbox, generated code never runs.
+        assert_eq!(
+            code(f.call(&host, "process", "run", json!({"program":"olg-scrape-js","stdin":"console.log(1)","allowed_domains":["example.test"]}))),
+            ErrorCode::Unavailable
+        );
+        // A shell is never an interpreter for generated code.
+        assert_eq!(
+            code(f.call(&host, "process", "run", json!({"program":"olg-scrape-sh"}))),
+            ErrorCode::Forbidden
+        );
+        // The same interpreter without the flag is an ordinary allowlisted tool.
+        assert_eq!(
+            f.call(&host, "process", "run", json!({"program":"trusted-cat"}))
+                .unwrap()["stdout"],
+            "generated code host"
+        );
     });
-    crate::inference::runtime_env::set_runtime_env_value(
-        f.root.path(),
-        process::ALLOWLIST_KEY,
-        &allowlist.to_string(),
-    )
-    .unwrap();
-    // Without the E20 sandbox, generated code never runs.
-    assert_eq!(
-        code(f.call(&host, "process", "run", json!({"program":"olg-scrape-js","stdin":"console.log(1)","allowed_domains":["example.test"]}))),
-        ErrorCode::Unavailable
-    );
-    // A shell is never an interpreter for generated code.
-    assert_eq!(
-        code(f.call(&host, "process", "run", json!({"program":"olg-scrape-sh"}))),
-        ErrorCode::Forbidden
-    );
-    // The same interpreter without the flag is an ordinary allowlisted tool.
-    assert_eq!(
-        f.call(&host, "process", "run", json!({"program":"trusted-cat"}))
-            .unwrap()["stdout"],
-        "generated code host"
-    );
 }
