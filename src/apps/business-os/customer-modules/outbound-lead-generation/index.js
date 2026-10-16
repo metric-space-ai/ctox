@@ -614,7 +614,8 @@ const state = {
   researchFieldKeysDraft: [...RESEARCH_FIELDS],
   // Entwurf der optionalen Felder (null = gespeicherter Stand).
   optionalFieldsDraft: null,
-  // OLGUI: Lead-Drawer zeigt nur Pflichtfelder (leere optionale Felder ausgeblendet). Je Nutzer ueber snapshot()/restored.
+  // OLGUI: Lead-Drawer zeigt nur Pflichtfelder (leere optionale Felder ausgeblendet). Dauerhaft je Nutzer ueber
+  // api.prefs (E51, geraeteuebergreifend); snapshot()/restored traegt den Wert nur beim Live-Remount mit.
   requiredFieldsOnly: false,
   adapterReconciliationPending: false,
   subscriptions: [],
@@ -628,6 +629,12 @@ const state = {
 };
 
 // Zustand der Ansicht, der einen Live-Remount ueberlebt (snapshot/restored, PORTING.md §2).
+// Nutzer-Einstellung (E51 api.prefs): Schluessel <= 64 Zeichen [a-z0-9._-], nur UI-Zustand.
+const PREF_REQUIRED_ONLY = 'drawer.required_only';
+function leseNurPflichtPref(api) {
+  try { return api?.prefs?.get?.(PREF_REQUIRED_ONLY) === true; } catch { return false; }
+}
+
 const SNAPSHOT_VIEW_KEYS = ['selectedCampaign', 'selectedLeadId', 'activeDetailTab', 'campaignViewMode', 'search',
   'sourceSearch', 'leadSortKey', 'leadSortDir', 'sourcePanelOpen', 'sourcePanelView', 'leadEditorOpen', 'leadEditorId',
   'researchPolicyDraft', 'researchPolicyFollowupDraft', 'digestPeriod', 'digestDirty', 'requiredFieldsOnly'];
@@ -702,6 +709,8 @@ export async function mount(root, api, { restored } = {}) {
   // Lokales Replikat der CRM-Firmen (im Manifest deklariert): die Sellify-Weiche laeuft komplett lokal.
   state.sellifyCompaniesLocal = state.port.daten('sellify_companies');
   state.collectionsEverLoaded = new Set();
+  // E51: gespeicherte Nutzer-Einstellung zuerst, ein Live-Remount-Snapshot ueberschreibt sie (gleicher Nutzer, neuerer Stand).
+  state.requiredFieldsOnly = leseNurPflichtPref(api);
   wendeSnapshotAn(restored);
   bindCollections();
   bindUi();
@@ -3251,6 +3260,8 @@ async function handleClick(event) {
   }
   if (action === 'toggle-required-only') {
     state.requiredFieldsOnly = !state.requiredFieldsOnly;
+    // E51: dauerhaft speichern; ein abgelehnter Schreibvorgang (quota/forbidden) laesst nur die Sitzung umgeschaltet.
+    try { state.api?.prefs?.set?.(PREF_REQUIRED_ONLY, state.requiredFieldsOnly)?.result?.catch?.(() => {}); } catch {}
     renderDetail();
     state.root.querySelector('[data-action="toggle-required-only"]')?.focus?.({ preventScroll: true });
     return;

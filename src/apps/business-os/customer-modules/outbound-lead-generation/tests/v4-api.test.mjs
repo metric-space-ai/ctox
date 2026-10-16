@@ -515,6 +515,36 @@ test('OLGUI: „Nur Pflichtfelder“ überlebt den Remount (snapshot/restored)',
   assert.equal(await schalterStand(), 'false');
 });
 
+test('OLGUI: „Nur Pflichtfelder“ bleibt nach Neuladen (api.prefs, E51) – ohne snapshot, je Nutzer gespeichert', async (t) => {
+  const hasPrefs = await page.evaluate(() => typeof window.__c.api.prefs?.get === 'function');
+  if (!hasPrefs) { t.skip('Stub vor E51 (kein api.prefs)'); return; }
+  await olguiOeffnen('company');
+  await page.click('[data-detail-body] [data-action="toggle-required-only"]');
+  await settle();
+  assert.equal(await page.evaluate(() => window.__c.api.prefs.get('drawer.required_only')), true, 'Einstellung gespeichert');
+  // Neuladen: App neu einhängen OHNE restored (kein Live-Remount-Snapshot) – der Wert kommt aus api.prefs.
+  await page.evaluate(async () => {
+    await window.__app.unmount();
+    window.__mod.__leadgenOutboundTestHooks.__render.getState().requiredFieldsOnly = false;
+    window.__app = await window.__mod.mount(document.getElementById('win'), window.__c.api, {});
+  });
+  await settle();
+  await olguiOeffnen('company');
+  assert.equal(await schalterStand(), 'true');
+  assert.ok(!(await felderImDrawer()).includes('firma_postfach'));
+  // Gegenprobe: aus → gespeichert aus, nach erneutem Einhängen aus.
+  await page.click('[data-detail-body] [data-action="toggle-required-only"]');
+  await settle();
+  assert.equal(await page.evaluate(() => window.__c.api.prefs.get('drawer.required_only')), false);
+  await page.evaluate(async () => {
+    await window.__app.unmount();
+    window.__app = await window.__mod.mount(document.getElementById('win'), window.__c.api, {});
+  });
+  await settle();
+  await olguiOeffnen('company');
+  assert.equal(await schalterStand(), 'false');
+});
+
 // Fensternachbau wie modules/outbound/tests/v4-api.test.mjs (FR5-1): #win = Fenster, darin der App-root; das Menü des
 // Rahmens (window-sheet.js) hängt im Fenster, nicht im Dokument.
 const olguiMitFenstermenue = () => page.evaluate(async () => {

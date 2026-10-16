@@ -1262,7 +1262,7 @@
     "in-flight-lead-sweep.mjs": "edd455435b3239bb506083a7284fafefb500668198191e8dc366b0a5744163e5",
     "index.css": "ba482c1899b42199f5207e160651c7d56ec2b07f76810935313a6ee697a8d2f7",
     "index.html": "29830dda4bfab99f6216f266e5ea7472ca1e908b5b6891ee85c04a0932ebb9bf",
-    "index.js": "83cf20be8e1d8251cf4ed1e657e803b3d69d328137a6791d27ef6a8f1fe00c52",
+    "index.js": "c07e4050625fa75917be9a207ad5c03c86259c422c6fba6cf686bd06a6011870",
     "locales/de.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
     "locales/en.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
     "module.json": "2be4554a9011dfdf78e9a95ef3471cefa8ef58c8eb912f94c12a33b2b7449607",
@@ -1288,8 +1288,8 @@
       "_evidence": {
         "code_read": [
           "handlers/_lib/research-writeback.js:8",
-          "index.js:1073",
-          "index.js:1075"
+          "index.js:1082",
+          "index.js:1084"
         ],
         "code_write": [],
         "declaration_basis": "customer-modules/outbound-lead-generation/V4-PORT.md §13, §16a",
@@ -1494,7 +1494,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "75b2fbde00d679fe8afa04b48505796f6cdee127f7b63400be80dd33fbe2a2ff",
+    "base_hash": "6c4d05cba721b54ec7ead4f18ba9e979145e81ae6fd901f80c89e6790b3cfa31",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },
