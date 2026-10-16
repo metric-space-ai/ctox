@@ -91,14 +91,36 @@ impl Dispatcher for Inspect {
             return Err(StoreError::Closed);
         }
         if request.method == ctox_store::import::daemon::METHOD {
-            let mut cutover = self.cutover.lock().unwrap_or_else(|p|p.into_inner());
+            let mut cutover = self.cutover.lock().unwrap_or_else(|p| p.into_inner());
             if cutover.is_none() {
-                let root = self.native_root.lock().unwrap_or_else(|p|p.into_inner()).clone().ok_or(StoreError::Closed)?;
-                let databases = self.databases.lock().unwrap_or_else(|p|p.into_inner());
+                let root = self
+                    .native_root
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clone()
+                    .ok_or(StoreError::Closed)?;
+                let databases = self.databases.lock().unwrap_or_else(|p| p.into_inner());
                 let sync = databases.get("sync").ok_or(StoreError::Closed)?;
-                *cutover = Some(ctox_store::import::daemon::Attachment::new(sync.writer.clone(),sync.readers.clone(),databases.values().map(|d|d.writer.db_id().path().to_path_buf()).collect(),crate::paths::runtime_dir(&root),self.runtime.clone(),crate::business_os::migrate_cutover_document,databases.values().map(|d|(d.writer.db_id().path().to_path_buf(),d.readers.clone())).collect()));
+                *cutover = Some(ctox_store::import::daemon::Attachment::new(
+                    sync.writer.clone(),
+                    sync.readers.clone(),
+                    databases
+                        .values()
+                        .map(|d| d.writer.db_id().path().to_path_buf())
+                        .collect(),
+                    crate::paths::runtime_dir(&root),
+                    self.runtime.clone(),
+                    crate::business_os::migrate_cutover_document,
+                    databases
+                        .values()
+                        .map(|d| (d.writer.db_id().path().to_path_buf(), d.readers.clone()))
+                        .collect(),
+                ));
             }
-            return cutover.as_ref().ok_or(StoreError::Closed)?.dispatch(request,options);
+            return cutover
+                .as_ref()
+                .ok_or(StoreError::Closed)?
+                .dispatch(request, options);
         }
         if request.method == "http.listen" {
             return self

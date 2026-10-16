@@ -9136,21 +9136,49 @@ fn native_declarative_migration_operations(spec: &Value) -> anyhow::Result<Vec<V
 
 /// Frozen cutover uses the same reviewed generated native migration chain as
 /// ordinary schema upgrades. No SQL, file opener, JS evaluator or new writer.
-pub(crate) fn migrate_cutover_document(collection:&str, spec:&Value, mut body:Value)->ctox_store::import::Result<Value> {
-    let run=||->anyhow::Result<Value>{
-        anyhow::ensure!(spec["from_ver"]==ctox_store::import::base_release::FROM_VERSION,"wrong cutover migration base");
-        static CHAINS:OnceLock<Option<BTreeMap<String,BTreeMap<i64,Value>>>>=OnceLock::new();
-        let chains=CHAINS.get_or_init(||serde_json::from_str(include_str!("business_os_schema_migrations.json")).ok()).as_ref().context("invalid canonical cutover migration registry")?;
-        let chain=chains.get(collection).context("cutover native migration chain missing")?;
-        let from=spec["_schema_version"]["from"].as_i64().context("cutover migration source version missing")?;
-        let to=spec["_schema_version"]["to"].as_i64().context("cutover migration target version missing")?;
-        anyhow::ensure!(from>=0 && to>from && to<=chain.keys().copied().max().unwrap_or(0),"invalid cutover native migration versions");
-        for version in (from+1)..=to {
-            body=apply_native_declarative_migration(&body,chain.get(&version).context("cutover native migration step missing")?)?;
+pub(crate) fn migrate_cutover_document(
+    collection: &str,
+    spec: &Value,
+    mut body: Value,
+) -> ctox_store::import::Result<Value> {
+    let run = || -> anyhow::Result<Value> {
+        anyhow::ensure!(
+            spec["from_ver"] == ctox_store::import::base_release::FROM_VERSION,
+            "wrong cutover migration base"
+        );
+        static CHAINS: OnceLock<Option<BTreeMap<String, BTreeMap<i64, Value>>>> = OnceLock::new();
+        let chains = CHAINS
+            .get_or_init(|| {
+                serde_json::from_str(include_str!("business_os_schema_migrations.json")).ok()
+            })
+            .as_ref()
+            .context("invalid canonical cutover migration registry")?;
+        let chain = chains
+            .get(collection)
+            .context("cutover native migration chain missing")?;
+        let from = spec["_schema_version"]["from"]
+            .as_i64()
+            .context("cutover migration source version missing")?;
+        let to = spec["_schema_version"]["to"]
+            .as_i64()
+            .context("cutover migration target version missing")?;
+        anyhow::ensure!(
+            from >= 0 && to > from && to <= chain.keys().copied().max().unwrap_or(0),
+            "invalid cutover native migration versions"
+        );
+        for version in (from + 1)..=to {
+            body = apply_native_declarative_migration(
+                &body,
+                chain
+                    .get(&version)
+                    .context("cutover native migration step missing")?,
+            )?;
         }
         Ok(body)
     };
-    run().map_err(|_|ctox_store::StoreError::Invalid(format!("cutover_native_migration_failed:{collection}")))
+    run().map_err(|_| {
+        ctox_store::StoreError::Invalid(format!("cutover_native_migration_failed:{collection}"))
+    })
 }
 
 fn apply_native_declarative_migration(old_doc: &Value, spec: &Value) -> anyhow::Result<Value> {

@@ -412,9 +412,18 @@ fn add(docs: &mut BTreeMap<(String, String), Document>, doc: Document) -> Result
     }
     Ok(())
 }
-fn add_for_row(docs: &mut BTreeMap<(String, String), Document>, doc: Document, row: &Row, audit: &mut Audit) -> Result<()> {
-    audit.target_documents.entry(format!("{}:{}",row.db,row.table)).or_default().insert((doc.collection.clone(),doc.id.clone()));
-    add(docs,doc)
+fn add_for_row(
+    docs: &mut BTreeMap<(String, String), Document>,
+    doc: Document,
+    row: &Row,
+    audit: &mut Audit,
+) -> Result<()> {
+    audit
+        .target_documents
+        .entry(format!("{}:{}", row.db, row.table))
+        .or_default()
+        .insert((doc.collection.clone(), doc.id.clone()));
+    add(docs, doc)
 }
 /// Row equality is audited before target writes. This is an offline import, not
 /// a running projection or permission shortcut. CoreKeep never reads contents.
@@ -563,11 +572,20 @@ pub fn collect(
         if row.kind != row.authority {
             // E29-R3
             let authority = authorities.get(&(row.collection.clone(), row.id.clone()));
-            if known.contains(row.collection.as_str()) && authority.is_some_and(|body| *body == &row.body) {
-                let mut target_body=row.body.clone();
-                if let Some(spec)=plan.migrations.get(&row.collection) {target_body=evaluator.migrate(&row.collection,spec,target_body)?;}
-                let (target_id,_)=base_release::migrated_identity(&row.collection,&row.id,target_body)?;
-                audit.target_documents.entry(format!("{}:{}",row.db,row.table)).or_default().insert((row.collection.clone(),target_id));
+            if known.contains(row.collection.as_str())
+                && authority.is_some_and(|body| *body == &row.body)
+            {
+                let mut target_body = row.body.clone();
+                if let Some(spec) = plan.migrations.get(&row.collection) {
+                    target_body = evaluator.migrate(&row.collection, spec, target_body)?;
+                }
+                let (target_id, _) =
+                    base_release::migrated_identity(&row.collection, &row.id, target_body)?;
+                audit
+                    .target_documents
+                    .entry(format!("{}:{}", row.db, row.table))
+                    .or_default()
+                    .insert((row.collection.clone(), target_id));
                 audit.compared_equal.push(
                     json!([row.db, row.table, row.collection, row.version, row.id]).to_string(),
                 );
@@ -612,7 +630,8 @@ pub fn collect(
                 body,
                 revision: row.revision.clone(),
             },
-            row, &mut audit,
+            row,
+            &mut audit,
         )?;
         if archive_complete {
             add_for_row(&mut docs, archive(row, imported_at)?, row, &mut audit)?;

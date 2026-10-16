@@ -494,7 +494,10 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
             // runtime SQLite database for a second CLI ledger write.
             "knowledge" => return true,
             "business-os" | "business"
-                if matches!(args.get(1).map(String::as_str), Some("serve" | "status" | "v4")) =>
+                if matches!(
+                    args.get(1).map(String::as_str),
+                    Some("serve" | "status" | "v4")
+                ) =>
             {
                 return true;
             }
@@ -5452,9 +5455,20 @@ mod tests {
 
     #[test]
     fn cutover_import_never_opens_a_caller_side_startup_db_or_turn_ledger() {
-        for dry in [false,true] {
-            let mut args=["business-os","v4","cutover","import","--snapshot","/frozen"].map(str::to_owned).to_vec();
-            if dry {args.push("--dry-run".into());}
+        for dry in [false, true] {
+            let mut args = [
+                "business-os",
+                "v4",
+                "cutover",
+                "import",
+                "--snapshot",
+                "/frozen",
+            ]
+            .map(str::to_owned)
+            .to_vec();
+            if dry {
+                args.push("--dry-run".into());
+            }
             assert!(super::skips_cli_startup_db(&args));
             assert!(super::skips_cli_turn_ledger(&args));
         }
