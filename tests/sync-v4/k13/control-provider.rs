@@ -11,7 +11,7 @@ struct Load {
     stop:tokio::sync::watch::Sender<bool>,
     task:tokio::task::JoinHandle<Result<Value>>,
 }
-async fn dispatch(inputs: Arc<StoreInputs>, request: Value, load:&mut Option<Load>) -> Result<Value> {
+async fn dispatch(inputs: Arc<StoreInputs>, request: Value, load:&mut Option<Load>, source:&std::path::Path) -> Result<Value> {
     let cookie = request["cookie"].as_str().context("session required")?.to_owned();
     let root = inputs.root.clone();
     let actor = crate::persistence::run_core_sync(move || {
@@ -31,6 +31,14 @@ async fn dispatch(inputs: Arc<StoreInputs>, request: Value, load:&mut Option<Loa
     }
     anyhow::ensure!(actor.is_admin && actor.role == "admin", "admin session required");
     match operation {
+        "sourceRelease" => source_release::publish(inputs,source.to_owned(),text(args,"appId")?.to_owned(),
+            BusinessOsActor::new(Some(actor.id),&actor.role)).await,
+        "readRights" => {
+            let rights=inputs.sync.readers.read_job(ReadJob::new(Default::default(),|db|{
+                let tx=db.unchecked_transaction()?;let rights=sync_rights::read(&tx)?;
+                Ok(json!({"rights_ver":rights.rights_ver,"rules":rights.rules}))
+            })).await?;Ok(rights)
+        }
         "processIdentity" => Ok(json!({"pid":std::process::id(),
             "instanceId":inputs.instance_signer()?.instance_id(),
             "syncGeneration":inputs.sync.writer.generation().0,
@@ -143,6 +151,7 @@ async fn dispatch(inputs: Arc<StoreInputs>, request: Value, load:&mut Option<Loa
 async fn p6_run_controlled_foreground() -> Result<()> {
     let config:Value=serde_json::from_slice(&std::fs::read(std::env::var_os("CTOX_P6_FIXTURE_CONFIG").context("private config")?)?)?;
     let root=std::path::PathBuf::from(text(&config,"root")?);
+    let source=std::path::PathBuf::from(text(&config,"source")?);
     let marker:Value=serde_json::from_slice(&std::fs::read(root.join(".sync-v4-e2e.json"))?)?;
     anyhow::ensure!(marker["owner"]=="01a14204-d613" && marker["synthetic"]==true && marker["source"]==config["revision"],"foreign fixture root");
     let mut foreground=tokio::spawn(crate::service::store_startup::run(root.clone()));
@@ -170,6 +179,7 @@ async fn p6_run_controlled_foreground() -> Result<()> {
                 // peer cannot create an unbounded task or read pool.
                 let inputs=inputs.clone();
                 let load=&mut load;
+                let source=&source;
                 let result=tokio::time::timeout(Duration::from_secs(10),async move {
                     use tokio::io::AsyncReadExt;
                     let (read,mut write)=stream.into_split();
@@ -177,7 +187,7 @@ async fn p6_run_controlled_foreground() -> Result<()> {
                     let mut line=String::new();reader.read_line(&mut line).await?;
                     let response=if line.len()>MAX_REQUEST as usize {json!({"ok":false,"error":"request budget exceeded"})}
                     else {match serde_json::from_str::<Value>(&line) {
-                        Ok(request)=>match dispatch(inputs,request,load).await {
+                        Ok(request)=>match dispatch(inputs,request,load,source).await {
                             Ok(value)=>json!({"ok":true,"value":value}),
                             // Never serialize raw errors: request contains a cookie.
                             Err(error)=>{let reason=error.to_string();let public=if reason.starts_with("not_run("){reason}else{"control request denied".into()};json!({"ok":false,"error":public})}
@@ -191,3 +201,6 @@ async fn p6_run_controlled_foreground() -> Result<()> {
         }
     }
 }
+
+#[path="source-release.rs"]
+mod source_release;

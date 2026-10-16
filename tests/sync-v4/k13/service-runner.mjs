@@ -55,6 +55,13 @@ try {
   if(pressureDone.committed<2 || BigInt(pressureDone.last_seq)<=BigInt(pressureDone.first_seq))throw Error('Native load did not commit positive ordered writes');
   report.control={ownerBacked:true,writeReadback:true,nonAdminWriteRejected:userDenied,pressure:pressureDone,seq:committed.seq,unissuedSessionRejected:denied,process:await call(admin,'processIdentity')};
   save();
+  try {
+    const shell=await call(admin,'sourceRelease',{appId:'shell'});
+    report.shellProvisioning={source:shell.source,appId:shell.appId,files:shell.files,status:shell.receipt.status,appVer:shell.receipt.app_ver};
+  } catch(error) {
+    report.shellProvisioning={status:'not_run',reason:error.message};
+  }
+  save();
   const origin='http://127.0.0.1:'+config.port;
   const require=createRequire(join(config.modulesRoot,'playwright/package.json'));
   const {chromium}=require('playwright');
