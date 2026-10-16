@@ -208,13 +208,13 @@ fn google_calendar_oauth_state_bound_one_time_and_real_adapter_read() -> anyhow:
     );
     let accounts = accounts(root.path())?;
     assert_eq!(accounts[0].owner_user_id, "owner");
-    let raw = secrets::read_secret_value(root.path(), ACCOUNT_SCOPE, "calendar@example.test")?;
+    let raw = secrets::read_secret_value(root.path(), ACCOUNT_SCOPE, id)?;
     let mut token: Tokens = serde_json::from_str(&raw)?;
     token.expires_at_ms = 0;
     secrets::write_secret_record(
         root.path(),
         ACCOUNT_SCOPE,
-        "calendar@example.test",
+        id,
         &serde_json::to_string(&token)?,
         None,
         json!({}),
@@ -266,6 +266,19 @@ fn google_calendar_oauth_state_bound_one_time_and_real_adapter_read() -> anyhow:
             &server.endpoints
         ),
         Err("account_exists")
+    );
+    let retained = read_calendar_at(
+        root.path(),
+        &accounts[0],
+        1_792_108_800_000,
+        1_792_281_600_000,
+        100,
+        &server.endpoints,
+    )
+    .map_err(anyhow::Error::msg)?;
+    assert_eq!(
+        retained["events"][0]["external_id"], "occurrence-1",
+        "duplicate connect must preserve the existing credential binding"
     );
     Ok(())
 }

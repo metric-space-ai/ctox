@@ -114,7 +114,9 @@ fn db(root: &Path) -> ConnectResult<Connection> {
       attempt_id TEXT PRIMARY KEY, actor TEXT NOT NULL, state_hash TEXT NOT NULL,
       redirect_uri TEXT NOT NULL, created_ms INTEGER NOT NULL, expires_ms INTEGER NOT NULL,
       status TEXT NOT NULL, receipt_json TEXT);
-      CREATE INDEX IF NOT EXISTS google_calendar_attempt_actor ON google_calendar_connect_attempts(actor, created_ms);")
+      CREATE INDEX IF NOT EXISTS google_calendar_attempt_actor ON google_calendar_connect_attempts(actor, created_ms);
+      CREATE TABLE IF NOT EXISTS google_calendar_account_credentials (
+        account_key TEXT PRIMARY KEY, secret_name TEXT NOT NULL UNIQUE);")
         .map_err(|_| "token_exchange_failed")?;
     Ok(conn)
 }
@@ -165,10 +167,7 @@ fn start_at(
     let (config, raw) = client(root)?;
     let now = now_ms();
     let mut conn = db(root).map_err(|_| "rate_limited")?;
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|_| "rate_limited")?;
-    let recent: i64 = tx.query_row("SELECT count(*) FROM google_calendar_connect_attempts WHERE actor=?1 AND created_ms>?2", params![actor,now-60_000], |r| r.get(0)).map_err(|_| "rate_limited")?;
+    let recent: i64 = conn.query_row("SELECT count(*) FROM google_calendar_connect_attempts WHERE actor=?1 AND created_ms>?2", params![actor,now-60_000], |r| r.get(0)).map_err(|_| "rate_limited")?;
     if recent >= 5 {
         return Err("rate_limited");
     }
@@ -197,22 +196,37 @@ fn start_at(
         Zeroizing::new(serde_json::to_string(&secret).map_err(|_| "oauth_client_missing")?);
     secrets::write_secret_record(root, ATTEMPT_SCOPE, &id, &secret_json, None, json!({}))
         .map_err(|_| "oauth_client_missing")?;
-    tx.execute(
-        "INSERT INTO google_calendar_connect_attempts VALUES(?1,?2,?3,?4,?5,?6,'pending',NULL)",
-        params![
-            id,
-            actor,
-            digest(&secret.state),
-            config.redirect_uri,
-            now,
-            now + 600_000
-        ],
-    )
-    .map_err(|_| "rate_limited")?;
-    tx.commit().map_err(|_| "rate_limited")?;
-    Ok(
-        json!({"attemptId":id,"authorizeUrl":url.as_str(),"redirectUri":config.redirect_uri,"scopes":SCOPES,"expiresAtMs":now+600_000}),
-    )
+    // The official secret provider can migrate legacy core state. Never call it
+    // while holding this database's writer; recheck the rate under the writer.
+    let outcome = (|| {
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| "rate_limited")?;
+        let recent: i64 = tx.query_row("SELECT count(*) FROM google_calendar_connect_attempts WHERE actor=?1 AND created_ms>?2",params![actor,now-60_000],|r|r.get(0)).map_err(|_| "rate_limited")?;
+        if recent >= 5 {
+            return Err("rate_limited");
+        }
+        tx.execute(
+            "INSERT INTO google_calendar_connect_attempts VALUES(?1,?2,?3,?4,?5,?6,'pending',NULL)",
+            params![
+                id,
+                actor,
+                digest(&secret.state),
+                config.redirect_uri,
+                now,
+                now + 600_000
+            ],
+        )
+        .map_err(|_| "rate_limited")?;
+        tx.commit().map_err(|_| "rate_limited")?;
+        Ok(
+            json!({"attemptId":id,"authorizeUrl":url.as_str(),"redirectUri":config.redirect_uri,"scopes":SCOPES,"expiresAtMs":now+600_000}),
+        )
+    })();
+    if outcome.is_err() {
+        let _ = secrets::delete_secret_record(root, ATTEMPT_SCOPE, &id);
+    }
+    outcome
 }
 
 pub(crate) fn complete(
@@ -363,6 +377,17 @@ fn complete_at(
             client_revision: secret.client_revision,
         };
         authorize()?;
+        let legacy_exists = super::email_accounts::load_accounts(root)
+            .map_err(|_| "token_exchange_failed")?
+            .iter()
+            .any(|a| a.address == address);
+        // Each attempt stages its own encrypted tuple before reserving the core
+        // writer. A racing duplicate cannot replace another account's secrets.
+        let token_json =
+            Zeroizing::new(serde_json::to_string(&tokens).map_err(|_| "token_exchange_failed")?);
+        secrets::write_secret_record(root, ACCOUNT_SCOPE, id, &token_json, None, json!({}))
+            .map_err(|_| "token_exchange_failed")?;
+        authorize()?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| "token_exchange_failed")?;
@@ -373,20 +398,12 @@ fn complete_at(
                 |r| r.get(0),
             )
             .map_err(|_| "token_exchange_failed")?;
-        if exists
-            || super::email_accounts::load_accounts(root)
-                .map_err(|_| "token_exchange_failed")?
-                .iter()
-                .any(|a| a.address == address)
-        {
+        if exists || legacy_exists {
             return Err("account_exists");
         }
-        let token_json =
-            Zeroizing::new(serde_json::to_string(&tokens).map_err(|_| "token_exchange_failed")?);
-        secrets::write_secret_record(root, ACCOUNT_SCOPE, &address, &token_json, None, json!({}))
-            .map_err(|_| "token_exchange_failed")?;
-        let profile = json!({"ownerUserId":actor,"shared_user_ids":[],"displayName":label,"source":"google-oauth","oauthAttemptId":id});
+        let profile = json!({"ownerUserId":actor,"shared_user_ids":[],"displayName":label,"source":"google-oauth"});
         tx.execute("INSERT INTO communication_accounts(account_key,channel,address,provider,profile_json,created_at,updated_at) VALUES(?1,'email',?2,'google',?3,?4,?4)",params![format!("email:{address}"),address,profile.to_string(),chrono::DateTime::from_timestamp_millis(now_ms()).ok_or("token_exchange_failed")?.to_rfc3339()]).map_err(|_| "token_exchange_failed")?;
+        tx.execute("INSERT INTO google_calendar_account_credentials(account_key,secret_name) VALUES(?1,?2)",params![format!("email:{address}"),id]).map_err(|_| "token_exchange_failed")?;
         let receipt = json!({"account":{"id":address,"label":label,"provider":"google","calendar_id":format!("account:{}",digest(&address)),"supported":true}});
         tx.execute("UPDATE google_calendar_connect_attempts SET status='completed',receipt_json=?2 WHERE attempt_id=?1",params![id,receipt.to_string()]).map_err(|_| "token_exchange_failed")?;
         tx.commit().map_err(|_| "token_exchange_failed")?;
@@ -394,6 +411,7 @@ fn complete_at(
     })();
     if outcome.is_err() {
         let _ = conn.execute("UPDATE google_calendar_connect_attempts SET status='failed' WHERE attempt_id=?1 AND status='exchanging'",[id]);
+        let _ = secrets::delete_secret_record(root, ACCOUNT_SCOPE, id);
     }
     let _ = secrets::delete_secret_record(root, ATTEMPT_SCOPE, id);
     outcome
@@ -407,6 +425,14 @@ pub(crate) fn accounts(root: &Path) -> anyhow::Result<Vec<EmailAccountConfig>> {
         root.join("runtime/ctox.sqlite3"),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     )?;
+    let initialized: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='communication_accounts')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !initialized {
+        return Ok(Vec::new());
+    }
     let mut stmt = conn.prepare("SELECT address,profile_json FROM communication_accounts WHERE channel='email' AND provider='google' AND json_extract(profile_json,'$.source')='google-oauth'")?;
     let rows = stmt
         .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
@@ -473,8 +499,21 @@ fn read_calendar_at(
     {
         return Err("permission_denied");
     }
+    let binding = Connection::open_with_flags(
+        root.join("runtime/ctox.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(|_| "token_exchange_failed")?;
+    let secret_name: String = binding
+        .query_row(
+            "SELECT secret_name FROM google_calendar_account_credentials WHERE account_key=?1",
+            [format!("email:{}", account.address)],
+            |r| r.get(0),
+        )
+        .map_err(|_| "token_exchange_failed")?;
+    drop(binding);
     let raw = Zeroizing::new(
-        secrets::read_secret_value(root, ACCOUNT_SCOPE, &account.address)
+        secrets::read_secret_value(root, ACCOUNT_SCOPE, &secret_name)
             .map_err(|_| "token_exchange_failed")?,
     );
     let mut token: Tokens = serde_json::from_str(&raw).map_err(|_| "token_exchange_failed")?;
@@ -512,12 +551,12 @@ fn read_calendar_at(
         if !secrets::compare_and_write_secret_records(
             root,
             &[
-                (ACCOUNT_SCOPE, &account.address, Some(raw.as_str())),
+                (ACCOUNT_SCOPE, &secret_name, Some(raw.as_str())),
                 (CLIENT_SCOPE, CLIENT_NAME, Some(client_raw.as_str())),
             ],
             &[secrets::SecretRecordWrite {
                 scope: ACCOUNT_SCOPE,
-                name: &account.address,
+                name: &secret_name,
                 value: &next,
                 description: None,
                 metadata: json!({}),
