@@ -50,10 +50,22 @@ try {
   if(!denied)throw Error('Native control admitted an unissued session');
   let userDenied=false;try{await call(native.fixture.identities.find(i=>i.name==='user'),'writeProbe',{id:probeId,n:99});}catch(e){userDenied=e.message==='control request denied';}
   if(!userDenied)throw Error('Native control admitted a non-admin fixture write');
-  const pressure=await call(admin,'startWrites',{collection:'p6_control_rows',intervalMs:25,stopAfterMs:1000});
-  await pause(100);const pressureDone=await call(admin,'stopWrites',{owner:pressure.owner});
-  if(pressureDone.committed<2 || BigInt(pressureDone.last_seq)<=BigInt(pressureDone.first_seq))throw Error('Native load did not commit positive ordered writes');
-  report.control={ownerBacked:true,writeReadback:true,nonAdminWriteRejected:userDenied,pressure:pressureDone,seq:committed.seq,unissuedSessionRejected:denied,process:await call(admin,'processIdentity')};
+  const afterDenial=await call(admin,'readNative',{collection:'p6_control_rows',id:probeId});
+  if(afterDenial.rows.length!==1 || afterDenial.rows[0].n!==17)throw Error('Denied control changed the stored probe');
+  const beforeRights=await call(admin,'readRights');
+  let staleRejected=false;try{await call(admin,'setRights',{expected_ver:beforeRights.rights_ver+1,rules:beforeRights.rules});}catch(e){staleRejected=e.message==='control request denied';}
+  const afterStale=await call(admin,'readRights');
+  if(!staleRejected || afterStale.rights_ver!==beforeRights.rights_ver || JSON.stringify(afterStale.rules)!==JSON.stringify(beforeRights.rules))throw Error('Stale fixture rights CAS changed policy');
+  const pressure=await call(admin,'startWrites',{collection:'p6_control_rows',intervalMs:25,stopAfterMs:5000});
+  let updated,pressureDone;
+  try {
+    updated=await call(admin,'setRights',{expected_ver:beforeRights.rights_ver,rules:beforeRights.rules});
+    await pause(250);
+  } finally {pressureDone=await call(admin,'stopWrites',{owner:pressure.owner});}
+  if(pressureDone.committed<2 || !updated || BigInt(pressureDone.first_seq)>=BigInt(updated.seq) || BigInt(pressureDone.last_seq)<=BigInt(updated.seq))throw Error('Actual native load did not bracket the rights commit');
+  report.control={ownerBacked:true,writeReadback:true,nonAdminWriteRejected:userDenied,deniedWriteUnchanged:true,
+    staleRightsCasRejected:staleRejected,rights:{before:beforeRights.rights_ver,after:updated.rights_ver,seq:updated.seq},
+    pressure:pressureDone,seq:committed.seq,unissuedSessionRejected:denied,process:await call(admin,'processIdentity')};
   save();
   if(config.controlOnly)throw Error('not_run(control-qualification-only)');
   try {
