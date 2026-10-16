@@ -2,7 +2,8 @@
 // Store/OrderedWriter/Subscription on the other stdio end. No mocked lifecycle.
 import assert from 'node:assert/strict';
 import {createInterface} from 'node:readline';
-import {verify,createPublicKey} from 'node:crypto';
+import {verify,createPublicKey,createHash} from 'node:crypto';
+import {readFileSync} from 'node:fs';
 const root=process.env.KERNEL_URL;
 const {createKernel}=await import(root+'/kernel.mjs');
 const {WebRTCKernelTransport}=await import(root+'/transport-webrtc.mjs');
@@ -15,11 +16,14 @@ const rpc=(type,data={})=>new Promise((resolve,reject)=>{const id=++request;pend
 const canonical=v=>Array.isArray(v)?'['+v.map(canonical).join(',')+']':v&&typeof v==='object'?'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}':JSON.stringify(v);
 const publicKey=createPublicKey({key:Buffer.from('302a300506032b6570032100d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a','hex'),format:'der',type:'spki'});
 let verified=0,replays=0,holdNextInitial=false,heldInitial=null;
+const nativeStages=new Map(),kernelStages=[];
 class NativeBridge extends FakeNativePeer {
  async apply(m,lane){
   if(m.type==='write'){
    assert.equal(lane,1);
+   const arrived=performance.now();
    const response=await rpc('write',{message:m});
+   nativeStages.set(response.core_stages.id,{native_ingress_ms:arrived,native_response_ms:performance.now(),core:response.core_stages});
    await this.send('commands',response.receipt);
    await this.send('live',response.page);
    return;
@@ -53,15 +57,17 @@ try {
  await boot('business_apps',[{id:'ctox-platform',active_ver:'platform-7'}]);
  await boot('business_app_versions',[{id:'ctox-platform@platform-7',manifest:config.manifest}]);
  const api=k.appApi('sender','99');
- const samples=[];
+ const samples=[];let firstHandle;
  for(let i=0;i<128;i++){
-  const start=performance.now(),h=api.command('fixture.task',{value:i});await h.local;
-  const receipt=await h.result;
+  const start=performance.now(),h=api.command('fixture.task',{value:i});firstHandle??=h;await h.local;const local=performance.now();
+  const receipt=await h.result;const accepted=performance.now();
   assert.equal(receipt.status,'accepted');
   await new Promise((resolve,reject)=>{let off;const timer=setTimeout(()=>{off?.();reject(Error('terminal page missing'))},3000);off=h.status.subscribe(s=>{if(s.status==='done'){clearTimeout(timer);queueMicrotask(()=>{off?.();resolve();});}});});
   assert.equal(h.status.get().result.value,i);
-  samples.push(performance.now()-start);
+  const end=performance.now();samples.push(end-start);
+  kernelStages.push({id:h.id,sample:i,kernel_write_ms:start,kernel_local_ms:local,accepted_ms:accepted,receipt_ms:end,...nativeStages.get(h.id)});
  }
+ await rpc('trace',{measured:{stage_timestamps:kernelStages,memory_source_sha256:createHash('sha256').update(readFileSync(new URL(root+'/store-idb-v5.mjs'))).digest('hex')}});
  // New op, same command_id, no base: no mutation; receipt's seq is behind
  // the live checkpoint. The core returns merged/requires_page and the old
  // canonical row must be replayed through the normal signed read path.
@@ -71,7 +77,7 @@ try {
  const {result:ignoredResult,executor_fence:ignoredFence,...intent}=doc;
  const h=api.put('business_commands',{...intent,status:'queued'});
  await h.local;const repeat=await h.result;
- assert.equal(repeat.status,'merged');assert.equal(api.get('business_commands',doc.id).get().status,'done');
+ assert.equal(repeat.status,'merged');assert.equal(firstHandle.status.get().status,'done');
  assert.equal((await k.sim.outbox()).length,0);assert.ok(replays>0);assert.ok(verified>0);assert.deepEqual(peer.errors,[]);
  if(heldInitial)await peer.send('initial',heldInitial);
  samples.sort((a,b)=>a-b);
