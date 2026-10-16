@@ -78,6 +78,7 @@ pub struct TableReport {
     pub database: String,
     pub table: String,
     pub decision: String,
+    pub destination: String,
     pub source_rows: Option<usize>,
     pub source_sha256: Option<String>,
     pub target_rows: Option<usize>,
@@ -280,9 +281,26 @@ fn prepare_with_core(
         for decision in &source.tables {
             if !matches!(
                 decision.rule.as_str(),
-                "E29-R1" | "E29-R2" | "E29-R3" | "E29-R4" | "E29-R5" | "E29-R6" | "E29-R7"
+                "E29-R1"
+                    | "E29-R2"
+                    | "E29-R3"
+                    | "E29-R4"
+                    | "E29-R5"
+                    | "E29-R6"
+                    | "E29-R7"
+                    | "E29.1"
             ) {
                 return Err(invalid("cutover_table_without_decision"));
+            }
+            if decision.rule == "E29.1"
+                && (!matches!(decision.table.mode, Mode::ArchiveOnly)
+                    || plan
+                        .collections
+                        .values()
+                        .flatten()
+                        .any(|d| d.name == decision.table.collection))
+            {
+                return Err(invalid("cutover_timeseries_requires_unowned_full_archive"));
             }
             let metadata = source.internal_table.as_ref() == Some(&decision.table.name);
             let retained = matches!(decision.table.mode, Mode::KeepCore);
@@ -336,6 +354,15 @@ fn prepare_with_core(
                 database: source.choice.database.clone(),
                 table: decision.table.name.clone(),
                 decision: decision.rule.clone(),
+                destination: if decision.rule == "E29.1" {
+                    "legacy_records (E29.1)".into()
+                } else if retained {
+                    "retained_core".into()
+                } else if matches!(decision.table.mode, Mode::ArchiveOnly) {
+                    "legacy_records + specialized projection".into()
+                } else {
+                    decision.table.collection.clone()
+                },
                 source_rows: Some(count),
                 source_sha256: sha,
                 target_rows: None,
@@ -406,6 +433,7 @@ fn prepare_with_core(
             database: kept.database.clone(),
             table: kept.table.clone(),
             decision: kept.decision.clone(),
+            destination: "secret_store_api_only".into(),
             source_rows: None,
             source_sha256: None,
             target_rows: None,

@@ -528,7 +528,56 @@ fn core_collector_projects_ticket_and_archives_full_raw_row_without_inventing_a_
         .insert("iot_datapoints".into());
     fs::write(&path, serde_json::to_vec(&snapshot).unwrap())?;
     assert!(
-        matches!(prepare_with_core(path,&[],migration,Some(not_a_crew_fixture)),Err(StoreError::Invalid(s)) if s=="cutover_dataframe_owner_required")
+        matches!(prepare_with_core(path.clone(),&[],migration,Some(not_a_crew_fixture)),Err(StoreError::Invalid(s)) if s=="cutover_dataframe_owner_required")
+    );
+    // E29.1 preserves duplicate points and values that cannot be parsed as JSON.
+    data.execute_batch("INSERT INTO iot_datapoints VALUES('asset','temperature',1,'42'),('asset','temperature',2,'not-json');")?;
+    let core = &mut snapshot.databases[1];
+    let points = core
+        .tables
+        .iter_mut()
+        .find(|d| d.table.name == "iot_datapoints")
+        .unwrap();
+    points.rule = "E29.1".into();
+    points.measurement = Some(freeze::measure(&data, "iot_datapoints")?);
+    measurements(core);
+    fs::write(&path, serde_json::to_vec(&snapshot).unwrap())?;
+    let first = prepare_with_core(path.clone(), &[], migration, Some(not_a_crew_fixture))?;
+    let archived: Vec<_> = first
+        .import
+        .snapshot
+        .documents
+        .iter()
+        .filter(|d| d.collection == cutover::ARCHIVE && d.body["source_table"] == "iot_datapoints")
+        .collect();
+    assert_eq!(
+        archived.len(),
+        3,
+        "every raw point, including duplicates, must survive"
+    );
+    assert!(archived
+        .iter()
+        .any(|d| d.body["doc"]["value"] == "not-json"));
+    assert_eq!(
+        first.import.audit.source_row_hashes["ctox.sqlite3:iot_datapoints"].len(),
+        3
+    );
+    let report = first
+        .tables
+        .iter()
+        .find(|t| t.table == "iot_datapoints")
+        .unwrap();
+    assert_eq!(report.destination, "legacy_records (E29.1)");
+    assert_eq!(report.source_rows, Some(3));
+    assert_eq!(report.expected_target_rows, 3);
+    let replay = prepare_with_core(path.clone(), &[], migration, Some(not_a_crew_fixture))?;
+    assert_eq!(
+        serde_json::to_value(first.import.snapshot.documents).unwrap(),
+        serde_json::to_value(replay.import.snapshot.documents).unwrap()
+    );
+    fs::write(frozen.join("v4/manifests/owned-timeseries.manifest.json"),json!({"app_id":"timeseries","collections":{"iot_timeseries":{"class":"full","schema":definition("iot_timeseries").schema_json}}}).to_string())?;
+    assert!(
+        matches!(prepare_with_core(path,&[],migration,Some(not_a_crew_fixture)),Err(StoreError::Invalid(s)) if s=="cutover_timeseries_requires_unowned_full_archive")
     );
     Ok(())
 }

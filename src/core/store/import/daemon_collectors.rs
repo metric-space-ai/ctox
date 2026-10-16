@@ -57,7 +57,7 @@ fn covered(source: &Source, tables: &[String]) -> Result<()> {
             .ok_or_else(|| invalid("cutover_collector_source_without_decision"))?;
         // A projection may never replace the full-row E29 archive. Protected
         // mail-server rows remain in Core and use only the allowlisted reader.
-        if decision.rule != "E29-R5" && decision.rule != "E29-R6" {
+        if decision.rule != "E29-R5" && decision.rule != "E29-R6" && decision.rule != "E29.1" {
             return Err(invalid("cutover_collector_requires_full_row_retention"));
         }
     }
@@ -226,7 +226,41 @@ pub(crate) fn collect(
                     &copied,
                     owner_user.clone(),
                 )?;
-                let extra = core_import::collect(tx, &mut services, 2_000_000, 256 * 1024 * 1024)?;
+                let archive_timeseries = source
+                    .tables
+                    .iter()
+                    .any(|d| d.table.name == "iot_datapoints" && d.rule == "E29.1");
+                let extra = if archive_timeseries {
+                    let key = format!("{}:iot_datapoints", source.choice.database);
+                    let rows = freeze::measure(tx, "iot_datapoints")?.row_count;
+                    if out.audit.source_rows.get(&key) != Some(&rows)
+                        || out
+                            .audit
+                            .target_documents
+                            .get(&key)
+                            .map_or(0, BTreeSet::len)
+                            != rows
+                    {
+                        return Err(invalid("cutover_timeseries_archive_incomplete"));
+                    }
+                    core_import::collect_archiving_timeseries(
+                        tx,
+                        &mut services,
+                        2_000_000,
+                        256 * 1024 * 1024,
+                    )?
+                } else {
+                    core_import::collect(tx, &mut services, 2_000_000, 256 * 1024 * 1024)?
+                };
+                let keys: Vec<_> = keys
+                    .into_iter()
+                    .filter(|key| {
+                        !source.tables.iter().any(|d| {
+                            d.rule == "E29.1"
+                                && *key == format!("{}:{}", source.choice.database, d.table.name)
+                        })
+                    })
+                    .collect();
                 append(out, extra, &keys)?;
                 files.push(PendingFiles {
                     tables: keys,
