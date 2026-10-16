@@ -908,7 +908,9 @@ impl CodexSubscriptionAccountPool {
             retry_delay_ms,
             observed_at_ms: self.clock.now_ms(),
         };
-        conductor.record_async(result).await
+        conductor
+            .record_async(result)
+            .await
             .map_err(|_| CodexAccountPoolError::OutcomePersistence)?;
         Ok(())
     }

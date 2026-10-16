@@ -1237,7 +1237,9 @@ impl AntigravitySubscriptionAccountPool {
             retry_delay_ms,
             observed_at_ms: self.clock.now_ms(),
         };
-        conductor.record_async(result).await
+        conductor
+            .record_async(result)
+            .await
             .map_err(|_| AntigravityAccountPoolError::OutcomePersistence)?;
         Ok(())
     }

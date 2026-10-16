@@ -139,10 +139,20 @@ async fn native_model_check_is_permissioned_bound_and_not_reexecuted() {
 #[tokio::test]
 async fn native_model_fence_borrows_the_existing_store_read_transaction() {
     let mut f = Fixture::new().await;
-    super::runtime_host::check_model_fence(f.readers.clone(),Arc::new(|tx| {
-        assert!(!tx.is_autocommit(), "native reader must already hold its snapshot");
-        tx.query_row("SELECT v FROM _seq WHERE singleton=1",[],|r|r.get::<_,u64>(0))?;
-        Ok(())
-    })).await.expect("one real Store snapshot, no nested BEGIN");
+    super::runtime_host::check_model_fence(
+        f.readers.clone(),
+        Arc::new(|tx| {
+            assert!(
+                !tx.is_autocommit(),
+                "native reader must already hold its snapshot"
+            );
+            tx.query_row("SELECT v FROM _seq WHERE singleton=1", [], |r| {
+                r.get::<_, u64>(0)
+            })?;
+            Ok(())
+        }),
+    )
+    .await
+    .expect("one real Store snapshot, no nested BEGIN");
     f.stores.shutdown().await.unwrap();
 }

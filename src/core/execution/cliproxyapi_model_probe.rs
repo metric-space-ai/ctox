@@ -39,21 +39,31 @@ impl Probe {
 /// existing Tokio reactor. Entering a nested Tokio runtime would forbid the
 /// synchronous owner facades; moving to an arbitrary blocking thread loses
 /// their private admission. This wake-driven park has one absolute deadline.
-pub(super) fn drive_native<T>(future: impl Future<Output=T>) -> Option<T> {
-    if crate::persistence::require_sync_owner_context().is_err() { return None; }
+pub(super) fn drive_native<T>(future: impl Future<Output = T>) -> Option<T> {
+    if crate::persistence::require_sync_owner_context().is_err() {
+        return None;
+    }
     struct WakeThread(std::thread::Thread);
     impl std::task::Wake for WakeThread {
-        fn wake(self: Arc<Self>) { self.0.unpark(); }
-        fn wake_by_ref(self: &Arc<Self>) { self.0.unpark(); }
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.unpark();
+        }
     }
     let waker = std::task::Waker::from(Arc::new(WakeThread(std::thread::current())));
     let mut context = std::task::Context::from_waker(&waker);
     let mut future = Box::pin(future);
-    let deadline = Instant::now()+Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        if let std::task::Poll::Ready(value) = future.as_mut().poll(&mut context) { return Some(value); }
+        if let std::task::Poll::Ready(value) = future.as_mut().poll(&mut context) {
+            return Some(value);
+        }
         let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() { return None; }
+        if remaining.is_zero() {
+            return None;
+        }
         std::thread::park_timeout(remaining);
     }
 }
@@ -109,12 +119,12 @@ fn classify(
             return Probe::unavailable(model, "gateway_state_unavailable");
         }
         let valid = serde_json::from_slice::<Value>(response.body()).is_ok_and(|v| {
-                v["object"] == "response"
-                    && v["output"].is_array()
-                    && v["status"]
-                        .as_str()
-                        .is_some_and(|s| matches!(s, "completed" | "incomplete"))
-            });
+            v["object"] == "response"
+                && v["output"].is_array()
+                && v["status"]
+                    .as_str()
+                    .is_some_and(|s| matches!(s, "completed" | "incomplete"))
+        });
         if valid {
             None
         } else {
@@ -164,8 +174,12 @@ pub(crate) async fn check(
             let router = build_instance_codex_responses_router(&root)?
                 .context("native gateway unavailable")?;
             let probe = drive_native(probe_route(
-                router.as_ref(), &target.provider, &target.local_account_id, &model,
-            )).unwrap_or_else(||Probe::unavailable(&model,"timeout"));
+                router.as_ref(),
+                &target.provider,
+                &target.local_account_id,
+                &model,
+            ))
+            .unwrap_or_else(|| Probe::unavailable(&model, "timeout"));
             if model_probe_target(&root, &actor, &account, revision)? != target
                 || load_instance_proxy_config(&root)? != config
             {

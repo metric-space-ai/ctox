@@ -31,8 +31,11 @@ pub struct AccountExecutionResult {
 /// CTOX adaptation of upstream's in-manager cooldown mutations. Serializes
 /// load/transition/save so the injected durable snapshot store never sees a lost
 /// update from concurrent requests within one proxy process.
-pub type CooldownRecordFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, CooldownStoreError>> + Send>>;
-pub type CooldownRecordDispatcher = Arc<dyn Fn(Arc<CooldownConductor>, AccountExecutionResult) -> CooldownRecordFuture + Send + Sync>;
+pub type CooldownRecordFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, CooldownStoreError>> + Send>>;
+pub type CooldownRecordDispatcher = Arc<
+    dyn Fn(Arc<CooldownConductor>, AccountExecutionResult) -> CooldownRecordFuture + Send + Sync,
+>;
 pub struct CooldownConductor {
     store: Arc<dyn CooldownStateStore>,
     transition_lock: Mutex<()>,
@@ -54,12 +57,16 @@ impl CooldownConductor {
         self.record_dispatcher = Some(dispatcher);
         self
     }
-    pub async fn record_async(self: &Arc<Self>, result: AccountExecutionResult) -> Result<bool, CooldownStoreError> {
+    pub async fn record_async(
+        self: &Arc<Self>,
+        result: AccountExecutionResult,
+    ) -> Result<bool, CooldownStoreError> {
         if let Some(dispatch) = &self.record_dispatcher {
             return dispatch(self.clone(), result).await;
         }
         let conductor = self.clone();
-        tokio::task::spawn_blocking(move || conductor.record(result)).await
+        tokio::task::spawn_blocking(move || conductor.record(result))
+            .await
             .map_err(|_| CooldownStoreError::Write)?
     }
 

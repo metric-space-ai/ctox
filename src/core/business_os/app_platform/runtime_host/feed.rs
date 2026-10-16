@@ -709,8 +709,11 @@ pub(super) async fn check_model_fence(
     pool: ctox_store::read_pool::ReadPool,
     check: Arc<dyn Fn(&rusqlite::Transaction<'_>) -> Result<(), StoreError> + Send + Sync>,
 ) -> Result<(), StoreError> {
-    pool.read(move |tx| check(tx).map_err(|error| rusqlite::Error::InvalidParameterName(error.to_string())))
-        .await.map_err(Into::into)
+    pool.read(move |tx| {
+        check(tx).map_err(|error| rusqlite::Error::InvalidParameterName(error.to_string()))
+    })
+    .await
+    .map_err(Into::into)
 }
 
 async fn dispatch_platform(
@@ -783,7 +786,11 @@ async fn dispatch_platform(
                     // Current P9 row, actor, app/version and rights, using the
                     // existing reader owner, immediately before the model effect.
                     wait(&runtime, async move {
-                        check_model_fence(pool, Arc::new(move |tx| codec.check_fence(tx, &invocation))).await
+                        check_model_fence(
+                            pool,
+                            Arc::new(move |tx| codec.check_fence(tx, &invocation)),
+                        )
+                        .await
                     })?;
                     effect()
                 },
