@@ -24,7 +24,10 @@ pub(super) async fn publish(
             let bytes=std::fs::read(full)?;let hash=digest(&bytes);
             anyhow::ensure!(expected.as_str()==Some(&hash),"not_run(source-artifact-hash): {app_for_io}/{path}");
             let mut receiver=cas.receive(&digest(format!("{app_for_io}:{path}").as_bytes()),&hash,size)?;
-            receiver.append(0,&bytes)?;receiver.finish()?;
+            for (index,chunk) in bytes.chunks(ctox_store::cas::CHUNK_BYTES).enumerate(){
+                receiver.append((index*ctox_store::cas::CHUNK_BYTES) as u64,chunk)?;
+            }
+            receiver.finish()?;
             files.push(json!({"id":hash,"ref":hash,"size":size,"name":path,"owner_app":app_for_io}));
         }
         let mut manifest=manifest;
