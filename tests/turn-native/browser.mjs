@@ -32,6 +32,7 @@ try {
 
  await page.evaluate(async iceServer=>{
   globalThis.pc=new RTCPeerConnection({iceTransportPolicy:'relay',iceServers:[iceServer]});
+  globalThis.iceErrors=[];pc.addEventListener('icecandidateerror',e=>iceErrors.push({code:e.errorCode,text:e.errorText,url:e.url}));
   globalThis.received=[];globalThis.dc=pc.createDataChannel('turn-native');
   globalThis.m4channels={};globalThis.m4wireErrors=[];globalThis.m4maxReceived=0;globalThis.m4maxSent=0;globalThis.m4bufferPeak=0;
   pc.addEventListener('datachannel',({channel})=>{
@@ -74,7 +75,7 @@ try {
    const ice=await pages[0].evaluate(async()=>{
     if(!globalThis.pc)return {};
     const stats=[...(await pc.getStats()).values()].filter(s=>s.type==='local-candidate'||s.type==='candidate-pair');
-    return {gathering:pc.iceGatheringState,connection:pc.connectionState,candidateCount:(pc.localDescription?.sdp.match(/^a=candidate:/gm)||[]).length,stats};
+    return {gathering:pc.iceGatheringState,connection:pc.connectionState,errors:globalThis.iceErrors||[],candidateCount:(pc.localDescription?.sdp.match(/^a=candidate:/gm)||[]).length,stats};
    });
    write('browser-ice.json',ice);
   }

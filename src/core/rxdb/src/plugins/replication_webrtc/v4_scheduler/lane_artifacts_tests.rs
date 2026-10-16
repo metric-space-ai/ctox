@@ -1168,7 +1168,9 @@ async fn z3_p4_turn_loss_rtt() {
         let bulk_received = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let window = Arc::new(tokio::sync::Semaphore::new(16));
         let mut seed = 0x6a09e667f3bcc909u64;
-        let mut payload = vec![0;16_000];
+        // Larger than one SCTP frame: the latency mutation must exercise chunking.
+        const BULK_BYTES: usize = 64_000;
+        let mut payload = vec![0;BULK_BYTES];
         for byte in &mut payload {seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; *byte=seed as u8;}
         let expected = payload.clone(); let count = bulk_received.clone(); let permits = window.clone();
         let receive_bulk = tokio::spawn(async move {
@@ -1251,6 +1253,6 @@ async fn z3_p4_turn_loss_rtt() {
         let command_p95=command_latency[(command_latency.len()*95/100).min(command_latency.len()-1)];
         let command_p99=command_latency[(command_latency.len()*99/100).min(command_latency.len()-1)];
         pair.close().await;
-        eprintln!("Z3_P4_TURN {}",serde_json::json!({"scenario":3,"relay_only":true,"candidates_a":candidates_a,"candidates_b":candidates_b,"shim":"UDP at TURN control legs","nominal_rtt_ms":rtt_ms,"drop_every":drop_every,"loss_placement":"source TURN leg, both directions","rto_proof":rto_proof,"injected_datagrams":injected,"datagrams":packets,"dropped_datagrams":drops,"probes":probes,"full_workload":probes==64,"sent":2*probes,"explicit_send_results":2*probes,"delivery_acknowledged":2*probes,"lost":0,"duplicated":0,"control_p95_ms":p95,"control_p99_ms":p99,"command_p95_ms":command_p95,"command_p99_ms":command_p99,"command_bidirectional_delivery_ms":command_latency,"control_roundtrip_ms":latency,"bulk_enabled":bulk_enabled,"bulk_bytes":bulk_sent*16_000,"bulk_seconds":bulk_seconds,"bulk_mb_s":bulk_sent as f64*16_000.0/bulk_seconds/1_000_000.0}));
+        eprintln!("Z3_P4_TURN {}",serde_json::json!({"scenario":3,"relay_only":true,"candidates_a":candidates_a,"candidates_b":candidates_b,"shim":"UDP at TURN control legs","nominal_rtt_ms":rtt_ms,"drop_every":drop_every,"loss_placement":"source TURN leg, both directions","rto_proof":rto_proof,"injected_datagrams":injected,"datagrams":packets,"dropped_datagrams":drops,"probes":probes,"full_workload":probes==64,"sent":2*probes,"explicit_send_results":2*probes,"delivery_acknowledged":2*probes,"lost":0,"duplicated":0,"control_p95_ms":p95,"control_p99_ms":p99,"command_p95_ms":command_p95,"command_p99_ms":command_p99,"command_bidirectional_delivery_ms":command_latency,"control_roundtrip_ms":latency,"bulk_enabled":bulk_enabled,"bulk_bytes":bulk_sent*BULK_BYTES as u64,"bulk_seconds":bulk_seconds,"bulk_mb_s":bulk_sent as f64*BULK_BYTES as f64/bulk_seconds/1_000_000.0}));
     }).await.expect("TURN loss RTT fixture deadline");
 }
