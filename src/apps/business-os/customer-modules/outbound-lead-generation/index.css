@@ -154,6 +154,26 @@
 
 [data-app="outbound-lead-generation"].outbound-lead-generation .leadgen-review-group { padding-top: 14px; }
 [data-app="outbound-lead-generation"].outbound-lead-generation .leadgen-review-group > h3 { margin-bottom: 10px; }
+/* OLGUI: Gruppenkopf mit Schalter „Nur Pflichtfelder“ in einer Zeile. */
+[data-app="outbound-lead-generation"] .leadgen-review-group-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; min-width: 0; }
+[data-app="outbound-lead-generation"] .leadgen-review-group .leadgen-review-group-head h3 { margin: 0; min-width: 0; }
+[data-app="outbound-lead-generation"] .leadgen-required-toggle {
+  display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 3px 8px 3px 4px;
+  border: 1px solid var(--leadgen-hairline, var(--line)); border-radius: 999px; background: transparent;
+  color: var(--muted); font: inherit; font-size: 11px; line-height: 16px; white-space: nowrap; cursor: pointer;
+}
+[data-app="outbound-lead-generation"] .leadgen-required-toggle:hover { color: var(--text); }
+[data-app="outbound-lead-generation"] .leadgen-switch-track {
+  position: relative; width: 22px; height: 12px; flex: 0 0 auto; border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 35%, transparent); transition: background .15s;
+}
+[data-app="outbound-lead-generation"] .leadgen-switch-track::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--surface, #fff); transition: transform .15s;
+}
+[data-app="outbound-lead-generation"] .leadgen-required-toggle[aria-checked="true"] { color: var(--text); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+[data-app="outbound-lead-generation"] .leadgen-required-toggle[aria-checked="true"] .leadgen-switch-track { background: var(--accent); }
+[data-app="outbound-lead-generation"] .leadgen-required-toggle[aria-checked="true"] .leadgen-switch-track::after { transform: translateX(10px); }
 [data-app="outbound-lead-generation"].outbound-lead-generation .leadgen-detail-actions {
   position: static;
   margin: 0 -16px;
@@ -1077,6 +1097,17 @@
 [data-app="outbound-lead-generation"] .leadgen-detail-actions .ctox-button { border-radius: 7px; }
 [data-app="outbound-lead-generation"] .leadgen-detail-actions .ctox-button:first-child { order: -2; }
 [data-app="outbound-lead-generation"] .leadgen-detail-actions .ctox-button[data-action="validate-lead"] { order: -1; }
+/* OLGUI: eine Zeile – Hauptaktion + „…“ (kein Umbruch, lange Beschriftung kuerzt mit Auslassung). */
+[data-app="outbound-lead-generation"] .leadgen-detail-actions[data-detail-action-bar] { flex-wrap: nowrap; align-items: center; min-width: 0; }
+[data-app="outbound-lead-generation"] .leadgen-detail-actions[data-detail-action-bar] > .ctox-button { flex: 0 1 auto; min-width: 0; max-width: 100%; order: 0; }
+[data-app="outbound-lead-generation"] .leadgen-detail-actions[data-detail-action-bar] > .ctox-button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-app="outbound-lead-generation"] .leadgen-detail-actions .leadgen-more-button {
+  flex: 0 0 auto; align-self: stretch; width: 30px; height: auto; min-height: 0; border: 1px solid var(--leadgen-hairline, var(--line)); border-radius: 7px;
+  background: var(--surface, transparent); color: var(--muted);
+}
+[data-app="outbound-lead-generation"] .leadgen-detail-actions .leadgen-more-button:hover,
+[data-app="outbound-lead-generation"] .leadgen-detail-actions .leadgen-more-button[aria-expanded="true"] { color: var(--text); }
+[data-app="outbound-lead-generation"] .leadgen-more-icon { width: 16px; height: 16px; }
 
 [data-app="outbound-lead-generation"] .leadgen-contact-tabs {
   gap: 0;

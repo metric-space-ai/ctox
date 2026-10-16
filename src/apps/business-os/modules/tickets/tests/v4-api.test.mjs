@@ -11,6 +11,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -57,6 +58,9 @@ before(async () => {
   page.on('response', (r) => { if (r.status() >= 400) console.error('[page] HTTP', r.status(), r.url()); });
   page.__errors = errors;
   await page.goto(base);
+  // Befehlsrouten/Deklarationen der echten tickets-Version (v4/manifests/tickets.manifest.json); ohne aktive Version
+  // lehnt der Kern seit E26/E27 ctox.ticket.* beim Schreiben mit unknown_command ab.
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes('tickets'));
   await page.evaluate(async () => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import('/modules/tickets/index.js');
@@ -64,6 +68,9 @@ before(async () => {
     await kernel.ready;
     const now = Date.now();
     await kernel.sim.push('business_apps', [{ id: 'tickets', title: 'Tickets' }]);
+    // FIXT-R: Eigentümer der Fremd-Collections (echte Manifeste, inkl. ctox-platform) vor der eigenen Version.
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion('tickets', '1.0.0', { title: 'Tickets', manifestExtra: window.__routes });
     await kernel.sim.push('ctox_ticket_items', [
       { id: 'tk_1', ticket_key: 'SUP-1', title: 'Login defekt', body_text: 'Seit heute kein Login.', remote_status: 'open', source_system: 'zammad', requester: 'kunde@acme.test', priority: 'high', updated_at_ms: now - 1000, updated_at: new Date(now - 1000).toISOString() },
       { id: 'tk_2', ticket_key: 'SUP-2', title: 'Rechnung fehlt', remote_status: 'waiting_customer', source_system: 'email', priority: 'normal', updated_at_ms: now - 2000 },

@@ -10,8 +10,11 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/ctox-sync-v4/stub');
+// Pin b6624eb (Kern 16.10.): der aktuelle Stub veröffentlicht das ctox-platform-Manifest (business_commands) noch nicht
+// automatisch; bis dahin gegen den letzten Stand, der es tut.
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/b6624eb');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
@@ -50,11 +53,17 @@ before(async () => {
   page.on('console', (m) => { if (m.type() === 'error') console.error('[page]', m.text()); });
   page.__errors = errors;
   await page.goto(base);
+  // Befehlsrouten der echten news-Version (v4/manifests/news.manifest.json); ohne aktive Version lehnt der Kern
+  // seit E26/E27 news.issue.generate beim Schreiben mit unknown_command ab.
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes(APP));
   await page.evaluate(async (APP) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import(`/modules/${APP}/index.js`);
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false });
     await kernel.ready;
+    // FIXT-R: Eigentümer der Fremd-Collections (echte Manifeste, inkl. ctox-platform) vor der eigenen Version.
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion(APP, '1', { title: 'News', manifestExtra: window.__routes });
     const ts = Date.now();
     await kernel.sim.push('news_topics', [
       { id: 'topic_ai', title: 'KI-Labs', prompt: 'Neue Modelle', cadence: 'daily', run_time: '07:00', cron_expr: '0 7 * * *', enabled: true, language: 'de', max_posts: 12, categories: [], payload: {}, created_at_ms: ts, updated_at_ms: ts },

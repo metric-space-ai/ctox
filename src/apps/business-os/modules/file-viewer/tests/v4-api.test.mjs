@@ -9,9 +9,10 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const APP = 'file-viewer';
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const SHOTS = join(HERE, 'shots');
@@ -50,6 +51,8 @@ before(async () => {
   page.on('console', (m) => { if (m.type() === 'error') console.error('[page]', m.text()); });
   page.__errors = errors;
   await page.goto(base);
+  // FIXT-R: echte Routen/Rechte/Fremd-Collections von file-viewer und explorer (v4/manifests/*.manifest.json).
+  await page.evaluate((routes) => { window.__routes = routes; }, { fv: realManifestRoutes(APP), explorer: realManifestRoutes('explorer') });
   await page.evaluate(async (APP) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import(`/modules/${APP}/index.js`);
@@ -57,6 +60,11 @@ before(async () => {
     await kernel.ready;
     await kernel.sim.push('business_apps', [{ id: 'explorer', title: 'Explorer' }, { id: APP, title: 'Datei-Viewer' }]);
     await kernel.sim.settle();
+    // FIXT-R: Eigentümer der Fremd-Collections (ctox-platform, desktop, …) vor den eigenen Versionen, danach
+    // file-viewer und explorer mit ihren echten Manifest-Teilen (nach den business_apps-Zeilen).
+    for (const o of [...window.__routes.fv._fixture_owners, ...window.__routes.explorer._fixture_owners]) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion('explorer', '1.0.0', { title: 'Explorer', manifestExtra: window.__routes.explorer });
+    await kernel.sim.publishAppVersion(APP, '1.0.0', { title: 'Datei-Viewer', manifestExtra: window.__routes.fv });
     window.__k = kernel;
     window.__api = kernel.appApi(APP, '1.0.0');
     window.__explorer = kernel.appApi('explorer', '1.0.0');
@@ -178,8 +186,14 @@ test('lazy Datei: Befehl ctox.file.materialize ohne Warten; failed → Zone; don
   assert.equal(zone.length, 1);
   assert.match(zone[0].text, /kein Zugriff/);
   const ref = await page.evaluate(() => window.__upload('materialisiert', { name: 'gross.log', mime: 'text/plain' }));
-  await page.evaluate((ref) => window.__k.sim.onCommand('ctox.file.materialize', () => ({ ref })), ref);
   await page.evaluate(() => window.__explorer.shell.navigate('file-viewer', { file_id: 'lazy-2', name: 'gross.log', mime: 'text/plain', path: '/CTOX/run/gross.log', content_state: 'lazy' }));
+  await settle();
+  // ctox.file.materialize ist ein Plattformbefehl: seit f967baf führt der simulierte Core ihn selbst aus (Ergebnis
+  // {ok:true}, sim.onCommand greift für Plattformtypen nicht). Das Materialisierungsergebnis {ref} meldet der Core
+  // wie im Betrieb über den gepushten Befehlsstatus.
+  cmd = await page.evaluate(() => window.__commands().at(-1));
+  assert.equal(cmd.payload.file_id, 'lazy-2');
+  await page.evaluate(({ cmd, ref }) => window.__k.sim.push('business_commands', { ...cmd, status: 'done', progress: 1, result: { ref } }), { cmd, ref });
   await settle();
   cmd = await page.evaluate(() => window.__commands().at(-1));
   assert.equal(cmd.status, 'done');

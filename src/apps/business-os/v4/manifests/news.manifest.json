@@ -5,21 +5,6 @@
     ],
     "agent.task.get": [
       "handlers/_lib/news.js"
-    ],
-    "browser.auth_assist.request": [
-      "handlers/news.source.auth_assist.js"
-    ],
-    "schedule.list": [
-      "handlers/news.topic.schedule.js"
-    ],
-    "schedule.remove": [
-      "handlers/news.topic.schedule.js"
-    ],
-    "schedule.set_enabled": [
-      "handlers/news.topic.schedule.js"
-    ],
-    "schedule.upsert": [
-      "handlers/news.topic.schedule.js"
     ]
   },
   "_declaration": "modules/news/v4-manifest.json",
@@ -40,12 +25,7 @@
   "author": null,
   "capabilities_required": [
     "agent.task.enqueue",
-    "agent.task.get",
-    "browser.auth_assist.request",
-    "schedule.list",
-    "schedule.remove",
-    "schedule.set_enabled",
-    "schedule.upsert"
+    "agent.task.get"
   ],
   "collections": {
     "news_issues": {
@@ -434,9 +414,7 @@
     "news.issue.generate": "handlers/news.issue.generate.js",
     "news.source.adapter": "handlers/news.source.adapter.js",
     "news.source.adapter.complete": "handlers/news.source.adapter.complete.js",
-    "news.source.adapter.failed": "handlers/news.source.adapter.failed.js",
-    "news.source.auth_assist": "handlers/news.source.auth_assist.js",
-    "news.topic.schedule": "handlers/news.topic.schedule.js"
+    "news.source.adapter.failed": "handlers/news.source.adapter.failed.js"
   },
   "layout": {
     "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/news-2.jpg (shared/operator-icon-selection.js, sha256 415e717a9036…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",

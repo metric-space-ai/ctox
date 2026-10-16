@@ -1,3 +1,566 @@
+// Generated from src/core/business_os/business_command_inventory.json. Check: tests/e39-inventory.test.mjs.
+const COMMAND_INVENTORY = {
+  "exact_control_types": [
+    "ctox.app.access.grant",
+    "ctox.app.access.revoke",
+    "ctox.app.action.run",
+    "ctox.app_store.install",
+    "ctox.app_store.uninstall",
+    "ctox.business_os.audit.list",
+    "ctox.business_os.audit.retention",
+    "ctox.business_os.audit.retention_policy.set",
+    "ctox.business_os.backup.restore_drill",
+    "ctox.business_os.branding.update",
+    "ctox.business_os.support.export_diagnostics",
+    "ctox.business_os.user.upsert",
+    "ctox.business_os.why",
+    "ctox.coding.models",
+    "ctox.coding.turn",
+    "ctox.command.cancel",
+    "ctox.crew.assign",
+    "ctox.crew.learning.confirm",
+    "ctox.crew.learning.delete",
+    "ctox.crew.learning.update",
+    "ctox.crew.member.create",
+    "ctox.crew.member.update",
+    "ctox.crew.memory.update",
+    "ctox.device.unbind",
+    "ctox.file.export",
+    "ctox.file.materialize",
+    "ctox.guest.input",
+    "ctox.guest.observe",
+    "ctox.machine.enroll.begin",
+    "ctox.machine.enroll.cancel",
+    "ctox.machine.enroll.step",
+    "ctox.machine.heartbeat",
+    "ctox.mailserver.delete_domain",
+    "ctox.mailserver.delete_user",
+    "ctox.mailserver.get_config",
+    "ctox.mailserver.save_domain",
+    "ctox.mailserver.save_runtime",
+    "ctox.mailserver.save_user",
+    "ctox.maintenance.client_ready",
+    "ctox.module.assign_founder",
+    "ctox.module.check_updates",
+    "ctox.module.delete",
+    "ctox.module.install_template",
+    "ctox.module.list_versions",
+    "ctox.module.release",
+    "ctox.module.repair_lifecycle_projection",
+    "ctox.module.rollback",
+    "ctox.module.rollback_version",
+    "ctox.module.save",
+    "ctox.module.set_visible",
+    "ctox.module.update",
+    "ctox.office.settings.save",
+    "ctox.plan.step.retry",
+    "ctox.provider_subscription.disconnect",
+    "ctox.provider_subscription.rotate",
+    "ctox.provider_subscription.status",
+    "ctox.queue.abort_turn",
+    "ctox.queue.block",
+    "ctox.queue.capacity",
+    "ctox.queue.pause",
+    "ctox.queue.release",
+    "ctox.queue.retry",
+    "ctox.runtime_settings.save",
+    "ctox.secret.delete",
+    "ctox.secret.list",
+    "ctox.secret.put",
+    "ctox.source.commit",
+    "ctox.source.diff",
+    "ctox.source.list_snapshots",
+    "ctox.source.load",
+    "ctox.source.log",
+    "ctox.source.rollback_snapshot",
+    "ctox.source.save",
+    "ctox.subscription_auth.start",
+    "ctox.task.delete",
+    "ctox.task.update",
+    "ctox.workjet.computer.assign",
+    "ctox.workjet.computer.endpoint.disable",
+    "ctox.workjet.computer.endpoint.list",
+    "ctox.workjet.computer.endpoint.upsert",
+    "ctox.workjet.computer.list",
+    "ctox.workjet.computer.ssh_key.ensure",
+    "ctox.workjet.computer.unassign",
+    "ctox.workjet.exit_model.read",
+    "ctox.workjet.exit_model.refresh",
+    "ctox.workjet.exit_model.submit",
+    "ctox.workjet.jour_fixe.comment.add",
+    "ctox.workjet.jour_fixe.deck.publish",
+    "ctox.workjet.jour_fixe.meeting.end",
+    "ctox.workjet.jour_fixe.meeting.read",
+    "ctox.workjet.jour_fixe.meeting.start",
+    "ctox.workjet.jour_fixe.narration.local_publish",
+    "ctox.workjet.jour_fixe.prepare",
+    "ctox.workjet.jour_fixe.todos.confirm",
+    "ctox.workjet.jour_fixe.todos.propose",
+    "ctox.workjet.jour_fixe.todos.revise",
+    "ctox.workjet.jour_fixe.transcript.append",
+    "ctox.workjet.jour_fixe.transcript.local_candidate",
+    "ctox.workjet.presentation.canvas.save",
+    "ctox.workjet.presentation.edits.apply",
+    "ctox.workjet.presentation.read",
+    "ctox.workjet.project.chat.create",
+    "ctox.workjet.project.chat.ensure",
+    "ctox.workjet.project.init",
+    "ctox.workjet.project.kpis.configure",
+    "ctox.workjet.project.kpis.read",
+    "ctox.workjet.project.kpis.refresh",
+    "ctox.workjet.project.list",
+    "ctox.workjet.project.persistent_worker.bind",
+    "ctox.workjet.project.persistent_worker.revoke",
+    "ctox.workjet.project.supervisor.bind",
+    "ctox.workjet.project.supervisor.route.capabilities.v1",
+    "ctox.workjet.project.supervisor.route.capabilities.v2",
+    "ctox.workjet.project.supervisor.route.read.v1",
+    "ctox.workjet.project.supervisor.route.read.v2",
+    "ctox.workjet.project.supervisor.turn.cancel",
+    "ctox.workjet.project.supervisor.turn.capabilities",
+    "ctox.workjet.project.supervisor.turn.history",
+    "ctox.workjet.project.supervisor.turn.input",
+    "ctox.workjet.project.supervisor.turn.submit",
+    "ctox.workjet.project.supervisor.turn.watch",
+    "ctox.workjet.project.upsert",
+    "ctox.workjet.project.worker.add",
+    "ctox.workjet.project.worker.remove",
+    "ctox.workjet.providers.account.enable",
+    "ctox.workjet.providers.account.remove",
+    "ctox.workjet.providers.adopt_native",
+    "ctox.workjet.providers.list",
+    "ctox.workjet.providers.models.exclude",
+    "ctox.workjet.providers.models.select",
+    "ctox.workjet.providers.observe_native",
+    "ctox.workjet.providers.withdraw",
+    "ctox.workjet.session.create",
+    "ctox.workjet.session.delete",
+    "ctox.workjet.session.list",
+    "ctox.workjet.session.transfer.abort",
+    "ctox.workjet.session.transfer.apply_complete",
+    "ctox.workjet.session.transfer.confirm_working_copy",
+    "ctox.workjet.session.transfer.pack_complete",
+    "ctox.workjet.session.transfer.pause_ack",
+    "ctox.workjet.session.transfer.resume_ack",
+    "ctox.workjet.session.transfer.start",
+    "ctox.workjet.session.transfer.status",
+    "ctox.workjet.worker_profile.bind",
+    "ctox.workjet.worker_profile.unbind",
+    "ctox.workjet.working_copy.upsert",
+    "knowledge.command",
+    "news.source.auth_assist",
+    "news.topic.schedule",
+    "outbound.lead.research_writeback",
+    "web_stack.person_research"
+  ],
+  "predicate_control_types": [
+    "ats.consent.check",
+    "ats.credential.verify",
+    "ats.deployment.check",
+    "ats.intake.capture",
+    "ats.interview.transcribe",
+    "ats.leistungsnachweis.signoff",
+    "ats.placement.create",
+    "ats.placement.early_leave",
+    "ats.retention.due",
+    "ats.retention.purge",
+    "ats.signature.request",
+    "ats.signature.sign",
+    "ats.subject.erase",
+    "ats.subject.export",
+    "ats.submission.present",
+    "ctox.iot.agent.configure",
+    "ctox.iot.alarm.update",
+    "ctox.iot.asset.delete",
+    "ctox.iot.asset.upsert",
+    "ctox.iot.attribute.write",
+    "ctox.iot.datapoints.query",
+    "ctox.iot.ruleset.save",
+    "ctox.iot.ruleset.toggle",
+    "customers.account.archive",
+    "customers.account.create",
+    "customers.account.update",
+    "customers.activity.record",
+    "customers.contact.archive",
+    "customers.contact.create",
+    "customers.contact.update",
+    "customers.dedupe.resolve",
+    "customers.import.from_outbound",
+    "customers.note.create",
+    "customers.note.update",
+    "customers.opportunity.close_lost",
+    "customers.opportunity.close_won",
+    "customers.opportunity.create",
+    "customers.opportunity.move_stage",
+    "customers.opportunity.update",
+    "customers.task.complete",
+    "customers.task.create",
+    "customers.task.update",
+    "customers.view.save",
+    "outbound.audit.export",
+    "outbound.campaign.apply_setup",
+    "outbound.campaign.briefing.update",
+    "outbound.campaign.mailbox.link",
+    "outbound.campaign.status.set",
+    "outbound.dev.seed_test_data",
+    "outbound.draft.prepare",
+    "outbound.engagement.assign_sender",
+    "outbound.engagement.close",
+    "outbound.engagement.create",
+    "outbound.engagement.reapply_sequence",
+    "outbound.engagement.resume",
+    "outbound.letter_template.save",
+    "outbound.message.approve",
+    "outbound.message.cancel",
+    "outbound.message.pause",
+    "outbound.message.prepare",
+    "outbound.message.reject",
+    "outbound.message.request_approval",
+    "outbound.message.request_changes",
+    "outbound.message.resume",
+    "outbound.message.send_approved",
+    "outbound.message.update_draft",
+    "outbound.pipeline.write_outreach_draft",
+    "outbound.provider.reconcile",
+    "outbound.reply.classify",
+    "outbound.reply.match",
+    "outbound.research_policy.publish",
+    "outbound.research_source.auth_assist",
+    "outbound.research_source.generate_adapter",
+    "outbound.research_source.registry_read",
+    "outbound.research_source.reprobe",
+    "outbound.research_source.test",
+    "outbound.research_source.upsert",
+    "outbound.scheduler.tick",
+    "outbound.scheduling.mark_booked",
+    "outbound.scheduling.prepare",
+    "outbound.scheduling.update_slots",
+    "outbound.sellify.lookup",
+    "outbound.sequence.save",
+    "outbound.skillbook.save",
+    "outbound.skillbook.seed_defaults",
+    "outbound.update_digest.send_now",
+    "support.agent.apply_suggestion",
+    "support.agent.reject_suggestion",
+    "support.agent.writeback",
+    "support.assignment_policy.upsert",
+    "support.automation.evaluate",
+    "support.automation_rule.upsert",
+    "support.bulk.assign",
+    "support.bulk.priority",
+    "support.bulk.resolve",
+    "support.bulk.snooze",
+    "support.bulk.status",
+    "support.conversation.assign",
+    "support.conversation.claim",
+    "support.conversation.open_from_thread",
+    "support.conversation.priority",
+    "support.conversation.reopen",
+    "support.conversation.resolve",
+    "support.conversation.snooze",
+    "support.conversation.status",
+    "support.identity.link",
+    "support.inbox.upsert",
+    "support.macro.run",
+    "support.macro.upsert",
+    "support.note.create",
+    "support.reply.draft",
+    "support.reply.send",
+    "support.reporting.rebuild_rollups",
+    "support.sla.apply",
+    "support.sla.recalculate",
+    "support.sla_policy.upsert",
+    "support.ticket.create_from_conversation",
+    "support.ticket.link",
+    "support.view.upsert",
+    "support.view_filter.upsert",
+    "threads.ai.request",
+    "threads.ctox_approval.approve",
+    "threads.ctox_approval.cancel",
+    "threads.ctox_approval.edit",
+    "threads.ctox_approval.reject",
+    "threads.ctox_approval.request",
+    "threads.handoff.create",
+    "threads.link.create",
+    "threads.link.remove",
+    "threads.message.create",
+    "threads.note.create",
+    "threads.note.delete",
+    "threads.note.update",
+    "threads.notification.dismiss",
+    "threads.notification.mark_read",
+    "threads.notification.preferences.update",
+    "threads.thread.archive",
+    "threads.thread.assign",
+    "threads.thread.claim",
+    "threads.thread.snooze",
+    "threads.thread.state.update",
+    "threads.thread.unwatch",
+    "threads.thread.watch"
+  ],
+  "control_prefixes": [
+    "ctox.appsec.",
+    "ctox.channel.",
+    "ctox.ticket.",
+    "invoices.",
+    "office.document.",
+    "office.spreadsheet."
+  ],
+  "browser_runtime_types": [
+    "browser.back",
+    "browser.clipboard.clear",
+    "browser.clipboard.copy",
+    "browser.clipboard.paste",
+    "browser.controller.acquire",
+    "browser.controller.release",
+    "browser.controller.renew",
+    "browser.credential.fill",
+    "browser.dialog.respond",
+    "browser.forward",
+    "browser.navigate",
+    "browser.permission.respond",
+    "browser.reload",
+    "browser.reset",
+    "browser.session.start",
+    "browser.session.stop",
+    "browser.tab.activate",
+    "browser.tab.close",
+    "browser.tab.open",
+    "web_stack.auth_assist.complete"
+  ],
+  "browser_literal_types": [
+    "ats.consent.check",
+    "ats.deployment.check",
+    "ats.intake.capture",
+    "ats.leistungsnachweis.signoff",
+    "ats.placement.create",
+    "ats.placement.early_leave",
+    "ats.signature.request",
+    "ats.signature.sign",
+    "ats.submission.present",
+    "browser.capture.extract",
+    "browser.credential.fill",
+    "business_os.chat.task",
+    "business_os.i18n.translate",
+    "ctox.app.action.run",
+    "ctox.app_store.install",
+    "ctox.app_store.uninstall",
+    "ctox.browser_context.capture",
+    "ctox.business_os.app.create",
+    "ctox.business_os.app.modify",
+    "ctox.business_os.audit.list",
+    "ctox.business_os.branding.update",
+    "ctox.business_os.support.export_diagnostics",
+    "ctox.business_os.sync.configure",
+    "ctox.business_os.user.upsert",
+    "ctox.business_os.why",
+    "ctox.channel.disconnect",
+    "ctox.channel.jami.create",
+    "ctox.channel.jami.export",
+    "ctox.channel.pair.start",
+    "ctox.channel.settings.save",
+    "ctox.channel.sync",
+    "ctox.channel.test",
+    "ctox.coding.models",
+    "ctox.coding.turn",
+    "ctox.command.cancel",
+    "ctox.communication_policy.verify",
+    "ctox.crew.assign",
+    "ctox.crew.member.create",
+    "ctox.crew.member.update",
+    "ctox.crew.memory.update",
+    "ctox.cv_print.apply_parse",
+    "ctox.file.materialize",
+    "ctox.knowledge.book.create",
+    "ctox.knowledge.book.export",
+    "ctox.knowledge.book.import",
+    "ctox.knowledge.document.modify",
+    "ctox.knowledge.runbook.execute",
+    "ctox.knowledge.runbook.modify",
+    "ctox.knowledge.runbooks.manage",
+    "ctox.mailserver.delete_domain",
+    "ctox.mailserver.delete_user",
+    "ctox.mailserver.get_config",
+    "ctox.mailserver.save_domain",
+    "ctox.mailserver.save_runtime",
+    "ctox.mailserver.save_user",
+    "ctox.maintenance.client_ready",
+    "ctox.module.assign_founder",
+    "ctox.module.check_updates",
+    "ctox.module.delete",
+    "ctox.module.install_template",
+    "ctox.module.list_versions",
+    "ctox.module.release",
+    "ctox.module.rollback",
+    "ctox.module.rollback_version",
+    "ctox.module.save",
+    "ctox.module.update",
+    "ctox.queue.block",
+    "ctox.queue.capacity",
+    "ctox.queue.pause",
+    "ctox.queue.release",
+    "ctox.queue.retry",
+    "ctox.runtime.switch",
+    "ctox.runtime_settings.save",
+    "ctox.secret.delete",
+    "ctox.secret.list",
+    "ctox.secret.put",
+    "ctox.source.rollback_snapshot",
+    "ctox.subscription_auth.start",
+    "ctox.task.delete",
+    "ctox.task.update",
+    "ctox.workjet.computer.assign",
+    "ctox.workjet.computer.list",
+    "ctox.workjet.computer.ssh_key.ensure",
+    "ctox.workjet.computer.unassign",
+    "ctox.workjet.project.init",
+    "ctox.workjet.project.list",
+    "ctox.workjet.project.supervisor.bind",
+    "ctox.workjet.project.supervisor.turn.history",
+    "ctox.workjet.project.upsert",
+    "ctox.workjet.working_copy.upsert",
+    "customers.account.archive",
+    "customers.account.create",
+    "customers.account.update",
+    "customers.contact.archive",
+    "customers.contact.create",
+    "customers.contact.update",
+    "customers.dedupe.resolve",
+    "customers.import.file",
+    "customers.import.from_outbound",
+    "customers.note.create",
+    "customers.note.update",
+    "customers.opportunity.create",
+    "customers.opportunity.move_stage",
+    "customers.opportunity.update",
+    "customers.task.complete",
+    "customers.task.create",
+    "customers.task.update",
+    "customers.view.save",
+    "document.extract-requirements",
+    "document.review-risks",
+    "document.summarize",
+    "example.control.refresh",
+    "example.work.execute",
+    "external_sql.write",
+    "invoices.dunning.run",
+    "invoices.invoice.create",
+    "invoices.invoice.delete",
+    "invoices.invoice.post",
+    "invoices.invoice.update",
+    "invoices.payment.allocate",
+    "knowledge.command",
+    "knowledge.entry.delete",
+    "mail.series_email.import",
+    "matching.match",
+    "matching.source.parse_object",
+    "matching.source.parse_requirement",
+    "native.sellify_lookup",
+    "news.issue.generate",
+    "news.source.adapter",
+    "news.source.auth_assist",
+    "news.topic.schedule",
+    "outbound-lead-generation.import",
+    "outbound.campaign.apply_setup",
+    "outbound.campaign.briefing.update",
+    "outbound.company.research",
+    "outbound.engagement.create",
+    "outbound.lead.research_writeback",
+    "outbound.message.prepare",
+    "outbound.message.request_approval",
+    "outbound.pipeline.contact_research",
+    "outbound.pipeline.lead_qualification",
+    "outbound.pipeline.outreach_draft",
+    "outbound.pipeline.write_outreach_draft",
+    "outbound.research.adapters.reconcile",
+    "outbound.research_policy.publish",
+    "outbound.research_source.registry_read",
+    "outbound.sellify.lookup",
+    "outbound.source.import",
+    "outbound.update_digest.send_now",
+    "research.knowledge.refresh",
+    "research.systematic.report.create",
+    "research.systematic.run",
+    "spreadsheet.audit-formulas",
+    "spreadsheet.risk-review",
+    "spreadsheet.summarize",
+    "support.agent.writeback",
+    "support.conversation.assign",
+    "support.conversation.open_from_thread",
+    "support.conversation.snooze",
+    "support.note.create",
+    "support.ticket.create_from_conversation",
+    "threads.ctox_approval.request",
+    "web_stack.auth_assist.complete",
+    "web_stack.auth_assist.request",
+    "web_stack.person_research"
+  ]
+};
+
+const platformTypes = new Set(['exact_control_types','predicate_control_types','browser_runtime_types','browser_literal_types'].flatMap(k=>COMMAND_INVENTORY[k]));
+const chatTypes = new Set(['business_os.chat.task','business_os.context.ask','business_os.data.modify']);
+function isPlatformCommand(type) {
+ if(typeof type!=='string')return false;
+ return platformTypes.has(type) || COMMAND_INVENTORY.control_prefixes.some(p=>type.startsWith(p)) || chatTypes.has(type) || type.startsWith('ctox.app.') || type.startsWith('ctox.coding.') || /^ctox\.workjet\..+\.v1$/.test(type) || type==='ctox.plan.step.retry';
+}
+function commandTarget(body, manifest) {
+ if (isPlatformCommand(body.type)) return {platform:true,target:'ctox-platform'};
+ const choices=[...new Set((manifest?.commands_out??[]).filter(x=>x.type===body.type).map(x=>x.app))];
+ if (body.target_app!==undefined && !choices.includes(body.target_app)) return {error:'forbidden'};
+ if (choices.length>1 && body.target_app===undefined) return {error:'forbidden'};
+ return {platform:false,target:body.target_app??choices[0]??body.app_id};
+}
+function commandRoute(body, manifestOf, user, testRoute=false) {
+ const route=commandTarget(body,manifestOf(body.app_id));
+ if(route.error || route.platform)return route;
+ // An isolated fake Core without a user registry represents the admin bootstrap identity.
+ user??={id:body.actor_id??'admin',role:'admin',permissions:[]};
+ const target=manifestOf(route.target),cross=route.target!==body.app_id;
+ if(cross && !(target?.commands_in??[]).some(x=>x.type===body.type && (x.from==='*'||(Array.isArray(x.from)&&(x.from.includes(body.app_id)||x.from.includes('*'))))))return {error:'forbidden'};
+ if(!target?.handlers?.[body.type] && !(testRoute && !cross))return {error:cross?'forbidden':'unknown_command'};
+ const rights=target?.command_rights??{};
+ // Same precedence as native ManifestRules::authorize_command: exact, then longest prefix.
+ const right=rights[body.type]??Object.entries(rights).filter(([k])=>k.endsWith('*')&&body.type.startsWith(k.slice(0,-1))).sort((a,b)=>b[0].length-a[0].length)[0]?.[1];
+ if(user && right && !(Array.isArray(right.roles)&&right.roles.includes(user.role)) && !(right.assigned_users && user.assigned_apps?.includes(route.target)))return {error:'forbidden'};
+ // The simulator's canonical collection write rules mirror its Core rights facade. No invented permission token.
+ const writable = Object.values(target?.collections??{}).some(c=>String(c.rights?.write??'all').split('+').every(token=>token!=='core'&&(token==='all'||token==='*'||token==='own'||token===`app:${route.target}`||token===`role:${user?.role}`||(token==='admin'&&user?.role==='admin')||(user?.permissions??[]).includes(token))));
+ if(cross && user && user.role!=='admin' && !right && !writable)return {error:'forbidden'};
+ return route;
+}
+
+// E26.5: observational, per-tab, bounded by command creation order.
+// No command payloads, durable state or authority are kept in diagnostics.
+function createCommandTimings(changed) {
+  const rows = new Map();
+  const stages = ['queued', 'sent', 'acked', 'completed'];
+  function merge(value, broadcast = false) {
+    if (!value || typeof value.command_id !== 'string') return;
+    let row = rows.get(value.command_id);
+    if (!row) {
+      if (!Number.isFinite(value.queued)) return; // late events cannot resurrect an evicted command
+      row = { command_id: value.command_id, queued: value.queued, sent: null, acked: null, completed: null };
+      rows.set(value.command_id, row);
+      if (rows.size > 500) rows.delete(rows.keys().next().value);
+    }
+    let updated = !row.published;
+    for (const stage of stages) {
+      if (row[stage] == null && Number.isFinite(value[stage])) { row[stage] = value[stage]; updated = true; }
+    }
+    if (!updated) return;
+    row.published = true;
+    const { published, ...snapshot } = row;
+    changed(Object.freeze(snapshot), broadcast, value);
+  }
+  return {
+    mark(command_id, stage, at = Date.now()) {
+      if (!stages.includes(stage)) throw new TypeError('Unknown command timing stage');
+      merge({ command_id, [stage]: at }, true);
+    },
+    merge,
+    snapshot: () => [...rows.values()].map(({ published, ...row }) => ({ ...row })),
+  };
+}
+
 // CTOX App-API 4.0 – ausführbarer Stub (Browser-ES-Modul, keine Abhängigkeiten, kein Build, kein Netz).
 // Vertrag: ctox-sync-v4-architektur.md §10.2, §10.2a, §6, §7.5, §9.3, §16.4, §16.6 (Teile), §16.7, §16.10.
 // Alles, was „Core“ heißt, ist hier simuliert (kernel.sim). Entscheidungen zu Vertragslücken: README.md.
@@ -34,13 +597,14 @@ function sessionTabKey() {
 // ---------------------------------------------------------------------------------------------------------------
 // Fehler
 // ---------------------------------------------------------------------------------------------------------------
-export const CTOX_ERROR_CODES = ['invalid', 'forbidden', 'not_found', 'conflict', 'revoked', 'expired', 'quota', 'unavailable'];
+export const CTOX_ERROR_CODES = ['revision_conflict', 'invalid', 'forbidden', 'not_found', 'conflict', 'revoked', 'expired', 'quota', 'unavailable'];
 export class CtoxError extends Error {
   constructor(code, message, extra = {}) {
     super(message || code);
     this.name = 'CtoxError';
     this.code = CTOX_ERROR_CODES.includes(code) ? code : 'invalid';
     if (extra.path !== undefined) this.path = extra.path;
+    if (extra.reason !== undefined) this.reason = extra.reason;
   }
 }
 class StaleLeader extends Error {}
@@ -648,7 +1212,8 @@ export function createStubKernel(opts = {}) {
   let closed = false, loggedOut = false, loaded = false;
   let isLeader = false, myGen = 0, releaseLock = null, lockAbort = null;
   let bc = null, dropBroadcasts = false;
-  const hasLocks = !!globalThis.navigator?.locks?.request && typeof BroadcastChannel !== 'undefined' && opts.multiTab !== false;
+  const locks = opts.locks ?? globalThis.navigator?.locks;
+  const hasLocks = !!locks?.request && typeof BroadcastChannel !== 'undefined' && opts.multiTab !== false;
 
   const mirror = new Map(); // ns -> Map(id -> record)
   let checkpoint = 0, localSeqKnown = 0;
@@ -670,14 +1235,14 @@ export function createStubKernel(opts = {}) {
   const inflight = new Map(); // docKey -> op_id
   const inflightOps = new Set();
   const skipBeforeCommit = new Set();
-  const uploadProgress = new Map(), uploadsDone = new Set();
+  const uploadProgress = new Map(), uploadsDone = new Set(), uploadResults = new Map();
   const activationListeners = new Set();
   const activationChains = new Map();
   let corruptNextFetch = 0;
   const publishing = new Set();
   const doubleWrite = new Map(); // ns_old -> {ns_new, migrate}
-  const sim0 = { reject: [], migrate: [], failCmd: new Map(), cmdHandlers: new Map() };
-  const simRecord = { lastVisible: null, activationReports: [], navigations: [], dialogs: [], openedFiles: [], staleDiscards: 0, refetches: 0 };
+  const sim0 = { reject: [], rejectUpload: [], migrate: [], failCmd: new Map(), cmdHandlers: new Map(), cmdTypes: new Set() };
+  const simRecord = { lastVisible: null, activationReports: [], navigations: [], dialogs: [], openedFiles: [], staleDiscards: 0, refetches: 0, connects: 1 };
   let readyResolve;
   const ready = new Promise((r) => { readyResolve = r; });
   const preReady = [];
@@ -779,7 +1344,11 @@ export function createStubKernel(opts = {}) {
       const appId = rec.collection === 'business_apps' ? rec.id : visible(r)?.app_id;
       if (appId) scheduleActivation(appId);
     }
-    if (rec.collection === 'business_commands') notify('commands');
+    if (rec.collection === 'business_commands') {
+      if (rec.pending && rec.lseq) commandTimings.mark(rec.id, 'queued');
+      if (!rec.pending && ['done','failed','cancelled','rejected'].includes(r.data?.status)) commandTimings.mark(rec.id, 'completed');
+      notify('commands');
+    }
     return true;
   }
   function setCheckpoint(cp) {
@@ -803,24 +1372,66 @@ export function createStubKernel(opts = {}) {
   async function getCore(t) { return (await t.get('sim_core', 'core')) ?? { key: 'core', head: 0 }; }
 
   // ---- Metriken ----
+  const commandTimings = createCommandTimings((value, broadcast, patch) => {
+    notify('metrics');
+    if (broadcast) post({type:'command_timing', value:patch});
+    try {
+      const observed = opts.diagnostics?.onCommandTiming?.(value);
+      if (observed != null) Promise.resolve(observed).catch(() => {});
+    } catch { /* diagnostics cannot affect writes */ }
+  });
   async function refreshOutboxStat() {
     if (!db || closed) return;
     const next = await db.outboxStat();
     if (next.count !== outboxStat.count || next.oldest_at !== outboxStat.oldest_at) { outboxStat = next; notify('metrics'); }
   }
+  // §16.45 Collection-Liveness (gleiche Regeln wie Kernel #K-1e): je Collection im Spiegel bzw. abonniert
+  // live = Verbindung oben und Backlog 0; catching_up = Backlog > 0 (noch nicht zugestellte Core-Änderungen dieser Collection
+  // oder sim.setBacklog(n, collection)); offline = Verbindung weg; error = sim.failCollection(name, code).
+  const collBacklog = new Map(), collError = new Map(), collSince = new Map();
+  // §16.45: abonnierte Collections (aktivierte App-Manifeste, api.query/get) erscheinen SOFORT – catching_up bis zur ersten
+  // vollständigen Zustellung nach dem Abonnieren, dann live, auch mit 0 Dokumenten. ns → complete
+  const subscribed = new Map();
+  function subscribeNs(ns) {
+    if (subscribed.has(ns)) return;
+    subscribed.set(ns, false);
+    netChanged();
+    const done = () => { if (!closed) { subscribed.set(ns, true); netChanged(); } };
+    if (isLeader) track(Promise.resolve().then(() => deliver()).then(done, () => {}));
+    else setTimeout(done, 0); // Leser: der Leiter stellt zu, der Spiegel kommt über BroadcastChannel
+  }
+  let collectionsView = {};
+  function refreshCollections() {
+    const names = new Set([...SYSTEM_COLLECTIONS, ...mirror.keys(), ...subscribed.keys(), ...collBacklog.keys(), ...collError.keys()]);
+    const pending = new Map();
+    for (const c of undelivered) pending.set(c.ns, (pending.get(c.ns) ?? 0) + 1);
+    const view = {}, now = Date.now();
+    for (const name of [...names].sort()) {
+      const backlog = (pending.get(name) ?? 0) + (collBacklog.get(name) ?? 0);
+      const state = collError.has(name) ? 'error' : link.state !== 'online' ? 'offline' : backlog > 0 || subscribed.get(name) === false ? 'catching_up' : 'live';
+      const prev = collectionsView[name];
+      const since = prev && prev.state === state ? prev.since_ms : (collSince.set(name, now), now);
+      view[name] = { state, backlog, gen: genOf(name), since_ms: since, ...(collError.has(name) ? { error: { ...collError.get(name) } } : {}) };
+    }
+    collectionsView = view;
+    return view;
+  }
   function netChanged() {
     notify('metrics');
-    if (isLeader) post({ type: 'net', link, backlog: undelivered.length + extraBacklog });
+    if (isLeader) post({ type: 'net', link, backlog: undelivered.length + extraBacklog, collections: refreshCollections() });
   }
   let followerNet = null;
   const metricsLive = makeLive(['metrics'], () => {
-    const net = isLeader || !followerNet ? { link, backlog: undelivered.length + extraBacklog } : followerNet;
+    const net = isLeader || !followerNet ? { link, backlog: undelivered.length + extraBacklog, collections: refreshCollections() } : followerNet;
     return {
+      commands: commandTimings.snapshot(),
       backlog: net.backlog,
+      collections: cloneValue(net.collections ?? {}),
       outbox: { count: outboxStat.count, oldest_ms: outboxStat.oldest_at ? Math.max(0, Date.now() - outboxStat.oldest_at) : 0 },
       link: { ...net.link },
     };
   });
+  Object.defineProperty(metricsLive, 'commands', {get: () => { guardAlive(); return deepFreeze(commandTimings.snapshot()); }});
   let knownGen = 0;
   const leaderLive = makeLive(['leader'], () => ({ isLeader, leader_gen: isLeader ? myGen : knownGen, tab_id: tabId }));
 
@@ -853,6 +1464,7 @@ export function createStubKernel(opts = {}) {
     for (const r of docs) mirrorPut(r);
     const metas = await db.all('meta');
     for (const m of metas) {
+      if (m.key.startsWith('upload_result:')) uploadResults.set(m.op_id,m);
       if (m.key === 'checkpoint') setCheckpoint(m.value);
       else if (m.key === 'local_seq') localSeqKnown = Math.max(localSeqKnown, m.value);
       else if (m.key === 'leader_gen') knownGen = m.value;
@@ -870,6 +1482,8 @@ export function createStubKernel(opts = {}) {
     let n = 0;
     for (const r of await db.all('docs')) if ((r.lseq ?? 0) > known) { if (mirrorPut(r)) n++; }
     for (const m of await db.all('meta')) {
+      if (m.key.startsWith('result:') && waiters.has(m.info.op_id)) handleWriteResult(m.info,m.result);
+      if (m.key.startsWith('upload_result:')) { uploadResults.set(m.op_id,m);notify('uploads'); }
       if (m.key === 'checkpoint') setCheckpoint(m.value);
       if (m.key.startsWith('activation:')) applyActivationLocal(m, false);
     }
@@ -887,7 +1501,13 @@ export function createStubKernel(opts = {}) {
     isLeader = true;
     // Ein neuer Leiter hat alles gelesen, was der alte geschrieben hat (gemeinsame IDB).
     for (const r of await db.all('docs')) mirrorPut(r);
-    for (const m of await db.all('meta')) if (m.key.startsWith('activation:')) applyActivationLocal(m, false);
+    for (const m of await db.all('meta')) {
+      if (m.key.startsWith('activation:')) applyActivationLocal(m, false);
+      // Takeover first advances the document mirror. Hydrate receipts here as
+      // well; local_seq may already equal the checkpoint after that advance.
+      if (m.key.startsWith('upload_result:')) { uploadResults.set(m.op_id,m);notify('uploads'); }
+      if (m.key.startsWith('result:') && waiters.has(m.info.op_id)) handleWriteResult(m.info,m.result);
+    }
     notify('leader');
     post({ type: 'leader', gen: myGen });
     netChanged();
@@ -913,7 +1533,7 @@ export function createStubKernel(opts = {}) {
     if (!hasLocks) return;
     const ac = new AbortController();
     lockAbort = ac;
-    navigator.locks.request(`ctox-stub-leader:${dbName}`, { signal: ac.signal }, async () => {
+    locks.request(`ctox-stub-leader:${dbName}`, { signal: ac.signal }, async () => {
       if (closed) return;
       const hold = new Promise((r) => { releaseLock = r; });
       await becomeLeader();
@@ -923,7 +1543,7 @@ export function createStubKernel(opts = {}) {
   async function elect() {
     if (!hasLocks) { await becomeLeader(); return; }
     await new Promise((resolveInitial) => {
-      navigator.locks.request(`ctox-stub-leader:${dbName}`, { ifAvailable: true }, async (lock) => {
+      locks.request(`ctox-stub-leader:${dbName}`, { ifAvailable: true }, async (lock) => {
         if (!lock) { resolveInitial(); waitForLock(); return; }
         const hold = new Promise((r) => { releaseLock = r; });
         await becomeLeader();
@@ -945,14 +1565,16 @@ export function createStubKernel(opts = {}) {
         await refreshOutboxStat();
         break;
       }
+      case 'command_timing': commandTimings.merge(msg.value); break;
       case 'outbox': await refreshOutboxStat(); if (isLeader) schedulePump(); break;
       case 'write_result': handleWriteResult(msg.info, msg.result); await refreshOutboxStat(); break;
-      case 'net': followerNet = { link: msg.link, backlog: msg.backlog }; notify('metrics'); break;
+      case 'net': followerNet = { link: msg.link, backlog: msg.backlog, collections: msg.collections ?? {} }; notify('metrics'); break;
       case 'hello': if (isLeader) netChanged(); break;
       case 'leader': knownGen = Math.max(knownGen, msg.gen ?? 0); notify('leader'); break;
       case 'activation': applyActivationLocal(msg.value, false); break;
       case 'drop_ns': dropNamespaces(msg.namespaces); break;
       case 'actor': actor = msg.actor; notify('actor'); break;
+      case 'upload_result': uploadResults.set(msg.outcome.op_id,msg.outcome);notify('uploads');break;
       case 'upload': setUploadProgress(msg.ref, msg.sent, msg.total); break;
       case 'rpc': {
         if (!isLeader) break;
@@ -989,14 +1611,17 @@ export function createStubKernel(opts = {}) {
     local.catch(() => {});
     return { op_id, local, result, cancel: cancelFn };
   }
-  function localWrite(app, op, collection, id, body) {
+  function localWrite(app, op, collection, id, body, createOnly = false, options = {}) {
     const op_id = uuidv7();
     let resolveResult;
     const result = new Promise((r) => { resolveResult = r; });
     let entry = null;
+    let reused = false;
+    let ownCommandQueued = false;
     // Synchroner Teil: prüfen und optimistisch in den Spiegel (lokal sofort sichtbar, Flag pending).
     const prepare = () => {
       guardAlive();
+      if (options.expected_revision !== undefined && (typeof options.expected_revision !== 'string' || !options.expected_revision)) throw new CtoxError('invalid','expected_revision must be a nonempty revision',{path:'expected_revision'});
       if (typeof collection !== 'string' || !collection) throw new CtoxError('invalid', 'collection fehlt', { path: 'collection' });
       if (typeof id !== 'string' || !id) throw new CtoxError('invalid', 'id (string) fehlt', { path: 'id' });
       if (collection === 'shell_preferences' && id !== actor.id) throw new CtoxError('forbidden', 'shell_preferences: nur die eigene Zeile (id = actor.id)', { path: 'id' });
@@ -1015,9 +1640,11 @@ export function createStubKernel(opts = {}) {
         collection: ns, id, op, body: clean, base_rev: cur?.rev ?? null, base_seq: cur?.base?.seq ?? 0,
         gen: genOf(ns), schema_ver: 1, app_id: app.id, app_ver: app.ver, created_at: Date.now(), origin_tab: tabId,
       };
+      if (options.expected_revision !== undefined) entry.expected_revision = options.expected_revision;
+      if (options.file_upload) { entry.file_upload = true; entry.file_upload_op = options.file_upload_op; }
       waiters.set(op_id, resolveResult);
       const base = cur?.base ?? emptyBase();
-      mirrorPut({ collection: ns, id, data: st.data, deleted: st.deleted, rev: `op:${op_id}`, seq: base.seq, pending: true, base });
+      if (!createOnly || !visible(cur)) mirrorPut({ collection: ns, id, data: st.data, deleted: st.deleted, rev: `op:${op_id}`, seq: base.seq, pending: true, base });
     };
     const persist = async () => {
       if (skipBeforeCommit.has(op_id)) {
@@ -1031,11 +1658,25 @@ export function createStubKernel(opts = {}) {
       const ns = entry.collection;
       const rec = await db.tx(async (t) => {
         const stored = await t.get('docs', [ns, id]);
+        // E26: the IDB transaction arbitrates concurrent tabs and reloads.
+        // Reuse the original operation/result, never enqueue another command.
+        if (createOnly && visible(stored)) {
+          reused = true;
+          waiters.delete(op_id);
+          const pending = (await t.outboxFor(ns, id)).sort(byOpId).at(-1);
+          if (pending) {
+            const previous = waiters.get(pending.op_id);
+            waiters.set(pending.op_id, (value) => { previous?.(value); resolveResult(value); });
+          } else resolveResult({ status: 'accepted', rev: stored.rev, seq: stored.seq });
+          return stored;
+        }
         await t.put('outbox', entry); // docs + outbox in EINER Transaktion
         const r = recompute(ns, id, stored?.base ?? emptyBase(), await t.outboxFor(ns, id));
         await putDoc(t, r);
         return r;
       });
+      ownCommandQueued = !reused;
+      if (ns === 'business_commands' && rec.pending) commandTimings.mark(id, 'queued');
       mirrorPut(rec);
       post({ type: 'docs', keys: [[ns, id]], local_seq: rec.lseq });
       post({ type: 'outbox' });
@@ -1056,7 +1697,7 @@ export function createStubKernel(opts = {}) {
       },
     );
     const localDone = committed.then(() => undefined);
-    return handleFor(op_id, localDone, result, () => cancelWrite(op_id, () => entry));
+    return handleFor(op_id, localDone, result, () => reused || (createOnly && !ownCommandQueued) ? false : cancelWrite(op_id, () => entry));
   }
   function normalizeJsonPatch(p) {
     if (!isPlainObject(p)) throw new CtoxError('invalid', 'patch muss ein Objekt sein', { path: '' });
@@ -1098,6 +1739,10 @@ export function createStubKernel(opts = {}) {
     return true;
   }
   function handleWriteResult(info, result) {
+    if (info.collection === 'business_commands') {
+      commandTimings.mark(info.id, 'acked');
+      if (result.status === 'rejected') commandTimings.mark(info.id, 'completed');
+    }
     const res = waiters.get(info.op_id);
     if (res) { waiters.delete(info.op_id); res(cloneValue(result)); }
     if (result.status === 'rejected' && result.reason !== 'cancelled') {
@@ -1134,9 +1779,29 @@ export function createStubKernel(opts = {}) {
     } finally { pumping = false; }
   }
   function takeOutcome() {
-    if (sim0.reject.length) return { status: 'rejected', reason: sim0.reject.shift() };
+    if (sim0.reject.length) { const rejection=sim0.reject.shift(); return {status:'rejected',...(typeof rejection === 'object' ? rejection : {reason:rejection})}; }
     if (sim0.migrate.length) return { status: 'migrated', dropFields: sim0.migrate.shift().dropFields ?? [] };
     return null;
+  }
+  // Durable CAS outcomes are per upload operation, not just per content hash.
+  // This separates a new upload from an earlier accepted/rejected same-ref attempt.
+  async function storeUploadResult(t, entry, result) {
+    const outcome={key:`upload_result:${entry.op_id}`,op_id:entry.op_id,ref:entry.id,...result};
+    await t.put('meta',outcome);
+    let rec=null;
+    if (result.status === 'rejected' && entry.file_id) {
+      const row=await t.get('docs',['files',entry.file_id]);
+      if (row?.data?.ref === entry.id && row.data.owner_app === entry.app_id) {
+        rec={...row,data:{...row.data,state:'rejected'},deleted:false,local_file_rejection:true};
+        await putDoc(t,rec);
+      }
+    }
+    return {outcome,rec};
+  }
+  function publishUploadResult(value) {
+    uploadResults.set(value.outcome.op_id,value.outcome);notify('uploads');
+    if(value.rec){mirrorPut(value.rec);post({type:'docs',keys:[['files',value.rec.id]]});}
+    post({type:'upload_result',outcome:value.outcome});
   }
   async function confirm(k, e) {
     const done = () => { if (inflight.get(k) === e.op_id) inflight.delete(k); inflightOps.delete(e.op_id); };
@@ -1149,13 +1814,20 @@ export function createStubKernel(opts = {}) {
         if (!(await t.get('outbox', e.op_id))) return null;
         if (e.op === 'upload') {
           const b = await t.get('blobs', e.id);
+          const rejected=sim0.rejectUpload.shift();
+          if (rejected) {
+            await t.del('outbox',e.op_id);
+            const uploadResult=await storeUploadResult(t,e,{status:'rejected',...(typeof rejected === 'object' ? rejected : {code:'forbidden',reason:rejected})});
+            await bumpLocalSeq(t);return {upload:true,rejected:true,total:b?.size ?? 0,uploadResult};
+          }
           if (b) {
             await t.put('sim_core', { key: `blob:${e.id}`, blob: b.blob, type: b.type, size: b.size });
             await t.put('blobs', { ...b, pinned: false });
           }
           await t.del('outbox', e.op_id);
+          const uploadResult=await storeUploadResult(t,e,{status:'accepted'});
           await bumpLocalSeq(t);
-          return { upload: true, total: b?.size ?? 0 };
+          return { upload: true, total: b?.size ?? 0, uploadResult };
         }
         const core = await getCore(t);
         const stored = await t.get('docs', [e.collection, e.id]);
@@ -1164,11 +1836,24 @@ export function createStubKernel(opts = {}) {
         let newBase = base;
         if (!res) {
           res = outcome;
+          if (!res && e.expected_revision !== undefined && e.expected_revision !== base.rev) res = {status:'rejected',code:'revision_conflict',reason:'Expected revision differs from current revision'};
           if (!res && e.op === 'patch' && (base.data == null || base.deleted)) res = { status: 'rejected', reason: 'not_found' };
           if (!res && e.op === 'delete') {
             let br = e.base_rev;
             if (br && br.startsWith('op:')) br = (await t.get('sim_core', `op:${br.slice(3)}`))?.result?.rev ?? br;
             if ((br ?? null) !== (base.rev ?? null)) res = { status: 'rejected', reason: 'conflict' };
+          }
+          if(!res && e.collection==='business_commands' && e.op==='put' && e.body?.status==='queued') {
+            const route=commandRoute(e.body,routingManifest,actor,sim0.cmdHandlers.has(e.body.type)||sim0.cmdTypes.has(e.body.type)||sim0.failCmd.has(e.body.type));
+            if(route.error)res={status:'rejected',code:route.error,reason:route.error};
+          }
+          // §16.44: ctox.coding.* prüft der Core beim Write (exakte Codes, Reservierung des Entwurfs im selben Schritt)
+          if (!res && e.collection === 'business_commands' && e.op === 'put' && e.body?.status === 'queued' && String(e.body.type).startsWith('ctox.coding.')) {
+            res = await checkCodingCommand(t, e.body);
+          }
+          // K-WJ-B2 (E27.2): Befehlstyp ohne veröffentlichte Route → beim Schreiben abgelehnt, nie erst angenommen
+          if (!res && e.collection === 'business_commands' && e.op === 'put' && e.body?.status === 'queued' && !commandRouteKnown(e.body.app_id, String(e.body.type))) {
+            res = { status: 'rejected', code: 'unknown_command', reason: `unknown_command:${e.body.type}` };
           }
           if (!res) res = { status: 'accepted' };
           if (res.status !== 'rejected') {
@@ -1187,7 +1872,7 @@ export function createStubKernel(opts = {}) {
             res = { status: res.status, rev, seq, ...(archived_ref ? { archived_ref } : {}) };
             newBase = { data: st.data, deleted: st.deleted, rev, seq };
             await t.put('sim_core', core);
-          } else res = { status: 'rejected', reason: res.reason };
+          } else res = { status: 'rejected', reason: res.reason, ...(res.code ? { code: res.code } : {}) };
           await t.put('sim_core', { key: `op:${e.op_id}`, result: res });
         }
         if (res.status === 'rejected') {
@@ -1197,8 +1882,10 @@ export function createStubKernel(opts = {}) {
             reason: res.reason, app_id: e.app_id, app_ver: e.app_ver, created_at: e.created_at, rejected_at: Date.now(),
           });
         }
+        await t.put('meta',{key:`result:${e.op_id}`,info:{op_id:e.op_id,app_id:e.app_id,collection:e.collection,id:e.id},result:res});
         await t.del('outbox', e.op_id);
         const rec = recompute(e.collection, e.id, newBase, await t.outboxFor(e.collection, e.id));
+        if (e.file_upload && (res.status === 'rejected' || (await t.get('meta',`upload_result:${e.file_upload_op}`))?.status === 'rejected') && !rec.pending) { rec.data={...e.body,state:'rejected'};rec.deleted=false;rec.local_file_rejection=true; }
         await putDoc(t, rec);
         let cp = (await t.get('meta', 'checkpoint'))?.value ?? 0;
         if (newBase.seq > cp) { cp = newBase.seq; await t.put('meta', { key: 'checkpoint', value: cp }); }
@@ -1211,11 +1898,18 @@ export function createStubKernel(opts = {}) {
     }
     done();
     if (!out) { schedulePump(); return; }
+    if (e.collection === 'business_commands') {
+
+      commandTimings.mark(e.id, 'sent');
+    }
     if (out.upload) {
+      publishUploadResult(out.uploadResult);
+      if (!out.rejected) {
       setUploadProgress(e.id, out.total, out.total, true);
       uploadsDone.add(e.id);
       notify('uploads');
       post({ type: 'upload', ref: e.id, sent: out.total, total: out.total, done: true });
+      }
     } else {
       mirrorPut(out.rec);
       setCheckpoint(out.cp);
@@ -1266,6 +1960,8 @@ export function createStubKernel(opts = {}) {
   async function coreMerge(ns, id, patch) {
     const cur = (await coreView(ns, id)) ?? { id };
     const next = mergePatch(cur, patch);
+    // Befehlsergebnis ist ein Wert, kein Merge-Patch: null-Felder (z. B. exit_code bei Zeitüberschreitung) bleiben erhalten
+    if (ns === 'business_commands' && isPlainObject(patch) && Object.prototype.hasOwnProperty.call(patch, 'result')) next.result = cloneValue(patch.result);
     next.id = id;
     return corePush(ns, [next]);
   }
@@ -1307,9 +2003,260 @@ export function createStubKernel(opts = {}) {
     } finally { delivering = false; }
   }
 
+  // ---- K-1i: process.run (CAP-3d #844, §16.47) – Allowlist der Plattform, Grund-Umgebung, stdin/stdin_ref; SIMULIERT ----
+  // Kein echter Prozess: die Ausführung ist deterministisch nachgebildet (cat → stdin, echo → args, env → Umgebung,
+  // false → exit 1, sleep N → timed_out, wenn N·1000 > timeout_ms; sonst JSON-Beschreibung des Aufrufs).
+  const DEFAULT_BASE_ENV = Object.freeze({ PATH: '/usr/local/bin:/usr/bin:/bin', CTOX_BIN: '/opt/ctox/bin', LANG: 'C.UTF-8' });
+  const DEFAULT_PROCESS_ALLOWLIST = Object.freeze({
+    cat: { program: '/bin/cat', env: DEFAULT_BASE_ENV },
+    echo: { program: '/bin/echo', env: DEFAULT_BASE_ENV },
+    env: { program: '/usr/bin/env', env: DEFAULT_BASE_ENV },
+    false: { program: '/usr/bin/false', env: DEFAULT_BASE_ENV },
+    sleep: { program: '/bin/sleep', env: DEFAULT_BASE_ENV },
+    scrape: { interpreter: '/usr/local/bin/tsx', script: '/opt/ctox/scripts/scrape.ts', env: DEFAULT_BASE_ENV },
+  });
+  const STDIN_MAX = 1024 * 1024, ENV_VALUE_MAX = 4096;
+  const PROCESS_FIELDS = ['program', 'args', 'env', 'stdin', 'stdin_ref', 'timeout_ms'];
+  async function simulateProcessRun(appId, req, allowlist, readOwnFile) {
+    const bad = (code, reason) => { throw new CtoxError(code, reason); };
+    if (!isPlainObject(req)) bad('invalid', 'payload_invalid:request');
+    for (const k of Object.keys(req)) if (!PROCESS_FIELDS.includes(k)) bad('invalid', `payload_invalid:${k}`);
+    if (typeof req.program !== 'string' || !req.program) bad('invalid', 'payload_invalid:program');
+    const raw = (allowlist ?? DEFAULT_PROCESS_ALLOWLIST)[req.program];
+    if (!raw) bad('forbidden', 'program_not_allowed');
+    const entry = typeof raw === 'string' ? { program: raw, env: {} } : raw;
+    const args = req.args ?? [];
+    if (!Array.isArray(args) || args.some((a) => typeof a !== 'string')) bad('invalid', 'payload_invalid:args');
+    const baseEnv = { ...(entry.env ?? {}) };
+    const appEnv = req.env ?? {};
+    if (!isPlainObject(appEnv)) bad('invalid', 'payload_invalid:env');
+    for (const [key, v] of Object.entries(appEnv)) {
+      if (typeof v !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) bad('invalid', 'payload_invalid:env');
+      if (Object.prototype.hasOwnProperty.call(baseEnv, key)) bad('invalid', `env_base_override:${key}`); // Grundvariable nie ersetzbar
+      if (new TextEncoder().encode(v).byteLength > ENV_VALUE_MAX) bad('invalid', `env_value_too_large:${key}`);
+    }
+    if (req.stdin !== undefined && req.stdin_ref !== undefined) bad('invalid', 'payload_invalid:stdin');
+    let stdin = '';
+    if (req.stdin !== undefined) {
+      if (typeof req.stdin !== 'string') bad('invalid', 'payload_invalid:stdin');
+      if (new TextEncoder().encode(req.stdin).byteLength > STDIN_MAX) bad('invalid', 'stdin_too_large');
+      stdin = req.stdin;
+    } else if (req.stdin_ref !== undefined) {
+      if (!isPlainObject(req.stdin_ref) || typeof req.stdin_ref.ref !== 'string') bad('invalid', 'payload_invalid:stdin_ref');
+      const f = await readOwnFile(req.stdin_ref.ref); // nur files-Datensätze der aufrufenden App (sonst forbidden)
+      if (!f?.found) bad('not_found', 'stdin_ref_not_found');
+      if (typeof f.text !== 'string') bad('invalid', 'stdin_ref_not_utf8');
+      if (new TextEncoder().encode(f.text).byteLength > STDIN_MAX) bad('invalid', 'stdin_too_large');
+      stdin = f.text;
+    }
+    const timeout = req.timeout_ms ?? 30000;
+    if (!Number.isInteger(timeout) || timeout <= 0) bad('invalid', 'payload_invalid:timeout_ms');
+    const env = { ...baseEnv, ...appEnv }; // Kind = leere Umgebung + Grund-Umgebung + App-env
+    const argv = entry.interpreter ? [entry.interpreter, entry.script, ...args] : [entry.program, ...args];
+    const name = String(argv[entry.interpreter ? 1 : 0]).split('/').pop();
+    let exit_code = 0, stdout = '', stderr = '', timed_out = false;
+    if (name === 'cat') stdout = stdin;
+    else if (name === 'echo') stdout = `${args.join(' ')}\n`;
+    else if (name === 'env') stdout = Object.keys(env).sort().map((k) => `${k}=${env[k]}`).join('\n') + '\n';
+    else if (name === 'false') exit_code = 1;
+    else if (name === 'sleep') { if (Number(args[0] ?? 0) * 1000 > timeout) { timed_out = true; exit_code = null; stderr = `timeout after ${timeout} ms\n`; } }
+    else stdout = `${JSON.stringify({ app: appId, argv, env_keys: Object.keys(env).sort(), stdin_bytes: new TextEncoder().encode(stdin).byteLength })}\n`;
+    return { exit_code, stdout, stderr, timed_out };
+  }
+
+  // stdin_ref: nur files-Datensätze der aufrufenden App (sonst forbidden)
+  async function readOwnFileForProcess(appId, ref) {
+    const docs = [...(mirror.get('files')?.values() ?? [])].map((r) => visible(r)).filter((d) => d && d.ref === ref);
+    if (!docs.length) return { found: false };
+    if (!docs.some((d) => d.owner_app === appId)) throw new CtoxError('forbidden', 'stdin_ref gehört einer anderen App');
+    const b = (await db.get('blobs', ref))?.blob ?? (await db.get('sim_core', `blob:${ref}`))?.blob;
+    if (!b) return { found: false };
+    const bytes = new Uint8Array(await b.arrayBuffer());
+    try { return { found: true, text: new TextDecoder('utf-8', { fatal: true }).decode(bytes) }; } catch { return { found: true }; }
+  }
+  function capProcessRun(appId) {
+    return async (req) => {
+      const declared = new Set(visible(mirrorGet('business_app_versions', `${appId}@${visible(mirrorGet('business_apps', appId))?.active_ver}`))?.manifest?.capabilities_required ?? []);
+      if (!declared.has('process') && !declared.has('process.run')) throw new CtoxError('forbidden', `cap.process.run nicht in capabilities_required von ${appId}`);
+      return simulateProcessRun(appId, req, processAllowlist, (ref) => readOwnFileForProcess(appId, ref));
+    };
+  }
+  let processAllowlist = null;
+  // ---- K-1g: simulierte Modellantwort (Responses-förmig, deterministisch; gleiche Regeln wie Kernel-Fake-Core) ----
+  function simulatedModelRun(appId, req) {
+    if (!isPlainObject(req)) throw new CtoxError('invalid', 'model.run: Anfrage-Objekt nötig');
+    const input = req.input ?? req.prompt ?? req.messages;
+    let text;
+    if (typeof input === 'string') text = input;
+    else if (Array.isArray(input)) text = input.map((m) => (typeof m === 'string' ? m : typeof m?.content === 'string' ? m.content : Array.isArray(m?.content) ? m.content.map((c) => c?.text ?? '').join(' ') : '')).join('\n');
+    else throw new CtoxError('invalid', 'model.run: input, prompt oder messages nötig');
+    const model = typeof req.model === 'string' && req.model ? req.model : 'fake-core';
+    const out = `Simulierte Modellantwort (${model}) für ${appId}: ${text.replace(/\s+/g, ' ').trim().slice(0, 200)}`;
+    return {
+      id: `resp_${fnv1a(JSON.stringify([appId, model, text]))}`, object: 'response', model, status: 'completed',
+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: out }] }],
+      output_text: out, usage: { input_tokens: text.split(/\s+/).filter(Boolean).length, output_tokens: out.split(/\s+/).length },
+    };
+  }
+  // ---- §16.44 Coding Agent im Quelltext-Modus (simuliert; Vertrag befund-coding-panel.md / Core-PR #848) ----
+  // Wie Kernel-Fake-Core K-1f: der simulierte Agent hängt an die erste im Prompt genannte Textdatei des Entwurfs (sonst die
+  // erste) eine Kommentarzeile an; Rückschreiben per CAS auf base_draft_rev; Nachrichten/tool_events erst am Turn-Ende.
+  const TURN_FIELDS = ['app_id', 'draft_id', 'base_draft_rev', 'prompt', 'model', 'turn_id'];
+  const activeTurns = new Map(); // draft_id → turn_id
+  const turnByCommand = new Map(); // command_id → turn_id
+  const coreDoc = async (t, ns, id) => { const r = await t.get('docs', [ns, id]); return r?.base?.data && !r.base.deleted ? { data: r.base.data, rev: r.base.rev } : null; };
+  async function checkCodingCommand(t, body) {
+    const p = isPlainObject(body.payload) ? body.payload : {};
+    const inv = (f) => ({ status: 'rejected', code: 'invalid', reason: `payload_invalid:${f}` });
+    const rej = (code, reason) => ({ status: 'rejected', code, reason });
+    if (body.type === 'ctox.coding.turn') {
+      for (const k of Object.keys(p)) if (!TURN_FIELDS.includes(k)) return inv(k);
+      for (const f of ['app_id', 'draft_id', 'base_draft_rev', 'prompt']) if (typeof p[f] !== 'string' || !p[f].trim()) return inv(f);
+      if (p.model !== undefined && (typeof p.model !== 'string' || !p.model)) return inv('model');
+      if (p.turn_id !== undefined && (typeof p.turn_id !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(p.turn_id))) return inv('turn_id');
+      if (!actor.permissions.includes('apps.source.edit')) return rej('forbidden', 'apps.source.edit');
+      const d = await coreDoc(t, 'app_drafts', p.draft_id);
+      if (!d) return rej('not_found', 'draft_not_found');
+      if (d.data.user_id !== body.actor_id || d.data.app_id !== p.app_id) return rej('forbidden', 'draft_not_owned'); // auch Admin nicht
+      if (d.rev !== p.base_draft_rev) return rej('conflict', 'stale_draft_rev');
+      if (activeTurns.has(p.draft_id)) return rej('conflict', 'turn_running');
+      const taken = p.turn_id ? await coreDoc(t, 'coding_turns', p.turn_id) : null;
+      if (taken && taken.data.command_id !== body.id) return rej('conflict', 'turn_id_taken');
+      const turn_id = p.turn_id ?? `turn-${uuidv7()}`;
+      activeTurns.set(p.draft_id, turn_id); // Prüfung + Reservierung in einem Schritt
+      turnByCommand.set(body.id, turn_id);
+      return null;
+    }
+    if (body.type === 'ctox.coding.cancel') {
+      for (const k of Object.keys(p)) if (k !== 'turn_id') return inv(k);
+      if (typeof p.turn_id !== 'string' || !p.turn_id) return inv('turn_id');
+      const turn = await coreDoc(t, 'coding_turns', p.turn_id);
+      if (!turn) return rej('not_found', 'turn_not_found');
+      if (turn.data.user_id !== body.actor_id) return rej('forbidden', 'turn_not_owned');
+      if (!['queued', 'running'].includes(turn.data.state)) return rej('conflict', 'turn_not_running');
+      return null;
+    }
+    return inv('type');
+  }
+  const turnNow = async (id) => (await coreView('coding_turns', id));
+  async function setTurn(id, patch) {
+    const cur = await turnNow(id);
+    if (!cur) return null;
+    if (patch.state && !['queued', 'running'].includes(cur.state)) return cur; // Endzustand genau einmal
+    const next = { ...cur, ...patch, updated_at_ms: Date.now() };
+    await corePush('coding_turns', [next]);
+    return next;
+  }
+  // Unified diff mit 3 Kontextzeilen je Hunk (gleiche Funktion wie Kernel-Fake-Core K-1h)
+  function unifiedDiff(path, before, after, context = 3) {
+    const split = (t) => (t === '' ? [] : t.replace(/\n$/, '').split('\n'));
+    const a = split(before), b = split(after);
+    let pre = 0;
+    while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++;
+    let suf = 0;
+    while (suf < a.length - pre && suf < b.length - pre && a[a.length - 1 - suf] === b[b.length - 1 - suf]) suf++;
+    const from = Math.max(0, pre - context);
+    const aEnd = Math.min(a.length, a.length - suf + context), bEnd = Math.min(b.length, b.length - suf + context);
+    const lines = [];
+    for (let i = from; i < pre; i++) lines.push(` ${a[i]}`);
+    for (let i = pre; i < a.length - suf; i++) lines.push(`-${a[i]}`);
+    for (let i = pre; i < b.length - suf; i++) lines.push(`+${b[i]}`);
+    for (let i = a.length - suf; i < aEnd; i++) lines.push(` ${a[i]}`);
+    const aLen = aEnd - from, bLen = bEnd - from;
+    return `--- a/${path}\n+++ b/${path}\n@@ -${aLen ? from + 1 : from},${aLen} +${bLen ? from + 1 : from},${bLen} @@\n${lines.join('\n')}\n`;
+  }
+  async function runCodingTurn(doc) {
+    const p = doc.payload, turn_id = turnByCommand.get(doc.id) ?? p.turn_id;
+    const now = Date.now();
+    await corePush('coding_turns', [{ id: turn_id, app_id: p.app_id, draft_id: p.draft_id, user_id: doc.actor_id, command_id: doc.id, origin_app: doc.app_id,
+      base_draft_rev: p.base_draft_rev, prompt: p.prompt, model: p.model ?? null, state: 'queued', messages: [], tool_events: [], draft_rev_after: null, changed_files: [],
+      callback: { on_complete: doc.on_complete ?? null, on_failed: doc.on_failed ?? null }, created_at_ms: now, updated_at_ms: now }]);
+    const finish = async (state, extra) => {
+      activeTurns.delete(p.draft_id);
+      const t = (await setTurn(turn_id, { state, finished_at_ms: Date.now(), ...extra })) ?? (await turnNow(turn_id));
+      const result = { turn_id, state: t.state, draft_rev_after: t.draft_rev_after ?? null, changed_files: t.changed_files ?? [], ...(t.patch ? { patch: t.patch } : {}), ...(t.error ? { error: t.error } : {}) };
+      const type = t.state === 'done' ? t.callback?.on_complete : t.callback?.on_failed;
+      const cbId = `coding-callback:${doc.id}`;
+      if (type && !(await coreView('business_commands', cbId))) { // höchstens einmal
+        const cb = { id: cbId, type, payload: { command_id: doc.id, turn_id, status: t.state, result }, status: 'queued', app_id: doc.app_id, actor_id: 'core', created_at: new Date().toISOString() };
+        await corePush('business_commands', [cb]);
+        track(runCommand(cb));
+      }
+      if (t.state === 'done') return { status: 'done', progress: 1, result };
+      if (t.state === 'cancelled') return { status: 'cancelled', result };
+      return { status: 'failed', error: `${t.error?.code ?? 'failed'}: ${t.error?.reason ?? t.state}`, result };
+    };
+    await setTurn(turn_id, { state: 'running' });
+    // §16.44-Ergänzung (1): Arbeitsbaum = VOLLER Baum = Basisversion + Entwurfs-Überlagerung (null = gelöscht)
+    const start = await coreView('app_drafts', p.draft_id);
+    const files = {};
+    const baseFiles = start?.base_app_ver ? versionDoc(p.app_id, start.base_app_ver)?.manifest?.files ?? {} : {};
+    for (const [path, hash] of Object.entries(baseFiles)) {
+      const c = (await db.get('sim_core', `file:${hash}`))?.content;
+      if (typeof c === 'string') files[path] = c;
+    }
+    for (const [path, v] of Object.entries(start?.files ?? {})) { if (v === null) delete files[path]; else files[path] = v; }
+    await sleep(opts.codingDelayMs ?? 60);
+    if ((await turnNow(turn_id)).state === 'cancelled') return finish('cancelled', {});
+    const textPaths = Object.keys(files).filter((x) => typeof files[x] === 'string').sort();
+    const path = textPaths.find((x) => p.prompt.includes(x)) ?? textPaths[0] ?? 'NOTES.md';
+    const old = typeof files[path] === 'string' ? files[path] : '';
+    const line = `// coding-agent ${turn_id}: ${p.prompt.replace(/\s+/g, ' ').slice(0, 60)}`;
+    const next = `${old}${old && !old.endsWith('\n') ? '\n' : ''}${line}\n`;
+    const at = Date.now();
+    const transcript = {
+      messages: [{ role: 'user', text: p.prompt, at_ms: at }, { role: 'assistant', text: `Kommentarzeile in ${path} ergänzt.`, at_ms: at }],
+      tool_events: [{ kind: 'read', path, at_ms: at }, { kind: 'edit', path, at_ms: at }],
+    };
+    if ((await turnNow(turn_id)).state === 'cancelled') return finish('cancelled', transcript);
+    const curRow = await db.get('docs', ['app_drafts', p.draft_id]);
+    const cur = curRow?.base;
+    if (cur?.data && !cur.deleted && cur.rev === p.base_draft_rev) { // CAS auf base_draft_rev
+      await corePush('app_drafts', [{ ...cur.data, files: { ...cur.data.files, [path]: next }, updated_at: at }]);
+      const rev = (await db.get('docs', ['app_drafts', p.draft_id]))?.base?.rev ?? null;
+      return finish('done', { ...transcript, draft_rev_after: rev, changed_files: [path] });
+    }
+    // Nutzer hat inzwischen editiert: nichts überschreiben, Patch als files-Datensatz coding-patch:<turn_id>
+    const patch = unifiedDiff(path, old, next); // §16.44-Ergänzung (4): 3 Kontextzeilen, Basis = base_draft_rev
+    const blob = new Blob([patch], { type: 'text/x-diff' });
+    const ref = await sha256Hex(blob);
+    await db.tx((t) => t.put('sim_core', { key: `blob:${ref}`, blob, type: blob.type, size: blob.size }));
+    const file_id = `coding-patch:${turn_id}`;
+    await corePush('files', [{ id: file_id, ref, name: `${file_id.replace(':', '-')}.diff`, mime: 'text/x-diff', size: blob.size, owner_app: p.app_id, owner_user: doc.actor_id, created_at_ms: at }]);
+    return finish('conflict', { ...transcript, changed_files: [path], patch: { ref, file_id }, error: { status: 'failed', code: 'conflict', reason: 'draft_changed' } });
+  }
+  async function runCodingCancel(doc) {
+    const turn = await turnNow(doc.payload.turn_id);
+    if (!turn || !['queued', 'running'].includes(turn.state)) return { status: 'failed', error: 'conflict: turn_not_running' };
+    await setTurn(turn.id, { state: 'cancelled', finished_at_ms: Date.now() }); // zuerst persistieren, dann „Sidecar beenden“
+    activeTurns.delete(turn.draft_id);
+    return { status: 'done', progress: 1, result: { turn_id: turn.id, state: 'cancelled' } };
+  }
+
   // ---- Befehle (§8): Dokument in business_commands, Status gepusht ----
+  // K-WJ-B2: veröffentlichte Befehls-Registry des simulierten Cores = Plattformbefehle ctox.coding.*, per sim.onCommand
+  // bzw. sim.failCommand registrierte Typen (aus jedem Tab) und die handlers der aktiven Version der sendenden App.
+  function routingManifest(appId) {
+    const app=mirrorGet('business_apps',appId);
+    if(app?.revoked||app?.base?.deleted)return undefined;
+    const ver=app?.base?.data?.active_ver;
+    const row=ver?mirrorGet('business_app_versions',`${appId}@${ver}`):null;
+    return !row?.revoked&&!row?.base?.deleted?row?.base?.data?.manifest:undefined;
+  }
+  function commandRouteKnown(appId,type) {
+    return commandRoute({app_id:appId,type},routingManifest,null,sim0.cmdHandlers.has(type)||sim0.cmdTypes.has(type)||sim0.failCmd.has(type)).error!=='unknown_command';
+  }
   async function runCommand(doc) {
     const id = doc.id, type = doc.type;
+    if (type === 'ctox.coding.turn' || type === 'ctox.coding.cancel') {
+      await sleep(latencyMs);
+      await coreMerge('business_commands', id, { status: 'accepted' });
+      await coreMerge('business_commands', id, { status: 'running' });
+      let fin;
+      try { fin = type === 'ctox.coding.turn' ? await runCodingTurn(doc) : await runCodingCancel(doc); } catch (err) { fin = { status: 'failed', error: String(err?.message ?? err) }; }
+      await coreMerge('business_commands', id, fin);
+      return;
+    }
     await sleep(latencyMs);
     await coreMerge('business_commands', id, { status: 'accepted' });
     await sleep(latencyMs);
@@ -1322,7 +2269,15 @@ export function createStubKernel(opts = {}) {
     } else {
       const h = sim0.cmdHandlers.get(type);
       try {
-        const result = h ? await h(cloneValue(doc.payload), { app_id: doc.app_id, command_id: id }) : { ok: true };
+        // sim.onCommand-Handler bekommen wie ein App-Handler ctx.model (#830) mit derselben simulierten Antwort
+        const route=commandRoute(doc,routingManifest,actor,!!h);
+        if(route.error)throw new CtoxError(route.error,route.error);
+        const manifest=routingManifest(route.target);
+        const path=manifest?.handlers?.[type];
+        const artifact=path ? await readArtifactContent(manifest.files[path]) : null;
+        const handler=artifact===null?null:(await import(`data:text/javascript;base64,${btoa(String.fromCharCode(...new TextEncoder().encode(typeof artifact==='string'?artifact:await artifact.text())))}`)).default;
+        const result = !route.platform && handler ? await handler({...cloneValue(doc),actor:{id:actor.id,role:actor.role}}, {app_id:route.target}) : !route.platform && h ? await h(cloneValue(doc.payload), { app_id: doc.app_id, command_id: id, model: (req) => Promise.resolve().then(() => simulatedModelRun(doc.app_id, req)),
+          cap: { process: { run: capProcessRun(doc.app_id) } } }) : { ok: true }; // CAP-3d process.run (simuliert)
         patch = { status: 'done', progress: 1, result: result ?? null };
       } catch (err) { patch = { status: 'failed', error: String(err?.message ?? err) }; }
     }
@@ -1335,7 +2290,11 @@ export function createStubKernel(opts = {}) {
   function genOf(ns) { const m = /@g(\d+)$/.exec(ns); return m ? Number(m[1]) : 1; }
   function resolveNs(app, collection) {
     if (SYSTEM_COLLECTIONS.has(collection) || collection.includes('@g')) return collection;
-    const g = versionDoc(app.id, app.ver)?.manifest?.generations?.[collection] ?? 1;
+    const manifest = versionDoc(app.id, app.ver)?.manifest;
+    const foreign = manifest?.foreign_collections?.[collection];
+    const owner = foreign?.owner_app ?? foreign?.app ?? foreign?.owner;
+    const ownerVer = owner && (visible(mirrorGet('business_apps',owner))?.active_ver ?? activations.get(owner)?.activated_ver);
+    const g = (owner ? versionDoc(owner,ownerVer)?.manifest : manifest)?.generations?.[collection] ?? 1;
     return nsName(collection, g);
   }
   function normalizeLayout(l) {
@@ -1453,6 +2412,7 @@ export function createStubKernel(opts = {}) {
     await setActivation(appId, { target_ver: ver, state: 'data-ready' });
     const prevAct = activations.get(appId);
     const good = [...(prevAct?.good_vers ?? []).filter((v) => v !== ver), ver].slice(-10);
+    for (const c of Object.keys(manifest.collections ?? {})) subscribeNs(nsName(c, manifest.generations?.[c] ?? 1)); // §16.45
     await setActivation(appId, { target_ver: ver, activated_ver: ver, previous_ver: prevAct?.activated_ver ?? null, good_vers: good, state: 'activated', at_seq: checkpoint });
     // §16.16: alte Generation(en) erst verwerfen, wenn die neue Version 10 min ohne Rückfall lief
     const retires = Object.values(manifest.retires ?? {});
@@ -1556,8 +2516,14 @@ export function createStubKernel(opts = {}) {
         win.header = el;
         notify(winTag);
       },
-      navigate(target, params = {}) {
+      canNavigate(target, params = {}) {
         const known = target === 'shell' || !!visible(mirrorGet('business_apps', target));
+        if(!known)return false;
+        if(params.command_type!==undefined)return (readManifest(appId,app.ver)?.commands_out??[]).some(x=>x.app===target&&x.type===params.command_type);
+        return true;
+      },
+      navigate(target, params = {}) {
+        const known = shell.canNavigate(target,params);
         if (!known) {
           zoneReport(appId, { level: 'error', code: 'shell.navigate.unknown_target', text: `Navigationsziel unbekannt: ${target}`, ref: String(target) }, 'kernel');
           return false;
@@ -1584,7 +2550,7 @@ export function createStubKernel(opts = {}) {
       }),
       openFile(ref) { simRecord.openedFiles.push({ app_id: appId, ref }); },
     });
-    const files = Object.freeze({
+    const legacyFiles = Object.freeze({
       async get(ref) {
         guardAlive();
         const local = await db.get('blobs', ref);
@@ -1602,7 +2568,7 @@ export function createStubKernel(opts = {}) {
         return core.blob;
       },
       put(blob, meta = {}) {
-        let metaHandle = null, cancelledEarly = false, refValue = null, resolveResult;
+        let metaHandle = null, uploadOp = null, cancelledEarly = false, refValue = null, resolveResult;
         const result = new Promise((r) => { resolveResult = r; });
         const progressTag = () => `upload:${refValue}`;
         const progress = {
@@ -1627,36 +2593,196 @@ export function createStubKernel(opts = {}) {
           guardAlive();
           if (cancelledEarly) return;
           const id = meta.id ?? uuidv7();
-          const op_id = uuidv7();
+          const op_id = uuidv7();uploadOp=op_id;
           setUploadProgress(ref, 0, blob.size, false);
           await db.tx(async (t) => {
             const existing = await t.get('blobs', ref);
             await t.put('blobs', { ref, blob, size: blob.size, type: blob.type, pinned: true, last_used: Date.now(), ...(existing ? {} : {}) });
-            await t.put('outbox', { op_id, collection: '__blobs', id: ref, op: 'upload', body: null, app_id: appId, app_ver: app.ver, created_at: Date.now(), origin_tab: tabId });
+            await t.put('outbox', { op_id, collection: '__blobs', id: ref, op: 'upload', body: null, file_id:id, app_id: appId, app_ver: app.ver, created_at: Date.now(), origin_tab: tabId });
+            await t.put('meta',{key:`file-owner:${JSON.stringify([appId,id])}`,ref});
           });
           post({ type: 'outbox' });
           if (isLeader) schedulePump();
           metaHandle = localWrite(app, 'put', 'files', id, {
             id, name: String(meta.name ?? 'datei'), mime: String(meta.mime ?? (blob.type || 'application/octet-stream')),
             size: blob.size, ref, owner_app: appId,
-          });
+          }, false, {file_upload:true,file_upload_op:uploadOp});
           await metaHandle.local;
         })();
         local.then(async () => {
           if (cancelledEarly || !metaHandle) { resolveResult({ status: 'rejected', reason: 'cancelled' }); return; }
           const r = await metaHandle.result;
-          if (r.status !== 'rejected') await waitUntil(() => uploadsDone.has(refValue) || closed);
-          resolveResult({ ...r, ref: refValue });
+          if (r.status !== 'rejected') await waitUntil(() => uploadResults.has(uploadOp) || closed);
+          const upload = uploadResults.get(uploadOp);
+          const final = r.status === 'rejected' ? r : upload?.status === 'accepted' ? r : {status:'rejected',code:upload?.code ?? 'unavailable',reason:upload?.reason ?? 'Upload not confirmed before close'};
+          resolveResult({ ...final, ref: refValue });
         }, (err) => resolveResult({ status: 'rejected', reason: err instanceof CtoxError ? err.code : 'local_error' }));
         local.catch(() => {});
+        const done = result.then(r => {
+          if (r.status === 'rejected') throw new CtoxError(r.code ?? r.reason ?? 'unavailable', r.reason ?? 'File rejected', {reason:r.reason});
+          return r;
+        });
+        done.catch(() => {}); // consumers may attach after the local acknowledgement
         return {
-          local, result, ref: refP,
+          local, result, ref: refP, done,
           upload: Object.freeze({ progress }),
           cancel() {
             if (!metaHandle) { cancelledEarly = true; return true; }
             return metaHandle.cancel();
           },
         };
+      },
+    });
+    // ---- K-1g: files nach CAP-3b (#844) – Ergebnisse immer Objekte, nie Base64, nur Dateien der eigenen App ----
+    const fileDocs = () => [...(mirror.get('files')?.values() ?? [])].map((r) => visible(r)).filter(Boolean);
+    function ownFile(sel) {
+      if (!isPlainObject(sel) || (typeof sel.id !== 'string' && typeof sel.ref !== 'string')) throw new CtoxError('invalid', 'files: {id} oder {ref} nötig', { path: 'ref' });
+      const docs = fileDocs().filter((d) => (sel.id ? d.id === sel.id : d.ref === sel.ref));
+      const mine = docs.find((d) => d.owner_app === appId);
+      if (!mine && docs.length) throw new CtoxError('forbidden', 'Datei gehört einer anderen App', { path: sel.id ? 'id' : 'ref' });
+      return mine ?? null;
+    }
+    // Grants come from Core-confirmed manifests, never optimistic metadata.
+    const readManifest = (id, ver) => {
+      const row = mirrorGet('business_app_versions',`${id}@${ver}`);
+      return !row?.revoked && !row?.base?.deleted ? row?.base?.data?.manifest : undefined;
+    };
+    const currentManifest = owner => {
+      const row = mirrorGet('business_apps',owner);
+      const ver = !row?.revoked && !row?.base?.deleted ? row?.base?.data?.active_ver : undefined;
+      return readManifest(owner,ver);
+    };
+    const ownReferenceRows = new Set(['shell_preferences','app_drafts']);
+    function readableNamespace(ns) {
+      const caller = readManifest(appId,app.ver);
+      const c = ns.replace(/@g[1-9][0-9]*$/,'');
+      if (caller?.collections?.[c]) return ns === resolveNs(app,c);
+      const f = caller?.foreign_collections?.[c];
+      const owner = f?.owner_app ?? f?.app ?? f?.owner;
+      const om = owner && currentManifest(owner);
+      return !!(f?.ops?.includes('read') && om?.collections?.[c] && om?.exports?.[c]?.includes('read') && ns === nsName(c,om.generations?.[c] ?? 1));
+    }
+    // §16.13: known owners and declared foreign reads require both grants.
+    // Published callers fail closed on undeclared names, even before the owner
+    // manifest arrives. Only manifest-less contract/bootstrap names are local.
+    function assertReadableCollection(collection) {
+      const c = collection.replace(/@g[1-9][0-9]*$/, '');
+      const callerManifest = readManifest(appId,app.ver);
+      const foreign = callerManifest?.foreign_collections?.[c];
+      const owners = [...(mirror.get('business_app_versions')?.values() ?? [])]
+        .filter(row => !row.revoked && !row.base?.deleted).map(row => row.base?.data).filter(Boolean).filter(v => v.app_id !== appId && v.manifest?.collections?.[c]);
+      if ((foreign || owners.length || (callerManifest && !callerManifest.collections?.[c])) && !readableNamespace(resolveNs(app, collection)))
+        throw new CtoxError('forbidden', 'Foreign collection requires declaration and read export', {path:'collection'});
+    }
+    function readableLive(collection, tags, compute, empty) {
+      const live = makeLive([...tags,'c:business_apps','c:business_app_versions'], () => {
+        try { assertReadableCollection(collection); }
+        catch (error) { if (error.code === 'forbidden') return empty; throw error; }
+        return compute();
+      });
+      return {
+        get() { assertReadableCollection(collection); return live.get(); },
+        subscribe(cb) { assertReadableCollection(collection); return live.subscribe(cb); },
+      };
+    }
+    // E30: a CAS hash is not authority. Only canonical, still-readable rows
+    // grant access; an optimistic reference cannot mint a read grant.
+    async function readableFile(sel) {
+      guardAlive();
+      if (!isPlainObject(sel) || (typeof sel.id !== 'string' && typeof sel.ref !== 'string')) throw new CtoxError('invalid', 'files: {id} oder {ref} nötig', {path:'ref'});
+      const docs = fileDocs().filter(d => sel.id ? d.id === sel.id : d.ref === sel.ref);
+      for (const d of docs) {
+        if (d.owner_app !== appId) continue;
+        const row = mirrorGet('files',d.id), base = row?.base;
+        if (row?.revoked) continue;
+        if (!base?.deleted && base?.data?.owner_app === appId && base.data.ref === d.ref) return d;
+        // files.put proves local bytes in the blob transaction, durably across
+        // reload. A plain optimistic files row cannot claim another app's CAS.
+        if ((row?.pending || row?.local_file_rejection) && (await db.get('meta',`file-owner:${JSON.stringify([appId,d.id])}`))?.ref === d.ref) return d;
+      }
+      const canonicalRows = [];
+      for (const [ns, rows] of mirror) {
+        const declared = readableNamespace(ns);
+        if (!declared && ns !== 'business_commands' && !ownReferenceRows.has(ns)) continue;
+        for (const row of rows.values()) if (!row.deleted && !row.revoked && !row.base?.deleted && row.base?.data && ownRowOk(ns,row.id)) {
+          const d = row.base.data;
+          // Standard API handles already expose own command results and own
+          // platform rows; they need no foreign-collection declaration.
+          if (declared || ownReferenceRows.has(ns) || (ns === 'business_commands' && d.app_id === appId && d.actor_id === userId)) canonicalRows.push([ns,d]);
+        }
+      }
+      const desktop = canonicalRows.find(([ns,d]) => ns.replace(/@g[1-9][0-9]*$/,'') === 'desktop_files' && d.id === sel.id && !d.is_deleted)?.[1];
+      if (desktop) {
+        const ref = [desktop.ref,desktop.content_ref,docs[0]?.ref].find(v => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v));
+        if (typeof ref !== 'string' || !/^[a-f0-9]{64}$/.test(ref)) throw new CtoxError('unavailable','Desktop file has no CAS reference',{path:'id'});
+        const meta = fileDocs().find(d => d.ref === ref);
+        return {...meta,id:desktop.id,ref,name:desktop.name ?? meta?.name,mime:desktop.mime ?? desktop.mime_type ?? meta?.mime,size:undefined, verify_size:true};
+      }
+      const ref = docs[0]?.ref ?? sel.ref;
+      const containsRef = value => value !== null && typeof value === 'object' && (value.ref === ref || value.blob_ref === ref || Object.values(value).some(containsRef));
+      if (typeof ref === 'string' && /^[a-f0-9]{64}$/.test(ref) && canonicalRows.some(([,d]) => containsRef(d))) return docs[0] ?? {ref,id:ref,name:null};
+      throw new CtoxError('forbidden','File needs ownership or a readable reference',{path:sel.id ? 'id' : 'ref'});
+    }
+    const fileInfo = (d) => ({ id: d.id, ref: d.ref, name: d.name ?? null, mime: d.mime ?? 'application/octet-stream', size: d.size ?? 0 });
+    const files = Object.freeze({
+      /** CAP-3b: put(bytes | {text}, {name, mime}) → {id, ref}. Blob = Altform (Handle, @deprecated). */
+      put(content, meta = {}) {
+        if (isBlob(content)) return legacyFiles.put(content, meta);
+        return (async () => {
+          guardAlive();
+          let bytes, text = false;
+          if (isPlainObject(content) && typeof content.text === 'string') { bytes = new TextEncoder().encode(content.text); text = true; }
+          else if (content instanceof ArrayBuffer) bytes = new Uint8Array(content.slice(0));
+          else if (ArrayBuffer.isView(content)) bytes = new Uint8Array(content.buffer.slice(content.byteOffset, content.byteOffset + content.byteLength));
+          else throw new CtoxError('invalid', 'files.put: Inhalt muss Uint8Array/ArrayBuffer oder {text} sein', { path: 'content' });
+          const mime = String(meta.mime ?? (text ? 'text/plain; charset=utf-8' : 'application/octet-stream'));
+          const id = typeof meta.id === 'string' && meta.id ? meta.id : uuidv7();
+          const h = legacyFiles.put(new Blob([bytes], { type: mime }), { ...meta, id, mime, name: meta.name ?? 'datei' });
+          const ref = await h.ref;
+          await h.local;
+          return Object.defineProperty({id,ref},'done',{value:h.done});
+        })();
+      },
+      /** CAP-3b: get({id|ref}) → {found, id, ref, name, mime, size, text|bytes}; Text nur für UTF-8 ≤ 512 KiB. String = Altform (Blob). */
+      async get(sel) {
+        if (typeof sel === 'string') return legacyFiles.get((await readableFile({ref:sel})).ref);
+        guardAlive();
+        let d = await readableFile(sel);
+        if (sel.range !== undefined) {
+          const blob = await legacyFiles.get(d.ref);
+          if (await sha256Hex(blob) !== d.ref) throw new CtoxError('invalid','File content hash mismatch');
+          d = {...d,size:blob.size};
+        }
+        if (!d) return { found: false, ref: sel.ref ?? null, ...(sel.id ? { id: sel.id } : {}) };
+        if (sel.range !== undefined) {
+          const {start, end} = sel.range ?? {};
+          if (!isPlainObject(sel.range) || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || end > d.size) throw new CtoxError('invalid', 'Byte range outside file', {path:'range'});
+          const blob = await legacyFiles.get(d.ref);
+          if (await sha256Hex(blob) !== d.ref) throw new CtoxError('invalid', 'File content hash mismatch');
+          const bytes = new Uint8Array(await blob.slice(start, end).arrayBuffer());
+          return {found:true, ...fileInfo(d), bytes};
+        }
+        const bytes = new Uint8Array(await (await legacyFiles.get(d.ref)).arrayBuffer());
+        let text;
+        if (bytes.byteLength <= 512 * 1024) { try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { text = undefined; } }
+        return { found: true, ...fileInfo(d), size: bytes.byteLength, ...(text !== undefined ? { text } : { bytes }) };
+      },
+      async list() { guardAlive(); return { files: fileDocs().filter((d) => d.owner_app === appId).map(fileInfo).sort((a, b) => (a.id < b.id ? -1 : 1)) }; },
+      async delete(sel) {
+        guardAlive();
+        const d = ownFile(sel);
+        if (!d) return { deleted: false };
+        const ok = await localWrite(app, 'delete', 'files', d.id, null).local.then(() => true, () => false);
+        return { deleted: ok, id: d.id };
+      },
+    });
+    // ---- K-1g: model.run (#830 / CATALOG §6) – deterministische simulierte Antwort, nur mit deklariertem model ----
+    const model = Object.freeze({
+      async run(req) {
+        guardAlive();
+        const declared = versionDoc(appId, app.ver)?.manifest?.capabilities_required ?? [];
+        if (!declared.includes('model') && !declared.includes('model.run')) throw new CtoxError('forbidden', 'model nicht in capabilities_required', { path: 'model' });
+        return simulatedModelRun(appId, req);
       },
     });
     const actorApi = Object.freeze({
@@ -1669,30 +2795,43 @@ export function createStubKernel(opts = {}) {
       version: APP_API_VERSION,
       app,
       query(collection, q = {}) {
+        assertReadableCollection(collection);
         const cq = compileQuery(q);
         const ns = resolveNs(app, collection);
-        return makeLive([`c:${ns}`], () => {
+        subscribeNs(ns);
+        return readableLive(collection, [`c:${ns}`], () => {
           const m = mirror.get(ns);
           if (!m) return [];
           const docs = [];
           for (const r of m.values()) if (r.data != null && !r.deleted && ownRowOk(ns, r.id)) docs.push(r.data);
           return runCompiledQuery(docs, cq);
-        });
+        }, []);
       },
       get(collection, id) {
+        assertReadableCollection(collection);
         const ns = resolveNs(app, collection);
-        return makeLive([`c:${ns}`, 'actor'], () => (ownRowOk(ns, id) ? visible(mirrorGet(ns, id)) : null));
+        subscribeNs(ns);
+        return readableLive(collection, [`c:${ns}`, 'actor'], () => ownRowOk(ns,id) ? visible(mirrorGet(ns,id)) : null, null);
       },
       put(collection, doc) { return localWrite(app, 'put', collection, doc?.id, doc); },
-      patch(collection, id, patch) { return localWrite(app, 'patch', collection, id, patch); },
+      patch(collection, id, patch, options = {}) { return localWrite(app, 'patch', collection, id, patch, false, {expected_revision:options.expected_revision}); },
       remove(collection, id) { return localWrite(app, 'delete', collection, id, null); },
       command(type, payload = {}, cmdOpts = {}) {
         if (typeof type !== 'string' || !type) throw new CtoxError('invalid', 'Befehlstyp fehlt', { path: 'type' });
-        const id = uuidv7();
+        const route=commandTarget({type,app_id:appId,...(cmdOpts.target_app===undefined?{}:{target_app:cmdOpts.target_app})},readManifest(appId,app.ver));
+        const key = cmdOpts.idempotency_key;
+        if (key !== undefined && (typeof key !== 'string' || key.length > 128)) throw new CtoxError('invalid', 'idempotency_key must be a string of at most 128 characters', { path: 'idempotency_key' });
+        // UUIDv8: first 128 SHA-256 bits, RFC variant/version bits normalized.
+        const hash = key === undefined ? null : sha256Js(new TextEncoder().encode(`${appId}|${actor.id}|${key}`));
+        const id = hash === null ? uuidv7() : `${hash.slice(0,8)}-${hash.slice(8,12)}-8${hash.slice(13,16)}-${((parseInt(hash[16],16)&3)|8).toString(16)}${hash.slice(17,20)}-${hash.slice(20,32)}`;
         const write = localWrite(app, 'put', 'business_commands', id, {
           id, type, payload, status: 'queued', app_id: appId, actor_id: actor.id, created_at: new Date().toISOString(),
+          ...(cmdOpts.target_app!==undefined ? {target_app:cmdOpts.target_app} : !route.error && !route.platform && route.target!==appId ? {target_app:route.target} : {}),
           ...(cmdOpts.record_id !== undefined ? { record_id: String(cmdOpts.record_id) } : {}), // §16.19 Nr. 8
-        });
+          // §16.39 Nr. 3: Rückruf-Befehlstypen der auslösenden App am Befehlsdokument (Core-PR #848 liest sie dort)
+          ...(typeof cmdOpts.on_complete === 'string' ? { on_complete: cmdOpts.on_complete } : {}),
+          ...(typeof cmdOpts.on_failed === 'string' ? { on_failed: cmdOpts.on_failed } : {}),
+        }, key !== undefined);
         const status = makeLive(['c:business_commands', 'commands'], () => {
           const d = visible(mirrorGet('business_commands', id));
           if (!d) {
@@ -1719,6 +2858,7 @@ export function createStubKernel(opts = {}) {
       shell,
       actor: actorApi,
       files,
+      model,
     });
   }
 
@@ -1774,6 +2914,41 @@ export function createStubKernel(opts = {}) {
     d.updated_at = Date.now();
     return localWrite(PLATFORM_APP, 'put', 'app_drafts', d.id, d).local;
   }
+  // §16.44-Ergänzung (3): wie draftMutate, liefert aber {local, result}; result = vom Core bestätigte Revision {status, rev}
+  // bzw. rejected{code}. Rückgabe ist weiterhin ein Promise (await/.catch wie bisher) mit den Feldern local und result.
+  function draftWrite(appId, mutate) {
+    let h = null;
+    const local = (async () => {
+      guardAlive();
+      requirePerm('apps.source.edit');
+      const cur = draftOf(appId);
+      let d;
+      if (cur) d = cloneValue(cur);
+      else {
+        const base = activeVerOf(appId);
+        d = { id: draftId(appId), app_id: appId, user_id: actor.id, base_app_ver: base, files: {}, manifest: {}, created_at: Date.now() };
+        if (base && versionDoc(appId, base)?.manifest?.files?.[MANIFEST_FILE]) d.files[MANIFEST_FILE] = null;
+      }
+      mutate(d);
+      d.updated_at = Date.now();
+      h = localWrite(PLATFORM_APP, 'put', 'app_drafts', d.id, d);
+      await h.local;
+    })();
+    const result = local.then(async () => {
+      const r = await h.result;
+      return r.status === 'rejected' ? { status: 'rejected', code: r.code ?? r.reason, reason: r.reason } : { status: 'accepted', rev: r.rev };
+    }, (e) => ({ status: 'rejected', code: e?.code ?? 'local_error', reason: String(e?.message ?? e) }));
+    local.catch(() => {});
+    local.local = local;
+    local.result = result;
+    return local;
+  }
+  // §16.44-Ergänzung (2): Revision nur für eine bestätigte, nicht gelöschte Zeile ohne ausstehende Änderungen (sonst null)
+  function confirmedDraftRev(appId) {
+    const r = mirrorGet('app_drafts', draftId(appId));
+    if (!r || r.pending || !r.base?.data || r.base.deleted) return null;
+    return r.base.rev ?? null;
+  }
   function sourceApi(appId) {
     const viewBase = () => { const d = draftOf(appId); return d ? d.base_app_ver : activeVerOf(appId); };
     async function readOverlay(path) {
@@ -1809,12 +2984,15 @@ export function createStubKernel(opts = {}) {
         async info() {
           requirePerm('apps.source.view');
           const d = draftOf(appId);
-          return d ? { base_app_ver: d.base_app_ver, files: cloneValue(d.files), manifest: cloneValue(d.manifest), updated_at: d.updated_at } : null;
+          // rev = Revision der app_drafts-Zeile im Core = base_draft_rev für ctox.coding.turn (§16.44)
+          return d ? { base_app_ver: d.base_app_ver, files: cloneValue(d.files), manifest: cloneValue(d.manifest), updated_at: d.updated_at, rev: confirmedDraftRev(appId) } : null;
         },
-        async write(path, text) {
-          if (typeof path !== 'string' || !path || typeof text !== 'string') throw new CtoxError('invalid', 'path und text (string) nötig', { path: 'path' });
-          noManifestFile(path);
-          await draftMutate(appId, (d) => { d.files[path] = text; });
+        write(path, text) {
+          return draftWrite(appId, (d) => {
+            if (typeof path !== 'string' || !path || typeof text !== 'string') throw new CtoxError('invalid', 'path und text (string) nötig', { path: 'path' });
+            noManifestFile(path);
+            d.files[path] = text;
+          });
         },
         // A7
         async remove(path) {
@@ -2011,7 +3189,12 @@ export function createStubKernel(opts = {}) {
         /** §16.39 (Bindung je MOUNT): beim Mount einmal aufrufen; Ergebnis ist eingefroren, url(path) synchron. */
         bind(appId, ver, o = {}) {
           guardAlive(); const b = makeBinding(appId, ver, o);
-          return Object.freeze({ ...b, url: (path) => b.root + encPath(path) });
+          // §16.50: Worker (Monaco u. a.) immer gleich-ursprünglich unter der gebundenen Lib-Wurzel, nie data:/blob:
+          const workerUrl = (lib, path) => {
+            if (typeof lib !== 'string' || !b.libs[lib]) throw new CtoxError('not_found', `Bibliothek ${lib} ist in dieser Bindung nicht gebunden`, { path: 'lib' });
+            return `/~a/${LIB_PREFIX}${lib}@${b.libs[lib]}${libSuffix(b.libs, lib)}/${encPath(path)}`;
+          };
+          return Object.freeze({ ...b, url: (path) => b.root + encPath(path), workerUrl });
         },
       });
     })(),
@@ -2019,6 +3202,8 @@ export function createStubKernel(opts = {}) {
     identity: Object.freeze({
       get instance_id() { return instanceId; },
       get user_id() { return userId; },
+      /** §16.43: eigene device_pairing_id; Stub deterministisch je (Instanz, Nutzer, Gerät), opts.deviceId geht vor. */
+      get device_id() { return opts.deviceId ?? `dev-${fnv1a(`${instanceId}|${userId}|${opts.deviceLabel ?? 'browser'}`)}`; },
       logout: (o) => logout(o),
       // Instanzwechsel: diesen Kernel schließen (Daten bleiben), neuen Kernel für (Instanz, Nutzer) liefern.
       async switchInstance(next = {}) {
@@ -2052,10 +3237,26 @@ export function createStubKernel(opts = {}) {
       if (link.state === 'online') { track(deliver().then(() => schedulePump())); }
       return { ...link };
     },
-    setBacklog(n) { extraBacklog = Math.max(0, Number(n) || 0); netChanged(); },
+    setBacklog(n, collection) {
+      if (collection) { const v = Math.max(0, Number(n) || 0); if (v) collBacklog.set(collection, v); else collBacklog.delete(collection); }
+      else extraBacklog = Math.max(0, Number(n) || 0);
+      netChanged();
+    },
+    failCollection(collection, code = 'unavailable', message = '') { if (code) collError.set(collection, { code, message: message || code }); else collError.delete(collection); netChanged(); },
+    // §16.45 „Neu verbinden“: voller Neuaufbau (simuliert: Verbindung ab, wieder auf, alles neu zustellen)
+    async reconnect() {
+      guardAlive();
+      simRecord.connects++;
+      link = { ...link, state: 'offline' }; netChanged();
+      link = { ...link, state: 'online' }; netChanged();
+      await deliver(); schedulePump();
+      return { link: { ...link }, collections: cloneValue(refreshCollections()) };
+    },
     rejectNext(reason) { sim0.reject.push(reason); },
+    rejectNextUpload(reason) { sim0.rejectUpload.push(reason); },
     migrateNext(o) { sim0.migrate.push(o ?? {}); },
     failCommand(type, error) { sim0.failCmd.set(type, error); },
+    registerCommandType(type) { sim0.cmdTypes.add(type); },
     async publishAppVersion(appId, ver, o) {
       await publishInternal(appId, ver, o);
       await waitUntil(() => isTerminalFor(appId, ver) || visible(mirrorGet('business_apps', appId))?.active_ver !== ver || closed);
@@ -2137,12 +3338,18 @@ export function createStubKernel(opts = {}) {
   // ---- Sim-Fassade (Test-Hooks) ----
   const sim = {
     rejectNext: (reason = 'simulated_rejection') => forward('rejectNext')(reason),
+    rejectNextUpload: (reason = {code:'forbidden',reason:'Upload denied'}) => forward('rejectNextUpload')(reason),
     migrateNext: (o = {}) => forward('migrateNext')({ dropFields: o.dropFields ?? [] }),
     failCommand: (type, error = 'simulated failure') => forward('failCommand')(type, error),
-    onCommand(type, fn) { sim0.cmdHandlers.set(type, fn); },
+    /** Registriert zugleich den Typ in der Befehls-Registry des Leiters (K-WJ-B2); unbekannte Typen lehnt der Core beim Schreiben ab. */
+    onCommand(type, fn) { sim0.cmdHandlers.set(type, fn); forward('registerCommandType')(type).catch(() => {}); },
+    /** CAP-3d: Plattform-Allowlist für process.run (Name → Pfad oder {program|interpreter+script, env}); null = Standard. */
+    setProcessAllowlist(map) { processAllowlist = map ? cloneValue(map) : null; },
     push: (collection, docs) => forward('push')(collection, docs),
     setLink: (partial) => forward('setLink')(partial),
-    setBacklog: (n) => forward('setBacklog')(n),
+    setBacklog: (n, collection) => forward('setBacklog')(n, collection),
+    failCollection: (collection, code, message) => forward('failCollection')(collection, code, message),
+    get transportConnects() { return simRecord.connects; },
     publishAppVersion(appId, ver, o = {}) {
       if (o.module) return Promise.reject(new CtoxError('invalid', 'In-Memory-Module registriert die Shell bzw. testkit/app-host.mjs, nicht der Kernel (§16.19 Nr. 1)'));
       const { migrate, ...rest } = o;
@@ -2287,6 +3494,8 @@ export function createStubKernel(opts = {}) {
     identity: shellApi.identity,
     shell: shellApi,
     shellApi: () => shellApi,
+    /** §16.45: voller Neuaufbau der Verbindung (nie Seiten-Reload); im Leser über den Leiter. */
+    reconnect: () => callLeader('reconnect', []),
     sim,
     close,
     logout,

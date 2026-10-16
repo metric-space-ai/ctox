@@ -614,6 +614,8 @@ const state = {
   researchFieldKeysDraft: [...RESEARCH_FIELDS],
   // Entwurf der optionalen Felder (null = gespeicherter Stand).
   optionalFieldsDraft: null,
+  // OLGUI: Lead-Drawer zeigt nur Pflichtfelder (leere optionale Felder ausgeblendet). Je Nutzer ueber snapshot()/restored.
+  requiredFieldsOnly: false,
   adapterReconciliationPending: false,
   subscriptions: [],
   messages: {},
@@ -628,7 +630,7 @@ const state = {
 // Zustand der Ansicht, der einen Live-Remount ueberlebt (snapshot/restored, PORTING.md §2).
 const SNAPSHOT_VIEW_KEYS = ['selectedCampaign', 'selectedLeadId', 'activeDetailTab', 'campaignViewMode', 'search',
   'sourceSearch', 'leadSortKey', 'leadSortDir', 'sourcePanelOpen', 'sourcePanelView', 'leadEditorOpen', 'leadEditorId',
-  'researchPolicyDraft', 'researchPolicyFollowupDraft', 'digestPeriod', 'digestDirty'];
+  'researchPolicyDraft', 'researchPolicyFollowupDraft', 'digestPeriod', 'digestDirty', 'requiredFieldsOnly'];
 
 function snapshot() {
   const snap = { v: 1 };
@@ -711,6 +713,8 @@ export async function mount(root, api, { restored } = {}) {
       port.abmelden();
       if (state.port === port) {
         state.uiMounted = false;
+        state.uiAbort?.abort();
+        state.uiAbort = null;
         for (const key of ['kampagnenPersonenTimer', 'befehlsabgleichTimer', 'quellenRenderTimer']) {
           if (state[key]) globalThis.clearTimeout(state[key]);
           state[key] = null;
@@ -1142,13 +1146,19 @@ function meldeAktionsfehler(event, error) {
 }
 
 function bindUi() {
+  // Je Montage ein Abbruchsignal: wird dasselbe root neu montiert, liefen sonst die Klick-Handler der alten
+  // Montage mit (ein Schalter kippte je Montage einmal und landete bei gerader Zahl wieder am Ausgangsstand).
+  state.uiAbort?.abort();
+  const ac = new AbortController();
+  state.uiAbort = ac;
+  const { signal } = ac;
   state.root.addEventListener('change', (event) => {
     const sortSel = event.target?.closest?.('[data-action="lead-sort"]');
     if (sortSel) { state.leadSortKey = sortSel.value || 'name'; renderCenter(); }
-  });
+  }, { signal });
   const host = state.root;
   // Antworten des CTOX-Agenten auf Sellify-Vermerkpruefungen: planeBefehlsabgleich (gepushter Befehlsstatus).
-  host.addEventListener('pointerdown', () => { state.sourcePanelPointerAt = Date.now(); }, true);
+  host.addEventListener('pointerdown', () => { state.sourcePanelPointerAt = Date.now(); }, { capture: true, signal });
   host.addEventListener('click', (event) => {
     const actionElement = event.target?.closest?.('[data-action]');
     if (actionElement) state.sourcePanelUserActionAt = Date.now();
@@ -1158,8 +1168,8 @@ function bindUi() {
     // Fehlschlaege, u. a. "Quelle ohne Zugang anlegen" und "Rechercheablauf
     // speichern" waehrend der Wartung (P4 T66/T68).
     return Promise.resolve(handleClick(event)).catch((error) => meldeAktionsfehler(event, error));
-  });
-  host.addEventListener('keydown', handleKeydown);
+  }, { signal });
+  host.addEventListener('keydown', handleKeydown, { signal });
   host.addEventListener('input', (event) => {
     if (event.target.matches('[data-lead-search]')) {
       state.search = event.target.value;
@@ -1190,7 +1200,7 @@ function bindUi() {
     if (event.target.matches('[data-lead-edit-field]') && state.leadDraft) {
       state.leadDraft[event.target.dataset.leadEditField] = event.target.value;
     }
-  });
+  }, { signal });
 }
 
 // Kompaktes Glossar der konfigurierten Quellen fuer den Agenten-Prompt:
@@ -1828,7 +1838,7 @@ function renderOptionalFieldSettings() {
     </div>`;
   };
   return `<section class="leadgen-optional-fields" aria-label="Pflichtfelder">
-    <label class="leadgen-policy-label" title="Angehakt = Pflicht für die Freigabe, ohne Haken optional (wird recherchiert, blockiert nicht). ✎ benennt um; der Name gilt in der App und im Rechercheablauf. „Aus“ = wird nicht recherchiert.">Pflichtfelder</label>
+    <label class="leadgen-policy-label" title="Haken = Pflicht für die Freigabe">Pflichtfelder</label>
     ${gruppen.map((group) => `<fieldset class="leadgen-optional-group"><legend>${escapeHtml(group.label)}</legend>
       ${group.fields.map(([key, label]) => zeile(key, label)).join('')}
     </fieldset>`).join('')}
@@ -2945,8 +2955,10 @@ function renderDetail() {
     : `${tr('notReadyForValidation', 'Freigabe')}: ${tr('openPoints', 'noch')} ${blockers.length || 1} ${tr('openPointsSuffix', 'offene Punkte')}`;
   // Der Tooltip sagte "Recherche noch nicht abgeschlossen." genau dann, wenn
   // der Knopf freigegeben war (keine Sperren = leere Liste = Ersatztext).
-  const validationDetails = blockers.join(' · ')
-    || (alreadyValidated ? tr('validatedHint', 'Der Lead ist validiert und kann an Sellify übergeben werden.') : tr('validateHint', 'Alle Punkte erfüllt – Lead jetzt validieren.'));
+  // OLGUI: kurzer Tooltip statt Satzwand; die Punkte stehen ausgeschrieben in der Aufklappliste darunter.
+  const validationDetails = blockers.length
+    ? `${blockers.length} ${tr('openPointsSuffix', 'offene Punkte')}`
+    : (alreadyValidated ? tr('validatedHint', 'Validiert, bereit für Sellify') : tr('validateHint', 'Alle Punkte erfüllt – jetzt validieren'));
   const handoffPrecondition = sellifyHandoffPrecondition(lead);
   const researchSubmissionRunning = researchSubmissionPending(lead);
   const handoffVorbereitung = state.sellifyUebergabeVorbereitung?.has?.(lead.id) === true;
@@ -2956,7 +2968,7 @@ function renderDetail() {
   const handoffTitle = handoffVorbereitung
     ? 'Übergabe wird vorbereitet: Sperrvermerke werden geprüft …' // v4-allow: label
     : handoffRunning ? tr('handoffRunning', 'Übergabe läuft') // v4-allow: label
-      : handoffPrecondition || (handoffUnterbrochen ? 'Letzte Übergabe unterbrochen – erneut übergeben, Angelegtes wird erkannt.' : '');
+      : handoffPrecondition || (handoffUnterbrochen ? 'Letzte Übergabe unterbrochen – erneut übergeben' : '');
   const activeTab = DETAIL_TAB_IDS.includes(state.activeDetailTab) ? state.activeDetailTab : 'overview';
   // Owner-Vorgabe 31.08.: zwei getrennte Wege mit harter Sellify-Weiche.
   // "Neue Recherche" bricht ab, wenn die Firma bereits im CRM existiert;
@@ -2964,35 +2976,51 @@ function renderDetail() {
   // Kennt der Vorabgleich die Antwort, steht nur der erlaubte Knopf da; der
   // andere endete ohnehin nur in einer Fehlermeldung.
   const sellifyBekannt = lead?.payload?.sellify_precheck?.known;
-  const neueRechercheKnopf = `<button class="ctox-button is-primary" data-action="research-lead-new" data-id="${escapeHtml(lead.id)}" title="${escapeHtml(tr('researchNewTitle', 'Startet nur, wenn die Firma noch nicht in Sellify geführt wird.'))}">${icon('search')}<span>${tr('researchNew', 'Neue Recherche')}</span></button>`;
-  const nachrechercheKnopf = `<button class="ctox-button is-primary" data-action="research-lead-followup" data-id="${escapeHtml(lead.id)}" title="${escapeHtml(sellifyBekannt ? `${tr('knownInSellify', 'In Sellify geführt')} (${lead.payload.sellify_precheck.contact_id || ''})` : tr('researchFollowupTitle', 'Startet nur, wenn die Firma bereits in Sellify geführt wird.'))}">${icon('search')}<span>${tr('researchLead', 'Nachrecherche')}</span></button>`;
+  // OLGUI: die Aktionen standen in bis zu drei umbrochenen Zeilen. Jetzt EINE Zeile: die zum Stand passende
+  // Hauptaktion als Primaerknopf, alle uebrigen im „…“-Menü (Muster OUTRES, Rahmen-Menü api.shell.menu im Fenster).
+  // Sichtbar bleibt dieselbe Menge wie vorher; nur die Hauptaktion steht als Knopf da.
+  const forschungsTitel = sellifyBekannt
+    ? `${tr('knownInSellify', 'In Sellify geführt')} (${lead.payload.sellify_precheck.contact_id || ''})`
+    : tr('researchFollowupTitle', 'Nur für Firmen, die in Sellify stehen');
+  const luecken = hatRechercheErgebnis(lead) ? offeneRecherchefelder(lead) : [];
+  const neueRecherche = { id: 'research-lead-new', label: tr('researchNew', 'Neue Recherche'), icon: 'search', title: tr('researchNewTitle', 'Nur für Firmen, die nicht in Sellify stehen') };
+  const nachrecherche = { id: 'research-lead-followup', label: tr('researchLead', 'Nachrecherche'), icon: 'search', title: forschungsTitel };
   // Waehrend ein Auftrag laeuft, startete ein zweiter Klick eine parallele
   // zweite Recherche desselben Leads (Kiesow, 10.09.2026 zweimal). Stattdessen
   // steht dort der Abbruch - ein haengender Lauf blieb sonst bis zur
   // Harness-Frist von 60 min auf "Läuft" (Sasol, 11.09.2026).
-  const luecken = hatRechercheErgebnis(lead) ? offeneRecherchefelder(lead) : [];
-  const lueckenKnopf = luecken.length
-    ? `<button class="ctox-button" data-action="research-lead-gaps" data-id="${escapeHtml(lead.id)}" title="${escapeHtml(`Nur die ${luecken.length} noch nicht belegten Felder erneut recherchieren: ${luecken.map(researchFieldLabel).join(', ')}`)}">${icon('search')}<span>Lücken schließen (${luecken.length})</span></button>`
-    : '';
-  const researchAction = researchSubmissionRunning
-    ? `<button class="ctox-button is-primary" data-action="research-lead" data-id="${escapeHtml(lead.id)}" disabled>${icon('search')}<span>Recherche wird gestartet …</span></button>` // v4-allow: label
+  const rechercheLaeuft = researchSubmissionRunning || researchInFlight(lead);
+  const rechercheAktionen = researchSubmissionRunning
+    ? [{ id: 'research-lead', label: 'Recherche wird gestartet …', icon: 'search', disabled: true }] // v4-allow: label
     : researchInFlight(lead)
-      ? (state.researchCancelling?.has(lead.id)
-        ? `<button class="ctox-button" disabled>${icon('close')}<span>Wird abgebrochen …</span></button>`
-        : `<button class="ctox-button" data-action="cancel-research" data-id="${escapeHtml(lead.id)}" title="${escapeHtml(tr('cancelResearchTitle', 'Bricht den laufenden Auftrag ab. Bereits gespeicherte Werte und Belege bleiben erhalten.'))}">${icon('close')}<span>${tr('cancelResearch', 'Recherche abbrechen')}</span></button>`)
-    : lueckenKnopf + (sellifyBekannt === true
-      ? nachrechercheKnopf
-      : sellifyBekannt === false
-        ? neueRechercheKnopf
-        : neueRechercheKnopf + nachrechercheKnopf);
+      ? [state.researchCancelling?.has(lead.id)
+        ? { id: 'cancel-research', label: 'Wird abgebrochen …', icon: 'close', disabled: true } // v4-allow: label
+        : { id: 'cancel-research', label: tr('cancelResearch', 'Recherche abbrechen'), icon: 'close', title: tr('cancelResearchTitle', 'Recherche abbrechen, Werte bleiben erhalten') }]
+      : [
+        ...(luecken.length ? [{ id: 'research-lead-gaps', label: `${tr('researchGaps', 'Lücken schließen')} (${luecken.length})`, icon: 'search', title: tr('researchGapsTitle', 'Nur unbelegte Felder erneut recherchieren') }] : []),
+        ...(sellifyBekannt === true ? [nachrecherche] : sellifyBekannt === false ? [neueRecherche] : [neueRecherche, nachrecherche]),
+      ];
+  const uebergabeBeschriftung = handoffVorbereitung ? 'Wird vorbereitet …' : handoffRunning ? 'Übergabe läuft …' : ''; // v4-allow: label
+  const validieren = { id: 'validate-lead', label: validateLabel, icon: alreadyValidated || readyForValidation ? 'check' : '', disabled: !(readyForValidation && !alreadyValidated), title: validationDetails };
+  const sellifyNurAktualisieren = { id: 'sellify-update-only', label: tr('sellifyUpdateOnly', 'Sellify aktualisieren'), busyLabel: uebergabeBeschriftung, icon: 'send', disabled: handoffDisabled, title: handoffTitle || tr('sellifyUpdateOnlyTitle', 'Firma und gewählte Personen in Sellify aktualisieren') };
+  const excel = { id: 'export-lead-xlsx', label: tr('exportXlsx', 'Excel'), icon: 'download', title: tr('exportLeadXlsxTitle', 'Recherche dieses Leads als Excel-Datei herunterladen') };
+  const sellifyMitKampagne = { id: 'sellify-update-campaign', label: tr('sellifyUpdateCampaign', 'Sellify + Kampagne'), busyLabel: uebergabeBeschriftung, icon: 'send', disabled: handoffDisabled, title: handoffTitle || tr('sellifyUpdateCampaignTitle', 'In Sellify aktualisieren und zur Kampagne') };
+  const alleAktionen = [...rechercheAktionen, validieren, sellifyNurAktualisieren, excel, sellifyMitKampagne];
+  // Hauptaktion: laufende Recherche (Abbruch) > Validieren, sobald freigabefaehig > Sellify-Uebergabe, sobald
+  // validiert > die erste Recherche-Aktion (Luecken schliessen bzw. der erlaubte Rechercheweg).
+  const hauptaktion = rechercheLaeuft ? rechercheAktionen[0]
+    : readyForValidation && !alreadyValidated ? validieren
+      : alreadyValidated ? sellifyNurAktualisieren
+        : rechercheAktionen[0] || validieren;
+  const weitere = alleAktionen.filter((eintrag) => eintrag !== hauptaktion);
+  state.detailMoreItems = { leadId: lead.id, items: weitere.map(({ id, label, disabled }) => ({ id, label, disabled: Boolean(disabled) })) };
+  const hauptLabel = hauptaktion.busyLabel || hauptaktion.label;
+  const mehrLabel = tr('moreActions', 'Weitere Aktionen');
   // Owner-Vorgabe 30.08.: kein eigener Entscheidungs-Tab - die Aktionen
   // stehen kompakt in der Uebersicht.
-  const decisionActions = `<div class="leadgen-detail-actions">
-    ${researchAction}
-    <button class="ctox-button" data-action="validate-lead" data-id="${escapeHtml(lead.id)}" ${readyForValidation && !alreadyValidated ? '' : 'disabled'} title="${escapeHtml(validationDetails)}">${alreadyValidated || readyForValidation ? icon('check') : ''}<span>${escapeHtml(validateLabel)}</span></button>
-    <button class="ctox-button" data-action="sellify-update-only" data-id="${escapeHtml(lead.id)}" ${handoffDisabled ? 'disabled' : ''} title="${escapeHtml(handoffTitle || tr('sellifyUpdateOnlyTitle', 'Organisation und ausgewählte Personen in Sellify aktualisieren.'))}">${icon('send')}<span>${handoffVorbereitung ? 'Wird vorbereitet …' : handoffRunning ? 'Übergabe läuft …' : tr('sellifyUpdateOnly', 'Sellify aktualisieren')}</span></button>${'' /* v4-allow: label */}
-    <button class="ctox-button" data-action="export-lead-xlsx" data-id="${escapeHtml(lead.id)}" title="${escapeHtml(tr('exportLeadXlsxTitle', 'Recherche dieses Leads als Excel-Datei herunterladen'))}" aria-label="${escapeHtml(tr('exportLeadXlsxTitle', 'Recherche dieses Leads als Excel-Datei herunterladen'))}">${icon('download')}<span>${tr('exportXlsx', 'Excel')}</span></button>
-    <button class="ctox-button" data-action="sellify-update-campaign" data-id="${escapeHtml(lead.id)}" ${handoffDisabled ? 'disabled' : ''} title="${escapeHtml(handoffTitle || tr('sellifyUpdateCampaignTitle', 'Organisation und ausgewählte Personen aktualisieren und der Kampagne hinzufügen.'))}">${icon('send')}<span>${handoffVorbereitung ? 'Wird vorbereitet …' : handoffRunning ? 'Übergabe läuft …' : tr('sellifyUpdateCampaign', 'Sellify + Kampagne')}</span></button>${'' /* v4-allow: label */}
+  const decisionActions = `<div class="leadgen-detail-actions" data-detail-action-bar>
+    <button class="ctox-button is-primary" data-action="${hauptaktion.id}" data-id="${escapeHtml(lead.id)}"${hauptaktion.disabled ? ' disabled' : ''}${hauptaktion.title ? ` title="${escapeHtml(hauptaktion.title)}"` : ''}>${hauptaktion.icon ? icon(hauptaktion.icon) : ''}<span>${escapeHtml(hauptLabel)}</span></button>
+    ${weitere.length ? `<button class="ctox-pane-icon leadgen-more-button" type="button" data-action="lead-detail-more" data-id="${escapeHtml(lead.id)}" aria-haspopup="menu" aria-expanded="false" title="${escapeHtml(mehrLabel)}" aria-label="${escapeHtml(mehrLabel)}">${MORE_ICON}</button>` : ''}
   </div>`;
   const tabContent = activeTab === 'overview'
     ? `${renderResearchReviewSummary(review, contactScopedLead)}${decisionActions}${!readyForValidation ? `<details class="leadgen-validation-details" data-disclosure="validation-blockers"><summary>${blockers.length || 1} offene Punkte bis zur Freigabe</summary><ul>${(blockerDetails.length ? blockerDetails : [{ text: validationDetails, key: '' }]).map((blocker) => `<li>${escapeHtml(blocker.text)}${renderBlockerActions(blocker.key)}</li>`).join('')}</ul></details>` : ''}${renderReleasedEmptyFields(lead)}${renderContactRecipientSelection(lead)}`
@@ -3215,6 +3243,16 @@ async function handleClick(event) {
       state.activeContactTabs.set(leadId, { id: contactId, identity: contactIdentity, personKey });
       renderDetail();
     }
+    return;
+  }
+  if (action === 'lead-detail-more') {
+    await oeffneDetailMenue(trigger, id);
+    return;
+  }
+  if (action === 'toggle-required-only') {
+    state.requiredFieldsOnly = !state.requiredFieldsOnly;
+    renderDetail();
+    state.root.querySelector('[data-action="toggle-required-only"]')?.focus?.({ preventScroll: true });
     return;
   }
   if (action === 'select-detail-tab') {
@@ -3460,6 +3498,33 @@ async function handleClick(event) {
   if (action === 'sellify-update-only') await sendLeadToSellify(id, { includeCampaign: false });
   if (action === 'sellify-update-campaign') await sendLeadToSellify(id, { includeCampaign: true });
   if (action === 'add-source') await addSource();
+}
+
+// OLGUI: „…“ der Drawer-Aktionsleiste öffnet das Rahmen-Menü im Fenster (window-sheet.js: Enter/Space am Knopf,
+// Pfeiltasten, Enter wählt, Esc und Klick daneben schließen, Fokus zurück auf „…“). Die Wahl läuft über denselben
+// Klickweg wie ein Knopf mit data-action (inklusive prepareFullLeadAction).
+async function oeffneDetailMenue(trigger, leadId) {
+  const shell = state.api?.shell;
+  const eintrag = state.detailMoreItems;
+  const items = eintrag?.leadId === leadId ? eintrag.items : [];
+  if (!items.length || typeof shell?.menu !== 'function') return;
+  const r = trigger.getBoundingClientRect();
+  trigger.setAttribute('aria-expanded', 'true');
+  let wahl = '';
+  try {
+    const antwort = await shell.menu({ items, at: { x: Math.round(r.left), y: Math.round(r.bottom) }, label: tr('moreActions', 'Weitere Aktionen') });
+    wahl = typeof antwort === 'string' ? antwort : (antwort?.id || '');
+  } finally {
+    trigger.setAttribute('aria-expanded', 'false');
+    // Ein Sync-Tick kann die Leiste waehrend des offenen Menues neu geschrieben haben: Fokus auf den neuen Knopf.
+    if (!trigger.isConnected && !wahl) state.root.querySelector('[data-action="lead-detail-more"]')?.focus?.({ preventScroll: true });
+  }
+  const ziel = items.find((item) => item.id === wahl && !item.disabled);
+  if (!ziel) return;
+  const knopf = state.root.ownerDocument.createElement('button');
+  knopf.dataset.action = ziel.id;
+  knopf.dataset.id = leadId;
+  await handleClick({ target: knopf, preventDefault() {}, stopPropagation() {} });
 }
 
 function handleKeydown(event) {
@@ -12364,8 +12429,6 @@ function letzterRechercheFehler(lead) {
 function renderResearchReviewSummary(review, lead) {
   const untouched = leadIsUnresearched(lead);
   const openCount = review.missingValueKeys.length + review.missingEvidenceKeys.length + review.conflictingKeys.length;
-  const nichtGefunden = (review.notFoundKeys || []).length;
-  const optionalOffen = (review.optionalOpenKeys || []).length;
   return `<section class="leadgen-detail-section leadgen-review-summary">
     <div class="leadgen-summary-heading"><h3>${tr('reviewTitle', 'Recherche')}</h3><span class="leadgen-status-pill">${escapeHtml(untouched ? tr('researchNotStartedShort', 'Nicht gestartet') : researchLabel(lead))}</span></div>
     ${letzterRechercheFehler(lead) ? `<p class="leadgen-review-error">${escapeHtml(letzterRechercheFehler(lead))}</p>` : ''}
@@ -12375,7 +12438,6 @@ function renderResearchReviewSummary(review, lead) {
       <div><strong>${review.sufficientCount}</strong><small>ausreichend belegt</small></div>
       <div><strong>${untouched ? '—' : openCount}</strong><small>offene Prüfungen</small></div>
     </div>
-    ${untouched ? '' : `<p class="leadgen-muted">${nichtGefunden} Feld(er) von der Recherche begründet „nicht gefunden“${optionalOffen ? ` · ${optionalOffen} optionale(s) Feld(er) ohne Wert` : ''} – blockieren die Freigabe nicht.</p>`}
     <p class="leadgen-muted">${escapeHtml(tr('campaignLabel', 'Kampagne'))}: ${escapeHtml(lead?.campaign || tr('annualResearch', 'Jahresrecherche'))}</p>
   </section>`;
 }
@@ -12678,13 +12740,19 @@ function renderResearchReviewGroups(review, lead, activeGroup = '') {
   const groupMatches = (group) => !activeGroup
     || group.id === activeGroup
     || (activeGroup === 'classification' && group.id === 'governance');
-  return review.groups.filter(groupMatches).map((group) => {
+  // OLGUI (Owner: „nicht Pflichtfelder ausblenden … kompaktere Ansicht“): ausgeblendet werden nur LEERE OPTIONALE
+  // Felder. Pflichtfelder, befuellte Felder und Konflikte bleiben stehen; Beleg- und Freigabebedarf haengt an
+  // befuellten Feldern oder Pflichtfeldern und bleibt damit ebenfalls sichtbar.
+  const nurPflicht = state.requiredFieldsOnly === true;
+  const sichtbar = (field) => !nurPflicht || !field.optional || field.filled || field.conflict;
+  const schalter = `<button type="button" class="leadgen-required-toggle" role="switch" aria-checked="${nurPflicht}" data-action="toggle-required-only" title="${escapeHtml(tr('requiredOnlyTitle', 'Leere optionale Felder ausblenden'))}"><span class="leadgen-switch-track" aria-hidden="true"></span><span>${escapeHtml(tr('requiredOnly', 'Nur Pflichtfelder'))}</span></button>`;
+  return review.groups.filter(groupMatches).map((group, index) => {
     // Owner-Vorgabe 31.08.: Die Sellify-Empfaengerauswahl steht in der Uebersicht.
     const recipientSelection = '';
     return `<section class="leadgen-detail-section leadgen-review-group" data-review-group="${escapeHtml(group.id)}">
-      <h3>${escapeHtml(group.label)}</h3>
+      <div class="leadgen-review-group-head"><h3>${escapeHtml(group.label)}</h3>${index === 0 ? schalter : ''}</div>
       ${group.id === 'contact' ? renderContactTabs(lead) : ''}
-      <ul class="leadgen-review-fields">${group.fields.map((field) => renderReviewFieldRow(field, untouched, lead)).join('')}</ul>
+      <ul class="leadgen-review-fields">${group.fields.filter(sichtbar).map((field) => renderReviewFieldRow(field, untouched, lead)).join('')}</ul>
       ${recipientSelection}
     </section>`;
   }).join('');
@@ -12808,6 +12876,8 @@ function startResize(event) {
   globalThis.addEventListener('pointerup', stop, { once: true });
 }
 
+// OLGUI: „…“-Symbol wie in der Outbound-App (modules/outbound/index.js MORE_ICON), gefuellte Punkte.
+const MORE_ICON = '<svg class="leadgen-more-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>';
 function icon(name) {
   const paths = {
     plus: '<path d="M12 5v14M5 12h14"/>',

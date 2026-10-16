@@ -1,6 +1,6 @@
 // kundenpipeline gegen den App-API-4.0-Kern-Stub (createStubKernel, read-only unter /__stub/) in echtem Chromium.
-// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/68b83a3), sonst ~/.local/state/ctox-sync-v4/stub.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/kundenpipeline/tests/v4-api.test.mjs
+// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/f967baf), sonst derselbe Pin.
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf node --test src/apps/business-os/modules/kundenpipeline/tests/v4-api.test.mjs
 // Screenshots (1280/420) nach tests/shots/ mit KUNDENPIPELINE_SHOTS=1.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,7 +12,7 @@ import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/ctox-sync-v4/stub');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
@@ -59,9 +59,11 @@ before(async () => {
     window.__mod = await import(`/modules/${APP}/index.js`);
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false });
     await kernel.ready;
+    // FIXT-R: Eigentümer der Fremd-Collections (echte Manifeste, inkl. ctox-platform) vor der eigenen Version.
+    for (const o of window.__kundenpipelineRoutes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
     await kernel.sim.publishAppVersion(APP, '1', { title: 'Decision Hub', manifestExtra: window.__kundenpipelineRoutes });
     await kernel.sim.push('kundenpipeline_vorgaenge', [
-      { id: 'case-1', title: 'Anfrage Müller GmbH', kunde_name: 'Müller GmbH', quelle_json: { kanal: 'mail', body_clean: 'Bitte Angebot für 40 Module.' }, created_at_ms: 1, updated_at_ms: 1 },
+      { id: 'case-1', title: 'Anfrage Müller GmbH', status: 'offen', kunde_name: 'Müller GmbH', quelle_json: { kanal: 'mail', body_clean: 'Bitte Angebot für 40 Module.' }, created_at_ms: 1, updated_at_ms: 1 },
     ]);
     await kernel.sim.push('kundenpipeline_entscheidungen', [
       { id: 'dec-1', titel: 'Projekt zuordnen', typ: 'zuordnung', status: 'offen', vorgang_id: 'case-1', frage_json: { question: 'Gehört die Anfrage zu Projekt Solar?' }, created_at_ms: 10, updated_at_ms: 10 },

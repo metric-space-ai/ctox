@@ -1,6 +1,6 @@
 // outbound-lead-generation gegen den eingefrorenen App-API-4.0-Kern-Stub (createStubKernel) in echtem Chromium.
 // Muster: modules/knowledge/tests/v4-api.test.mjs. Stub-Pin: CTOX_APP_API_STUB (Pflicht laut Port-Auftrag).
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 \
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf \
 //   node --test src/apps/business-os/customer-modules/outbound-lead-generation/tests/v4-api.test.mjs
 // Bildschirmfotos (1280/420) landen in tests/shots/.
 import { test, before, after } from 'node:test';
@@ -11,8 +11,9 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const APP = '/customer-modules/outbound-lead-generation';
@@ -30,8 +31,8 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8">
 let server, browser, page, base;
 
 const LEADS = [
-  { id: 'lead_alpha', name: 'Alpha Maschinenbau GmbH', campaign: 'Maschinenbau', domain: 'alpha.example', website: 'https://alpha.example', country: 'DE', research_status: 'new', validation_status: 'open', contacts: [], selected_contact_ids: [], payload: {}, data: {}, created_at_ms: 1, updated_at_ms: 2 },
-  { id: 'lead_beta', name: 'Beta Chemie AG', campaign: 'Maschinenbau', domain: 'beta.example', website: 'https://beta.example', country: 'DE', research_status: 'new', validation_status: 'open', contacts: [], selected_contact_ids: [], payload: {}, data: {}, created_at_ms: 1, updated_at_ms: 1 },
+  { id: 'lead_alpha', import_id: 'import_1', name: 'Alpha Maschinenbau GmbH', campaign: 'Maschinenbau', domain: 'alpha.example', website: 'https://alpha.example', city: 'Stuttgart', country: 'DE', research_status: 'new', validation_status: 'open', sellify_status: 'not_started', task_id: '', command_id: '', contacts: [], selected_contact_ids: [], evidence: [], payload: {}, data: {}, created_at_ms: 1, updated_at_ms: 2 },
+  { id: 'lead_beta', import_id: 'import_1', name: 'Beta Chemie AG', campaign: 'Maschinenbau', domain: 'beta.example', website: 'https://beta.example', city: 'Ludwigshafen', country: 'DE', research_status: 'new', validation_status: 'open', sellify_status: 'not_started', task_id: '', command_id: '', contacts: [], selected_contact_ids: [], evidence: [], payload: {}, data: {}, created_at_ms: 1, updated_at_ms: 1 },
 ];
 
 before(async () => {
@@ -57,13 +58,23 @@ before(async () => {
   page.on('console', (m) => { if (m.type() === 'error') console.error('[page]', m.text()); });
   page.__errors = errors;
   await page.goto(base);
+  // Befehlsrouten/Deklarationen der echten Version (v4/manifests/outbound-lead-generation.manifest.json); ohne aktive
+  // Version lehnt der Kern seit E26/E27 App-Befehle (outbound.sellify.lookup …) mit unknown_command ab.
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes('outbound-lead-generation'));
+  // Navigationsziel des Excel-Exports: spreadsheets mit seinen echten Routen (foreign_collections files → liest die
+  // von OLG abgelegte Datei über den lesbaren files-Eintrag, E30).
+  await page.evaluate((routes) => { window.__sheetsRoutes = routes; }, realManifestRoutes('spreadsheets'));
   await page.evaluate(async ({ APP, LEADS }) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import(`${APP}/index.js`);
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, actor: { role: 'admin', permissions: ['apps.source.edit'] } });
     await kernel.ready;
+    await kernel.sim.publishAppVersion('spreadsheets', '1', { title: 'CTOX Spreadsheets', manifestExtra: window.__sheetsRoutes });
+    // FIXT-R: Eigentümer der Fremd-Collections (echte Manifeste, inkl. ctox-platform) vor der eigenen Version.
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion('outbound-lead-generation', '1.0.323', { title: 'Outbound Lead Generation', manifestExtra: window.__routes });
     await kernel.sim.push('outbound_lead_generation_leads', LEADS);
-    await kernel.sim.push('outbound_lead_generation_imports', [{ id: 'import_1', title: 'Maschinenbau', status: 'completed', created_at_ms: 1, updated_at_ms: 1 }]);
+    await kernel.sim.push('outbound_lead_generation_imports', [{ id: 'import_1', title: 'Maschinenbau', source_type: 'csv', status: 'completed', lead_count: 2, payload: {}, created_at_ms: 1, updated_at_ms: 1 }]);
     await kernel.sim.settle();
     window.__k = kernel;
     window.__api = kernel.appApi('outbound-lead-generation', '1.0.323');
@@ -104,7 +115,7 @@ test('Rundgang RUND2: kein Wächter-Kommentar („// v4-allow“) als sichtbarer
 });
 
 test('Live-Änderung vom Core erscheint ohne Neuladen, Löschung verschwindet', async () => {
-  await page.evaluate(() => window.__k.sim.push('outbound_lead_generation_leads', { id: 'lead_gamma', name: 'Gamma Live KG', campaign: 'Maschinenbau', research_status: 'new', contacts: [], selected_contact_ids: [], payload: {}, data: {}, updated_at_ms: 9 }));
+  await page.evaluate(() => window.__k.sim.push('outbound_lead_generation_leads', { id: 'lead_gamma', import_id: 'import_1', name: 'Gamma Live KG', campaign: 'Maschinenbau', domain: 'gamma.example', website: 'https://gamma.example', city: 'Ulm', country: 'DE', research_status: 'new', validation_status: 'open', sellify_status: 'not_started', task_id: '', command_id: '', contacts: [], selected_contact_ids: [], evidence: [], payload: {}, data: {}, created_at_ms: 9, updated_at_ms: 9 }));
   await settle();
   assert.match(await page.$eval('[data-leads-body]', (el) => el.textContent), /Gamma Live KG/);
   await page.evaluate(() => window.__k.sim.push('outbound_lead_generation_leads', { id: 'lead_gamma', _deleted: true }));
@@ -117,6 +128,8 @@ test('leere Collections rendern keinen Zustandstext und keine Zone', async () =>
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     const k2 = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, instanceId: 'leer' });
     await k2.ready;
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await k2.sim.inspect('business_apps', o.app))?.data?.active_ver) await k2.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await k2.sim.publishAppVersion('outbound-lead-generation', '1.0.323', { title: 'Outbound Lead Generation', manifestExtra: window.__routes });
     const host = document.createElement('div');
     document.body.append(host);
     const app = await window.__mod.mount(host, k2.appApi('outbound-lead-generation', '1.0.323'), {});
@@ -144,7 +157,7 @@ test('leere Collections rendern keinen Zustandstext und keine Zone', async () =>
 
 test('Schreiben: api.put erscheint live und wird vom Core angenommen', async () => {
   const result = await page.evaluate(async () => {
-    const h = window.__api.put('outbound_lead_generation_leads', { id: 'lead_delta', name: 'Delta Put GmbH', campaign: 'Maschinenbau', research_status: 'new', contacts: [], selected_contact_ids: [], payload: {}, data: {}, updated_at_ms: 10 });
+    const h = window.__api.put('outbound_lead_generation_leads', { id: 'lead_delta', import_id: 'import_1', name: 'Delta Put GmbH', campaign: 'Maschinenbau', domain: 'delta.example', website: 'https://delta.example', city: 'Köln', country: 'DE', research_status: 'new', validation_status: 'open', sellify_status: 'not_started', task_id: '', command_id: '', contacts: [], selected_contact_ids: [], evidence: [], payload: {}, data: {}, created_at_ms: 10, updated_at_ms: 10 });
     await h.local;
     return h.result;
   });
@@ -308,7 +321,8 @@ test('navigate: Browser-Anmeldung flach in der Routenform der Browser-App', asyn
 
 test('navigate: Excel-Export öffnet Spreadsheets mit file_ref und Herkunft in deren Routenform', async () => {
   const r = await page.evaluate(async () => {
-    await window.__k.sim.publishAppVersion('spreadsheets', '1', {});
+    // FIXT-R: spreadsheets ist schon mit seinem echten Manifest (Version 1) aktiv (before).
+    if (!(await window.__k.sim.inspect('business_apps', 'spreadsheets'))?.data?.active_ver) await window.__k.sim.publishAppVersion('spreadsheets', '1', {});
     const sheetsApi = window.__k.appApi('spreadsheets', '1');
     const routen = [];
     const off = sheetsApi.shell.onRoute((ev) => routen.push(ev));
@@ -319,6 +333,8 @@ test('navigate: Excel-Export öffnet Spreadsheets mit file_ref und Herkunft in d
     off();
     const params = routen[0]?.params || {};
     // Wie modules/spreadsheets/index.js fileFromRef: Bytes über api.files der Spreadsheet-App.
+    // E30: die abgelegte Datei ist für spreadsheets erst über den Core-bestätigten files-Eintrag lesbar.
+    await window.__k.sim.settle();
     const blob = params.file_ref ? await sheetsApi.files.get(params.file_ref) : null;
     const bytes = blob ? new Uint8Array(await blob.arrayBuffer()) : new Uint8Array();
     const sha = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (b) => b.toString(16).padStart(2, '0')).join('');
@@ -422,6 +438,188 @@ test('patchLead: fehlender Lead ist kein stiller Erfolg (main #725)', async () =
     try { await window.__mod.__leadgenOutboundTestHooks.patchLead('lead_gibt_es_nicht', { name: 'x' }); return 'kein Fehler'; } catch (e) { return String(e.message); }
   });
   assert.match(meldung, /LEAD_NOT_FOUND/);
+});
+
+// OLGUI: Lead-Drawer kompakter (Owner: „nicht Pflichtfelder ausblenden … kompaktere Ansicht“).
+// Fixture: recherchierter Lead mit leerem Pflichtfeld (firma_email), leerem optionalem Feld (firma_postfach) und
+// befülltem optionalem Feld (firma_fax); optional = DEFAULT_OPTIONAL_FIELDS.
+const OLGUI_LEAD = { id: 'lead_olgui', import_id: 'import_1', name: 'Testwerk Kompakt GmbH', campaign: 'Maschinenbau', domain: 'testwerk.example', website: 'https://testwerk.example',
+  city: 'Berlin', country: 'DE', research_status: 'completed', validation_status: 'open', sellify_status: 'not_started', task_id: '', command_id: '', contacts: [], selected_contact_ids: [], evidence: [],
+  // Vorabgleich: nicht im CRM → nur „Neue Recherche“ als Rechercheweg (deterministisch, ohne Abgleichlauf).
+  payload: { sellify_precheck: { known: false } }, data: { firma_fax: '+49 30 1234567', firma_anschrift: 'Musterstraße 1' }, created_at_ms: 1, updated_at_ms: 3 };
+const olguiOeffnen = (tab = 'overview') => page.evaluate(async ({ lead, tab }) => {
+  await window.__k.sim.push('outbound_lead_generation_leads', [lead]);
+  await window.__k.sim.settle();
+  await new Promise((r) => setTimeout(r, 150));
+  const r = window.__mod.__leadgenOutboundTestHooks.__render;
+  // Offene Masken früherer Tests schließen (Adapter-Skript, Lead-Editor, Quellen), sonst liegen sie über dem Drawer.
+  r.setState({ selectedLeadId: lead.id, activeDetailTab: tab, search: '', adapterInspectorSourceId: '', sellifyImportOpen: false,
+    leadEditorOpen: false, leadDraft: null, leadEditorSaving: false, sourcePanelOpen: false });
+  r.render();
+}, { lead: OLGUI_LEAD, tab });
+
+test('OLGUI: Übersicht ohne abgeschnittene Zeile „Feld(er) ohne Wert … blockieren die Freigabe nicht“', async () => {
+  await olguiOeffnen('overview');
+  await settle();
+  const text = await page.$eval('[data-detail-body]', (el) => el.textContent);
+  assert.match(text, /Recherche/);
+  assert.doesNotMatch(text, /Feld\(er\)[^]*ohne Wert/);
+  assert.doesNotMatch(text, /blockieren die Freigabe nicht/);
+  assert.doesNotMatch(text, /begründet „nicht gefunden“/);
+});
+
+const felderImDrawer = () => page.$$eval('[data-detail-body] [data-review-field]', (lis) => lis.map((li) => li.dataset.reviewField));
+const schalterStand = () => page.$eval('[data-detail-body] [data-action="toggle-required-only"]', (b) => b.getAttribute('aria-checked'));
+
+test('OLGUI: „Nur Pflichtfelder“ blendet nur leere optionale Felder aus (Standard aus)', async () => {
+  await olguiOeffnen('company');
+  await settle();
+  assert.equal(await schalterStand(), 'false', 'Standard: aus');
+  const vorher = await felderImDrawer();
+  for (const key of ['firma_postfach', 'firma_email', 'firma_fax']) assert.ok(vorher.includes(key), `${key} sichtbar, solange aus`);
+  await page.click('[data-detail-body] [data-action="toggle-required-only"]');
+  await settle();
+  assert.equal(await schalterStand(), 'true');
+  const nachher = await felderImDrawer();
+  assert.ok(!nachher.includes('firma_postfach'), 'leeres optionales Feld ausgeblendet');
+  assert.ok(nachher.includes('firma_email'), 'leeres Pflichtfeld bleibt');
+  assert.ok(nachher.includes('firma_fax'), 'befülltes optionales Feld bleibt');
+  assert.ok(nachher.includes('firma_anschrift'), 'befülltes Pflichtfeld bleibt');
+  assert.ok(nachher.length < vorher.length);
+  // Tastatur: Fokus bleibt auf dem Schalter, Leertaste schaltet zurück.
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.action), 'toggle-required-only');
+  await page.keyboard.press('Space');
+  await settle();
+  assert.equal(await schalterStand(), 'false');
+  assert.ok((await felderImDrawer()).includes('firma_postfach'));
+});
+
+test('OLGUI: „Nur Pflichtfelder“ überlebt den Remount (snapshot/restored)', async () => {
+  await olguiOeffnen('company');
+  await page.click('[data-detail-body] [data-action="toggle-required-only"]');
+  await settle();
+  const snap = await page.evaluate(async () => {
+    const cloned = structuredClone(window.__app.snapshot());
+    await window.__app.unmount();
+    window.__mod.__leadgenOutboundTestHooks.__render.getState().requiredFieldsOnly = false;
+    window.__app = await window.__mod.mount(document.getElementById('win'), window.__c.api, { restored: cloned });
+    return cloned;
+  });
+  assert.equal(snap.requiredFieldsOnly, true);
+  await settle();
+  assert.equal(await schalterStand(), 'true');
+  assert.ok(!(await felderImDrawer()).includes('firma_postfach'));
+  // Zurück auf aus, damit folgende Tests den Standard sehen.
+  await page.click('[data-detail-body] [data-action="toggle-required-only"]');
+  await settle();
+  assert.equal(await schalterStand(), 'false');
+});
+
+// Fensternachbau wie modules/outbound/tests/v4-api.test.mjs (FR5-1): #win = Fenster, darin der App-root; das Menü des
+// Rahmens (window-sheet.js) hängt im Fenster, nicht im Dokument.
+const olguiMitFenstermenue = () => page.evaluate(async () => {
+  const { withWindowSheet } = await import('/v4/tools/port/test-api.mjs');
+  // Wie der Rahmen (v4/frame/index.js): Theme-Tokens und gemeinsame base.css vor dem App-CSS, dazu frame.css für das Menü.
+  for (const href of ['/v4/frame/theme/theme.css', '/shared/base.css', '/v4/frame/frame.css']) {
+    if (document.querySelector(`link[href="${href}"]`)) continue;
+    const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = href;
+    await new Promise((r) => { l.onload = l.onerror = r; document.head.insertBefore(l, document.head.querySelector('link')); });
+  }
+  await window.__app?.unmount?.();
+  const winEl = document.getElementById('win');
+  const content = document.createElement('div');
+  content.dataset.fr5Content = '';
+  content.style.cssText = 'position:absolute;inset:0;overflow:auto';
+  winEl.replaceChildren(content);
+  const { api } = await withWindowSheet(window.__c.api, winEl, { root: content });
+  window.__app = await window.__mod.mount(content, api, {});
+});
+const leisteZeilen = () => page.$$eval('[data-detail-action-bar] > button', (bs) => bs.map((b) => {
+  const r = b.getBoundingClientRect();
+  return { action: b.dataset.action, top: Math.round(r.top), right: Math.round(r.right), bar: Math.round(b.parentElement.getBoundingClientRect().right) };
+}));
+const ueberlauf = () => page.evaluate(() => {
+  const pane = document.querySelector('#win [data-detail-pane]');
+  const body = pane?.querySelector('[data-detail-body]');
+  const scroller = document.querySelector('#win [data-fr5-content]') || document.getElementById('win');
+  return { seite: scroller.scrollWidth - scroller.clientWidth, drawer: body ? body.scrollWidth - body.clientWidth : 0 };
+});
+const geclippteTexte = () => page.$$eval('#win [data-detail-pane] :is(button, h2, h3, small, strong, span, .leadgen-review-label)', (els) => els
+  .filter((el) => el.offsetParent && el.children.length === 0 && el.textContent.trim()
+    && getComputedStyle(el).textOverflow !== 'ellipsis' && el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).overflow !== 'visible')
+  .map((el) => el.textContent.trim().slice(0, 40)));
+
+test('OLGUI: Aktionsleiste eine Zeile (Hauptaktion + „…“), Menü per Tastatur/Esc/Klick daneben, Bildschirmfotos', async () => {
+  await mkdir(SHOTS, { recursive: true });
+  await olguiMitFenstermenue();
+  for (const breite of [1280, 420]) {
+    await page.setViewportSize({ width: breite, height: breite === 420 ? 860 : 800 });
+    await olguiOeffnen('overview');
+    await settle();
+    const leiste = await leisteZeilen();
+    // Recherchierter Lead mit Lücken: Hauptaktion „Lücken schließen“.
+    assert.deepEqual(leiste.map((b) => b.action), ['research-lead-gaps', 'lead-detail-more'], `Hauptaktion + „…“ bei ${breite}`);
+    assert.equal(new Set(leiste.map((b) => b.top)).size, 1, `eine Zeile bei ${breite}: ${JSON.stringify(leiste)}`);
+    assert.ok(leiste.every((b) => b.right <= b.bar + 1), `Knöpfe innerhalb der Leiste bei ${breite}`);
+    const quer = await ueberlauf();
+    assert.ok(quer.seite <= 1 && quer.drawer <= 1, `kein horizontales Überlaufen bei ${breite}: ${JSON.stringify(quer)}`);
+    assert.deepEqual(await geclippteTexte(), [], `kein abgeschnittener Text bei ${breite}`);
+    const pane = await page.$('#win [data-detail-pane]');
+    // Bei 420 ist der Drawer niedrig: die Leiste in den sichtbaren Bereich des Drawers holen.
+    await page.evaluate(() => document.querySelector('#win [data-detail-action-bar]').scrollIntoView({ block: 'center' }));
+    await page.waitForTimeout(100);
+    await pane.screenshot({ path: join(SHOTS, `olgui-${breite}-leiste.png`) });
+    // „…“ per Tastatur: Enter öffnet, Pfeil bewegt, Esc schließt und gibt den Fokus zurück.
+    await page.focus('#win [data-action="lead-detail-more"]');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('#win [data-v4-menu]');
+    assert.equal(await page.$eval('#win [data-action="lead-detail-more"]', (b) => b.getAttribute('aria-expanded')), 'true');
+    const items = await page.$$eval('#win [data-v4-menu] [data-v4-menu-item]', (bs) => bs.map((b) => b.dataset.v4MenuItem));
+    assert.deepEqual(items, ['research-lead-new', 'validate-lead', 'sellify-update-only', 'export-lead-xlsx', 'sellify-update-campaign']);
+    assert.equal(await page.evaluate(() => document.querySelector('#win').contains(document.querySelector('[data-v4-menu]'))), true, 'Menü im Fenster');
+    // Ausschnitt = Drawer ∪ Menü (das Menü darf über den Drawer hinausragen, es hängt im Fenster).
+    const clip = await page.evaluate(() => {
+      const a = document.querySelector('#win [data-detail-pane]').getBoundingClientRect();
+      const b = document.querySelector('#win [data-v4-menu]').getBoundingClientRect();
+      const x = Math.max(0, Math.min(a.left, b.left)); const y = Math.max(0, Math.min(a.top, b.top));
+      return { x, y, width: Math.min(innerWidth, Math.max(a.right, b.right)) - x, height: Math.min(innerHeight, Math.max(a.bottom, b.bottom)) - y };
+    });
+    await page.screenshot({ path: join(SHOTS, `olgui-${breite}-menue.png`), clip });
+    await page.keyboard.press('Escape');
+    assert.equal(await page.$('#win [data-v4-menu]'), null, 'Esc schließt das Menü');
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset.action), 'lead-detail-more', 'Fokus zurück auf „…“');
+    assert.equal(await page.$eval('#win [data-action="lead-detail-more"]', (b) => b.getAttribute('aria-expanded')), 'false');
+    // Klick daneben schließt ebenfalls.
+    await page.click('#win [data-action="lead-detail-more"]');
+    await page.waitForSelector('#win [data-v4-menu]');
+    await page.mouse.click(5, 5);
+    await page.waitForTimeout(100);
+    assert.equal(await page.$('#win [data-v4-menu]'), null, 'Klick daneben schließt das Menü');
+    // Feldreiter: Schalter aus und an.
+    await olguiOeffnen('company');
+    await settle();
+    await page.evaluate(() => { document.querySelector('#win [data-detail-body]').scrollTop = 0; document.querySelector('#win [data-detail-pane]').scrollIntoView({ block: 'end' }); });
+    assert.equal(await schalterStand(), 'false');
+    assert.deepEqual(await geclippteTexte(), [], `kein abgeschnittener Text (Feldreiter) bei ${breite}`);
+    await pane.screenshot({ path: join(SHOTS, `olgui-${breite}-pflicht-aus.png`) });
+    await page.click('#win [data-detail-body] [data-action="toggle-required-only"]');
+    await settle();
+    assert.equal(await schalterStand(), 'true');
+    const quer2 = await ueberlauf();
+    assert.ok(quer2.seite <= 1 && quer2.drawer <= 1, `kein horizontales Überlaufen (Schalter an) bei ${breite}: ${JSON.stringify(quer2)}`);
+    await pane.screenshot({ path: join(SHOTS, `olgui-${breite}-pflicht-an.png`) });
+    await page.click('#win [data-detail-body] [data-action="toggle-required-only"]');
+    await settle();
+  }
+  assert.deepEqual(page.__errors, []);
+  // Zurück auf die normale Montage für die folgenden Tests.
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.evaluate(async () => {
+    await window.__app?.unmount?.();
+    document.getElementById('win').replaceChildren();
+    window.__app = await window.__mod.mount(document.getElementById('win'), window.__c.api, {});
+  });
+  await settle();
 });
 
 test('unmount meldet alle Abos ab und leert root', async () => {

@@ -192,7 +192,7 @@
     },
     "app_activations": {
       "basis": "Entscheidung: Plattform-Collection (§16.17, ctox-platform.manifest.json)",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [],
       "owner": "ctox-platform",
       "proposal": false,
@@ -209,7 +209,7 @@
     },
     "app_drafts": {
       "basis": "Entscheidung: Plattform-Collection (§16.22: Entwürfe je (App, Nutzer), Eigentum ctox-platform)",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [],
       "owner": "ctox-platform",
       "proposal": false,
@@ -357,7 +357,7 @@
     },
     "business_app_versions": {
       "basis": "Entscheidung: Plattform-Collection (§9.2, §16.17)",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [],
       "owner": "ctox-platform",
       "proposal": false,
@@ -365,7 +365,7 @@
     },
     "business_apps": {
       "basis": "Entscheidung: Plattform-Collection (§9.2, §16.14, §16.17)",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [],
       "owner": "ctox-platform",
       "proposal": false,
@@ -698,7 +698,7 @@
     },
     "ctox_crew_assignments": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "ctox"
       ],
@@ -708,7 +708,7 @@
     },
     "ctox_crew_continuity": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "ctox"
       ],
@@ -718,7 +718,7 @@
     },
     "ctox_crew_continuity_commits": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "ctox"
       ],
@@ -1167,7 +1167,7 @@
     },
     "files": {
       "basis": "Entscheidung: Plattform-Collection (§10.2a api.files, ctox-platform.manifest.json)",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [],
       "owner": "ctox-platform",
       "proposal": false,
@@ -1345,7 +1345,7 @@
     },
     "knowledge_tasks": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "knowledge"
       ],
@@ -1395,7 +1395,7 @@
     },
     "legacy_records": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "ctox"
       ],
@@ -1414,7 +1414,7 @@
     },
     "mail_server_state": {
       "basis": "keine App definiert die Collection; keine Präfixregel → Plattform",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [],
       "no_defining_app": true,
       "owner": "ctox-platform",
@@ -1586,7 +1586,7 @@
     },
     "outbound_lead_generation_field_status_witnesses": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "outbound-lead-generation"
       ],
@@ -1596,7 +1596,7 @@
     },
     "outbound_lead_generation_imports": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "outbound-lead-generation"
       ],
@@ -1606,7 +1606,7 @@
     },
     "outbound_lead_generation_leads": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "outbound-lead-generation"
       ],
@@ -1616,7 +1616,7 @@
     },
     "outbound_lead_generation_policy_report_reviews": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "outbound-lead-generation"
       ],
@@ -1626,7 +1626,7 @@
     },
     "outbound_lead_generation_research_policies": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "outbound-lead-generation"
       ],
@@ -1636,7 +1636,7 @@
     },
     "outbound_lead_generation_scrape_account_states": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "outbound-lead-generation"
       ],
@@ -1646,7 +1646,7 @@
     },
     "outbound_lead_generation_scrape_runs": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "outbound-lead-generation"
       ],
@@ -1656,7 +1656,7 @@
     },
     "outbound_lead_generation_scrape_scripts": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "outbound-lead-generation"
       ],
@@ -1666,7 +1666,7 @@
     },
     "outbound_lead_generation_scrape_targets": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "outbound-lead-generation"
       ],
@@ -1676,7 +1676,7 @@
     },
     "outbound_lead_generation_sources": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "outbound-lead-generation"
       ],
@@ -1748,7 +1748,7 @@
     },
     "outbound_research_policies": {
       "basis": "Entscheidung: §16.21 Eigentum: OLG (einziger Schreiber outbound.research_policy.publish; heute nur nativ in business_records)",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "outbound-lead-generation"
       ],
@@ -1830,7 +1830,7 @@
     },
     "outbound_tracking_endpoints": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "outbound"
       ],
@@ -1840,7 +1840,7 @@
     },
     "outbound_tracking_events": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "outbound"
       ],
@@ -1850,7 +1850,7 @@
     },
     "outbound_tracking_tokens": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "outbound"
       ],
@@ -1870,7 +1870,7 @@
     },
     "planned_steps": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "ctox"
       ],
@@ -1960,7 +1960,7 @@
     },
     "sellify_campaigns": {
       "basis": "Entscheidung: §16.21 Eigentum: OLG (Projektion der externen SQL-Quelle Sellify)",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "outbound-lead-generation"
       ],
@@ -1970,7 +1970,7 @@
     },
     "sellify_companies": {
       "basis": "Entscheidung: §16.21 Eigentum: OLG (Projektion der externen SQL-Quelle Sellify)",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "outbound-lead-generation"
       ],
@@ -1980,7 +1980,7 @@
     },
     "sellify_people": {
       "basis": "Entscheidung: §16.21 Eigentum: OLG (Projektion der externen SQL-Quelle Sellify)",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "outbound-lead-generation"
       ],
@@ -1990,7 +1990,7 @@
     },
     "shell_preferences": {
       "basis": "Entscheidung: Plattform-Collection (§16.19 Nr. 3)",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [],
       "owner": "ctox-platform",
       "proposal": false,
@@ -2330,7 +2330,7 @@
     },
     "workjet_jour_fixe_meetings": {
       "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [
         "ctox"
       ],

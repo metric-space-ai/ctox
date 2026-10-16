@@ -66,6 +66,8 @@ before(async () => {
     await kernel.ready;
     const now = Date.now();
     await kernel.sim.push('business_apps', [{ id: 'browser', title: 'Browser' }, { id: 'outbound', title: 'Outbound' }]);
+    // FIXT-R: Eigentümer der Fremd-Collections (echte Manifeste, inkl. ctox-platform) vor der eigenen Version.
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
     await kernel.sim.publishAppVersion('browser', '0.3.0', { title: 'Browser', manifestExtra: window.__routes });
     await kernel.sim.push('browser_sessions', [
       { id: 'browser_session_michael_1', owner_user_id: 'michael', controller_user_id: 'michael', controller_lease_id: 'lease-1', controller_lease_expires_at_ms: now + 110_000, status: 'active', runtime_status: 'active', title: 'Example Domain', current_url: 'https://example.com/', current_tab_id: 'browser_tab_1', profile_mode: 'persistent', created_at_ms: now - 5000, updated_at_ms: now - 1000 },
@@ -153,6 +155,8 @@ test('leere Collections: kein Zustandstext und keine Zone; Bühne zeigt genau ei
     const k2 = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, instanceId: 'empty' });
     await k2.ready;
     // Leere App-Collections, aber eine aktive Version mit Routen (sonst unknown_command für browser.session.start).
+    // FIXT-R: Eigentümer der Fremd-Collections (echte Manifeste, inkl. ctox-platform) vor der eigenen Version.
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await k2.sim.inspect('business_apps', o.app))?.data?.active_ver) await k2.sim.publishAppVersion(o.app, o.ver, o.publish);
     await k2.sim.publishAppVersion('browser', '0.3.0', { title: 'Browser', manifestExtra: window.__routes });
     const host = document.createElement('div');
     host.style.cssText = 'width:900px;height:600px';

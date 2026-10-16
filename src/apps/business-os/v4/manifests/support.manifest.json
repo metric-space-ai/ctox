@@ -7,11 +7,6 @@
       "handlers/_agent-task.js"
     ]
   },
-  "_commands_out_evidence": {
-    "tickets ctox.ticket.local.create": [
-      "handlers/support.ticket.create_from_conversation.js:33"
-    ]
-  },
   "_declaration": "modules/support/v4-manifest.json",
   "_format": "ctox-shell-v4-app-manifest-draft-1",
   "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
@@ -21,6 +16,40 @@
   "_source_dir": "src/apps/business-os/modules/support",
   "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
   "_todo": [
+    "command_rights support.inbox.upsert (support.manage_inboxes): kein Handler-Datei.",
+    "command_rights support.conversation.open_from_thread (support.triage): kein Handler-Datei.",
+    "command_rights support.conversation.claim (support.triage): kein Handler-Datei.",
+    "command_rights support.conversation.assign (support.assign): kein Handler-Datei.",
+    "command_rights support.conversation.status (support.triage): kein Handler-Datei.",
+    "command_rights support.conversation.priority (support.triage): kein Handler-Datei.",
+    "command_rights support.conversation.snooze (support.triage): kein Handler-Datei.",
+    "command_rights support.conversation.resolve (support.resolve): kein Handler-Datei.",
+    "command_rights support.conversation.reopen (support.triage): kein Handler-Datei.",
+    "command_rights support.identity.link (support.triage): kein Handler-Datei.",
+    "command_rights support.note.create (support.triage): kein Handler-Datei.",
+    "command_rights support.ticket.link (support.triage): kein Handler-Datei.",
+    "command_rights support.ticket.create_from_conversation (support.triage): kein Handler-Datei.",
+    "command_rights support.reply.draft (support.reply): kein Handler-Datei.",
+    "command_rights support.reply.send (support.reply): kein Handler-Datei.",
+    "command_rights support.view.upsert (support.triage): kein Handler-Datei.",
+    "command_rights support.view_filter.upsert (support.triage): kein Handler-Datei.",
+    "command_rights support.bulk.assign (support.assign): kein Handler-Datei.",
+    "command_rights support.bulk.status (support.triage): kein Handler-Datei.",
+    "command_rights support.bulk.priority (support.triage): kein Handler-Datei.",
+    "command_rights support.bulk.snooze (support.triage): kein Handler-Datei.",
+    "command_rights support.bulk.resolve (support.resolve): kein Handler-Datei.",
+    "command_rights support.assignment_policy.upsert (support.assign): kein Handler-Datei.",
+    "command_rights support.macro.upsert (support.manage_macros): kein Handler-Datei.",
+    "command_rights support.macro.run (support.triage): kein Handler-Datei.",
+    "command_rights support.automation_rule.upsert (support.manage_inboxes): kein Handler-Datei.",
+    "command_rights support.automation.evaluate (support.triage): kein Handler-Datei.",
+    "command_rights support.sla_policy.upsert (support.manage_sla): kein Handler-Datei.",
+    "command_rights support.sla.apply (support.manage_sla): kein Handler-Datei.",
+    "command_rights support.sla.recalculate (support.manage_sla): kein Handler-Datei.",
+    "command_rights support.reporting.rebuild_rollups (support.manage_inboxes): kein Handler-Datei.",
+    "command_rights support.agent.writeback (support.agent_request): kein Handler-Datei.",
+    "command_rights support.agent.apply_suggestion (support.agent_apply): kein Handler-Datei.",
+    "command_rights support.agent.reject_suggestion (support.agent_apply): kein Handler-Datei.",
     "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
     "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
     "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
@@ -1916,20 +1945,8 @@
       ]
     }
   },
-  "commands_in": [
-    {
-      "from": [
-        "mail"
-      ],
-      "type": "support.conversation.open_from_thread"
-    }
-  ],
-  "commands_out": [
-    {
-      "app": "tickets",
-      "type": "ctox.ticket.local.create"
-    }
-  ],
+  "commands_in": [],
+  "commands_out": [],
   "created_at": null,
   "entry": "index.js",
   "exports": {
@@ -2200,44 +2217,10 @@
     }
   },
   "handlers": {
-    "support.agent.apply_suggestion": "handlers/support.agent.apply_suggestion.js",
-    "support.agent.reject_suggestion": "handlers/support.agent.reject_suggestion.js",
     "support.agent.task": "handlers/support.agent.task.js",
     "support.agent.task.complete": "handlers/support.agent.task.complete.js",
     "support.agent.task.failed": "handlers/support.agent.task.failed.js",
-    "support.agent.writeback": "handlers/support.agent.writeback.js",
-    "support.assignment_policy.upsert": "handlers/support.assignment_policy.upsert.js",
-    "support.automation.evaluate": "handlers/support.automation.evaluate.js",
-    "support.automation_rule.upsert": "handlers/support.automation_rule.upsert.js",
-    "support.bulk.assign": "handlers/support.bulk.assign.js",
-    "support.bulk.priority": "handlers/support.bulk.priority.js",
-    "support.bulk.resolve": "handlers/support.bulk.resolve.js",
-    "support.bulk.snooze": "handlers/support.bulk.snooze.js",
-    "support.bulk.status": "handlers/support.bulk.status.js",
-    "support.conversation.assign": "handlers/support.conversation.assign.js",
-    "support.conversation.claim": "handlers/support.conversation.claim.js",
-    "support.conversation.open_from_thread": "handlers/support.conversation.open_from_thread.js",
-    "support.conversation.priority": "handlers/support.conversation.priority.js",
-    "support.conversation.reopen": "handlers/support.conversation.reopen.js",
-    "support.conversation.resolve": "handlers/support.conversation.resolve.js",
-    "support.conversation.snooze": "handlers/support.conversation.snooze.js",
-    "support.conversation.status": "handlers/support.conversation.status.js",
-    "support.identity.link": "handlers/support.identity.link.js",
-    "support.inbox.upsert": "handlers/support.inbox.upsert.js",
-    "support.intake.project": "handlers/support.intake.project.js",
-    "support.macro.run": "handlers/support.macro.run.js",
-    "support.macro.upsert": "handlers/support.macro.upsert.js",
-    "support.note.create": "handlers/support.note.create.js",
-    "support.reply.draft": "handlers/support.reply.draft.js",
-    "support.reply.send": "handlers/support.reply.send.js",
-    "support.reporting.rebuild_rollups": "handlers/support.reporting.rebuild_rollups.js",
-    "support.sla.apply": "handlers/support.sla.apply.js",
-    "support.sla.recalculate": "handlers/support.sla.recalculate.js",
-    "support.sla_policy.upsert": "handlers/support.sla_policy.upsert.js",
-    "support.ticket.create_from_conversation": "handlers/support.ticket.create_from_conversation.js",
-    "support.ticket.link": "handlers/support.ticket.link.js",
-    "support.view.upsert": "handlers/support.view.upsert.js",
-    "support.view_filter.upsert": "handlers/support.view_filter.upsert.js"
+    "support.intake.project": "handlers/support.intake.project.js"
   },
   "layout": {
     "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/support.jpg (shared/operator-icon-selection.js, sha256 d5058006ec86…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
