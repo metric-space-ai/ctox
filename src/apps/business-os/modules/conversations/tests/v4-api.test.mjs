@@ -1,6 +1,6 @@
 // conversations gegen den eingefrorenen App-API-4.0-Kern-Stub (Pin 9fa9948, read-only unter /__stub/) in echtem
 // Chromium. Eigene Attrappe (v4/tools/port/test-api.mjs) nur für den Abo-Zähler.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 \
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/8265bd7 \
 //       node --test src/apps/business-os/modules/conversations/tests/v4-api.test.mjs
 // Playwright: aus PLAYWRIGHT_MODULE, sonst ~/Documents/ctox/src/apps/business-os/node_modules/playwright.
 import { test, before, after } from 'node:test';
@@ -11,9 +11,10 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const BOS = normalize(join(HERE, '../../..'));
 const SHOTS = join(HERE, 'shots');
 const require = createRequire(import.meta.url);
@@ -59,6 +60,9 @@ before(async () => {
   page.on('response', (r) => { if (r.status() >= 400) console.error('[page] HTTP', r.status(), r.url()); });
   page.__errors = errors;
   await page.goto(base);
+  // FIXT-8265 (E48): echte Deklarationen der conversations-Version (v4/manifests/conversations.manifest.json, Fremdlesen
+  // der outbound_*-Collections) plus Eigentümer-Manifest outbound; ohne veröffentlichte Version sperrt der Kern Fremdlesen.
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes('conversations'));
   await page.evaluate(async ({ link, t }) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import('/modules/conversations/index.js');
@@ -66,6 +70,8 @@ before(async () => {
     await kernel.ready;
     const sim = kernel.sim;
     await sim.push('business_apps', ['ctox', 'outbound', 'conversations', 'file-viewer'].map((id) => ({ id, title: id })));
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await sim.inspect('business_apps', o.app))?.data?.active_ver) await sim.publishAppVersion(o.app, o.ver, o.publish);
+    await sim.publishAppVersion('conversations', '1.0.2', { title: 'Conversations', manifestExtra: window.__routes });
     await sim.push('communication_accounts', [
       { id: 'acct-mail', account_key: 'acct-mail', channel: 'email', address: 'ops@ctox.dev', provider: 'imap', created_at: t[3], updated_at: t[0], last_inbound_ok_at: t[1], last_outbound_ok_at: t[2] },
       { id: 'acct-wa', account_key: 'acct-wa', channel: 'whatsapp', address: '+49 30 555 0101', provider: 'whatsapp-web', created_at: t[3], updated_at: t[0] },
@@ -85,9 +91,16 @@ before(async () => {
     await sim.settle();
     const api = kernel.appApi('conversations', '1.0.2');
     window.__k = kernel;
-    window.__api = api;
+    // FIXT-8265: conversations deklariert business_commands nicht (nur api.command). Testseitiges Lesen daher über die
+    // Befehls-ids aus api.command und kernel.sim.inspect, nicht über die App-API.
+    const cmdIds = [];
+    window.__api = { ...api, command(type, payload, opts) { const h = api.command(type, payload, opts); cmdIds.push(h.id); return h; } };
     window.__zone = () => kernel.statusZone.forApp('conversations').get().filter((e) => e.source === 'app');
-    window.__commands = () => api.query('business_commands', { sort: [{ created_at: 'asc' }] }).get();
+    window.__commands = async () => {
+      const rows = [];
+      for (const id of cmdIds) { const r = await kernel.sim.inspect('business_commands', id); if (r?.data != null && !r.deleted) rows.push(r.data); }
+      return rows.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+    };
   }, { link: OUTBOUND_LINK, t: [iso(5), iso(30), iso(60 * 26), iso(60 * 24 * 30)] });
 });
 
@@ -120,7 +133,7 @@ test('mount: Live-Daten, Auswahl, Timeline, Outbound-Kontext; nur api.*, gescopt
   const subs = await page.evaluate(() => ['communication_threads', 'communication_accounts', 'communication_messages', 'outbound_messages', 'outbound_approvals'].map((c) => window.__c.subscribers(c)));
   assert.deepEqual(subs, [1, 1, 1, 1, 1]);
   // Auto-Zuordnung der eingegangenen Antwort (v3-Verhalten) als Befehl, ohne Warten.
-  const match = await page.evaluate(() => window.__commands().find((c) => c.type === 'outbound.reply.match'));
+  const match = await page.evaluate(async () => (await window.__commands()).find((c) => c.type === 'outbound.reply.match'));
   assert.equal(match?.payload.engagement_id, 'eng-1');
   assert.equal(match?.payload.reply_message_id, 'm-a1');
   assert.deepEqual(await page.evaluate(() => window.__zone()), []);
@@ -171,10 +184,10 @@ test('leere Collections rendern keinen Zustandstext und keine Zone', async () =>
 
 test('Freigeben: Befehl über api.command (gehört outbound), kein lokales Upsert; done → Projektion in communication_messages', async () => {
   await page.click('[data-action="conv-outbound-approve"]');
-  const immediate = await page.evaluate(() => window.__commands().filter((c) => c.type === 'outbound.message.approve'));
+  const immediate = await page.evaluate(async () => (await window.__commands()).filter((c) => c.type === 'outbound.message.approve'));
   assert.equal(immediate.length, 1, 'Befehl liegt sofort lokal an, ohne Warten');
   await settle();
-  const cmd = await page.evaluate(() => window.__commands().find((c) => c.type === 'outbound.message.approve'));
+  const cmd = await page.evaluate(async () => (await window.__commands()).find((c) => c.type === 'outbound.message.approve'));
   assert.equal(cmd.payload.message_id, 'om-1');
   assert.equal(cmd.payload.record_id, 'om-1');
   assert.equal(cmd.payload.client_context.source_module, 'conversations');
@@ -199,7 +212,7 @@ test('Ablehnen schlägt fehl → genau ein Eintrag in der Zustandszone, keine Pr
   await page.evaluate(() => window.__k.sim.failCommand('outbound.message.reject', 'kaputt'));
   await page.click('[data-action="conv-outbound-reject"]');
   await settle();
-  const cmd = await page.evaluate(() => window.__commands().find((c) => c.type === 'outbound.message.reject'));
+  const cmd = await page.evaluate(async () => (await window.__commands()).find((c) => c.type === 'outbound.message.reject'));
   assert.equal(cmd.payload.message_id, 'om-1');
   assert.equal(cmd.payload.comment, 'Rejected from Conversations');
   assert.equal(cmd.status, 'failed');
@@ -216,7 +229,7 @@ test('Reply-Klasse: Befehl outbound.reply.classify mit gewählter Klasse', async
   await page.selectOption('.conv-outbound-reply-classifier select', 'positive');
   await page.click('[data-action="conv-outbound-reply-classify"]');
   await settle();
-  const cmd = await page.evaluate(() => window.__commands().filter((c) => c.type === 'outbound.reply.classify').at(-1));
+  const cmd = await page.evaluate(async () => (await window.__commands()).filter((c) => c.type === 'outbound.reply.classify').at(-1));
   assert.deepEqual({ e: cmd.payload.engagement_id, c: cmd.payload.classification, r: cmd.payload.reply_message_id }, { e: 'eng-1', c: 'positive', r: 'm-a3' }, 'neueste eingegangene Antwort (m-a3 kam live)');
 });
 
