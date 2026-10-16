@@ -488,16 +488,12 @@ impl AppGrantSession {
     ) -> scope::Result<Vec<ScopeRevoke>> {
         let rights = super::read(tx).map_err(|_| "grant rights unavailable")?;
         let mut state = self.state.lock().map_err(|_| "grant session unavailable")?;
-        let peer_valid = self
-            .peer_authority
-            .validate(tx, &state.user, &state.role, &state.device)
-            .is_ok();
         let invalid: Vec<_> = state
             .issued
             .iter()
             .filter_map(|(app, issued)| {
                 let valid = state.active
-                    && peer_valid
+                    && self.peer_authority.validate(tx, &state.user, &state.role, &state.device, app).is_ok()
                     && now < issued.claims.exp
                     && issued.claims.rights_ver == rights.rights_ver.to_string()
                     && resolve(tx, &rights, &state, app).is_ok_and(|(cols, hash)| {
