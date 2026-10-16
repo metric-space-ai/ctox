@@ -38,6 +38,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex as AsyncMutex;
 
+#[path = "rxdb_peer_browser_e44.rs"]
+mod e44;
+
 pub(super) static BROWSER_RUNTIME_LOOP_METRICS: NativePeerLoopMetrics =
     NativePeerLoopMetrics::new("browser_runtime");
 static BROWSER_FRAME_CAPTURE_SLOTS: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
@@ -583,7 +586,7 @@ async fn handle_browser_live_webrtc_request_inner(
             now_ms() as u64,
             result.get("error").and_then(Value::as_str),
             Some(&access),
-            None,
+            Some(&e44::prompt_metadata(None, &nav)),
         )
         .await
         .map_err(|error| format!("browser live session projection failed: {error:#}"))?;
@@ -902,7 +905,7 @@ async fn start_browser_live_webrtc_session(
         now,
         navigation.get("error").and_then(Value::as_str),
         Some(&access),
-        Some(request),
+        Some(&e44::prompt_metadata(Some(request), &nav)),
     )
     .await
     .map_err(|error| format!("browser direct session projection failed: {error:#}"))?;
@@ -948,6 +951,11 @@ pub(super) fn is_browser_runtime_command(command_type: &str) -> bool {
             | "browser.tab.open"
             | "browser.tab.activate"
             | "browser.tab.close"
+            | "browser.http_auth.respond"
+            | "browser.observer.grant"
+            | "browser.observer.revoke"
+            | "browser.upload.select"
+            | "browser.webauthn.respond"
             | "browser.dialog.respond"
             | "browser.permission.respond"
             | "browser.clipboard.copy"
@@ -1342,6 +1350,21 @@ async fn apply_browser_runtime_command_as(
         return Ok(());
     }
 
+    if e44::is_control_response(command_type) {
+        anyhow::ensure!(store::webrtc_capability_allows_collection_permission(
+            root, capability_token, "browser_sessions", BusinessOsPermission::DataWrite),
+            "browser control response requires session write permission");
+        e44::require_owned_session(&existing_session, &profile_owner)?;
+        if matches!(command_type, "browser.observer.grant" | "browser.observer.revoke") {
+            let observers = e44::update_observers(database, &existing_session, &profile_owner,
+                command_type, &payload).await?;
+            mark_browser_runtime_command_completed(database, document, accepted,
+                json!({"ok": true, "session_id": session_id,
+                    "allowed_observer_user_ids": observers})).await?;
+            return Ok(());
+        }
+    }
+
     if existing_session.is_object() && command_type != "browser.session.start" {
         let current_controller = existing_session
             .get("controller_user_id")
@@ -1501,6 +1524,11 @@ async fn apply_browser_runtime_command_as(
         .await?;
         return Ok(());
     }
+
+    // Resolve/authorize sensitive inputs before any runner is started. Only native
+    // secret values and verified file bytes cross into the private runtime channel.
+    let control_response = e44::prepare_response(root, capability_token, command_id,
+        command_type, &payload)?;
 
     let credential_fill = if command_type == "browser.credential.fill" {
         anyhow::ensure!(existing_session.is_object(), "browser session not found");
@@ -1683,7 +1711,9 @@ async fn apply_browser_runtime_command_as(
     };
 
     // Translate the lifecycle command into a runtime operation.
-    let (op, op_params): (&str, Value) = match command_type {
+    let (op, op_params): (&str, Value) = if let Some(response) = control_response {
+        response
+    } else { match command_type {
         "browser.navigate" | "browser.session.start" | "browser.reset" => {
             ("navigate", json!({ "url": target_url, "timeoutMs": 30000 }))
         }
@@ -1747,7 +1777,7 @@ async fn apply_browser_runtime_command_as(
             )
         }
         _ => ("nav_state", json!({})),
-    };
+    }};
 
     let op_result = match manager.request(&session, op, op_params).await {
         Ok(value) => value,
@@ -1782,6 +1812,11 @@ async fn apply_browser_runtime_command_as(
             return Err(err);
         }
     };
+
+    if e44::is_control_response(command_type) {
+        anyhow::ensure!(op_result.get("ok").and_then(Value::as_bool) == Some(true),
+            "browser control response failed");
+    }
 
     // Was der ferne Browser als Auswahl meldet, wird hier zur Zwischenablage
     // dieser Sitzung -- nur im Arbeitsspeicher, damit ein kopiertes Passwort
@@ -2033,7 +2068,7 @@ async fn apply_browser_runtime_command_as(
         command_created_at_ms,
         navigation_error.as_deref(),
         Some(&access),
-        session_metadata_patch.as_ref(),
+        Some(&e44::prompt_metadata(session_metadata_patch.as_ref(), &nav)),
     )
     .await?;
     if command_type == "browser.session.start" {
@@ -2878,7 +2913,7 @@ async fn capture_and_store_browser_frame(
         now_ms() as u64,
         None,
         None,
-        None,
+        Some(&e44::prompt_metadata(None, &nav)),
     )
     .await?;
     // The frame and its active pointer are finished work. Retention is
@@ -3561,6 +3596,8 @@ pub(super) async fn upsert_browser_session(
             "authenticated_at_ms",
             "continuation_status",
             "profile_mode",
+            "pending_http_auth",
+            "pending_webauthn",
             "credential_fill_status",
             "credential_field_role",
             "secret_value_in_rxdb",
@@ -3580,6 +3617,7 @@ pub(super) async fn upsert_browser_session(
         "controller_user_id": controller_user_id,
         "controller_lease_id": controller_lease_id,
         "controller_lease_expires_at_ms": controller_lease_expires_at_ms,
+        "allowed_observer_user_ids": existing.get("allowed_observer_user_ids").cloned().unwrap_or_else(|| json!([])),
         "status": status,
         "runtime_status": runtime_status,
         "current_tab_id": tab_id,
@@ -3645,6 +3683,7 @@ pub(super) async fn upsert_browser_tab(
         "tenant_id": tenant_id,
         "owner_user_id": owner_user_id,
         "controller_user_id": controller_user_id,
+        "allowed_observer_user_ids": session.get("allowed_observer_user_ids").cloned().unwrap_or_else(|| json!([])),
         "session_id": session_id,
         "title": title,
         "url": url,
@@ -3707,6 +3746,7 @@ pub(super) async fn upsert_browser_frame(
         "tenant_id": tenant_id,
         "owner_user_id": owner_user_id,
         "controller_user_id": controller_user_id,
+        "allowed_observer_user_ids": session.get("allowed_observer_user_ids").cloned().unwrap_or_else(|| json!([])),
         "session_id": session_id,
         "tab_id": tab_id,
         "seq": seq,
