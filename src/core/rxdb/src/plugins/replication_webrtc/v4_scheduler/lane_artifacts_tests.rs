@@ -1174,7 +1174,8 @@ async fn z3_p4_turn_loss_rtt() {
         for byte in &mut payload {seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; *byte=seed as u8;}
         let expected = payload.clone(); let count = bulk_received.clone(); let permits = window.clone();
         let receive_bulk = tokio::spawn(async move {
-            while let Some(Incoming::Reliable{bytes,delivery:Some(token),..})=bulk.recv().await {
+            while let Some(Incoming::Reliable{id,bytes,delivery:Some(token),..})=bulk.recv().await {
+                assert_eq!(id.0,count.load(Ordering::Relaxed)+1,"bulk session gap or duplicate");
                 assert_eq!(bytes,expected);token.acknowledge().unwrap();count.fetch_add(1,Ordering::Relaxed);permits.add_permits(1);
             }
         });
@@ -1194,11 +1195,13 @@ async fn z3_p4_turn_loss_rtt() {
         for id in 0..probes {
             let command_clock = Instant::now();
             pair.source.send(Lane::Commands,WireSeq(id),&id.to_be_bytes(),Some(Arc::new(Authorized))).await.unwrap();
+            // A real request/reply: do not send the response before receiving
+            // the request (two independent simultaneous deliveries undercount RTT).
+            let Some(Incoming::Reliable{bytes,delivery:Some(token),..})=bc.recv().await else {panic!("TURN command request missing");};
+            assert_eq!(bytes,id.to_be_bytes()); effects_b.push(id); token.acknowledge().unwrap();
             pair.target.send(Lane::Commands,WireSeq(id),&id.to_be_bytes(),Some(Arc::new(Authorized))).await.unwrap();
-            for (incoming,effects) in [(&mut ac,&mut effects_a),(&mut bc,&mut effects_b)] {
-                let Some(Incoming::Reliable{bytes,delivery:Some(token),..})=incoming.recv().await else {panic!("TURN application message missing");};
-                assert_eq!(bytes,id.to_be_bytes()); effects.push(id); token.acknowledge().unwrap();
-            }
+            let Some(Incoming::Reliable{bytes,delivery:Some(token),..})=ac.recv().await else {panic!("TURN command reply missing");};
+            assert_eq!(bytes,id.to_be_bytes()); effects_a.push(id); token.acknowledge().unwrap();
             command_latency.push(command_clock.elapsed().as_secs_f64()*1000.0);
             if rto_proof {
                 tokio::time::timeout(Duration::from_secs(5),async {
@@ -1229,15 +1232,16 @@ async fn z3_p4_turn_loss_rtt() {
         }
         bulk_stop.store(true,Ordering::Relaxed);
         let bulk_sent = produce_bulk.await.unwrap();
-        tokio::time::timeout(Duration::from_secs(20),async {while bulk_received.load(Ordering::Relaxed)!=bulk_sent {tokio::time::sleep(Duration::from_millis(5)).await;}}).await.expect("bulk admission lost delivery");
+        let bulk_drained = tokio::time::timeout(Duration::from_secs(20),async {while bulk_received.load(Ordering::Relaxed)!=bulk_sent {tokio::time::sleep(Duration::from_millis(5)).await;}}).await.is_ok();
+        let bulk_delivered = bulk_received.load(Ordering::Relaxed);
         receive_bulk.abort();let _=receive_bulk.await;
         let bulk_seconds=bulk_clock.elapsed().as_secs_f64();
-        tokio::time::timeout(Duration::from_secs(5),async {
+        let delivery_acked = tokio::time::timeout(Duration::from_secs(5),async {
             loop {
                 if [(&sa,&pair.source),(&sb,&pair.target)].iter().all(|(session,scheduler)| [Lane::Commands,Lane::Control,Lane::Transfer].iter().all(|lane| session.replay(scheduler.session.as_ref().unwrap().generation,*lane).unwrap().is_empty())) {break;}
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
-        }).await.expect("TURN application delivery acknowledgements missing");
+        }).await.is_ok();
         assert_eq!(effects_a,(0..probes).collect::<Vec<_>>());assert_eq!(effects_b,effects_a);
         let packets=a.packets.load(Ordering::Relaxed)+b.packets.load(Ordering::Relaxed);
         let drops=a.drops.load(Ordering::Relaxed)+b.drops.load(Ordering::Relaxed);
@@ -1253,6 +1257,9 @@ async fn z3_p4_turn_loss_rtt() {
         let command_p95=command_latency[(command_latency.len()*95/100).min(command_latency.len()-1)];
         let command_p99=command_latency[(command_latency.len()*99/100).min(command_latency.len()-1)];
         pair.close().await;
-        eprintln!("Z3_P4_TURN {}",serde_json::json!({"scenario":3,"relay_only":true,"candidates_a":candidates_a,"candidates_b":candidates_b,"shim":"UDP at TURN control legs","nominal_rtt_ms":rtt_ms,"drop_every":drop_every,"loss_placement":"source TURN leg, both directions","rto_proof":rto_proof,"injected_datagrams":injected,"datagrams":packets,"dropped_datagrams":drops,"probes":probes,"full_workload":probes==64,"sent":2*probes,"explicit_send_results":2*probes,"delivery_acknowledged":2*probes,"lost":0,"duplicated":0,"control_p95_ms":p95,"control_p99_ms":p99,"command_p95_ms":command_p95,"command_p99_ms":command_p99,"command_bidirectional_delivery_ms":command_latency,"control_roundtrip_ms":latency,"bulk_enabled":bulk_enabled,"bulk_bytes":bulk_sent*BULK_BYTES as u64,"bulk_seconds":bulk_seconds,"bulk_mb_s":bulk_sent as f64*BULK_BYTES as f64/bulk_seconds/1_000_000.0}));
+        eprintln!("Z3_P4_TURN {}",serde_json::json!({"scenario":3,"relay_only":true,"candidates_a":candidates_a,"candidates_b":candidates_b,"shim":"UDP at TURN control legs","nominal_rtt_ms":rtt_ms,"drop_every":drop_every,"loss_placement":"source TURN leg, both directions","rto_proof":rto_proof,"injected_datagrams":injected,"datagrams":packets,"dropped_datagrams":drops,"probes":probes,"full_workload":probes==64,"sent":2*probes,"explicit_send_results":2*probes,"delivery_acknowledged":2*probes,"lost":if bulk_drained {Some(0u64)} else {None},"pending_bulk_at_deadline":bulk_sent-bulk_delivered,"fully_drained":bulk_drained&&delivery_acked,"duplicated":0,"control_p95_ms":p95,"control_p99_ms":p99,"command_p95_ms":command_p95,"command_p99_ms":command_p99,"command_metric":"request/reply roundtrip","command_roundtrip_ms":command_latency,"control_roundtrip_ms":latency,"bulk_enabled":bulk_enabled,"bulk_bytes":bulk_delivered*BULK_BYTES as u64,"bulk_admitted_bytes":bulk_sent*BULK_BYTES as u64,"bulk_seconds":bulk_seconds,"bulk_mb_s":bulk_delivered as f64*BULK_BYTES as f64/bulk_seconds/1_000_000.0}));
+        // Preserve failed measurements; keep the original bounded-drain gates red.
+        assert!(bulk_drained,"bulk admission lost delivery within the bounded drain; see Z3_P4_TURN");
+        assert!(delivery_acked,"TURN application delivery acknowledgements missing; see Z3_P4_TURN");
     }).await.expect("TURN loss RTT fixture deadline");
 }

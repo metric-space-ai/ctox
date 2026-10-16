@@ -80,7 +80,8 @@ try {
    write('browser-ice.json',ice);
   }
  } catch {}
- write('browser-result.json',{pass:false,error:error.message});process.exitCode=1;
+ const partial=fs.existsSync(join(root,'m4-provisional.json'))?JSON.parse(fs.readFileSync(join(root,'m4-provisional.json'))):{};
+ write('browser-result.json',{...partial,pass:false,error:error.message});process.exitCode=1;
 }
 finally {await browser?.close();if(server)await new Promise(r=>server.close(r));}
 
@@ -107,6 +108,9 @@ async function runM4(page){
   dc.send('m4-stop');
   return Object.fromEntries(Object.entries(samples).map(([lane,values])=>{values.sort((a,b)=>a-b);return [lane,{p95_ms:values[Math.floor(values.length*.95)],p99_ms:values[Math.floor(values.length*.99)],roundtrips_ms:values}];}));
  });
+ // Retain real measurements even when the unchanged bounded drain fails.
+ const progress=await page.evaluate(()=>({bulk_received:m4received,bulk_bytes:m4bytes,bulk_seconds:(performance.now()-m4start)/1000,browser_buffer_peak:m4bufferPeak,max_received_frame:m4maxReceived,max_sent_frame:m4maxSent,errors:m4wireErrors}));
+ write('m4-provisional.json',{...metrics,...progress,nominal_rtt_ms:config.rtt,loss_percent:1,browserVersion:browser.version(),nodeVersion:process.version,bulk_mb_s:progress.bulk_bytes/progress.bulk_seconds/1e6,measurement_window:'completed probes, before bounded drain',fully_drained:false,pass:false});
  const native=await wait(join(root,'m4-native-result.json'));
  await page.waitForFunction(()=>m4wire.state.acked.every((seq,lane)=>seq===m4wire.state.sent[lane]),null,{timeout:10000});
  const measured=await page.evaluate(async()=>{
@@ -114,7 +118,7 @@ async function runM4(page){
   return {max_received_frame:m4maxReceived,max_sent_frame:m4maxSent,browser_buffer_peak:m4bufferPeak,delivery_acknowledged:m4wire.state.acked.map(String),sent:m4wire.state.sent.map(String),bulk_received:m4received,bulk_bytes:m4bytes,bulk_seconds:(performance.now()-m4start)/1000,errors:m4wireErrors,local:local?.candidateType,remote:remote?.candidateType};
  });
  const result={...metrics,...measured,native,nominal_rtt_ms:config.rtt,loss_percent:1,browserVersion:browser.version(),nodeVersion:process.version,
-  pass:measured.errors.length===0&&measured.max_received_frame<=16384&&measured.max_sent_frame<=16384&&measured.browser_buffer_peak<=131072&&native.buffer_peak<=131072&&measured.bulk_received===native.bulk_sent&&measured.bulk_bytes===native.bulk_bytes&&measured.local==='relay'&&measured.remote==='relay',
+  pass:native.fully_drained!==false&&measured.errors.length===0&&measured.max_received_frame<=16384&&measured.max_sent_frame<=16384&&measured.browser_buffer_peak<=131072&&native.buffer_peak<=131072&&measured.bulk_received===native.bulk_sent&&measured.bulk_bytes===native.bulk_bytes&&measured.local==='relay'&&measured.remote==='relay',
   bulk_mb_s:measured.bulk_bytes/measured.bulk_seconds/1e6,scope:'Chromium NativeWire/E14 to native scheduler; fixture authority, not enrollment'};
  const target={20:120,150:250,600:700}[config.rtt];
  result.performance_pass=result.pass&&metrics.control.p99_ms<=target&&metrics.commands.p99_ms<=target&&(config.rtt!==20||result.bulk_mb_s>=5);

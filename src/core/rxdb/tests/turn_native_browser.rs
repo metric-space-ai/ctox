@@ -403,7 +403,7 @@ async fn run_m4(
         echo.await.unwrap();
     }
     notices.await.unwrap();
-    tokio::time::timeout(Duration::from_secs(20), async {
+    let fully_drained = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             if [Lane::Control, Lane::Commands, Lane::Transfer]
                 .iter()
@@ -415,11 +415,12 @@ async fn run_m4(
         }
     })
     .await
-    .expect("M4 bulk E14 delivery ACKs missing");
+    .is_ok();
     let handoff = scheduler.handoff_counters();
-    tokio::fs::write(root.join("m4-native-result.json"),serde_json::to_vec(&serde_json::json!({"bulk_sent":bulk_sent,"bulk_bytes":bulk_bytes,"buffer_peak":handoff.buffered_upper_bound_peak,"attempted":handoff.attempted,"handed_to_sctp":handoff.handed_to_sctp,"failed":handoff.failed})).unwrap()).await.unwrap();
+    tokio::fs::write(root.join("m4-native-result.json"),serde_json::to_vec(&serde_json::json!({"fully_drained":fully_drained,"pending_delivery":[state.replay(generation,Lane::Control).unwrap().len(),state.replay(generation,Lane::Commands).unwrap().len(),state.replay(generation,Lane::Transfer).unwrap().len()],"bulk_sent":bulk_sent,"bulk_bytes":bulk_bytes,"buffer_peak":handoff.buffered_upper_bound_peak,"attempted":handoff.attempted,"handed_to_sctp":handoff.handed_to_sctp,"failed":handoff.failed})).unwrap()).await.unwrap();
     let result: serde_json::Value =
         serde_json::from_str(&wait_file(&root.join("browser-result.json")).await).unwrap();
     scheduler.close_now();
+    assert!(fully_drained,"M4 bulk E14 delivery ACKs missing; see m4-native-result.json");
     assert_eq!(result["pass"], true, "M4 Chromium fixture failed: {result}");
 }
