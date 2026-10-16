@@ -315,8 +315,21 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
     }
     // net.ingest (§16.38): cookie-less generic ingress; it never reads a
     // session, so it is answered before session/cross-origin handling.
-    if crate::app_capabilities::cap3::ingest::serves(root, path) {
-        return respond_ingest(root, request, &url);
+    if crate::app_capabilities::cap3::ingest::may_serve(path) {
+        let work = root.to_owned();
+        let ingest_path = path.to_owned();
+        let serves = crate::persistence::run_core_blocking_at(root, move || {
+            crate::app_capabilities::cap3::ingest::serves(&work, &ingest_path)
+                .map_err(anyhow::Error::new)
+        });
+        match serves {
+            Ok(true) => return respond_ingest(root, request, &url),
+            Ok(false) => {}
+            Err(error) => {
+                respond_status(request, 503, "native ingress unavailable")?;
+                return Err(error.context("Business OS ingress route lookup failed"));
+            }
+        }
     }
     if rejects_cross_origin_browser_mutation(
         &method,
@@ -4062,12 +4075,22 @@ fn respond_ingest(root: &Path, mut request: Request, url: &str) -> anyhow::Resul
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0),
     };
-    let answer = ingest::handle_ingress(
-        root,
-        &ingest::CoreIngestRuntime { root },
-        &incoming,
-        ingest::RESPONSE_WAIT,
-    );
+    let work = root.to_owned();
+    let answer = match crate::persistence::run_core_blocking_at(root, move || {
+        ingest::handle_ingress(
+            &work,
+            &ingest::CoreIngestRuntime { root: &work },
+            &incoming,
+            ingest::RESPONSE_WAIT,
+        )
+        .map_err(anyhow::Error::new)
+    }) {
+        Ok(answer) => answer,
+        Err(error) => {
+            respond_status(request, 503, "native ingress unavailable")?;
+            return Err(error.context("Business OS ingress dispatch failed"));
+        }
+    };
     let mut response = Response::from_data(answer.body).with_status_code(answer.status);
     for (name, value) in &answer.headers {
         if let Ok(header) = Header::from_bytes(name.as_bytes(), value.as_bytes()) {

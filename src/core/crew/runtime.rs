@@ -146,7 +146,9 @@ pub(crate) fn prepare_attempt_or_continue(
                 "crew preparation failed"
             };
             selection_warning(root, task_ids.first().map(String::as_str), attempt, cause);
-            if let Ok(conn) = Connection::open(crate::paths::core_db(root)) {
+            let task_ids = task_ids.to_vec();
+            let lease_owner = lease_owner.to_owned();
+            let _ = crate::lcm::with_lcm_write(&crate::paths::core_db(root), move |conn| {
                 for id in task_ids {
                     let _ = conn.execute(
                         "UPDATE communication_routing_state SET crew_member_id=NULL
@@ -154,7 +156,8 @@ pub(crate) fn prepare_attempt_or_continue(
                         params![id, lease_owner],
                     );
                 }
-            }
+                Ok(())
+            });
             None
         }
     }
@@ -189,22 +192,50 @@ pub(crate) fn prepare_attempt(
     let Some(task_id) = task_ids.first() else {
         return Ok(None);
     };
-    let conn = Connection::open(crate::paths::core_db(root))?;
-    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
-    // New ledgers remain lazy until admitted work. Existing ledgers were already
-    // deduplicated/indexed by the migration; this also covers a ledger initialized
-    // independently since then. No extra reads are added to progress emissions.
-    crate::service::harness_flow::ensure_event_schema(&conn)?;
-    ensure_selection_event_index(&conn)?;
-    ensure_schema(&conn)?;
-    let existing: Option<String> = conn
-        .query_row(
-            "SELECT member_id FROM crew_attempts WHERE attempt_id=?1",
-            [attempt],
-            |r| r.get(0),
-        )
-        .optional()?;
-    let (all, warnings) = members_with_errors(&conn)?;
+    let db_path = crate::paths::core_db(root);
+    // TODO(P3-06): the registry replaces this existing lazy schema seam.
+    crate::lcm::with_lcm_write(&db_path, |conn| {
+        crate::service::harness_flow::ensure_event_schema(conn)?;
+        ensure_selection_event_index(conn)?;
+        ensure_schema(conn)
+    })?;
+    let snapshot_task_id = task_id.clone();
+    let snapshot_attempt = attempt.to_owned();
+    let snapshot_lease = lease_owner.to_owned();
+    let snapshot_thread = thread_key.map(str::to_owned);
+    let (existing, all, warnings, manual_at_snapshot, continuity, history, memories, recents) =
+        crate::lcm::with_lcm_read(&db_path, move |conn| {
+            let existing: Option<String> = conn
+                .query_row(
+                    "SELECT member_id FROM crew_attempts WHERE attempt_id=?1",
+                    [&snapshot_attempt],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let (all, warnings) = members_with_errors(conn)?;
+            let manual: Option<String> = conn.query_row(
+                "SELECT crew_assigned_member_id FROM communication_routing_state WHERE message_key=?1 AND route_status='leased' AND lease_owner=?2",
+                params![snapshot_task_id, snapshot_lease], |r| r.get(0),
+            ).optional()?.context("crew attachment requires the held lease")?;
+            let continuity = conn.query_row(
+                "SELECT member_id FROM crew_attempts WHERE thread_key=?1 AND task_id!=?2 AND (started_at IS NOT NULL OR finalized_at IS NOT NULL) ORDER BY selected_at DESC,attempt_id DESC LIMIT 1",
+                params![snapshot_thread, snapshot_task_id], |r| r.get::<_, String>(0),
+            ).optional()?;
+            let history = conn.prepare("SELECT member_id,module,thread_key,succeeded,finalized_at FROM crew_attempts WHERE finalized_at IS NOT NULL ORDER BY finalized_at DESC,attempt_id DESC LIMIT 1000")?
+                .query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,Option<String>>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,bool>(3)?,r.get::<_,String>(4)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?.into_iter().filter_map(|(member_id,module,thread_key,succeeded,at)| Some(History{member_id,module,thread_key,succeeded,finished_at_ms:chrono::DateTime::parse_from_rfc3339(&at).ok()?.timestamp_millis()})).collect::<Vec<_>>();
+            let memories = all
+                .iter()
+                .map(|m| load_member_memory_from_conn(conn, &m.id))
+                .collect::<Vec<_>>();
+            let recents = all
+                .iter()
+                .map(|m| recent_attempts(conn, &m.id, 6).unwrap_or_default())
+                .collect::<Vec<_>>();
+            Ok((
+                existing, all, warnings, manual, continuity, history, memories, recents,
+            ))
+        })?;
     let mut task = TaskTraits {
         thread_key: thread_key.map(String::from),
         module: metadata
@@ -234,15 +265,7 @@ pub(crate) fn prepare_attempt(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    task.manual_member = conn
-        .query_row(
-            "SELECT crew_assigned_member_id FROM communication_routing_state
-         WHERE message_key=?1 AND route_status='leased' AND lease_owner=?2",
-            params![task_id, lease_owner],
-            |r| r.get::<_, Option<String>>(0),
-        )
-        .optional()?
-        .context("crew attachment requires the held lease")?;
+    task.manual_member = manual_at_snapshot.clone();
     if let Some(member) = crate::business_os::project_crew_member_for_task(root, task_id)? {
         anyhow::ensure!(
             task_ids.len() == 1,
@@ -262,18 +285,7 @@ pub(crate) fn prepare_attempt(
     }
     // A retry is scored again; its own previous selection is not a manual pin
     // or evidence of continuity with a different task in the conversation.
-    task.continuity_member = conn
-        .query_row(
-            "SELECT member_id FROM crew_attempts
-        WHERE thread_key=?1 AND task_id!=?2 AND (started_at IS NOT NULL OR finalized_at IS NOT NULL)
-        ORDER BY selected_at DESC,attempt_id DESC LIMIT 1",
-            params![thread_key, task_id],
-            |r| r.get(0),
-        )
-        .optional()?;
-    let history=conn.prepare("SELECT member_id,module,thread_key,succeeded,finalized_at FROM crew_attempts WHERE finalized_at IS NOT NULL ORDER BY finalized_at DESC,attempt_id DESC LIMIT 1000")?
-        .query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,Option<String>>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,bool>(3)?,r.get::<_,String>(4)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()?.into_iter().filter_map(|(member_id,module,thread_key,succeeded,at)| Some(History{member_id,module,thread_key,succeeded,finished_at_ms:chrono::DateTime::parse_from_rfc3339(&at).ok()?.timestamp_millis()})).collect::<Vec<_>>();
+    task.continuity_member = continuity;
     let summary = task_summary_from_prompt(prompt, task.module.as_deref());
     let engine = open_engine(root).ok();
     let selection = if let Some(id) = existing {
@@ -283,19 +295,6 @@ pub(crate) fn prepare_attempt(
         }
     } else {
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let memories = all
-            .iter()
-            .map(|member| {
-                engine
-                    .as_ref()
-                    .map(|engine| load_member_memory(engine, &member.id))
-                    .unwrap_or_default()
-            })
-            .collect::<Vec<_>>();
-        let recents = all
-            .iter()
-            .map(|member| recent_attempts(&conn, &member.id, 6).unwrap_or_default())
-            .collect::<Vec<_>>();
         let candidates = all
             .iter()
             .enumerate()
@@ -339,43 +338,74 @@ pub(crate) fn prepare_attempt(
         .find(|m| m.id == selection.member_id)
         .context("attempt member no longer exists")?;
     let now = chrono::Utc::now().to_rfc3339();
-    let tx = conn.unchecked_transaction()?;
-    let inserted=tx.execute("INSERT OR IGNORE INTO crew_attempts(attempt_id,task_id,member_id,module,thread_key,selected_at,started_at,selection_reason,task_summary) VALUES(?1,?2,?3,?4,?5,?6,?6,?7,?8)",params![attempt,task_id,member.id,task.module,thread_key,now,selection.reason,summary])?;
-    // Check the durable identity after INSERT OR IGNORE, inside the same write
-    // transaction as attachment. A replay must not borrow another task's member
-    // or revive an already finalized attempt. Checking only the earlier member
-    // lookup would also miss a concurrent insertion or finalization.
-    let (bound_task, bound_member, finalized): (String, String, Option<String>) = tx.query_row(
-        "SELECT task_id,member_id,finalized_at FROM crew_attempts WHERE attempt_id=?1",
-        [attempt],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-    )?;
-    anyhow::ensure!(
-        bound_task == *task_id,
-        "crew attempt belongs to another task"
-    );
-    anyhow::ensure!(
-        bound_member == member.id,
-        "crew attempt member changed during admission"
-    );
-    anyhow::ensure!(finalized.is_none(), "crew attempt is already finalized");
-    for id in task_ids {
-        let changed = tx.execute(
+    let inserted = {
+        let task_ids = task_ids.to_vec();
+        let task_id = task_id.clone();
+        let attempt = attempt.to_owned();
+        let lease_owner = lease_owner.to_owned();
+        let thread_key = thread_key.map(str::to_owned);
+        let member = member.clone();
+        let module = task.module.clone();
+        let reason = selection.reason.clone();
+        let summary = summary.clone();
+        let now = now.clone();
+        crate::lcm::with_lcm_write(&db_path, move |conn| {
+            let current_assignment: Option<String> = conn.query_row(
+                "SELECT crew_assigned_member_id FROM communication_routing_state WHERE message_key=?1 AND route_status='leased' AND lease_owner=?2",
+                params![task_id, lease_owner], |r| r.get(0),
+            ).optional()?.context("crew attachment lost its lease")?;
+            anyhow::ensure!(
+                current_assignment == manual_at_snapshot,
+                "crew assignment changed during routing"
+            );
+            anyhow::ensure!(
+                conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM crew_members WHERE id=?1 AND archived=0)",
+                    [&member.id],
+                    |r| r.get::<_, bool>(0)
+                )?,
+                "attempt member is unavailable or archived"
+            );
+            let tx = conn;
+            let inserted=tx.execute("INSERT OR IGNORE INTO crew_attempts(attempt_id,task_id,member_id,module,thread_key,selected_at,started_at,selection_reason,task_summary) VALUES(?1,?2,?3,?4,?5,?6,?6,?7,?8)",params![attempt,task_id,member.id,module,thread_key,now,reason,summary])?;
+            // Check the durable identity after INSERT OR IGNORE, inside the same write
+            // transaction as attachment. A replay must not borrow another task's member
+            // or revive an already finalized attempt. Checking only the earlier member
+            // lookup would also miss a concurrent insertion or finalization.
+            let (bound_task, bound_member, finalized): (String, String, Option<String>) = tx
+                .query_row(
+                    "SELECT task_id,member_id,finalized_at FROM crew_attempts WHERE attempt_id=?1",
+                    [attempt],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?;
+            anyhow::ensure!(
+                bound_task == task_id,
+                "crew attempt belongs to another task"
+            );
+            anyhow::ensure!(
+                bound_member == member.id,
+                "crew attempt member changed during admission"
+            );
+            anyhow::ensure!(finalized.is_none(), "crew attempt is already finalized");
+            for id in &task_ids {
+                let changed = tx.execute(
             "UPDATE communication_routing_state SET crew_member_id=?2,crew_assigned_member_id=NULL,updated_at=?3
              WHERE message_key=?1 AND route_status='leased' AND lease_owner=?4",
             params![id, member.id, now, lease_owner],
         )?;
-        anyhow::ensure!(changed == 1, "crew attachment lost its lease");
-    }
-    if inserted > 0 {
-        tx.execute("UPDATE crew_members SET stats_json=json_set(stats_json,'$.last_active_at',?2),updated_at=?2 WHERE id=?1",params![member.id,now])?;
-    }
-    tx.commit()?;
+                anyhow::ensure!(changed == 1, "crew attachment lost its lease");
+            }
+            if inserted > 0 {
+                tx.execute("UPDATE crew_members SET stats_json=json_set(stats_json,'$.last_active_at',?2),updated_at=?2 WHERE id=?1",params![member.id,now])?;
+            }
+            Ok(inserted)
+        })?
+    };
     // Memory after the commit: the legacy learnings table is folded into the
     // member's anchors once, then the documents are read as they are.
     let mut member_memory = MemberMemory::default();
     if let Some(engine) = engine.as_ref() {
-        if let Err(error) = migrate_learnings_into_memory(&conn, engine, &member.id) {
+        if let Err(error) = migrate_learnings_into_memory(root, &member.id) {
             eprintln!(
                 "[ctox crew] legacy learnings migration deferred for {}: {error}",
                 member.id
@@ -383,7 +413,11 @@ pub(crate) fn prepare_attempt(
         }
         member_memory = load_member_memory(engine, &member.id);
     }
-    let recent = recent_attempts(&conn, &member.id, 6).unwrap_or_default();
+    let selected_member_id = member.id.clone();
+    let recent = crate::lcm::with_lcm_read(&db_path, move |conn| {
+        recent_attempts(conn, &selected_member_id, 6)
+    })
+    .unwrap_or_default();
     let persona = render_persona(member);
     let memory_block = render_memory_block(member, &member_memory, &recent);
     for warning in &warnings {
@@ -405,10 +439,15 @@ pub(crate) fn prepare_attempt(
         );
         if memory_block.is_some() {
             // The member is reading now: the projection shows it for a moment.
-            let _ = conn.execute(
-                "UPDATE crew_members SET last_memory_read_at=?2,updated_at=?2 WHERE id=?1",
-                params![member.id, now],
-            );
+            let selected_member_id = member.id.clone();
+            let memory_read_at = now.clone();
+            let _ = crate::lcm::with_lcm_write(&db_path, move |conn| {
+                conn.execute(
+                    "UPDATE crew_members SET last_memory_read_at=?2,updated_at=?2 WHERE id=?1",
+                    params![selected_member_id, memory_read_at],
+                )?;
+                Ok(())
+            });
             let anchors = anchor_lines(&member_memory.anchors).len();
             let experiences = narrative_lines(&member_memory.narrative).len();
             let title = format!(

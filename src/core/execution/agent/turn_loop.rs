@@ -127,7 +127,7 @@ impl lcm::Summarizer for ToolFreeSemanticSummarizer {
 fn compact_with_semantic_summarizer(
     root: &Path,
     settings: &BTreeMap<String, String>,
-    engine: &lcm::LcmEngine,
+    engine: &lcm::LcmClient,
     conversation_id: i64,
     max_context_tokens: i64,
     force: bool,
@@ -187,22 +187,10 @@ pub fn refresh_budget_snapshot(conversation_id: i64) -> RefreshBudgetSnapshot {
 
 const COMMUNICATION_REFRESH_TURN_LIMIT: i64 = 8;
 
-fn open_turn_state_connection(db_path: &Path) -> Result<rusqlite::Connection> {
-    let conn = rusqlite::Connection::open(db_path)?;
-    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
-        .context("configure turn-state SQLite busy_timeout")?;
-    Ok(conn)
-}
-
-fn record_durable_refresh_demand(
-    db_path: &Path,
-    conversation_id: i64,
-    force_boundary: bool,
-    legacy_every_n_turns: u64,
-    reply_output_chars: u64,
-    source_ref: &str,
-) -> Result<HashSet<String>> {
-    let mut conn = open_turn_state_connection(db_path)?;
+// TODO(sync-v4/P3-06): register this existing legacy schema in the Core
+// registry. Until that cutover, preserve its additive upgrade inside the same
+// owner WriteJob; never open/migrate a parallel connection from the agent.
+fn ensure_turn_refresh_schema(conn: &rusqlite::Connection) -> Result<()> {
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS continuity_refresh_status (
@@ -235,11 +223,24 @@ fn record_durable_refresh_demand(
             "ALTER TABLE continuity_refresh_status ADD COLUMN output_chars_since_refresh INTEGER NOT NULL DEFAULT 0;",
         )?;
     }
-    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let now = current_rfc3339_timestamp();
-    for kind in ["narrative", "anchors", "focus"] {
-        tx.execute(
-            r#"
+    Ok(())
+}
+
+fn record_durable_refresh_demand(
+    db_path: &Path,
+    conversation_id: i64,
+    force_boundary: bool,
+    legacy_every_n_turns: u64,
+    reply_output_chars: u64,
+    source_ref: &str,
+) -> Result<HashSet<String>> {
+    let source_ref = source_ref.to_owned();
+    lcm::with_lcm_write(db_path, move |tx| {
+        ensure_turn_refresh_schema(tx)?;
+        let now = current_rfc3339_timestamp();
+        for kind in ["narrative", "anchors", "focus"] {
+            tx.execute(
+                r#"
             INSERT INTO continuity_refresh_status (
                 conversation_id, continuity_kind, status, successful_turn_count,
                 output_chars_since_refresh, trigger_source_ref,
@@ -248,27 +249,27 @@ fn record_durable_refresh_demand(
             ) VALUES (?1, ?2, 'idle', 0, 0, NULL, NULL, NULL, 0, NULL, NULL, ?3, ?3)
             ON CONFLICT(conversation_id, continuity_kind) DO NOTHING
             "#,
-            rusqlite::params![conversation_id, kind, now],
-        )?;
-        let previous_turns: i64 = tx.query_row(
+                rusqlite::params![conversation_id, kind, now],
+            )?;
+            let previous_turns: i64 = tx.query_row(
             "SELECT successful_turn_count FROM continuity_refresh_status WHERE conversation_id=?1 AND continuity_kind=?2",
             rusqlite::params![conversation_id, kind],
             |row| row.get(0),
         )?;
-        let turns = previous_turns.saturating_add(1);
-        let previous_output_chars: i64 = tx.query_row(
+            let turns = previous_turns.saturating_add(1);
+            let previous_output_chars: i64 = tx.query_row(
             "SELECT output_chars_since_refresh FROM continuity_refresh_status WHERE conversation_id=?1 AND continuity_kind=?2",
             rusqlite::params![conversation_id, kind],
             |row| row.get(0),
         )?;
-        let output_chars = previous_output_chars
-            .saturating_add(i64::try_from(reply_output_chars).unwrap_or(i64::MAX));
-        let interval_boundary = legacy_every_n_turns > 0
-            && u64::try_from(turns).unwrap_or(u64::MAX) >= legacy_every_n_turns;
-        let communication_boundary =
-            matches!(kind, "narrative" | "anchors") && turns >= COMMUNICATION_REFRESH_TURN_LIMIT;
-        let pending = force_boundary || interval_boundary || communication_boundary;
-        tx.execute(
+            let output_chars = previous_output_chars
+                .saturating_add(i64::try_from(reply_output_chars).unwrap_or(i64::MAX));
+            let interval_boundary = legacy_every_n_turns > 0
+                && u64::try_from(turns).unwrap_or(u64::MAX) >= legacy_every_n_turns;
+            let communication_boundary = matches!(kind, "narrative" | "anchors")
+                && turns >= COMMUNICATION_REFRESH_TURN_LIMIT;
+            let pending = force_boundary || interval_boundary || communication_boundary;
+            tx.execute(
             r#"
             UPDATE continuity_refresh_status
             SET successful_turn_count=?3,
@@ -289,10 +290,10 @@ fn record_durable_refresh_demand(
                 now,
             ],
         )?;
-    }
-    let due = due_refresh_kinds(&tx, conversation_id, &now)?;
-    tx.commit()?;
-    Ok(due)
+        }
+        let due = due_refresh_kinds(&tx, conversation_id, &now)?;
+        Ok(due)
+    })
 }
 
 fn due_refresh_kinds(
@@ -327,9 +328,12 @@ fn mark_durable_refresh_consumed(
         !head_after.is_empty() && head_after != head_before,
         "continuity head did not advance"
     );
-    let conn = open_turn_state_connection(db_path)?;
-    conn.execute(
-        r#"
+    let head_before = head_before.to_owned();
+    let head_after = head_after.to_owned();
+    let kind = kind.to_owned();
+    lcm::with_lcm_write(db_path, move |tx| {
+        tx.execute(
+            r#"
         UPDATE continuity_refresh_status
         SET status='consumed', successful_turn_count=0,
             output_chars_since_refresh=0,
@@ -338,15 +342,16 @@ fn mark_durable_refresh_consumed(
             updated_at=?5
         WHERE conversation_id=?1 AND continuity_kind=?2
         "#,
-        rusqlite::params![
-            conversation_id,
-            kind,
-            head_before,
-            head_after,
-            current_rfc3339_timestamp()
-        ],
-    )?;
-    Ok(())
+            rusqlite::params![
+                conversation_id,
+                kind,
+                head_before,
+                head_after,
+                current_rfc3339_timestamp()
+            ],
+        )?;
+        Ok(())
+    })
 }
 
 fn mark_durable_refresh_failed(
@@ -355,39 +360,40 @@ fn mark_durable_refresh_failed(
     kind: &str,
     error: &str,
 ) -> Result<()> {
-    let mut conn = open_turn_state_connection(db_path)?;
-    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let previous: i64 = tx.query_row(
+    let kind = kind.to_owned();
+    let error = error.to_owned();
+    lcm::with_lcm_write(db_path, move |tx| {
+        let previous: i64 = tx.query_row(
         "SELECT failure_attempt_count FROM continuity_refresh_status WHERE conversation_id=?1 AND continuity_kind=?2",
         rusqlite::params![conversation_id, kind],
         |row| row.get(0),
     )?;
-    let attempt = previous.saturating_add(1);
-    let exponent = u32::try_from(attempt.saturating_sub(1))
-        .unwrap_or(16)
-        .min(16);
-    let delay = 300_i64
-        .saturating_mul(2_i64.saturating_pow(exponent))
-        .min(3_600);
-    let retry_not_before = (chrono::Utc::now() + chrono::Duration::seconds(delay)).to_rfc3339();
-    tx.execute(
-        r#"
+        let attempt = previous.saturating_add(1);
+        let exponent = u32::try_from(attempt.saturating_sub(1))
+            .unwrap_or(16)
+            .min(16);
+        let delay = 300_i64
+            .saturating_mul(2_i64.saturating_pow(exponent))
+            .min(3_600);
+        let retry_not_before = (chrono::Utc::now() + chrono::Duration::seconds(delay)).to_rfc3339();
+        tx.execute(
+            r#"
         UPDATE continuity_refresh_status
         SET status='pending', failure_attempt_count=?3, retry_not_before=?4,
             last_error=?5, updated_at=?6
         WHERE conversation_id=?1 AND continuity_kind=?2
         "#,
-        rusqlite::params![
-            conversation_id,
-            kind,
-            attempt,
-            retry_not_before,
-            error.chars().take(900).collect::<String>(),
-            current_rfc3339_timestamp()
-        ],
-    )?;
-    tx.commit()?;
-    Ok(())
+            rusqlite::params![
+                conversation_id,
+                kind,
+                attempt,
+                retry_not_before,
+                error.chars().take(900).collect::<String>(),
+                current_rfc3339_timestamp()
+            ],
+        )?;
+        Ok(())
+    })
 }
 
 /// Start of the boundary-detection window for this conversation: the moment
@@ -399,9 +405,9 @@ fn durable_boundary_window_start(
     conversation_id: i64,
     turn_start_ts: &str,
 ) -> String {
-    let Ok(conn) = rusqlite::Connection::open(db_path) else {
-        return turn_start_ts.to_string();
-    };
+    let fallback = turn_start_ts.to_owned();
+    let fallback_in_job = fallback.clone();
+    lcm::with_lcm_read(db_path,move |conn| {
     let table_exists = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='continuity_refresh_status')",
@@ -411,9 +417,9 @@ fn durable_boundary_window_start(
         .unwrap_or(0)
         != 0;
     if !table_exists {
-        return turn_start_ts.to_string();
+        return Ok(fallback_in_job);
     }
-    conn.query_row(
+    Ok(conn.query_row(
         "SELECT MAX(updated_at) FROM continuity_refresh_status WHERE conversation_id=?1",
         rusqlite::params![conversation_id],
         |row| row.get::<_, Option<String>>(0),
@@ -421,7 +427,8 @@ fn durable_boundary_window_start(
     .ok()
     .flatten()
     .filter(|value| !value.trim().is_empty())
-    .unwrap_or_else(|| turn_start_ts.to_string())
+    .unwrap_or(fallback_in_job))
+    }).unwrap_or(fallback)
 }
 
 /// Query the mission and LCM databases for durable state changes written
@@ -454,95 +461,94 @@ fn detect_durable_state_transition(
     turn_start_ts: &str,
     boundary_window_ts: &str,
 ) -> Result<DurableStateProbe> {
-    use rusqlite::Connection;
+    // Both logical stores share Core: one snapshot for the entire probe.
+    anyhow::ensure!(
+        ctox_store::DbId::new(crate::persistence::sqlite_path(root))?
+            == ctox_store::DbId::new(lcm_db_path)?,
+        "durable probes require the same injected Core file"
+    );
+    let turn_start_ts = turn_start_ts.to_owned();
+    let boundary_window_ts = boundary_window_ts.to_owned();
+    lcm::with_lcm_read(lcm_db_path, move |conn| {
+        let mut probe = DurableStateProbe::default();
 
-    let mut probe = DurableStateProbe::default();
-
-    // Mission-side tables live in the unified CTOX runtime database. These
-    // use the boundary WINDOW (since the last refresh), not the turn
-    // bracket: the service closes internal work items after the turn, post
-    // completion review, and a turn-local bracket never sees those.
-    let mission_db = crate::persistence::sqlite_path(root);
-    if mission_db.exists() {
-        let conn = Connection::open_with_flags(
-            &mission_db,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
-        )?;
-        let self_work_closed: i64 = match conn.query_row(
-            "SELECT COUNT(1) FROM ticket_self_work_items \
+        // Mission-side tables live in the unified CTOX runtime database. These
+        // use the boundary WINDOW (since the last refresh), not the turn
+        // bracket: the service closes internal work items after the turn, post
+        // completion review, and a turn-local bracket never sees those.
+        {
+            let self_work_closed: i64 = match conn.query_row(
+                "SELECT COUNT(1) FROM ticket_self_work_items \
              WHERE state = 'closed' AND updated_at > ?1",
-            rusqlite::params![boundary_window_ts],
-            |row| row.get(0),
-        ) {
-            Ok(count) => count,
-            Err(err) => {
-                probe
-                    .probe_errors
-                    .push(format!("ticket_self_work_items probe failed: {err}"));
-                0
+                rusqlite::params![boundary_window_ts],
+                |row| row.get(0),
+            ) {
+                Ok(count) => count,
+                Err(err) => {
+                    probe
+                        .probe_errors
+                        .push(format!("ticket_self_work_items probe failed: {err}"));
+                    0
+                }
+            };
+            if self_work_closed > 0 {
+                probe.detected = true;
+                return Ok(probe);
             }
-        };
-        if self_work_closed > 0 {
-            probe.detected = true;
-            return Ok(probe);
-        }
-        let knowledge_added: i64 = match conn.query_row(
-            "SELECT COUNT(1) FROM ticket_knowledge_entries WHERE created_at > ?1",
-            rusqlite::params![boundary_window_ts],
-            |row| row.get(0),
-        ) {
-            Ok(count) => count,
-            Err(err) => {
-                probe
-                    .probe_errors
-                    .push(format!("ticket_knowledge_entries probe failed: {err}"));
-                0
+            let knowledge_added: i64 = match conn.query_row(
+                "SELECT COUNT(1) FROM ticket_knowledge_entries WHERE created_at > ?1",
+                rusqlite::params![boundary_window_ts],
+                |row| row.get(0),
+            ) {
+                Ok(count) => count,
+                Err(err) => {
+                    probe
+                        .probe_errors
+                        .push(format!("ticket_knowledge_entries probe failed: {err}"));
+                    0
+                }
+            };
+            if knowledge_added > 0 {
+                probe.detected = true;
+                return Ok(probe);
             }
-        };
-        if knowledge_added > 0 {
-            probe.detected = true;
-            return Ok(probe);
         }
-    }
 
-    // Focus-document commits live in the LCM database alongside Narrative
-    // and Anchors. A focus replacement during the turn is a boundary.
-    // LCM stamps `continuity_commits.created_at` as an epoch-millis string
-    // (lcm::iso_now), NOT RFC3339 — compare numerically, otherwise the text
-    // collation ("17..." vs "20...") makes this check permanently false.
-    if lcm_db_path.exists() {
-        let turn_start_millis = chrono::DateTime::parse_from_rfc3339(turn_start_ts)
-            .map(|ts| ts.timestamp_millis())
-            .unwrap_or(i64::MAX);
-        let conn = Connection::open_with_flags(
-            lcm_db_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
-        )?;
-        // `continuity_documents.kind` is stored lowercase ("focus", see
-        // ContinuityKind::as_str) and its primary key is `document_id`.
-        let focus_commits: i64 = match conn.query_row(
-            "SELECT COUNT(1) FROM continuity_commits c \
+        // Focus-document commits live in the LCM database alongside Narrative
+        // and Anchors. A focus replacement during the turn is a boundary.
+        // LCM stamps `continuity_commits.created_at` as an epoch-millis string
+        // (lcm::iso_now), NOT RFC3339 — compare numerically, otherwise the text
+        // collation ("17..." vs "20...") makes this check permanently false.
+        {
+            let turn_start_millis = chrono::DateTime::parse_from_rfc3339(&turn_start_ts)
+                .map(|ts| ts.timestamp_millis())
+                .unwrap_or(i64::MAX);
+            // `continuity_documents.kind` is stored lowercase ("focus", see
+            // ContinuityKind::as_str) and its primary key is `document_id`.
+            let focus_commits: i64 = match conn.query_row(
+                "SELECT COUNT(1) FROM continuity_commits c \
              JOIN continuity_documents d ON c.document_id = d.document_id \
              WHERE d.conversation_id = ?1 AND d.kind = 'focus' \
              AND CAST(c.created_at AS INTEGER) > ?2",
-            rusqlite::params![conversation_id, turn_start_millis],
-            |row| row.get(0),
-        ) {
-            Ok(count) => count,
-            Err(err) => {
-                probe
-                    .probe_errors
-                    .push(format!("continuity_commits probe failed: {err}"));
-                0
+                rusqlite::params![conversation_id, turn_start_millis],
+                |row| row.get(0),
+            ) {
+                Ok(count) => count,
+                Err(err) => {
+                    probe
+                        .probe_errors
+                        .push(format!("continuity_commits probe failed: {err}"));
+                    0
+                }
+            };
+            if focus_commits > 0 {
+                probe.detected = true;
+                return Ok(probe);
             }
-        };
-        if focus_commits > 0 {
-            probe.detected = true;
-            return Ok(probe);
         }
-    }
 
-    Ok(probe)
+        Ok(probe)
+    })
 }
 
 use crate::context_health;
@@ -938,7 +944,7 @@ where
             .unwrap_or(configured_turn_timeout_secs),
     };
     emit("lcm-open");
-    let engine = lcm::LcmEngine::open(db_path, lcm::LcmConfig::default())?;
+    let engine = lcm::LcmClient::attach(db_path)?;
     let _ = engine.continuity_init_documents(conversation_id)?;
     emit("persist-user-turn");
     persist_lcm_message_with_retry(db_path, conversation_id, "user", prompt, &mut emit)
@@ -1343,7 +1349,7 @@ where
     }
     let state_transition_detected = state_probe.detected;
     let effective_force_refresh = force_continuity_refresh || state_transition_detected;
-    let engine = lcm::LcmEngine::open(db_path, lcm::LcmConfig::default())?;
+    let engine = lcm::LcmClient::attach(db_path)?;
     // New adaptive model: refresh only on durable state transition
     // (force_continuity_refresh) or when cumulative output tokens exceed
     // the configured percentage of the context window. Legacy interval
@@ -1621,13 +1627,16 @@ fn ensure_rendered_prompt_is_invocable(
 #[cfg(test)]
 #[path = "turn_loop_boundary_tests.rs"]
 mod boundary_tests;
+#[cfg(test)]
+#[path = "turn_loop_owner_tests.rs"]
+mod owner_tests;
 
 /// Crew memory refresh: the same tool-based continuity refresh, run on a
 /// member conversation. Returns the kinds whose head actually advanced.
 pub(crate) fn refresh_member_memory(
     root: &Path,
     settings: &BTreeMap<String, String>,
-    engine: &lcm::LcmEngine,
+    engine: &lcm::LcmClient,
     conversation_id: i64,
     due_kinds: &HashSet<String>,
     session: &mut PersistentSession,
@@ -1738,7 +1747,7 @@ fn refresh_continuity_documents(
     root: &Path,
     settings: &BTreeMap<String, String>,
     db_path: &Path,
-    engine: &lcm::LcmEngine,
+    engine: &lcm::LcmClient,
     conversation_id: i64,
     due_kinds: &HashSet<String>,
     session: &mut ContinuityRefreshSession<'_>,
@@ -2480,55 +2489,83 @@ fn continuity_refresh_timeout_secs(settings: &BTreeMap<String, String>) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    async fn owner_fixture(
+        path: &Path,
+    ) -> Result<(
+        ctox_store::writer::WriterHandle,
+        ctox_store::read_pool::ReadPool,
+        crate::lcm::owner_adapter::OwnerAdapter,
+    )> {
+        std::fs::create_dir_all(path.parent().expect("Core parent"))?;
+        drop(lcm::LcmEngine::open(path, lcm::LcmConfig::default())?);
+        let (writer, readers) =
+            ctox_store::testkit::StoreFixture::open(ctox_store::DbId::new(path)?)
+                .await?
+                .into_parts();
+        let adapter =
+            crate::lcm::owner_adapter::OwnerAdapter::attach(path, writer.clone(), readers.clone())
+                .await?;
+        Ok((writer, readers, adapter))
+    }
 
-    #[test]
-    fn continuity_refresh_never_starts_a_session_it_does_not_need() -> Result<()> {
+    #[tokio::test]
+    async fn continuity_refresh_never_starts_a_session_it_does_not_need() -> Result<()> {
         // The task refresh owns an isolated session that starts only on the
         // first model call; it never borrows the worker's thread.
         let temp = tempfile::tempdir()?;
         let db_path = temp.path().join("ctox.sqlite3");
-        let engine = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
-        let fault = temp.path().join("continuity-fault.json");
-        std::fs::write(
-            &fault,
-            serde_json::json!({
-                "anchors": ["## Entries\n+ - fact: refreshed outside the worker thread\n"]
-            })
-            .to_string(),
-        )?;
-        let mut settings = BTreeMap::new();
-        settings.insert(
-            CONTINUITY_REFRESH_FAULT_FILE_ENV_KEY.to_string(),
-            fault.display().to_string(),
-        );
-        let due = HashSet::from(["anchors".to_string()]);
-        let mut session = ContinuityRefreshSession::Isolated { slot: None };
-        let stats = refresh_continuity_documents(
-            temp.path(),
-            &settings,
-            &db_path,
-            &engine,
-            42,
-            &due,
-            &mut session,
-            &mut |_| {},
-        )?;
-        assert_eq!(stats.attempted, 1);
-        assert!(
-            !session.started(),
-            "refresh started a session it never used"
-        );
-        let anchors = engine.continuity_show(42, lcm::ContinuityKind::Anchors)?;
-        assert!(anchors
-            .content
-            .contains("refreshed outside the worker thread"));
-        Ok(())
+        let (writer, readers, adapter) = owner_fixture(&db_path).await?;
+        let result = crate::persistence::run_core_sync(move || {
+            let engine = lcm::LcmClient::attach(&db_path)?;
+            let fault = temp.path().join("continuity-fault.json");
+            std::fs::write(
+                &fault,
+                serde_json::json!({
+                    "anchors": ["## Entries\n+ - fact: refreshed outside the worker thread\n"]
+                })
+                .to_string(),
+            )?;
+            let mut settings = BTreeMap::new();
+            settings.insert(
+                CONTINUITY_REFRESH_FAULT_FILE_ENV_KEY.to_string(),
+                fault.display().to_string(),
+            );
+            let due = HashSet::from(["anchors".to_string()]);
+            let mut session = ContinuityRefreshSession::Isolated { slot: None };
+            let stats = refresh_continuity_documents(
+                temp.path(),
+                &settings,
+                &db_path,
+                &engine,
+                42,
+                &due,
+                &mut session,
+                &mut |_| {},
+            )?;
+            assert_eq!(stats.attempted, 1);
+            assert!(
+                !session.started(),
+                "refresh started a session it never used"
+            );
+            let anchors = engine.continuity_show(42, lcm::ContinuityKind::Anchors)?;
+            assert!(anchors
+                .content
+                .contains("refreshed outside the worker thread"));
+            Ok(())
+        })
+        .await;
+        drop(adapter);
+        drop(readers);
+        writer.shutdown().await?;
+        result
     }
 
-    #[test]
-    fn successful_turn_persists_one_attempt_and_typed_success_reply() -> Result<()> {
+    #[tokio::test]
+    async fn successful_turn_persists_one_attempt_and_typed_success_reply() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let db_path = temp.path().join("ctox.sqlite3");
+        let (writer, readers, adapter) = owner_fixture(&db_path).await?;
+        let result=crate::persistence::run_core_sync(move || {
         let context = WorkerAttemptContext {
             attempt_id: "turn-success-attempt".to_string(),
             work_key: "queue:turn-success".to_string(),
@@ -2567,10 +2604,11 @@ mod tests {
         )?;
         assert_eq!(first.message_id, second.message_id);
         assert_eq!(first.agent_outcome.as_deref(), Some("Success"));
-        let conn = rusqlite::Connection::open(&db_path)?;
+        let work_key=context.work_key.clone();
+        let (attempts,replies)=lcm::with_lcm_read(&db_path,move |conn| {
         let attempts: i64 = conn.query_row(
             "SELECT COUNT(*) FROM worker_attempt_finalizations WHERE work_key = ?1",
-            [context.work_key.as_str()],
+            [work_key.as_str()],
             |row| row.get(0),
         )?;
         let replies: i64 = conn.query_row(
@@ -2578,39 +2616,56 @@ mod tests {
             [],
             |row| row.get(0),
         )?;
+        Ok((attempts,replies))
+        })?;
         assert_eq!(attempts, 1);
         assert_eq!(replies, 1);
         assert!(events.is_empty());
         Ok(())
+        }).await;
+        drop(adapter);
+        drop(readers);
+        writer.shutdown().await?;
+        result
     }
 
-    #[test]
-    fn service_owned_turn_cannot_persist_success_without_a_completed_plan() -> Result<()> {
+    #[tokio::test]
+    async fn service_owned_turn_cannot_persist_success_without_a_completed_plan() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let db_path = temp.path().join("ctox.sqlite3");
-        let context = WorkerAttemptContext {
-            attempt_id: "turn-planless-attempt".to_string(),
-            work_key: "queue:turn-planless".to_string(),
-            source_label: "turn-loop-test".to_string(),
-            progress_error: Arc::new(Mutex::new(None)),
-        };
-        let error = persist_successful_assistant_with_retry(
-            &db_path,
-            7102,
-            "must not persist",
-            Some(&context),
-            &mut |_| {},
-        )
-        .expect_err("planless service-owned completion must fail closed");
-        assert!(error.to_string().contains("has no durable execution plan"));
-        let conn = rusqlite::Connection::open(&db_path)?;
-        let replies: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM messages WHERE conversation_id = 7102",
-            [],
-            |row| row.get(0),
-        )?;
-        assert_eq!(replies, 0);
-        Ok(())
+        let (writer, readers, adapter) = owner_fixture(&db_path).await?;
+        let result = crate::persistence::run_core_sync(move || {
+            let context = WorkerAttemptContext {
+                attempt_id: "turn-planless-attempt".to_string(),
+                work_key: "queue:turn-planless".to_string(),
+                source_label: "turn-loop-test".to_string(),
+                progress_error: Arc::new(Mutex::new(None)),
+            };
+            let error = persist_successful_assistant_with_retry(
+                &db_path,
+                7102,
+                "must not persist",
+                Some(&context),
+                &mut |_| {},
+            )
+            .expect_err("planless service-owned completion must fail closed");
+            assert!(error.to_string().contains("has no durable execution plan"));
+            let replies = lcm::with_lcm_read(&db_path, |conn| {
+                let replies: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM messages WHERE conversation_id = 7102",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok(replies)
+            })?;
+            assert_eq!(replies, 0);
+            Ok(())
+        })
+        .await;
+        drop(adapter);
+        drop(readers);
+        writer.shutdown().await?;
+        result
     }
 
     #[test]
@@ -2797,14 +2852,12 @@ mod tests {
         assert!(fallback.contains(rendered.trim_start()));
     }
 
-    #[test]
-    fn communication_refresh_is_durable_due_on_eighth_successful_turn() -> Result<()> {
-        let db_path = std::env::temp_dir().join(format!(
-            "ctox-refresh-eight-{}-{}.sqlite",
-            std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-        ));
-        let _engine = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
+    #[tokio::test]
+    async fn communication_refresh_is_durable_due_on_eighth_successful_turn() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let db_path = dir.path().join("refresh.sqlite");
+        let (writer, readers, adapter) = owner_fixture(&db_path).await?;
+        let result=crate::persistence::run_core_sync(move || {
         for turn in 1..COMMUNICATION_REFRESH_TURN_LIMIT {
             let due = record_durable_refresh_demand(
                 &db_path,
@@ -2823,66 +2876,54 @@ mod tests {
         assert!(!due.contains("focus"));
 
         mark_durable_refresh_failed(&db_path, 77, "narrative", "model unavailable")?;
-        let conn = rusqlite::Connection::open(&db_path)?;
-        let (status, attempts, error): (String, i64, String) = conn.query_row(
+        let (status, attempts, error): (String, i64, String) = lcm::with_lcm_read(&db_path,|conn|Ok(conn.query_row(
             "SELECT status, failure_attempt_count, last_error FROM continuity_refresh_status WHERE conversation_id=77 AND continuity_kind='narrative'",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
+        )?))?;
         assert_eq!(status, "pending");
         assert_eq!(attempts, 1);
         assert_eq!(error, "model unavailable");
-        conn.execute(
+        lcm::with_lcm_write(&db_path,|conn| {conn.execute(
             "UPDATE continuity_refresh_status SET retry_not_before='2000-01-01T00:00:00Z' WHERE conversation_id=77 AND continuity_kind='narrative'",
             [],
-        )?;
-        let due_after_restart = due_refresh_kinds(&conn, 77, &current_rfc3339_timestamp())?;
+        )?;Ok(())})?;
+        let due_after_restart = lcm::with_lcm_read(&db_path,|conn|due_refresh_kinds(conn,77,&current_rfc3339_timestamp()))?;
         assert!(due_after_restart.contains("narrative"));
         assert!(
             mark_durable_refresh_consumed(&db_path, 77, "narrative", "head-a", "head-a").is_err()
         );
 
-        drop(conn);
-        let _ = std::fs::remove_file(db_path);
         Ok(())
+        }).await;
+        drop(adapter);
+        drop(readers);
+        writer.shutdown().await?;
+        result
     }
 
-    #[test]
-    fn durable_refresh_waits_for_a_short_parallel_writer() -> Result<()> {
-        let db_path = std::env::temp_dir().join(format!(
-            "ctox-refresh-lock-{}-{}.sqlite",
-            std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-        ));
-        let _engine = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
-        record_durable_refresh_demand(&db_path, 91, false, 0, 10, "initial")?;
-
-        let holder = rusqlite::Connection::open(&db_path)?;
-        holder.execute_batch("BEGIN IMMEDIATE")?;
-        let worker_path = db_path.clone();
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            started_tx.send(()).expect("signal refresh worker start");
-            record_durable_refresh_demand(&worker_path, 91, false, 0, 10, "parallel")
-        });
-        started_rx.recv()?;
-        std::thread::sleep(Duration::from_millis(100));
-        assert!(
-            !worker.is_finished(),
-            "refresh accounting must wait for a short writer instead of failing immediately"
+    #[tokio::test]
+    async fn durable_refresh_serializes_parallel_jobs_on_the_existing_owner() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("refresh.sqlite");
+        let (writer, readers, adapter) = owner_fixture(&path).await?;
+        let first = path.clone();
+        let second = path.clone();
+        let (a, b) = tokio::join!(
+            crate::persistence::run_core_sync(move || record_durable_refresh_demand(
+                &first, 91, false, 0, 10, "first"
+            )),
+            crate::persistence::run_core_sync(move || record_durable_refresh_demand(
+                &second, 91, false, 0, 10, "second"
+            ))
         );
-        holder.execute_batch("COMMIT")?;
-        worker.join().expect("refresh worker panicked")?;
-
-        let conn = rusqlite::Connection::open(&db_path)?;
-        let turns: i64 = conn.query_row(
-            "SELECT successful_turn_count FROM continuity_refresh_status WHERE conversation_id=91 AND continuity_kind='narrative'",
-            [],
-            |row| row.get(0),
-        )?;
-        assert_eq!(turns, 2);
-        drop(conn);
-        let _ = std::fs::remove_file(db_path);
+        a?;
+        b?;
+        let turns=readers.read_job(ctox_store::ReadJob::new(Default::default(),|conn|Ok(conn.query_row("SELECT successful_turn_count FROM continuity_refresh_status WHERE conversation_id=91 AND continuity_kind='narrative'",[],|row|row.get::<_,i64>(0))?))).await?;
+        assert_eq!(turns, 2, "parallel owner jobs lost a durable increment");
+        drop(adapter);
+        drop(readers);
+        writer.shutdown().await?;
         Ok(())
     }
 
@@ -3171,42 +3212,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
-    fn durable_state_probe_surfaces_a_query_error_instead_of_suppressing() {
-        // turnloop-6: a probe whose query ERRORS (e.g. a schema regression
-        // renames a column or drops a table) must be reported via probe_errors,
-        // not collapsed into "no boundary" — otherwise a query regression
-        // silently stops forcing continuity refreshes.
-        let root = std::env::temp_dir().join(format!(
-            "ctox-turn-probe-err-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(root.join("runtime")).unwrap();
-        // Create the mission db so it EXISTS but WITHOUT ticket_self_work_items,
-        // so the first probe query errors with "no such table".
-        let mission_db = crate::persistence::sqlite_path(&root);
-        std::fs::create_dir_all(mission_db.parent().unwrap()).unwrap();
-        rusqlite::Connection::open(&mission_db)
-            .unwrap()
-            .execute_batch("CREATE TABLE unrelated (x INTEGER);")
-            .unwrap();
-        let turn_start = current_rfc3339_timestamp();
-        let absent_lcm = root.join("no-such-lcm.sqlite");
-        let probe =
-            detect_durable_state_transition(&root, &absent_lcm, 7, &turn_start, &turn_start)
-                .expect("probe must not hard-error on a missing table");
-        assert!(
-            !probe.detected,
-            "a degraded probe must not claim a boundary"
-        );
-        assert!(
-            !probe.probe_errors.is_empty(),
-            "a missing-table probe error must be surfaced, not swallowed to no-boundary"
-        );
-        let _ = std::fs::remove_dir_all(&root);
+    #[tokio::test]
+    async fn durable_state_probe_surfaces_a_query_error_instead_of_suppressing() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().to_owned();
+        let path = crate::paths::core_db(&root);
+        let (writer, readers, adapter) = owner_fixture(&path).await?;
+        // A unified Core schema without ticket tables must surface degraded
+        // probes. A different LCM file is no longer a supported live topology.
+        crate::persistence::run_core_sync(move || {
+            let now = current_rfc3339_timestamp();
+            let probe = detect_durable_state_transition(&root, &path, 7, &now, &now)?;
+            assert!(!probe.detected);
+            assert!(
+                !probe.probe_errors.is_empty(),
+                "missing-table errors must remain visible"
+            );
+            Ok(())
+        })
+        .await?;
+        drop(adapter);
+        drop(readers);
+        writer.shutdown().await?;
+        Ok(())
     }
 
     #[test]

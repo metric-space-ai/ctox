@@ -194,8 +194,8 @@ impl Default for Runtime {
     }
 }
 impl ingest::IngestRuntime for Runtime {
-    fn public_origin(&self) -> Option<String> {
-        self.origin.clone()
+    fn public_origin(&self) -> Result<Option<String>, CtoxError> {
+        Ok(self.origin.clone())
     }
     fn has_handler(&self, app_id: &str, command_type: &str) -> Result<bool, CtoxError> {
         Ok(self
@@ -920,7 +920,7 @@ fn ingress(f: &Fixture, path: &str, wait: Duration) -> ingest::HttpResponse {
         body: Vec::new(),
         received_at_ms: 7,
     };
-    ingest::handle_ingress(f.root.path(), &f.runtime, &request, wait)
+    ingest::handle_ingress(f.root.path(), &f.runtime, &request, wait).unwrap()
 }
 fn registered_fixture() -> Fixture {
     let f = Fixture::new();
@@ -1313,7 +1313,7 @@ fn app_capabilities_cap3_platform_origin_contract() {
         };
         use ingest::IngestRuntime as _;
         assert_eq!(
-            runtime.public_origin().as_deref(),
+            runtime.public_origin().unwrap().as_deref(),
             Some("https://core.example.test")
         );
         assert_eq!(
@@ -1326,10 +1326,10 @@ fn app_capabilities_cap3_platform_origin_contract() {
             "https://core.example.test/path",
         )
         .unwrap();
-        assert_eq!(config::public_origin(f.root.path()), None);
+        assert_eq!(config::public_origin(f.root.path()).unwrap(), None);
         // HTTP routing: /ingest always, a legacy alias only once registered.
-        assert!(ingest::serves(f.root.path(), "/ingest/outbound/tracking"));
-        assert!(!ingest::serves(f.root.path(), "/mail/track/o/abc.gif"));
+        assert!(ingest::serves(f.root.path(), "/ingest/outbound/tracking").unwrap());
+        assert!(!ingest::serves(f.root.path(), "/mail/track/o/abc.gif").unwrap());
         f.call(
             &Host::new("outbound", "staff"),
             "net.ingest.webhook",
@@ -1337,8 +1337,8 @@ fn app_capabilities_cap3_platform_origin_contract() {
             json!({"path":"tracking","command":"outbound.tracking.event","aliases":["/mail/track/o/"]}),
         )
         .unwrap();
-        assert!(ingest::serves(f.root.path(), "/mail/track/o/abc.gif"));
-        assert!(!ingest::serves(f.root.path(), "/mail/track/c/abc"));
+        assert!(ingest::serves(f.root.path(), "/mail/track/o/abc.gif").unwrap());
+        assert!(!ingest::serves(f.root.path(), "/mail/track/c/abc").unwrap());
     });
 }
 
