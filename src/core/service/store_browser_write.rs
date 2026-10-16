@@ -42,12 +42,7 @@ impl BrowserWrite {
         self.admission
             .authority()
             .router
-            .with_snapshot(self.peer.rights_ver, &self.peer.epoch, |_, _| {
-                if rights.rights_ver != self.peer.rights_ver {
-                    return Err("revoked".into());
-                }
-                Ok(())
-            })
+            .with_snapshot(rights.rights_ver, &self.peer.epoch, |_, _| Ok(()))
             .map_err(sql_invalid)?;
         Ok(rights)
     }

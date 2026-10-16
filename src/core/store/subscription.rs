@@ -464,7 +464,8 @@ pub(crate) fn apply_write(
         let mut permission = authority.authorize(tx, participant, request)?;
         let prefs = if request.collection == crate::preferences::COLLECTION {
             let context = authority.preference_context(participant);
-            if !context.as_ref().is_some_and(|ctx| ctx.owns_id(&request.id)) {
+            if !matches!(&permission, WritePermission::Reject(_))
+                && !context.as_ref().is_some_and(|ctx| ctx.owns_id(&request.id)) {
                 permission = WritePermission::Reject("forbidden".into());
             }
             context

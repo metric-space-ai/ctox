@@ -39,7 +39,7 @@ try:
  contract=['cargo','test','--locked','--manifest-path','tests/sync-v4/p6-e55/Cargo.toml','--test','contract','--jobs','2','--','--test-threads=2']
  if run('native-contracts',contract,1500):raise RuntimeError('native contract baseline')
  grant=root/'src/core/store/app_grant.rs';originals[grant]=grant.read_text()
- mutations=[('shell-preferences','let include_preferences = true;','let include_preferences = false;','shell boot preferences grant missing'),('foreign-scope','g.claims.scope_hash == h','true || g.claims.scope_hash == h','foreign scope admitted'),('retained-revoke','state.issued.remove(app).map','state.issued.get(app).map','revoked subscription survived')]
+ mutations=[('shell-preferences','let include_preferences = true;','let include_preferences = false;','shell boot preferences grant missing'),('foreign-scope','g.claims.scope_hash == h','true || g.claims.scope_hash == h','foreign scope admitted'),('retained-revoke','state.issued.remove(app).map','state.issued.get(app).map','revoked subscription survived'),('publication-version','.with_snapshot(version, epoch, |_, _| {','.with_identity(|_, _| {','old version survived publication before revoke notification')]
  for name,before,after,reason in mutations:
   original=originals[grant];assert original.count(before)==1,(name,'anchor')
   grant.write_text(original.replace(before,after))
@@ -48,6 +48,14 @@ try:
   log=(out/('mutation-'+name+'.log')).read_text();red=code==101 and reason in log
   r['mutations'].append({'name':name,'file':str(grant.relative_to(root)),'line':next(i for i,l in enumerate(original.splitlines(),1) if before in l),'red':red,'reason':reason});save()
   if not red:raise RuntimeError('mutation not proven: '+name)
+ subscription=root/'src/core/store/subscription.rs';originals[subscription]=subscription.read_text()
+ before='!matches!(&permission, WritePermission::Reject(_))';assert originals[subscription].count(before)==1
+ subscription.write_text(originals[subscription].replace(before,'true'))
+ try:code=run('mutation-revoked-preference-reason',contract,180)
+ finally:subscription.write_text(originals[subscription])
+ red=code==101 and 'revoked preference rejection lost its reason' in (out/'mutation-revoked-preference-reason.log').read_text()
+ r['mutations'].append({'name':'revoked-preference-reason','red':red,'file':str(subscription.relative_to(root)),'line':next(i for i,l in enumerate(originals[subscription].splitlines(),1) if before in l)});save()
+ if not red:raise RuntimeError('revoked preference reason mutation')
  if run('native-restored',contract,180):raise RuntimeError('restored contracts')
  if run('kernel-protocol',['node','--test','src/apps/business-os/kernel/tests/e55.test.mjs','src/apps/business-os/kernel/tests/boot.test.mjs'],120):raise RuntimeError('kernel protocol')
  # Existing runner builds real foreground and native enrollment/control fixture;
