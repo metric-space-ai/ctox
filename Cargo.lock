@@ -3411,6 +3411,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctox-toolhub"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "ureq 2.12.1",
+ "url",
+]
+
+[[package]]
 name = "ctox-transfers"
 version = "0.1.0"
 dependencies = [
