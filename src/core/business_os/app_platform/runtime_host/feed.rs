@@ -122,6 +122,9 @@ async fn drive(
             .await?;
         }
     }
+    let mut lease_tick = tokio::time::interval(Duration::from_secs(10));
+    lease_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    lease_tick.tick().await;
     loop {
         // Drain retained heads before awaiting the next coalesced wakeup.
         loop {
@@ -136,6 +139,7 @@ async fn drive(
                 }).collect::<Result<Vec<_>,StoreError>>()
             })).await?;
             if page.is_empty() {
+                authority.finish_events(true).await?;
                 break;
             }
             for (collection, id, seq, op, doc) in page {
@@ -196,7 +200,7 @@ async fn drive(
                     .await?;
             }
         }
-        tokio::select! {biased;_=stop.changed()=>break,result=commits.changed()=>{result?;}}
+        tokio::select! {biased;_=stop.changed()=>break,result=commits.changed()=>{result?;},_=lease_tick.tick()=>{authority.renew_events().await?;}}
     }
     Ok(())
 }

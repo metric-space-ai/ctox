@@ -125,6 +125,10 @@ impl Fixture {
                     schema_json:json!({"version":1,"type":"object","primaryKey":"id","properties":{"id":{"type":"string"}},"required":["id"]}),
                     class:"full".into(),client_limit:0,byte_budget:1_048_576,rights_ver:1,app_ver:"platform-1".into()})?;
             }
+            // Native publication now evaluates the actual P6 transaction policy.
+            // Seed its canonical role/action rows, as the runtime bootstrap does.
+            super::super::super::policy::sync_rights::initialize(tx)?;
+            super::super::super::policy::sync_rights::replace(tx, 1, &super::super::super::policy::base_release_rights(&[]))?;
             Ok(())
         })).await.unwrap();
         let writer = database.writer.clone();

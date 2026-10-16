@@ -476,7 +476,8 @@ impl CoreAuthority for RuntimeAuthority {
         let codec = self.codec.clone();
         self.query(move |db| {
             let m = codec.version(db, &app, &version)?["manifest"].clone();
-            let record = document(db, "business_apps", &app)?.unwrap();
+            let record = document(db, "business_apps", &app)?
+                .ok_or_else(|| invalid("revoked: app removed"))?;
             let requested = m["capabilities_required"]
                 .as_array()
                 .cloned()
@@ -622,10 +623,50 @@ impl RuntimeAuthority {
                 .map(|v| json!({"command":v.command,"fence":v.fence}))
                 .collect::<Vec<_>>()
         };
+        // An unclassified/uncertain handler failure never confirms the native
+        // effect. Keep its durable BeginEffect for reconciliation.
+        if !succeeded {
+            return Ok(());
+        }
         for binding in bindings {
-            self.finish_event_record(&binding, if succeeded { "done" } else { "failed" })
-                .await?;
-            self.release(&binding).await?;
+            let b = binding.clone();
+            let settled = self.database.readers.read_job(ReadJob::new(Default::default(), move |db| {
+                let app=text(&b["command"],"app_id").map_err(sql_error)?;
+                let trigger=text(&b["command"]["client_context"],"trigger_id").map_err(sql_error)?;
+                let row: Option<(bool,String,u64,Option<String>)> = db.query_row(
+                    "SELECT running,run_id,fence,outcome FROM _app_runtime_triggers WHERE app_id=?1 AND trigger_id=?2",
+                    params![app,trigger],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+                Ok(row.is_some_and(|(running,run,fence,outcome)| !running && b["fence"]["run_id"]==run && b["fence"]["fence"]==fence && outcome.as_deref().and_then(|s|serde_json::from_str::<Value>(s).ok()).is_some_and(|v|v["status"]=="completed" && v["uncertain"]!=true)))
+            })).await?;
+            if settled {
+                self.finish_event_record(&binding, "done").await?;
+                self.release(&binding).await?;
+            }
+        }
+        Ok(())
+    }
+    pub(super) async fn renew_events(self: &Arc<Self>) -> Result<()> {
+        let bindings = {
+            let held = self
+                .held
+                .read()
+                .map_err(|_| anyhow!("unavailable: invocation registry"))?;
+            held.values()
+                .filter(|v| v.command["runtime_event"] == true && v.callback.is_none())
+                .map(|v| json!({"command":v.command,"fence":v.fence}))
+                .collect::<Vec<_>>()
+        };
+        self.finish_events(true).await?;
+        for binding in bindings {
+            let id = text(&binding["command"], "id")?;
+            let still_held = self
+                .held
+                .read()
+                .map_err(|_| anyhow!("unavailable: invocation registry"))?
+                .contains_key(id);
+            if still_held {
+                self.renew(&binding).await?;
+            }
         }
         Ok(())
     }
