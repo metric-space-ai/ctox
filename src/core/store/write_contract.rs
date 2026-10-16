@@ -329,6 +329,14 @@ fn ingest(
                 // terminal()/remember() retain only request identity (no
                 // body) and the typed rejection. Never enqueue these bytes.
                 Some("credential_ref_required")
+            } else if request.collection == "business_commands"
+                && request
+                    .body
+                    .as_ref()
+                    .and_then(|body| body["type"].as_str())
+                    .is_some_and(|kind| routes::owns_type(kind) && routes::resolve(kind).is_err())
+            {
+                Some("unknown_command")
             } else if request.id.is_empty() || request.collection.is_empty() || request.gen == 0 {
                 Some("invalid_input")
             } else if issued.is_err() {

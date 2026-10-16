@@ -66,7 +66,244 @@ pub const ROUTES: &[Route] = &[
         "ctox.outbound.sellify_lookup.v1",
         "src/core/business_os/store_outbound_commands.rs:1673"
     ),
+    route!(
+        "ctox.plan.step.retry",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.calendar.connect.v1",
+        "src/core/business_os/mcp_workjet_calendar_connect.rs:1"
+    ),
+    route!(
+        "ctox.workjet.computer.assign",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.computer.endpoint.disable",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.computer.endpoint.upsert",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.computer.list",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.computer.ssh_key.ensure",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.computer.unassign",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.exit_model.read",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.exit_model.refresh",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.exit_model.submit",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.jour_fixe.comment.add",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.jour_fixe.meeting.end",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.jour_fixe.meeting.read",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.jour_fixe.meeting.start",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.jour_fixe.todos.confirm",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.jour_fixe.todos.revise",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.jour_fixe.transcript.append",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.presentation.canvas.save",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.presentation.read",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.project.chat.create",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.project.init",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.project.kpis.configure",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.project.kpis.read",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.project.kpis.refresh",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.project.list",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.project.supervisor.bind",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.project.supervisor.route.capabilities.v1",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.project.supervisor.route.capabilities.v2",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.project.supervisor.route.read.v1",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.project.supervisor.route.read.v2",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.project.supervisor.turn.cancel",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.project.supervisor.turn.capabilities",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.project.supervisor.turn.input",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.project.supervisor.turn.submit",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.project.supervisor.turn.watch",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.project.upsert",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.project.worker.add",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.providers.account.enable",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.providers.account.remove",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.providers.adopt_native",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.providers.list",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.providers.models.exclude",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.providers.models.select",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.providers.observe_native",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.session.create",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.session.list",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.session.transfer.abort",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.session.transfer.pause_ack",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.session.transfer.start",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.session.transfer.status",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
+    route!(
+        "ctox.workjet.working_copy.upsert",
+        "src/core/business_os/command_plane.rs:1734"
+    ),
 ];
+pub fn owns_type(method: &str) -> bool {
+    method.starts_with("ctox.workjet.") || method == "ctox.plan.step.retry"
+}
+pub fn timeout_ms(command: &NativeCommand) -> u64 {
+    match command.kind.as_str() {
+        "ctox.workjet.speech.dictation.v1" | "ctox.workjet.jour_fixe.speech.v1" => {
+            if command.payload["op"] == "open" {
+                20_000
+            } else {
+                5_000
+            }
+        }
+        "ctox.workjet.speech.settings.v1" => {
+            if command.payload["action"] == "speech.settings.check.transcription" {
+                30_000
+            } else {
+                25_000
+            }
+        }
+        "ctox.workjet.grok.v1" => 24_000,
+        "ctox.workjet.device.v1" => 10_000,
+        _ => 10_000,
+    }
+}
+pub fn is_command_bus(route: Route) -> bool {
+    route
+        .handler
+        .starts_with("src/core/business_os/command_plane.rs:")
+}
 pub fn resolve(method: &str) -> Result<Route, CommandError> {
     ROUTES
         .iter()
@@ -77,7 +314,10 @@ pub fn resolve(method: &str) -> Result<Route, CommandError> {
 /// Before the ordering buffer, document/history or rejection ledger can see
 /// an E25 input. Credential bytes belong only to the official secret provider.
 pub fn validate_persisted_input(document: &Value) -> Result<(), CommandError> {
-    if contains_credential(&document["payload"]) {
+    if contains_credential(&document["payload"])
+        || (document["type"] == "ctox.workjet.calendar.connect.v1"
+            && document["payload"].get("callbackUrl").is_some())
+    {
         return Err(error("invalid", "credential_ref_required"));
     }
     Ok(())
