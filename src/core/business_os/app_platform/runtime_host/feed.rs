@@ -27,7 +27,8 @@ impl RuntimeBinding {
         .map_err(|e| anyhow!(e))?;
         // Subscribe BEFORE the common WAL activation snapshot.
         let commits = database.writer.subscribe_commits();
-        let (host, authority) = tokio::task::spawn_blocking(move || super::host(&owners)).await??;
+        let (host, authority) =
+            crate::persistence::run_core_sync(move || super::host(&owners)).await?;
         let codec = host.codec.clone();
         let (active,initial,epoch)=observed_read(database.readers.clone(), "activation_snapshot", ReadJob::new(JobOptions::default(),move|db|{
             let c=collection(db,"business_apps")?;
@@ -50,9 +51,14 @@ impl RuntimeBinding {
             runtime: runtime.clone(),
             active,
         };
-        let registration =
-            tokio::task::spawn_blocking(move || AppRuntimeRegistration::start(root, inputs))
-                .await??;
+        let registration = crate::persistence::run_core_sync(move || {
+            AppRuntimeRegistration::start_with_executor(
+                root,
+                inputs,
+                Some(Arc::new(crate::persistence::CoreCompatibilityExecutor)),
+            )
+        })
+        .await?;
         let ingress = registration.ingress.clone();
         let (stop, stopping) = watch::channel(false);
         let feed_ingress = ingress.clone();
@@ -337,7 +343,7 @@ async fn deliver_completion(
     let id = text(&doc, "id")?.to_owned();
     let command_id = id.clone();
     let binding =
-        tokio::task::spawn_blocking(move || owner.completion_binding(&command_id)).await??;
+        crate::persistence::run_core_sync(move || owner.completion_binding(&command_id)).await?;
     if let Some(binding) = binding {
         let status = match doc["status"].as_str() {
             Some("done" | "completed") => "completed",

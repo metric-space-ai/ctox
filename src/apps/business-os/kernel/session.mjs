@@ -1,6 +1,6 @@
 // Kernel owns authentication; V3 compatibility is explicit and never a V4 fallback.
-import {withTimeout} from '../shared/async-timeout.js';
-import {decodeHelloFrame} from '../rxdb/src/hello.mjs';
+import {withTimeout} from './vendor/async-timeout.js';
+import {decodeHelloFrame} from './vendor/hello.mjs';
 import {CtoxError} from './values.mjs';
 const COMMAND_CAPABILITY_TIMEOUT_MS = 120000;
 const COMMAND_CAPABILITY_TERMINAL_NEGATIVE_CACHE_MS = 10000;

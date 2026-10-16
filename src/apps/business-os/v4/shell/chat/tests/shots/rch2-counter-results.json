@@ -1,0 +1,82 @@
+[
+  {
+    "name": "(a) Klick auf „Research starten“ (echte Maus)",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "(a) Chatleiste offen, Eingabefeld sichtbar mit Entwurf",
+    "ok": false,
+    "detail": "{\"visible\":false,\"len\":null}"
+  },
+  {
+    "name": "(a) Entwurf = vollständige Anweisung (Kopf, Aufgabe, Abschluss des Templates)",
+    "ok": false,
+    "detail": ""
+  },
+  {
+    "name": "(a) vor dem Senden KEIN Befehl (weder research.systematic.run noch Chatbefehl)",
+    "ok": false,
+    "detail": "{\"handled\":1,\"docs\":[[\"research.systematic.run\",\"research\"]]}"
+  },
+  {
+    "name": "(a) Rahmen setzt Quelle aus dem Fenster und merkt Befehlstyp + Parameter",
+    "ok": false,
+    "detail": "{\"winTitle\":\"Webrecherche\"}"
+  },
+  {
+    "name": "(a) Lauf-Kopf im Chat-Weg: status chat (nichts läuft vor dem Senden)",
+    "ok": false,
+    "detail": "[\"queued\"]"
+  },
+  {
+    "name": "(b) Klick auf Senden (echte Maus)",
+    "ok": false,
+    "detail": ""
+  },
+  {
+    "name": "(b) genau ein Befehl research.systematic.run, kein Chat-Standardbefehl",
+    "ok": true,
+    "detail": "{\"handled\":[[\"research.systematic.run\",\"research\"]],\"docs\":[[\"research.systematic.run\",\"research\",\"done\"]]}"
+  },
+  {
+    "name": "(b) Nutzlast trägt jede Befehlsgröße des direkten Wegs unverändert",
+    "ok": false,
+    "detail": "{\"keys\":0,\"diff\":[]}"
+  },
+  {
+    "name": "(b) Absender Chat (App shell), Datensatz = Research-Aufgabe, Anweisung = Entwurf",
+    "ok": false,
+    "detail": "{\"app\":\"research\",\"record\":null}"
+  },
+  {
+    "name": "(d) Entwurf byte-gleich zur Anweisung des Handlers research.systematic.run (gleicher Befehl)",
+    "ok": false,
+    "detail": "{\"handler\":1499,\"draft\":null,\"firstDiff\":null}"
+  },
+  {
+    "name": "(c) Klick auf „Research starten“ ohne Chatleiste (echte Maus)",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "(c) direkter Weg: genau ein Befehl research.systematic.run von der App research",
+    "ok": true,
+    "detail": "{\"handled\":[[\"research.systematic.run\",\"research\"]],\"newDocs\":1}"
+  },
+  {
+    "name": "(c) direkter Weg: dieselben Befehlsgrößen wie die Chat-Übergabe (bis auf Lauf-Kennungen)",
+    "ok": false,
+    "detail": ""
+  },
+  {
+    "name": "(c) kein Fehler- oder navigate-Eintrag in der Zone",
+    "ok": false,
+    "detail": "{\"frame\":[{\"code\":\"shell.navigate\",\"level\":\"error\",\"source\":\"shell\"}],\"kernel\":[]}"
+  },
+  {
+    "name": "keine Seitenfehler",
+    "ok": true,
+    "detail": ""
+  }
+]

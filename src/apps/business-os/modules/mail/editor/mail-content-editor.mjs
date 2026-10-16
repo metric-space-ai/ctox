@@ -68,7 +68,8 @@ export async function createMailContentEditor(options = {}) {
   if (!isElement(host)) throw new TypeError('Mail content editor requires a host Element');
   // App-API 4.0: die App reicht ihre api durch; CSS lädt die Shell aus dem Manifest (editor/editor.css).
   const appApi = options.api && typeof options.api === 'object' ? options.api : null;
-  const ctx = null; // keine Icon-API in 4.0 (OFFEN-D): Glyphen-Rückfall
+  // Icons aus dem gemeinsamen Icon-Satz der Shell (ctox:shared/icons.js), vom Aufrufer übergeben; ohne Übergabe Glyphen-Rückfall.
+  const ctx = typeof options.getActionIcon === 'function' ? { getActionIcon: options.getActionIcon } : null;
   const locale = normalizeLocale(options.locale || appApi?.shell?.locale?.get?.());
   const labels = { ...COPY[locale], ...(options.labels || {}) };
   let mode = normalizeEditorMode(options.mode);

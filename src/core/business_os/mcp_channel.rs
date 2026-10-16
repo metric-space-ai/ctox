@@ -1271,11 +1271,20 @@ fn mcp_request_authorized(root: &Path, request: &Request) -> bool {
 }
 
 pub fn serve_mcp_channel(root: &Path, options: BusinessOsMcpServeOptions) -> anyhow::Result<()> {
+    let work = root.to_owned();
+    crate::persistence::with_cli_owners(root, move || serve_owned_mcp_channel(&work, options))
+        .context("MCP foreground owner execution failed")
+}
+
+fn serve_owned_mcp_channel(root: &Path, options: BusinessOsMcpServeOptions) -> anyhow::Result<()> {
     let server = Server::http(&options.addr)
         .map_err(|error| anyhow::anyhow!("failed to bind Business OS MCP server: {error}"))?;
     // Materialize the auth token at startup so it exists in the secret store for
     // the operator to retrieve, and warn loudly if bound beyond loopback.
-    if let Err(error) = mcp_auth_token(root) {
+    let work = root.to_owned();
+    if let Err(error) =
+        crate::persistence::run_core_blocking_at(root, move || mcp_auth_token(&work))
+    {
         eprintln!("[business-os-mcp] failed to provision inbound auth token: {error:#}");
     }
     println!("CTOX Business OS MCP listening on http://{}", options.addr);
@@ -1508,12 +1517,15 @@ async fn connect_managed_gateway_once(
                 tokio::spawn(async move {
                     let _permit = permits.acquire_owned().await;
                     let text = text.to_string();
-                    let response =
-                        tokio::task::spawn_blocking(move || handle_gateway_message(&root, &text))
-                            .await
-                            .unwrap_or_else(|_| {
-                                r#"{"type":"mcp_response","request_id":"","status":500,"headers":{"content-type":"application/json; charset=utf-8"},"body":"{}"}"#.to_string()
-                            });
+                    let request_id = serde_json::from_str::<Value>(&text).ok()
+                        .and_then(|v|v.get("request_id").and_then(Value::as_str).map(str::to_owned)).unwrap_or_default();
+                    let response = crate::persistence::run_core_sync(move || {
+                        Ok(handle_gateway_message(&root, &text))
+                    }).await.unwrap_or_else(|error| {
+                        eprintln!("[business-os-mcp] gateway owner execution failed: {error:#}");
+                        gateway_json_rpc_error(request_id, None, 503, -32603,
+                            "native store owner unavailable").to_string()
+                    });
                     let _ = response_tx.send(response);
                 });
             }
@@ -1557,6 +1569,26 @@ pub fn gateway_hello_message() -> String {
 }
 
 pub fn handle_gateway_message(root: &Path, message: &str) -> String {
+    let work = root.to_owned();
+    let message_owned = message.to_owned();
+    crate::persistence::run_core_blocking_at(root, move || {
+        Ok(handle_admitted_gateway_message(&work, &message_owned))
+    })
+    .unwrap_or_else(|error| {
+        eprintln!("[business-os-mcp] gateway owner admission failed: {error:#}");
+        let id = serde_json::from_str::<Value>(message)
+            .ok()
+            .and_then(|v| {
+                v.get("request_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .unwrap_or_default();
+        gateway_json_rpc_error(id, None, 503, -32603, "native store owner unavailable").to_string()
+    })
+}
+
+fn handle_admitted_gateway_message(root: &Path, message: &str) -> String {
     let response = match serde_json::from_str::<Value>(message) {
         Ok(envelope) => handle_gateway_envelope(root, envelope),
         Err(error) => serde_json::json!({
@@ -2260,7 +2292,7 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
 pub fn mcp_status(root: &Path, context: &McpChannelRequestContext) -> anyhow::Result<Value> {
     context.validate()?;
     let status = store::status(root)?;
-    let policy = mcp_policy(root);
+    let policy = try_mcp_policy(root)?;
     Ok(serde_json::json!({
         "ok": true,
         "channel": &context.channel,
@@ -2283,7 +2315,7 @@ pub fn list_modules(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let policy = mcp_policy(root);
+    let policy = try_mcp_policy(root)?;
     let modules = modules
         .into_iter()
         .filter(|module| {
@@ -2325,7 +2357,7 @@ pub fn list_entities(
     module_id: &str,
 ) -> anyhow::Result<BusinessOsMcpList<BusinessOsEntityDescriptor>> {
     let module = get_module(root, context, module_id)?;
-    let policy = mcp_policy(root);
+    let policy = try_mcp_policy(root)?;
     let entities = module
         .collections
         .iter()
@@ -6120,6 +6152,18 @@ fn support_agent_action_payload(
 fn handle_mcp_http_request(
     root: &Path,
     listener: std::net::SocketAddr,
+    request: Request,
+) -> anyhow::Result<()> {
+    let work = root.to_owned();
+    crate::persistence::run_core_blocking_at(root, move || {
+        handle_admitted_mcp_http_request(&work, listener, request)
+    })
+    .context("MCP HTTP owner admission/request failed")
+}
+
+fn handle_admitted_mcp_http_request(
+    root: &Path,
+    listener: std::net::SocketAddr,
     mut request: Request,
 ) -> anyhow::Result<()> {
     let method = request.method().clone();
@@ -6447,14 +6491,30 @@ fn ensure_mcp_response_size(value: &Value) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn mcp_policy(root: &Path) -> BusinessOsMcpPolicy {
-    if let Ok(Some(payload)) = crate::persistence::load_json_payload::<BusinessOsMcpPolicyPayload>(
+pub fn try_mcp_policy(root: &Path) -> anyhow::Result<BusinessOsMcpPolicy> {
+    if let Some(payload) = crate::persistence::load_json_payload::<BusinessOsMcpPolicyPayload>(
         root,
         MCP_POLICY_PAYLOAD_KEY,
-    ) {
-        return normalize_mcp_policy(payload.policy);
+    )? {
+        return Ok(normalize_mcp_policy(payload.policy));
     }
-    legacy_mcp_policy(root)
+    let env_map = crate::inference::runtime_env::effective_operator_env_map(root)?;
+    Ok(mcp_policy_from_env_map(&env_map))
+}
+
+/// Legacy observers fail closed and surface the error. Production operations
+/// use try_mcp_policy to propagate an unavailable owner as an operation error.
+pub fn mcp_policy(root: &Path) -> BusinessOsMcpPolicy {
+    try_mcp_policy(root).unwrap_or_else(|error| {
+        eprintln!("[business-os-mcp] policy unavailable: {error:#}");
+        let mut policy = default_mcp_policy();
+        policy.enabled = false;
+        policy.allow_reads = false;
+        policy.allow_writes = false;
+        policy.allow_approvals = false;
+        policy.allow_external_effects = false;
+        policy
+    })
 }
 
 pub fn save_mcp_policy(root: &Path, policy: &BusinessOsMcpPolicy) -> anyhow::Result<()> {
@@ -6567,7 +6627,7 @@ fn enforce_tool_policy_class(
     tool_name: &str,
     class: McpToolPolicyClass,
 ) -> anyhow::Result<()> {
-    let policy = mcp_policy(root);
+    let policy = try_mcp_policy(root)?;
     if !policy.enabled {
         return Err(anyhow::Error::new(BusinessOsMcpError {
             code: BusinessOsMcpErrorCode::ChannelDisabled,
@@ -7353,7 +7413,7 @@ fn mcp_session(
 }
 
 fn enforce_context_policy(root: &Path, context: &McpChannelRequestContext) -> anyhow::Result<()> {
-    let policy = mcp_policy(root);
+    let policy = try_mcp_policy(root)?;
     if !policy.allowed_actors.is_empty() && !policy.allowed_actors.contains(&context.actor) {
         return Err(policy_denied(
             "actor is not allowed for Business OS MCP channel",
@@ -7470,7 +7530,7 @@ fn enforce_argument_scope_policy(
 }
 
 fn enforce_module_policy(root: &Path, module_id: &str) -> anyhow::Result<()> {
-    let policy = mcp_policy(root);
+    let policy = try_mcp_policy(root)?;
     if !policy.allowed_modules.is_empty()
         && !policy
             .allowed_modules
@@ -7520,7 +7580,7 @@ fn enforce_managed_collection_read_scope(
 }
 
 fn enforce_collection_policy(root: &Path, collection: &str) -> anyhow::Result<()> {
-    let policy = mcp_policy(root);
+    let policy = try_mcp_policy(root)?;
     if !policy.allowed_collections.is_empty()
         && !policy
             .allowed_collections
@@ -7536,7 +7596,7 @@ fn enforce_collection_policy(root: &Path, collection: &str) -> anyhow::Result<()
 }
 
 fn enforce_rate_limit(root: &Path, context: &McpChannelRequestContext) -> anyhow::Result<()> {
-    let limit = mcp_policy(root).rate_limit_per_minute;
+    let limit = try_mcp_policy(root)?.rate_limit_per_minute;
     if limit == 0 {
         return Ok(());
     }
@@ -7678,7 +7738,7 @@ pub fn prune_mcp_activity(root: &Path) -> anyhow::Result<usize> {
 }
 
 fn prune_mcp_activity_with_conn(root: &Path, conn: &rusqlite::Connection) -> anyhow::Result<usize> {
-    let retention_days = mcp_policy(root).audit_retention_days;
+    let retention_days = try_mcp_policy(root)?.audit_retention_days;
     if retention_days == 0 {
         return Ok(0);
     }

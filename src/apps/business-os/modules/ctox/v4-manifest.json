@@ -83,6 +83,10 @@
           "admin"
         ]
       }
+    },
+    "planned_steps": {
+      "read": "all",
+      "write": "core"
     }
   },
   "command_rights": {

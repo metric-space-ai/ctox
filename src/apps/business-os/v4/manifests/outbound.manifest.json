@@ -45,6 +45,11 @@
       "handlers/_lib/research-adapter.js"
     ]
   },
+  "_commands_in_evidence": {
+    "mail outbound.message.compose": [
+      "modules/mail/index.js:1258"
+    ]
+  },
   "_commands_out_evidence": {
     "outbound-lead-generation outbound.research_source.reprobe": [
       "handlers/_lib/owner-app.js:22"
@@ -1438,7 +1443,14 @@
       "roles": []
     }
   },
-  "commands_in": [],
+  "commands_in": [
+    {
+      "from": [
+        "mail"
+      ],
+      "type": "outbound.message.compose"
+    }
+  ],
   "commands_out": [
     {
       "app": "outbound-lead-generation",

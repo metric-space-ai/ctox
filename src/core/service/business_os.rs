@@ -319,6 +319,33 @@ struct BusinessOsActivation {
 }
 
 pub fn handle_business_os_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    // Listeners retain owners but admit only individual requests, never their
+    // entire lifetime. Ordinary CLI commands use one bounded compatibility job.
+    if args.first().is_some_and(|word| word == "serve")
+        || (args.first().is_some_and(|word| word == "mcp")
+            && args
+                .get(1)
+                .is_some_and(|word| word == "serve" || word == "connect"))
+    {
+        return crate::persistence::with_cli_owners(root, || {
+            handle_owned_business_os_command(root, args)
+        });
+    }
+    let ipc_client = matches!(
+        args.first().map(String::as_str),
+        Some("web-stack" | "mobile-invite")
+    ) || (args.first().is_some_and(|word| word == "commands")
+        && args.get(1).is_some_and(|word| word == "dispatch"));
+    if ipc_client {
+        return handle_owned_business_os_command(root, args);
+    }
+    let work = root.to_owned();
+    let args = args.to_owned();
+    crate::persistence::run_cli_owned(root, move || handle_owned_business_os_command(&work, &args))
+        .context("Business OS CLI owner execution failed")
+}
+
+fn handle_owned_business_os_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         None | Some("status") => {
             println!("{}", business_os_status_text(root));
@@ -1832,7 +1859,7 @@ fn handle_business_os_mcp(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 print_json(&serde_json::json!({
                     "ok": true,
                     "deleted": deleted,
-                    "policy": crate::business_os::mcp_channel::mcp_policy(root)
+                    "policy": crate::business_os::mcp_channel::try_mcp_policy(root)?
                 }))?;
                 return Ok(());
             }
@@ -1905,7 +1932,7 @@ fn handle_business_os_mcp(root: &Path, args: &[String]) -> anyhow::Result<()> {
 fn handle_business_os_mcp_policy(root: &Path, args: &[String]) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         Some("set") => {
-            let mut policy = crate::business_os::mcp_channel::mcp_policy(root);
+            let mut policy = crate::business_os::mcp_channel::try_mcp_policy(root)?;
             apply_mcp_policy_bool_arg(args, "--enabled", &mut policy.enabled)?;
             apply_mcp_policy_bool_arg(args, "--allow-reads", &mut policy.allow_reads)?;
             apply_mcp_policy_bool_arg(args, "--allow-writes", &mut policy.allow_writes)?;
@@ -1955,13 +1982,13 @@ fn handle_business_os_mcp_policy(root: &Path, args: &[String]) -> anyhow::Result
             crate::business_os::mcp_channel::save_mcp_policy(root, &policy)?;
             print_json(&serde_json::json!({
                 "ok": true,
-                "policy": crate::business_os::mcp_channel::mcp_policy(root),
+                "policy": crate::business_os::mcp_channel::try_mcp_policy(root)?,
                 "storage": "business_os.mcp_policy.v1",
                 "keys": mcp_policy_env_projection(&mcp_policy_to_env_map(&policy))
             }))
         }
         Some("keys") => {
-            let policy = crate::business_os::mcp_channel::mcp_policy(root);
+            let policy = crate::business_os::mcp_channel::try_mcp_policy(root)?;
             print_json(&serde_json::json!({
                 "ok": true,
                 "storage": "business_os.mcp_policy.v1",
@@ -1974,7 +2001,7 @@ fn handle_business_os_mcp_policy(root: &Path, args: &[String]) -> anyhow::Result
         }
         Some(other) => anyhow::bail!("unknown business-os mcp policy command `{other}`"),
         None => {
-            let policy = crate::business_os::mcp_channel::mcp_policy(root);
+            let policy = crate::business_os::mcp_channel::try_mcp_policy(root)?;
             print_json(&serde_json::json!({
                 "ok": true,
                 "policy": policy,
@@ -5976,19 +6003,24 @@ fn find_fresh_email_otp(
     profile_owner: &str,
     mailbox_granted: bool,
 ) -> Option<(String, String)> {
-    let conn = rusqlite::Connection::open_with_flags(
-        crate::paths::core_db(root),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    let recipe = *recipe;
+    let mailbox_address = mailbox_address.to_owned();
+    let profile_owner = profile_owner.to_owned();
+    crate::lcm::with_lcm_read(
+        &crate::paths::core_db(root),
+        move |conn: &rusqlite::Connection| {
+            Ok(find_fresh_email_otp_in_conn(
+                conn,
+                &recipe,
+                not_before_epoch_s,
+                &mailbox_address,
+                &profile_owner,
+                mailbox_granted,
+            ))
+        },
     )
-    .ok()?;
-    find_fresh_email_otp_in_conn(
-        &conn,
-        recipe,
-        not_before_epoch_s,
-        mailbox_address,
-        profile_owner,
-        mailbox_granted,
-    )
+    .ok()
+    .flatten()
 }
 
 fn find_fresh_email_otp_in_conn(

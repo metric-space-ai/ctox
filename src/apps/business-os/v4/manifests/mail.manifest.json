@@ -31,10 +31,13 @@
   },
   "_commands_out_evidence": {
     "ctox ctox.chat.task": [
-      "index.js:2559"
+      "index.js:2561"
+    ],
+    "outbound outbound.message.compose": [
+      "index.js:1258"
     ],
     "support support.conversation.open_from_thread": [
-      "index.js:2513"
+      "index.js:2515"
     ]
   },
   "_declaration": "modules/mail/v4-manifest.json",
@@ -73,6 +76,10 @@
       "type": "ctox.chat.task"
     },
     {
+      "app": "outbound",
+      "type": "outbound.message.compose"
+    },
+    {
       "app": "support",
       "type": "support.conversation.open_from_thread"
     }
@@ -87,9 +94,9 @@
     "assets/icon@512.jpg": "b28e6689b705dbd7761ae1534195c79a13a18e687fa3b2f62f1019b601ebf480",
     "collections.schema.json": "a2acbbe2ca2d41d9e4a8b208a759e4d3d63935498dae9667da73cd2b26a6ba2b",
     "editor/README.md": "65589c645a2888fa383a3668f3151a517ab60880e1ca98f7a1dc9d2d8801fea6",
-    "editor/editor.css": "39e89ca192c2bb2f2e01fa5567bb375ff3132049d3df8395ada9a21e861ef934",
+    "editor/editor.css": "0a93414872b1bb7d0a14751c1e78d7e5a3590ccee0e2002440ff916d9e25ff81",
     "editor/logic-editor-v1.mjs": "5c683141ad7a6ca18b7ff580c324a97f1dba5020dfb36a243b59e1558d51a8fa",
-    "editor/mail-content-editor.mjs": "40fdcf08ff36294381be5393940dd93626b07b0f5242f7ed7fcf36d1eb0ed6fd",
+    "editor/mail-content-editor.mjs": "36ca4c68b7a9346ea00d617a18bd3fcf90b3ffa85fe260c139d3fb05d7d76f85",
     "handlers/_base.js": "9150293c4a852db693ac102df849ffdad84fcd36c6f1d93aa25a083706263d69",
     "handlers/ctox.mailserver.delete_domain.js": "59d2ea6bcbcef86f16d5ae669f128ac9fa572a64088eca16bd5540ff373811d2",
     "handlers/ctox.mailserver.delete_user.js": "cdb1c39d68fa57369fb6ccde402ff00473ef3ef84538ae4d76b0b2c953f6ed94",
@@ -99,9 +106,9 @@
     "handlers/ctox.mailserver.save_user.js": "586c68655f2341a29b082bd122e973202672f25b2aff01c9016513c02c80dd70",
     "handlers/mail.content.freeze.js": "da793b277800e1bf000e149df65281ab384ce8a165a2fd097732e464f442fe62",
     "icon.svg": "614f1f9985c51dae6fb87541b7cabfdf32545322faec9ce42ce998bed1cc4c7d",
-    "index.css": "7b78d30a63485c734908b5175a588e01c0581033380f062b61a8ac9e3e367d03",
+    "index.css": "4dfe35d6d092b6301595a07f3b4ad59ab0b5402bd6ffd8d3ff7a1c4c952488ee",
     "index.html": "72fa851f4713e0c41085e4c1ee1fdebb77cfba3807910a711fa8711008b9df72",
-    "index.js": "a16dae2209490fa1b03f72061652da6e3f62d641732f9f71508b202faf0051c3",
+    "index.js": "7b894f4ff797725a76e4856e6b7dcfe2e78748373d6a162067ca9c3bc42d06bc",
     "lib/mail-body-renderer.mjs": "cab0bade395eff97eece014493e0a1b7a4c96d7890ce8101069c870dde6c6baa",
     "locales/de.json": "baa5e15aa39ee7cb8802834d0961d785c2c90e614295f0dff22c8b68489c0be0",
     "locales/en.json": "1c7a9ce5eb4e15c994a693c37cf4fd7a13b68841c84b77bff6accf46d111ebb9",
@@ -127,8 +134,8 @@
     "business_app_versions": {
       "_evidence": {
         "code_read": [
-          "index.js:20",
-          "index.js:650"
+          "index.js:21",
+          "index.js:651"
         ],
         "code_write": [],
         "replaces": [
@@ -147,8 +154,8 @@
     "business_apps": {
       "_evidence": {
         "code_read": [
-          "index.js:20",
-          "index.js:650"
+          "index.js:21",
+          "index.js:651"
         ],
         "code_write": [],
         "replaces": [
@@ -167,8 +174,8 @@
     "business_commands": {
       "_evidence": {
         "code_read": [
-          "index.js:19",
-          "index.js:649"
+          "index.js:20",
+          "index.js:650"
         ],
         "code_write": [],
         "sources": [
@@ -184,8 +191,8 @@
     "business_users": {
       "_evidence": {
         "code_read": [
-          "index.js:21",
-          "index.js:651"
+          "index.js:22",
+          "index.js:652"
         ],
         "code_write": [],
         "sources": [
@@ -201,9 +208,9 @@
     "communication_accounts": {
       "_evidence": {
         "code_read": [
-          "index.js:22",
-          "index.js:203",
-          "index.js:652"
+          "index.js:23",
+          "index.js:204",
+          "index.js:653"
         ],
         "code_write": [],
         "sources": [
@@ -219,9 +226,9 @@
     "communication_messages": {
       "_evidence": {
         "code_read": [
-          "index.js:24",
-          "index.js:203",
-          "index.js:654"
+          "index.js:25",
+          "index.js:204",
+          "index.js:655"
         ],
         "code_write": [],
         "sources": [
@@ -237,9 +244,9 @@
     "communication_threads": {
       "_evidence": {
         "code_read": [
-          "index.js:23",
-          "index.js:203",
-          "index.js:653"
+          "index.js:24",
+          "index.js:204",
+          "index.js:654"
         ],
         "code_write": [],
         "sources": [
@@ -255,8 +262,8 @@
     "documents": {
       "_evidence": {
         "code_read": [
-          "editor/mail-content-editor.mjs:727",
-          "index.js:2418"
+          "editor/mail-content-editor.mjs:728",
+          "index.js:2420"
         ],
         "code_write": [],
         "sources": [
@@ -272,7 +279,7 @@
     "files": {
       "_evidence": {
         "code_read": [
-          "editor/mail-content-editor.mjs:745",
+          "editor/mail-content-editor.mjs:746",
           "handlers/mail.content.freeze.js:36"
         ],
         "code_write": [],
@@ -288,9 +295,9 @@
     "mail_server_state": {
       "_evidence": {
         "code_read": [
-          "index.js:32",
-          "index.js:644",
-          "index.js:645"
+          "index.js:33",
+          "index.js:645",
+          "index.js:646"
         ],
         "code_write": [],
         "declaration_basis": "modules/mail/V4-PORT.md „D mail_server_state“ / „Offen für andere Stränge“; Kern §16.28",
@@ -307,8 +314,8 @@
     "outbound_approvals": {
       "_evidence": {
         "code_read": [
-          "index.js:29",
-          "index.js:658"
+          "index.js:30",
+          "index.js:659"
         ],
         "code_write": [],
         "sources": [
@@ -324,9 +331,9 @@
     "outbound_campaigns": {
       "_evidence": {
         "code_read": [
-          "index.js:25",
-          "index.js:655",
-          "index.js:1280"
+          "index.js:26",
+          "index.js:656",
+          "index.js:1281"
         ],
         "code_write": [],
         "sources": [
@@ -342,8 +349,8 @@
     "outbound_engagements": {
       "_evidence": {
         "code_read": [
-          "index.js:27",
-          "index.js:656"
+          "index.js:28",
+          "index.js:657"
         ],
         "code_write": [],
         "sources": [
@@ -359,9 +366,9 @@
     "outbound_messages": {
       "_evidence": {
         "code_read": [
-          "index.js:28",
-          "index.js:203",
-          "index.js:657"
+          "index.js:29",
+          "index.js:204",
+          "index.js:658"
         ],
         "code_write": [],
         "sources": [
@@ -377,7 +384,7 @@
     "outbound_pipeline_items": {
       "_evidence": {
         "code_read": [
-          "index.js:26"
+          "index.js:27"
         ],
         "code_write": [],
         "sources": [
@@ -443,7 +450,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "01de538353d9d0954536dedb23019e3155ce8071f40803d658b8dcb87d065d53",
+    "base_hash": "ff095254d76f5b6d3576d1da4022c3a369b37c692a577aecec8d501ff4737179",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

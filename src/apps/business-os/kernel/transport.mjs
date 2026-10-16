@@ -14,7 +14,7 @@ export class KernelTransport {
   async appActivation(_report) {}
   priority(_hint) {}
   async artifact(_hash) { throw new CtoxError('unavailable', 'No artifact transport'); }
-  async blob(_ref) { throw new CtoxError('unavailable', 'No file transport'); }
+  async blob(_ref, _range) { throw new CtoxError('unavailable', 'No file transport'); }
   async upload(_ref, _blob) { throw new CtoxError('unavailable', 'No file transport'); }
   close() {}
 }

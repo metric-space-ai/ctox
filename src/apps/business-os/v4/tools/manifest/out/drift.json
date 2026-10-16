@@ -1,7 +1,123 @@
 {
+  "commands_in_derived": [
+    {
+      "app": "outbound",
+      "evidence": [
+        "modules/mail/index.js:1258"
+      ],
+      "from": "mail",
+      "type": "outbound.message.compose"
+    }
+  ],
   "commands_in_without_handler": [],
+  "commands_out_ambiguous": [],
   "commands_out_unresolved": [],
+  "commands_routes_pending": [
+    {
+      "app": "browser",
+      "basis": "V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)",
+      "evidence": [
+        "modules/browser/index.js:627"
+      ],
+      "type": "browser.http_auth.respond"
+    },
+    {
+      "app": "browser",
+      "basis": "V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)",
+      "evidence": [
+        "modules/browser/index.js:587"
+      ],
+      "type": "browser.observer.grant"
+    },
+    {
+      "app": "browser",
+      "basis": "V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)",
+      "evidence": [
+        "modules/browser/index.js:592"
+      ],
+      "type": "browser.observer.revoke"
+    },
+    {
+      "app": "browser",
+      "basis": "V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)",
+      "evidence": [
+        "modules/browser/index.js:555"
+      ],
+      "type": "browser.upload.select"
+    },
+    {
+      "app": "browser",
+      "basis": "V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)",
+      "evidence": [
+        "modules/browser/index.js:636"
+      ],
+      "type": "browser.webauthn.respond"
+    },
+    {
+      "app": null,
+      "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
+      "evidence": [],
+      "type": "ctox.plan.step.retry"
+    },
+    {
+      "app": "shell",
+      "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
+      "evidence": [
+        "v4/shell/workjet/actions/calendar-connect.js:11"
+      ],
+      "type": "ctox.workjet.calendar.connect.v1"
+    },
+    {
+      "app": "shell",
+      "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
+      "evidence": [
+        "v4/shell/workjet/actions/meeting.js:150"
+      ],
+      "type": "ctox.workjet.calendar.read.v1"
+    },
+    {
+      "app": "shell",
+      "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
+      "evidence": [
+        "v4/shell/workjet/actions/device.js:45"
+      ],
+      "type": "ctox.workjet.device.v1"
+    },
+    {
+      "app": "shell",
+      "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
+      "evidence": [
+        "v4/shell/workjet/actions/instance.js:18"
+      ],
+      "type": "ctox.workjet.grok.v1"
+    },
+    {
+      "app": "shell",
+      "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
+      "evidence": [
+        "v4/shell/workjet/actions/meeting.js:204"
+      ],
+      "type": "ctox.workjet.jour_fixe.speech.v1"
+    },
+    {
+      "app": "shell",
+      "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
+      "evidence": [
+        "v4/shell/workjet/actions/meeting.js:28"
+      ],
+      "type": "ctox.workjet.speech.dictation.v1"
+    },
+    {
+      "app": "shell",
+      "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
+      "evidence": [
+        "v4/shell/workjet/actions/meeting.js:105"
+      ],
+      "type": "ctox.workjet.speech.settings.v1"
+    }
+  ],
   "commands_unmatched": [],
+  "commands_unrouted": [],
   "contract_only": [
     {
       "collection": "business_commands",
@@ -414,6 +530,11 @@
     {
       "app": "ctox",
       "collection": "legacy_records",
+      "kind": "only_in_collections.schema.json"
+    },
+    {
+      "app": "ctox",
+      "collection": "planned_steps",
       "kind": "only_in_collections.schema.json"
     },
     {

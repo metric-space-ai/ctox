@@ -29,7 +29,6 @@ pub use mission_state::{
     ClosureConfidence, ContinuationMode, MissionStateFields, MissionStatus, TriggerIntensity,
 };
 use mission_state::{focus_semantic_conflicts_local, normalize_mission_text};
-pub(crate) use runtime_support::seed_mission_state_for_queue_with;
 use runtime_support::*;
 pub use runtime_support::{
     run_add_assistant_turn, run_add_message, run_begin_worker_attempt_finalization, run_compact,
@@ -44,6 +43,10 @@ pub use runtime_support::{
     run_refresh_continuity, run_secret_rewrite, run_set_task_execution_review_status,
     run_show_continuity, run_task_execution_progress, run_task_execution_progress_for_task,
     run_terminalize_worker_attempt, run_worker_attempt,
+};
+pub(crate) use runtime_support::{
+    seed_mission_state_for_queue_with, with_lcm_read, with_lcm_write, with_lcm_write_session,
+    LcmClient,
 };
 pub(crate) use worker_runs::projected_worker_run_id;
 pub use worker_runs::{run_register_worker_run, WorkerRunInput};
@@ -923,11 +926,19 @@ impl Summarizer for HeuristicSummarizer {
 #[path = "../../store/harness_adapter.rs"]
 mod legacy_file_owner;
 
-pub struct LcmEngine {
-    conn: Connection,
+pub struct OwnedLcmConnection(Connection);
+impl std::ops::Deref for OwnedLcmConnection {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        &self.0
+    }
+}
+
+pub struct LcmEngine<C = OwnedLcmConnection> {
+    conn: C,
     config: LcmConfig,
-    // Connection drops before the cooperative legacy lease. This fallback
-    // must never overlap the injected Core owner, even in another process.
+    // Connection drops before the exclusive offline lease. Legacy callers
+    // must never overlap any other owner, even in another process.
     _owner_lease: Option<legacy_file_owner::FileOwner>,
 }
 
@@ -936,14 +947,14 @@ impl LcmEngine {
         let owner_lease = if path == Path::new(":memory:") {
             None
         } else {
-            Some(legacy_file_owner::FileOwner::acquire_legacy_shared(path)?)
+            Some(legacy_file_owner::FileOwner::acquire(path)?)
         };
         let conn = Connection::open(path)
             .with_context(|| format!("failed to open SQLite database {}", path.display()))?;
         conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
             .context("failed to configure SQLite busy_timeout for LCM")?;
         let engine = Self {
-            conn,
+            conn: OwnedLcmConnection(conn),
             config: config.clone(),
             _owner_lease: owner_lease,
         };
@@ -965,7 +976,19 @@ impl LcmEngine {
             .insert(canonical);
         Ok(engine)
     }
+}
 
+impl<'a> LcmEngine<&'a Connection> {
+    fn borrowed(conn: &'a Connection, config: LcmConfig) -> Self {
+        Self {
+            conn,
+            config,
+            _owner_lease: None,
+        }
+    }
+}
+
+impl<C: std::ops::Deref<Target = Connection>> LcmEngine<C> {
     /// Override the connection-level busy timeout. Read-mostly UI consumers
     /// use a short timeout so a daemon-held write lock degrades into stale
     /// data on screen instead of stalling their render loop for the full
@@ -1262,11 +1285,8 @@ impl LcmEngine {
     /// key while retaining terminal attempt history.
     fn ensure_worker_attempt_finalization_schema(&self) -> Result<()> {
         const MIGRATION_ID: &str = "i-071-worker-attempt-finalization-v1";
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin worker-attempt schema migration")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin worker-attempt schema migration")?;
         let already_applied: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM lcm_data_migrations WHERE migration_id = ?1)",
             [MIGRATION_ID],
@@ -1332,11 +1352,8 @@ impl LcmEngine {
     /// ledger remains a best-effort forensic projection.
     fn ensure_task_execution_progress_schema(&self) -> Result<()> {
         const MIGRATION_ID: &str = "task-execution-progress-v1";
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin task execution progress schema migration")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin task execution progress schema migration")?;
         let already_applied: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM lcm_data_migrations WHERE migration_id = ?1)",
             [MIGRATION_ID],
@@ -1467,11 +1484,8 @@ impl LcmEngine {
         // A mid-sequence failure (e.g. SQLITE_BUSY, or a failing ordinal read) must not
         // commit an orphan messages row: render/compaction JOIN through context_items and
         // would never see it, while the persist-retry helper would insert a duplicate.
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin add-message transaction")?;
+        let tx =
+            LcmTransaction::begin(&self.conn).context("failed to begin add-message transaction")?;
         let seq = self
             .conn
             .query_row(
@@ -1529,11 +1543,8 @@ impl LcmEngine {
         // remains the database invariant, while the immediate transaction makes
         // a cross-process race return the authoritative row instead of leaking a
         // uniqueness error to the worker.
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin worker-attempt finalization transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin worker-attempt finalization transaction")?;
         if let Some(existing) = tx
             .query_row(
                 &format!("{WORKER_ATTEMPT_SELECT} WHERE attempt_id = ?1"),
@@ -1625,11 +1636,8 @@ impl LcmEngine {
         let signature = task_execution_plan_signature(&steps);
         let now_ms = epoch_millis_i64();
         let steps_json = serde_json::to_string(&steps)?;
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin task execution plan transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin task execution plan transaction")?;
         authorize(&tx)?;
         let latest = tx
             .query_row(
@@ -1721,11 +1729,8 @@ impl LcmEngine {
             !input.activity_id.trim().is_empty(),
             "task activity id is required"
         );
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin task activity transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin task activity transaction")?;
         let current = tx
             .query_row(
                 "SELECT revision, steps_json
@@ -1866,11 +1871,8 @@ impl LcmEngine {
         &self,
         attempt_id: &str,
     ) -> Result<MessageRecord> {
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin worker-attempt reply transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin worker-attempt reply transaction")?;
         let attempt = tx
             .query_row(
                 &format!("{WORKER_ATTEMPT_SELECT} WHERE attempt_id = ?1"),
@@ -2390,7 +2392,12 @@ impl LcmEngine {
     }
 
     pub fn latest_continuity(&self, conversation_id: i64) -> Result<Option<ContinuityRevision>> {
-        let show_all = self.continuity_show_all(conversation_id)?;
+        let _ = self.continuity_show_all(conversation_id)?;
+        self.stored_latest_continuity(conversation_id)
+    }
+
+    fn stored_latest_continuity(&self, conversation_id: i64) -> Result<Option<ContinuityRevision>> {
+        let show_all = self.stored_continuity_show_all(conversation_id)?;
         let snapshot = self.snapshot(conversation_id)?;
         let revision_id = continuity_heads_revision_id(
             conversation_id,
@@ -2426,11 +2433,8 @@ impl LcmEngine {
     }
 
     pub fn continuity_init_documents(&self, conversation_id: i64) -> Result<ContinuityShowAll> {
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin continuity init transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin continuity init transaction")?;
         let mut show_all = load_or_init_continuity_show_all(&tx, conversation_id)?;
         let (record, imported) = load_or_import_mission_state_with(&tx, &show_all)?;
         let reason = if imported {
@@ -2494,11 +2498,8 @@ impl LcmEngine {
         kind: ContinuityKind,
         diff_text: &str,
     ) -> Result<ContinuityDocumentState> {
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin continuity apply transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin continuity apply transaction")?;
         let document = ensure_continuity_document_with(&tx, conversation_id, kind)?;
         let normalized_diff = normalize_continuity_diff(kind, diff_text)?;
         let rendered = apply_continuity_diff(kind, &document.content, &normalized_diff)?;
@@ -2581,11 +2582,8 @@ impl LcmEngine {
         kind: ContinuityKind,
         new_content: &str,
     ) -> Result<ContinuityDocumentState> {
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin continuity full-replace transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin continuity full-replace transaction")?;
         let document = ensure_continuity_document_with(&tx, conversation_id, kind)?;
         let rendered = new_content.trim().to_string();
         if rendered.is_empty() {
@@ -2647,11 +2645,8 @@ impl LcmEngine {
         if find.is_empty() {
             anyhow::bail!("continuity_string_replace_document: find is empty");
         }
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin continuity string-replace transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin continuity string-replace transaction")?;
         let document = ensure_continuity_document_with(&tx, conversation_id, kind)?;
         let before = document.content.clone();
         let matches: usize = before.matches(find).count();
@@ -2728,11 +2723,8 @@ impl LcmEngine {
             !match_text.trim().is_empty(),
             "match_text must not be empty for secret rewrite"
         );
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin secret rewrite transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin secret rewrite transaction")?;
         let message_rows_updated =
             rewrite_message_rows_with(&tx, conversation_id, match_text, replacement_text)?;
         let summary_rows_updated =
@@ -2835,11 +2827,8 @@ impl LcmEngine {
         &self,
         conversation_id: i64,
     ) -> Result<MissionStateRepairOutcome> {
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin mission render transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin mission render transaction")?;
         let mut continuity = load_or_init_continuity_show_all(&tx, conversation_id)?;
         let previous_focus_head_commit_id = continuity.focus.head_commit_id.clone();
         let (record, imported) = load_or_import_mission_state_with(&tx, &continuity)?;
@@ -3026,11 +3015,8 @@ impl LcmEngine {
         record: &MissionStateRecord,
         reason: &str,
     ) -> Result<bool> {
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin focus continuity rewrite transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin focus continuity rewrite transaction")?;
         anyhow::ensure!(
             record.conversation_id == conversation_id,
             "mission-state conversation id does not match focus render target"
@@ -3622,18 +3608,13 @@ impl LcmEngine {
         Ok(out)
     }
 
-    pub fn continuity_build_prompt(
+    fn continuity_prompt_source(
         &self,
         conversation_id: i64,
         kind: ContinuityKind,
-    ) -> Result<ContinuityPromptPayload> {
+    ) -> Result<ContinuityPromptSource> {
         let document = self.ensure_continuity_document(conversation_id, kind)?;
         let snapshot = self.working_set_snapshot(conversation_id, 512)?;
-        let explicit_anchor_literals = if kind == ContinuityKind::Anchors {
-            collect_explicit_anchor_literals(&snapshot.messages)
-        } else {
-            Vec::new()
-        };
         let forgotten = self
             .continuity_forgotten_recent(conversation_id, Some(kind), 64)?
             .into_iter()
@@ -3641,63 +3622,23 @@ impl LcmEngine {
             .take(8)
             .map(|entry| entry.line)
             .collect::<Vec<_>>();
-        let recent_messages = snapshot
-            .messages
-            .iter()
-            .rev()
-            .take(8)
-            .map(|message| {
-                format!(
-                    "[{} #{}] {}",
-                    message.role,
-                    message.seq,
-                    sentence_fragment(
-                        &message.content,
-                        if kind == ContinuityKind::Anchors {
-                            420
-                        } else if kind == ContinuityKind::Focus {
-                            520
-                        } else {
-                            220
-                        },
-                    )
-                )
-            })
-            .collect::<Vec<_>>();
-        let recent_summaries = snapshot
-            .summaries
-            .iter()
-            .rev()
-            .take(4)
-            .map(|summary| {
-                format!(
-                    "[{} depth={}] {}",
-                    summary.kind.as_str(),
-                    summary.depth,
-                    sentence_fragment(&summary.content, 240)
-                )
-            })
-            .collect::<Vec<_>>();
-        let document_view = continuity_document_prompt_view(&document.content);
-        let prompt = build_continuity_prompt_text(
-            conversation_id,
-            kind,
-            &document_view,
-            &recent_messages,
-            &recent_summaries,
-            &forgotten,
-            &explicit_anchor_literals,
-        );
-
-        Ok(ContinuityPromptPayload {
-            conversation_id,
-            kind,
-            current_document: document.content,
-            recent_messages,
-            recent_summaries,
-            forgotten_lines: forgotten,
-            prompt,
+        Ok(ContinuityPromptSource {
+            document,
+            snapshot,
+            forgotten,
         })
+    }
+
+    pub fn continuity_build_prompt(
+        &self,
+        conversation_id: i64,
+        kind: ContinuityKind,
+    ) -> Result<ContinuityPromptPayload> {
+        build_continuity_prompt_from_source(
+            conversation_id,
+            kind,
+            self.continuity_prompt_source(conversation_id, kind)?,
+        )
     }
 
     pub fn continuity_preserve_recent_anchor_literals(
@@ -3730,8 +3671,16 @@ impl LcmEngine {
         conversation_id: i64,
         summarizer: &S,
         force: bool,
-        previous_tokens: i64,
+        _previous_tokens: i64,
     ) -> Result<Option<String>> {
+        let Some(plan) = self.prepare_leaf_pass(conversation_id)? else {
+            return Ok(None);
+        };
+        let content = plan.summarize(summarizer)?;
+        self.commit_prepared_summary(plan, content, force)
+    }
+
+    fn prepare_leaf_pass(&self, conversation_id: i64) -> Result<Option<PreparedSummary>> {
         let entries = self.context_entries(conversation_id)?;
         let message_entries: Vec<_> = entries
             .iter()
@@ -3780,15 +3729,6 @@ impl LcmEngine {
 
         let first_ordinal = selected[0].ordinal;
         let source_text = self.leaf_source_text(&selected)?;
-        let content = self
-            .summarize_with_escalation(
-                SummaryKind::Leaf,
-                0,
-                &source_text,
-                self.config.leaf_target_tokens,
-                summarizer,
-            )?
-            .content;
         let source_message_token_count = selected
             .iter()
             .filter_map(|entry| entry.message_id)
@@ -3799,25 +3739,24 @@ impl LcmEngine {
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .sum();
-        let summary_id = self.insert_summary_token_gated(
+        Ok(Some(PreparedSummary {
             conversation_id,
-            SummaryKind::Leaf,
-            0,
-            &content,
-            0,
-            0,
+            kind: SummaryKind::Leaf,
+            depth: 0,
+            source_text,
+            target_tokens: self.config.leaf_target_tokens,
+            descendant_count: 0,
+            descendant_tokens: 0,
             source_message_token_count,
-            &[],
-            selected
+            child_ids: Vec::new(),
+            message_ids: selected
                 .iter()
                 .filter_map(|entry| entry.message_id)
                 .collect(),
             first_ordinal,
-            selected.iter().map(|entry| entry.ordinal).collect(),
-            previous_tokens,
-            force,
-        )?;
-        Ok(summary_id)
+            replaced_ordinals: selected.iter().map(|entry| entry.ordinal).collect(),
+            previous_tokens: self.context_token_count(conversation_id)?,
+        }))
     }
 
     fn compact_condensed_pass<S: Summarizer>(
@@ -3825,8 +3764,49 @@ impl LcmEngine {
         conversation_id: i64,
         summarizer: &S,
         force: bool,
-        previous_tokens: i64,
+        _previous_tokens: i64,
     ) -> Result<Option<String>> {
+        let Some(plan) = self.prepare_condensed_pass(conversation_id)? else {
+            return Ok(None);
+        };
+        let content = plan.summarize(summarizer)?;
+        self.commit_prepared_summary(plan, content, force)
+    }
+
+    fn commit_prepared_summary(
+        &self,
+        plan: PreparedSummary,
+        content: String,
+        force: bool,
+    ) -> Result<Option<String>> {
+        let phase = LcmTransaction::begin(&self.conn)?;
+        let current = match plan.kind {
+            SummaryKind::Leaf => self.prepare_leaf_pass(plan.conversation_id)?,
+            SummaryKind::Condensed => self.prepare_condensed_pass(plan.conversation_id)?,
+        };
+        // The summarizer has no reusable authority. Re-read the exact selected
+        // source, positions, tokens and metadata inside the owner transaction.
+        anyhow::ensure!(current.as_ref() == Some(&plan), CompactionSourceChanged);
+        let result = self.insert_summary_token_gated(
+            plan.conversation_id,
+            plan.kind,
+            plan.depth,
+            &content,
+            plan.descendant_count,
+            plan.descendant_tokens,
+            plan.source_message_token_count,
+            &plan.child_ids,
+            plan.message_ids,
+            plan.first_ordinal,
+            plan.replaced_ordinals,
+            plan.previous_tokens,
+            force,
+        )?;
+        phase.commit()?;
+        Ok(result)
+    }
+
+    fn prepare_condensed_pass(&self, conversation_id: i64) -> Result<Option<PreparedSummary>> {
         let entries = self.context_entries(conversation_id)?;
         let message_entries: Vec<_> = entries
             .iter()
@@ -3887,33 +3867,22 @@ impl LcmEngine {
                 .collect::<Result<Vec<_>>>()?
                 .into_iter()
                 .sum();
-            let content = self
-                .summarize_with_escalation(
-                    SummaryKind::Condensed,
-                    depth + 1,
-                    &source_text,
-                    self.config.condensed_target_tokens,
-                    summarizer,
-                )?
-                .content;
-            let summary_id = self.insert_summary_token_gated(
+            return Ok(Some(PreparedSummary {
                 conversation_id,
-                SummaryKind::Condensed,
-                depth + 1,
-                &content,
+                kind: SummaryKind::Condensed,
+                depth: depth + 1,
+                source_text,
+                target_tokens: self.config.condensed_target_tokens,
                 descendant_count,
                 descendant_tokens,
                 source_message_token_count,
-                &child_ids,
-                Vec::new(),
+                child_ids,
+                message_ids: Vec::new(),
                 first_ordinal,
-                same_depth.iter().map(|entry| entry.ordinal).collect(),
-                previous_tokens,
-                force,
-            )?;
-            return Ok(summary_id);
+                replaced_ordinals: same_depth.iter().map(|entry| entry.ordinal).collect(),
+                previous_tokens: self.context_token_count(conversation_id)?,
+            }));
         }
-
         Ok(None)
     }
 
@@ -4265,37 +4234,6 @@ impl LcmEngine {
             chunks.push(format!("[{timestamp} - {timestamp}]\n{}", summary.content));
         }
         Ok(chunks.join("\n\n"))
-    }
-
-    fn summarize_with_escalation<S: Summarizer>(
-        &self,
-        kind: SummaryKind,
-        depth: i64,
-        source_text: &str,
-        target_tokens: usize,
-        summarizer: &S,
-    ) -> Result<EscalatedSummary> {
-        let trimmed = source_text.trim();
-        if trimmed.is_empty() {
-            return Ok(EscalatedSummary {
-                content: "[Truncated from 0 tokens]".to_string(),
-            });
-        }
-
-        let input_tokens = estimate_tokens(trimmed) as i64;
-        let lines: Vec<String> = trimmed.lines().map(str::to_string).collect();
-        let summary = summarizer.summarize(kind, depth, &lines, target_tokens)?;
-        let summary_tokens = estimate_tokens(&summary) as i64;
-        let content = if summary.trim().is_empty()
-            || summary_tokens >= input_tokens
-            || (input_tokens > 0
-                && (summary_tokens as f64 / input_tokens as f64) > MAX_SUMMARY_RATIO)
-        {
-            build_deterministic_fallback(trimmed, input_tokens)
-        } else {
-            summary.trim().to_string()
-        };
-        Ok(EscalatedSummary { content })
     }
 
     fn get_message(&self, message_id: i64) -> Result<MessageRecord> {
@@ -5906,12 +5844,7 @@ fn owned_lcm_read<T: Send + 'static>(
     operation: impl FnOnce(&Connection) -> Result<T> + Send + 'static,
 ) -> Result<T> {
     crate::persistence::require_sync_owner_context()?;
-    Ok(
-        owner_adapter::OwnerAdapter::for_path(path)?.read_blocking(move |conn| {
-            operation(conn)
-                .map_err(|_| ctox_store::StoreError::Invalid("LCM snapshot unavailable".into()))
-        })?,
-    )
+    owner_adapter::OwnerAdapter::for_path(path)?.read_blocking(move |conn| Ok(operation(conn)))?
 }
 
 fn snapshot_worker_attempt(
@@ -6068,12 +6001,217 @@ fn snapshot_task_execution_progress_for_task(
 mod legacy_owner_contract {
     use super::*;
     #[tokio::test]
+    async fn lcm_jobs_keep_domain_rejections_atomic_and_summarize_without_the_writer() -> Result<()>
+    {
+        let dir = tempfile::tempdir()?;
+        let absent = dir.path().join("missing-parent/core.sqlite");
+        let denied = run_add_message(&absent, 71, "user", "not admitted").unwrap_err();
+        anyhow::ensure!(
+            denied.to_string().contains("run_core_sync"),
+            "async misuse reached path lookup before admission"
+        );
+        anyhow::ensure!(!absent.exists());
+        let path = dir.path().join("core.sqlite");
+        drop(LcmEngine::open(&path, LcmConfig::default())?);
+        let (writer, readers) =
+            ctox_store::testkit::StoreFixture::open(ctox_store::DbId::new(&path)?)
+                .await?
+                .into_parts();
+        let adapter =
+            owner_adapter::OwnerAdapter::attach(&path, writer.clone(), readers.clone()).await?;
+        writer.submit(ctox_store::WriteJob::new(Default::default(),|tx| {
+            tx.execute_batch("CREATE TEMP TABLE lcm_audit(kind TEXT);\n                CREATE TEMP TRIGGER audit_lcm_message AFTER INSERT ON main.messages BEGIN INSERT INTO lcm_audit VALUES('message'); END;\n                CREATE TEMP TRIGGER audit_lcm_summary AFTER INSERT ON main.summaries BEGIN INSERT INTO lcm_audit VALUES('summary'); END;")?;
+            Ok(())
+        }))?.await?;
+        let work_path = path.clone();
+        let callback_writer = writer.clone();
+        crate::persistence::run_core_sync(move || {
+            run_init(&work_path).context("verify registered LCM schema")?;
+            for _ in 0..4 { run_add_message(&work_path,71,"user",&"source words for compacting durable work ".repeat(70))?; }
+            run_add_assistant_turn(&work_path,71,"assistant completion",AgentOutcome::Success)?;
+            let steps=[TaskExecutionPlanStepInput{label:"durable step".into(),status:"in_progress".into()}];
+            run_record_task_execution_plan(&work_path,TaskExecutionPlanUpdate{work_key:"work",task_id:"task",command_id:"command",attempt_id:"attempt",explanation:None,steps:&steps})?;
+            let activity=TaskExecutionActivityInput{activity_id:"activity",work_key:"work",task_id:"task",command_id:"command",attempt_id:"attempt",kind:"tool",attribute_to_current_step:true};
+            anyhow::ensure!(run_record_task_execution_activity(&work_path,activity.clone())?);
+            anyhow::ensure!(!run_record_task_execution_activity(&work_path,activity)?);
+            run_prepare_task_execution_review(&work_path,"work")?;
+            let rejection=run_set_task_execution_review_status(&work_path,"work","completed").unwrap_err();
+            anyhow::ensure!(rejection.downcast_ref::<IncompleteTaskExecutionPlan>().is_some(),"typed domain rejection was erased");
+            let error=owned_lcm_write::<()>(&work_path,|engine| {
+                engine.conn.execute("INSERT INTO temp.lcm_audit VALUES('must-roll-back')",[])?;
+                anyhow::bail!(IncompleteTaskExecutionPlan{work_key:"work".into(),revision:1,completed:0,total:1})
+            }).unwrap_err();
+            anyhow::ensure!(error.downcast_ref::<IncompleteTaskExecutionPlan>().is_some());
+            run_continuity_full_replace(&work_path,71,"anchors","stable anchor")?;
+            run_continuity_string_replace(&work_path,71,"anchors","stable","updated")?;
+            let _ = mission_state::drain_pending_mission_state_clobbers();
+            owned_lcm_write(&work_path, |engine| {
+                let mut record=engine.mission_state(71)?;
+                record.next_slice="protected next slice".into();
+                engine.overwrite_mission_state(&record)?;
+                record.next_slice.clear();
+                engine.overwrite_mission_state(&record)?;
+                anyhow::ensure!(engine.stored_mission_state(71)?.unwrap().next_slice == "protected next slice");
+                Ok(())
+            })?;
+            let notes=mission_state::drain_pending_mission_state_clobbers();
+            anyhow::ensure!(notes.iter().any(|note|note.conversation_id==71 && note.field=="next_slice" && note.previous_value=="protected next slice"),"writer audit did not return to the original caller");
+            let query_only=owned_lcm_session_read(&work_path,|engine| Ok(engine.conn.query_row("PRAGMA query_only",[],|r|r.get::<_,i64>(0))?))?;
+            anyhow::ensure!(query_only==1,"LCM inspection escaped the snapshot read pool");
+            let current=run_context_retrieve(&work_path,71,"current",None,None,None,10,1,true,8000).context("read LCM current view")?;
+            anyhow::ensure!(current["messages"].as_array().is_some_and(|messages|!messages.is_empty()));
+            let _=run_continuity_log(&work_path,71,None).context("read LCM continuity log")?;
+            let _=run_continuity_build_prompt(&work_path,71,"anchors").context("prepare LCM anchor prompt")?;
+
+            let config=LcmConfig{fresh_tail_count:0,min_compaction_tokens:1,max_rounds:2,..LcmConfig::default()};
+            struct Probe { writer:ctox_store::writer::WriterHandle, change_source:bool }
+            impl Summarizer for Probe {
+                fn summarize(&self,_:SummaryKind,_:i64,_:&[String],_:usize)->Result<String> {
+                    let (done,receive)=std::sync::mpsc::sync_channel(1);
+                    let change_source=self.change_source;
+                    let ack=self.writer.submit(ctox_store::WriteJob::new(Default::default(),move |tx| {
+                        if change_source { tx.execute("UPDATE messages SET content='changed current source' WHERE message_id=(SELECT MIN(message_id) FROM messages)",[])?; }
+                        let _=done.try_send(());Ok(())
+                    }))?;
+                    receive.recv_timeout(std::time::Duration::from_secs(2)).context("summarizer retained the Core writer")?;
+                    ack.blocking_wait()?;
+                    Ok("short durable summary".into())
+                }
+            }
+            let stale=owned_lcm_compact(&work_path,71,1,config.clone(),&Probe{writer:callback_writer.clone(),change_source:true},true);
+            let stale=stale.expect_err("stale prepared source was committed");
+            anyhow::ensure!(matches!(stale.downcast_ref::<ctox_store::StoreError>(),Some(ctox_store::StoreError::Busy)),"concurrent source change was not reported as retryable Busy");
+            let result=owned_lcm_compact(&work_path,71,1,config,&Probe{writer:callback_writer,change_source:false},true)?;
+            anyhow::ensure!(result.action_taken && result.tokens_after<=result.tokens_before);
+            let snapshot=run_dump(&work_path,71)?;
+            anyhow::ensure!(!snapshot.summaries.is_empty());
+            let summary=snapshot.summaries[0].summary_id.clone();
+            anyhow::ensure!(run_describe(&work_path,&summary)?.is_some());
+            anyhow::ensure!(!run_expand(&work_path,&summary,1,true,8000)?.messages.is_empty());
+            let _ = mission_state::drain_pending_mission_state_clobbers();
+            Ok(())
+        }).await?;
+        writer
+            .submit(ctox_store::WriteJob::new(Default::default(), |tx| {
+                let count = |kind: &str| {
+                    tx.query_row(
+                        "SELECT count(*) FROM temp.lcm_audit WHERE kind=?1",
+                        [kind],
+                        |r| r.get::<_, i64>(0),
+                    )
+                };
+                assert!(
+                    count("message")? > 0 && count("summary")? > 0,
+                    "LCM writes escaped the existing connection"
+                );
+                assert_eq!(
+                    count("must-roll-back")?,
+                    0,
+                    "rejected LCM operation committed partial effects"
+                );
+                Ok(())
+            }))?
+            .await?;
+        drop(adapter);
+        readers.shutdown().await?;
+        writer.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn finalization_jobs_share_core_transaction_and_preserve_identity() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("core.sqlite");
+        drop(LcmEngine::open(&path, LcmConfig::default())?);
+        let (writer, readers) =
+            ctox_store::testkit::StoreFixture::open(ctox_store::DbId::new(&path)?)
+                .await?
+                .into_parts();
+        let adapter =
+            owner_adapter::OwnerAdapter::attach(&path, writer.clone(), readers.clone()).await?;
+        writer.submit(ctox_store::WriteJob::new(Default::default(), |tx| {
+            tx.execute_batch("CREATE TEMP TABLE owner_audit(attempt TEXT);
+                CREATE TEMP TRIGGER audit_finalization AFTER INSERT ON main.worker_attempt_finalizations
+                BEGIN INSERT INTO owner_audit VALUES(new.attempt_id); END;")?;
+            Ok(())
+        }))?.await?;
+        let job_path = path.clone();
+        crate::persistence::run_core_sync(move || {
+            let input = WorkerAttemptFinalizationInput {
+                attempt_id: "owned-attempt",
+                work_key: "owned-work",
+                conversation_id: 71,
+                source_label: "fixture",
+                agent_outcome: AgentOutcome::Success,
+                reply_text: "persisted completion",
+                error_text: None,
+            };
+            let first = run_begin_worker_attempt_finalization(&job_path, input.clone())?;
+            let replay = run_begin_worker_attempt_finalization(&job_path, input.clone())?;
+            anyhow::ensure!(
+                first.attempt_id == replay.attempt_id && replay.reply_text == input.reply_text
+            );
+            let mut conflict = input.clone();
+            conflict.reply_text = "changed immutable reply";
+            anyhow::ensure!(run_begin_worker_attempt_finalization(&job_path, conflict).is_err());
+            let mut recovery = input;
+            recovery.attempt_id = "replacement-attempt";
+            anyhow::ensure!(
+                run_begin_worker_attempt_finalization(&job_path, recovery)?.attempt_id
+                    == first.attempt_id
+            );
+            Ok(())
+        })
+        .await?;
+        writer
+            .submit(ctox_store::WriteJob::new(Default::default(), |tx| {
+                let audited: i64 =
+                    tx.query_row("SELECT COUNT(*) FROM temp.owner_audit", [], |r| r.get(0))?;
+                assert_eq!(
+                    audited, 1,
+                    "finalization escaped the existing writer connection"
+                );
+                let count: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM worker_attempt_finalizations",
+                    [],
+                    |r| r.get(0),
+                )?;
+                assert_eq!(
+                    count, 1,
+                    "identity conflict or recovery created a duplicate marker"
+                );
+                // A failed inner phase rolls back only its savepoint. It cannot
+                // accidentally commit or abort this enclosing owner transaction.
+                {
+                    let inner = LcmTransaction::begin(tx)?;
+                    inner.execute("INSERT INTO owner_audit VALUES('rolled-back')", [])?;
+                }
+                assert_eq!(
+                    tx.query_row("SELECT COUNT(*) FROM temp.owner_audit", [], |r| r
+                        .get::<_, i64>(0))?,
+                    1
+                );
+                tx.execute("INSERT INTO owner_audit VALUES('outer-survives')", [])?;
+                Ok(())
+            }))?
+            .await?;
+        drop(adapter);
+        readers.shutdown().await?;
+        writer.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn legacy_lcm_must_not_open_an_owned_core_file() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("core.sqlite");
         {
             // Offline fixture preparation ends before Core takes ownership.
             let offline = LcmEngine::open(&path, LcmConfig::default())?;
+            assert!(
+                LcmEngine::open(&path, LcmConfig::default()).is_err(),
+                "a second legacy opener bypassed exclusive file ownership"
+            );
             offline.add_message(71, "user", "owner snapshot fixture")?;
             offline.record_task_execution_plan(TaskExecutionPlanUpdate {
                 work_key: "fixture-work",
@@ -6129,4 +6267,373 @@ mod legacy_owner_contract {
         );
         Ok(())
     }
+}
+
+// The Core writer owns the outer IMMEDIATE transaction. Existing atomic LCM
+// phases use a savepoint when borrowing it; offline engines retain IMMEDIATE.
+// Never commit the owner transaction from a borrowed session.
+enum LcmTransaction<'a> {
+    Root(rusqlite::Transaction<'a>),
+    Nested(LcmSavepoint<'a>),
+}
+struct LcmSavepoint<'a> {
+    conn: &'a Connection,
+    name: String,
+    released: bool,
+}
+impl Drop for LcmSavepoint<'_> {
+    fn drop(&mut self) {
+        if !self.released {
+            let _ = self
+                .conn
+                .execute_batch(&format!("ROLLBACK TO {}; RELEASE {}", self.name, self.name));
+        }
+    }
+}
+impl<'a> LcmTransaction<'a> {
+    fn begin(conn: &'a Connection) -> rusqlite::Result<Self> {
+        if conn.is_autocommit() {
+            return rusqlite::Transaction::new_unchecked(
+                conn,
+                rusqlite::TransactionBehavior::Immediate,
+            )
+            .map(Self::Root);
+        }
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let name = format!(
+            "lcm_phase_{}",
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        conn.execute_batch(&format!("SAVEPOINT {name}"))?;
+        Ok(Self::Nested(LcmSavepoint {
+            conn,
+            name,
+            released: false,
+        }))
+    }
+    fn rollback(self) -> rusqlite::Result<()> {
+        match self {
+            Self::Root(tx) => tx.rollback(),
+            Self::Nested(mut savepoint) => {
+                savepoint.conn.execute_batch(&format!(
+                    "ROLLBACK TO {}; RELEASE {}",
+                    savepoint.name, savepoint.name
+                ))?;
+                savepoint.released = true;
+                Ok(())
+            }
+        }
+    }
+    fn commit(self) -> rusqlite::Result<()> {
+        match self {
+            Self::Root(tx) => tx.commit(),
+            Self::Nested(mut savepoint) => {
+                savepoint
+                    .conn
+                    .execute_batch(&format!("RELEASE {}", savepoint.name))?;
+                savepoint.released = true;
+                Ok(())
+            }
+        }
+    }
+}
+impl std::ops::Deref for LcmTransaction<'_> {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        match self {
+            Self::Root(tx) => tx,
+            Self::Nested(savepoint) => savepoint.conn,
+        }
+    }
+}
+
+fn owned_lcm_write<T: Send + 'static>(
+    path: &Path,
+    operation: impl FnOnce(&LcmEngine<&Connection>) -> Result<T> + Send + 'static,
+) -> Result<T> {
+    crate::persistence::require_sync_owner_context()?;
+    let owner = owner_adapter::OwnerAdapter::for_path(path)?;
+    let (result, pending) = owner.write_blocking(move |tx| {
+        // The legacy clobber audit is thread-local. Return only this job's
+        // notes after the real commit acknowledgement; never publish governance
+        // recursively from the writer or steal another job's pending notes.
+        struct AuditScope(Option<Vec<mission_state::PendingMissionStateClobberAttempt>>);
+        impl AuditScope {
+            fn finish(mut self) -> Vec<mission_state::PendingMissionStateClobberAttempt> {
+                let pending = mission_state::drain_pending_mission_state_clobbers();
+                for previous in self.0.take().unwrap_or_default() {
+                    mission_state::push_pending_mission_state_clobber(previous);
+                }
+                pending
+            }
+        }
+        impl Drop for AuditScope {
+            fn drop(&mut self) {
+                if let Some(previous) = self.0.take() {
+                    let _ = mission_state::drain_pending_mission_state_clobbers();
+                    for note in previous {
+                        mission_state::push_pending_mission_state_clobber(note);
+                    }
+                }
+            }
+        }
+        let audit = AuditScope(Some(mission_state::drain_pending_mission_state_clobbers()));
+        let phase = LcmTransaction::begin(tx)?;
+        let result = operation(&LcmEngine::borrowed(tx, LcmConfig::default()));
+        if result.is_ok() {
+            phase.commit()?;
+        } else {
+            phase.rollback()?;
+        }
+        Ok((result, audit.finish()))
+    })?;
+    for note in pending {
+        mission_state::push_pending_mission_state_clobber(note);
+    }
+    result
+}
+
+fn owned_lcm_session_read<T: Send + 'static>(
+    path: &Path,
+    operation: impl FnOnce(&LcmEngine<&Connection>) -> Result<T> + Send + 'static,
+) -> Result<T> {
+    owned_lcm_read(path, move |conn| {
+        operation(&LcmEngine::borrowed(conn, LcmConfig::default()))
+    })
+}
+
+#[derive(Debug)]
+struct CompactionSourceChanged;
+impl std::fmt::Display for CompactionSourceChanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LCM compaction source changed; retry from a fresh snapshot")
+    }
+}
+impl std::error::Error for CompactionSourceChanged {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PreparedSummary {
+    conversation_id: i64,
+    kind: SummaryKind,
+    depth: i64,
+    source_text: String,
+    target_tokens: usize,
+    descendant_count: i64,
+    descendant_tokens: i64,
+    source_message_token_count: i64,
+    child_ids: Vec<String>,
+    message_ids: Vec<i64>,
+    first_ordinal: i64,
+    replaced_ordinals: Vec<i64>,
+    previous_tokens: i64,
+}
+impl PreparedSummary {
+    fn summarize<S: Summarizer>(&self, summarizer: &S) -> Result<String> {
+        Ok(summarize_with_escalation(
+            self.kind,
+            self.depth,
+            &self.source_text,
+            self.target_tokens,
+            summarizer,
+        )?
+        .content)
+    }
+}
+fn summarize_with_escalation<S: Summarizer>(
+    kind: SummaryKind,
+    depth: i64,
+    source_text: &str,
+    target_tokens: usize,
+    summarizer: &S,
+) -> Result<EscalatedSummary> {
+    let trimmed = source_text.trim();
+    if trimmed.is_empty() {
+        return Ok(EscalatedSummary {
+            content: "[Truncated from 0 tokens]".to_string(),
+        });
+    }
+
+    let input_tokens = estimate_tokens(trimmed) as i64;
+    let lines: Vec<String> = trimmed.lines().map(str::to_string).collect();
+    let summary = summarizer.summarize(kind, depth, &lines, target_tokens)?;
+    let summary_tokens = estimate_tokens(&summary) as i64;
+    let content = if summary.trim().is_empty()
+        || summary_tokens >= input_tokens
+        || (input_tokens > 0 && (summary_tokens as f64 / input_tokens as f64) > MAX_SUMMARY_RATIO)
+    {
+        build_deterministic_fallback(trimmed, input_tokens)
+    } else {
+        summary.trim().to_string()
+    };
+    Ok(EscalatedSummary { content })
+}
+
+/// Snapshot -> computation -> revalidated short WriteJob. A borrowed summarizer
+/// never runs on a SQLite thread and never retains its reader transaction.
+pub(crate) fn owned_lcm_compact<S: Summarizer>(
+    path: &Path,
+    conversation_id: i64,
+    token_budget: i64,
+    config: LcmConfig,
+    summarizer: &S,
+    force: bool,
+) -> Result<CompactionResult> {
+    crate::persistence::require_sync_owner_context()?;
+    let owner = owner_adapter::OwnerAdapter::for_path(path)?;
+    let initial_config = config.clone();
+    let tokens_before = owner.read_blocking(move |conn| {
+        LcmEngine::borrowed(conn, initial_config)
+            .context_token_count(conversation_id)
+            .map_err(|e| ctox_store::StoreError::Invalid(e.to_string()))
+    })?;
+    let threshold = config.compaction_threshold(token_budget);
+    let mut result = CompactionResult {
+        action_taken: false,
+        tokens_before,
+        tokens_after: tokens_before,
+        created_summary_ids: Vec::new(),
+        rounds: 0,
+    };
+    if !force && tokens_before <= threshold {
+        return Ok(result);
+    }
+    for kind in [SummaryKind::Leaf, SummaryKind::Condensed] {
+        while result.rounds < config.max_rounds && (force || result.tokens_after > threshold) {
+            result.rounds += 1;
+            let read_config = config.clone();
+            let plan = owner.read_blocking(move |conn| {
+                let session = LcmEngine::borrowed(conn, read_config);
+                match kind {
+                    SummaryKind::Leaf => session.prepare_leaf_pass(conversation_id),
+                    SummaryKind::Condensed => session.prepare_condensed_pass(conversation_id),
+                }
+                .map_err(|e| ctox_store::StoreError::Invalid(e.to_string()))
+            })?;
+            let Some(plan) = plan else {
+                break;
+            };
+            // This is the sole caller-controlled/possibly expensive step.
+            let content = plan.summarize(summarizer)?;
+            let write_config = config.clone();
+            let (summary, tokens) = owner.write_blocking(move |tx| {
+                let session = LcmEngine::borrowed(tx, write_config);
+                let summary = session
+                    .commit_prepared_summary(plan, content, force)
+                    .map_err(|error| {
+                        if error.downcast_ref::<CompactionSourceChanged>().is_some() {
+                            ctox_store::StoreError::Busy
+                        } else {
+                            ctox_store::StoreError::Invalid(error.to_string())
+                        }
+                    })?;
+                let tokens = session
+                    .context_token_count(conversation_id)
+                    .map_err(|e| ctox_store::StoreError::Invalid(e.to_string()))?;
+                Ok((summary, tokens))
+            })?;
+            let Some(summary) = summary else {
+                break;
+            };
+            result.created_summary_ids.push(summary);
+            result.action_taken = true;
+            let decreased = tokens < result.tokens_after;
+            result.tokens_after = tokens;
+            if !decreased {
+                break;
+            }
+        }
+    }
+    if result.action_taken {
+        result.tokens_after = owner.write_blocking(move |tx| {
+            let session = LcmEngine::borrowed(tx, config);
+            session
+                .resequence_context_items(conversation_id)
+                .map_err(|e| ctox_store::StoreError::Invalid(e.to_string()))?;
+            session
+                .context_token_count(conversation_id)
+                .map_err(|e| ctox_store::StoreError::Invalid(e.to_string()))
+        })?;
+    }
+    Ok(result)
+}
+
+struct ContinuityPromptSource {
+    document: ContinuityDocumentState,
+    snapshot: LcmSnapshot,
+    forgotten: Vec<String>,
+}
+// Regex construction, literal extraction, sentence shaping and prompt assembly
+// run after the reader returned its owned DTO and released the WAL snapshot.
+fn build_continuity_prompt_from_source(
+    conversation_id: i64,
+    kind: ContinuityKind,
+    source: ContinuityPromptSource,
+) -> Result<ContinuityPromptPayload> {
+    let ContinuityPromptSource {
+        document,
+        snapshot,
+        forgotten,
+    } = source;
+    let explicit_anchor_literals = if kind == ContinuityKind::Anchors {
+        collect_explicit_anchor_literals(&snapshot.messages)
+    } else {
+        Vec::new()
+    };
+    let recent_messages = snapshot
+        .messages
+        .iter()
+        .rev()
+        .take(8)
+        .map(|message| {
+            format!(
+                "[{} #{}] {}",
+                message.role,
+                message.seq,
+                sentence_fragment(
+                    &message.content,
+                    if kind == ContinuityKind::Anchors {
+                        420
+                    } else if kind == ContinuityKind::Focus {
+                        520
+                    } else {
+                        220
+                    },
+                )
+            )
+        })
+        .collect::<Vec<_>>();
+    let recent_summaries = snapshot
+        .summaries
+        .iter()
+        .rev()
+        .take(4)
+        .map(|summary| {
+            format!(
+                "[{} depth={}] {}",
+                summary.kind.as_str(),
+                summary.depth,
+                sentence_fragment(&summary.content, 240)
+            )
+        })
+        .collect::<Vec<_>>();
+    let document_view = continuity_document_prompt_view(&document.content);
+    let prompt = build_continuity_prompt_text(
+        conversation_id,
+        kind,
+        &document_view,
+        &recent_messages,
+        &recent_summaries,
+        &forgotten,
+        &explicit_anchor_literals,
+    );
+
+    Ok(ContinuityPromptPayload {
+        conversation_id,
+        kind,
+        current_document: document.content,
+        recent_messages,
+        recent_summaries,
+        forgotten_lines: forgotten,
+        prompt,
+    })
 }

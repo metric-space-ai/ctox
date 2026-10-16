@@ -83,7 +83,17 @@ pub struct AppRuntimeRegistration {
 impl AppRuntimeRegistration {
     /// Called exactly once at run_foreground after CUTOVER owns the sync writer.
     pub fn start(root: PathBuf, inputs: AppRuntimeInputs) -> Result<Self> {
-        let daemon = AppRuntimeDaemon::production(root, inputs.host.clone())?;
+        Self::start_with_executor(root, inputs, None)
+    }
+    pub fn start_with_executor(
+        root: PathBuf,
+        inputs: AppRuntimeInputs,
+        executor: Option<Arc<dyn crate::daemon::BlockingExecutor>>,
+    ) -> Result<Self> {
+        let mut daemon = AppRuntimeDaemon::production(root, inputs.host.clone())?;
+        if let Some(executor) = executor {
+            daemon = daemon.with_executor(executor);
+        }
         // Startup is fallible and synchronous: never advertise a runtime that
         // silently failed to load one of its active CAS releases.
         for (app, version) in &inputs.active {

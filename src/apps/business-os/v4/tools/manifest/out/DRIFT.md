@@ -8,9 +8,9 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 |---|---|
 | apps | 41 |
 | manifests_total | 42 |
-| collections_total | 235 |
-| collections_in_contract | 199 |
-| owned_by_apps | 220 |
+| collections_total | 236 |
+| collections_in_contract | 201 |
+| owned_by_apps | 221 |
 | owned_by_platform | 15 |
 | owner_proposals | 5 |
 | handlers_total | 399 |
@@ -19,12 +19,12 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | capabilities_distinct | 71 |
 | triggers_total | 11 |
 | command_rights_entries | 55 |
-| foreign_declarations | 281 |
-| foreign_write_declarations | 31 |
+| foreign_declarations | 293 |
+| foreign_write_declarations | 32 |
 | foreign_code_only | 94 |
 | foreign_without_export | 0 |
 | platform_clamps | 1 |
-| exported_collections | 82 |
+| exported_collections | 84 |
 | handler_conflicts | 8 |
 | schema_missing | 0 |
 | schema_js_present | 3 |
@@ -33,19 +33,23 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | no_owner_app | 5 |
 | contract_only | 4 |
 | multiple_owners | 0 |
-| drift_schema_js_vs_json_collections | 28 |
+| drift_schema_js_vs_json_collections | 29 |
 | drift_migration_steps | 3 |
 | drift_copy_divergence | 0 |
 | prefix_mismatch | 2 |
 | class_proposals | 22 |
-| shell_files | 120 |
+| shell_files | 125 |
 | apps_with_styles | 41 |
 | write_guards | 1 |
 | todo_total | 149 |
 | declarations | 40 |
-| commands_out_total | 24 |
-| commands_in_total | 12 |
+| commands_out_total | 25 |
+| commands_in_total | 13 |
 | commands_unmatched | 0 |
+| commands_unrouted | 0 |
+| commands_out_ambiguous | 0 |
+| commands_routes_pending | 13 |
+| commands_in_derived | 1 |
 | commands_out_unresolved | 0 |
 | commands_in_without_handler | 0 |
 | exports_beyond_declaration | 0 |
@@ -55,7 +59,7 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | icon_svg | 1 |
 | icon_generated |  |
 
-## 1. schema.js vs. collections.schema.json je App (28 Fälle)
+## 1. schema.js vs. collections.schema.json je App (29 Fälle)
 
 | App | Collection | Art | Feld | schema.js | collections.schema.json |
 |---|---|---|---|---|---|
@@ -95,6 +99,7 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | ctox | ctox_queue_tasks | only_in_schema.js | | | |
 | ctox | ctox_runtime_settings | only_in_schema.js | | | |
 | ctox | legacy_records | only_in_collections.schema.json | | | |
+| ctox | planned_steps | only_in_collections.schema.json | | | |
 | ctox | workjet_jour_fixe_meetings | only_in_collections.schema.json | | | |
 | ctox | workjet_provider_registry | differs | `$.version` | 0 | 1 |
 | ctox | workjet_provider_registry | differs | `properties.accounts` | {"type":"array","maxItems":256,"items":{"type":"object","additionalProperties… | {"items":{"additionalProperties":false,"properties":{"credentialReady":{"type… |

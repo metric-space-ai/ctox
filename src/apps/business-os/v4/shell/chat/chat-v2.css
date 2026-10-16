@@ -1,0 +1,402 @@
+/* GENERIERT von v4/shell/chat/tests/extract-chat-css.mjs – nicht von Hand ändern (CHAT4, 16.10.2026).
+   CSS-Kontext der Shell-V2-Chatleiste wörtlich aus ui-contract/v1/workjet-ui-contract.css, app.css, mobile-host.css: Deklarationen, @media und Reihenfolge
+   unverändert, Selektoren mechanisch auf die Hülle [data-v4-chat-v2] begrenzt (Spezifität gleich). Die Regeln der Leiste selbst
+   schreibt shared/business-chat.js (installChatStyles) zur Laufzeit. Änderungen nur in den Quellen, dann neu erzeugen;
+   v4/shell/chat/tests/geometry.test.mjs vergleicht die Leiste mit der Shell-V2. */
+
+/* --- Tokens aus :root/html der Quellen (transitiv benutzt), an der Hülle --- */
+/* ui-contract/v1/workjet-ui-contract.css */
+[data-v4-chat-v2],
+:root[data-theme="light"] :where([data-v4-chat-v2]) {
+  --workjet-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --workjet-shadow-panel: 0 4px 12px rgb(0 0 0 / 0.12);
+  --workjet-shadow-overlay: 0 16px 44px rgb(0 0 0 / 0.18);
+  --workjet-category-imported-accent: #71717a;
+  --workjet-category-imported-accent-foreground: #ffffff;
+  --workjet-category-imported-accent-soft: #e4e4e7;
+  --workjet-category-imported-accent-border: #a1a1aa;
+}
+/* ui-contract/v1/workjet-ui-contract.css */
+[data-v4-chat-v2],
+:root[data-theme="light"] :where([data-v4-chat-v2]) {
+  --workjet-accent: #1b4ed8;
+  --workjet-accent-soft: #e0e6f7;
+}
+/* ui-contract/v1/workjet-ui-contract.css */
+:root[data-theme="dark"] :where([data-v4-chat-v2]) {
+  --workjet-accent: #346bf1;
+  --workjet-accent-soft: #16264f;
+}
+/* ui-contract/v1/workjet-ui-contract.css */
+:root[data-theme="dark"] :where([data-v4-chat-v2]) {
+  --workjet-category-imported-accent-soft: #27272a;
+  --workjet-category-imported-accent-border: #52525b;
+}
+/* app.css */
+[data-v4-chat-v2] {
+  --bg: var(--ctox-host-bg, #fcfcfc);
+  --surface: var(--ctox-host-surface, #ffffff);
+  --surface-2: var(--ctox-host-surface-2, #fcfcfc);
+  --line: var(--ctox-host-line, #e4e4e7);
+  --text: var(--ctox-host-text, #52525b);
+  --text-strong: var(--ctox-host-text-strong, #27272a);
+  --muted: var(--ctox-host-muted, #71717b);
+  --accent: var(--ctox-host-accent, #1b4ed8);
+  --accent-soft: var(--ctox-host-accent-soft, #e0e6f7);
+  --shadow-md: 0 4px 12px oklch(0.22 0.015 235 / 0.12);
+  --shadow-lg: 0 8px 24px oklch(0.22 0.015 235 / 0.18);
+  --panel-radius: 6px;
+  --control-radius: 4px;
+  --surface-3: var(--ctox-host-surface-3, #ffffff);
+  --motion-fast: 120ms;
+  --motion-base: 160ms;
+  --motion-slow: 200ms;
+  --ease-standard: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --elev-float: #ffffff;
+  --elev-float-2: #f5f6f8;
+  --elev-float-3: #eceef2;
+  --elev-inner-line: rgb(15 23 42 / 0.08);
+  --elev-edge: rgb(15 23 42 / 0.14);
+  --elev-outline: rgb(255 255 255 / 0.9);
+  --elev-float-shadow: 0 0 0 1px rgb(15 23 42 / 0.05), 0 20px 50px oklch(0.22 0.015 235 / 0.2), 0 4px 12px oklch(0.22 0.015 235 / 0.12);
+  --elev-bar-shadow: 0 0 0 1px rgb(15 23 42 / 0.05), 0 10px 30px oklch(0.22 0.015 235 / 0.18);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+/* app.css */
+:root[data-theme="dark"] :where([data-v4-chat-v2]) {
+  --bg: var(--ctox-host-bg, #0a0a0a);
+  --surface: var(--ctox-host-surface, #111111);
+  --surface-2: var(--ctox-host-surface-2, #141414);
+  --line: var(--ctox-host-line, #191919);
+  --text: var(--ctox-host-text, #d4d4d8);
+  --text-strong: var(--ctox-host-text-strong, #f5f5f5);
+  --muted: var(--ctox-host-muted, #818181);
+  --accent: var(--ctox-host-accent, #346bf1);
+  --accent-soft: var(--ctox-host-accent-soft, #16264f);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.42);
+  --panel-radius: 6px;
+  --control-radius: 4px;
+  --surface-3: var(--ctox-host-surface-3, #191919);
+  --elev-float: #1c1f25;
+  --elev-float-2: #252a32;
+  --elev-float-3: #2e343d;
+  --elev-inner-line: rgb(255 255 255 / 0.08);
+  --elev-edge: rgb(255 255 255 / 0.15);
+  --elev-outline: rgb(0 0 0 / 0.85);
+  --elev-float-shadow: 0 0 0 1px var(--elev-outline), 0 24px 60px rgb(0 0 0 / 0.62), 0 6px 18px rgb(0 0 0 / 0.5);
+  --elev-bar-shadow: 0 0 0 1px var(--elev-outline), 0 14px 38px rgb(0 0 0 / 0.58);
+}
+/* app.css */
+[data-v4-chat-v2] {
+  color: var(--text);
+  font-size: var(--fs-base);
+}
+
+/* --- Regeln --- */
+
+/* ===== app.css ===== */
+:where([data-v4-chat-v2]) * {
+  box-sizing: border-box;
+}
+:where([data-v4-chat-v2]) input,
+:where([data-v4-chat-v2]) textarea,
+:where([data-v4-chat-v2]) [contenteditable]:not([contenteditable="false"]),
+:where([data-v4-chat-v2]) [role="textbox"],
+:where([data-v4-chat-v2]) .ctox-chat-body,
+:where([data-v4-chat-v2]) [data-ctox-text-selectable] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+:where([data-v4-chat-v2]) ::selection {
+  background: color-mix(in oklab, var(--accent) 24%, transparent);
+  color: inherit;
+}
+:where([data-v4-chat-v2]) button,
+:where([data-v4-chat-v2]) input,
+:where([data-v4-chat-v2]) textarea {
+  font: inherit;
+}
+:where([data-v4-chat-v2]) button {
+  cursor: pointer;
+}
+:where([data-v4-chat-v2]) [data-maintenance-empty-state="true"] {
+  display: none !important;
+}
+body.is-workspace-col-resizing :where([data-v4-chat-v2]),
+body.is-workspace-col-resizing :where([data-v4-chat-v2]) * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+:where([data-v4-chat-v2]) [data-resizer] {
+  align-self: stretch;
+  width: 12px;
+  min-width: 12px;
+  max-width: 12px;
+  flex: 0 0 12px;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  padding: 0;
+  margin: 0;
+  position: relative;
+  z-index: 10;
+  touch-action: none;
+  box-sizing: border-box;
+  box-shadow: none;
+  outline: none;
+  appearance: none;
+}
+:where([data-v4-chat-v2]) [data-resizer][hidden] {
+  display: none !important;
+}
+:where([data-v4-chat-v2]) [data-resizer]::after {
+  content: none !important;
+  display: none !important;
+}
+:where([data-v4-chat-v2]) [data-resizer]::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 4px;
+  height: 48px;
+  border-radius: 999px;
+  background: var(--line);
+  opacity: 0.5;
+  transition: opacity var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
+  pointer-events: none;
+}
+:where([data-v4-chat-v2]) [data-resizer]:hover::before,
+:where([data-v4-chat-v2]) [data-resizer].is-active::before,
+:where([data-v4-chat-v2]) [data-resizer].is-dragging::before {
+  opacity: 1;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+body.is-resizing :where([data-v4-chat-v2]),
+body.is-resizing :where([data-v4-chat-v2]) * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+body[data-shell-chat-dock-side] :where([data-v4-chat-v2]) .ctox-chat-root {
+  left: auto !important;
+  right: 96px !important;
+  width: 340px !important;
+  max-width: min(340px, calc(100vw - 176px)) !important;
+}
+body[data-shell-chat-dock-side] :where([data-v4-chat-v2]) .ctox-chat-dock {
+  display: flex !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  scrollbar-width: thin;
+}
+body[data-shell-chat-dock-side] :where([data-v4-chat-v2]) .ctox-chat-strip {
+  flex: 1 1 auto !important;
+  min-width: 112px !important;
+  width: auto !important;
+}
+body[data-shell-chat-dock-side] :where([data-v4-chat-v2]) .ctox-chat-stage,
+body[data-shell-chat-dock-side] :where([data-v4-chat-v2]) .ctox-chat-stage-inner {
+  width: 100% !important;
+}
+body[data-shell-chat-dock-side] :where([data-v4-chat-v2]) .ctox-chat-stage-inner {
+  overflow: hidden !important;
+}
+body[data-shell-chat-dock-side] :where([data-v4-chat-v2]) .ctox-chat-window {
+  left: 8px !important;
+  right: 8px !important;
+  bottom: 10px !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+}
+body[data-shell-chat-dock-side] :where([data-v4-chat-v2]) .ctox-chat-window:not(.is-active) {
+  display: none !important;
+}
+body[data-shell-chat-dock-compact] :where([data-v4-chat-v2]) .ctox-chat-stage {
+  display: none !important;
+}
+:where([data-v4-chat-v2]) :where(button, [role="button"], input, select, textarea):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+:where([data-v4-chat-v2]) :where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]), select, textarea) {
+  color: var(--text);
+  -webkit-text-fill-color: currentColor;
+  caret-color: var(--accent);
+}
+:where([data-v4-chat-v2]) input::placeholder,
+:where([data-v4-chat-v2]) textarea::placeholder {
+  /* WICHTIG: kein :where() um Pseudo-ELEMENTE - :where() nimmt nur
+     Pseudo-KLASSEN; Chrome verwirft sonst die komplette Regel und es gilt der
+     UA-Default (#757575, ~4,0:1). Seit jeher kaputt; entdeckt im UI-Review
+     31.08.2026 (r3-B1/r4). 60%-Mischung: erreicht auch im dunkleren
+     Kopfband-Kontext (~--muted #55) die Leerzustand-Stufe ~#939393 >= 4,5:1. */
+  color: color-mix(in srgb, var(--text) 22%, var(--muted));
+  -webkit-text-fill-color: color-mix(in srgb, var(--text) 22%, var(--muted));
+  opacity: 1;
+}
+:where([data-v4-chat-v2]) :where(button, input, select, textarea):disabled,
+:where([data-v4-chat-v2]) :where(button, input, select, textarea)[aria-disabled="true"] {
+  cursor: not-allowed !important;
+  opacity: 0.55;
+  box-shadow: none !important;
+}
+:where([data-v4-chat-v2]) [data-resizer]:focus-visible {
+  outline: none;
+}
+:where([data-v4-chat-v2]) [data-resizer]:focus-visible::before {
+  opacity: 1;
+  background: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+:where([data-v4-chat-v2]) [data-resize-frame] { position: relative; }
+body.is-resizing :where([data-v4-chat-v2]) * { cursor: col-resize !important; }
+body.is-resizing-horizontal :where([data-v4-chat-v2]),
+body.is-resizing-horizontal :where([data-v4-chat-v2]) * { cursor: row-resize !important; }
+@media (prefers-reduced-motion: reduce) {
+:where([data-v4-chat-v2]) *,
+:where([data-v4-chat-v2]) *::before,
+:where([data-v4-chat-v2]) *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+:where([data-v4-chat-v2]) [data-workjet-category] {
+  --shell-category-accent: var(--workjet-category-imported-accent);
+  --shell-category-foreground: var(--workjet-category-imported-accent-foreground);
+  --shell-category-soft: var(--workjet-category-imported-accent-soft);
+  --shell-category-border: var(--workjet-category-imported-accent-border);
+}
+@media (max-width: 767px) {
+:where([data-v4-chat-v2]) .ctox-chat-root {
+    left: 8px !important;
+    right: 8px !important;
+    bottom: calc(8px + env(safe-area-inset-bottom, 0px)) !important;
+    max-width: none !important;
+  }
+}
+@media (max-width: 767px) {
+:where([data-v4-chat-v2]) .ctox-chat-root.is-collapsed {
+    right: 8px !important;
+    max-width: none !important;
+  }
+}
+@media (max-width: 767px) {
+:where([data-v4-chat-v2]) .ctox-chat-dock {
+    --ctox-date-pill-width: 118px !important;
+    width: max-content !important;
+    max-width: calc(100vw - 16px) !important;
+    gap: 6px !important;
+    /* Keep every portrait inside Crew's own track. On the narrowest screens
+       scroll the bounded dock instead of painting over the date controls. */
+    overflow-x: auto;
+    overflow-y: hidden;
+    grid-template-columns: max-content var(--ctox-date-pill-width) 44px !important;
+  }
+}
+@media (max-width: 767px) {
+:where([data-v4-chat-v2]) .ctox-chat-dock.is-collapsed {
+    width: auto !important;
+    grid-template-columns: max-content var(--ctox-date-pill-width) !important;
+  }
+}
+@media (max-width: 767px) {
+:where([data-v4-chat-v2]) .ctox-chat-dock.has-visible-chats {
+    grid-template-columns: max-content var(--ctox-date-pill-width) minmax(0, 1fr) 44px !important;
+  }
+}
+@media (max-width: 767px) {
+:where([data-v4-chat-v2]) .ctox-chat-dock.has-one-chat .ctox-chat-strip {
+    width: auto !important;
+    max-width: none !important;
+  }
+}
+@media (max-width: 767px) {
+:where([data-v4-chat-v2]) .ctox-chat-fab {
+    width: max-content !important;
+    min-width: 0 !important;
+    height: 44px !important;
+  }
+}
+@media (max-width: 767px) {
+:where([data-v4-chat-v2]) .ctox-chat-date-pill {
+    height: 44px !important;
+    min-width: var(--ctox-date-pill-width) !important;
+  }
+}
+@media (max-width: 767px) {
+:where([data-v4-chat-v2]) .ctox-date-nav-btn {
+    width: 32px !important;
+    height: 32px !important;
+  }
+}
+@media (max-width: 767px) {
+:where([data-v4-chat-v2]) .ctox-chat-new {
+    width: 44px !important;
+    height: 44px !important;
+  }
+}
+@media (max-width: 767px) {
+:where([data-v4-chat-v2]) .ctox-chat-stage-inner {
+    overflow: hidden !important;
+  }
+}
+@media (max-width: 767px) {
+:where([data-v4-chat-v2]) .ctox-chat-window {
+    left: 8px !important;
+    right: 8px !important;
+    width: auto !important;
+    max-width: none !important;
+  }
+}
+@media (max-width: 767px) {
+:where([data-v4-chat-v2]) .ctox-chat-window:not(.is-active) {
+    display: none !important;
+  }
+}
+@media (max-width: 767px) {
+:where([data-v4-chat-v2]) .ctox-date-workload-panel {
+    left: 0 !important;
+    width: calc(100vw - 32px) !important;
+    max-width: calc(100vw - 32px) !important;
+  }
+}
+
+/* ===== mobile-host.css ===== */
+:root[data-workjet-mobile-host="true"] :where([data-v4-chat-v2]) {
+  width: 100%;
+  height: 100%;
+  min-height: 100dvh;
+  overflow: hidden;
+  background: var(--bg);
+}
+:root[data-workjet-mobile-host="true"] :where([data-v4-chat-v2]) [data-shell-start-menu],
+:root[data-workjet-mobile-host="true"] :where([data-v4-chat-v2]) [data-chat-dock],
+:root[data-workjet-mobile-host="true"] :where([data-v4-chat-v2]) [data-taskbar] {
+  display: none !important;
+}
+:root[data-workjet-mobile-host="true"] :where([data-v4-chat-v2]) :where(button, select, input, [role="button"]) {
+  min-height: 44px;
+  touch-action: manipulation;
+}
+:root[data-workjet-mobile-host="true"] :where([data-v4-chat-v2]) :where(button, [role="button"]):has(> svg:only-child) {
+  min-width: 44px;
+}
+@media (prefers-reduced-motion: reduce) {
+:root[data-workjet-mobile-host="true"] :where([data-v4-chat-v2]) *,
+:root[data-workjet-mobile-host="true"] :where([data-v4-chat-v2]) *::before,
+:root[data-workjet-mobile-host="true"] :where([data-v4-chat-v2]) *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

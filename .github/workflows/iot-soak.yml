@@ -19,15 +19,18 @@ on:
       - "src/core/business_os/**"
       - "src/apps/business-os/modules/iot/**"
       - "src/apps/business-os/scripts/assert-rxdb-only.mjs"
+      - "src/apps/business-os/scripts/assert-rxdb-only.v4.mjs"
   push:
     branches:
       - main
+      - release/v2
     paths:
       - ".github/workflows/iot-soak.yml"
       - "src/core/iot/**"
       - "src/core/business_os/**"
       - "src/apps/business-os/modules/iot/**"
       - "src/apps/business-os/scripts/assert-rxdb-only.mjs"
+      - "src/apps/business-os/scripts/assert-rxdb-only.v4.mjs"
   workflow_dispatch:
     inputs:
       cycles:
@@ -107,7 +110,19 @@ jobs:
           set -o pipefail
           node src/apps/business-os/modules/iot/iot.test.mjs | tee -a iot-soak.log
           node --test src/apps/business-os/modules/app-store/app-store.test.mjs | tee -a iot-soak.log
+
+      # Line selection (E37): V2 RxDB-only contract on release/v2, its v4 counterpart on every other line.
+      - name: RxDB-only contract, no HTTP bridge (V2 line)
+        if: (github.base_ref || github.ref_name) == 'release/v2'
+        run: |
+          set -o pipefail
           node src/apps/business-os/scripts/assert-rxdb-only.mjs | tee -a iot-soak.log
+
+      - name: RxDB-only contract, no HTTP bridge (v4 line)
+        if: (github.base_ref || github.ref_name) != 'release/v2'
+        run: |
+          set -o pipefail
+          node src/apps/business-os/scripts/assert-rxdb-only.v4.mjs | tee -a iot-soak.log
 
       - name: Summarize soak evidence
         if: always()

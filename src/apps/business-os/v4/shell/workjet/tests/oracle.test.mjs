@@ -267,7 +267,7 @@ async function waitForSyncBridgeReady() {}
   const { createV2Compat, isUnsupported } = await import('../v2-compat.js');
   const { checkResponse } = await import('./contract-checkers.mjs');
   const HERE = path.dirname(fileURLToPath(import.meta.url));
-  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/637caf6');
+  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/b6624eb');
   const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR, 'ctox-app-api-stub.mjs')).href);
   const FIX = path.resolve(HERE, '../../../../../../core/rxdb/tests/fixtures');
   const fixture = (name) => JSON.parse(fs.readFileSync(path.join(FIX, name), 'utf8'));
@@ -690,7 +690,7 @@ async function waitForSyncBridgeReady() {}
   const { adaptKernel } = await import('../../kernel-adapter.js');
   const { createV2Compat, isUnsupported } = await import('../v2-compat.js');
   const { checkResponse } = await import('./contract-checkers.mjs');
-  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/637caf6');
+  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/b6624eb');
   const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR, 'ctox-app-api-stub.mjs')).href);
   let nC = 0;
   const mkC = async () => {
@@ -884,7 +884,7 @@ async function waitForSyncBridgeReady() {}
   const { createWorkjetBridges } = await import('../index.js');
   const { createV2Compat, isUnsupported } = await import('../v2-compat.js');
   const { checkResponse } = await import('./contract-checkers.mjs');
-  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/637caf6');
+  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/b6624eb');
   const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR, 'ctox-app-api-stub.mjs')).href);
   let seq = 0;
   async function withKernel(fn) {
@@ -1267,7 +1267,7 @@ function isStaleDataPlaneGeneration() {}
   const { createWorkjetBridges, installWorkjetBridges, INVENTORY, inventoryList } = await import('../index.js');
   const { createV2Compat, isUnsupported } = await import('../v2-compat.js');
   const { checkResponse, CHECKERS, sessionTransferEventD } = await import('./contract-checkers.mjs');
-  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/637caf6');
+  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/b6624eb');
   const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR, 'ctox-app-api-stub.mjs')).href);
   const WORKJET_UNSUPPORTED = /(?:unsupported|unknown)\s+(?:workjet\s+)?(?:project[- ]control\s+)?action/i;
   const docOf = (r) => r?.doc ?? r?.value ?? r?.data ?? r;
@@ -1719,7 +1719,7 @@ function isStaleDataPlaneGeneration() {}
   const { adaptKernel } = await import('../../kernel-adapter.js');
   const { createV2Compat } = await import('../v2-compat.js');
   const { checkResponse } = await import('./contract-checkers.mjs');
-  const STUB_DIR_CC = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/637caf6');
+  const STUB_DIR_CC = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/b6624eb');
   const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR_CC, 'ctox-app-api-stub.mjs')).href);
   test('[v4] Kalender verbinden über die Brücke: Kern-Befehl ctox.workjet.calendar.connect.v1, Fehler als Code', async () => {
     const k = createStubKernel({ instanceId: `wjbcc-${process.pid}`, userId: 'owner-1', latencyMs: 2, storage: 'memory',
@@ -1849,17 +1849,34 @@ async function waitForSyncBridgeReady() {}
   const { createV2Compat, isUnsupported } = await import('../v2-compat.js');
   const { checkResponse, correlateR } = await import('./contract-checkers.mjs');
   const { readStoredFileFromDemandChunks, sha256Hex } = await import('../../../../shared/file-integrity.js');
-  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/637caf6');
+  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/b6624eb');
   const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR, 'ctox-app-api-stub.mjs')).href);
   const workjetRegex = /(?:unsupported|unknown)\s+(?:workjet\s+)?(?:project[- ]control\s+)?action/i;
   const OWNER = 'owner-1';
   let seqR = 0;
   // Kernel + Brücke; files.get wird mitprotokolliert (Bereichsaufrufe), commandBus-Quittungen (kernel_command_id) auch.
+  // E30: files.get liest eine fremde Datei nur über eine lesbare desktop_files-Zeile. Die Shell braucht dafür die
+  // Deklaration aus ihrem echten Manifest (foreign_collections), desktop den read-Export. Wie in Produktion legt die
+  // Desktop-App die Datei an; die Shell kennt nur die desktop_files-ID.
+  const SHELL_FOREIGN_R = Object.fromEntries(Object.entries(JSON.parse(fs.readFileSync(path.join(BOS_DIR, 'v4/manifests/shell.manifest.json'), 'utf8'))
+    .foreign_collections).map(([name, { owner_app, ops }]) => [name, { owner_app, ops }]));
+  const E30_SCHEMA = { schema: { type: 'object', properties: { id: { type: 'string' } } } };
+  async function publishE30Apps(k, { shellForeign = SHELL_FOREIGN_R } = {}) {
+    await k.sim.publishAppVersion('desktop', '1', { collections: { desktop_files: E30_SCHEMA }, manifestExtra: { exports: { desktop_files: ['read'] } } });
+    await k.sim.publishAppVersion('shell', 'dev', { collections: {}, manifestExtra: { foreign_collections: shellForeign } });
+  }
+  async function desktopFile(k, bytes, meta) {
+    const stored = await k.appApi('desktop', '1').files.put(bytes, meta);
+    await k.sim.settle?.();
+    return { id: `desktop-${stored.id}`, ref: stored.ref };
+  }
+
   async function withKernelR(fn) {
     const k = createStubKernel({ instanceId: `wjb-r-${process.pid}-${++seqR}`, userId: OWNER, latencyMs: 2, storage: 'memory',
       actor: { id: OWNER, display_name: 'Owner', role: 'admin', permissions: [] } });
     try {
       await k.ready;
+      await publishE30Apps(k);
       const adapted = adaptKernel(k);
       const fileGets = [];
       const spy = Object.create(adapted, { appApi: { value(appId, ver) {
@@ -1882,8 +1899,7 @@ async function waitForSyncBridgeReady() {}
   // Präsentation: echte Datei im Kern, desktop_files-Metadaten wie V2 (jour-fixe-presentation.test.mjs fixture()).
   async function presentationFixture(compat, k, { sizeDelta = 0 } = {}) {
     const bytes = new TextEncoder().encode(JSON.stringify({ schemaVersion: 'learnordie.slide.v1', title: 'Regeltermin', slides: [{ id: 's1' }] }));
-    const file = await compat.api.files.put(bytes, { name: 'deck.json', mime: 'application/json' });
-    await k.sim.settle?.();
+    const file = await desktopFile(k, bytes, { name: 'deck.json', mime: 'application/json' });
     const sha = await sha256Hex(bytes);
     const size = bytes.length + sizeDelta;
     const manifest = {
@@ -1892,7 +1908,7 @@ async function waitForSyncBridgeReady() {}
       document_generation_id: 'deck-generation', document_sha256: sha, document_bytes: size,
       slide_ids: ['s1'], source: 'owner', updated_by: OWNER, updated_at_ms: 1,
     };
-    await k.sim.push('desktop_files', [{ id: file.id, owner_id: OWNER, linked_collection: 'workjet_presentations',
+    await k.sim.push('desktop_files', [{ id: file.id, content_ref: file.ref, owner_id: OWNER, linked_collection: 'workjet_presentations',
       linked_record_id: 'workjet_presentation_1', kind: 'file', content_state: 'available', mime_type: 'application/json',
       content_hash_scheme: 'sha256-bytes-v1', content_hash: sha, content_generation_id: 'deck-generation', size_bytes: size }]);
     const reads = [];
@@ -1918,10 +1934,11 @@ async function waitForSyncBridgeReady() {}
     for (const range of [{ offset: data.length - 2, length: 5 }, { offset: 4, length: -1 }]) {
       await assert.rejects(peer.demandFileLoader.fetchFile(file.id, { range }), (e) => e.code === 'invalid' && e.path === 'range' && !isUnsupported(e), JSON.stringify(range));
     }
-    // unbekannte Datei → leere Liste → V2-Leser meldet „Dateiinhalt fehlt.“
-    const none = await peer.demandFileLoader.fetchFile('gibt-es-nicht', { range: { offset: 0, length: 1 } });
-    assert.deepEqual(none, []);
-    await assert.rejects(readStoredFileFromDemandChunks(none), { code: 'ctox_file_chunk_missing' });
+    // unbekannte Datei: E30 verrät die Existenz nicht und lehnt mit forbidden ab; der Fehler geht unverändert an den
+    // Aufrufer (kein stilles „Dateiinhalt fehlt“, damit eine fehlende Deklaration sichtbar bleibt).
+    await assert.rejects(peer.demandFileLoader.fetchFile('gibt-es-nicht', { range: { offset: 0, length: 1 } }), (e) => e.code === 'forbidden' && !isUnsupported(e));
+    // Kern ohne E30 (found:false) → leere Liste → V2-Leser meldet „Dateiinhalt fehlt.“
+    await assert.rejects(readStoredFileFromDemandChunks([]), { code: 'ctox_file_chunk_missing' });
   }));
 
   test('[v4 Strang R] project.presentation.read über kernel.command: Manifest bzw. null, Vertrag und Korrelation erfüllt', () => withKernelR(async ({ k, compat, b }) => {
@@ -2050,10 +2067,24 @@ async function waitForSyncBridgeReady() {}
   }));
 
   // Narration: Besprechung aus dem Kern-Fixture (wie V2 „Shell narration read …“), Audio als echte Kerndatei.
+  test('[v4 Strang R / E30] Gegenprobe: ohne desktop_files-Deklaration im Shell-Manifest lehnt der Kern den Präsentationsinhalt mit forbidden ab', async () => {
+    assert.deepEqual(SHELL_FOREIGN_R.desktop_files, { owner_app: 'desktop', ops: ['read'] }, 'echtes Shell-Manifest deklariert das Lesen');
+    const k = createStubKernel({ instanceId: `wjb-r-e30-${process.pid}`, userId: OWNER, latencyMs: 2, storage: 'memory',
+      actor: { id: OWNER, display_name: 'Owner', role: 'admin', permissions: [] } });
+    try {
+      await k.ready;
+      const { desktop_files: _omit, ...rest } = SHELL_FOREIGN_R;
+      await publishE30Apps(k, { shellForeign: rest });
+      const compat = createV2Compat({ kernel: adaptKernel(k) });
+      await presentationFixture(compat, k);
+      await assert.rejects(createWorkjetBridges(compat).workjetProjectControl({ action: 'project.presentation.content.read', commandId: 'c-e30', projectId: 'p-1',
+        meetingId: 'm-1', presentationId: 'workjet_presentation_1', revision: 3, offset: 0, length: 8 }), (e) => e.code === 'forbidden' && !isUnsupported(e));
+    } finally { await k.close(); }
+  });
+
   async function narrationFixture(compat, k, { sizeDelta = 0 } = {}) {
     const bytes = new TextEncoder().encode('RIFF-bounded-audio-fixture-for-v4');
-    const file = await compat.api.files.put(bytes, { name: 'slide.wav', mime: 'audio/wav' });
-    await k.sim.settle?.();
+    const file = await desktopFile(k, bytes, { name: 'slide.wav', mime: 'audio/wav' });
     const corpus = JSON.parse(show('src/core/rxdb/tests/fixtures/workjet-jour-fixe-v1.json'));
     const meeting = structuredClone(corpus.valid_cases.find((item) => item.type === 'Meeting').value);
     const body = 'Slide text';
@@ -2064,7 +2095,7 @@ async function waitForSyncBridgeReady() {}
       slides: [{ id: 'slide', meeting_id: 'm-1', title: 'Slide', position: 0, body_markdown: body, audio }] });
     for (const list of ['comments', 'transcript']) if (Array.isArray(meeting[list])) for (const x of meeting[list]) x.meeting_id = 'm-1';
     if (Array.isArray(meeting.comments)) meeting.comments = [];
-    await k.sim.push('desktop_files', [{ id: file.id, owner_id: OWNER, linked_collection: 'workjet_jour_fixe_meetings', linked_record_id: 'm-1',
+    await k.sim.push('desktop_files', [{ id: file.id, content_ref: file.ref, owner_id: OWNER, linked_collection: 'workjet_jour_fixe_meetings', linked_record_id: 'm-1',
       kind: 'file', content_state: 'available', mime_type: 'audio/wav', content_hash_scheme: 'sha256-bytes-v1', content_hash: audio.sha256,
       content_generation_id: audio.generation_id, size_bytes: bytes.length + sizeDelta }]);
     const meetingReads = [];
@@ -2102,6 +2133,7 @@ async function waitForSyncBridgeReady() {}
       actor: { id: OWNER, display_name: 'Owner', role: 'admin', permissions: [] } });
     try {
       await k.ready;
+      await publishE30Apps(k);
       const adapted = adaptKernel(k);
       const full = createV2Compat({ kernel: adapted });
       const { bytes } = await narrationFixture(full, k);

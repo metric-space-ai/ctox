@@ -45,16 +45,13 @@ pub(super) fn validate_crew_reference(
     let payload: BindPayload = serde_json::from_value(command.payload.clone())?;
     if let Some(member_id) = payload.crew_member_id {
         let member_id = required(&member_id, "crew_member_id", 256)?;
-        let core = Connection::open_with_flags(
-            crate::paths::core_db(root),
-            OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )?;
-        ensure!(
-            crate::crew::members(&core)?
+        let member_id = member_id.to_owned();
+        let available = crate::lcm::with_lcm_read(&crate::paths::core_db(root), move |core| {
+            Ok(crate::crew::members(core)?
                 .iter()
-                .any(|member| member.id == member_id && !member.archived),
-            "Crew member is unavailable or archived"
-        );
+                .any(|member| member.id == member_id && !member.archived))
+        })?;
+        ensure!(available, "Crew member is unavailable or archived");
     }
     Ok(())
 }

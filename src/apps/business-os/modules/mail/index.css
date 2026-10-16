@@ -51,6 +51,8 @@
   min-height: 0;
   overflow: hidden;
   background: var(--surface);
+  /* Width steps of the editor command bar in this head (editor/editor.css). */
+  container: mail-content-surface / inline-size;
 }
 [data-app="mail"] .mail-content-surface[hidden] { display: none; }
 [data-app="mail"] .mail-content-surface-header { min-height: 48px; padding: 5px 8px; border-bottom: 1px solid var(--line); }
@@ -893,6 +895,34 @@
    that stays readable next to the editor strip. */
 [data-app="mail"] .mail-module .mail-content-surface-header .ctox-pane-titles {
   min-width: 96px;
+}
+
+/* Once the editor strip goes icon-only (editor/editor.css), the title gives
+   way to it first, down to its 96px minimum. */
+@container mail-content-surface (max-width: 840px) {
+  [data-app="mail"] .mail-module .mail-content-surface-header .ctox-pane-titles {
+    flex-shrink: 100;
+  }
+}
+
+/* A narrow surface: the editor strip breaks into two lines (editor/editor.css),
+   so the title row grows into the head's second 37px row; close and save stay
+   centred on the first row. */
+@container mail-content-surface (max-width: 500px) {
+  [data-app="mail"] .mail-module .mail-content-surface-header > .ctox-pane-title-row {
+    align-items: flex-start;
+    height: auto;
+  }
+
+  [data-app="mail"] .mail-module .mail-content-surface-header > .ctox-pane-title-row > .ctox-pane-icon,
+  [data-app="mail"] .mail-module .mail-content-surface-header > .ctox-pane-title-row > .ctox-pane-actions {
+    margin-block-start: calc((var(--shell-v2-header-row-size, 37px) - 26px) / 2);
+  }
+
+  [data-app="mail"] .mail-module .mail-content-surface-controls {
+    flex: 1 1 0;
+    margin-block-start: 2px;
+  }
 }
 
 @container business-app-window (max-width: 1024px) {

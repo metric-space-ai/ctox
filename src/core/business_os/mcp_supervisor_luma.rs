@@ -271,49 +271,33 @@ pub(in crate::business_os) fn read_configured_route(
             "catalog_checked_at_ms": route.catalog_checked_at_ms
         });
         // No schema creation, issuer fence or writer reservation on this read.
-        let mut core = Connection::open_with_flags(
-            crate::paths::core_db(root),
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        core.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
-        let core = core.transaction_with_behavior(TransactionBehavior::Deferred)?;
-        let exists: bool = core.query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table'
-             AND name='workjet_supervisor_route_attempts')",
-            [],
-            |row| row.get(0),
-        )?;
-        if exists {
-            let prior: Option<(String, String, String, i64)> = core
-                .query_row(
-                    "SELECT execution_key,requested_json,error_code,created_at_ms
-                 FROM workjet_supervisor_route_attempts
-                 WHERE owner_user_id=?1
-                   AND json_extract(requested_json,'$.project_id')=?2
-                   AND json_extract(requested_json,'$.supervisor_thread_id')=?3
-                 ORDER BY created_at_ms DESC,lease_hash DESC LIMIT 1",
-                    params![owner, binding.project_id, binding.thread_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-                )
-                .optional()?;
-            if let Some((execution_key, requested_json, error_code, created_at_ms)) = prior {
-                anyhow::ensure!(
-                    requested_json.len() <= 16_384,
-                    "oversized native requested route"
-                );
-                let prior: RequestedRoute = serde_json::from_str(&requested_json)?;
-                // An earlier selection cannot be presented as a request for the
-                // current configuration, model catalog or account revision.
-                if prior == route {
-                    result["source"] = json!({
-                        "execution_key": execution_key,
-                        "request_revision": format!("{:x}",sha2::Sha256::digest(requested_json.as_bytes())),
-                        "error_code": error_code, "created_at_ms": created_at_ms
-                    });
-                }
+        let query_owner = owner.to_owned();
+        let query_project = binding.project_id.clone();
+        let query_thread = binding.thread_id.clone();
+        let prior = crate::lcm::with_lcm_read(&crate::paths::core_db(root), move |core| {
+            let exists: bool = core.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='workjet_supervisor_route_attempts')", [], |row| row.get(0))?;
+            if !exists {
+                return Ok(None);
+            }
+            Ok(core.query_row("SELECT execution_key,requested_json,error_code,created_at_ms FROM workjet_supervisor_route_attempts WHERE owner_user_id=?1 AND json_extract(requested_json,'$.project_id')=?2 AND json_extract(requested_json,'$.supervisor_thread_id')=?3 ORDER BY created_at_ms DESC,lease_hash DESC LIMIT 1",
+                params![query_owner,query_project,query_thread], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,i64>(3)?))).optional()?)
+        })?;
+        if let Some((execution_key, requested_json, error_code, created_at_ms)) = prior {
+            anyhow::ensure!(
+                requested_json.len() <= 16_384,
+                "oversized native requested route"
+            );
+            let prior: RequestedRoute = serde_json::from_str(&requested_json)?;
+            // An earlier selection cannot be presented as a request for the
+            // current configuration, model catalog or account revision.
+            if prior == route {
+                result["source"] = json!({
+                    "execution_key": execution_key,
+                    "request_revision": format!("{:x}",sha2::Sha256::digest(requested_json.as_bytes())),
+                    "error_code": error_code, "created_at_ms": created_at_ms
+                });
             }
         }
-        core.commit()?;
     }
     policy.commit()?;
     let typed: SupervisorRouteDisplay = serde_json::from_value(result.clone())?;
@@ -347,16 +331,14 @@ pub(in crate::business_os) fn read_computed_route(
             "configuration_revision":route.configuration_revision,"computer_id":route.computer_id,
             "harness":route.harness,"route_id":route.route_id,"model":route.model,
             "catalog_checked_at_ms":route.catalog_checked_at_ms});
-        let mut core = Connection::open_with_flags(
-            crate::paths::core_db(root),
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        core.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
-        let core = core.transaction_with_behavior(TransactionBehavior::Deferred)?;
-        if let Some(computation) = holding::read_owned_computation(&core, owner, &route)? {
+        let query_owner = owner.to_owned();
+        if let Some(computation) =
+            crate::lcm::with_lcm_read(&crate::paths::core_db(root), move |core| {
+                holding::read_owned_computation(core, &query_owner, &route)
+            })?
+        {
             result["actual"] = computation;
         }
-        core.commit()?;
     }
     policy.commit()?;
     serde_json::from_value::<SupervisorRouteDisplay>(result.clone())?
@@ -378,36 +360,32 @@ fn lease_record(trusted: &Value) -> anyhow::Result<(String, String, String)> {
 /// Clearing a project selection affects a new execution, not an already
 /// sealed native lease. This default-path read creates no schema/writer.
 fn require_unsealed_default(root: &Path, trusted: &Value, owner: &str) -> anyhow::Result<()> {
-    let mut core = Connection::open_with_flags(
-        crate::paths::core_db(root),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
-    core.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
-    let core = core.transaction_with_behavior(TransactionBehavior::Deferred)?;
-    let exists: bool = core.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table'
+    let owner = owner.to_owned();
+    let (execution_key, _, lease_hash) = lease_record(trusted)?;
+    crate::lcm::with_lcm_read(&crate::paths::core_db(root), move |core| {
+        let exists: bool = core.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table'
          AND name='workjet_supervisor_route_attempts')",
-        [],
-        |row| row.get(0),
-    )?;
-    if exists {
-        let (execution_key, _, lease_hash) = lease_record(trusted)?;
-        let sealed: bool = core.query_row(
-            "SELECT EXISTS(SELECT 1 FROM workjet_supervisor_route_attempts
-             WHERE execution_key=?1 AND lease_hash=?2 AND owner_user_id=?3)",
-            params![execution_key, lease_hash, owner],
+            [],
             |row| row.get(0),
         )?;
-        anyhow::ensure!(
-            !sealed,
-            unavailable(
-                "supervisor_selection_changed_during_lease",
-                "a sealed project Luma was cleared in this execution lease"
-            )
-        );
-    }
-    core.commit()?;
-    Ok(())
+        if exists {
+            let sealed: bool = core.query_row(
+                "SELECT EXISTS(SELECT 1 FROM workjet_supervisor_route_attempts
+             WHERE execution_key=?1 AND lease_hash=?2 AND owner_user_id=?3)",
+                params![execution_key, lease_hash, owner],
+                |row| row.get(0),
+            )?;
+            anyhow::ensure!(
+                !sealed,
+                unavailable(
+                    "supervisor_selection_changed_during_lease",
+                    "a sealed project Luma was cleared in this execution lease"
+                )
+            );
+        }
+        Ok(())
+    })
 }
 
 /// The actual service calls this after issuing its restricted command/plan

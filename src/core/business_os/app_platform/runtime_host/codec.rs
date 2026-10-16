@@ -29,6 +29,15 @@ impl RuntimeCodec {
         db: &Connection,
         binding: &Value,
     ) -> Result<BusinessOsActor, StoreError> {
+        self.checked_snapshot(db, binding)
+            .map(|(actor, _, _)| actor)
+    }
+    // Reuse only within this WAL callback; all current-state/signature/fence checks run.
+    pub(super) fn checked_snapshot(
+        &self,
+        db: &Connection,
+        binding: &Value,
+    ) -> Result<(BusinessOsActor, Value, sync_rights::RightsSnapshot), StoreError> {
         let command = &binding["command"];
         let a = actor(db, text(&command["actor"], "id").map_err(sql_error)?)?;
         let parent = text(&binding["fence"], "run_id")
@@ -70,7 +79,7 @@ impl RuntimeCodec {
         if binding["fence"]["rights_ver"].as_u64() != Some(r.rights_ver) {
             return Err(invalid("revoked: rights changed"));
         }
-        Ok(a)
+        Ok((a, manifest, r))
     }
     pub(super) fn bytes(&self, hash: &str, size: u64) -> Result<Vec<u8>, StoreError> {
         if size > 64 * 1024 * 1024 {
