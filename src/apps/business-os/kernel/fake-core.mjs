@@ -13,8 +13,9 @@ function coreFor(namespace) {
   const core = { head: 0n, docs: new Map(), ops: new Map(), artifacts: new Map(), blobs: new Map(), listeners: new Set(), users: new Map(), pending: new Set() };
   const key = (collection, id) => JSON.stringify([collection, id]);
   core.headSeq = () => core.head;
-  /** E27.8: alle Teilnehmer und Abos gleichzeitig beliefern; die Reihenfolge je Abo hält MemoryCoreTransport.deliver. */
-  core.fanOut = () => Promise.all([...core.listeners].flatMap((peer) => [...peer.subscriptions.keys()].map((held) => peer.deliver(held))));
+  /** E27.8: nur die Abos der geschriebenen Collection beliefern, alle Teilnehmer gleichzeitig. Je Teilnehmer läuft höchstens
+   *  eine Seite (MemoryCoreTransport.deliver), damit dessen eigene Writes in IndexedDB nie hinter einem Stapel Seiten warten. */
+  core.fanOut = (collection) => Promise.all([...core.listeners].filter((peer) => peer.subscriptions.has(collection)).map((peer) => peer.deliver(collection)));
   /** Einziger Commit-Weg im Core: Dokumente schreiben, an alle Teilnehmer ausliefern, Trigger auslösen. */
   core.commit = async (collection, docs, depth = 0) => {
     const sequences = [], changes = [];
@@ -29,7 +30,7 @@ function coreFor(namespace) {
       core.docs.set(key(collection, data.id), row); sequences.push(seq);
       changes.push({ id: data.id, op: deleted ? 'delete' : old && !old.deleted ? 'update' : 'insert', doc });
     }
-    await core.fanOut();
+    await core.fanOut(collection);
     core.runtime.onCommit(collection, changes, depth);
     return sequences;
   };
@@ -78,7 +79,9 @@ export class MemoryCoreTransport extends KernelTransport {
     this.user = user ? cloneValue(user) : null;
     this.deviceLabel = deviceLabel ?? 'browser';
     this.pending = this.core.pending; this.online = true; this.closed = false; this.subscriptions = new Map();
-    this.deliveries = new Map(); // collection → {tail, queued}: Seiten eines Abos nie überholend (E27.8)
+    // E27.8: eine Zustellspur je Teilnehmer. waiting: Collection → Wartende (zusammengelegt, bis die Seite startet);
+    // sent: Abos, die ihre erste Seite haben – danach gehen leere Seiten nicht mehr hinaus (jede kostet eine DB-Transaktion).
+    this.waiting = new Map(); this.draining = null; this.sent = new Set();
   }
   /** Katalog-Primitive, die dieser Core anbietet (§16.29); die Aktivierung prüft capabilities_required dagegen. */
   get capabilities() { return this.core.runtime.capabilities; }
@@ -89,6 +92,7 @@ export class MemoryCoreTransport extends KernelTransport {
   async connect(identity, events) {
     if (this.identity && JSON.stringify(identity) !== JSON.stringify(this.identity)) throw new CtoxError('forbidden', 'Transport identity mismatch');
     this.identity = cloneValue(identity); this.events = events; this.closed = false; this.connects = (this.connects ?? 0) + 1;
+    this.sent.clear(); // neue Verbindung: jedes Abo bekommt wieder eine erste (ggf. leere) vollständige Seite
     if (this.user && this.user.id === identity.userId && !this.core.users.has(this.user.id)) this.core.users.set(this.user.id, this.user);
     this.core.listeners.add(this); events.link?.({ state: this.online ? 'online' : 'offline', rtt_ms: this.latencyMs, relay: false });
     const known = this.core.users.get(identity.userId);
@@ -101,18 +105,27 @@ export class MemoryCoreTransport extends KernelTransport {
   get backlog(){return [...this.core.docs.values()].filter(row=>this.subscriptions.has(row.collection) && BigInt(row.seq)>BigInt(this.subscriptions.get(row.collection).checkpoint_seq??'0')).length;}
   get head() { return decimalSeq(this.core.head); }
   async subscribe(sub) {
-    this.subscriptions.set(sub.collection, cloneValue(sub));
-    if (this.online) await this.deliver(sub.collection);
+    this.subscriptions.set(sub.collection, cloneValue(sub)); this.sent.delete(sub.collection);
+    if (this.online) await this.deliver(sub.collection, { priority: true }); // erste Seite eines neuen Abos vor Rückstand
   }
-  /** Je Abo genau eine Zustellung gleichzeitig, in Aufrufreihenfolge; eine noch nicht gestartete wird geteilt (sie liest beim
-   *  Start alle Zeilen über dem Checkpoint). Verschiedene Abos und Teilnehmer laufen parallel. */
-  deliver(collection) {
-    let lane = this.deliveries.get(collection);
-    if (lane?.queued) return lane.queued;
-    if (!lane) { lane = { tail: Promise.resolve(), queued: null }; this.deliveries.set(collection, lane); }
-    const run = lane.tail.catch(() => {}).then(() => { lane.queued = null; return this.deliverNow(collection); });
-    lane.queued = run; lane.tail = run;
-    return run;
+  /** Höchstens eine Seite je Teilnehmer gleichzeitig, Abos in Anforderungsreihenfolge. Eine noch nicht gestartete
+   *  Zustellung desselben Abos wird geteilt (sie liest beim Start alle Zeilen über dem Checkpoint). Teilnehmer parallel. */
+  deliver(collection, { priority = false } = {}) {
+    let w = this.waiting.get(collection);
+    if (!w) { w = {}; w.promise = new Promise((resolve, reject) => { w.resolve = resolve; w.reject = reject; }); this.waiting.set(collection, w); }
+    // Write-Vorrang: die Seite zum eigenen Write dieses Teilnehmers überholt wartende Zustellungen (nicht die laufende).
+    if (priority && this.waiting.size > 1) this.waiting = new Map([[collection, w], ...[...this.waiting].filter(([c]) => c !== collection)]);
+    if (!this.draining) this.draining = this.drain();
+    return w.promise;
+  }
+  async drain() {
+    try {
+      while (this.waiting.size) {
+        const [collection, w] = this.waiting.entries().next().value;
+        this.waiting.delete(collection);
+        try { w.resolve(await this.deliverNow(collection)); } catch (error) { w.reject(error); }
+      }
+    } finally { this.draining = null; }
   }
   async deliverNow(collection) {
     if (this.closed || !this.online || !this.events?.page) return;
@@ -121,12 +134,13 @@ export class MemoryCoreTransport extends KernelTransport {
     // Zeilenrechte: nicht lesbare Zeilen erreichen den Client nicht (Lesbarkeit kann sich ändern → als gelöscht liefern)
     const rows = [...this.core.docs.values()].filter(d => d.collection === collection && BigInt(d.seq) > BigInt(sub.checkpoint_seq ?? '0')).sort((a,b) => BigInt(a.seq) < BigInt(b.seq) ? -1 : 1)
       .map((r) => (this.core.runtime.canRead(user, r) ? r : { ...r, data: null, deleted: true }));
+    if (!rows.length && this.sent.has(collection)) return; // nichts Neues: keine leere Seite
     const page = { ...sub, epoch: '1', docs: cloneValue(rows), cursor_to: this.head, head_seq: this.head, backlog: 0, complete: true };
     // K-BF1: Checkpoint VOR der Übergabe vorziehen. Der Leiter meldet seinen Rückstand (this.backlog) noch während
     // events.page an die Folger; mit dem alten Checkpoint trug diese letzte Meldung N > 0, und nichts korrigierte sie.
     // Scheitert die Annahme, wird der Checkpoint zurückgesetzt, solange keine spätere Seite ihn weitergeschoben hat.
     const previous = sub.checkpoint_seq; sub.checkpoint_seq = page.cursor_to;
-    try { await this.events.page(page); }
+    try { await this.events.page(page); this.sent.add(collection); }
     catch (error) { if (sub.checkpoint_seq === page.cursor_to) sub.checkpoint_seq = previous; throw error; }
   }
   async push(collection, docs) { return this.core.commit(collection, docs); }
@@ -167,7 +181,7 @@ export class MemoryCoreTransport extends KernelTransport {
     }
     this.core.ops.set(entry.op_id,cloneValue(result));
     // Pages follow the write result through the SAME stream. No separate live path.
-    setTimeout(()=>{for(const peer of this.core.listeners) void peer.deliver(entry.collection);},0);
+    setTimeout(()=>{for(const peer of this.core.listeners) void peer.deliver(entry.collection, { priority: peer === this });},0);
     // §16.44: Turn-Annahme (Prüfung + Reservierung des Entwurfs) im selben Schritt wie der Write
     if (result.status !== 'rejected' && !duplicateCommand && entry.collection === 'business_commands' && entry.body?.type === 'ctox.coding.turn' && entry.body?.status === 'queued') {
       this.core.runtime.acceptCodingTurn(this.currentUser ?? { id: entry.body.actor_id ?? this.identity?.userId }, entry.body);
