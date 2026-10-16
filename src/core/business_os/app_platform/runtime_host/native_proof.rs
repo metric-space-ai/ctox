@@ -235,6 +235,7 @@ async fn native_daemon_hotplug_roundtrip_and_change() -> Result<()> {
             tokio::time::timeout(Duration::from_secs(15),owner.inputs.native_session()?.execution_authority.worker_membership(9001)).await??;
         }
         let database=&owners[0].inputs.sync;
+        let delayed_pages = feed::load_source::delay_pages(database.writer.db_id().path(), 3);
         let source=b"export async function handle(command,ctx){if(command.payload.write)await ctx.put('hot_rows',{id:command.payload.id,n:command.payload.n});return {n:command.payload.n};}";
         let trigger=b"export default async(command,ctx)=>{await ctx.put('hot_events',{id:'change',n:command.payload.seq});return true;}";
         let cas=Cas::open(crate::paths::runtime_dir(roots[0].path()).join("transfers"))?;
@@ -253,6 +254,7 @@ async fn native_daemon_hotplug_roundtrip_and_change() -> Result<()> {
         let published=submit(database,"hot-publish","ctox-platform","ctox.app.publish",json!({"app_id":"hot-app","base_app_ver":null,"draft_id":"hot-draft"})).await?;
         anyhow::ensure!(published["status"]=="done","native publish failed: {published}");
         let publish_us=started.elapsed().as_micros();
+        anyhow::ensure!(delayed_pages.exhausted(), "native change source load was not exercised");
         let result=submit(database,"hot-write","hot-app","hot.echo",json!({"id":"one","n":7,"write":true})).await?;
         anyhow::ensure!(result["status"]=="done"&&result["result"]["n"]==7,"native handler roundtrip failed: {result}");
         let changed=terminal(database,"hot_events","change").await?;
@@ -287,7 +289,7 @@ async fn native_daemon_hotplug_roundtrip_and_change() -> Result<()> {
         anyhow::ensure!(removed["status"]=="done","native remove failed: {removed}");
         let denied=submit(database,"after-remove","hot-app","hot.echo",json!({"n":-1})).await?;
         anyhow::ensure!(denied["status"]=="failed","removed app still admitted command: {denied}");
-        Ok(json!({"publish_us":publish_us,"command_roundtrip_p99_us":samples[98],"samples":samples.len(),"native_quorum":true,"published":true,"change":true,"removed":true,"post_remove_denied":true,"e23_core_delivered":true,"e23_client_forbidden_audited":true}))
+        Ok(json!({"publish_us":publish_us,"command_roundtrip_p99_us":samples[98],"samples":samples.len(),"native_quorum":true,"published":true,"change":true,"removed":true,"post_remove_denied":true,"e23_core_delivered":true,"e23_client_forbidden_audited":true,"slow_source_recovered":true}))
     }.await;
     if let Err(error) = &proof {
         eprintln!("native hot-plug operation failed: {error:#}");
