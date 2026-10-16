@@ -31,7 +31,7 @@ impl Entity {
     }
 }
 /// Supplied by DevOps from its freeze receipt, not inferred from a basename.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct FileChoice {
     pub database: String,
@@ -78,10 +78,14 @@ pub struct Finding {
 }
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Audit {
+    #[serde(default)]
+    pub selected_files: Vec<FileChoice>,
     pub retained_core_tables: Vec<String>,
     pub findings: Vec<Finding>,
     pub compared_equal: Vec<String>,
     pub source_rows: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub source_tables: BTreeMap<String, freeze::Measurement>,
     pub source_row_hashes: BTreeMap<String, BTreeMap<String, String>>,
 }
 pub struct CutoverImport {
@@ -370,13 +374,18 @@ fn read_rows(
 fn archive(row: &Row, imported_at: u64) -> Result<Document> {
     bound(&row.table, 256)?;
     bound(&row.collection, 256)?;
-    let id = sha(&json!([
-        row.db,
-        row.table,
-        row.collection,
-        row.version,
-        row.id
-    ]));
+    bound(&row.db, 256)?;
+    bound(&row.id, 512)?;
+    let id = format!(
+        "{:x}",
+        Sha256::digest(
+            format!(
+                "{}|{}|{}|{}|{}",
+                row.db, row.table, row.collection, row.version, row.id
+            )
+            .as_bytes()
+        )
+    );
     Ok(Document {
         collection: ARCHIVE.into(),
         id: id.clone(),
@@ -418,10 +427,15 @@ pub fn collect(
     let mut total = (0, 0);
     let mut sources = BTreeSet::new();
     let mut active = BTreeMap::new();
+    let mut aliases = owner_alias::Aliases::default();
     for input in inputs {
         validate_file(input)?;
+        audit.selected_files.push(input.file.clone());
         if !sources.insert(&input.file.database) {
             return Err(invalid("cutover_duplicate_source_choice"));
+        }
+        if input.kind == SourceKind::Core {
+            aliases.extend(owner_alias::Aliases::load(input.tx)?)?;
         }
         if input.kind == SourceKind::Rxdb {
             let metadata = input
@@ -466,6 +480,10 @@ pub fn collect(
                 continue;
             } // E29-R6
             let part = read_rows(input, table, budget, &mut total)?;
+            audit.source_tables.insert(
+                format!("{}:{}", input.file.database, table.name),
+                freeze::measure(input.tx, &table.name)?,
+            );
             let key = format!("{}:{}", input.file.database, table.name);
             if audit.source_rows.insert(key.clone(), part.len()).is_some() {
                 return Err(invalid("cutover_duplicate_source_table"));
@@ -567,6 +585,7 @@ pub fn collect(
         if let Some(spec) = plan.migrations.get(&row.collection) {
             body = evaluator.migrate(&row.collection, spec, body)?;
         }
+        let _owner_changed = aliases.migrate(&row.collection, &mut body);
         let (id, body) = base_release::migrated_identity(&row.collection, &row.id, body)?;
         let archive_complete = row.projection || body != row.body;
         add(
@@ -655,6 +674,34 @@ pub async fn prepare_files(
 pub(crate) fn document_hash(collection: &str, body: &Value) -> Result<String> {
     if collection != ARCHIVE {
         return Ok(sha(body));
+    }
+    for (field, max) in [
+        ("source_db", 256),
+        ("source_table", 256),
+        ("collection", 256),
+        ("record_id", 512),
+    ] {
+        bound(
+            body[field]
+                .as_str()
+                .ok_or_else(|| invalid("legacy_identity_type"))?,
+            max,
+        )?;
+    }
+    if !body["id"].as_str().is_some_and(digest_valid)
+        || !body["sha256"].as_str().is_some_and(digest_valid)
+        || body["collection_version"]
+            .as_u64()
+            .is_none_or(|n| n > 9_007_199_254_740_991)
+        || body["imported_at"]
+            .as_u64()
+            .is_none_or(|n| n > 9_007_199_254_740_991)
+        || body
+            .get("doc_storage")
+            .is_some_and(|v| v != "blob" && v != "inline")
+        || (body["doc_storage"] != "blob" && !body["doc"].is_object() && !body["doc"].is_array())
+    {
+        return Err(invalid("legacy_schema_bounds"));
     }
     let mut canonical = body.clone();
     let (hash, size) = if body["doc_storage"] == "blob" {

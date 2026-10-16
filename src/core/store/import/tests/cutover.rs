@@ -637,3 +637,292 @@ fn rule7_freeze_receipt_selects_the_source_file_never_path_heuristics() -> Resul
     )?;
     Ok(())
 }
+
+const OWNER: &str = "00000000-0000-4000-8000-000000000001";
+fn seed_aliases(conn: &Connection) -> Result<()> {
+    sql(conn.execute_batch("CREATE TABLE business_users(user_id TEXT PRIMARY KEY,active INTEGER);CREATE TABLE business_user_identity_aliases(alias TEXT PRIMARY KEY,canonical_user_id TEXT,verified_at_ms INTEGER);"))?;
+    sql(conn.execute("INSERT INTO business_users VALUES(?1,1)", [OWNER]))?;
+    sql(conn.execute(
+        "INSERT INTO business_user_identity_aliases VALUES('owner@example.test',?1,1)",
+        [OWNER],
+    ))?;
+    Ok(())
+}
+#[tokio::test]
+async fn e34_cutover_alias_retains_original_hash_count_and_replay() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let f = seed(
+        dir.path(),
+        "sync.sqlite3",
+        json!({"id":"r","owner_user_id":"owner@example.test","untouched":7}),
+    )?;
+    let bos = dir.path().join("bos.sqlite3");
+    let b = Connection::open(&bos)?;
+    seed_aliases(&b)?;
+    drop(b);
+    let identity = c::FileChoice {
+        database: "business-os.sqlite3".into(),
+        live_file: "/original/bos.sqlite3".into(),
+        frozen_file: bos,
+        lsof_receipt_sha256: "b".repeat(64),
+    };
+    let mut b = ro(&identity)?;
+    let btx = b.transaction()?;
+    let conn = Connection::open(&f.frozen_file)?;
+    conn.execute("UPDATE internal SET data=?1",[json!({"context":"collection","data":{"name":"workjet_computers","version":1,"schema":{"version":1}}}).to_string()])?;
+    drop(conn);
+    let mut db = ro(&f)?;
+    let tx = db.transaction()?;
+    let mut p = plan();
+    let mut definition = definition("workjet_computers", "v4-base");
+    definition.app_id = "ctox".into();
+    p.collections.get_mut("ctox").unwrap().push(definition);
+    let tables = [spec("workjet_computers", 1, c::Entity::App, c::Mode::Rows)];
+    let out = c::collect(
+        &[
+            input(&tx, &f, c::SourceKind::Rxdb, &tables),
+            input(&btx, &identity, c::SourceKind::Core, &[]),
+        ],
+        &p,
+        &ReleaseMigration,
+        &budget(),
+        7,
+    )?;
+    assert_eq!(out.audit.source_rows["sync.sqlite3:records"], 1);
+    assert_eq!(out.audit.source_tables["sync.sqlite3:records"].row_count, 1);
+    let original_hash = out.audit.source_row_hashes["sync.sqlite3:records"]
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    let doc = out
+        .snapshot
+        .documents
+        .iter()
+        .find(|d| d.collection == "workjet_computers")
+        .unwrap();
+    assert_eq!(doc.body["owner_user_id"], OWNER);
+    assert_eq!(doc.body["untouched"], 7);
+    let archive = out
+        .snapshot
+        .documents
+        .iter()
+        .find(|d| d.collection == c::ARCHIVE)
+        .unwrap();
+    assert_eq!(archive.body["sha256"], original_hash);
+    let w = Registry.open(
+        DbId::new(dir.path().join("target.sqlite3"))?,
+        WriterOptions::default(),
+    )?;
+    w.ready().await?;
+    base_release::publish(&w, &p, &ReleaseMigration, 1).await?;
+    let documents = out.snapshot.documents.clone();
+    let initial_report = out.snapshot.report.clone();
+    let first = core_import::apply(&w, out.snapshot, &mut NoFrame, "e34").await?;
+    first.validate_complete()?;
+    let before = w
+        .submit(WriteJob::new(JobOptions::default(), |t| {
+            sql(t.query_row("SELECT MAX(seq) FROM _changes", [], |r| r.get::<_, u64>(0)))
+        }))?
+        .await?;
+    let replay = core_import::CoreImport {
+        documents,
+        dataframe_rows: vec![],
+        report: initial_report,
+    };
+    let second = core_import::apply(&w, replay, &mut NoFrame, "e34").await?;
+    second.validate_complete()?;
+    let after = w
+        .submit(WriteJob::new(JobOptions::default(), |t| {
+            sql(t.query_row("SELECT MAX(seq) FROM _changes", [], |r| r.get::<_, u64>(0)))
+        }))?
+        .await?;
+    assert_eq!(before, after);
+    proof(
+        "e34-cutover",
+        json!({"report":first,"source_tables":out.audit.source_tables,"before_seq":before,"after_seq":after,"original_row_preserved":true}),
+    )?;
+    w.shutdown().await
+}
+#[tokio::test]
+async fn e34_startup_is_marker_guarded_and_revocation_safe() -> Result<()> {
+    use super::super::owner_alias as a;
+    let dir = tempfile::tempdir()?;
+    let bos = Registry.open(
+        DbId::new(dir.path().join("bos.sqlite3"))?,
+        WriterOptions::default(),
+    )?;
+    bos.ready().await?;
+    bos.submit(WriteJob::new(JobOptions::default(), |t| seed_aliases(t)))?
+        .await?;
+    let readers = crate::read_pool::ReadPool::for_database(
+        bos.db_id(),
+        bos.generation(),
+        crate::config::ConnectionConfig::default(),
+        crate::config::AdmissionBudget::default(),
+    )
+    .await?;
+    let core = Registry.open(
+        DbId::new(dir.path().join("core.sqlite3"))?,
+        WriterOptions::default(),
+    )?;
+    core.ready().await?;
+    let mut p = plan();
+    for name in a::COLLECTIONS {
+        let mut d = definition(name, "v4-base");
+        d.app_id = "ctox".into();
+        p.collections.get_mut("ctox").unwrap().push(d);
+    }
+    let w = Registry.open(
+        DbId::new(dir.path().join("sync.sqlite3"))?,
+        WriterOptions::default(),
+    )?;
+    w.ready().await?;
+    w.submit(WriteJob::new(JobOptions::default(), |t| {
+        sql(schema::initialize(t))
+    }))?
+    .await?;
+    a::startup(&core, &w, &readers).await?;
+    let premature = core
+        .submit(WriteJob::new(JobOptions::default(), |t| {
+            sql(
+                t.query_row("SELECT count(*) FROM _workjet_owner_migrations", [], |r| {
+                    r.get::<_, usize>(0)
+                }),
+            )
+        }))?
+        .await?;
+    assert_eq!(premature, 0);
+    base_release::publish(&w, &p, &ReleaseMigration, 1).await?;
+    w.submit(WriteJob::new(JobOptions::default(), |tx| {
+        for collection in a::COLLECTIONS {
+            for (id, owner) in [
+                ("mine", "owner@example.test"),
+                ("foreign", "other@example.test"),
+            ] {
+                insert_document(
+                    tx,
+                    &Document {
+                        collection: collection.into(),
+                        id: id.into(),
+                        body: json!({"id":id,"owner_user_id":owner}),
+                        revision: None,
+                    },
+                )?;
+            }
+        }
+        Ok(())
+    }))?
+    .await?;
+    a::startup(&core, &w, &readers).await?;
+    for collection in a::COLLECTIONS {
+        let docs = stored(&w, collection).await?;
+        assert_eq!(docs[0]["owner_user_id"], "other@example.test");
+        assert_eq!(docs[1]["owner_user_id"], OWNER);
+    }
+    let before = w
+        .submit(WriteJob::new(JobOptions::default(), |t| {
+            sql(t.query_row("SELECT MAX(seq) FROM _changes", [], |r| r.get::<_, u64>(0)))
+        }))?
+        .await?;
+    // Crash after Sync commit but before Core marker: replay changes nothing.
+    core.submit(WriteJob::new(JobOptions::default(), |t| {
+        sql(t.execute("DELETE FROM _workjet_owner_migrations", []))?;
+        Ok(())
+    }))?
+    .await?;
+    a::startup(&core, &w, &readers).await?;
+    // A completed startup does not consult a now unavailable identity store.
+    readers.shutdown().await.map_err(StoreError::from)?;
+    a::startup(&core, &w, &readers).await?;
+    let after = w
+        .submit(WriteJob::new(JobOptions::default(), |t| {
+            sql(t.query_row("SELECT MAX(seq) FROM _changes", [], |r| r.get::<_, u64>(0)))
+        }))?
+        .await?;
+    assert_eq!(before, after);
+    proof(
+        "e34-startup",
+        json!({"before_seq":before,"after_seq":after,"foreign_unchanged":true,"marker_replay_without_identity_read":true}),
+    )?;
+    bos.shutdown().await?;
+    core.shutdown().await?;
+    w.shutdown().await
+}
+#[test]
+fn legacy_archive_enforces_schema_bounds_not_just_outer_types() -> Result<()> {
+    let mut body = json!({"id":"a".repeat(64),"source_db":"bos","source_table":"t","collection":"unknown","collection_version":0,"record_id":"r","doc":{},"sha256":"44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a","imported_at":1});
+    c::document_hash(c::ARCHIVE, &body)?;
+    for (field, bad) in [
+        ("source_db", json!("x".repeat(257))),
+        ("record_id", json!("x".repeat(513))),
+        ("id", json!("A".repeat(64))),
+        ("sha256", json!("A".repeat(64))),
+        ("collection_version", json!(-1)),
+        ("doc", json!("lost structure")),
+    ] {
+        let saved = body[field].clone();
+        body[field] = bad;
+        assert!(c::document_hash(c::ARCHIVE, &body).is_err(), "{field}");
+        body[field] = saved;
+    }
+    Ok(())
+}
+
+#[test]
+fn freeze_measurement_matches_operator_sqlite_api_and_detects_mutation() -> Result<()> {
+    let local = Connection::open_in_memory()?;
+    local.execute_batch("CREATE TABLE t(v);INSERT INTO t VALUES(1),(1),('1'),(X'31'),(NULL);")?;
+    let before = super::super::freeze::measure(&local, "t")?;
+    local.execute("DELETE FROM t WHERE rowid=1", [])?;
+    let after = super::super::freeze::measure(&local, "t")?;
+    assert_eq!(before.row_count, 5);
+    assert_eq!(after.row_count, 4);
+    assert_ne!(before.source_table_hash, after.source_table_hash);
+    let Some(dir) = std::env::var_os("E34_PROOF_DIR") else {
+        return Ok(());
+    };
+    let path = std::path::PathBuf::from(dir);
+    let db = Connection::open_with_flags(
+        path.join("freeze.sqlite3"),
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?;
+    let expected: Value =
+        serde_json::from_slice(&std::fs::read(path.join("freeze.json"))?).unwrap();
+    let actual = super::super::freeze::measure(&db, "values_table")?;
+    assert_eq!(
+        actual.row_count,
+        expected["row_count"].as_u64().unwrap() as usize
+    );
+    assert_eq!(
+        actual.source_table_hash,
+        expected["source_table_hash"].as_str().unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(actual.schema_columns).unwrap(),
+        expected["schema_columns"]
+    );
+    Ok(())
+}
+
+#[test]
+fn e34_native_aliases_never_infer_profiles_or_revoked_owners() -> Result<()> {
+    let db = Connection::open_in_memory()?;
+    seed_aliases(&db)?;
+    let mut original = json!({"id":"r","owner_user_id":"owner@example.test"});
+    assert!(
+        super::super::owner_alias::Aliases::load(&db)?.migrate("workjet_sessions", &mut original)
+    );
+    sql(db.execute("UPDATE business_users SET active=0", []))?;
+    let mut revoked = json!({"id":"r","owner_user_id":"owner@example.test"});
+    assert!(
+        !super::super::owner_alias::Aliases::load(&db)?.migrate("workjet_sessions", &mut revoked)
+    );
+    assert_eq!(revoked["owner_user_id"], "owner@example.test");
+    sql(db.execute_batch("ALTER TABLE business_users ADD COLUMN profile_json TEXT;UPDATE business_users SET active=1,profile_json='{\"email\":\"forged@example.test\"}';"))?;
+    let mut forged = json!({"id":"r","owner_user_id":"forged@example.test"});
+    assert!(
+        !super::super::owner_alias::Aliases::load(&db)?.migrate("workjet_computers", &mut forged)
+    );
+    Ok(())
+}

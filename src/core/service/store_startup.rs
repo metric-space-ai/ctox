@@ -229,6 +229,12 @@ impl Foreground {
                 crate::secrets::initialize_owned_secret_schema(tx).map_err(|_|StoreError::Invalid("Secrets schema initialization failed".into()))?;
                 Ok(())
             })).await?;
+            // E34: the canonical BOS identity registry has its own retained owner.
+            // No profile email, guessed alias, cross-store ATTACH or second writer.
+            let bos_root = root.clone();
+            let bos_id = tokio::task::spawn_blocking(move || DbId::new(crate::paths::business_os_db(&bos_root)))
+                .await.map_err(|_|StoreError::Panicked)??;
+            stores.register("bos", bos_id, false, Arc::new(|_|Ok(()))).await?;
             stores.install_native_rxdb(sync.clone()).await?;
             stores.install_queue(root.clone(), core, sync).await?;
             stores.publish_inputs(&root).await?;
@@ -265,6 +271,23 @@ impl Foreground {
                 owner.shutdown().await?;
                 return Err(error);
             }
+        }
+        // Base/app activation precedes the one-time identity repair; external
+        // engine ingress is admitted only after its Sync commit and Core marker.
+        let bos = owner
+            .inputs
+            .databases
+            .get("bos")
+            .ok_or(StoreError::Closed)?;
+        if let Err(error) = ctox_store::import::owner_alias::startup(
+            &owner.inputs.core.writer,
+            &owner.inputs.sync.writer,
+            &bos.readers,
+        )
+        .await
+        {
+            owner.shutdown().await?;
+            return Err(error);
         }
         let factories = {
             let mut state = FACTORIES
