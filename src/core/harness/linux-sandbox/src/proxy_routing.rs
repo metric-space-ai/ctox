@@ -67,7 +67,8 @@ struct ProxyRoutePlan {
     has_proxy_config: bool,
 }
 
-pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
+/// Prepare routes in a fresh single-threaded helper; this forks bridge workers.
+pub fn prepare_host_proxy_route_spec() -> io::Result<String> {
     let env: HashMap<String, String> = std::env::vars().collect();
     let plan = plan_proxy_routes(&env);
 
@@ -118,7 +119,8 @@ pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
     serde_json::to_string(&ProxyRouteSpec { routes }).map_err(io::Error::other)
 }
 
-pub(crate) fn activate_proxy_routes_in_netns(serialized_spec: &str) -> io::Result<()> {
+/// Activate routes inside the isolated network namespace, before user exec.
+pub fn activate_proxy_routes_in_netns(serialized_spec: &str) -> io::Result<()> {
     let spec: ProxyRouteSpec = serde_json::from_str(serialized_spec).map_err(io::Error::other)?;
 
     if spec.routes.is_empty() {

@@ -130,10 +130,10 @@ fn app_capabilities_e20_network_without_approval_contract() {
             !stdout.contains("CONNECTED") && listener.accept().is_err(),
             "E20 network escape: {out}"
         );
-        // Domain-restricted egress is not built: approval is unavailable, never open.
+        // Malformed platform targets fail closed; valid proxy egress has its own escape test.
         allow(
             &f,
-            json!({"web":{"program":"/bin/sh","net_domains":["example.com"]},
+            json!({"web":{"program":"/bin/sh","net_domains":["not-a-domain"]},
                    "sh":{"program":"/bin/sh"}}),
         );
         let host = Host::new(APP, "staff");
