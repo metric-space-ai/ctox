@@ -13,6 +13,8 @@ function coreFor(namespace) {
   const core = { head: 0n, docs: new Map(), ops: new Map(), artifacts: new Map(), blobs: new Map(), listeners: new Set(), users: new Map(), pending: new Set() };
   const key = (collection, id) => JSON.stringify([collection, id]);
   core.headSeq = () => core.head;
+  /** E27.8: alle Teilnehmer und Abos gleichzeitig beliefern; die Reihenfolge je Abo hält MemoryCoreTransport.deliver. */
+  core.fanOut = () => Promise.all([...core.listeners].flatMap((peer) => [...peer.subscriptions.keys()].map((held) => peer.deliver(held))));
   /** Einziger Commit-Weg im Core: Dokumente schreiben, an alle Teilnehmer ausliefern, Trigger auslösen. */
   core.commit = async (collection, docs, depth = 0) => {
     const sequences = [], changes = [];
@@ -27,7 +29,7 @@ function coreFor(namespace) {
       core.docs.set(key(collection, data.id), row); sequences.push(seq);
       changes.push({ id: data.id, op: deleted ? 'delete' : old && !old.deleted ? 'update' : 'insert', doc });
     }
-    for (const peer of core.listeners) for (const held of peer.subscriptions.keys()) await peer.deliver(held);
+    await core.fanOut();
     core.runtime.onCommit(collection, changes, depth);
     return sequences;
   };
@@ -44,6 +46,7 @@ function coreFor(namespace) {
 async function runCommand(core, doc, depth, via) {
   const latency = via?.latencyMs ?? 5;
   const sleep = () => new Promise((r) => setTimeout(r, latency));
+  // E27.8: simulierte Leitungslatenz nur einmal vor der Annahme; danach startet der Handler ohne Timer-Verzug.
   // result ist ein Wert, kein Merge-Patch: null-Felder (z. B. exit_code bei Zeitüberschreitung) bleiben erhalten
   const update = async (patch) => {
     const current = core.docs.get(JSON.stringify(['business_commands', doc.id]))?.data ?? doc;
@@ -51,7 +54,7 @@ async function runCommand(core, doc, depth, via) {
     if (Object.prototype.hasOwnProperty.call(patch, 'result')) next.result = cloneValue(patch.result);
     await core.commit('business_commands', [next]);
   };
-  await sleep(); await update({ status: 'accepted' }); await sleep(); await update({ status: 'running', progress: 0.5 });
+  await sleep(); await update({ status: 'accepted' }); await update({ status: 'running', progress: 0.5 });
   const user = core.users.get(doc.actor_id) ?? null;
   let final;
   if (via?.failures.has(doc.type)) { final = { status: 'failed', error: via.failures.get(doc.type) }; via.failures.delete(doc.type); }
@@ -62,7 +65,7 @@ async function runCommand(core, doc, depth, via) {
     // Ohne Handler gibt es kein Ergebnis mehr (K-1c Punkt 6): Befehl scheitert sichtbar statt {ok:true}.
     final ??= { status: 'failed', error: `no_handler: ${doc.type} hat keinen Handler in ${doc.app_id}` };
   }
-  await sleep(); await update(final);
+  await update(final);
 }
 export class MemoryCoreTransport extends KernelTransport {
   /** user = {id, role, permissions}: der Core kennt den Nutzer (Rechte wirken); ohne user prüft der Core keine Rechte. */
@@ -75,6 +78,7 @@ export class MemoryCoreTransport extends KernelTransport {
     this.user = user ? cloneValue(user) : null;
     this.deviceLabel = deviceLabel ?? 'browser';
     this.pending = this.core.pending; this.online = true; this.closed = false; this.subscriptions = new Map();
+    this.deliveries = new Map(); // collection → {tail, queued}: Seiten eines Abos nie überholend (E27.8)
   }
   /** Katalog-Primitive, die dieser Core anbietet (§16.29); die Aktivierung prüft capabilities_required dagegen. */
   get capabilities() { return this.core.runtime.capabilities; }
@@ -100,7 +104,17 @@ export class MemoryCoreTransport extends KernelTransport {
     this.subscriptions.set(sub.collection, cloneValue(sub));
     if (this.online) await this.deliver(sub.collection);
   }
-  async deliver(collection) {
+  /** Je Abo genau eine Zustellung gleichzeitig, in Aufrufreihenfolge; eine noch nicht gestartete wird geteilt (sie liest beim
+   *  Start alle Zeilen über dem Checkpoint). Verschiedene Abos und Teilnehmer laufen parallel. */
+  deliver(collection) {
+    let lane = this.deliveries.get(collection);
+    if (lane?.queued) return lane.queued;
+    if (!lane) { lane = { tail: Promise.resolve(), queued: null }; this.deliveries.set(collection, lane); }
+    const run = lane.tail.catch(() => {}).then(() => { lane.queued = null; return this.deliverNow(collection); });
+    lane.queued = run; lane.tail = run;
+    return run;
+  }
+  async deliverNow(collection) {
     if (this.closed || !this.online || !this.events?.page) return;
     const sub = this.subscriptions.get(collection); if (!sub) return;
     const user = this.currentUser;
@@ -121,6 +135,10 @@ export class MemoryCoreTransport extends KernelTransport {
     const previous = this.core.ops.get(entry.op_id); if (previous) return cloneValue(previous);
     const old = this.core.docs.get(this.key(entry.collection,entry.id));
     let result = this.reject.length ? { status:'rejected', reason:this.reject.shift() } : null;
+    // K-WJ-B2 (E27.2): Befehlstyp ohne veröffentlichte Route → beim Schreiben abgelehnt, nie erst accepted und später failed
+    if (!result && entry.collection === 'business_commands' && entry.op === 'put' && entry.body?.status === 'queued' && !(old?.data && !old.deleted) && !this.commandRouteKnown(entry.body)) {
+      result = { status: 'rejected', code: 'unknown_command', reason: `unknown_command:${entry.body.type}` };
+    }
     if (!result) {
       const code = this.core.runtime.checkWrite(this.currentUser, entry, old);
       if (code) result = typeof code === 'object' ? { status: 'rejected', code: code.code, reason: code.reason } : { status: 'rejected', reason: code };
@@ -158,6 +176,12 @@ export class MemoryCoreTransport extends KernelTransport {
     return cloneValue(result);
   }
   runCommand(doc) { return this.core.spawnCommand(doc, 0, this); }
+  /** Veröffentlichte Befehls-Registry dieses Cores: Plattformbefehle, die Handler-Routen (app_id, type) der aktiven
+   *  App-Versionen und die an diesem Transport registrierten Test-Routen (sim.onCommand / sim.failCommand). */
+  commandRouteKnown(body) {
+    const type = String(body?.type ?? '');
+    return this.handlers.has(type) || this.failures.has(type) || this.core.runtime.hasCommandRoute(body?.app_id, type);
+  }
   async artifact(hash) { if(!this.core.artifacts.has(hash)) throw new CtoxError('not_found','Artifact missing'); return this.core.artifacts.get(hash); }
   putArtifact(hash, content) { this.core.artifacts.set(hash, content); }
   async blob(ref) { const blob=this.core.blobs.get(ref); if(!blob) throw new CtoxError('not_found','Blob missing'); return blob; }
