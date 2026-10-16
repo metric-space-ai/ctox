@@ -34,7 +34,7 @@ A scrape is a registered **target** (`target_key`) with a versioned extraction *
 5. **New source:** first `{"target_key": "…", "mode": "upsert_target", "target": {"display_name": "…", "start_url": "https://…", "target_kind": "prospect-research", "config": {"record_key_fields": ["field", "source_url"], "expected_min_records": 1}, "output_schema": {"schema_key": "prospect.v1"}}}`, then steps 1–4. It replaces the whole definition: never use it on an existing target.
 
 **Script contract** (the runner starts `node <script>` with a cleared environment plus these variables):
-- `CTOX_SCRAPE_INPUT_JSON` — the call's `input` (JSON text); `CTOX_SCRAPE_START_URL`, `CTOX_SCRAPE_TARGET_KEY`, `CTOX_SCRAPE_RUN_DIR`, `CTOX_SCRAPE_OUTPUT_DIR` (scratch for captures); `CTOX_BIN` — the running ctox binary for `web browser-capture`, `web read`, `secret get`.
+- `CTOX_SCRAPE_INPUT_JSON` — the call's `input` (JSON text); `CTOX_SCRAPE_START_URL`, `CTOX_SCRAPE_TARGET_KEY`, `CTOX_SCRAPE_RUN_DIR`, `CTOX_SCRAPE_OUTPUT_DIR` (scratch for captures); `CTOX_BIN` — the running ctox binary for `web browser-capture`, `web read`, `secret get --reveal`.
 - stdout: exactly one JSON value — `{"records": [...]}` (also accepted: a bare array, `items`, `jobs`, `result.records`), or `{"records": [], "failure_mode": "<mode>", "detail": "<why>"}`. Without an optional `query_completion` receipt, 0 records counts as `portal_drift`.
 - `failure_mode`: `invalid_input`, `temporary_unreachable`, `blocked`, `portal_drift`, `authorization_required`, `provider_account_inactive`, `partial_output`.
 - Prospect records: `{"field", "value", "confidence": "high|medium", "source_url", "note"}`.
