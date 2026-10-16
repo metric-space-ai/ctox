@@ -1079,6 +1079,20 @@ fn union_research_keys(lead: &mut Value, previous: &BTreeMap<String, Vec<String>
 /// field). An incoming `unsupported` without sources or attempts is only
 /// accepted for a field that has no status yet or is itself `unsupported`.
 fn merge_field_status(existing: Option<&Value>, incoming: Value) -> Value {
+    merge_field_status_tracked(existing, incoming, &mut Vec::new())
+}
+
+/// [`merge_field_status`] that also names every incoming field the store did
+/// not apply because the stored verified value is protected (the incoming
+/// status was kept only as `challenge`). The writeback response reports them
+/// as `protected_fields`: an agent that believed its downgrade was stored
+/// wrote it into its report, the reviewer failed the report against the
+/// stored record, and the lead looped to attempt 4 (pilot 16.10.2026).
+fn merge_field_status_tracked(
+    existing: Option<&Value>,
+    incoming: Value,
+    protected: &mut Vec<String>,
+) -> Value {
     let mut merged = existing
         .and_then(Value::as_object)
         .cloned()
@@ -1151,6 +1165,7 @@ fn merge_field_status(existing: Option<&Value>, incoming: Value) -> Value {
                     if let Some(previous) = previous.as_object_mut() {
                         previous.insert("challenge".to_string(), status.clone());
                     }
+                    protected.push(field.clone());
                     continue;
                 }
             }
@@ -1404,6 +1419,7 @@ fn phone_numbers_in(quote: &str) -> Vec<String> {
 /// entries that name their `person_key`. Every entry is checked on its own; a
 /// malformed entry of one person is reported and dropped without touching the
 /// valid entries of the others. Returns the rejection lines.
+#[cfg(test)]
 fn apply_person_field_status(
     lead: &mut Value,
     incoming: &Value,
@@ -1411,6 +1427,28 @@ fn apply_person_field_status(
     requested_fields: &[String],
     crm: &CrmBaseline,
     terminal_check: Option<(&Path, &Value)>,
+) -> Vec<String> {
+    apply_person_field_status_tracked(
+        lead,
+        incoming,
+        lead_level,
+        requested_fields,
+        crm,
+        terminal_check,
+        &mut Vec::new(),
+    )
+}
+
+/// [`apply_person_field_status`] that also collects `(person_key, field)` for
+/// every delivered person status the store kept only as `challenge`.
+fn apply_person_field_status_tracked(
+    lead: &mut Value,
+    incoming: &Value,
+    lead_level: &BTreeMap<String, FieldStatus>,
+    requested_fields: &[String],
+    crm: &CrmBaseline,
+    terminal_check: Option<(&Path, &Value)>,
+    protected: &mut Vec<(String, String)>,
 ) -> Vec<String> {
     struct Gate<'a> {
         requested: BTreeSet<String>,
@@ -1533,13 +1571,39 @@ fn apply_person_field_status(
         lead["person_field_status"] = Value::Object(Map::new());
     }
     for (person_key, fields) in per_person {
-        let merged = merge_field_status(
+        let mut kept = Vec::new();
+        let merged = merge_field_status_tracked(
             lead["person_field_status"].get(&person_key),
             Value::Object(fields),
+            &mut kept,
         );
+        protected.extend(kept.into_iter().map(|field| (person_key.clone(), field)));
         lead["person_field_status"][person_key] = merged;
     }
     rejections
+}
+
+const PROTECTED_FIELD_HOW_TO_CHANGE: &str = "Der gespeicherte Wert bleibt, weil seine eigenen gespeicherten Zitate ihn nennen; dein Status liegt nur als `challenge` am Feld. Aendern laesst er sich nur mit einer widersprechenden externen Quelle (url + quote, das einen ANDEREN Wert nennt). Ist nur die Begruendung falsch (z. B. Einzelquelle), sende das Feld weiter als verified mit demselben Wert und passendem `reason`. Melde dieses Feld im Bericht nie als geaendert oder zurueckgestuft.";
+
+/// One `protected_fields` entry for a delivered field whose stored status is
+/// still the verified value with this writeback's status as `challenge`.
+/// `None` when a later step (exclusion, native verdict restore) replaced it.
+fn protected_field_entry(field: &str, person_key: Option<&str>, stored: &Value) -> Option<Value> {
+    if !is_verified_status(stored) {
+        return None;
+    }
+    let challenge = stored.get("challenge")?;
+    let mut entry = serde_json::json!({
+        "field": field,
+        "stored_status": stored.get("status").cloned().unwrap_or(Value::Null),
+        "stored_value": stored.get("value").cloned().unwrap_or(Value::Null),
+        "your_status": challenge.get("status").cloned().unwrap_or(Value::Null),
+        "how_to_change": PROTECTED_FIELD_HOW_TO_CHANGE,
+    });
+    if let Some(person_key) = person_key {
+        entry["person_key"] = Value::String(person_key.to_string());
+    }
+    Some(entry)
 }
 
 /// The evidence rules of the lead-level path, applied to one person's status
@@ -2463,9 +2527,11 @@ pub(super) fn handle_research_writeback(
     let patch = outbound_lead_generation_research_outcome_patch(&lead, &projection_result, now);
     merge_json_object_values(&mut lead, &patch);
     union_research_keys(&mut lead, &previous_keys);
-    let merged_field_status = merge_field_status(
+    let mut protected_lead_fields = Vec::new();
+    let merged_field_status = merge_field_status_tracked(
         lead.get("field_status"),
         serde_json::to_value(&request.field_status)?,
+        &mut protected_lead_fields,
     );
     lead["field_status"] = merged_field_status;
     if let Some(exclusion) = &exclusion {
@@ -2483,7 +2549,8 @@ pub(super) fn handle_research_writeback(
             task_workspace(root, task, contract).map(|workspace| (workspace, contract.clone()))
         })
         .transpose()?;
-    rejections.extend(apply_person_field_status(
+    let mut protected_person_fields = Vec::new();
+    rejections.extend(apply_person_field_status_tracked(
         &mut lead,
         &request.result.person_field_status,
         &request.field_status,
@@ -2492,6 +2559,7 @@ pub(super) fn handle_research_writeback(
         terminal_check
             .as_ref()
             .map(|(workspace, contract)| (workspace.as_path(), contract)),
+        &mut protected_person_fields,
     ));
     project_person_field_status(&mut lead);
     super::contact_email_validation::invalidate_changed_email_addresses(
@@ -2645,6 +2713,38 @@ pub(super) fn handle_research_writeback(
             issued_keys.insert(("contact".into(), person.clone(), field.clone()));
         }
     }
+    // The response reports what the store holds, never the request: an echo
+    // of a downgrade the store kept as `challenge` read as stored (pilot
+    // 16.10.2026, review: report claims a contradiction note, record still
+    // shows verified).
+    let stored_field_status = delivered_fields
+        .iter()
+        .map(|field| {
+            (
+                field.clone(),
+                lead["field_status"]
+                    .get(field)
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            )
+        })
+        .collect::<BTreeMap<String, Value>>();
+    let protected_fields = protected_lead_fields
+        .iter()
+        .filter(|field| delivered_fields.contains(field.as_str()))
+        .filter_map(|field| protected_field_entry(field, None, lead["field_status"].get(field)?))
+        .chain(
+            protected_person_fields
+                .iter()
+                .filter_map(|(person_key, field)| {
+                    protected_field_entry(
+                        field,
+                        Some(person_key),
+                        lead["person_field_status"].get(person_key)?.get(field)?,
+                    )
+                }),
+        )
+        .collect::<Vec<Value>>();
     store::upsert_native_research_writeback_record(
         root,
         &request.record_id,
@@ -2655,6 +2755,7 @@ pub(super) fn handle_research_writeback(
         &issued_keys,
     )?;
     super::contact_email_validation::spawn_contact_email_validation(root, &request.record_id);
+    let protected_count = protected_fields.len();
 
     Ok(serde_json::json!({
         "ok": true,
@@ -2663,11 +2764,11 @@ pub(super) fn handle_research_writeback(
         "research_command_id": request.research_command_id,
         "gap_task_id": request.gap_task_id,
         "research_status": if needs_review { "needs_review" } else { "completed" },
-        "field_status": request
-            .field_status
-            .iter()
-            .filter(|(key, _)| delivered_fields.contains(key.as_str()))
-            .collect::<BTreeMap<_, _>>(),
+        // The STORED status of every delivered field (after merge).
+        "field_status": stored_field_status,
+        // Delivered statuses the store did not apply: the verified value its
+        // own quotes prove stays; the delivered status is only a `challenge`.
+        "protected_fields": protected_fields,
         "accepted_fields": accepted_fields,
         "delivered_fields": delivered_fields.iter().cloned().collect::<Vec<String>>(),
         "open_fields": open_fields,
@@ -2687,10 +2788,17 @@ pub(super) fn handle_research_writeback(
                 .collect::<Vec<_>>(),
         })).unwrap_or(Value::Null),
         "summary": format!(
-            "{} Feld(er) gespeichert, {} Beleg(e) verworfen, {} Feld(er) noch offen. Ein Feld gilt erst als beantwortet, wenn es verifiziert ist (eine passende externe Quelle, deren Zitat den Wert nennt; Sellify allein belegt nichts; widersprechen sich Quellen, bleibt das Feld action_required) oder als no_match belegt wurde. Offene Felder sind keine Ablehnung: hole die fehlende externe Quelle bzw. den Wert und sende sie gesammelt in einem weiteren Aufruf; gespeicherte Felder nicht erneut senden.",
+            "{} Feld(er) gespeichert, {} Beleg(e) verworfen, {} Feld(er) noch offen. Ein Feld gilt erst als beantwortet, wenn es verifiziert ist (eine passende externe Quelle, deren Zitat den Wert nennt; Sellify allein belegt nichts; widersprechen sich Quellen, bleibt das Feld action_required) oder als no_match belegt wurde. Offene Felder sind keine Ablehnung: hole die fehlende externe Quelle bzw. den Wert und sende sie gesammelt in einem weiteren Aufruf; gespeicherte Felder nicht erneut senden.{}",
             accepted_count,
             rejections.len(),
-            open_count
+            open_count,
+            if protected_count == 0 {
+                String::new()
+            } else {
+                format!(
+                    " {protected_count} gelieferte(r) Status unverändert, siehe protected_fields: der gespeicherte verifizierte Wert bleibt, berichte diese Felder nicht als geaendert."
+                )
+            }
         ),
     }))
 }
@@ -7054,6 +7162,130 @@ mod tests {
         assert_eq!(
             count, 0,
             "untouched shaped metadata never acquires native issuance"
+        );
+        Ok(())
+    }
+
+    fn writeback_downgrading_a_stored_verified_status(
+        root: &Path,
+        record_id: &str,
+        research_command_id: &str,
+        stored_quote: &str,
+    ) -> anyhow::Result<Value> {
+        create_chat_fixture_with_sellify(
+            root,
+            research_command_id,
+            record_id,
+            &["firma_aktivitaetsstatus"],
+        )?;
+        let mut prior = store::load_rxdb_collection_record(root, LEAD_COLLECTION, record_id)?
+            .context("fixture lead")?;
+        prior["field_status"] = serde_json::json!({
+            "firma_aktivitaetsstatus": {"status": "verified", "value": "aktiv", "sources": [
+                {"source_id": "northdata.de", "url": "https://www.northdata.de/x", "quote": stored_quote}
+            ]}
+        });
+        store::upsert_rxdb_collection_record(root, LEAD_COLLECTION, record_id, 1, prior)?;
+        let command = writeback_command(
+            record_id,
+            serde_json::json!({
+                "record_id": record_id,
+                "module": "outbound-lead-generation",
+                "research_command_id": research_command_id,
+                "gap_task_id": "",
+                "field_status": {
+                    "firma_aktivitaetsstatus": {
+                        "status": "action_required",
+                        "value": null,
+                        "sources": [],
+                        "attempts": [{"query_or_url": "https://www.northdata.de/x", "result": "kein Zitat nennt einen Status"}],
+                        "reason": "Review: Status nicht belegt"
+                    }
+                },
+                "result": {"fields": {}, "person_records": [], "evidence": []}
+            }),
+        );
+        handle_research_writeback(root, &command)
+    }
+
+    #[test]
+    fn research_writeback_response_reports_a_protected_field_instead_of_echoing_the_request(
+    ) -> anyhow::Result<()> {
+        // Pilot 16.10.2026: the response echoed the delivered downgrade, the
+        // agent reported it as stored, the reviewer found the record still
+        // verified and failed the report; three of ten leads reached attempt 4.
+        let temp = tempfile::tempdir()?;
+        let record_id = "lead-protected-response";
+        let result = writeback_downgrading_a_stored_verified_status(
+            temp.path(),
+            record_id,
+            "research-protected-response",
+            "Status: Aktiv seit 1998",
+        )?;
+        assert_eq!(result["ok"], true, "{result}");
+        let reported = &result["field_status"]["firma_aktivitaetsstatus"];
+        assert_eq!(reported["status"], "verified", "{result}");
+        assert_eq!(reported["value"], "aktiv", "{result}");
+        assert_eq!(reported["challenge"]["status"], "action_required");
+        let saved = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("persisted writeback")?;
+        assert_eq!(
+            saved["field_status"]["firma_aktivitaetsstatus"]["status"], reported["status"],
+            "response and store agree"
+        );
+        assert_eq!(
+            result["protected_fields"],
+            serde_json::json!([{
+                "field": "firma_aktivitaetsstatus",
+                "stored_status": "verified",
+                "stored_value": "aktiv",
+                "your_status": "action_required",
+                "how_to_change": PROTECTED_FIELD_HOW_TO_CHANGE,
+            }]),
+            "{result}"
+        );
+        assert!(
+            result["summary"]
+                .as_str()
+                .is_some_and(|text| text
+                    .contains("1 gelieferte(r) Status unverändert, siehe protected_fields")),
+            "{result}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn research_writeback_response_reports_a_stored_downgrade_of_an_unproven_value(
+    ) -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let record_id = "lead-unproven-response";
+        let result = writeback_downgrading_a_stored_verified_status(
+            temp.path(),
+            record_id,
+            "research-unproven-response",
+            "Beispiel GmbH, Duisburg, HRB 1234",
+        )?;
+        assert_eq!(result["ok"], true, "{result}");
+        let reported = &result["field_status"]["firma_aktivitaetsstatus"];
+        assert_eq!(reported["status"], "action_required", "{result}");
+        assert_eq!(reported["superseded"]["value"], "aktiv", "{result}");
+        assert!(reported.get("challenge").is_none(), "{result}");
+        assert_eq!(
+            result["protected_fields"],
+            serde_json::json!([]),
+            "{result}"
+        );
+        assert!(
+            result["summary"]
+                .as_str()
+                .is_some_and(|text| !text.contains("protected_fields")),
+            "{result}"
+        );
+        let saved = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("persisted writeback")?;
+        assert_eq!(
+            saved["field_status"]["firma_aktivitaetsstatus"]["status"],
+            "action_required"
         );
         Ok(())
     }
