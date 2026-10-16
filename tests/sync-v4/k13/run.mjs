@@ -79,7 +79,7 @@ if(build && !summary.scenarios.length) {
     const config={owner:summary.owner,...build,output:dir,profile:'small',clients:1,rttMs:20,warmRttMs:20,lossPercent:0,
       uid:process.getuid(),gid:process.getgid(),hostNamespaces:Object.fromEntries(['user','net','mnt','pid'].map(k=>[k,fs.readlinkSync('/proc/self/ns/'+k)])),seedAfterStart:false,leadProfile:'eager',prime:false,
       catalog:true,scenarioRoot:resolve(here,'..'),scenario:id,prepareOnly:flags.get('--prepare-only')==='true',
-      root:join(dir,'tenant-'+expected.slice(0,12)),port:19865,signalingPort:19866,turnPort:34789,
+      root:join('/tmp','p6-'+id.toLowerCase()+'-'+expected.slice(0,8)),port:19865,signalingPort:19866,turnPort:34789,
       runner:join(here,'service-runner.mjs'),sourceManifest,buildReceipt:resolve(flags.get('--build')),
       lane,canonicalTmpdir:process.env.TMPDIR,durationSeconds:seconds,hostNetworkNamespace:fs.readlinkSync('/proc/self/ns/net'),
       chrome:flags.get('--chrome')??'/opt/google/chrome/chrome',

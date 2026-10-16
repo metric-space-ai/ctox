@@ -2,7 +2,7 @@
 """Lane-only K rerun; builds the composed source and preserves measured/not-run criteria."""
 import argparse,hashlib,json,os,re,signal,subprocess,time,zipfile
 from pathlib import Path
-P=argparse.ArgumentParser();P.add_argument('--revision',required=True);P.add_argument('--deadline',type=float,required=True);P.add_argument('--prepare-only',action='store_true');a=P.parse_args()
+P=argparse.ArgumentParser();P.add_argument('--revision',required=True);P.add_argument('--deadline',type=float,required=True);P.add_argument('--prepare-only',action='store_true');P.add_argument('--reuse-build');a=P.parse_args()
 ROOT=Path(__file__).resolve().parents[3];HERE=Path(__file__).resolve().parent
 assert os.environ.get('BUILD_LANE_BIN') and os.environ.get('CARGO_TARGET_DIR'),'canonical lane required'
 OUT=Path(os.environ['CARGO_TARGET_DIR'])/('p6-k-rerun-'+time.strftime('%Y%m%dT%H%M%SZ',time.gmtime()));OUT.mkdir()
@@ -51,19 +51,32 @@ try:
   if run('syntax-'+file.stem,['node','--check',file],30)[0]:raise RuntimeError('runner syntax failed')
  if run('node-prepare',['bash','src/core/app_runtime/verify.sh','prepare'],150)[0]:raise RuntimeError('pinned Node bundle unavailable')
  ENV['CTOX_APP_RUNTIME_NODE_BUNDLE']=str(Path(os.environ['CARGO_TARGET_DIR'])/'app-runtime-test-node/bin/node')
- if run('daemon-build',['cargo','build','--locked','--jobs','2','--bin','ctox','--features','app-runtime-node'],1800)[0]:raise RuntimeError('build unverified')
- fixture_source=ROOT/'src/core/business_os/app_platform/runtime_host/native_proof.rs'
- fixture_original=fixture_source.read_bytes()
- try:
-  fixture_source.write_bytes(fixture_original+('\n#[path = '+json.dumps(str(HERE/'enrolled-fixture.rs'))+']\nmod p6_k_fixture;\n').encode())
-  fcode,flog=run('fixture-build',['cargo','test','--locked','--jobs','2','--bin','ctox','--features','app-runtime-node','--no-run','--message-format=json'],1200)
-  if fcode:raise RuntimeError('native fixture build unverified')
-  bins=[j['executable'] for line in flog.splitlines() if line.startswith('{') for j in [json.loads(line)] if j.get('reason')=='compiler-artifact' and j.get('target',{}).get('name')=='ctox' and j.get('profile',{}).get('test') and j.get('executable')]
-  if len(bins)!=1:raise RuntimeError('native fixture executable ambiguous')
-  fixture_binary=Path(bins[0])
- finally:fixture_source.write_bytes(fixture_original)
- binary=Path(os.environ['CARGO_TARGET_DIR'])/'debug/ctox'
- receipt=OUT/'build.json';receipt.write_text(json.dumps({'pass':True,'terminal':True,'revision':a.revision,'source':str(ROOT),'binary':str(binary),'binarySha256':hash_file(binary),'fixtureBinary':str(fixture_binary),'fixtureBinarySha256':hash_file(fixture_binary)},indent=2))
+ if a.reuse_build:
+  producer=Path(a.reuse_build).resolve();build=json.loads(producer.read_text())
+  binding=json.loads((producer.parent/'source-binding.json').read_text())
+  assert build.get('pass') and build.get('terminal') and build['revision']==a.revision==binding['expected_revision'],'unverified producer'
+  assert Path(build['source']).resolve()==ROOT,'foreign source root'
+  compiled={p:h for p,h in binding['hashes'].items() if p.startswith('src/') or p.endswith('enrolled-fixture.rs')}
+  assert compiled and all(hash_file(ROOT/p)==h for p,h in compiled.items()),'compiled product/fixture source differs'
+  for kind in ['binary','fixtureBinary']:
+   assert hash_file(build[kind])==build[kind+'Sha256'],'producer executable changed'
+  results['build_reuse']={'producer':str(producer),'compiled_revision':a.revision,'verified_sources':compiled,'binarySha256':build['binarySha256'],'fixtureBinarySha256':build['fixtureBinarySha256']};save()
+  print('P6_K_BUILD_REUSE verified',flush=True)
+ else:
+  if run('daemon-build',['cargo','build','--locked','--jobs','2','--bin','ctox','--features','app-runtime-node'],1800)[0]:raise RuntimeError('build unverified')
+  fixture_source=ROOT/'src/core/business_os/app_platform/runtime_host/native_proof.rs'
+  fixture_original=fixture_source.read_bytes()
+  try:
+   fixture_source.write_bytes(fixture_original+('\n#[path = '+json.dumps(str(HERE/'enrolled-fixture.rs'))+']\nmod p6_k_fixture;\n').encode())
+   fcode,flog=run('fixture-build',['cargo','test','--locked','--jobs','2','--bin','ctox','--features','app-runtime-node','--no-run','--message-format=json'],1200)
+   if fcode:raise RuntimeError('native fixture build unverified')
+   bins=[j['executable'] for line in flog.splitlines() if line.startswith('{') for j in [json.loads(line)] if j.get('reason')=='compiler-artifact' and j.get('target',{}).get('name')=='ctox' and j.get('profile',{}).get('test') and j.get('executable')]
+   if len(bins)!=1:raise RuntimeError('native fixture executable ambiguous')
+   fixture_binary=Path(bins[0])
+  finally:fixture_source.write_bytes(fixture_original)
+  binary=Path(os.environ['CARGO_TARGET_DIR'])/'debug/ctox'
+  build={'pass':True,'terminal':True,'revision':a.revision,'source':str(ROOT),'binary':str(binary),'binarySha256':hash_file(binary),'fixtureBinary':str(fixture_binary),'fixtureBinarySha256':hash_file(fixture_binary)}
+ receipt=OUT/'build.json';receipt.write_text(json.dumps(build,indent=2))
  args=['node',HERE/'run.mjs','--build',receipt,'--expected-revision',a.revision]
  if a.prepare_only:args+=['--prepare-only','true']
  code,text=run('scenarios',args,2400)
