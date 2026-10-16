@@ -1,7 +1,7 @@
 // Test-only adapter for #810's Native lifecycle. No product/harness file edits.
 import fs from 'node:fs';
 import {resolve} from 'node:path';
-import {spawnSync} from 'node:child_process';
+import {spawnSync,execFileSync} from 'node:child_process';
 import {hashFile} from './build-receipt.mjs';
 
 export function installServiceEntry(Native) {
@@ -14,17 +14,23 @@ export function installServiceEntry(Native) {
   };
   Native.prototype.prepare=async function() {
     const {root,source,revision,owner}=this.config;
-    if(fs.existsSync(root))throw Error('Never reuse a P6 tenant root');
-    fs.mkdirSync(resolve(root,'runtime/home'),{recursive:true,mode:0o700});
+    const mounts=[];
+    for(const [index,path] of [root,root+'.voter2',root+'.voter3'].entries()) {
+      if(fs.existsSync(path))throw Error('Never reuse a P6 tenant root');
+      fs.mkdirSync(resolve(path,'runtime'),{recursive:true,mode:0o700});
+      // The socket-visible root stays short; large SQLite/managed Node data
+      // uses this runner's SSD backing, mounted only inside the private netns.
+      const backing=resolve(this.config.output,'tenant-runtime-'+index);
+      fs.mkdirSync(backing,{mode:0o700});
+      execFileSync('mount',['--bind',backing,resolve(path,'runtime')]);
+      fs.mkdirSync(resolve(path,'runtime/home'),{recursive:true,mode:0o700});
+      for(const item of ['Cargo.toml','src','contracts'])fs.symlinkSync(resolve(source,item),resolve(path,item));
+      mounts.push({root:path,runtimeBacking:backing,mountNamespace:fs.readlinkSync('/proc/self/ns/mnt')});
+    }
+    fs.writeFileSync(resolve(this.config.output,'p6-root-mounts.json'),JSON.stringify(mounts,null,2));
     fs.writeFileSync(resolve(root,'.sync-v4-e2e.json'),JSON.stringify({owner,synthetic:true,source:revision}));
-    for(const path of ['Cargo.toml','src','contracts'])fs.symlinkSync(resolve(source,path),resolve(root,path));
     fs.mkdirSync(resolve(root,'bin'));
     fs.symlinkSync(this.config.binary,resolve(root,'bin/ctox'));
-    for(const voter of [root+'.voter2',root+'.voter3']) {
-      if(fs.existsSync(voter))throw Error('Never reuse a P6 voter root');
-      fs.mkdirSync(resolve(voter,'runtime/home'),{recursive:true,mode:0o700});
-      for(const path of ['Cargo.toml','src','contracts'])fs.symlinkSync(resolve(source,path),resolve(voter,path));
-    }
     delete this.env.CTOX_BUSINESS_OS_ENABLE_SMOKE_CONTROLS;
     delete this.env.CTOX_BUSINESS_OS_SIGNALING_URLS;
     if(!this.config.fixtureBinary || hashFile(this.config.fixtureBinary)!==this.config.fixtureBinarySha256)throw Error('Checksum-bound native fixture executable required');
