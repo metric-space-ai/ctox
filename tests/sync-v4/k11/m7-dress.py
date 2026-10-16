@@ -19,6 +19,7 @@ HERE = Path(__file__).resolve().parent
 CRITERIA = {
     'private-release-artifact': 'DevOps', 'frozen-welsch-coverage': 'ctox sync v4 / phase1',
     'sqlite-snapshot': 'DevOps', 'foreground-restart-component': 'DevOps',
+    'public-key-restart-component': 'DevOps / Architecture CUTOVER-4',
     'supported-update-rollback': 'DevOps / gpu3 lane owner', 'base-import-daemon-attachment': 'phase1 / Architecture',
     'cutover-coverage': 'phase1', 'instance-key-restart': 'Architecture CUTOVER-4',
     'installed-get-root-p99': 'DevOps', 'app-hot-plug': 'Harness #868',
@@ -63,11 +64,11 @@ def main():
         else:
             result['criteria'][index] = row
         save()
-    def run(name, command, timeout=60):
+    def run(name, command, timeout=60, env=None):
         row = dict(name=name, command=[str(v) for v in command], startedAtMs=int(time.time()*1000))
         result['commands'].append(row)
         with (out/(name+'.log')).open('w') as log:
-            child = subprocess.Popen(row['command'], stdout=log, stderr=log, start_new_session=True)
+            child = subprocess.Popen(row['command'], stdout=log, stderr=log, start_new_session=True, env=env)
             process = dict(owner=OWNER, pid=child.pid, pgid=child.pid, purpose=name, stopAfterSeconds=timeout)
             result['processes'].append(process)
             save()
@@ -131,7 +132,7 @@ def main():
                   consistency='Per-file SQLite API snapshot of terminal owned fixture; no live customer copy')
         # Start the real foreground twice as a fresh-state component control.
         # The public instance ID can be observed without opening encrypted data.
-        # It is deliberately NOT called a public signing-key proof.
+        # This does not replace the installed-profile/signature witness.
         component = out/'foreground-profile'
         component.mkdir(mode=0o700)
         (component/'.sync-v4-e2e.json').write_text(json.dumps(marker))
@@ -185,9 +186,22 @@ def main():
                         process['groupAbsent'] = False
                     except ProcessLookupError:
                         process['groupAbsent'] = True
+            # Official public-identity CLI, after owner drain. It only loads
+            # the existing key; the helper never opens/decrypts protected data.
+            name = 'public-identity-'+str(attempt)
+            start['identityExit'] = run(name,[release['binary'],'sync','identity','--root',component],10,env)
+            if start['identityExit'] == 0:
+                identity = json.loads((out/(name+'.log')).read_text())
+                start['publicIdentity'] = identity.get('identity')
         stable = all(x['ready'] and x['exit']==0 for x in starts) and bool(starts[0]['instanceId']) and starts[0]['instanceId']==starts[1]['instanceId']
+        key_stable = all(x.get('identityExit')==0 for x in starts) and bool(starts[0].get('publicIdentity')) and starts[0].get('publicIdentity')==starts[1].get('publicIdentity')
         criterion('foreground-restart-component','pass' if stable else 'fail','DevOps',
-                  measured=starts, limit='Candidate image on fresh empty state, not frozen-profile coverage, installed upgrade or signing-key witness')
+                  measured=starts, publicSigningKeyStable=key_stable,
+                  limit='Candidate image on fresh empty state, not frozen-profile coverage or installed upgrade')
+        criterion('public-key-restart-component','pass' if key_stable else 'fail','DevOps / Architecture CUTOVER-4',
+                  measured=[dict(exit=x.get('identityExit'),publicIdentity=x.get('publicIdentity')) for x in starts],
+                  method='Official sync identity after each real foreground shutdown; no key extraction',
+                  limit='Fresh-state control, not the installed frozen-profile migration/signature witness')
         # This only probes admission capability. A failed sudo never launches
         # unshare or an installer, and no host user/system bus is contacted.
         capable = run('namespace-admission', ['sudo','-n','true'], 10) == 0
