@@ -4,6 +4,7 @@ pub mod base_release;
 pub mod core_import;
 pub mod cutover;
 pub mod daemon;
+pub mod daemon_collectors;
 pub mod file_import;
 pub mod freeze;
 pub mod jour_fixe;

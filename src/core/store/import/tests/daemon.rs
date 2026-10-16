@@ -62,6 +62,7 @@ fn fixture(root: &Path) -> Result<PathBuf> {
         measurement_sha256: String::new(),
         kind: SourceKind::Rxdb,
         internal_table: Some("internal".into()),
+        collectors: vec![],
         tables: vec![
             Decision {
                 rule: "E29-R1".into(),
@@ -297,5 +298,46 @@ fn cutover_cli_is_strict_and_absent_daemon_never_opens_a_writer() -> Result<()> 
     };
     assert!(request(endpoint, cli_request(&args)?).is_err());
     assert!(!root.path().join("destination.sqlite3").exists());
+    Ok(())
+}
+
+#[test]
+fn cutover_specialized_tracking_keeps_raw_rows_and_adds_native_projection() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let path = fixture(root.path())?;
+    let mut snapshot: Snapshot = serde_json::from_slice(&fs::read(&path)?).unwrap();
+    let live = root.path().join("tracking-live.sqlite3");
+    let source = Connection::open(&live)?;
+    source.execute_batch("CREATE TABLE stalwart_mail_tracking_tokens(token TEXT PRIMARY KEY,message_id TEXT,campaign_id TEXT,event_type TEXT,target_url TEXT,created_at INTEGER);INSERT INTO stalwart_mail_tracking_tokens VALUES('token','message','campaign','opened',NULL,123);CREATE TABLE stalwart_mail_tracking_events(id INTEGER PRIMARY KEY,token TEXT,message_id TEXT,event_type TEXT,occurred_at INTEGER,user_agent TEXT);INSERT INTO stalwart_mail_tracking_events VALUES(17,'token','message','opened',123456,'test');")?;
+    let frozen = path.parent().unwrap().join("tracking.sqlite3");
+    source.backup(rusqlite::DatabaseName::Main, &frozen, None)?;
+    let ro = Connection::open_with_flags(&frozen, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let names = ["stalwart_mail_tracking_tokens", "stalwart_mail_tracking_events"];
+    let mut source = Source {
+        choice: FileChoice { database: "tracking".into(), live_file: live, frozen_file: frozen, lsof_receipt_sha256: "b".repeat(64) },
+        kind: SourceKind::Core, internal_table: None, measurement_sha256: String::new(),
+        collectors: vec![super::super::daemon_collectors::Collector::MailTracking],
+        tables: names.iter().enumerate().map(|(i, name)| Ok(Decision {
+            rule: "E29-R5".into(),
+            table: Table { name: (*name).into(), collection: format!("legacy_{name}"), version: 0,
+                id_column: if i == 0 { "token" } else { "id" }.into(), body_column: None,
+                entity: cutover::Entity::Core, mode: Mode::Rows },
+            measurement: Some(freeze::measure(&ro, name)?),
+        })).collect::<Result<_>>()?,
+    };
+    measurements(&mut source);
+    snapshot.inventory.insert("tracking".into(), names.map(str::to_owned).into_iter().collect());
+    snapshot.databases.push(source);
+    fs::write(&path, serde_json::to_vec(&snapshot).unwrap())?;
+    let prepared = prepare(path.clone(), &[], migration)?;
+    let docs = &prepared.import.snapshot.documents;
+    let token = docs.iter().find(|d| d.collection == "outbound_tracking_tokens").expect("specialized collector must run");
+    assert_eq!(token.body["created_at_ms"], 123000);
+    assert!(docs.iter().any(|d| d.collection == cutover::ARCHIVE && d.body["source_table"] == names[0] && d.body["doc"]["created_at"] == 123));
+    assert!(prepared.import.audit.target_documents["tracking:stalwart_mail_tracking_tokens"].contains(&(token.collection.clone(), token.id.clone())));
+    let mut snapshot: Snapshot = serde_json::from_slice(&fs::read(&path)?).unwrap();
+    snapshot.databases[1].collectors.push(super::super::daemon_collectors::Collector::MailTracking);
+    fs::write(&path, serde_json::to_vec(&snapshot).unwrap())?;
+    assert!(matches!(prepare(path, &[], migration), Err(StoreError::Invalid(s)) if s == "cutover_duplicate_collector_source"));
     Ok(())
 }

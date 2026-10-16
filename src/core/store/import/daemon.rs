@@ -63,6 +63,8 @@ pub struct Source {
     pub kind: SourceKind,
     pub internal_table: Option<String>,
     pub tables: Vec<Decision>,
+    #[serde(default)]
+    pub collectors: Vec<super::daemon_collectors::Collector>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -100,6 +102,7 @@ struct Prepared {
     hash: String,
     import: cutover::CutoverImport,
     tables: Vec<TableReport>,
+    files: Vec<super::daemon_collectors::PendingFiles>,
 }
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -357,7 +360,7 @@ fn prepare(path: PathBuf, live: &[PathBuf], migration: Migration) -> Result<Prep
             tables: &specs[i],
         })
         .collect();
-    let import = cutover::collect(
+    let mut import = cutover::collect(
         &inputs,
         &plan,
         &NativeMigration(migration),
@@ -367,6 +370,12 @@ fn prepare(path: PathBuf, live: &[PathBuf], migration: Migration) -> Result<Prep
         },
         snapshot.imported_at_ms,
     )?;
+    let mut files = Vec::new();
+    for (index, source) in snapshot.databases.iter().enumerate() {
+        super::daemon_collectors::collect(
+            &transactions[index], source, &plan, &mut import, &mut files, root,
+        )?;
+    }
     for table in &mut tables {
         table.expected_target_rows = if table.retained_source {
             table.source_rows.unwrap_or(0)
@@ -400,6 +409,7 @@ fn prepare(path: PathBuf, live: &[PathBuf], migration: Migration) -> Result<Prep
         hash: hash(&bytes),
         import,
         tables,
+        files,
     })
 }
 struct NoDataframe;
@@ -450,6 +460,18 @@ pub async fn execute(
         &prepared.snapshot.archive_custodian_user,
     )
     .await?;
+    let mut imported = jour_fixe::prepare_files(imported, &cas, &scratch).await?;
+    for files in prepared.files {
+        let prepared_files = file_import::prepare(files.plan, &cas, &scratch).await?;
+        for key in files.tables {
+            let targets = report.audit.target_documents.entry(key.clone()).or_default();
+            targets.extend(prepared_files.documents.iter().map(|d| (d.collection.clone(), d.id.clone())));
+            if let Some(table) = report.tables.iter_mut().find(|t| format!("{}:{}", t.database, t.table) == key) {
+                table.expected_target_rows = targets.len();
+            }
+        }
+        imported = file_import::attach(imported, prepared_files)?;
+    }
     base_release::publish(
         &writer,
         &prepared.plan,
@@ -490,6 +512,9 @@ pub async fn execute(
                 table.target_rows = Some(actual);
             }
         }
+    }
+    for table in report.tables.iter_mut().filter(|t| !t.retained_source && t.source_rows == Some(0) && t.expected_target_rows == 0) {
+        table.target_rows = Some(0);
     }
     for table in report.tables.iter_mut().filter(|t| t.retained_source) {
         let Some(file) = report
