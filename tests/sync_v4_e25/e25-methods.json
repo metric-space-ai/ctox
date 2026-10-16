@@ -1175,7 +1175,8 @@
       "verification": "component verified: native Platform contract, rights gate mutation red and clean restoration green",
       "productive": "not_run",
       "gap": "protected pre-outbox Kernel/P4 intake and native SecretStore effect/commit binding missing; returns unavailable",
-      "component_source_sha256": "728051911bb01ebb58f7c370f15a340aa88700f01840b26f4b2fb4864bac84e7"
+      "component_source_sha256": "728051911bb01ebb58f7c370f15a340aa88700f01840b26f4b2fb4864bac84e7",
+      "post_m7": true
     },
     {
       "method": "ctox.secret.request.decline",
@@ -1192,26 +1193,28 @@
       "route": "ctox.workjet.remote_worker.admit",
       "handler": "src/core/business_os/app_platform/platform_routes.rs",
       "test": "e49_platform_rights_metadata_grants_and_restart_reply_boundary",
-      "verification": "component verified: native Platform contract, rights gate mutation red and clean restoration green",
-      "productive": "not_run",
-      "gap": "positive component fixture supplies machine_enrollment_id; current devices projection lacks the native relation and executor consumption is unwired",
-      "component_source_sha256": "728051911bb01ebb58f7c370f15a340aa88700f01840b26f4b2fb4864bac84e7"
+      "verification": "Native BOS/sync baseline green; removing the live native binding check makes revoked-enrollment admission red.",
+      "productive": "not_run(peer)",
+      "gap": "Existing remote run terminal/restoration and remaining counterfactual custody require recovery after SSH255; do not duplicate the run.",
+      "component_source_sha256": "8fb469a5df3c611e063a68ee4e21ec79ee494f83aedb0178b021416e197c939f",
+      "native_resolver": "devices::active_machine_enrollment; Platform borrows registered BOS reader; schema/feed unchanged; canonical command validation/idempotency retained; Platform::worker_grant rechecks source at consumption"
     },
     {
       "method": "ctox.maintenance.restart",
       "route": "ctox.maintenance.restart",
       "handler": "src/core/business_os/app_platform/platform_routes.rs",
       "test": "e49_platform_rights_metadata_grants_and_restart_reply_boundary",
-      "verification": "component verified: native Platform contract, rights gate mutation red and clean restoration green",
+      "verification": "Native baseline: admin-only unavailable response, no restart intent.",
       "productive": "not_run",
-      "gap": "native terminal delivery receipt and service restart consumer unwired; only audited transaction states verified",
+      "gap": "post-M7: native completion publication plus bounded service consumer",
       "component_source_sha256": "728051911bb01ebb58f7c370f15a340aa88700f01840b26f4b2fb4864bac84e7",
       "capability_filter": {
         "entry": "Platform::filter_session_capabilities",
         "status": "native_component_verified",
         "attachment": "src/core/rxdb/src/plugins/replication_webrtc/connection_lifecycle.rs:395",
         "gap": "hello owner must filter selected capabilities after current authenticated user lookup; no caller role"
-      }
+      },
+      "post_m7": true
     },
     {
       "method": "instance.providers.models.check",
