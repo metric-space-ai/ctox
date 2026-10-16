@@ -29,6 +29,8 @@ pub mod lanes;
 pub mod framing;
 #[path = "scheduler.rs"]
 pub mod scheduler;
+#[path="v4_session.rs"]
+pub mod v4_session;
 
 use super::collection_authority::authorize_collection_for_peer;
 use super::{protocol_contract_generated, NativePeerRole};
