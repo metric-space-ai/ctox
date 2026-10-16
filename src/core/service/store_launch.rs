@@ -22,7 +22,8 @@ async fn build(
 }
 
 /// Authentication is a read on the retained BOS owner. No raw opener, write,
-/// implicit loopback admin, stale cookie role or profile seeding is allowed.
+/// stale cookie role or profile seeding is allowed. E50 loopback admission is
+/// separately authenticated from the actual TCP peer AND the Host header.
 async fn authenticated_user(
     inputs: &StoreInputs,
     hash: String,
@@ -63,18 +64,33 @@ pub(super) fn response(
             (name == "ctox_business_os_auth" && !value.is_empty() && value.len() <= 512)
                 .then_some(value)
         });
-    let Some(token) = token else {
+    let local = token.is_none() && allows_local_admin(request);
+    if token.is_none() && !local {
         return Ok((
             401,
             "application/json",
             b"{\"error\":\"authentication_required\"}".to_vec(),
         ));
-    };
-    let hash = URL_SAFE_NO_PAD.encode(Sha256::digest(token.as_bytes()));
+    }
+    let hash = token.map(|token| URL_SAFE_NO_PAD.encode(Sha256::digest(token.as_bytes())));
+
     let owners = inputs.clone();
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     let task = inputs.runtime.spawn(async move {
         let result = async {
+            if local {
+                let context = crate::business_os::launch_context_v4::build_local(&owners)
+                    .await
+                    .map_err(|_| StoreError::Invalid("local launch unavailable".into()))?;
+                owners.instance_signer()?;
+                return Ok((
+                    200,
+                    "application/json",
+                    serde_json::to_vec(&context)
+                        .map_err(|_| StoreError::Invalid("launch encoding".into()))?,
+                ));
+            }
+            let hash = hash.ok_or(StoreError::Closed)?;
             let Some(user) = authenticated_user(&owners, hash.clone()).await? else {
                 return Ok((
                     401,
@@ -119,3 +135,26 @@ pub(super) fn response(
 #[cfg(all(test, unix))]
 #[path = "store_launch_tests.rs"]
 mod tests;
+
+fn allows_local_admin(request: &tiny_http::Request) -> bool {
+    if !request.remote_addr().is_some_and(|a| a.ip().is_loopback()) {
+        return false;
+    }
+    let host = request
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("Host"))
+        .map(|h| h.value.as_str());
+    host.is_none_or(|h| {
+        url::Url::parse(&format!("http://{h}"))
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_owned))
+            .is_some_and(|h| {
+                h.eq_ignore_ascii_case("localhost")
+                    || h.to_ascii_lowercase().ends_with(".localhost")
+                    || h.trim_matches(['[', ']'])
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+            })
+    })
+}

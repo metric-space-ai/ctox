@@ -93,6 +93,27 @@ pub(crate) async fn build(
     owners: &Arc<StoreInputs>,
     user: &BusinessOsUser,
 ) -> Result<V4LaunchContext> {
+    build_principal(owners, user, false).await
+}
+/// E50: only the HTTP boundary may authenticate the implicit loopback admin.
+/// No persisted local-dev account or credential is created.
+pub(crate) async fn build_local(owners: &Arc<StoreInputs>) -> Result<V4LaunchContext> {
+    let user = BusinessOsUser {
+        id: "local-dev".into(),
+        display_name: "Local CTOX".into(),
+        role: "admin".into(),
+        active: true,
+        profile: serde_json::json!({}),
+        created_at_ms: 0,
+        updated_at_ms: 0,
+    };
+    build_principal(owners, &user, true).await
+}
+async fn build_principal(
+    owners: &Arc<StoreInputs>,
+    user: &BusinessOsUser,
+    local: bool,
+) -> Result<V4LaunchContext> {
     ensure!(
         user.active && !user.id.is_empty(),
         "forbidden: inactive principal"
@@ -103,7 +124,7 @@ pub(crate) async fn build(
     let key = raw_key;
     let snapshot = owners
         .activation_snapshot(move |tx| {
-            snapshot(tx, &id, &key)
+            snapshot(tx, &id, &key, local)
                 .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))
         })
         .await
@@ -183,7 +204,7 @@ pub(crate) async fn build(
     offer
         .encode()
         .map_err(|e| anyhow!("invalid P4 offer: {e:?}"))?;
-    Ok(V4LaunchContext {
+    let context = V4LaunchContext {
         v4: Launch {
             instance_id: signer.instance_id().into(),
             user_id: actor.id.clone(),
@@ -196,7 +217,12 @@ pub(crate) async fn build(
                 public_key: URL_SAFE_NO_PAD.encode(raw_key),
             }],
         },
-    })
+    };
+    owners
+        .browser_admission()?
+        .register(&context, local)
+        .await?;
+    Ok(context)
 }
 fn validate_signaling(s: &mut Signaling) -> Result<()> {
     ensure!(
@@ -327,8 +353,13 @@ fn snapshot(
     tx: &Transaction<'_>,
     id: &str,
     key: &[u8; 32],
+    local: bool,
 ) -> Result<(Actor, Vec<String>, Vec<String>)> {
-    let user = document(tx, "business_users", id)?;
+    let user = if local && id == "local-dev" {
+        serde_json::json!({"id":"local-dev","role":"admin","active":true})
+    } else {
+        document(tx, "business_users", id)?
+    };
     ensure!(
         user["active"] == true
             && user["id"] == id

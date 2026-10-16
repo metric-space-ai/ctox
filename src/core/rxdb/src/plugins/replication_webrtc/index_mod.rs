@@ -155,8 +155,10 @@ async fn finish_guarded_auxiliary_send(
 mod v4_native_commands;
 #[path = "v4_native_sessions.rs"]
 mod v4_native_sessions;
-pub use v4_native_sessions::{NativeSessionFeed,NativeSessionStream};
-pub use v4_native_commands::{NativeCommandAuthority, NativeCommandExecutor, PendingNativeCompletion};
+pub use v4_native_commands::{
+    NativeCommandAuthority, NativeCommandExecutor, PendingNativeCompletion,
+};
+pub use v4_native_sessions::{NativeSessionFeed, NativeSessionStream};
 
 pub struct GuardedAuxiliaryResponse {
     pub result: Value,
@@ -415,9 +417,11 @@ pub struct RxWebRTCReplicationPool<H: WebRTCConnectionHandler> {
     /// WebRTC DataChannel without becoming RxDB documents. This is reserved for
     /// latency-sensitive ephemeral control planes such as the live Browser.
     auxiliary_request_handlers: Mutex<HashMap<String, RegisteredAuxiliaryRequest<H::Peer>>>,
-    native_command_executors: Mutex<HashMap<String,v4_native_commands::NativeCommandExecutor>>,
-    native_session_observers: Mutex<HashMap<String,v4_native_sessions::NativeSessionObserver<H::Peer>>>,
-    native_command_sessions: Mutex<HashMap<String,v4_native_sessions::NativeSessionBinding<H::Peer>>>,
+    native_command_executors: Mutex<HashMap<String, v4_native_commands::NativeCommandExecutor>>,
+    native_session_observers:
+        Mutex<HashMap<String, v4_native_sessions::NativeSessionObserver<H::Peer>>>,
+    native_command_sessions:
+        Mutex<HashMap<String, v4_native_sessions::NativeSessionBinding<H::Peer>>>,
     /// Room admission is also required before sending auxiliary control RPCs.
     authenticated_peers: Arc<Mutex<HashSet<H::Peer>>>,
     outbound_ready_peers: Mutex<HashSet<H::Peer>>,
@@ -6561,6 +6565,7 @@ pub mod v4_router {
     }
     pub struct V4ConnectionRouter {
         config: V4RouterConfig,
+        browser_tickets: bool,
         registry: PeerLifecycleRegistry,
         sessions: Mutex<HashMap<WebRTCRsConnection, Arc<Session>>>,
         reliable: Mutex<
@@ -6583,10 +6588,18 @@ pub mod v4_router {
             }
             Ok(Self {
                 config,
+                browser_tickets: false,
                 registry: PeerLifecycleRegistry::default(),
                 sessions: Mutex::new(HashMap::new()),
                 reliable: Mutex::new(HashMap::new()),
             })
+        }
+        /// Separate browser listener: no unsolicited native Hello/challenge.
+        /// The supplied admission callback owns E50 ticket verification/consumption.
+        pub fn new_browser(config: V4RouterConfig) -> RxResult<Self> {
+            let mut router = Self::new(config)?;
+            router.browser_tickets = true;
+            Ok(router)
         }
         pub fn snapshot(&self, peer: &WebRTCRsConnection) -> Option<ConnectionSnapshot> {
             self.sessions
@@ -6604,16 +6617,27 @@ pub mod v4_router {
             peer: WebRTCRsConnection,
         ) -> RxResult<()> {
             let nonce = super::fresh_device_proof_nonce();
-            let lifecycle = self
-                .registry
-                .start(
+            let lifecycle = if self.browser_tickets {
+                let authenticate = self.config.authenticate.clone();
+                let identity = peer.peer_id().to_owned();
+                let admission: AuthenticatePeer =
+                    Arc::new(move |_, hello| authenticate(identity.clone(), hello));
+                self.registry.start_browser(
+                    peer.to_string(),
+                    self.config.policy.clone(),
+                    admission,
+                    self.config.handshake_timeout,
+                )
+            } else {
+                self.registry.start(
                     peer.to_string(),
                     nonce.clone(),
                     self.config.policy.clone(),
                     self.config.authenticate.clone(),
                     self.config.handshake_timeout,
                 )
-                .map_err(|_| new_rx_error("ctox_v4_lifecycle_start", None))?;
+            }
+            .map_err(|_| new_rx_error("ctox_v4_lifecycle_start", None))?;
             lifecycle
                 .transport_connected()
                 .await
@@ -6645,6 +6669,9 @@ pub mod v4_router {
                 }
             });
             handler.track_v4_task(&peer, task);
+            if self.browser_tickets {
+                return Ok(());
+            }
             let local = tokio::time::timeout(
                 self.config.handshake_timeout,
                 (self.config.create_local_hello)(peer.clone(), nonce.clone()),
