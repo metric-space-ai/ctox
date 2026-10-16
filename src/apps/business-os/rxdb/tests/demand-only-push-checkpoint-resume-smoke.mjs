@@ -1,4 +1,4 @@
-// THESEN 16.10.2026: 124 moved leads never left one browser.
+// Field report 16.10.2026: 124 moved records never left one browser.
 //
 // outbound_lead_generation_leads is demand-only (pull: null), so it never owns a
 // pull checkpoint. Native research writes move the collection epoch all the
@@ -108,7 +108,7 @@ try {
     !state.pullCheckpointsByPeer.has('peer-2'));
   drop('peer-2');
 
-  // A second renegotiation keeps resuming (the THESEN pattern: many reconnects).
+  // A second renegotiation keeps resuming (the field pattern: many reconnects).
   localStatus = { lwt: 1792140800000, eviction: 9 };
   await connect('peer-3', protocol('epoch-c'));
   check('repeated reconnects keep resuming the push position',
