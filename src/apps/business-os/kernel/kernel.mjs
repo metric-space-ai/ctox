@@ -8,7 +8,7 @@ import { KernelTransport, decimalSeq, seqGreater, maxSeq, checkpointKey } from '
 import { MemoryCoreTransport } from './fake-core.mjs';
 import { assertLeader, acquireGeneration } from './leader.mjs';
 // Local App API 4.0 kernel. Derived from the reviewed executable contract; no legacy runtime imports.
-import { CtoxError, StaleLeader, cloneValue, deepFreeze, deepEqual, jsonEq, liveEqual, mergePatch, fnv1a, uuidv7, sha256Hex, hasBlob, isBlob, isPlainObject } from './values.mjs';
+import { CtoxError, StaleLeader, cloneValue, deepFreeze, deepEqual, jsonEq, liveEqual, mergePatch, fnv1a, uuidv7, sha256Js, sha256Hex, hasBlob, isBlob, isPlainObject } from './values.mjs';
 import { compileQuery, runCompiledQuery, normalizeJson, validateSchema } from './app-api.mjs';
 import { openBackend, deleteBackend } from './store-idb-v5.mjs';
 import { emptyBase, byOpId, enqueueWrite, reserveWrites, docKey, nsName, applyOp, recompute } from './outbox.mjs';
@@ -84,6 +84,7 @@ async function importModuleText(text) {
 // Vom Kern berechnete bzw. geschützte Manifest-Felder: weder per setManifest änderbar noch vom Basis-Manifest geerbt.
 const MANIFEST_FIELDS_PROTECTED = new Set(['app_id', 'app_ver', 'files', 'generations', 'retires', 'provenance', 'author', 'created_at']);
 const MANIFEST_FIELDS_COMPUTED = new Set([...MANIFEST_FIELDS_PROTECTED, 'title', 'entry', 'handlers', 'capabilities_required', 'min_app_api', 'layout', 'styles', 'collections']);
+const HASH_MISMATCH = Symbol('hash_mismatch');
 export function createKernel(opts = {}) {
   const instanceId = opts.instanceId;
   const userId = opts.userId ?? opts.actor?.id;
@@ -552,7 +553,7 @@ export function createKernel(opts = {}) {
       case 'rpc': {
         if (!isLeader) break;
         try {
-          const value = msg.name==='fetchBlob' ? await fetchBlob(...msg.args) : await simImpl[msg.name](...msg.args);
+          const value = msg.name==='fetchBlob' ? await fetchBlob(...msg.args) : msg.name==='fetchRange' ? await fetchRange(...msg.args) : await simImpl[msg.name](...msg.args);
           post({ type: 'rpc_done', reqId: msg.reqId, value: value === undefined ? null : value });
         } catch (e) {
           post({ type: 'rpc_done', reqId: msg.reqId, error: { code: e?.code, message: String(e?.message ?? e) } });
@@ -582,11 +583,13 @@ export function createKernel(opts = {}) {
     local.catch(() => {});
     return { op_id, local, result, cancel: cancelFn };
   }
-  function localWrite(app, op, collection, id, body) {
+  function localWrite(app, op, collection, id, body, createOnly = false) {
     const op_id = uuidv7();
     let resolveResult;
     const result = new Promise((r) => { resolveResult = r; });
     let entry = null;
+    let reused = false;
+    let ownCommandQueued = false;
     // Synchroner Teil: prüfen und optimistisch in den Spiegel (lokal sofort sichtbar, Flag pending).
     const prepare = () => {
       guardAlive();
@@ -611,7 +614,7 @@ export function createKernel(opts = {}) {
       };
       waiters.set(op_id, resolveResult);
       const base = cur?.base ?? emptyBase();
-      mirrorPut({ collection: ns, id, data: st.data, deleted: st.deleted, rev: `op:${op_id}`, seq: base.seq, pending: true, base });
+      if (!createOnly || !visible(cur)) mirrorPut({ collection: ns, id, data: st.data, deleted: st.deleted, rev: `op:${op_id}`, seq: base.seq, pending: true, base });
     };
     const persist = async () => {
       if (skipBeforeCommit.has(op_id)) {
@@ -626,12 +629,25 @@ export function createKernel(opts = {}) {
       const rec = await db.tx(async (t) => {
         if(isLeader)await assertGen(t);
         const stored = await t.get('docs', [ns, id]);
-        await enqueueWrite(t, entry); // enqueue order + docs + outbox in ONE transaction
+        // E26: the IDB transaction arbitrates concurrent tabs and reloads.
+        // Reuse the original operation/result, never enqueue another command.
+        if (createOnly && visible(stored)) {
+          reused = true;
+          waiters.delete(op_id);
+          const pending = (await t.outboxFor(ns, id)).sort(byOpId).at(-1);
+          if (pending) {
+            const previous = waiters.get(pending.op_id);
+            waiters.set(pending.op_id, (value) => { previous?.(value); resolveResult(value); });
+          } else resolveResult({ status: 'accepted', rev: stored.rev, seq: stored.seq });
+          return stored;
+        }
+        await enqueueWrite(t, entry); // preserve E26 reuse plus durable enqueue/client order
         const r = recompute(ns, id, stored?.base ?? emptyBase(), await t.outboxFor(ns, id));
         await putDoc(t, r);
         return r;
       });
-      if (ns === 'business_commands' && rec.pending) commandTimings.mark(id, 'queued');
+      ownCommandQueued = !reused; // E26: a reused create-only command is not this handle's queue entry
+      if (ns === 'business_commands' && rec.pending) commandTimings.mark(id, 'queued'); // E14 command timings
       mirrorPut(rec);
       post({ type: 'docs', keys: [[ns, id]], local_seq: rec.lseq });
       post({ type: 'outbox' });
@@ -654,7 +670,7 @@ export function createKernel(opts = {}) {
       },
     );
     const localDone = committed.then(() => undefined);
-    return handleFor(op_id, localDone, result, () => cancelWrite(op_id, () => entry));
+    return handleFor(op_id, localDone, result, () => reused || (createOnly && !ownCommandQueued) ? false : cancelWrite(op_id, () => entry));
   }
   function normalizeJsonPatch(p) {
     if(!isPlainObject(p))throw new CtoxError('invalid','patch must be an object',{path:''});
@@ -1065,7 +1081,8 @@ export function createKernel(opts = {}) {
       // Jeder Zweig endet in setActivation; kein Warten ohne Ende (K-1c Punkt 0). Transport offline → Fehler nach oben.
       let content = null;
       for (let attempt = 0; attempt < 2 && content === null; attempt++) {
-        let got = await transport.artifact(hash).then(artifactContent).catch((error) => { if (error?.code === 'unavailable') throw error; return null; });
+        let got = await transport.artifact(hash).then(artifactContent).catch((error) => { if (error?.code === 'unavailable') throw error; return error?.reason === 'hash_mismatch' ? HASH_MISMATCH : null; });
+        if (got === HASH_MISMATCH) { simRecord.refetches++; continue; }
         if (got == null) { await setActivation(appId, { target_ver: ver, state: 'failed', error: `artifact_missing:${path}` }); return; }
         if (corruptNextFetch > 0) { corruptNextFetch--; got = typeof got === 'string' ? `${got}\n/* beschädigt */` : Uint8Array.from([...got, 0]); }
         if ((await sha256Hex(got)) === hash) content = got;
@@ -1075,6 +1092,8 @@ export function createKernel(opts = {}) {
       await db.tx(async (t) => { await assertGen(t); await t.put('artifacts', { hash, content, app_id: appId, app_ver: ver, path, stored_at: Date.now() }); });
     }
     await setActivation(appId, { target_ver: ver, state: 'fetched' });
+    // E43.2: a transport that grants capabilities in hello_ok reports null until then; never judge before the grant.
+    if ((manifest.capabilities_required ?? []).some((c) => !capabilities.has(c)) && transport.capabilities === null) { await waitUntil(() => transport.capabilities !== null || closed); if (closed) return; }
     const missing = (manifest.capabilities_required ?? []).filter((c) => !capabilities.has(c) && !(transport.capabilities ?? []).includes(c)); // Katalog-Primitive des Core (§16.29)
     if (missing.length || compareVer(manifest.min_app_api ?? '4.0', APP_API_VERSION) > 0) {
       await setActivation(appId, { target_ver: ver, state: 'failed', error: `needs_update:${missing.join(',') || `app_api ${manifest.min_app_api}`}` });
@@ -1228,6 +1247,14 @@ export function createKernel(opts = {}) {
     if (broadcast) post({ type: 'upload', ref, sent, total });
   }
 
+  async function fetchRange(ref, range) {
+    guardAlive();
+    if (!isLeader || link.state !== 'online') throw new CtoxError('unavailable', 'File not cached and leader offline');
+    const bytes = new Uint8Array(await (await transport.blob(ref, range)).arrayBuffer());
+    if (bytes.length !== range.end - range.start) throw new CtoxError('invalid', 'Incomplete file range');
+    return bytes;
+  }
+
   async function fetchBlob(ref) {
     guardAlive();
     if(!isLeader || link.state!=='online')throw new CtoxError('unavailable','File not cached and leader offline');
@@ -1287,6 +1314,58 @@ export function createKernel(opts = {}) {
       if (!mine && docs.length) throw new CtoxError('forbidden', 'Datei gehört einer anderen App', { path: sel.id ? 'id' : 'ref' });
       return mine ?? null;
     }
+    // E30: a CAS hash is not authority. Only canonical, still-readable rows
+    // grant access; an optimistic reference cannot mint a read grant.
+    async function readableFile(sel) {
+      guardAlive();
+      if (!isPlainObject(sel) || (typeof sel.id !== 'string' && typeof sel.ref !== 'string')) throw new CtoxError('invalid', 'files: {id} oder {ref} nötig', {path:'ref'});
+      const docs = fileDocs().filter(d => sel.id ? d.id === sel.id : d.ref === sel.ref);
+      for (const d of docs) {
+        if (d.owner_app !== appId) continue;
+        const row = mirrorGet('files',d.id), base = row?.base;
+        if (row?.revoked) continue;
+        if (!base?.deleted && base?.data?.owner_app === appId && base.data.ref === d.ref) return d;
+        // files.put proves local bytes in the blob transaction, durably across
+        // reload. A plain optimistic files row cannot claim another app's CAS.
+        if (row?.pending && !base?.data && (await db.get('meta',`file-owner:${JSON.stringify([appId,d.id])}`))?.ref === d.ref) return d;
+      }
+      const currentManifest = owner => {
+        const ver = visible(mirrorGet('business_apps',owner))?.active_ver ?? activations.get(owner)?.activated_ver;
+        return versionDoc(owner,ver)?.manifest;
+      };
+      const caller = versionDoc(appId,app.ver)?.manifest;
+      const ownReferenceRows = new Set(['shell_preferences','app_drafts']);
+      function readableNamespace(ns) {
+        const c = ns.replace(/@g[1-9][0-9]*$/,'');
+        if (caller?.collections?.[c]) return ns === resolveNs(app,c);
+        const f = caller?.foreign_collections?.[c];
+        const owner = f?.owner_app ?? f?.app ?? f?.owner;
+        const om = owner && currentManifest(owner);
+        return !!(f?.ops?.includes('read') && om?.collections?.[c] && om?.exports?.[c]?.includes('read') && ns === nsName(c,om.generations?.[c] ?? 1));
+      }
+      const canonicalRows = [];
+      for (const [ns, rows] of mirror) {
+        const declared = readableNamespace(ns);
+        if (!declared && ns !== 'business_commands' && !ownReferenceRows.has(ns)) continue;
+        for (const row of rows.values()) if (!row.deleted && !row.revoked && !row.base?.deleted && row.base?.data && ownRowOk(ns,row.id)) {
+          const d = row.base.data;
+          // Standard API handles already expose own command results and own
+          // platform rows; they need no foreign-collection declaration.
+          if (declared || ownReferenceRows.has(ns) || (ns === 'business_commands' && d.app_id === appId && d.actor_id === userId)) canonicalRows.push([ns,d]);
+        }
+      }
+      const desktop = canonicalRows.find(([ns,d]) => ns.replace(/@g[1-9][0-9]*$/,'') === 'desktop_files' && d.id === sel.id && !d.is_deleted)?.[1];
+      if (desktop) {
+        const ref = [desktop.ref,desktop.content_ref,docs[0]?.ref].find(v => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v));
+        if (typeof ref !== 'string' || !/^[a-f0-9]{64}$/.test(ref)) throw new CtoxError('unavailable','Desktop file has no CAS reference',{path:'id'});
+        const meta = fileDocs().find(d => d.ref === ref);
+        return {...meta,id:desktop.id,ref,name:desktop.name ?? meta?.name,mime:desktop.mime ?? desktop.mime_type ?? meta?.mime,size:desktop.size ?? desktop.size_bytes ?? meta?.size};
+      }
+      const ref = docs[0]?.ref ?? sel.ref;
+      const containsRef = value => value !== null && typeof value === 'object' && (value.ref === ref || value.blob_ref === ref || Object.values(value).some(containsRef));
+      if (typeof ref === 'string' && /^[a-f0-9]{64}$/.test(ref) && canonicalRows.some(([,d]) => containsRef(d))) return docs[0] ?? {ref,id:ref,name:null};
+      throw new CtoxError('forbidden','File needs ownership or a readable reference',{path:sel.id ? 'id' : 'ref'});
+    }
     const fileInfo = (d) => ({ id: d.id, ref: d.ref, name: d.name ?? null, mime: d.mime ?? 'application/octet-stream', size: d.size ?? 0 });
     async function fileBytes(content) {
       if (isPlainObject(content) && typeof content.text === 'string') return { bytes: new TextEncoder().encode(content.text), text: true };
@@ -1311,10 +1390,23 @@ export function createKernel(opts = {}) {
       },
       /** CAP-3b: get({id|ref}) → {found, id, ref, name, size, mime, text? | bytes?}; Text nur für UTF-8 ≤ 512 KiB. String = Altform (Blob). */
       async get(sel) {
-        if (typeof sel === 'string') return getBlob(sel);
+        if (typeof sel === 'string') return getBlob((await readableFile({ref:sel})).ref);
         guardAlive();
-        const d = ownFile(sel);
+        let d = await readableFile(sel);
+        if (sel.range !== undefined && !Number.isSafeInteger(d.size)) d = {...d,size:(await getBlob(d.ref)).size};
         if (!d) return { found: false, ref: sel.ref ?? null, ...(sel.id ? { id: sel.id } : {}) };
+        if (sel.range !== undefined) {
+          const {start, end} = sel.range ?? {};
+          if (!isPlainObject(sel.range) || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || end > d.size) throw new CtoxError('invalid', 'Byte range outside file', {path:'range'});
+          const local = await db.get('blobs', d.ref);
+          let bytes;
+          if (local) {
+            // The immutable cached Blob was verified on full receipt/upload.
+            await db.tx(t => t.put('blobs', {...local, last_used:Date.now()}));
+            bytes = new Uint8Array(await local.blob.slice(start, end).arrayBuffer());
+          } else bytes = isLeader ? await fetchRange(d.ref, sel.range) : await callLeader('fetchRange', [d.ref, sel.range]);
+          return {found:true, ...fileInfo(d), bytes};
+        }
         const bytes = new Uint8Array(await (await getBlob(d.ref)).arrayBuffer());
         let text;
         if (bytes.byteLength <= FILE_TEXT_MAX) { try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { text = undefined; } }
@@ -1382,6 +1474,7 @@ export function createKernel(opts = {}) {
             const existing = await t.get('blobs', ref);
             await t.put('blobs', { ref, blob, size: blob.size, type: blob.type, pinned: true, last_used: Date.now(), ...(existing ? {} : {}) });
             await t.put('outbox', { op_id, collection: '__blobs', id: ref, op: 'upload', body: null, app_id: appId, app_ver: app.ver, created_at: Date.now(), origin_tab: tabId });
+            await t.put('meta',{key:`file-owner:${JSON.stringify([appId,id])}`,ref});
           });
           if(cancelledEarly){await db.tx(async t=>{await t.del('outbox',op_id);const b=await t.get('blobs',ref);if(b)await t.put('blobs',{...b,pinned:false});});return;}
           post({ type: 'outbox' });
@@ -1445,14 +1538,18 @@ export function createKernel(opts = {}) {
       remove(collection, id) { return localWrite(app, 'delete', collection, id, null); },
       command(type, payload = {}, commandOptions={}) {
         if (typeof type !== 'string' || !type) throw new CtoxError('invalid', 'Befehlstyp fehlt', { path: 'type' });
-        const id = uuidv7();
+        const key = commandOptions.idempotency_key;
+        if (key !== undefined && (typeof key !== 'string' || key.length > 128)) throw new CtoxError('invalid', 'idempotency_key must be a string of at most 128 characters', { path: 'idempotency_key' });
+        // UUIDv8: first 128 SHA-256 bits, RFC variant/version bits normalized.
+        const hash = key === undefined ? null : sha256Js(new TextEncoder().encode(`${appId}|${actor.id}|${key}`));
+        const id = hash === null ? uuidv7() : `${hash.slice(0,8)}-${hash.slice(8,12)}-8${hash.slice(13,16)}-${((parseInt(hash[16],16)&3)|8).toString(16)}${hash.slice(17,20)}-${hash.slice(20,32)}`;
         const write = localWrite(app, 'put', 'business_commands', id, {
           id, ...(commandOptions.record_id===undefined?{}:{record_id:commandOptions.record_id}),
           // §16.39 Nr. 3: Rückruf-Befehlstypen der auslösenden App als Felder am Befehlsdokument (Core-PR #848 liest sie dort)
           ...(typeof commandOptions.on_complete === 'string' ? { on_complete: commandOptions.on_complete } : {}),
           ...(typeof commandOptions.on_failed === 'string' ? { on_failed: commandOptions.on_failed } : {}),
           type, payload, status: 'queued', app_id: appId, actor_id: actor.id, created_at: new Date().toISOString(),
-        });
+        }, key !== undefined);
         const status = makeLive(['c:business_commands', 'commands'], () => {
           const d = visible(mirrorGet('business_commands', id));
           if (!d) {

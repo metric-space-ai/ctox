@@ -19,7 +19,7 @@ const sha = (b) => createHash('sha256').update(b).digest('hex');
 const noBase64 = (v) => !JSON.stringify(v, (k, x) => (x instanceof Uint8Array ? `<${x.length} bytes>` : x)).includes('base64');
 const cmdEnd = async (h) => { await until(() => ['done', 'failed'].includes(h.status.get().status)); return h.status.get(); };
 
-test('CAP-3b App-API: files.put(bytes|{text}, {name, mime}) → {id, ref}; get/list/delete nur eigene App, Ergebnisse immer Objekte', async (t) => {
+test('CAP-3b App-API: files.put(bytes|{text}, {name, mime}) → {id, ref}; get checks readable references; list/delete own App, Ergebnisse immer Objekte', async (t) => {
   const k = await mk(t);
   await k.sim.publishAppVersion('crm', '1', { files: { 'index.js': MOUNT } });
   await k.sim.publishAppVersion('hr', '1', { files: { 'index.js': MOUNT } });
@@ -35,13 +35,13 @@ test('CAP-3b App-API: files.put(bytes|{text}, {name, mime}) → {id, ref}; get/l
   assert.deepEqual([...gb.bytes], [0xff, 0xfe, 0x00]);
   assert.ok(noBase64(ga) && noBase64(gb));
   assert.deepEqual((await crm.files.list()).files.map((f) => f.name).sort(), ['a.txt', 'b.bin']);
-  assert.deepEqual(await crm.files.get({ ref: sha('gibt es nicht') }), { found: false, ref: sha('gibt es nicht') });
+  await assert.rejects(crm.files.get({ref:sha('gibt es nicht')}), e=>e.code==='forbidden', 'E30: unknown reference grants nothing');
   // fremde App: lesen und löschen verweigert, Liste leer
   await assert.rejects(hr.files.get({ ref: a.ref }), (e) => e.code === 'forbidden');
   await assert.rejects(hr.files.delete({ id: a.id }), (e) => e.code === 'forbidden');
   assert.deepEqual(await hr.files.list(), { files: [] });
   assert.deepEqual(await crm.files.delete({ id: a.id }), { deleted: true, id: a.id });
-  assert.deepEqual((await crm.files.get({ id: a.id })).found, false);
+  await assert.rejects(crm.files.get({id:a.id}), e=>e.code==='forbidden', 'E30: deleted reference grants nothing');
 });
 
 test('#830 Handler: ctx.model(req) und ctx.cap.files.* – deterministisch, Objekte, fremde Datei verweigert, Deklaration nötig', async (t) => {

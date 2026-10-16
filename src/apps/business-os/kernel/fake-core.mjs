@@ -198,6 +198,6 @@ export class MemoryCoreTransport extends KernelTransport {
   }
   async artifact(hash) { if(!this.core.artifacts.has(hash)) throw new CtoxError('not_found','Artifact missing'); return this.core.artifacts.get(hash); }
   putArtifact(hash, content) { this.core.artifacts.set(hash, content); }
-  async blob(ref) { const blob=this.core.blobs.get(ref); if(!blob) throw new CtoxError('not_found','Blob missing'); return blob; }
+  async blob(ref, range) { const blob=this.core.blobs.get(ref); if(!blob) throw new CtoxError('not_found','Blob missing'); return range === undefined ? blob : blob.slice(range.start, range.end, blob.type); }
   async upload(ref,blob) { this.core.blobs.set(ref,blob); }
 }

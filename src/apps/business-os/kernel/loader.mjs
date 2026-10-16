@@ -15,6 +15,7 @@ export async function createLoader(options) {
     if(serviceWorker && globalThis.navigator?.serviceWorker) {
       const url = new URL(serviceWorker, globalThis.location.href);
       if(url.origin !== globalThis.location.origin || url.pathname !== '/sw.js') throw new CtoxError('invalid','Only the same-origin /sw.js bootstrap is allowed');
+      url.search='';url.searchParams.set('db',kernel.dbName); // E43.3: v4/sw.js reads the kernel IDB name from its registration URL
       registration = await navigator.serviceWorker.register(url.href,{scope:'/'});
       if(navigator.serviceWorker.ready)registration=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new CtoxError('unavailable','Service worker activation deadline')),9000);navigator.serviceWorker.ready.then(value=>{clearTimeout(timer);resolve(value);},error=>{clearTimeout(timer);reject(error);});});
     }
