@@ -51,12 +51,12 @@ impl RuntimeAuthority {
     }
     fn query<T: Send + 'static>(
         &self,
+        stage: &'static str,
         read: impl FnOnce(&Connection) -> Result<T, StoreError> + Send + 'static,
     ) -> Result<T> {
         let pool = self.database.readers.clone();
         wait(&self.runtime, async move {
-            pool.read_job(ReadJob::new(JobOptions::default(), read))
-                .await
+            observed_read(pool, stage, ReadJob::new(JobOptions::default(), read)).await
         })
     }
     pub(super) fn binding(
@@ -77,7 +77,7 @@ impl RuntimeAuthority {
             self.codec.manifest(db, app)?
         };
         if !super::super::commands::handles(text(doc, "type").map_err(sql_error)?) {
-            permit(db, app, &a, text(doc, "type").map_err(sql_error)?)?;
+            origin::delivery_permit(db, doc, &a)?;
         }
         let mut command = doc.clone();
         command["actor"] = actor_json(&a);
@@ -352,7 +352,7 @@ impl CoreAuthority for RuntimeAuthority {
         let codec = self.codec.clone();
         let b = binding.clone();
         let expected = manifest.clone();
-        self.query(move |db| {
+        self.query("authority.admit", move |db| {
             let a = codec.check(db, &b)?;
             let current = if b["command"]["runtime_completion"] == true {
                 codec.version(
@@ -367,12 +367,7 @@ impl CoreAuthority for RuntimeAuthority {
             if current != expected {
                 return Err(invalid("revoked: manifest changed"));
             }
-            permit(
-                db,
-                text(&b["command"], "app_id").map_err(sql_error)?,
-                &a,
-                text(&b["command"], "type").map_err(sql_error)?,
-            )?;
+            origin::delivery_permit(db, &b["command"], &a)?;
             Ok(())
         })
     }
@@ -381,7 +376,7 @@ impl CoreAuthority for RuntimeAuthority {
         let claimed = claimed.clone();
         let op = operation.clone();
         let codec = self.codec.clone();
-        self.query(move |db| {
+        self.query("authority.authorize", move |db| {
             let a = actor(db, text(&claimed, "id").map_err(sql_error)?)?;
             if actor_json(&a) != claimed {
                 return Err(invalid("revoked: actor changed"));
@@ -418,7 +413,7 @@ impl CoreAuthority for RuntimeAuthority {
         let name = name.to_owned();
         let operation = operation.to_owned();
         let codec = self.codec.clone();
-        self.query(move |db| {
+        self.query("authority.exported", move |db| {
             let c = collection(db, &name)?;
             if c.owner != owner {
                 return Ok(false);
@@ -474,7 +469,7 @@ impl CoreAuthority for RuntimeAuthority {
         let app = app.to_owned();
         let version = version.to_owned();
         let codec = self.codec.clone();
-        self.query(move |db| {
+        self.query("authority.grants", move |db| {
             let m = codec.version(db, &app, &version)?["manifest"].clone();
             let record = document(db, "business_apps", &app)?
                 .ok_or_else(|| invalid("revoked: app removed"))?;
@@ -530,7 +525,7 @@ impl WriteAuthority for ExecutorGate {
             let app = text(command, "app_id")?;
             if !super::super::commands::handles(text(command, "type")?) {
                 self.codec.manifest(tx, app)?;
-                permit(tx, app, &a, text(command, "type")?)?;
+                origin::delivery_permit(tx, command, &a)?;
             }
             Ok(())
         })();
@@ -591,7 +586,7 @@ impl RuntimeAuthority {
             let payload=if event["kind"]=="trigger"{event["event"].clone()}else{event.clone()};
             let doc=json!({"id":command_id,"app_id":app,"type":kind,"actor_id":a.id,"status":"queued","payload":payload,"client_context":{"trigger_id":event["trigger_id"]},"created_at":chrono::Utc::now().to_rfc3339(),"runtime_event":true,"runtime_completion":expected_callback.is_some(),"native_version":version});
             if document(tx,"business_commands",&command_id)?.is_some(){return Err(invalid("conflict: native event already admitted; reconcile"));}
-            super::super::commands::put(tx,"business_commands",&command_id,&doc)?;Ok(doc)
+            store_command(tx,&doc)?;origin::stamp(tx,"runtime_event",&doc)?;Ok(doc)
         }))?;
         let doc = wait(&self.runtime, async move { job.await })?;
         let myself = self
@@ -682,7 +677,7 @@ impl RuntimeAuthority {
                 let mut doc = document(tx, "business_commands", &id)?
                     .ok_or_else(|| invalid("not_found: event"))?;
                 doc["status"] = json!(status);
-                super::super::commands::put(tx, "business_commands", &id, &doc)?;
+                store_command(tx, &doc)?;
                 Ok(())
             }))?
             .await?;
@@ -692,7 +687,7 @@ impl RuntimeAuthority {
         let id = id.to_owned();
         let task = format!("command:{id}");
         let codec = self.codec.clone();
-        let saved=self.query(move|db|{
+        let saved=self.query("authority.completion_binding", move |db| {
             let row:Option<(String,String,String,Option<String>,Option<String>)>=db.query_row("SELECT app_id,app_ver,actor_id,on_complete,on_failed FROM _app_runtime_completions WHERE task_id=?1 AND state='pending'",[task],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
             let Some((app,ver,actor_id,complete,failed))=row else{return Ok(None)};
             let target=document(db,"business_commands",&id)?.ok_or_else(||invalid("not_found: completed command"))?;

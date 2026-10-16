@@ -78,17 +78,17 @@ async fn terminal(database: &Database, name: &str, id: &str) -> Result<Value> {
     let mut commits = database.writer.subscribe_commits();
     let name = name.to_owned();
     let id = id.to_owned();
+    let started = Instant::now();
+    let mut observed = json!({"present":false});
     tokio::time::timeout(Duration::from_secs(25), async {
         loop {
             let n = name.clone();
             let i = id.clone();
-            let doc = database
-                .readers
-                .read_job(ReadJob::new(Default::default(), move |db| {
-                    document(db, &n, &i)
-                }))
-                .await?;
+            let doc = observed_read(database.readers.clone(), "proof_terminal", ReadJob::new(Default::default(), move |db| {
+                document(db, &n, &i)
+            })).await.with_context(|| format!("native terminal read {name}/{id}"))?;
             if let Some(doc) = doc {
+                observed = json!({"present":true,"status":doc["status"],"error_code":doc["error"]["code"]});
                 if name != "business_commands"
                     || matches!(
                         doc["status"].as_str(),
@@ -102,7 +102,7 @@ async fn terminal(database: &Database, name: &str, id: &str) -> Result<Value> {
         }
     })
     .await
-    .context("native daemon did not deliver committed command/change")?
+    .with_context(|| format!("native daemon did not deliver {name}/{id}; elapsed_ms={} last={observed}", started.elapsed().as_millis()))?
 }
 async fn submit(
     database: &Database,
@@ -247,7 +247,7 @@ async fn native_daemon_hotplug_roundtrip_and_change() -> Result<()> {
             files.insert(path.into(),json!(hash));
         }
         let definitions=json!({"hot_rows":{"schema":{"version":1,"type":"object","primaryKey":"id","properties":{"id":{"type":"string"},"n":{"type":"integer"}},"required":["id","n"]},"class":"full","client_limit":0,"byte_budget":1048576},"hot_events":{"schema":{"version":1,"type":"object","primaryKey":"id","properties":{"id":{"type":"string"},"n":{"type":"integer"}},"required":["id","n"]},"class":"full","client_limit":0,"byte_budget":1048576}});
-        let draft=json!({"id":"hot-draft","app_id":"hot-app","author":"owner","files":files,"collections_schema":definitions,"manifest_fields":{"title":"Native hot-plug proof","handlers":{"hot.echo":"handlers/run.js"},"triggers":[{"handler":"handlers/change.js","on":{"collection":"hot_rows","op":"insert"}}]}});
+        let draft=json!({"id":"hot-draft","app_id":"hot-app","author":"owner","files":files,"collections_schema":definitions,"manifest_fields":{"title":"Native hot-plug proof","handlers":{"hot.echo":"handlers/run.js","hot.core":"handlers/run.js"},"command_rights":{"hot.core":{"roles":[],"assigned_users":false}},"triggers":[{"handler":"handlers/change.js","on":{"collection":"hot_rows","op":"insert"}}]}});
         database.writer.submit(WriteJob::new(Default::default(),move |tx|super::super::commands::put(tx,"app_drafts","hot-draft",&draft)))?.await?;
         let started=Instant::now();
         let published=submit(database,"hot-publish","ctox-platform","ctox.app.publish",json!({"app_id":"hot-app","base_app_ver":null,"draft_id":"hot-draft"})).await?;
@@ -257,6 +257,25 @@ async fn native_daemon_hotplug_roundtrip_and_change() -> Result<()> {
         anyhow::ensure!(result["status"]=="done"&&result["result"]["n"]==7,"native handler roundtrip failed: {result}");
         let changed=terminal(database,"hot_events","change").await?;
         anyhow::ensure!(changed["n"].as_u64().is_some_and(|n|n>0),"committed change did not run real trigger");
+        // E23.1: forged client fields confer no native provenance, including admin.
+        let forged=json!({"id":"hot-client-core","app_id":"hot-app","type":"hot.core","actor_id":"owner","payload":{"n":99},"status":"queued","created_at":chrono::Utc::now().to_rfc3339(),"origin":"core","runtime_event":true,"client_context":{"origin":"scheduler","role":"admin"}});
+        database.writer.submit(WriteJob::new(Default::default(),move|tx|store_command(tx,&forged)))?.await?;
+        let denied=terminal(database,"business_commands","hot-client-core").await?;
+        anyhow::ensure!(denied["status"]=="failed"&&denied["error"]["code"]=="forbidden","E23 client core-only command admitted: {denied}");
+        let audited=database.readers.read_job(ReadJob::new(Default::default(),|db|Ok(db.query_row("SELECT EXISTS(SELECT 1 FROM _app_runtime_command_audit WHERE id='hot-client-core' AND code='forbidden')",[],|r|r.get::<_,bool>(0))?))).await?;
+        anyhow::ensure!(audited,"E23 core-only denial was not audited");
+        database.writer.submit(WriteJob::new(Default::default(),|tx|enqueue_core_command(tx,CoreCommandSource::Scheduler,"hot-native-core","hot-app","hot.core","owner",json!({"id":"core-row","n":23,"write":true}))))?.await?;
+        let core=terminal(database,"business_commands","hot-native-core").await?;
+        anyhow::ensure!(core["status"]=="done"&&core["result"]["n"]==23,"E23 native core command denied: {core}");
+        let row=terminal(database,"hot_rows","core-row").await?;
+        anyhow::ensure!(row["n"]==23,"E23 core handler write missing");
+        // A client rewrite cannot reuse the private native admission receipt.
+        let mut rewritten=core.clone();rewritten["status"]=json!("queued");rewritten["payload"]["n"]=json!(24);
+        database.writer.submit(WriteJob::new(Default::default(),move|tx|super::super::commands::put(tx,"business_commands","hot-native-core",&rewritten)))?.await?;
+        let denied=terminal(database,"business_commands","hot-native-core").await?;
+        anyhow::ensure!(denied["status"]=="failed"&&denied["error"]["code"]=="forbidden","E23 rewritten core command admitted: {denied}");
+        let audited=database.readers.read_job(ReadJob::new(Default::default(),|db|Ok(db.query_row("SELECT EXISTS(SELECT 1 FROM _app_runtime_command_audit WHERE id='hot-native-core' AND code='forbidden')",[],|r|r.get::<_,bool>(0))?))).await?;
+        anyhow::ensure!(audited,"E23 rewritten core command denial was not audited");
         let mut samples=Vec::new();
         for i in 0..100 {
             let started=Instant::now();let result=submit(database,&format!("hot-echo-{i}"),"hot-app","hot.echo",json!({"n":i})).await?;
@@ -268,12 +287,16 @@ async fn native_daemon_hotplug_roundtrip_and_change() -> Result<()> {
         anyhow::ensure!(removed["status"]=="done","native remove failed: {removed}");
         let denied=submit(database,"after-remove","hot-app","hot.echo",json!({"n":-1})).await?;
         anyhow::ensure!(denied["status"]=="failed","removed app still admitted command: {denied}");
-        Ok(json!({"publish_us":publish_us,"command_roundtrip_p99_us":samples[98],"samples":samples.len(),"native_quorum":true,"published":true,"change":true,"removed":true,"post_remove_denied":true}))
+        Ok(json!({"publish_us":publish_us,"command_roundtrip_p99_us":samples[98],"samples":samples.len(),"native_quorum":true,"published":true,"change":true,"removed":true,"post_remove_denied":true,"e23_core_delivered":true,"e23_client_forbidden_audited":true}))
     }.await;
-    if let Err(error) = &proof { eprintln!("native hot-plug operation failed: {error:#}"); }
+    if let Err(error) = &proof {
+        eprintln!("native hot-plug operation failed: {error:#}");
+    }
     let mut shutdown_errors = Vec::new();
     for owner in &mut owners {
-        if let Err(error) = owner.shutdown().await { shutdown_errors.push(error.to_string()); }
+        if let Err(error) = owner.shutdown().await {
+            shutdown_errors.push(error.to_string());
+        }
     }
     assert!(
         proof.is_ok() && shutdown_errors.is_empty(),
