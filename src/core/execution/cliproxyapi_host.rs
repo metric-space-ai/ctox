@@ -3811,8 +3811,12 @@ fn native_cooldown_conductor(store: Arc<CtoxCooldownStateStore>) -> CooldownCond
                 return conductor.record(result);
             }
             crate::persistence::run_core_sync(move || {
-                conductor.record(result).map_err(|_| anyhow::anyhow!("native cooldown persistence failed"))
-            }).await.map_err(|_| CooldownStoreError::Write)
+                conductor
+                    .record(result)
+                    .map_err(|_| anyhow::anyhow!("native cooldown persistence failed"))
+            })
+            .await
+            .map_err(|_| CooldownStoreError::Write)
         })
     }))
 }

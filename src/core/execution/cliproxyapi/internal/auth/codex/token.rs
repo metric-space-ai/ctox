@@ -219,41 +219,6 @@ pub trait CodexSecretStore: Send + Sync {
         handles: &CodexCredentialHandles,
         credentials: &CodexStoredCredentials,
     ) -> Result<(), SecretStoreError>;
-
-    /// Async callers lend IO to the host's actual owner executor. Portable
-    /// stores retain the blocking-pool default; native stores override it.
-    fn load_async(
-        self: std::sync::Arc<Self>,
-        handles: CodexCredentialHandles,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<CodexStoredCredentials, SecretStoreError>>
-                + Send,
-        >,
-    >
-    where
-        Self: 'static,
-    {
-        Box::pin(async move {
-            tokio::task::spawn_blocking(move || self.load_credentials(&handles))
-                .await
-                .map_err(|_| SecretStoreError::Read)?
-        })
-    }
-    fn store_async(
-        self: std::sync::Arc<Self>,
-        handles: CodexCredentialHandles,
-        credentials: CodexStoredCredentials,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), SecretStoreError>> + Send>>
-    where
-        Self: 'static,
-    {
-        Box::pin(async move {
-            tokio::task::spawn_blocking(move || self.store_credentials(&handles, &credentials))
-                .await
-                .map_err(|_| SecretStoreError::Write)?
-        })
-    }
 }
 
 /// Codex token storage adapted to CTOX's encrypted secret-store boundary.
