@@ -7,8 +7,9 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-export const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+export const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 export const BOS = normalize(join(dirname(fileURLToPath(import.meta.url)), '../../..'));
 const require = createRequire(import.meta.url);
 export const { chromium } = require(process.env.PLAYWRIGHT_MODULE || join(homedir(), 'Documents/ctox/src/apps/business-os/node_modules/playwright'));
@@ -88,12 +89,17 @@ export async function startServer(html) {
 
 // Im Browser: Kernel mit Plattform-Apps, Aufgabe und Knowledge-Tabellen anlegen.
 export async function seedKernel(page, { task = TASK, tables = TABLES } = {}) {
+  // E48 (Stub 8265bd7): Fremdlesen (business_commands, ctox_queue_tasks, knowledge_*) braucht die veröffentlichte
+  // Deklaration aus dem echten Manifest (v4/manifests/research.manifest.json) und aktive Eigentümer.
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes('research'));
   await page.evaluate(async ({ task, tables }) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import('/modules/research/index.js');
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, actor: { role: 'admin', permissions: ['apps.source.edit'] } });
     await kernel.ready;
     await kernel.sim.push('business_apps', [{ id: 'ctox', title: 'CTOX' }, { id: 'knowledge', title: 'Knowledge' }, { id: 'research', title: 'Web Research' }]);
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion('research', '1.0.0', { title: 'Web Research', manifestExtra: window.__routes });
     if (task) await kernel.sim.push('research_tasks', [task]);
     if (tables?.length) await kernel.sim.push('knowledge_tables', tables);
     await kernel.sim.settle();
