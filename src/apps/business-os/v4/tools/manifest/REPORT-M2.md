@@ -11,7 +11,7 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 |---|---|
 | Apps (modules + customer-modules) | 41 |
 | Manifeste gesamt (Apps + shell) | 42 |
-| Collections gesamt / App-eigen / ctox-platform | 236 / 221 / 15 |
+| Collections gesamt / App-eigen / ctox-platform | 237 / 221 / 16 |
 | Handler gesamt (Apps mit Handlern) | 116 (15) |
 | Legacy-Rest gesamt (ctx.cap.legacy) | 0 |
 | Capabilities gesamt (verschieden, ohne legacy) | 41 |

@@ -112,6 +112,10 @@
       "proposed_owner": "ctox-platform"
     },
     {
+      "collection": "app_user_preferences",
+      "proposed_owner": "ctox-platform"
+    },
+    {
       "collection": "business_app_versions",
       "proposed_owner": "ctox-platform"
     },
@@ -1598,6 +1602,11 @@
     {
       "basis": "keine App definiert die Collection; keine Präfixregel → Plattform",
       "collection": "app_catalog",
+      "proposed_owner": "ctox-platform"
+    },
+    {
+      "basis": "keine App definiert die Collection; keine Präfixregel → Plattform",
+      "collection": "app_user_preferences",
       "proposed_owner": "ctox-platform"
     },
     {

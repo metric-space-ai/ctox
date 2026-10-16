@@ -8,11 +8,11 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 |---|---|
 | apps | 41 |
 | manifests_total | 42 |
-| collections_total | 236 |
-| collections_in_contract | 232 |
+| collections_total | 237 |
+| collections_in_contract | 233 |
 | owned_by_apps | 221 |
-| owned_by_platform | 15 |
-| owner_proposals | 5 |
+| owned_by_platform | 16 |
+| owner_proposals | 6 |
 | handlers_total | 116 |
 | apps_with_handlers | 15 |
 | legacy_total | 0 |
@@ -31,8 +31,8 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | schema_js_present | 3 |
 | schema_js_load_errors | 0 |
 | schema_from_v4_schemas | 41 |
-| no_owner_app | 5 |
-| contract_only | 11 |
+| no_owner_app | 6 |
+| contract_only | 12 |
 | multiple_owners | 0 |
 | drift_schema_js_vs_json_collections | 29 |
 | drift_migration_steps | 3 |
@@ -148,12 +148,13 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | App | Fehler |
 |---|---|
 
-## 4. Nur im Schema-Vertrag, in keiner collections.schema.json (11)
+## 4. Nur im Schema-Vertrag, in keiner collections.schema.json (12)
 
 | Collection | Eigentümer |
 |---|---|
 | app_activations | ctox-platform |
 | app_drafts | ctox-platform |
+| app_user_preferences | ctox-platform |
 | business_app_versions | ctox-platform |
 | business_apps | ctox-platform |
 | business_commands | ctox-platform |
@@ -164,11 +165,12 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | mail_server_state | ctox-platform |
 | shell_preferences | ctox-platform |
 
-## 5. Ohne definierende App (5)
+## 5. Ohne definierende App (6)
 
 | Collection | Eigentümer | Grundlage |
 |---|---|---|
 | app_catalog | ctox-platform | keine App definiert die Collection; keine Präfixregel → Plattform |
+| app_user_preferences | ctox-platform | keine App definiert die Collection; keine Präfixregel → Plattform |
 | coding_turns | ctox-platform | keine App definiert die Collection; keine Präfixregel → Plattform |
 | devices | ctox-platform | keine App definiert die Collection; keine Präfixregel → Plattform |
 | machine_enrollments | ctox-platform | keine App definiert die Collection; keine Präfixregel → Plattform |

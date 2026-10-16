@@ -215,6 +215,15 @@
       "proposal": false,
       "schema_js_definers": []
     },
+    "app_user_preferences": {
+      "basis": "keine App definiert die Collection; keine Präfixregel → Plattform",
+      "in_contract": true,
+      "json_definers": [],
+      "no_defining_app": true,
+      "owner": "ctox-platform",
+      "proposal": true,
+      "schema_js_definers": []
+    },
     "applications": {
       "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
       "in_contract": true,
@@ -2441,6 +2450,7 @@
         "app_activations",
         "app_catalog",
         "app_drafts",
+        "app_user_preferences",
         "business_app_versions",
         "business_apps",
         "business_commands",
