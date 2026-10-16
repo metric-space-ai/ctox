@@ -7,6 +7,8 @@ use std::collections::BTreeSet;
 pub mod manifest_rules;
 #[path = "scope.rs"]
 pub mod scope;
+#[path = "app_grant.rs"]
+pub mod app_grant;
 use manifest_rules::{CommandPermit, ManifestRules};
 use scope::{FieldMask, Projection, ResolvedScope, RowFilter};
 
