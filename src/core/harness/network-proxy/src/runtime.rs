@@ -905,7 +905,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
-    async fn connect_time_dns_rebinding_is_denied() {
+    async fn connect_time_dns_rebinding_is_denied() -> anyhow::Result<()> {
         let state = network_proxy_state_for_policy(NetworkProxySettings {
             allowed_domains: vec!["localhost".into()],
             allow_upstream_proxy: false,
@@ -915,15 +915,15 @@ mod tests {
         // Existing Harness policy explicitly admits this local name. A strict
         // process transport must independently reject its resolved address.
         assert_eq!(
-            state.host_blocked("localhost", 80).await.unwrap(),
+            state.host_blocked("localhost", 80).await?,
             HostBlockDecision::Allowed
         );
         assert!(
             state.pin_destination("localhost", 80).await.is_err(),
             "E20b DNS rebinding escape"
         );
-        let public = "93.184.215.14:443".parse().unwrap();
-        assert_eq!(checked_public_destination(&[public]).unwrap(), public);
+        let public = "93.184.215.14:443".parse()?;
+        assert_eq!(checked_public_destination(&[public])?, public);
         for ip in [
             "127.0.0.1",
             "10.0.0.1",
@@ -934,13 +934,14 @@ mod tests {
             "fe80::1",
             "::ffff:127.0.0.1",
         ] {
-            let private = std::net::SocketAddr::new(ip.parse().unwrap(), 443);
+            let private = std::net::SocketAddr::new(ip.parse()?, 443);
             assert!(
                 checked_public_destination(&[public, private]).is_err(),
                 "mixed private DNS answer: {ip}"
             );
         }
         assert!(checked_public_destination(&[]).is_err());
+        Ok(())
     }
 
     #[tokio::test]

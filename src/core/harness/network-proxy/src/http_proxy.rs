@@ -1025,7 +1025,7 @@ mod tests {
     use tokio::time::timeout;
 
     #[tokio::test]
-    async fn e20b_foreign_domain_is_rejected_without_dns() {
+    async fn e20b_foreign_domain_is_rejected_without_dns() -> anyhow::Result<()> {
         ensure_rustls_crypto_provider();
         struct Dns(std::sync::atomic::AtomicUsize);
         #[async_trait::async_trait]
@@ -1045,28 +1045,25 @@ mod tests {
         .with_resolver(dns.clone());
         let mut req = Request::builder()
             .uri("http://foreign.invalid/")
-            .body(Body::empty())
-            .unwrap();
+            .body(Body::empty())?;
         req.extensions_mut().insert(Arc::new(state));
-        let response = http_plain_proxy(None, req).await.unwrap();
+        let response = http_plain_proxy(None, req).await?;
         assert_eq!(
             dns.0.load(std::sync::atomic::Ordering::SeqCst),
             0,
             "E20b foreign domain triggered DNS"
         );
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn e20b_private_dns_destination_cannot_reach_host_service() {
+    async fn e20b_private_dns_destination_cannot_reach_host_service() -> anyhow::Result<()> {
         ensure_rustls_crypto_provider();
-        let listener = TokioTcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-            .await
-            .unwrap();
-        let port = listener.local_addr().unwrap().port();
+        let listener = TokioTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let port = listener.local_addr()?.port();
         let server = tokio::spawn(async move {
-            loop {
-                let (mut stream, _) = listener.accept().await.unwrap();
+            while let Ok((mut stream, _)) = listener.accept().await {
                 let mut buf = [0; 4096];
                 let _ = stream.read(&mut buf).await;
                 let _ = stream
@@ -1083,23 +1080,20 @@ mod tests {
                 ..NetworkProxySettings::default()
             })
         };
-        let request = |state| {
+        let request = |state| -> anyhow::Result<_> {
             let mut req = Request::builder()
                 .uri(format!("http://localhost:{port}/"))
-                .body(Body::empty())
-                .unwrap();
+                .body(Body::empty())?;
             req.extensions_mut().insert(Arc::new(state));
-            req
+            Ok(req)
         };
         // Real target control: the existing explicitly-local Harness policy
         // reaches this listener. Strict process DNS must refuse that answer.
         let control = timeout(
             Duration::from_secs(5),
-            http_plain_proxy(None, request(state())),
+            http_plain_proxy(None, request(state())?),
         )
-        .await
-        .unwrap()
-        .unwrap();
+        .await??;
         assert_eq!(control.status(), StatusCode::OK);
         struct Rebinding(std::sync::atomic::AtomicUsize);
         #[async_trait::async_trait]
@@ -1112,7 +1106,7 @@ mod tests {
                 } else {
                     "127.0.0.1"
                 };
-                Ok(vec![SocketAddr::new(ip.parse().unwrap(), port)])
+                Ok(vec![SocketAddr::new(ip.parse()?, port)])
             }
         }
         let dns = Arc::new(Rebinding(std::sync::atomic::AtomicUsize::new(0)));
@@ -1125,12 +1119,11 @@ mod tests {
         .with_resolver(dns.clone());
         let mut rebound = Request::builder()
             .uri(format!("http://rebinding.test:{port}/"))
-            .body(Body::empty())
-            .unwrap();
+            .body(Body::empty())?;
         rebound.extensions_mut().insert(Arc::new(strict));
         let result = timeout(Duration::from_secs(5), http_plain_proxy(None, rebound)).await;
         server.abort();
-        let response = result.unwrap().unwrap();
+        let response = result??;
         assert_eq!(
             dns.0.load(std::sync::atomic::Ordering::SeqCst),
             3,
@@ -1145,12 +1138,15 @@ mod tests {
         let mut req = Request::builder()
             .method(Method::CONNECT)
             .uri(format!("localhost:{port}"))
-            .body(Body::empty())
-            .unwrap();
+            .body(Body::empty())?;
         req.extensions_mut()
             .insert(Arc::new(state().with_public_destinations_only()));
-        let response = http_connect_accept(None, req).await.unwrap_err();
+        let response = match http_connect_accept(None, req).await {
+            Err(response) => response,
+            Ok(_) => anyhow::bail!("private CONNECT was admitted"),
+        };
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        Ok(())
     }
 
     #[tokio::test]
