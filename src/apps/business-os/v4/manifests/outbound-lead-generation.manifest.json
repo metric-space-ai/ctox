@@ -37,9 +37,6 @@
     "command.get": [
       "handlers/_lib/research-writeback.js"
     ],
-    "config.get": [
-      "handlers/outbound.update_digest.send_now.js"
-    ],
     "fence.claim": [
       "handlers/_lib/contact-email-validation.js",
       "handlers/_lib/person-research.js",
@@ -84,14 +81,6 @@
   "_source_dir": "src/apps/business-os/customer-modules/outbound-lead-generation",
   "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
   "_todo": [
-    "Befehlstyp outbound.research_policy.publish hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.research_source.auth_assist hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.research_source.generate_adapter hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.research_source.reprobe hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.research_source.test hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.research_source.upsert hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.sellify.lookup hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.update_digest.send_now hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
     "module.json.entry zeigt auf local-modules/…; Kundeninstanzen tragen ggf. eine abweichende installierte module.json (~/.local/state/ctox-sync-v4/docs/thesen-olg-installiert-20261015/module.json) – vor Aktivierung abgleichen.",
     "Abnahme Nicht-Admin (V4-PORT.md §13) legt die Mindestrechte fest; Logo (layout.icon_svg) muss erhalten bleiben.",
     "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
@@ -111,7 +100,6 @@
     "agent.task.workspace.read",
     "browser.auth_assist.request",
     "command.get",
-    "config.get",
     "fence.claim",
     "fence.release",
     "files.get",
@@ -1162,18 +1150,6 @@
       "from": [
         "outbound"
       ],
-      "type": "outbound.research_source.reprobe"
-    },
-    {
-      "from": [
-        "outbound"
-      ],
-      "type": "outbound.research_source.test"
-    },
-    {
-      "from": [
-        "outbound"
-      ],
       "type": "outbound.scrape.script.read"
     },
     {
@@ -1181,12 +1157,6 @@
         "outbound"
       ],
       "type": "outbound.scrape.target.upsert"
-    },
-    {
-      "from": [
-        "outbound"
-      ],
-      "type": "outbound.update_digest.send_now"
     }
   ],
   "commands_out": [],
@@ -1290,9 +1260,9 @@
     "icon.svg": "da19e50be20343aa5a1d9de7e7be2413e5db41faaa5b92ad690c24dddbedc94e",
     "import-preview-groups.js": "12c6f881d4dc5674f4fe8af73b37f9d8ac06578c78ffc764ea9ae504a1e27666",
     "in-flight-lead-sweep.mjs": "edd455435b3239bb506083a7284fafefb500668198191e8dc366b0a5744163e5",
-    "index.css": "7a071144c456337bf55a73a90e954475c4740391c24696973a721c57702613b5",
+    "index.css": "ba482c1899b42199f5207e160651c7d56ec2b07f76810935313a6ee697a8d2f7",
     "index.html": "29830dda4bfab99f6216f266e5ea7472ca1e908b5b6891ee85c04a0932ebb9bf",
-    "index.js": "6030297708997f396892a0f2863e28da05a1b48bf606a315fa7ac0fc4e496384",
+    "index.js": "83cf20be8e1d8251cf4ed1e657e803b3d69d328137a6791d27ef6a8f1fe00c52",
     "locales/de.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
     "locales/en.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
     "module.json": "2be4554a9011dfdf78e9a95ef3471cefa8ef58c8eb912f94c12a33b2b7449607",
@@ -1318,8 +1288,8 @@
       "_evidence": {
         "code_read": [
           "handlers/_lib/research-writeback.js:8",
-          "index.js:1069",
-          "index.js:1071"
+          "index.js:1073",
+          "index.js:1075"
         ],
         "code_write": [],
         "declaration_basis": "customer-modules/outbound-lead-generation/V4-PORT.md §13, §16a",
@@ -1408,26 +1378,16 @@
     "outbound.lead.research": "handlers/outbound.lead.research.js",
     "outbound.lead.research.done": "handlers/outbound.lead.research.done.js",
     "outbound.lead.research.failed": "handlers/outbound.lead.research.failed.js",
-    "outbound.lead.research_writeback": "handlers/outbound.lead.research_writeback.js",
     "outbound.research.adapters.reconcile": "handlers/outbound.research.adapters.reconcile.js",
     "outbound.research.adapters.reconcile.done": "handlers/outbound.research.adapters.reconcile.done.js",
-    "outbound.research_policy.publish": "handlers/outbound.research_policy.publish.js",
-    "outbound.research_source.auth_assist": "handlers/outbound.research_source.auth_assist.js",
-    "outbound.research_source.generate_adapter": "handlers/outbound.research_source.generate_adapter.js",
     "outbound.research_source.generation.done": "handlers/outbound.research_source.generation.done.js",
-    "outbound.research_source.reprobe": "handlers/outbound.research_source.reprobe.js",
-    "outbound.research_source.test": "handlers/outbound.research_source.test.js",
-    "outbound.research_source.upsert": "handlers/outbound.research_source.upsert.js",
     "outbound.scrape.execute": "handlers/outbound.scrape.execute.js",
     "outbound.scrape.script.read": "handlers/outbound.scrape.script.read.js",
     "outbound.scrape.script.register": "handlers/outbound.scrape.script.register.js",
     "outbound.scrape.target.upsert": "handlers/outbound.scrape.target.upsert.js",
-    "outbound.sellify.lookup": "handlers/outbound.sellify.lookup.js",
     "outbound.sellify.remarks.check": "handlers/outbound.sellify.remarks.check.js",
     "outbound.sellify.remarks.complete": "handlers/outbound.sellify.remarks.complete.js",
     "outbound.sellify.remarks.failed": "handlers/outbound.sellify.remarks.failed.js",
-    "outbound.update_digest.send_now": "handlers/outbound.update_digest.send_now.js",
-    "web_stack.person_research": "handlers/web_stack.person_research.js",
     "web_stack.person_research.done": "handlers/web_stack.person_research.done.js",
     "web_stack.person_research.failed": "handlers/web_stack.person_research.failed.js"
   },
@@ -1534,7 +1494,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "e801b698d6f3a9dbd2c2dd86f6d9b7d69432f4daeb395f5dfecf5b529188c661",
+    "base_hash": "75b2fbde00d679fe8afa04b48505796f6cdee127f7b63400be80dd33fbe2a2ff",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

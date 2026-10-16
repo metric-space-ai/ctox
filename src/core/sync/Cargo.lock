@@ -890,6 +890,7 @@ dependencies = [
  "base64",
  "ctox-protocol",
  "ctox-rxdb",
+ "ctox-store",
  "fs2",
  "futures",
  "futures-util",

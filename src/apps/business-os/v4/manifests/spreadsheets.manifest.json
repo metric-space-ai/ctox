@@ -11,9 +11,6 @@
     ],
     "office.edit.prepare": [
       "handlers/_lib/office.js"
-    ],
-    "office.render": [
-      "handlers/office.spreadsheet.export.js"
     ]
   },
   "_commands_out_evidence": {
@@ -44,8 +41,7 @@
     "agent.task.enqueue",
     "agent.task.get",
     "office.edit.apply",
-    "office.edit.prepare",
-    "office.render"
+    "office.edit.prepare"
   ],
   "collections": {
     "spreadsheet_blob_chunks": {
@@ -475,9 +471,6 @@
     }
   },
   "handlers": {
-    "office.spreadsheet.commit": "handlers/office.spreadsheet.commit.js",
-    "office.spreadsheet.export": "handlers/office.spreadsheet.export.js",
-    "office.spreadsheet.prepare": "handlers/office.spreadsheet.prepare.js",
     "spreadsheet.audit-formulas": "handlers/spreadsheet.audit-formulas.js",
     "spreadsheet.risk-review": "handlers/spreadsheet.risk-review.js",
     "spreadsheet.runbook.complete": "handlers/spreadsheet.runbook.complete.js",

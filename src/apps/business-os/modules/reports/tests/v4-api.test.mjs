@@ -12,6 +12,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const APP = 'reports';
 const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
@@ -55,6 +56,8 @@ before(async () => {
   page.on('response', (r) => { if (r.status() >= 400) console.error('[page] HTTP', r.status(), r.url()); });
   page.__errors = errors;
   await page.goto(base);
+  // Deklarationen der echten reports-Version (v4/manifests/reports.manifest.json), nach der business_apps-Zeile veröffentlicht.
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes(APP));
   await page.evaluate(async (APP) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import(`/modules/${APP}/index.js`);
@@ -64,6 +67,12 @@ before(async () => {
       { id: 'reports', title: 'Bugs & Features' }, { id: 'ctox', title: 'CTOX' }, { id: 'threads', title: 'Threads' },
       { id: 'coding-agents', title: 'Coding Agents' }, { id: 'notes', title: 'Notizen' },
     ]);
+    // FIXT-R: Eigentümer der Fremd-Collections (echte Manifeste, inkl. ctox-platform) vor der eigenen Version.
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion(APP, '1', { title: 'Bugs & Features', manifestExtra: window.__routes });
+    // ctox.module.rollback ist ein Kernbefehl (src/core/business_os/module_lifecycle.rs), keine App-Route: seit E26/E27
+    // lehnt der Kern ihn ohne Route mit unknown_command ab, der Prüfstand simuliert ihn wie die anderen Kernbefehle.
+    kernel.sim.onCommand('ctox.module.rollback', () => ({ ok: true }));
     await kernel.sim.push('business_module_reports', [
       { id: 'rep_1', kind: 'bug', title: 'Notiz-Liste springt beim Speichern', summary: 'Nach dem Speichern scrollt die Liste nach oben.', expected: 'Scrollposition bleibt.', status: 'open', severity: 'high', module_id: 'notes', created_at_ms: Date.UTC(2026, 9, 14, 9), updated_at_ms: Date.UTC(2026, 9, 14, 10) },
       { id: 'rep_2', kind: 'feature_request', title: 'Export als CSV in der Rechnungsliste mit sehr langem Titel, der umbrechen muss', summary: 'CSV-Export gewünscht.', status: 'completed', severity: 'medium', module_id: 'notes', created_at_ms: Date.UTC(2026, 9, 12, 9), updated_at_ms: Date.UTC(2026, 9, 12, 9) },

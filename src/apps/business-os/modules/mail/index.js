@@ -18,7 +18,8 @@ const MAIL_PAGE_SIZE = 50;
 const COMPOSER_FIELDS = ['composeFrom', 'composeTo', 'composeCampaign', 'composeSubject', 'composeBody'];
 const MAIL_COLLECTIONS = [
   'business_commands',
-  'business_module_catalog',
+  // Weiterleitungsziele: App-Liste der Plattform (business_apps ersetzt den V2-business_module_catalog, E48).
+  'business_apps',
   'business_users',
   'communication_accounts',
   'communication_threads',
@@ -648,7 +649,7 @@ export async function mount(host, api, { restored } = {}) {
     }
     const reads = [
       readAll(collections.business_commands),
-      readAll(collections.business_module_catalog),
+      readAll(collections.business_apps),
       readAll(collections.business_users),
       readAll(collections.communication_accounts, true),
       readAll(collections.communication_threads, true),
@@ -2425,7 +2426,8 @@ function defaultMailRouteDestinations() {
 function routeDestinationsFromCatalog(catalogs = [], permissions) {
   const seen = new Map(defaultMailRouteDestinations().map((item) => [item.id, item]));
   for (const catalog of catalogs || []) {
-    for (const module of Array.isArray(catalog?.modules) ? catalog.modules : []) {
+    // v4: eine business_apps-Zeile ist selbst der Eintrag; V2-Katalogzeilen tragen modules[].
+    for (const module of Array.isArray(catalog?.modules) ? catalog.modules : (catalog?.id ? [catalog] : [])) {
       const id = String(module?.id || module?.module_id || '').trim();
       if (!id || id === 'mail' || module?.hidden === true || module?.installed === false) continue;
       if (typeof permissions?.canViewModule === 'function' && permissions.canViewModule(id) === false) continue;

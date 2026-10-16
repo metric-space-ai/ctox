@@ -17,7 +17,7 @@ try{
  const url='http://127.0.0.1:'+server.address().port;await page.goto(url);
  const second=await context.newPage();second.on('pageerror',e=>errors.push(String(e)));await second.goto(url);
  for(const tab of [page,second])await tab.evaluate(async()=>{
-  const {createStubKernel}=await import('/kernel/kernel.mjs');globalThis.e26=createStubKernel({instanceId:'e26-idb',userId:'u1',latencyMs:2});await e26.ready;await e26.sim.setLink({state:'offline'});
+  const {createStubKernel}=await import('/kernel/testkit.mjs');globalThis.e26=createStubKernel({instanceId:'e26-idb',userId:'u1',latencyMs:2});await e26.ready;await e26.sim.setLink({state:'offline'});
  });
  const race=await Promise.all([page,second].map(tab=>tab.evaluate(async()=>{
   const a=e26.appApi('notes','1'),h=a.command('notes.run',{n:1},{idempotency_key:'reload'});await h.local;
@@ -28,7 +28,7 @@ try{
  await page.evaluate(async()=>{await e26.close();});
  await page.reload();
  const after=await page.evaluate(async()=>{
-  const {createStubKernel}=await import('/kernel/kernel.mjs');const k=createStubKernel({instanceId:'e26-idb',userId:'u1',latencyMs:2});await k.ready;await k.sim.setLink({state:'offline'});
+  const {createStubKernel}=await import('/kernel/testkit.mjs');const k=createStubKernel({instanceId:'e26-idb',userId:'u1',latencyMs:2});await k.ready;await k.sim.setLink({state:'offline'});
   try{
    const a=k.appApi('notes','2'),h=a.command('notes.other',{n:9},{idempotency_key:'reload'});await h.local;
    if(a.get('business_commands',h.id).get().payload.n!==1||(await k.sim.outbox()).filter(e=>e.id===h.id).length>1)throw Error('reload replaced command');

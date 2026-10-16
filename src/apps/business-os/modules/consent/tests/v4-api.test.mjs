@@ -1,7 +1,7 @@
 // consent gegen den eingefrorenen App-API-4.0-Kern-Stub (createStubKernel) in echtem Chromium.
 // Muster: modules/knowledge/tests/v4-api.test.mjs. Stub-Pfad aus CTOX_APP_API_STUB (Pflicht-Pin
-// ~/.local/state/shell-v4/stub-pins/68b83a3), read-only unter /__stub/ ausgeliefert.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/consent/tests/v4-api.test.mjs
+// ~/.local/state/shell-v4/stub-pins/f967baf), read-only unter /__stub/ ausgeliefert.
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf node --test src/apps/business-os/modules/consent/tests/v4-api.test.mjs
 // Playwright: aus PLAYWRIGHT_MODULE, sonst ~/Documents/ctox/src/apps/business-os/node_modules/playwright.
 // Screenshots (1280 und 420) landen in tests/shots/.
 import { test, before, after } from 'node:test';
@@ -15,7 +15,7 @@ import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const APP = 'consent';
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
@@ -65,6 +65,8 @@ before(async () => {
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false });
     await kernel.ready;
     await kernel.sim.push('business_apps', [{ id: APP, title: 'Einwilligungen' }]);
+    // FIXT-R: Eigentümer der Fremd-Collections (echte Manifeste, inkl. ctox-platform) vor der eigenen Version.
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
     await kernel.sim.publishAppVersion(APP, '1', { title: 'Einwilligungen', manifestExtra: window.__routes });
     await kernel.sim.push('business_consents', [
       { id: 'c-1', subject_id: 'cand-alpha', subject_name: 'Alpha Person', purpose: 'Alpha Talentpool', legal_basis: 'consent', granted_at_ms: Date.now() - 864e5, updated_at_ms: 2 },

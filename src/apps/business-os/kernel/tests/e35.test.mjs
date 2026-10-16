@@ -1,7 +1,7 @@
 import {testLocks} from './web-locks.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {createStubKernel} from '../kernel.mjs';
+import {createStubKernel} from '../testkit.mjs';
 const schema={schema:{type:'object',properties:{id:{type:'string'}}}};
 let serial=0;
 async function open(t,opts={}) {

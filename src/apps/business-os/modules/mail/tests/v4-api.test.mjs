@@ -1,6 +1,6 @@
 // mail gegen den App-API-4.0-Kern-Stub (createStubKernel, Pin cff5ba5) in echtem Chromium.
 // Muster: modules/knowledge/tests/v4-api.test.mjs, modules/matching/tests/v4-api.test.mjs. Abo-Zähler über countingApi.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/mail/tests/v4-api.test.mjs
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf node --test src/apps/business-os/modules/mail/tests/v4-api.test.mjs
 // Screenshots: MAIL_SHOTS=1 zusätzlich → tests/shots/mail-{1280,420}.png
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,15 +10,16 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || join(homedir(), 'Documents/ctox/src/apps/business-os/node_modules/playwright'));
 const TYPES = { '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.json': 'application/json', '.svg': 'image/svg+xml' };
 // Gleiche Liste wie MAIL_COLLECTIONS in index.js (je Montage genau ein Abo).
-const SUBS = ['business_commands', 'business_module_catalog', 'business_users', 'communication_accounts', 'communication_threads',
+const SUBS = ['business_commands', 'business_apps', 'business_users', 'communication_accounts', 'communication_threads',
   'communication_messages', 'outbound_campaigns', 'outbound_pipeline_items', 'outbound_engagements', 'outbound_messages', 'outbound_approvals',
   'mail_server_state'];
 const ACCOUNT = 'email:ada@example.test';
@@ -56,12 +57,21 @@ before(async () => {
   page.on('response', (r) => { if (r.status() >= 400 && !/\.css$/.test(r.url())) console.error('[page] HTTP', r.status(), r.url()); });
   page.__errors = errors;
   await page.goto(base);
+  // FIXT-R: echte Routen/Rechte/Fremd-Collections von mail (v4/manifests/mail.manifest.json) und der Zielapps seiner
+  // commands_out (ctox, outbound, support): Querbefehle brauchen seit E39 eine aktive Zielversion mit commands_in + handler.
+  await page.evaluate((routes) => { window.__routes = routes; },
+    { mail: realManifestRoutes('mail'), targets: ['ctox', 'outbound', 'support'].map((app) => ({ app, routes: realManifestRoutes(app) })) });
   await page.evaluate(async (account) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import('/modules/mail/index.js');
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false,
       actor: { id: 'u-admin', display_name: 'Admin', role: 'admin', permissions: ['apps.source.edit'] } });
     await kernel.ready;
+    // FIXT-R: Zielapps (mit ihren Collections, outbound ist zugleich Eigentümer von outbound_*), dann die übrigen Eigentümer
+    // der Fremd-Collections (ctox-platform, conversations, documents, …), zuletzt mail selbst – vor den Core-Daten.
+    for (const t of window.__routes.targets) await kernel.sim.publishAppVersion(t.app, '1.0.0', { title: t.app, manifestExtra: t.routes });
+    for (const o of window.__routes.mail._fixture_owners) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion('mail', '1.0.0', { title: 'Mail', manifestExtra: window.__routes.mail });
     // Projektionen des Cores: v4 verlangt `id`; communication_* tragen ihren Schlüssel zusätzlich (V4-PORT.md OFFEN mail-6).
     await kernel.sim.push('communication_accounts', [{ id: account, account_key: account, channel: 'email', address: 'ada@example.test',
       provider: 'stalwart', profile_json: { owner_user_id: 'u-admin' }, created_at: '2026-10-01T08:00:00Z', updated_at: '2026-10-01T08:00:00Z' }]);

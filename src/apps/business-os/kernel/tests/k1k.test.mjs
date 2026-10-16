@@ -3,7 +3,7 @@
 import { testLocks } from './web-locks.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createStubKernel } from '../kernel.mjs';
+import { createStubKernel } from '../testkit.mjs';
 
 let n = 0;
 const until = async (fn, ms = 3000) => { const end = Date.now() + ms; while (!fn()) { if (Date.now() > end) throw new Error('until: Zeitüberschreitung'); await new Promise((r) => setTimeout(r, 5)); } };

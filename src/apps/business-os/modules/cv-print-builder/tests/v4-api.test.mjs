@@ -1,6 +1,6 @@
 // cv-print-builder gegen den verbindlichen App-API-4.0-Stub des Kerns (createStubKernel, gepinnt über CTOX_APP_API_STUB,
 // read-only unter /__stub/ ausgeliefert) in echtem Chromium. Muster: modules/knowledge/tests/v4-api.test.mjs.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/cv-print-builder/tests/v4-api.test.mjs
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf node --test src/apps/business-os/modules/cv-print-builder/tests/v4-api.test.mjs
 // Playwright: aus PLAYWRIGHT_MODULE, sonst ~/Documents/ctox/src/apps/business-os/node_modules/playwright.
 // SHOTS=1 legt zusätzlich Bildschirmfotos in 1280 und 420 nach tests/shots/.
 import { test, before, after } from 'node:test';
@@ -11,8 +11,9 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
@@ -57,12 +58,19 @@ before(async () => {
   page.on('response', (r) => { if (r.status() >= 400) console.error('[page] HTTP', r.status(), r.url()); });
   page.__errors = errors;
   await page.goto(base);
+  // FIXT-R: echte Routen/Rechte/Fremd-Collections von cv-print-builder (v4/manifests/cv-print-builder.manifest.json).
+  // window.__routes ist hier schon die Navigationsliste der ctox-App, daher window.__manifestRoutes.
+  await page.evaluate((routes) => { window.__manifestRoutes = routes; }, realManifestRoutes(APP));
   await page.evaluate(async (APP) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import(`/modules/${APP}/index.js`);
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, userId: 'michael', actor: { id: 'michael', display_name: 'Michael', role: 'admin' } });
     await kernel.ready;
     await kernel.sim.push('business_apps', [{ id: APP, title: 'CV Print Builder' }, { id: 'ctox', title: 'CTOX' }]);
+    // FIXT-R: Eigentümer der Fremd-Collections (ctox-platform, desktop, documents) vor der eigenen Version, diese nach
+    // der business_apps-Zeile.
+    for (const o of window.__manifestRoutes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion(APP, '0.1.2', { title: 'CV Print Builder', manifestExtra: window.__manifestRoutes });
     const api = kernel.appApi(APP, '0.1.2');
     // Original-PDF von Bernd liegt als Datei in api.files (Ref = sha256).
     const pdf = new Blob(['%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF'], { type: 'application/pdf' });
@@ -241,15 +249,27 @@ test('Befehl: Parsing starten → ctox.cv_print.apply_parse sofort lokal, nie wa
   assert.equal(zone[0].ref, cmd.id);
   // Die Live-Projektion des fehlgeschlagenen Befehls setzt die Phase auf „Fehler“ (wie v3).
   assert.equal(await page.$eval('[data-cv-stage-kicker]', (el) => el.textContent), 'Fehler');
-  // Kein Chat-Dokument, keine Datei-Dokumente in fremden Collections.
-  assert.deepEqual(await page.evaluate(() => ['business_chats', 'desktop_files', 'desktop_file_chunks'].map((c) => window.__api.query(c, {}).get().length)), [0, 0, 0]);
+  // Kein Chat-Dokument, keine Datei-Dokumente in fremden Collections. business_chats deklariert das Manifest nicht:
+  // der Kern verweigert Lesen (forbidden), und kein Schreibversuch liegt in Outbox oder Ablehnungsarchiv.
+  assert.deepEqual(await page.evaluate(async () => {
+    let chatsRead = 'readable';
+    try { window.__api.query('business_chats', {}).get(); } catch (e) { chatsRead = e.code; }
+    const writes = [...await window.__k.sim.outbox(), ...await window.__k.sim.archiveLocal()].filter((e) => e.collection === 'business_chats').length;
+    return { chatsRead, writes, files: ['desktop_files', 'desktop_file_chunks'].map((c) => window.__api.query(c, {}).get().length) };
+  }), { chatsRead: 'forbidden', writes: 0, files: [0, 0] });
 });
 
 test('Befehl done: Ergebnis {task_id} erscheint am Profil, Zone geräumt, „Flow öffnen“ navigiert in die CTOX-App', async () => {
-  await page.evaluate((t) => window.__k.sim.onCommand(t, () => ({ task_id: 'queue::task-42' })), PARSE);
   await page.evaluate(() => document.querySelector('[data-cv-action]').click());
   await settle();
-  const cmd = await page.evaluate(() => window.__commands().at(-1));
+  // ctox.cv_print.apply_parse ist ein Plattformbefehl: seit f967baf führt der simulierte Core ihn selbst aus (Ergebnis
+  // {ok:true}, sim.onCommand greift für Plattformtypen nicht). Das Ergebnis {task_id} meldet der Core wie im Betrieb
+  // über den gepushten Befehlsstatus.
+  let cmd = await page.evaluate(() => window.__commands().at(-1));
+  assert.equal(cmd.type, PARSE);
+  await page.evaluate((cmd) => window.__k.sim.push('business_commands', { ...cmd, status: 'done', progress: 1, result: { task_id: 'queue::task-42' } }), cmd);
+  await settle();
+  cmd = await page.evaluate(() => window.__commands().at(-1));
   assert.equal(cmd.status, 'done');
   assert.deepEqual(await page.evaluate(() => window.__zone().map((e) => e.code)), []);
   const link = await page.$('[data-cv-open-task]');

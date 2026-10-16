@@ -1,18 +1,5 @@
 {
-  "_capability_evidence": {
-    "browser.auth_assist_complete": [
-      "handlers/web_stack.auth_assist.complete.js"
-    ],
-    "browser.op": [
-      "handlers/_lib/run.js",
-      "handlers/browser.clipboard.clear.js",
-      "handlers/browser.clipboard.paste.js",
-      "handlers/browser.credential.fill.js"
-    ],
-    "browser.session_stop": [
-      "handlers/browser.session.stop.js"
-    ]
-  },
+  "_capability_evidence": {},
   "_declaration": "modules/browser/v4-manifest.json",
   "_format": "ctox-shell-v4-app-manifest-draft-1",
   "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
@@ -29,11 +16,7 @@
   "app_id": "browser",
   "app_ver": null,
   "author": null,
-  "capabilities_required": [
-    "browser.auth_assist_complete",
-    "browser.op",
-    "browser.session_stop"
-  ],
+  "capabilities_required": [],
   "collections": {
     "browser_frames": {
       "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
@@ -640,28 +623,7 @@
       "owner_app": "outbound"
     }
   },
-  "handlers": {
-    "browser.back": "handlers/browser.back.js",
-    "browser.clipboard.clear": "handlers/browser.clipboard.clear.js",
-    "browser.clipboard.copy": "handlers/browser.clipboard.copy.js",
-    "browser.clipboard.paste": "handlers/browser.clipboard.paste.js",
-    "browser.controller.acquire": "handlers/browser.controller.acquire.js",
-    "browser.controller.release": "handlers/browser.controller.release.js",
-    "browser.controller.renew": "handlers/browser.controller.renew.js",
-    "browser.credential.fill": "handlers/browser.credential.fill.js",
-    "browser.dialog.respond": "handlers/browser.dialog.respond.js",
-    "browser.forward": "handlers/browser.forward.js",
-    "browser.navigate": "handlers/browser.navigate.js",
-    "browser.permission.respond": "handlers/browser.permission.respond.js",
-    "browser.reload": "handlers/browser.reload.js",
-    "browser.reset": "handlers/browser.reset.js",
-    "browser.session.start": "handlers/browser.session.start.js",
-    "browser.session.stop": "handlers/browser.session.stop.js",
-    "browser.tab.activate": "handlers/browser.tab.activate.js",
-    "browser.tab.close": "handlers/browser.tab.close.js",
-    "browser.tab.open": "handlers/browser.tab.open.js",
-    "web_stack.auth_assist.complete": "handlers/web_stack.auth_assist.complete.js"
-  },
+  "handlers": {},
   "layout": {
     "_icon_asset_replaced": {
       "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/browser.jpg",

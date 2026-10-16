@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createLoader,artifactUrl} from '../index.mjs';
-import {MemoryCoreTransport} from '../fake-core.mjs';
+import {MemoryCoreTransport} from '../testkit.mjs';
 
 test('loader follows shell activation, persists snapshot and falls back on failed shell start',async()=>{
  const calls=[],transport=new MemoryCoreTransport({namespace:`loader-${process.pid}`});

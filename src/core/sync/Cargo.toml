@@ -12,6 +12,7 @@ required-features = ["webrtc"]
 webrtc = ["dep:rxdb", "dep:futures-util", "dep:url"]
 
 [dependencies]
+ctox-store = { path = "../store" }
 futures-util = { version = "0.3", optional = true }
 url = { version = "2.5", optional = true }
 rxdb = { package = "ctox-rxdb", path = "../rxdb", optional = true }

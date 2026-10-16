@@ -1191,6 +1191,48 @@
       }
     }
   },
+  "app_user_preferences": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "app_id",
+      "user_id",
+      "key",
+      "value"
+    ],
+    "indexes": [
+      [
+        "app_id",
+        "user_id"
+      ]
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 579
+      },
+      "app_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "user_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "key": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[a-z0-9._-]+$"
+      },
+      "value": {}
+    }
+  },
   "applications": {
     "version": 0,
     "primaryKey": "id",
