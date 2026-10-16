@@ -11,7 +11,8 @@ await writeFile(new URL('../command-inventory.generated.mjs',import.meta.url),ou
 const arg=process.argv.indexOf('--stub-root');
 if(arg!==-1){
  const path=join(resolve(process.argv[arg+1]),'ctox-app-api-stub.mjs'),stub=await readFile(path,'utf8');
- const end=stub.indexOf('const platformTypes');
- if(end<0||!stub.startsWith('// Generated from src/core/business_os/business_command_inventory.json.'))throw Error('Private stub inventory projection not found');
- await writeFile(path,output.replace('export const','const')+'\n'+stub.slice(end));
+ const start=stub.indexOf('// Generated from src/core/business_os/business_command_inventory.json.');
+ const end=stub.indexOf('const platformTypes',start);
+ if(start<0||end<start)throw Error('Private stub inventory projection not found');
+ await writeFile(path,stub.slice(0,start)+output.replace('export const','const')+'\n'+stub.slice(end));
 }
