@@ -37,7 +37,7 @@ pub mod sandbox;
 pub mod secrets;
 #[cfg(test)]
 #[path = "cap3_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 fn invalid(path: &str) -> CtoxError {
     CtoxError::invalid(path)

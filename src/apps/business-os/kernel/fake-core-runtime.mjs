@@ -2,14 +2,14 @@
 // Trigger-Lauf (§16.20, fremde Collections nur nach §16.34 Nr. 3), Katalog-Primitive audit/agent.task (§16.29/§16.30)
 // und die Plattformbefehle ctox.app.publish|update|rollback|release|remove (§16.29 B, §16.33).
 // Nur für MemoryCoreTransport (Tests, Shell-Entwicklung). Der echte Core macht das in Rust.
-import { CtoxError, cloneValue, isPlainObject, mergePatch, uuidv7 } from './values.mjs';
+import { CtoxError, cloneValue, isPlainObject, mergePatch, uuidv7, sha256Hex, fnv1a } from './values.mjs';
 import { compileQuery, runCompiledQuery, validateSchema } from './app-api.mjs';
 import { bytesBase64 } from './artifact-url.mjs';
 import { PLATFORM_COLLECTIONS, PLATFORM_APP_ID } from './platform.mjs';
 import { SCHEMA_FILE, parseCollectionsFile, classifyCollections, manifestCollectionsToParsed, parsedToManifestCollections } from './schema-diff.mjs';
 
 /** Katalog-Primitive, die der Fake-Core als ctx.cap anbietet (Aktivierung prüft capabilities_required dagegen). */
-export const FAKE_CORE_CAPABILITIES = Object.freeze(['audit.event', 'agent.task.enqueue', 'agent.task.get', 'agent.task.find', 'agent.task.cancel']);
+export const FAKE_CORE_CAPABILITIES = Object.freeze(['audit.event', 'agent.task.enqueue', 'agent.task.get', 'agent.task.find', 'agent.task.cancel', 'model', 'model.run', 'files', 'files.put', 'files.get', 'files.list', 'files.delete', 'process', 'process.run']);
 // Zeilenrechte der Plattform-Collections (docs/v4-manifests/ctox-platform.manifest.json, Auszug).
 const PLATFORM_RIGHTS = Object.freeze({
   shell_preferences: { read: 'own', write: 'own' },
@@ -112,6 +112,7 @@ export function createCoreRuntime(core) {
     const c = baseName(entry.collection);
     // Plattformbefehle prüft der Core immer (CAS, Codes §16.33); ohne bekannten Nutzer gilt der Client als Admin (Bind-Aufbau).
     if (c === 'business_commands' && entry.op === 'put' && entry.body?.status === 'queued' && String(entry.body.type).startsWith('ctox.app.')) return checkPlatformCommand(user ?? SYSTEM_ADMIN, entry.body);
+    if (c === 'business_commands' && entry.op === 'put' && entry.body?.status === 'queued' && String(entry.body.type).startsWith('ctox.coding.')) return checkCodingCommand(user ?? { ...SYSTEM_ADMIN, id: entry.body.actor_id ?? 'admin' }, entry.body);
     if (!user) return null;
     if (c === 'business_commands') {
       const body = entry.body ?? old?.data;
@@ -160,6 +161,122 @@ export function createCoreRuntime(core) {
     if (typeof mod.default !== 'function') fail('invalid', `${path}: kein default export handle(command, ctx)`);
     return mod.default;
   }
+  // ---- K-1g: model.run (#830 ctx.model → 'model.run', CATALOG §6) – deterministische simulierte Antwort ----
+  function modelRun(appId, req) {
+    if (!isPlainObject(req)) fail('invalid', 'model.run: Anfrage-Objekt nötig');
+    const input = req.input ?? req.prompt ?? req.messages;
+    const text = typeof input === 'string' ? input
+      : Array.isArray(input) ? input.map((m) => (typeof m === 'string' ? m : typeof m?.content === 'string' ? m.content : Array.isArray(m?.content) ? m.content.map((c) => c?.text ?? '').join(' ') : '')).join('\n')
+      : fail('invalid', 'model.run: input, prompt oder messages nötig');
+    const model = typeof req.model === 'string' && req.model ? req.model : 'fake-core';
+    const out = `Simulierte Modellantwort (${model}) für ${appId}: ${text.replace(/\s+/g, ' ').trim().slice(0, 200)}`;
+    return {
+      id: `resp_${fnv1a(JSON.stringify([appId, model, text]))}`, object: 'response', model, status: 'completed',
+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: out }] }],
+      output_text: out, usage: { input_tokens: text.split(/\s+/).filter(Boolean).length, output_tokens: out.split(/\s+/).length },
+    };
+  }
+  // ---- K-1g: files.* (CAP-3b #844) im Handler – nur Dateien der eigenen App, Ergebnisse immer Objekte, nie Base64 ----
+  const FILE_TEXT_MAX = 512 * 1024;
+  function ownCoreFile(appId, sel) {
+    if (!isPlainObject(sel) || (typeof sel.id !== 'string' && typeof sel.ref !== 'string')) fail('invalid', 'files: {id} oder {ref} nötig');
+    const docs = rowsOf('files').map((r) => r.data).filter((d) => (sel.id ? d.id === sel.id : d.ref === sel.ref));
+    const mine = docs.find((d) => d.owner_app === appId);
+    if (!mine && docs.length) fail('forbidden', 'Datei gehört einer anderen App');
+    return mine ?? null;
+  }
+  const coreFileInfo = (d) => ({ id: d.id, ref: d.ref, name: d.name ?? null, mime: d.mime ?? 'application/octet-stream', size: d.size ?? 0 });
+  function filesCap(appId, command, depth) {
+    return {
+      async put(a = {}) {
+        if (!isPlainObject(a)) fail('invalid', 'files.put: Objekt nötig');
+        const bytes = typeof a.text === 'string' ? new TextEncoder().encode(a.text) : a.bytes instanceof Uint8Array ? a.bytes : fail('invalid', 'files.put: text oder bytes nötig');
+        const mime = String(a.mime ?? (typeof a.text === 'string' ? 'text/plain; charset=utf-8' : 'application/octet-stream'));
+        const ref = await sha256Hex(bytes);
+        core.blobs.set(ref, new Blob([bytes], { type: mime }));
+        const id = typeof a.id === 'string' && a.id ? a.id : uuidv7();
+        await commit('files', [{ id, ref, name: String(a.name ?? 'datei'), mime, size: bytes.byteLength, owner_app: appId, owner_user: command?.actor?.id ?? null, created_at_ms: Date.now() }], depth);
+        return { id, ref };
+      },
+      async get(sel) {
+        const d = ownCoreFile(appId, sel);
+        if (!d) return { found: false, ref: sel.ref ?? null, ...(sel.id ? { id: sel.id } : {}) };
+        const blob = core.blobs.get(d.ref);
+        if (!blob) return { found: false, ...coreFileInfo(d) };
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        let text;
+        if (bytes.byteLength <= FILE_TEXT_MAX) { try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { text = undefined; } }
+        return { found: true, ...coreFileInfo(d), size: bytes.byteLength, ...(text !== undefined ? { text } : { bytes }) };
+      },
+      async list() { return { files: rowsOf('files').map((r) => r.data).filter((d) => d.owner_app === appId).map(coreFileInfo).sort((a, b) => (a.id < b.id ? -1 : 1)) }; },
+      async delete(sel) {
+        const d = ownCoreFile(appId, sel);
+        if (!d) return { deleted: false };
+        await commit('files', [{ id: d.id, _deleted: true }], depth);
+        return { deleted: true, id: d.id };
+      },
+    };
+  }
+  // ---- K-1i: process.run (CAP-3d #844, §16.47) – Allowlist der Plattform, Grund-Umgebung, stdin/stdin_ref; SIMULIERT ----
+  // Kein echter Prozess: die Ausführung ist deterministisch nachgebildet (cat → stdin, echo → args, env → Umgebung,
+  // false → exit 1, sleep N → timed_out, wenn N·1000 > timeout_ms; sonst JSON-Beschreibung des Aufrufs).
+  const DEFAULT_BASE_ENV = Object.freeze({ PATH: '/usr/local/bin:/usr/bin:/bin', CTOX_BIN: '/opt/ctox/bin', LANG: 'C.UTF-8' });
+  const DEFAULT_PROCESS_ALLOWLIST = Object.freeze({
+    cat: { program: '/bin/cat', env: DEFAULT_BASE_ENV },
+    echo: { program: '/bin/echo', env: DEFAULT_BASE_ENV },
+    env: { program: '/usr/bin/env', env: DEFAULT_BASE_ENV },
+    false: { program: '/usr/bin/false', env: DEFAULT_BASE_ENV },
+    sleep: { program: '/bin/sleep', env: DEFAULT_BASE_ENV },
+    scrape: { interpreter: '/usr/local/bin/tsx', script: '/opt/ctox/scripts/scrape.ts', env: DEFAULT_BASE_ENV },
+  });
+  const STDIN_MAX = 1024 * 1024, ENV_VALUE_MAX = 4096;
+  const PROCESS_FIELDS = ['program', 'args', 'env', 'stdin', 'stdin_ref', 'timeout_ms'];
+  async function simulateProcessRun(appId, req, allowlist, readOwnFile) {
+    const bad = (code, reason) => { throw new CtoxError(code, reason); };
+    if (!isPlainObject(req)) bad('invalid', 'payload_invalid:request');
+    for (const k of Object.keys(req)) if (!PROCESS_FIELDS.includes(k)) bad('invalid', `payload_invalid:${k}`);
+    if (typeof req.program !== 'string' || !req.program) bad('invalid', 'payload_invalid:program');
+    const raw = (allowlist ?? DEFAULT_PROCESS_ALLOWLIST)[req.program];
+    if (!raw) bad('forbidden', 'program_not_allowed');
+    const entry = typeof raw === 'string' ? { program: raw, env: {} } : raw;
+    const args = req.args ?? [];
+    if (!Array.isArray(args) || args.some((a) => typeof a !== 'string')) bad('invalid', 'payload_invalid:args');
+    const baseEnv = { ...(entry.env ?? {}) };
+    const appEnv = req.env ?? {};
+    if (!isPlainObject(appEnv)) bad('invalid', 'payload_invalid:env');
+    for (const [key, v] of Object.entries(appEnv)) {
+      if (typeof v !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) bad('invalid', 'payload_invalid:env');
+      if (Object.prototype.hasOwnProperty.call(baseEnv, key)) bad('invalid', `env_base_override:${key}`); // Grundvariable nie ersetzbar
+      if (new TextEncoder().encode(v).byteLength > ENV_VALUE_MAX) bad('invalid', `env_value_too_large:${key}`);
+    }
+    if (req.stdin !== undefined && req.stdin_ref !== undefined) bad('invalid', 'payload_invalid:stdin');
+    let stdin = '';
+    if (req.stdin !== undefined) {
+      if (typeof req.stdin !== 'string') bad('invalid', 'payload_invalid:stdin');
+      if (new TextEncoder().encode(req.stdin).byteLength > STDIN_MAX) bad('invalid', 'stdin_too_large');
+      stdin = req.stdin;
+    } else if (req.stdin_ref !== undefined) {
+      if (!isPlainObject(req.stdin_ref) || typeof req.stdin_ref.ref !== 'string') bad('invalid', 'payload_invalid:stdin_ref');
+      const f = await readOwnFile(req.stdin_ref.ref); // nur files-Datensätze der aufrufenden App (sonst forbidden)
+      if (!f?.found) bad('not_found', 'stdin_ref_not_found');
+      if (typeof f.text !== 'string') bad('invalid', 'stdin_ref_not_utf8');
+      if (new TextEncoder().encode(f.text).byteLength > STDIN_MAX) bad('invalid', 'stdin_too_large');
+      stdin = f.text;
+    }
+    const timeout = req.timeout_ms ?? 30000;
+    if (!Number.isInteger(timeout) || timeout <= 0) bad('invalid', 'payload_invalid:timeout_ms');
+    const env = { ...baseEnv, ...appEnv }; // Kind = leere Umgebung + Grund-Umgebung + App-env
+    const argv = entry.interpreter ? [entry.interpreter, entry.script, ...args] : [entry.program, ...args];
+    const name = String(argv[entry.interpreter ? 1 : 0]).split('/').pop();
+    let exit_code = 0, stdout = '', stderr = '', timed_out = false;
+    if (name === 'cat') stdout = stdin;
+    else if (name === 'echo') stdout = `${args.join(' ')}\n`;
+    else if (name === 'env') stdout = Object.keys(env).sort().map((k) => `${k}=${env[k]}`).join('\n') + '\n';
+    else if (name === 'false') exit_code = 1;
+    else if (name === 'sleep') { if (Number(args[0] ?? 0) * 1000 > timeout) { timed_out = true; exit_code = null; stderr = `timeout after ${timeout} ms\n`; } }
+    else stdout = `${JSON.stringify({ app: appId, argv, env_keys: Object.keys(env).sort(), stdin_bytes: new TextEncoder().encode(stdin).byteLength })}\n`;
+    return { exit_code, stdout, stderr, timed_out };
+  }
   function makeCtx(appId, manifest, command, depth) {
     const declared = new Set(manifest.capabilities_required ?? []);
     const ns = (c, op) => {
@@ -196,7 +313,7 @@ export function createCoreRuntime(core) {
       remove: (c, id) => writeOne(c, 'delete', id, null),
     };
     const cap = (name, fn) => async (args = {}) => {
-      if (!declared.has(name)) fail('forbidden', `cap.${name} nicht in capabilities_required von ${appId}`);
+      if (!declared.has(name) && !declared.has(name.split('.')[0])) fail('forbidden', `cap.${name} nicht in capabilities_required von ${appId}`);
       return fn(args);
     };
     return Object.freeze({
@@ -218,7 +335,12 @@ export function createCoreRuntime(core) {
         if (new TextEncoder().encode(text).byteLength > MAX_ASSET) fail('invalid', `ctx.asset: ${path} > 1 MiB`);
         return text;
       },
+      /** #830: ctx.model(req) = Katalogfunktion model.run (deklariert als `model`). */
+      model: (req) => cap('model.run', async (r) => modelRun(appId, r))(req),
       cap: Object.freeze({
+        files: Object.freeze(Object.fromEntries(Object.entries(filesCap(appId, command, depth)).map(([fn, f]) => [fn, cap(`files.${fn}`, f)]))),
+        model: Object.freeze({ run: cap('model.run', async (r) => modelRun(appId, r)) }),
+        process: Object.freeze({ run: cap('process.run', (r) => simulateProcessRun(appId, r, core.processAllowlist, (ref) => filesCap(appId, command, depth).get({ ref }))) }),
         audit: Object.freeze({ event: cap('audit.event', async (a) => { const id = uuidv7(); await commit('_audit', [{ id, app_id: appId, ...cloneValue(a), at_ms: Date.now() }], depth); return { id }; }) }),
         agent: Object.freeze({ task: Object.freeze({
           enqueue: cap('agent.task.enqueue', (a) => enqueueTask(appId, manifest, a, command, depth)),
@@ -459,9 +581,167 @@ export function createCoreRuntime(core) {
     return { status: 'failed', error: 'invalid' };
   }
 
+  // Unified diff mit 3 Kontextzeilen je Hunk (ein Hunk um den geänderten Bereich; für git apply geeignet).
+  function unifiedDiff(path, before, after, context = 3) {
+    const split = (t) => (t === '' ? [] : t.replace(/\n$/, '').split('\n'));
+    const a = split(before), b = split(after);
+    let pre = 0;
+    while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++;
+    let suf = 0;
+    while (suf < a.length - pre && suf < b.length - pre && a[a.length - 1 - suf] === b[b.length - 1 - suf]) suf++;
+    const from = Math.max(0, pre - context);
+    const aEnd = Math.min(a.length, a.length - suf + context), bEnd = Math.min(b.length, b.length - suf + context);
+    const lines = [];
+    for (let i = from; i < pre; i++) lines.push(` ${a[i]}`);
+    for (let i = pre; i < a.length - suf; i++) lines.push(`-${a[i]}`);
+    for (let i = pre; i < b.length - suf; i++) lines.push(`+${b[i]}`);
+    for (let i = a.length - suf; i < aEnd; i++) lines.push(` ${a[i]}`);
+    const aLen = aEnd - from, bLen = bEnd - from;
+    const head = `@@ -${aLen ? from + 1 : from},${aLen} +${bLen ? from + 1 : from},${bLen} @@`;
+    return `--- a/${path}\n+++ b/${path}\n${head}\n${lines.join('\n')}\n`;
+  }
+  // ---- K-1f: Coding Agent im Quelltext-Modus (§16.44, Vertrag befund-coding-panel.md / Core-PR #848), simuliert ----
+  // Der simulierte Agent ändert deterministisch: er hängt an die erste im Prompt genannte Datei des Entwurfs (sonst die erste
+  // Textdatei) eine Kommentarzeile an. Nachrichten und tool_events erscheinen wie beim echten Sidecar erst am Turn-Ende.
+  const TURN_FIELDS = ['app_id', 'draft_id', 'base_draft_rev', 'prompt', 'model', 'turn_id'];
+  const TURN_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
+  const activeTurns = new Map(); // draft_id → turn_id (Prüfung und Reservierung in einem Schritt wie die Writer-Transaktion)
+  const turnRow = (id) => core.docs.get(key('coding_turns', id));
+  const draftRow = (id) => { const r = core.docs.get(key('app_drafts', id)); return r && !r.deleted && r.data ? r : null; };
+  const inv = (f) => ({ code: 'invalid', reason: `payload_invalid:${f}` });
+  function runningTurnFor(draftId) {
+    if (activeTurns.has(draftId)) return activeTurns.get(draftId);
+    for (const r of rowsOf('coding_turns')) if (r.data.draft_id === draftId && ['queued', 'running'].includes(r.data.state)) return r.id;
+    return null;
+  }
+  /** null = angenommen, sonst {code, reason} (write_result rejected). */
+  function checkCodingCommand(user, body) {
+    const p = isPlainObject(body.payload) ? body.payload : {};
+    if (body.type === 'ctox.coding.turn') {
+      for (const k of Object.keys(p)) if (!TURN_FIELDS.includes(k)) return inv(k);
+      for (const f of ['app_id', 'draft_id', 'base_draft_rev', 'prompt']) if (typeof p[f] !== 'string' || !p[f].trim()) return inv(f);
+      if (p.model !== undefined && (typeof p.model !== 'string' || !p.model)) return inv('model');
+      if (p.turn_id !== undefined && (typeof p.turn_id !== 'string' || !TURN_ID.test(p.turn_id))) return inv('turn_id');
+      if (!hasPerm(user, 'apps.source.edit')) return { code: 'forbidden', reason: 'apps.source.edit' };
+      const row = draftRow(p.draft_id);
+      if (!row) return { code: 'not_found', reason: 'draft_not_found' };
+      if (row.data.user_id !== user.id || row.data.app_id !== p.app_id) return { code: 'forbidden', reason: 'draft_not_owned' }; // auch Admin nicht
+      if (row.rev !== p.base_draft_rev) return { code: 'conflict', reason: 'stale_draft_rev' };
+      if (runningTurnFor(p.draft_id)) return { code: 'conflict', reason: 'turn_running' };
+      const taken = p.turn_id ? turnRow(p.turn_id) : null;
+      if (taken && taken.data?.command_id !== body.id) return { code: 'conflict', reason: 'turn_id_taken' };
+      return null;
+    }
+    if (body.type === 'ctox.coding.cancel') {
+      for (const k of Object.keys(p)) if (k !== 'turn_id') return inv(k);
+      if (typeof p.turn_id !== 'string' || !p.turn_id) return inv('turn_id');
+      const t = turnRow(p.turn_id);
+      if (!t || t.deleted) return { code: 'not_found', reason: 'turn_not_found' };
+      if (t.data.user_id !== user.id) return { code: 'forbidden', reason: 'turn_not_owned' };
+      if (!['queued', 'running'].includes(t.data.state)) return { code: 'conflict', reason: 'turn_not_running' };
+      return null;
+    }
+    return { code: 'invalid', reason: 'payload_invalid:type' };
+  }
+  /** Annahme eines Turns (synchron mit dem Write): Turn-id vergeben, Entwurf reservieren, Turn-Dokument queued anlegen. */
+  function acceptCodingTurn(user, body) {
+    const p = body.payload;
+    const turn_id = p.turn_id ?? `turn-${uuidv7()}`;
+    activeTurns.set(p.draft_id, turn_id);
+    const now = Date.now();
+    const doc = { id: turn_id, app_id: p.app_id, draft_id: p.draft_id, user_id: user.id, command_id: body.id, origin_app: body.app_id,
+      base_draft_rev: p.base_draft_rev, prompt: p.prompt, model: p.model ?? null, state: 'queued', messages: [], tool_events: [],
+      draft_rev_after: null, changed_files: [], callback: { on_complete: body.on_complete ?? null, on_failed: body.on_failed ?? null },
+      created_at_ms: now, updated_at_ms: now };
+    turnsAccepted.set(body.id, turn_id);
+    void commit('coding_turns', [doc]);
+    return turn_id;
+  }
+  const turnsAccepted = new Map(); // command_id → turn_id
+  async function setTurn(turn_id, patch) {
+    const cur = turnRow(turn_id)?.data;
+    if (!cur) return null;
+    if (!['queued', 'running'].includes(cur.state) && patch.state) return cur; // Endzustand genau einmal
+    const next = { ...cur, ...patch, updated_at_ms: Date.now() };
+    await commit('coding_turns', [next]);
+    return next;
+  }
+  async function codingCallback(doc, turn, status, result) {
+    const type = status === 'done' ? turn.callback?.on_complete : turn.callback?.on_failed;
+    const id = `coding-callback:${doc.id}`;
+    if (!type || data('business_commands', id)) return; // höchstens einmal
+    const cb = { id, type, payload: { command_id: doc.id, turn_id: turn.id, status, result: cloneValue(result) }, status: 'queued', app_id: turn.origin_app, actor_id: 'core', created_at: new Date().toISOString() };
+    await commit('business_commands', [cb]);
+    core.spawnCommand(cb, 1);
+  }
+  async function runCodingTurn(doc) {
+    const turn_id = turnsAccepted.get(doc.id) ?? doc.payload?.turn_id;
+    await until(() => turnRow(turn_id)); // das queued-Dokument ist schon unterwegs
+    let turn = turnRow(turn_id).data;
+    const finish = async (state, extra, cmd) => {
+      activeTurns.delete(turn.draft_id);
+      const ended = await setTurn(turn_id, { state, finished_at_ms: Date.now(), ...extra });
+      const t = ended ?? turn;
+      const finalState = t.state; // ein Abbruch kann vorher gewonnen haben
+      const result = { turn_id, state: finalState, draft_rev_after: t.draft_rev_after ?? null, changed_files: t.changed_files ?? [], ...(t.patch ? { patch: t.patch } : {}), ...(t.error ? { error: t.error } : {}) };
+      await codingCallback(doc, t, finalState === 'done' ? 'done' : finalState, result);
+      if (finalState === 'done') return { status: 'done', progress: 1, result };
+      if (finalState === 'cancelled') return { status: 'cancelled', result };
+      return { status: 'failed', error: `${t.error?.code ?? 'failed'}: ${t.error?.reason ?? finalState}`, result };
+    };
+    if (turn.state !== 'queued') return finish(turn.state, {});
+    turn = await setTurn(turn_id, { state: 'running' }) ?? turn;
+    // §16.44-Ergänzung (1): Arbeitsbaum = VOLLER Baum = Basisversion + Entwurfs-Überlagerung (null = gelöscht), Snapshot beim Start
+    const startRow = draftRow(turn.draft_id);
+    const baseFiles = startRow?.data?.base_app_ver ? manifestOf(turn.app_id, startRow.data.base_app_ver)?.files ?? {} : {};
+    const files = { ...baseFiles };
+    for (const [path, h] of Object.entries(startRow?.data?.files ?? {})) { if (h === null) delete files[path]; else files[path] = h; }
+    await new Promise((r) => setTimeout(r, core.codingDelayMs ?? 60));
+    if (turnRow(turn_id).data.state === 'cancelled') return finish('cancelled', {});
+    const textPaths = Object.keys(files).filter((p) => files[p] && typeof core.artifacts.get(files[p]) === 'string').sort();
+    const named = textPaths.find((p) => turn.prompt.includes(p));
+    const path = named ?? textPaths[0] ?? 'NOTES.md';
+    const old = files[path] ? String(core.artifacts.get(files[path])) : '';
+    const line = `// coding-agent ${turn_id}: ${turn.prompt.replace(/\s+/g, ' ').slice(0, 60)}`;
+    const next = `${old}${old && !old.endsWith('\n') ? '\n' : ''}${line}\n`;
+    const hash = await sha256Hex(next);
+    core.artifacts.set(hash, next);
+    const at = Date.now();
+    const transcript = {
+      messages: [{ role: 'user', text: turn.prompt, at_ms: at }, { role: 'assistant', text: `Kommentarzeile in ${path} ergänzt.`, at_ms: at }],
+      tool_events: [{ kind: 'read', path, at_ms: at }, { kind: 'edit', path, at_ms: at }],
+    };
+    if (turnRow(turn_id).data.state === 'cancelled') return finish('cancelled', transcript);
+    // Rückschreiben als neue Entwurfsrevision per CAS auf base_draft_rev
+    const cur = draftRow(turn.draft_id);
+    if (cur && cur.rev === turn.base_draft_rev) {
+      await commit('app_drafts', [{ ...cur.data, files: { ...cur.data.files, [path]: hash }, updated_at_ms: at }]);
+      return finish('done', { ...transcript, draft_rev_after: draftRow(turn.draft_id).rev, changed_files: [path] });
+    }
+    // Nutzer hat inzwischen editiert: nichts überschreiben, Patch als files-Datensatz
+    const patch = unifiedDiff(path, old, next); // §16.44-Ergänzung (4): 3 Kontextzeilen, Basis = base_draft_rev
+    const bytes = new TextEncoder().encode(patch);
+    const ref = await sha256Hex(bytes);
+    core.blobs.set(ref, new Blob([bytes], { type: 'text/x-diff' }));
+    const file_id = `coding-patch:${turn_id}`;
+    await commit('files', [{ id: file_id, ref, name: `${file_id.replace(':', '-')}.diff`, mime: 'text/x-diff', size: bytes.length, owner_app: turn.app_id, owner_user: turn.user_id, created_at_ms: at }]);
+    return finish('conflict', { ...transcript, changed_files: [path], patch: { ref, file_id }, error: { status: 'failed', code: 'conflict', reason: 'draft_changed' } });
+  }
+  async function runCodingCancel(doc) {
+    const turn_id = doc.payload.turn_id;
+    const t = turnRow(turn_id)?.data;
+    if (!t || !['queued', 'running'].includes(t.state)) return { status: 'failed', error: 'conflict: turn_not_running' };
+    await setTurn(turn_id, { state: 'cancelled', finished_at_ms: Date.now() }); // zuerst persistieren, dann „Sidecar beenden“
+    activeTurns.delete(t.draft_id);
+    return { status: 'done', progress: 1, result: { turn_id, state: 'cancelled' } };
+  }
+  async function until(pred, ms = 5000) { const t0 = Date.now(); while (!pred()) { if (Date.now() - t0 > ms) fail('unavailable', 'Turn-Dokument fehlt'); await new Promise((r) => setTimeout(r, 2)); } }
+
   /** Ausführung eines Befehls: Plattformbefehl → App-Handler (Routing nach (app_id, type)). null = kein Handler. */
   async function execute(user, doc, depth) {
     if (String(doc.type).startsWith('ctox.app.')) return runPlatformCommand(user, doc);
+    if (doc.type === 'ctox.coding.turn') return runCodingTurn(doc);
+    if (doc.type === 'ctox.coding.cancel') return runCodingCancel(doc);
     const manifest = activeManifest(doc.app_id);
     const path = manifest?.handlers?.[doc.type];
     if (!path) return null;
@@ -470,7 +750,7 @@ export function createCoreRuntime(core) {
   }
 
   return {
-    canRead, checkWrite, execute, onCommit, refreshEvery, idle, log, tasks,
+    canRead, checkWrite, execute, onCommit, refreshEvery, idle, log, tasks, acceptCodingTurn, modelRun,
     setAgentOutcome(fn) { agentOutcome = typeof fn === 'function' ? fn : null; },
     capabilities: FAKE_CORE_CAPABILITIES,
   };

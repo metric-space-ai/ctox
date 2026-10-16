@@ -39,7 +39,7 @@ runtime-smol = [
     "dep:smol",
     "dep:async-broadcast",
 ]
-runtime-tokio = ["dep:tokio"]
+runtime-tokio = ["dep:tokio", "dep:tokio-rustls", "dep:rustls-native-certs"]
 
 [lib]
 name = "webrtc"
@@ -217,6 +217,8 @@ optional = true
 version = "1.49.0"
 features = [
     "net",
+    "io-util",
+    "macros",
     "time",
     "sync",
     "rt",
@@ -253,3 +255,13 @@ version = "1.0.149"
 [dev-dependencies.signal]
 version = "0.20.0-alpha.1"
 package = "rtc-signal"
+
+[dependencies.tokio-rustls]
+version = "0.26.4"
+default-features = false
+features = ["ring", "tls12"]
+optional = true
+
+[dependencies.rustls-native-certs]
+version = "0.8.3"
+optional = true

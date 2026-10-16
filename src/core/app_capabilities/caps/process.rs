@@ -41,7 +41,7 @@ struct Run {
     env: std::collections::BTreeMap<String, String>,
     timeout_ms: Option<u64>,
     /// Target domains for egress (§16.48); only when the entry permits them.
-    #[serde(default)]
+    #[serde(default, alias = "allowed_domains")]
     net_domains: Vec<String>,
 }
 

@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::rx_error::{new_rx_error, RxResult};
 use crate::types::{BulkWriteRow, FilledMangoQuery, RxJsonSchema, RxQueryPlan};
@@ -74,18 +75,199 @@ pub fn quote_identifier(identifier: &str) -> String {
 /// Owner DDL deliberately creates no per-table sequence. P3-05 installs the
 /// global `_changes` triggers in this same transaction before it commits.
 pub fn ensure_owned_collection_table(conn: &Connection, table: &str) -> RxResult<()> {
-    let table_id = quote_identifier(table);
-    let lwt_index = quote_identifier(&format!("{table}_lwt_id_idx"));
-    let deleted_index = quote_identifier(&format!("{table}_deleted_lwt_id_idx"));
-    conn.execute_batch(&format!(
-        "CREATE TABLE IF NOT EXISTS {table_id}(
-            id TEXT NOT NULL PRIMARY KEY UNIQUE, revision TEXT,
-            deleted INTEGER NOT NULL CHECK(deleted IN(0,1)),
-            lastWriteTime REAL NOT NULL, data TEXT NOT NULL);
-         CREATE INDEX IF NOT EXISTS {lwt_index} ON {table_id}(lastWriteTime,id);
-         CREATE INDEX IF NOT EXISTS {deleted_index} ON {table_id}(deleted,lastWriteTime,id);"
-    ))
-    .map_err(sqlite_error)
+    // DDL belongs exclusively to P3-06; never create a second current table.
+    let valid: bool = conn.query_row(
+        "SELECT COUNT(*)=5 FROM pragma_table_info(?1) WHERE name IN ('id','rev','schema_ver','data','deleted')",
+        [table], |r| r.get(0)).map_err(sqlite_error)?;
+    if !valid || !table.starts_with("c_") {
+        return Err(super::types::owner_job_error(
+            "canonical collection table required",
+        ));
+    }
+    Ok(())
+}
+
+/// One bounded startup transfer. Renaming the old source fences legacy writers;
+/// a durable receipt counts every row, including NULL-body tombstones. A
+/// pre-populated target without our receipt is an ambiguous double activation.
+pub fn migrate_legacy_page(
+    conn: &Connection,
+    source: &str,
+    target: &str,
+    version: i32,
+) -> RxResult<bool> {
+    let active: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM _collections WHERE table_name=?1 AND schema_ver=?2 AND state='active')",params![target,version],|r|r.get(0)).map_err(sqlite_error)?;
+    if !active {
+        return Err(super::types::owner_job_error(
+            "legacy import generation no longer active",
+        ));
+    }
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS _rxdb_imports(source TEXT PRIMARY KEY,target TEXT NOT NULL UNIQUE,expected INTEGER NOT NULL,copied INTEGER NOT NULL DEFAULT 0,cursor TEXT,state TEXT NOT NULL CHECK(state IN ('copying','complete')))").map_err(sqlite_error)?;
+    let receipt: Option<(String, i64, i64, Option<String>, String)> = conn
+        .query_row(
+            "SELECT target,expected,copied,cursor,state FROM _rxdb_imports WHERE source=?1",
+            [source],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .optional()
+        .map_err(sqlite_error)?;
+    let archive = format!("_rxdb_import_{target}");
+    let exists = |name: &str| -> RxResult<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?1)",
+            [name],
+            |r| r.get(0),
+        )
+        .map_err(sqlite_error)
+    };
+    let (expected, copied, cursor) = match receipt {
+        Some((bound, expected, copied, cursor, state)) => {
+            if bound != target || exists(source)? {
+                return Err(super::types::owner_job_error(
+                    "legacy import binding changed or source recreated",
+                ));
+            }
+            if state == "complete" {
+                return Ok(true);
+            }
+            (expected, copied, cursor)
+        }
+        None => {
+            if !exists(source)? {
+                return Ok(true);
+            }
+            let occupied: bool = conn
+                .query_row(
+                    &format!("SELECT EXISTS(SELECT 1 FROM {})", quote_identifier(target)),
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(sqlite_error)?;
+            if occupied || exists(&archive)? {
+                return Err(super::types::owner_job_error(
+                    "double collection activation refused",
+                ));
+            }
+            let expected: i64 = conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {}", quote_identifier(source)),
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(sqlite_error)?;
+            conn.execute_batch(&format!(
+                "ALTER TABLE {} RENAME TO {}",
+                quote_identifier(source),
+                quote_identifier(&archive)
+            ))
+            .map_err(sqlite_error)?;
+            conn.execute("INSERT INTO _rxdb_imports(source,target,expected,state) VALUES(?1,?2,?3,'copying')",params![source,target,expected]).map_err(sqlite_error)?;
+            (expected, 0, None)
+        }
+    };
+    let mut stmt=conn.prepare(&format!("SELECT id,revision,deleted,data FROM {} WHERE (?1 IS NULL OR id>?1) ORDER BY id LIMIT 500",quote_identifier(&archive))).map_err(sqlite_error)?;
+    let mut cursor_rows = stmt.query([cursor.as_deref()]).map_err(sqlite_error)?;
+    let mut rows = Vec::new();
+    let mut bytes = 0usize;
+    let mut complete = false;
+    // A row cap alone can hold the writer for tens of MiB of lead documents.
+    // Read incrementally; do not materialize 500 large bodies before yielding.
+    while rows.len() < 500 && bytes < 1024 * 1024 {
+        let Some(row) = cursor_rows.next().map_err(sqlite_error)? else {
+            complete = true;
+            break;
+        };
+        let id: String = row.get(0).map_err(sqlite_error)?;
+        let stored_rev: Option<String> = row.get(1).map_err(sqlite_error)?;
+        let deleted: i64 = row.get(2).map_err(sqlite_error)?;
+        let raw: String = row.get(3).map_err(sqlite_error)?;
+        bytes = bytes.saturating_add(raw.len());
+        let mut body: Value = serde_json::from_str(&raw)
+            .map_err(|_| super::types::owner_job_error("invalid legacy document JSON"))?;
+        let valid = |rev: &str| {
+            rev.split_once('-').is_some_and(|(height, hash)| {
+                height.parse::<u64>().is_ok() && !hash.is_empty() && !hash.contains('-')
+            })
+        };
+        let stored = stored_rev.as_deref().unwrap_or_default();
+        let body_rev = body.get("_rev").and_then(Value::as_str).unwrap_or_default();
+        let rev = if valid(stored) {
+            stored.to_owned()
+        } else if valid(body_rev) {
+            body_rev.to_owned()
+        } else {
+            let identity = serde_json::to_vec(&(source, &id, stored, &raw))
+                .map_err(|_| super::types::owner_job_error("legacy revision identity encoding"))?;
+            format!("1-{:x}", Sha256::digest(identity))
+        };
+        let deleted =
+            i64::from(deleted != 0 || body.get("_deleted").and_then(Value::as_bool) == Some(true));
+        let object = body
+            .as_object_mut()
+            .ok_or_else(|| super::types::owner_job_error("legacy document is not an object"))?;
+        object.insert("_rev".into(), Value::String(rev.clone()));
+        object.insert("_deleted".into(), Value::Bool(deleted != 0));
+        rows.push((id, rev, deleted, body.to_string()));
+    }
+    drop(cursor_rows);
+    drop(stmt);
+    for (id, rev, deleted, data) in &rows {
+        conn.execute(
+            &format!(
+                "INSERT INTO {}(id,rev,schema_ver,deleted,data) VALUES(?1,?2,?3,?4,?5)",
+                quote_identifier(target)
+            ),
+            params![
+                id,
+                rev,
+                version,
+                deleted,
+                if *deleted != 0 { None } else { Some(data) }
+            ],
+        )
+        .map_err(sqlite_error)?;
+    }
+    let total = copied + rows.len() as i64;
+    if complete {
+        let source_count: i64 = conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM {}", quote_identifier(&archive)),
+                [],
+                |r| r.get(0),
+            )
+            .map_err(sqlite_error)?;
+        if total != expected || source_count != expected {
+            return Err(super::types::owner_job_error(
+                "legacy import row count changed",
+            ));
+        }
+        conn.execute_batch(&format!("DROP TABLE {}", quote_identifier(&archive)))
+            .map_err(sqlite_error)?;
+        conn.execute(
+            "UPDATE _rxdb_imports SET copied=?2,state='complete' WHERE source=?1",
+            params![source, total],
+        )
+        .map_err(sqlite_error)?;
+        Ok(true)
+    } else {
+        conn.execute(
+            "UPDATE _rxdb_imports SET copied=?2,cursor=?3 WHERE source=?1",
+            params![source, total, rows.last().map(|r| r.0.as_str())],
+        )
+        .map_err(sqlite_error)?;
+        Ok(false)
+    }
+}
+
+/// Read-only envelope projection, not another physical table or writer. The
+/// authoritative revision/deletion columns override any old body metadata.
+fn read_table(table: &str) -> String {
+    if !table.starts_with("c_") {
+        return quote_identifier(table);
+    }
+    let name = quote_identifier(table);
+    let literal = quote_sql_literal(table);
+    format!("(SELECT t.id,t.rev AS revision,t.deleted,COALESCE(json_extract(t.data,'$._meta.lwt'),0) AS lastWriteTime,json_set(COALESCE(t.data,'{{}}'),'$.'||json_quote(COALESCE((SELECT COALESCE(json_extract(schema_json,'$.primaryKey.key'),json_extract(schema_json,'$.primaryKey')) FROM _collections WHERE table_name={literal}),'id')),t.id,'$._rev',t.rev,'$._deleted',json(CASE t.deleted WHEN 1 THEN 'true' ELSE 'false' END),'$._attachments',json(COALESCE(json_extract(t.data,'$._attachments'),'{{}}')),'$._meta.lwt',COALESCE(json_extract(t.data,'$._meta.lwt'),0)) AS data FROM {name} t)")
 }
 
 pub fn ensure_collection_table(conn: &Connection, table: &str) -> RxResult<()> {
@@ -224,7 +406,7 @@ pub fn compile_query_sql(
 ) -> Option<CompiledSqliteQuery> {
     let (where_sql, mut params) = compile_selector_sql(primary_path, &query.selector)?;
     let order_sql = compile_order_sql(primary_path, query)?;
-    let mut sql = format!("SELECT data FROM {}", quote_identifier(table));
+    let mut sql = format!("SELECT data FROM {}", read_table(table));
     if !where_sql.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&where_sql);
@@ -256,7 +438,7 @@ pub fn compile_count_sql(
     let has_window = query.limit.is_some() || query.skip.unwrap_or(0) > 0;
     let sql = if has_window {
         let order_sql = compile_order_sql(primary_path, query)?;
-        let mut inner = format!("SELECT 1 FROM {}", quote_identifier(table));
+        let mut inner = format!("SELECT 1 FROM {}", read_table(table));
         if !where_sql.is_empty() {
             inner.push_str(" WHERE ");
             inner.push_str(&where_sql);
@@ -277,7 +459,7 @@ pub fn compile_count_sql(
         }
         format!("SELECT COUNT(*) FROM ({inner})")
     } else {
-        let mut sql = format!("SELECT COUNT(*) FROM {}", quote_identifier(table));
+        let mut sql = format!("SELECT COUNT(*) FROM {}", read_table(table));
         if !where_sql.is_empty() {
             sql.push_str(" WHERE ");
             sql.push_str(&where_sql);
@@ -361,7 +543,7 @@ pub fn compile_query_plan_candidate_sql(
         .join(", ");
     let mut sql = format!(
         "SELECT data FROM {} WHERE {}",
-        quote_identifier(table),
+        read_table(table),
         clauses.join(" AND ")
     );
     if !order_sql.is_empty() {
@@ -650,6 +832,10 @@ pub fn insert_document(
     document: &Value,
 ) -> RxResult<()> {
     let (id, revision, deleted, lwt, data) = document_columns(document, primary_path)?;
+    if table.starts_with("c_") {
+        conn.execute(&format!("INSERT INTO {}(id,rev,schema_ver,deleted,data) SELECT ?1,?2,schema_ver,?3,?4 FROM _collections WHERE table_name=?5 AND state='active'", quote_identifier(table)), params![id,revision,i64::from(deleted),if deleted {None} else {Some(data)},table]).map_err(sqlite_error).and_then(|n| if n==1 {Ok(())} else {Err(super::types::owner_job_error("collection generation not active"))})?;
+        return Ok(());
+    }
     let _statement_timer = timed_sqlite_statement();
     conn.execute(
         &format!(
@@ -670,6 +856,10 @@ pub fn update_document(
 ) -> RxResult<()> {
     let document = &row.document;
     let (id, revision, deleted, lwt, data) = document_columns(document, primary_path)?;
+    if table.starts_with("c_") {
+        conn.execute(&format!("UPDATE {} SET rev=?1,deleted=?2,data=?3 WHERE id=?4 AND EXISTS(SELECT 1 FROM _collections WHERE table_name=?5 AND state='active')",quote_identifier(table)),params![revision,i64::from(deleted),if deleted {None} else {Some(data)},id,table]).map_err(sqlite_error).and_then(|n| if n==1 {Ok(())} else {Err(super::types::owner_job_error("collection generation not active"))})?;
+        return Ok(());
+    }
     let _statement_timer = timed_sqlite_statement();
     conn.execute(
         &format!(
@@ -692,7 +882,7 @@ where
 {
     let _statement_timer = timed_sqlite_statement();
     let mut stmt = conn
-        .prepare(&format!("SELECT data FROM {}", quote_identifier(table)))
+        .prepare(&format!("SELECT data FROM {}", read_table(table)))
         .map_err(sqlite_error)?;
     let mut rows = stmt.query([]).map_err(sqlite_error)?;
     while let Some(row) = rows.next().map_err(sqlite_error)? {
@@ -713,7 +903,7 @@ pub fn document_by_id(conn: &Connection, table: &str, id: &str) -> RxResult<Opti
         .query_row(
             &format!(
                 "SELECT revision, deleted, lastWriteTime, data FROM {} WHERE id = ?",
-                quote_identifier(table)
+                read_table(table)
             ),
             params![id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
@@ -739,7 +929,7 @@ pub fn documents_by_ids(
     }
 
     let mut by_id: HashMap<String, Value> = HashMap::with_capacity(ids.len());
-    let quoted_table = quote_identifier(table);
+    let quoted_table = read_table(table);
     for chunk in ids.chunks(DOCUMENTS_BY_ID_BATCH_SIZE) {
         let placeholders = std::iter::repeat_n("?", chunk.len())
             .collect::<Vec<_>>()

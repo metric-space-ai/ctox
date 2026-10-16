@@ -23,7 +23,8 @@ import {
   nativeRxdbPeerReady,
   normalizeCollectionReadinessState,
 } from './sync-contract.js?v=20261014-shell-v2-query-checkpoint-readonly';
-import { getBusinessOsCapabilityToken } from './command-bus.js?v=20261014-shell-v2-query-checkpoint-readonly';
+// Explicit V3 compatibility until cutover; V4 admits its own hello session.
+import { getV3CapabilityToken as getBusinessOsCapabilityToken } from '../kernel/session.mjs';
 import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20261014-shell-v2-query-checkpoint-readonly';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 

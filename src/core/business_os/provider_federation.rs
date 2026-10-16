@@ -77,10 +77,19 @@ CREATE TABLE IF NOT EXISTS business_provider_federation_model_exclusions (
     account_id TEXT PRIMARY KEY,
     models_json TEXT NOT NULL,
     FOREIGN KEY(account_id) REFERENCES business_provider_federation_accounts(account_id)
+);
+CREATE TABLE IF NOT EXISTS business_provider_reported_quotas (
+    account_id TEXT PRIMARY KEY,
+    account_revision INTEGER NOT NULL,
+    quota_json TEXT NOT NULL,
+    FOREIGN KEY(account_id) REFERENCES business_provider_federation_accounts(account_id)
 );";
 
 #[path = "provider_account_controls.rs"]
 pub(in crate::business_os) mod account_controls;
+
+#[path = "provider_reported_quotas.rs"]
+mod reported_quotas;
 
 const MAX_ACCOUNTS: usize = 256;
 const MAX_ID_BYTES: usize = 256;
@@ -163,7 +172,8 @@ fn observations(projection: &Value) -> Result<Vec<NativeAccountObservation>> {
                 enabled: account["enabled"].as_bool().unwrap_or(false),
                 // The source's ready status means credential configured, never
                 // provider health, available quota or successful inference.
-                credential_ready: matches!(phase, "ready" | "connected"),
+                credential_ready: matches!(phase, "ready" | "connected")
+                    || (provider == "xai" && phase == "authenticated"),
                 private_binding: None,
             })
         })
@@ -214,8 +224,8 @@ pub(super) fn handle_command(
                 admission.context("native account adoption requires domain admission")?;
             let holder = store::existing_instance_id(root)?;
             bounded_id(&holder)?;
-            // Resolve existing account metadata before taking the policy writer
-            // transaction. No network call, auth refresh or credential mutation.
+            // Capture metadata and bounded gateway quota outside the policy writer.
+            // Quota observation never refreshes or mutates credentials.
             let snapshot = store::provider_subscription_status_for_control_plane(root);
             let mut accounts = observations(&snapshot["provider_subscriptions"])?;
             for account in accounts
@@ -229,6 +239,20 @@ pub(super) fn handle_command(
                     )?;
                 account.credential_ready &= account.private_binding.is_some();
             }
+            let quota = if let Some(account) = accounts.iter_mut().find(|a| {
+                a.provider == "xai"
+                    && a.local_account_id == crate::execution::cliproxyapi_xai::ACCOUNT_ID
+            }) {
+                let conn = store::open_store(root)?;
+                management_owner(&conn, actor)?;
+                drop(conn);
+                let observed = crate::execution::cliproxyapi_xai::quota::observe(root)?;
+                account.private_binding = observed.binding.clone();
+                account.credential_ready &= observed.binding.is_some();
+                Some(observed)
+            } else {
+                None
+            };
             let inherited =
                 crate::coding_agents::pi_sidecar::inherited_coding_account_metadata(root);
             if let Ok(Some(metadata)) = &inherited {
@@ -260,6 +284,9 @@ pub(super) fn handle_command(
                     )?;
                 }
                 adopt(tx, &owner, &holder, &accounts, now)?;
+                if let Some(quota) = &quota {
+                    reported_quotas::retain(tx, &owner, &holder, quota)?;
+                }
                 projection::applied(tx, &owner)
             })?;
             Ok(applied.result)
@@ -754,6 +781,7 @@ fn list(conn: &Connection, owner: &str) -> Result<Value> {
         entry["modelCatalogObserved"] = catalog["observed"].clone();
         entry["modelCatalog"] = catalog;
     }
+    reported_quotas::project(conn, &mut rows, now)?;
     account_controls::project(conn, &mut rows)?;
     let providers = models::project(conn, owner, &mut rows)?;
     Ok(

@@ -77,6 +77,9 @@ PROOFS=[
  ("process-stdin-owner","process.rs",E("meta.owner_app == ctx.app_id && sha256_hex(bytes) == meta.reference"),"sha256_hex(bytes) == meta.reference","process_base_env_contract"),
  ("automation-prevalidate","browser.rs",E('validate_step(step).map_err(|_| invalid("$.steps"))?;'),"","browser_automation_contract"),
  ("coding-envelope","coding.rs",E('json!({ "rejected_shape": args })'),"args","coding_flat_contract"),
+ # ---- CAP-3e (§16.48)
+ ("extract-limit","browser.rs",E(".is_some_and(|limit| (1..=1000).contains(&limit))"),".map_or(true, |limit| (1..=1000).contains(&limit))","browser_extract_contract"),
+ ("untrusted-sandbox","process.rs",E("if untrusted.is_some() && SANDBOX.get().is_none() {"),"if false {","process_untrusted_contract"),
  ("mail-redact","mail.rs",E('|| !(k.contains("password")'),"|| !(false","mail_server_intake_contract"),
 ]
 SELECTED=set(sys.argv[2].split(",")) if len(sys.argv)>2 and sys.argv[2] else None
