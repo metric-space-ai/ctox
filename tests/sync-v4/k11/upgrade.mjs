@@ -66,6 +66,10 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
  await new Promise(r=>server.listen(0,'127.0.0.1',r));base='http://127.0.0.1:'+server.address().port;
  // Explicit allowlist avoids ambient credentials, proxies and host service buses.
  const env={PATH:process.env.PATH,HOME:home,TMPDIR:tmpdir,LANG:'C.UTF-8',BUILD_LANE_BIN:process.env.BUILD_LANE_BIN,CTOX_ROOT:join(installRoot,'current'),CTOX_INSTALL_ROOT:installRoot,CTOX_STATE_ROOT:stateRoot,XDG_CONFIG_HOME:join(home,'.config'),XDG_CACHE_HOME:join(home,'.cache'),XDG_RUNTIME_DIR:proof.serviceManager?.runtime??join(home,'run')};if(proof.serviceManager)env.DBUS_SESSION_BUS_ADDRESS=proof.serviceManager.bus;fs.mkdirSync(env.XDG_RUNTIME_DIR,{recursive:true,mode:0o700});
+ // Normal production user extraction does not restore archive owners. UID 0
+ // here maps only our own host UID, so archive UID 1000 is deliberately unmapped.
+ // Use GNU tar's ordinary non-root semantics; no wrapper or archive mutation.
+ if(proof.mappedUser)env.TAR_OPTIONS='--no-same-owner';
  const calls=[];
  const serviceCalls=[];
  const quiesce=()=>{

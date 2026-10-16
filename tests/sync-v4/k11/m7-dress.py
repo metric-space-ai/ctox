@@ -136,7 +136,9 @@ def main():
         # Start the real foreground twice as a fresh-state component control.
         # The public instance ID can be observed without opening encrypted data.
         # This does not replace the installed-profile/signature witness.
-        component = out/'foreground-profile'
+        # Unix store IPC is STATE_ROOT/store/store.sock (SUN_LEN). Keep the
+        # private component root compact instead of changing the product path.
+        component = out/'f'
         component.mkdir(mode=0o700)
         (component/'.sync-v4-e2e.json').write_text(json.dumps(dict(owner=OWNER,synthetic=True,
             source=release['revision'],purpose='fresh empty-state restart control')))

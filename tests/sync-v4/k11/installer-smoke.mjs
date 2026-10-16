@@ -12,7 +12,7 @@ const [oldReceipt,newReceipt,outArg,roundtrip]=process.argv.slice(2),before=veri
 const output=resolve(outArg),allowed=resolve(process.env.BUILD_LANE_BIN,'../artifacts')+'/';
 if(!output.startsWith(allowed))throw Error('New private artifact prefix required');
 fs.mkdirSync(output,{recursive:false,mode:0o700});
-const root=join(output,'tenant-'+before.revision.slice(0,12)),native=new Native({...before,root,output,profile:'small'});
+const root=join(output,'t'),native=new Native({...before,root,output,profile:'small'});
 const record={id:'K11',scope:'supported installer only',owner,startedAt:new Date().toISOString(),beforeRevision:before.revision,afterRevision:after.revision,installerExecuted:false,migrationExecuted:false,acceptanceComplete:false,pass:false};
 const save=()=>fs.writeFileSync(join(output,'result.json'),JSON.stringify(record,null,2));save();
 const snapshot=(phase)=>{
