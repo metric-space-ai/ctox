@@ -541,7 +541,8 @@ async fn kernel_component(e25: bool) {
                             .unwrap()
                             .await
                             .expect("E25 route must resolve instead of unknown_command");
-                        stages["handler_complete_us"] = json!(stage_start.elapsed().as_micros() as u64);
+                        stages["handler_complete_us"] =
+                            json!(stage_start.elapsed().as_micros() as u64);
                         assert_eq!(complete.command_id, id);
                         doc["status"] = json!(complete.status);
                         doc["result"] = complete.result.unwrap();
@@ -580,7 +581,8 @@ async fn kernel_component(e25: bool) {
                             .await
                             .unwrap()
                     };
-                    stages["completion_commit_us"] = json!(stage_start.elapsed().as_micros() as u64);
+                    stages["completion_commit_us"] =
+                        json!(stage_start.elapsed().as_micros() as u64);
                     assert_eq!(done.results[0].result.status, WriteStatus::Accepted);
                     if first.is_none() {
                         writer
@@ -638,10 +640,10 @@ async fn kernel_component(e25: bool) {
                 .unwrap()
             }
             "trace" => {
-                let mut trace=request["measured"].clone();
-                trace["core_stages"]=json!(stage_trace);
-                if let Ok(path)=std::env::var("E25_TRACE_OUT") {
-                    std::fs::write(path,serde_json::to_vec(&trace).unwrap()).unwrap();
+                let mut trace = request["measured"].clone();
+                trace["core_stages"] = json!(stage_trace);
+                if let Ok(path) = std::env::var("E25_TRACE_OUT") {
+                    std::fs::write(path, serde_json::to_vec(&trace).unwrap()).unwrap();
                 }
                 Value::Null
             }

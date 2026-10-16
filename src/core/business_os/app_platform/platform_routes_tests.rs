@@ -1,16 +1,27 @@
 use super::*;
-use ctox_store::{schema::{self,CollectionDefinition},types::{DbId,JobOptions,WriteJob}};
+use ctox_store::{
+    schema::{self, CollectionDefinition},
+    types::{DbId, JobOptions, WriteJob},
+};
 use std::sync::Arc;
 
 #[cfg(unix)]
 #[tokio::test]
 async fn e49_platform_rights_metadata_grants_and_restart_reply_boundary() {
-    use sha2::{Digest,Sha256};
-    println!("E49_PLATFORM_SOURCE_SHA256 {:x}",Sha256::digest(include_bytes!("platform_routes.rs")));
-    let _scope=crate::service::store_startup::isolate_test_roots().await;
-    let dir=tempfile::tempdir().unwrap();
-    let mut stores=crate::service::store_runtime::DaemonStores::start(
-        ctox_store::ipc::StoreEndpoint::UnixSocket{path:dir.path().join("ipc/store.sock")},tokio::runtime::Handle::current()).unwrap();
+    use sha2::{Digest, Sha256};
+    println!(
+        "E49_PLATFORM_SOURCE_SHA256 {:x}",
+        Sha256::digest(include_bytes!("platform_routes.rs"))
+    );
+    let _scope = crate::service::store_startup::isolate_test_roots().await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut stores = crate::service::store_runtime::DaemonStores::start(
+        ctox_store::ipc::StoreEndpoint::UnixSocket {
+            path: dir.path().join("ipc/store.sock"),
+        },
+        tokio::runtime::Handle::current(),
+    )
+    .unwrap();
     let db=stores.register("sync",DbId::new(dir.path().join("sync.sqlite")).unwrap(),true,Arc::new(|tx|{
         for name in ["business_commands","devices","machine_enrollments","business_users"] {
             schema::create_collection(tx,&CollectionDefinition{name:name.into(),app_id:"ctox-platform".into(),schema_ver:1,
@@ -25,8 +36,11 @@ async fn e49_platform_rights_metadata_grants_and_restart_reply_boundary() {
         commands::put(tx,"machine_enrollments","enrollment-a",&json!({"id":"enrollment-a","status":"green","created_by":"owner"}))?;
         Ok(())
     })).await.unwrap();
-    let rights=policy::sync_rights::StoreRightsAuthority::attach(db.writer.clone(),"e49-isolated".into()).await.unwrap();
-    let _policy=policy::bind_policy_authority(rights).unwrap();
+    let rights =
+        policy::sync_rights::StoreRightsAuthority::attach(db.writer.clone(), "e49-isolated".into())
+            .await
+            .unwrap();
+    let _policy = policy::bind_policy_authority(rights).unwrap();
     db.writer.submit(WriteJob::new(JobOptions::default(),|tx|{
         let admin=BusinessOsActor::new(Some("owner".into()),"admin");
         let user=BusinessOsActor::new(Some("owner".into()),"user");
@@ -44,7 +58,7 @@ async fn e49_platform_rights_metadata_grants_and_restart_reply_boundary() {
         let declined=execute(tx,&admin,&command("decline","ctox.secret.request.decline",json!({"request_id":"request-a"})),100)?;
         assert_eq!(declined,json!({"request_id":"request-a","declined":true}));
         let grant=execute(tx,&admin,&command("grant","ctox.workjet.remote_worker.admit",json!({"device_id":"device-a","enrollment_id":"enrollment-a","scopes":["task.execute"],"ttl_ms":1000})),100)?;
-        assert_eq!(grant["grant"]["actor_id"],"owner");assert_eq!(grant["grant"]["rights_ver"],"1");
+        assert_eq!(grant["grant"]["actor_id"],"owner");assert_eq!(grant["grant"]["rights_ver"],policy::sync_rights::read(tx).map_err(|e|StoreError::Invalid(e.to_string()))?.rights_ver.to_string());
         assert!(worker_grant(tx,"grant",&admin,"workjet","device-a",101)?.is_some());
         assert!(worker_grant(tx,"grant",&admin,"foreign-app","device-a",101)?.is_none());
         assert!(worker_grant(tx,"grant",&admin,"workjet","device-a",1100)?.is_none());
