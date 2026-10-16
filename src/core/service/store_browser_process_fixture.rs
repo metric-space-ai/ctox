@@ -16,7 +16,8 @@ async fn export_installed_browser_fixture() -> anyhow::Result<()> {
     let (root, mut owner, _, _) = write_fixture().await?;
     let signer = owner.inputs.instance_signer()?;
     owner.inputs.sync.writer.submit(ctox_store::WriteJob::new(Default::default(),move |tx| {
-        let manifest = serde_json::json!({"app_id":"notes-app","app_ver":"1","collections":{"notes":{"type":"object","primaryKey":"id","properties":{"id":{"type":"string"},"title":{"type":"string"},"owner":{"type":"string"}},"required":["id"]}},"generations":{"notes":1},"files":[],"capabilities_required":[]});
+        let mut manifest = serde_json::json!({"app_id":"notes-app","app_ver":"1","collections":{"notes":{"type":"object","primaryKey":"id","properties":{"id":{"type":"string"},"title":{"type":"string"},"owner":{"type":"string"}},"required":["id"]}},"generations":{"notes":1},"files":[],"capabilities_required":[]});
+        manifest.sort_all_objects();
         let bytes=serde_json::to_vec(&manifest).unwrap();
         let signature=signer.sign(&bytes).unwrap().iter().map(|v|format!("{v:02x}")).collect::<String>();
         let version=serde_json::json!({"id":"notes-app@1","app_id":"notes-app","app_ver":"1","state":"published","manifest":manifest,"manifest_sha256":format!("{:x}",Sha256::digest(bytes)),"signature":signature});
