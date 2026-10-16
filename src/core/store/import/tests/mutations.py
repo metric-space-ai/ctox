@@ -8,7 +8,7 @@ def mutate(path,old,new,test):
     line=before[:before.index(old)].count('\n')+1
     try:
         path.write_text(before.replace(old,new))
-        result=subprocess.run(['cargo','test','--manifest-path',str(store/'Cargo.toml'),'--lib',test,'--','--nocapture'],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=120)
+        result=subprocess.run(['cargo','test','--manifest-path',str(store/'Cargo.toml'),'--lib',test,'--','--include-ignored','--nocapture'],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=120)
         log_name = str(len(rows)+1)+'-'+test.split('::')[-1]+'.mutant.log'
         (proof/log_name).write_text(result.stdout)
 
