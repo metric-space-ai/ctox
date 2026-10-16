@@ -1000,6 +1000,10 @@ pub enum NativeWriteAdmission<T> {
 /// Adapter for P8's single cursor reader and owning write transaction. Identity
 /// comes from Core authentication. ReadAuthority delegates to authorize_snapshot
 /// and project_change; WriteAuthority uses admit_write on the final document.
+#[path = "rxdb_peer_v4_files.rs"]
+mod v4_files;
+pub(crate) use v4_files::NativeFileAccess;
+
 #[derive(Clone)]
 pub struct NativeStorePolicy {
     authority: std::sync::Arc<sync_rights::StoreRightsAuthority>,

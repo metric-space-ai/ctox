@@ -204,6 +204,7 @@ pub(crate) fn execute_core(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::business_os::store;
     struct RetainedTestAuthority;
     impl NativeCommandAuthority for RetainedTestAuthority {
         fn with_current(
