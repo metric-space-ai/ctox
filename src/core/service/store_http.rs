@@ -44,6 +44,7 @@ impl HttpSurface {
     }
     /// Runs only on a blocking/IPC worker. Admission and thread count are bounded.
     pub fn listen(&self, addr: SocketAddr) -> Result<SocketAddr, StoreError> {
+        self.inputs.instance_signer()?;
         let mut listeners = self.listeners.lock().unwrap_or_else(|p| p.into_inner());
         if self.closing.load(Ordering::Acquire) {
             return Err(StoreError::Closed);
@@ -60,6 +61,7 @@ impl HttpSurface {
                 StoreError::Invalid("no verified Business OS bootstrap installed".into())
             })?;
         let app = std::fs::canonicalize(app)?;
+        self.inputs.instance_signer()?;
         let server = Arc::new(
             Server::http(addr)
                 .map_err(|_| StoreError::Invalid("HTTP address unavailable".into()))?,
@@ -147,11 +149,14 @@ impl HttpSurface {
         });
         Ok(JobHandle::from_receiver(receive))
     }
-    pub async fn shutdown(&self) -> Result<(), StoreError> {
+    pub async fn shutdown(self: &Arc<Self>) -> Result<(), StoreError> {
         self.closing.store(true, Ordering::Release);
-        let listeners =
-            std::mem::take(&mut *self.listeners.lock().unwrap_or_else(|p| p.into_inner()));
+        let surface = self.clone();
         tokio::task::spawn_blocking(move || {
+            // listen() retains this mutex while verifying a selected release.
+            // Waiting for that filesystem work must not block a Tokio worker.
+            let listeners =
+                std::mem::take(&mut *surface.listeners.lock().unwrap_or_else(|p| p.into_inner()));
             for listener in listeners {
                 for _ in &listener.workers {
                     listener.server.unblock();
