@@ -155,6 +155,8 @@ export interface ShellApi {
   /** Unbekanntes Ziel → Fehler in der Zustandszone, `false`, nie stiller Fallback. */
   /** Read-only: no navigation or status entry is emitted. */
   canNavigate(appId: string, params?: Record<string, unknown>): boolean;
+  /** E48: ref grants one files.get to target, bound to this user/session for at most one hour; audited before routing. */
+  navigate(appId: string, params: Record<string, unknown> & {ref: string | {id?: string; ref?: string}}): Promise<boolean>;
   navigate(appId: string, params?: Record<string, unknown>): boolean;
   onRoute(cb: (ev: RouteEvent) => void): () => void;
   locale: LiveDoc<string>;

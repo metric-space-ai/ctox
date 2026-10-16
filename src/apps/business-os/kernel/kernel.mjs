@@ -1,3 +1,4 @@
+import {PLATFORM_MANIFEST} from './platform-manifest.generated.mjs';
 import {commandTarget} from './command-routing.mjs';
 import { createCommandTimings } from './command-timings.mjs';
 import { PLATFORM_COLLECTIONS, PLATFORM_APP_ID } from './platform.mjs';
@@ -136,6 +137,8 @@ export function createKernel(opts = {}) {
   const zone = [];
   const moduleCache = new Map();
   const routeListeners = new Map();
+  const fileReadGrants = new Map(); // E48: session-local, exact ref, consumed once, one hour.
+
   const windowStates = new Map();
   let locale = opts.locale ?? 'de';
   const translations = {};
@@ -1011,7 +1014,7 @@ export function createKernel(opts = {}) {
     const manifest=versionDoc(owner,ver)?.manifest;
     return {owner,ver,definition:manifest?.collections?.[collection],gen:manifest?.generations?.[collection]};
   }
-  function schemaFor(app, collection) { const {owner,definition}=collectionVersion(app,collection);return definition?.schema??(owner===PLATFORM_APP_ID?PLATFORM_SCHEMAS[collection]??null:null); }
+  function schemaFor(app, collection) { const {owner,ver,definition}=collectionVersion(app,collection);return (owner===PLATFORM_APP_ID && versionDoc(owner,ver)?.builtin ? PLATFORM_SCHEMAS[collection]??null : definition?.schema)??(owner===PLATFORM_APP_ID?PLATFORM_SCHEMAS[collection]??null:null); }
   function writeVersion(app,collection) {
     const {owner,ver,definition,gen}=collectionVersion(app,collection);
     // Wire versions describe the collection owner, never the calling app.
@@ -1094,6 +1097,8 @@ export function createKernel(opts = {}) {
     } finally { publishing.delete(appId); }
   }
   function scheduleActivation(appId) {
+    if(appId==='ctox-platform' && versionDoc(appId,visible(mirrorGet('business_apps',appId))?.active_ver)?.builtin)return; // resident Core service, no app mount or eager data subscriptions
+
     if (!isLeader || closed || isLib(appId)) return; // §16.37: lib:<name> nie eager, nur dateiweise bei SW-Miss
     const prev = activationChains.get(appId) ?? Promise.resolve();
     const next = prev.then(() => runActivation(appId)).catch((err) => {
@@ -1333,10 +1338,22 @@ export function createKernel(opts = {}) {
           zoneReport(appId, { level: 'error', code: 'shell.navigate.unknown_target', text: `Navigationsziel unbekannt: ${target}`, ref: String(target) }, 'kernel');
           return false;
         }
+        if (params.ref !== undefined) return (async () => {
+          const sel = typeof params.ref === 'string' ? {ref:params.ref} : params.ref;
+          const file = await readableFile(sel, false);
+          const grant = {from:appId,to:target,ref:file.ref,user_id:userId,expires_at:Date.now()+3600000,at_ms:Date.now()};
+          // Audit commits before delivery. A failed authorization never emits a route.
+          await db.tx(t=>t.put('meta',{key:`file-grant:${uuidv7()}`,value:{...grant,event:'granted'}}));
+          fileReadGrants.set(JSON.stringify([target,file.ref]),grant);
+          return emitRoute();
+        })();
+        return emitRoute();
+        function emitRoute() {
         const ev = Object.freeze({ from: appId, to: target, params: cloneValue(params) });
         simRecord.navigations.push(ev);
         for (const cb of [...(routeListeners.get(target) ?? [])]) { try { cb(ev); } catch (e) { console.error(e); } }
         return true;
+        }
       },
       onRoute(cb) {
         if (!routeListeners.has(appId)) routeListeners.set(appId, new Set());
@@ -1410,7 +1427,7 @@ export function createKernel(opts = {}) {
     }
     // E30: a CAS hash is not authority. Only canonical, still-readable rows
     // grant access; an optimistic reference cannot mint a read grant.
-    async function readableFile(sel) {
+    async function readableFile(sel, consumeGrant = true) {
       guardAlive();
       if (!isPlainObject(sel) || (typeof sel.id !== 'string' && typeof sel.ref !== 'string')) throw new CtoxError('invalid', 'files: {id} oder {ref} nötig', {path:'ref'});
       const docs = fileDocs().filter(d => sel.id ? d.id === sel.id : d.ref === sel.ref);
@@ -1444,6 +1461,13 @@ export function createKernel(opts = {}) {
       const ref = docs[0]?.ref ?? sel.ref;
       const containsRef = value => value !== null && typeof value === 'object' && (value.ref === ref || value.blob_ref === ref || Object.values(value).some(containsRef));
       if (typeof ref === 'string' && /^[a-f0-9]{64}$/.test(ref) && canonicalRows.some(([,d]) => containsRef(d))) return docs[0] ?? {ref,id:ref,name:null};
+      const grantKey = JSON.stringify([appId,ref]);
+      const grant = fileReadGrants.get(grantKey);
+      if (consumeGrant && grant?.user_id===userId && grant.expires_at>Date.now()) {
+        fileReadGrants.delete(grantKey); // consume before any await: concurrent reads cannot reuse it
+        await db.tx(t=>t.put('meta',{key:`file-grant:${uuidv7()}`,value:{...grant,event:'consumed',at_ms:Date.now()}}));
+        return docs[0] ?? {id:ref,ref,name:null};
+      }
       throw new CtoxError('forbidden','File needs ownership or a readable reference',{path:sel.id ? 'id' : 'ref'});
     }
     const fileInfo = (d) => ({ id: d.id, ref: d.ref, name: d.name ?? null, mime: d.mime ?? 'application/octet-stream', size: d.size ?? 0 });
@@ -1939,7 +1963,7 @@ export function createKernel(opts = {}) {
     const out = [];
     for (const r of mirror.get('business_apps')?.values() ?? []) {
       const d = visible(r);
-      if (!d || isLib(d.id)) continue;
+      if (!d || d.id==='ctox-platform' || isLib(d.id)) continue;
       if (Array.isArray(d.roles) && !d.roles.includes(actor.role)) continue;
       const a = activations.get(d.id);
       // §16.19 Nr. 6: layout/styles der laufenden (sonst der veröffentlichten) Version
@@ -2552,6 +2576,23 @@ export function createKernel(opts = {}) {
       if(db.kind!=='indexeddb')throw new CtoxError('invalid','V3 takeover requires IndexedDB');
       await takeoverV3Database(db,opts.legacyDatabase,{instanceId,userId});
     }
+    // E48: trusted built-in platform publication; never replaces a Core catalog row.
+    const builtinPlatform = await db.tx(async t=>{
+      const existing = await t.get('docs',['business_apps','ctox-platform']);
+      if (existing) return [];
+      const rows = [
+        ['business_app_versions',{id:'ctox-platform@1',app_id:'ctox-platform',app_ver:'1',manifest:PLATFORM_MANIFEST,builtin:true}],
+        ['business_apps',{id:'ctox-platform',active_ver:'1'}],
+      ];
+      const result=[];
+      for (const [collection,data] of rows) {
+        const base={data,deleted:false,rev:null,seq:'0'};
+        const row={collection,id:data.id,...base,pending:false,base};
+        await putDoc(t,row);result.push(row);
+      }
+      return result;
+    });
+    if (fakeCore) for (const row of builtinPlatform) if (!fakeCore.core.docs.has(fakeCore.key(row.collection,row.id))) await fakeCore.push(row.collection,[row.data]);
     await loadFromStorage();
     if (hasLocks) {
       bc = new BroadcastChannel(channelName);
