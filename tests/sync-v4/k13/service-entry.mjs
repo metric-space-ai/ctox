@@ -5,8 +5,15 @@ import {spawnSync} from 'node:child_process';
 import {hashFile} from './build-receipt.mjs';
 
 export function installServiceEntry(Native) {
+  const start=Native.prototype.start;
+  Native.prototype.start=function(...args) {
+    const child=start.apply(this,args);
+    const record=this.receipts.find(row=>row.pid===child.pid);
+    record.owner=this.config.owner;record.pidNamespace=fs.readlinkSync('/proc/self/ns/pid');
+    record.pidScope='private namespace';this.save();return child;
+  };
   Native.prototype.prepare=async function() {
-    const {root,source,revision,owner,port}=this.config;
+    const {root,source,revision,owner}=this.config;
     if(fs.existsSync(root))throw Error('Never reuse a P6 tenant root');
     fs.mkdirSync(resolve(root,'runtime/home'),{recursive:true,mode:0o700});
     fs.writeFileSync(resolve(root,'.sync-v4-e2e.json'),JSON.stringify({owner,synthetic:true,source:revision}));

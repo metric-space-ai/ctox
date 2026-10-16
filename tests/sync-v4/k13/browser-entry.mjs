@@ -26,17 +26,19 @@ export async function installBrowserEntry(context, origin) {
       if(kernel.instanceId!==instanceId || kernel.userId!==userId || t.identity.userId!==userId || t.session.instance_id!==instanceId)
         throw Error('not_run(e38-identity): kernel/transport identity mismatch');
       if(kernel.storageKind!=='indexeddb')throw Error('Real kernel IndexedDB required');
+      const deviceId=launch.hello.offer.device_proof.device_id;
+      if(!deviceId || kernel.identity.device_id!==deviceId)
+        throw Error('not_run(native-device-enrollment): admitted device is not bound to kernel identity');
       const shell=kernel.shellApi();
       globalThis.__e2eOS={kernel,shell,transport:t,transportKind:'native-webrtc',nativePeerId:launch.signaling.nativePeerId,
-        regression:{contract:'ctox.sync-v4.regression-control.v1',
-          async prepare(){throw Error('not_run(native-scenario-control): E38 defines authentication, not native regression fixture/commit/send-trace control');},
-          async control(operation,args){
-            if(operation!=='authenticate')throw Error('not_run(native-scenario-control): unsupported authenticated native operation');
-            if(args.userId!==kernel.userId)throw Error('Identity switches require a separately authenticated browser context');
-            return {userId:kernel.userId,instanceId:kernel.instanceId,role:launch.actor.role,is_admin:launch.actor.is_admin};
-          }},
+        // Authentication is supplied by E38. Native regression operations are
+        // deliberately absent until a real owner-backed provider exists.
+        authenticatedControl:{async authenticate(args){
+          if(args.userId!==kernel.userId || args.deviceId!==deviceId)throw Error('A separately authenticated enrolled context is required');
+          return {userId:kernel.userId,deviceId,instanceId:kernel.instanceId,role:launch.actor.role,is_admin:launch.actor.is_admin};
+        }},
       };
-      return {instanceId,userId,role:launch.actor.role,transportKind:'native-webrtc',helloAdmitted:true,loader:true,
+      return {instanceId,userId,deviceId,role:launch.actor.role,transportKind:'native-webrtc',helloAdmitted:true,loader:true,
         shellVersion:loader.shellVersion,storageKind:kernel.storageKind,entry:location.pathname,launchContext:true};
     },{instanceId:fixture.instanceId,userId:identity.id,role:identity.role});
     return {available:true,proof};

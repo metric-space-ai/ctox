@@ -66,7 +66,7 @@ async fn p6_prepare_enrolled_profiles() -> Result<()> {
                 super::super::super::commands::put(tx, "business_users", &sync_user,
                     &json!({"id":sync_user,"user_id":sync_user,"role":sync_role,"active":true}))
             }))?.await?;
-            identities.push(json!({"id":id,"name":role,"role":role,"deviceId":format!("{id}-device"),"cookie":token}));
+            identities.push(json!({"id":id,"name":role,"role":role,"deviceId":null,"cookie":token}));
         }
         let instance_id = owners[0].inputs.instance_signer()?.instance_id().to_owned();
         let fixture = json!({"version":1,"source":"foreground-writer-secret-store","root":root,"roots":roots,
