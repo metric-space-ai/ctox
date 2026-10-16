@@ -9,7 +9,7 @@
 //    Antwortanzeige in der App-Fläche. Gegenproben: Esc im Eingabeblatt sendet nichts; Rechtsklick ohne Datensatz
 //    sendet ohne record_ref.
 //
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/buchhaltung/tests/kontext-chat.test.mjs
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/8265bd7 node --test src/apps/business-os/modules/buchhaltung/tests/kontext-chat.test.mjs
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -19,8 +19,9 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 
-process.env.CTOX_APP_API_STUB ||= join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+process.env.CTOX_APP_API_STUB ||= join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const { appConfig, configs, resolveLabPath, labBinding, labBody } = await import('../../../v4/tools/geometry/geometry-v4.mjs');
+const { realManifestRoutes } = await import('../../../v4/tools/port/real-manifest.mjs');
 
 const APP = 'buchhaltung';
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -86,7 +87,9 @@ const PAGE = `<!doctype html><html lang="de"><head><meta charset="utf-8"><meta n
 <title>BUCH Kontext-Chat</title><style>html,body{margin:0;height:100%}</style></head><body><div id="ctox-shell"></div>
 <script type="module">
 import { createStubKernel } from '/~stub/ctox-app-api-stub.mjs';
-import * as frame from '/v4/frame/index.js';
+// PIN-ALL: Rahmen wie vom Kernel unter /~a/shell@<ver>/ laden – er leitet seine Shell-Version (für shell_preferences über
+// die App-API der Shell) aus der eigenen URL ab; unter /v4/ wäre das 'dev' ohne veröffentlichtes Manifest.
+import * as frame from '/~a/shell@lab/v4/frame/index.js';
 import { createWindowHost } from '/v4/shell/app-host.js';
 const app = ${JSON.stringify(APP)};
 const cfg = await (await fetch('/__bt/cfg.json')).json();
@@ -94,8 +97,11 @@ const bt = window.__bt = { commands: [], writes: [], zone: [] };
 const kernel = createStubKernel({ instanceId: 'bt-' + Date.now(), userId: 'owner', storage: 'memory', latencyMs: 1, multiTab: false, locale: 'de-DE' });
 await kernel.ready;
 for (const [c, rows] of Object.entries(cfg.seed)) { try { await kernel.sim.push(c, rows); } catch {} }
-try { await kernel.sim.publishAppVersion('shell', 'lab', { entry: 'v4/frame/index.js' }); } catch {}
-await kernel.sim.publishAppVersion(app, '1.0.0', { entry: cfg.entry, layout: cfg.layout, styles: cfg.styles });
+// PIN-ALL (E48): echte Routen/Rechte/Collections aus v4/manifests/{shell,buchhaltung}.manifest.json; ohne Deklaration sperrt
+// der Kern einer veröffentlichten App Fremd- und eigene Collections (der Rahmen liest shell_preferences als Fremdlesen).
+for (const o of [...(cfg.shellRoutes?._fixture_owners ?? []), ...(cfg.routes?._fixture_owners ?? [])]) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+try { await kernel.sim.publishAppVersion('shell', 'lab', { entry: 'v4/frame/index.js', manifestExtra: cfg.shellRoutes }); } catch {}
+await kernel.sim.publishAppVersion(app, '1.0.0', { entry: cfg.entry, layout: cfg.layout, styles: cfg.styles, manifestExtra: cfg.routes });
 await kernel.sim.settle();
 const wrapData = (data) => {
   const out = { ...data };
@@ -130,6 +136,8 @@ async function clickEl(selector, opts = {}) {
 before(async () => {
   const cfg = appConfig(APP);
   for (const rows of Object.values(cfg.seed)) for (const r of rows) delete r._deleted;
+  cfg.routes = realManifestRoutes(APP);
+  cfg.shellRoutes = realManifestRoutes('shell');
   configs.set(APP, cfg);
   server = createServer((req, res) => {
     const p = decodeURIComponent(new URL(req.url, 'http://bt').pathname).replace(/^(\/~a\/[^/]+?)~shell@[^/~]+/, '$1');
