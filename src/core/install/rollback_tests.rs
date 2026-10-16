@@ -2,7 +2,7 @@ use super::*;
 use tempfile::tempdir;
 
 #[test]
-fn rollback_restore_keeps_live_lease_and_restores_tenant_data() -> Result<()> {
+fn restore_state_backup_keeps_live_lease_and_restores_tenant_data() -> Result<()> {
     let temp = tempdir()?;
     let layout = InstallLayout {
         workspace_root: temp.path().to_path_buf(),

@@ -1561,6 +1561,8 @@ pub fn handle_update_command(root: &Path, args: &[String]) -> Result<()> {
             update_maintenance(&layout.state_root, &maintenance.lease_id, |state| {
                 state.phase = "rolled_back".to_string();
                 state.status = "rolled_back".to_string();
+                state.current_release = Some(result.current_release.clone());
+                state.previous_release = result.previous_release.clone();
                 state.service_active = true;
                 state.progress = MaintenanceProgress {
                     percent: 100,

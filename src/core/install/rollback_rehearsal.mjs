@@ -6,7 +6,6 @@ import {join,resolve,dirname} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {spawn,spawnSync,execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import http from 'node:http';
 const self=fileURLToPath(import.meta.url),hash=p=>createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 const args=process.argv.slice(2),mode=args.shift();
 if(process.platform!=='linux'||!process.env.BUILD_LANE_BIN)throw Error('Canonical Linux lane only');
@@ -27,7 +26,11 @@ if(mode==='rollback'){
    await cli(['update','rollback']);
    const restored=execFileSync('python3',['-c',"import sqlite3,sys; c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True); print(c.execute('SELECT value FROM restore_probe').fetchone()[0])",join(stateRoot,'m7-restore-probe.sqlite3')],{encoding:'utf8'}).trim();
    if(restored!=='before')throw Error('Rollback did not restore the actual SQLite value');
-   record.restoredDatabaseValue=restored;`);
+   record.restoredDatabaseValue=restored;
+   const maintenance=JSON.parse(execFileSync('python3',['-c',"import sqlite3,sys; c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True); print(c.execute('SELECT state_json FROM ctox_maintenance_state').fetchone()[0])",join(stateRoot,'ctox-maintenance.sqlite3')],{encoding:'utf8'}));
+   const receipt=JSON.parse(fs.readFileSync(join(stateRoot,'update_state.json')));
+   if(maintenance.phase!=='rolled_back'||maintenance.status!=='rolled_back'||maintenance.current_release!==receipt.current_release||maintenance.previous_release!==receipt.previous_release)throw Error('Rollback maintenance receipt disagrees with the actual release');
+   record.rollbackMaintenance={leaseId:maintenance.lease_id,phase:maintenance.phase,currentRelease:maintenance.current_release,previousRelease:maintenance.previous_release};`);
  fs.writeFileSync(upgrade,text);
  const smoke=join(harness,'tests/sync-v4/k11/installer-smoke.mjs');let source=fs.readFileSync(smoke,'utf8');
  const marker='record.root=root;';if(source.split(marker).length!==2)throw Error('Frozen smoke drift');
@@ -64,17 +67,22 @@ if(mode==='rollback'){
  const config={root,binary,source:root,output:c.output,port:18766,signalingPort:18767};
  const native=new Native(config);native.env.CTOX_STATE_ROOT=join(profile.root,'runtime');native.env.CTOX_INSTALL_ROOT=join(profile.root,'managed');native.env.CTOX_WEBRTC_UDP_BIND_ADDR='127.0.0.1:0';native.env.HOME=process.env.HOME;
  if(c.slot){
-  const version='0.1.46-beta.106',dest=join(profile.root,'runtime/business-os-shell/slots',version);fs.mkdirSync(dirname(dest),{recursive:true});if(!fs.existsSync(dest))fs.cpSync(c.slot,dest,{recursive:true});
+  const version='0.1.46-beta.106',dest=join(profile.root,'runtime/business-os-shell/slots',version);fs.mkdirSync(dirname(dest),{recursive:true});if(!fs.existsSync(dest))fs.cpSync(fs.realpathSync(c.slot),dest,{recursive:true});
   // Private fixture metadata only; signed bytes are still verified by the real server.
   execFileSync('python3',['-c',"import sqlite3,json,sys; c=sqlite3.connect(sys.argv[1]); c.execute(\"INSERT INTO business_os_shell_update_state(singleton,state_json,updated_at) VALUES (1,?,datetime('now')) ON CONFLICT(singleton) DO UPDATE SET state_json=excluded.state_json,updated_at=excluded.updated_at\",(json.dumps(json.load(open(sys.argv[2]))),)); c.commit()",join(profile.root,'runtime/business-os.sqlite3'),join(c.slot,'../fixture-state.json')]);
  }
 
  const result={startedAt:new Date().toISOString(),binarySha256:hash(binary),rows:[],pass:false};
- const request=path=>new Promise(resolve=>{
-  const start=performance.now(),row={path,startedAt:new Date().toISOString(),headersMs:null,bodyMs:null,bytes:0};
-  const req=http.get('http://127.0.0.1:18766'+path,{agent:false},res=>{row.status=res.statusCode;row.headersMs=performance.now()-start;res.on('data',b=>row.bytes+=b.length);res.on('end',()=>{row.bodyMs=performance.now()-start;resolve(row);});res.on('error',e=>{row.error=e.message;resolve(row);});});
-  req.setTimeout(12000,()=>req.destroy(Error('HTTP phase deadline')));req.on('error',e=>{row.error=e.message;row.totalMs=performance.now()-start;resolve(row);});
- });
+ const request=async path=>{
+  const start=performance.now(),row={path,startedAt:new Date().toISOString(),headersMs:null,bodyMs:null,bytes:0,client:'Node fetch; default compression; manual redirect'};
+  try{
+   const response=await fetch('http://127.0.0.1:18766'+path,{redirect:'manual',signal:AbortSignal.timeout(12000)});
+   row.status=response.status;row.headersMs=performance.now()-start;
+   row.headers=Object.fromEntries(['content-length','content-type','content-encoding','connection','cache-control'].map(k=>[k,response.headers.get(k)]));
+   row.bytes=(await response.arrayBuffer()).byteLength;row.bodyMs=performance.now()-start;
+  }catch(error){row.error=error.message;}finally{row.totalMs=performance.now()-start;}
+  return row;
+ };
  try{
   native.start('signaling',process.execPath,[resolve(dirname(self),'../rxdb/tools/local_signaling_server.js'),'18767'],{...native.env,SIGNALING_HOST:'127.0.0.1',SIGNALING_PORT:'18767'});native.serve();await until(async()=>{try{const r=await fetch('http://127.0.0.1:18766/app.js?v=m7-phase',{signal:AbortSignal.timeout(2000)});await r.arrayBuffer();return r.ok;}catch{return false;}},30000,'isolated static server');
   for(let i=0;i<20;i++){const row=await request('/');result.rows.push(row);json(join(c.output,'static.json'),result);if(row.error){
