@@ -31,6 +31,8 @@ pub(crate) struct V4LaunchContext {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Launch {
     pub instance_id: String,
+    #[serde(rename = "instance_display_name")]
+    pub instance_display_name: String,
     pub user_id: String,
     pub actor: Actor,
     pub signaling: Signaling,
@@ -87,6 +89,24 @@ struct Device {
     peer: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     device_pubkey: Option<String>,
+}
+
+/// Display metadata from the official persisted instance configuration only.
+/// No process environment, hostname inference or secret lookup is involved.
+pub(crate) async fn instance_display_name(owners: &Arc<StoreInputs>) -> Result<String> {
+    let fallback = owners.instance_signer()?.instance_id().to_owned();
+    let root = owners.root.clone();
+    let configured = crate::persistence::run_core_sync(move || {
+        crate::inference::runtime_env::try_get_runtime_env_value(
+            &root,
+            "CTOX_INSTANCE_DISPLAY_NAME",
+        )
+    })
+    .await?;
+    Ok(configured
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty() && s.len() <= 128 && !s.chars().any(char::is_control))
+        .unwrap_or(fallback))
 }
 
 /// `user` is the route's authenticated principal, never a browser body. Its role
@@ -226,6 +246,7 @@ async fn build_principal(
     let context = V4LaunchContext {
         v4: Launch {
             instance_id: signer.instance_id().into(),
+            instance_display_name: instance_display_name(owners).await?,
             user_id: actor.id.clone(),
             actor,
             signaling,

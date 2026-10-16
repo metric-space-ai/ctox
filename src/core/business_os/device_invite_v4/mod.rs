@@ -7,7 +7,7 @@ use super::{
 };
 use crate::service::store_inputs::StoreInputs;
 use std::sync::Arc;
-pub(crate) use store::{Invitation, Redeem, Reject};
+pub(crate) use store::{Challenge, Invitation, Redeem, Reject, Renew, RenewReject};
 
 /// Called only from the authenticated invite.create command with its retained
 /// native principal. The request payload cannot choose another user or role.
@@ -20,9 +20,12 @@ pub(crate) async fn create(
         .instance_signer()
         .map_err(|_| Reject::DeviceRejected)?;
     let invites = store::Invites::attach(owners.sync.writer.clone()).await?;
-    let result = invites
+    let mut result = invites
         .create(principal.id.clone(), principal.role.clone(), ttl_ms)
         .await?;
+    result.instance_display_name = launch_context_v4::instance_display_name(owners)
+        .await
+        .map_err(|_| Reject::DeviceRejected)?;
     owners
         .instance_signer()
         .map_err(|_| Reject::DeviceRejected)?;
@@ -59,9 +62,87 @@ pub(crate) async fn redeem(
     if context.v4.actor.id != user.id || context.v4.actor.role != user.role {
         return Err(Reject::DeviceRejected);
     }
-    invites.consume(prepared).await?;
+    let rxdb::plugins::replication_webrtc::index_mod::hello::HelloFrame::Hello(hello) =
+        &context.v4.hello.offer
+    else {
+        return Err(Reject::DeviceRejected);
+    };
+    invites
+        .consume(prepared, hello.device_proof.device_id.clone())
+        .await?;
     owners
         .instance_signer()
         .map_err(|_| Reject::DeviceRejected)?;
     Ok(context)
+}
+
+/// P4 sends this before the request and retains its nonce on that exact pairing
+/// control connection. It must not accept another connection's challenge.
+pub(crate) async fn challenge(owners: &Arc<StoreInputs>) -> Result<Challenge, RenewReject> {
+    let instance = owners
+        .instance_signer()
+        .map_err(|_| RenewReject::DeviceUnknown)?
+        .instance_id()
+        .to_owned();
+    store::Invites::attach(owners.sync.writer.clone())
+        .await
+        .map_err(|_| RenewReject::DeviceUnknown)?
+        .challenge(instance)
+        .await
+}
+/// Same P4 publication/generation fence as redeem. No data lane is opened here.
+pub(crate) async fn renew(
+    owners: &Arc<StoreInputs>,
+    request: Renew,
+) -> Result<V4LaunchContext, RenewReject> {
+    let instance = owners
+        .instance_signer()
+        .map_err(|_| RenewReject::DeviceUnknown)?
+        .instance_id()
+        .to_owned();
+    let invites = store::Invites::attach(owners.sync.writer.clone())
+        .await
+        .map_err(|_| RenewReject::DeviceUnknown)?;
+    let prepared = invites.prepare_renew(instance, request).await?;
+    let user = BusinessOsUser {
+        id: prepared.principal.id.clone(),
+        role: prepared.principal.role.clone(),
+        display_name: prepared.principal.display_name.clone(),
+        active: true,
+        profile: serde_json::json!({}),
+        created_at_ms: 0,
+        updated_at_ms: 0,
+    };
+    let context = launch_context_v4::build_for_device(owners, &user, &prepared.device_pubkey)
+        .await
+        .map_err(|_| RenewReject::DeviceUnknown)?;
+    if context.v4.actor.id != user.id || context.v4.actor.role != user.role {
+        return Err(RenewReject::DeviceRevoked);
+    }
+    let rxdb::plugins::replication_webrtc::index_mod::hello::HelloFrame::Hello(hello) =
+        &context.v4.hello.offer
+    else {
+        return Err(RenewReject::DeviceUnknown);
+    };
+    invites
+        .consume_renew(prepared, hello.device_proof.device_id.clone())
+        .await?;
+    owners
+        .instance_signer()
+        .map_err(|_| RenewReject::DeviceUnknown)?;
+    Ok(context)
+}
+/// Authenticated devices-management adapter only, never an unpaired RPC method.
+pub(crate) async fn revoke_device(
+    owners: &Arc<StoreInputs>,
+    device_id: String,
+) -> Result<(), RenewReject> {
+    owners
+        .instance_signer()
+        .map_err(|_| RenewReject::DeviceUnknown)?;
+    store::Invites::attach(owners.sync.writer.clone())
+        .await
+        .map_err(|_| RenewReject::DeviceUnknown)?
+        .revoke_device(device_id)
+        .await
 }

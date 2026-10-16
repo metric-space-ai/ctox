@@ -13,6 +13,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const MAX_TTL_MS: i64 = 86_400_000;
 const KEY_DOMAIN: &[u8] = b"ctox.device.invite.key.v1\0";
 const PROOF_DOMAIN: &[u8] = b"ctox.device.invite.redeem.v1\0";
+#[path = "renew.rs"]
+mod renew;
+pub use renew::{Challenge, Renew, RenewReject};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -51,6 +54,7 @@ pub struct Invitation {
     pub invite_id: String,
     pub one_time_secret: String,
     pub expires_at_ms: i64,
+    pub instance_display_name: String,
 }
 #[derive(Clone)]
 pub struct Principal {
@@ -72,6 +76,12 @@ pub struct Invites {
     writer: WriterHandle,
 }
 type Checked<T> = Result<Result<T, Reject>, StoreError>;
+fn store_error(error: impl std::fmt::Display) -> Reject {
+    #[cfg(test)]
+    eprintln!("pairing Store operation failed: {error}");
+    let _ = error;
+    Reject::DeviceRejected
+}
 fn rejected<T>(reason: Reject) -> Checked<T> {
     Ok(Err(reason))
 }
@@ -110,9 +120,13 @@ fn principal(
     role: &str,
 ) -> Result<Option<Principal>, StoreError> {
     if !matches!(role, "chef" | "admin" | "founder" | "user") {
+        #[cfg(test)]
+        eprintln!("pairing retained role is unsupported");
         return Ok(None);
     }
     let Some(collection) = ctox_store::schema::active_collection(tx, "business_users")? else {
+        #[cfg(test)]
+        eprintln!("pairing current users collection is unavailable");
         return Ok(None);
     };
     let table = collection.table.replace('"', "\"\"");
@@ -124,11 +138,15 @@ fn principal(
         )
         .optional()?;
     let Some(raw) = raw else {
+        #[cfg(test)]
+        eprintln!("pairing current principal is absent");
         return Ok(None);
     };
     let value: serde_json::Value = serde_json::from_str(&raw)
         .map_err(|_| StoreError::Invalid("invalid pairing principal".into()))?;
     if value["id"] != user || value["active"] != true || value["role"] != role {
+        #[cfg(test)]
+        eprintln!("pairing principal id, activity or retained role differs");
         return Ok(None);
     }
     Ok(Some(Principal {
@@ -149,9 +167,14 @@ impl Invites {
                 singleton INTEGER PRIMARY KEY CHECK(singleton=1), window_ms INTEGER NOT NULL, attempts INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS _workjet_devices_v4 (
                 device_key TEXT PRIMARY KEY, user_id TEXT NOT NULL, role TEXT NOT NULL,
-                label TEXT NOT NULL, paired_ms INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1);")?;
+                label TEXT NOT NULL, paired_ms INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1);
+                CREATE TABLE IF NOT EXISTS _workjet_device_launches_v4 (
+                device_id TEXT PRIMARY KEY, device_key TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS _workjet_renew_challenges_v4 (
+                nonce TEXT PRIMARY KEY, instance_id TEXT NOT NULL, created_ms INTEGER NOT NULL,
+                expires_ms INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0);")?;
             Ok(())
-        })).map_err(|_|Reject::DeviceRejected)?.await.map_err(|_|Reject::DeviceRejected)?;
+        })).map_err(store_error)?.await.map_err(store_error)?;
         Ok(Self { writer })
     }
     /// Identity comes from the authenticated create command, never its JSON payload.
@@ -180,11 +203,12 @@ impl Invites {
             if count>=4096 { return rejected(Reject::RateLimited); }
             tx.execute("INSERT INTO _workjet_invites_v4(invite_id,proof_key,user_id,role,created_ms,expires_ms) VALUES(?1,?2,?3,?4,?5,?6)",params![stored,proof_key.as_slice(),user,role,now,expires])?;
             Ok(Ok(()))
-        })).map_err(|_|Reject::DeviceRejected)?.await.map_err(|_|Reject::DeviceRejected)??;
+        })).map_err(store_error)?.await.map_err(store_error)??;
         Ok(Invitation {
             invite_id: id,
             one_time_secret: URL_SAFE_NO_PAD.encode(secret),
             expires_at_ms: expires,
+            instance_display_name: String::new(),
         })
     }
     /// Preparation never spends an invite. Mint E41/E50 only after this succeeds.
@@ -196,19 +220,20 @@ impl Invites {
             if attempts>=120 { return rejected(Reject::RateLimited); }
             tx.execute("INSERT INTO _workjet_pairing_budget_v4 VALUES(1,?1,?2) ON CONFLICT(singleton) DO UPDATE SET window_ms=excluded.window_ms,attempts=excluded.attempts",params![window,attempts+1])?;
             inspect(tx,request,now)
-        })).map_err(|_|Reject::DeviceRejected)?.await.map_err(|_|Reject::DeviceRejected)?
+        })).map_err(store_error)?.await.map_err(store_error)?
     }
     /// Recheck and consume in the same writer transaction. Only its winner may
     /// publish the already minted launch context to the exact pairing connection.
-    pub async fn consume(&self, prepared: Prepared) -> Result<(), Reject> {
+    pub async fn consume(&self, prepared: Prepared, device_id: String) -> Result<(), Reject> {
         let now = clock()?;
         self.writer.submit(WriteJob::new(Default::default(),move|tx| {
             let current=match inspect(tx,prepared.request,now)? {Ok(v)=>v,Err(e)=>return rejected(e)};
             if current.principal.id!=prepared.principal.id || current.principal.role!=prepared.principal.role {return rejected(Reject::DeviceRejected);}
             tx.execute("INSERT INTO _workjet_devices_v4(device_key,user_id,role,label,paired_ms) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(device_key) DO UPDATE SET role=excluded.role,label=excluded.label,paired_ms=excluded.paired_ms",params![current.request.device_pubkey,current.principal.id,current.principal.role,current.request.device_label,now])?;
+            renew::bind_launch(tx,&current.request.device_pubkey,&device_id)?;
             tx.execute("UPDATE _workjet_invites_v4 SET used_ms=?2 WHERE invite_id=?1",params![current.request.invite_id,now])?;
             Ok(Ok(()))
-        })).map_err(|_|Reject::DeviceRejected)?.await.map_err(|_|Reject::DeviceRejected)?
+        })).map_err(store_error)?.await.map_err(store_error)?
     }
 }
 fn inspect(tx: &Transaction<'_>, request: Redeem, now: i64) -> Checked<Prepared> {

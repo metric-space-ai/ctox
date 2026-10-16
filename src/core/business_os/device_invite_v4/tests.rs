@@ -6,7 +6,7 @@ use ctox_store::{
 };
 use serde_json::json;
 
-async fn fixture() -> (tempfile::TempDir, StoreFixture, Invites) {
+pub(super) async fn fixture() -> (tempfile::TempDir, StoreFixture, Invites) {
     let dir = tempfile::tempdir().unwrap();
     let owner = StoreFixture::open(DbId::new(dir.path().join("pairing.sqlite3")).unwrap())
         .await
@@ -36,7 +36,7 @@ fn request(invite: &Invitation) -> Redeem {
 }
 async fn redeem(invites: &Invites, r: Redeem) -> Result<(), Reject> {
     let p = invites.prepare(r).await?;
-    invites.consume(p).await
+    invites.consume(p, "fixture-device-id".into()).await
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn single_use_is_atomic_across_prepared_competing_connections_and_restart() {
@@ -47,7 +47,10 @@ async fn single_use_is_atomic_across_prepared_competing_connections_and_restart(
         .unwrap();
     let a = invites.prepare(request(&invite)).await.unwrap();
     let b = invites.prepare(request(&invite)).await.unwrap();
-    let (first, second) = tokio::join!(invites.consume(a), invites.consume(b));
+    let (first, second) = tokio::join!(
+        invites.consume(a, "device-a".into()),
+        invites.consume(b, "device-b".into())
+    );
     assert!(first.is_ok() ^ second.is_ok(), "second use accepted");
     assert_eq!(first.err().or(second.err()), Some(Reject::InviteUsed));
     drop(invites);
@@ -83,7 +86,7 @@ async fn expired_invite_cannot_be_prepared_or_consumed() {
         })
         .await
         .unwrap();
-    let outcome = invites.consume(prepared).await;
+    let outcome = invites.consume(prepared, "expired-device".into()).await;
     assert!(outcome.is_err(), "expired invite accepted");
     assert_eq!(outcome.err(), Some(Reject::InviteExpired));
     assert_eq!(

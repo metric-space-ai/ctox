@@ -81,6 +81,122 @@ pub(crate) async fn fixture() -> Result<(tempfile::TempDir, Foreground, Business
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn configured_instance_name_and_real_pairing_renewal() -> Result<()> {
+    use super::super::device_invite_v4;
+    use ring::signature::{Ed25519KeyPair, KeyPair};
+    let _isolation = isolate_test_roots().await;
+    let (_root, mut fg, user) = fixture().await?;
+    let root = fg.inputs.root.clone();
+    crate::persistence::run_core_sync(move || {
+        crate::inference::runtime_env::set_runtime_env_value(
+            &root,
+            "CTOX_INSTANCE_DISPLAY_NAME",
+            "Molecularity Lab",
+        )
+    })
+    .await?;
+    let mut retained = user.clone();
+    retained.role = "founder".into();
+    assert_eq!(instance_display_name(&fg.inputs).await.context("read persisted instance name")?, "Molecularity Lab", "configured instance name missing");
+    fg.inputs.instance_signer().context("signer after configuration write")?;
+    let invitation = device_invite_v4::create(&fg.inputs, &retained, 60_000).await.context("create E54 invitation")?;
+    assert_eq!(
+        invitation.instance_display_name, "Molecularity Lab",
+        "configured invite name missing"
+    );
+    let keypair = Ed25519KeyPair::from_seed_unchecked(&[42; 32]).unwrap();
+    let public = URL_SAFE_NO_PAD.encode(keypair.public_key().as_ref());
+    // Independent transcription of the published #927 MAC, not a call to its verifier.
+    let secret = URL_SAFE_NO_PAD.decode(&invitation.one_time_secret)?;
+    let key =
+        Sha256::digest([b"ctox.device.invite.key.v1\0".as_slice(), secret.as_slice()].concat());
+    let message = [
+        b"ctox.device.invite.redeem.v1\0".as_slice(),
+        &(invitation.invite_id.len() as u32).to_be_bytes(),
+        invitation.invite_id.as_bytes(),
+        keypair.public_key().as_ref(),
+    ]
+    .concat();
+    let proof = URL_SAFE_NO_PAD.encode(
+        ring::hmac::sign(
+            &ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &key),
+            &message,
+        )
+        .as_ref(),
+    );
+    let first = device_invite_v4::redeem(
+        &fg.inputs,
+        device_invite_v4::Redeem {
+            invite_id: invitation.invite_id,
+            proof,
+            device_pubkey: public,
+            device_label: "Workjet".into(),
+        },
+    )
+    .await.context("redeem E54 invitation")?;
+    assert_eq!(
+        first.v4.instance_display_name, "Molecularity Lab",
+        "configured context name missing"
+    );
+    let challenge = device_invite_v4::challenge(&fg.inputs).await?;
+    let device_id = hello(&first).device_proof.device_id.clone();
+    let bytes = [
+        b"ctox-v4-device-renew\n".as_slice(),
+        first.v4.instance_id.as_bytes(),
+        device_id.as_bytes(),
+        challenge.nonce.as_bytes(),
+    ]
+    .concat();
+    let request = device_invite_v4::Renew {
+        instance_id: first.v4.instance_id.clone(),
+        device_id,
+        nonce: challenge.nonce,
+        signature: URL_SAFE_NO_PAD.encode(keypair.sign(&bytes).as_ref()),
+    };
+    let renewed = device_invite_v4::renew(&fg.inputs, request).await?;
+    assert_eq!(renewed.v4.actor, first.v4.actor);
+    assert_eq!(renewed.v4.instance_display_name, "Molecularity Lab");
+    assert_ne!(
+        hello(&renewed).device_proof.nonce,
+        hello(&first).device_proof.nonce
+    );
+    assert_ne!(
+        hello(&renewed).device_proof.device_id,
+        hello(&first).device_proof.device_id
+    );
+    assert_eq!(
+        verify_offer(
+            hello(&renewed),
+            &renewed.v4.signaling.peer_id,
+            &public_key(fg.inputs.instance_signer()?.key_id())?
+        )?,
+        renewed.v4.actor
+    );
+    device_invite_v4::revoke_device(&fg.inputs, hello(&renewed).device_proof.device_id.clone())
+        .await?;
+    let challenge = device_invite_v4::challenge(&fg.inputs).await?;
+    let device_id = hello(&renewed).device_proof.device_id.clone();
+    let bytes = [
+        b"ctox-v4-device-renew\n".as_slice(),
+        renewed.v4.instance_id.as_bytes(),
+        device_id.as_bytes(),
+        challenge.nonce.as_bytes(),
+    ]
+    .concat();
+    let request = device_invite_v4::Renew {
+        instance_id: renewed.v4.instance_id.clone(),
+        device_id,
+        nonce: challenge.nonce,
+        signature: URL_SAFE_NO_PAD.encode(keypair.sign(&bytes).as_ref()),
+    };
+    assert_eq!(
+        device_invite_v4::renew(&fg.inputs, request).await.err(),
+        Some(device_invite_v4::RenewReject::DeviceRevoked)
+    );
+    fg.shutdown().await?;
+    Ok(())
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn paired_launch_binds_device_key_inside_the_real_signed_e50_offer() -> Result<()> {
     let _scope = isolate_test_roots().await;
     let (_root, mut fg, user) = fixture().await?;
@@ -180,6 +296,7 @@ async fn launch_context_v4_real_owners_shape_signature_freshness_and_rights() ->
     // Golden includes every property name, nesting level and optional ICE field;
     // only random/key/config values are normalized, not structure or privileges.
     golden["v4"]["instanceId"] = json!("INSTANCE");
+    golden["v4"]["instance_display_name"] = json!("INSTANCE");
     for (field, value) in [
         ("urls", json!(["wss://fixture.invalid"])),
         ("room", json!("ROOM")),
@@ -202,7 +319,7 @@ async fn launch_context_v4_real_owners_shape_signature_freshness_and_rights() ->
     golden["v4"]["packageKeys"][0]["publicKey"] = json!("KEY");
     assert_eq!(
         golden,
-        json!({"v4":{"instanceId":"INSTANCE","userId":"alice","actor":{"id":"alice","role":"founder"},"signaling":{"urls":["wss://fixture.invalid"],"room":"ROOM","peerId":"PEER","nativePeerId":"NATIVE","token":"TOKEN","iceServers":[{"urls":"turn:fixture.invalid:3478","username":"synthetic","credential":"synthetic"}]},"hello":{"offer":{"type":"hello","protocol_ver":4,"bootstrap_ver":1,"app_api_ver":{"min":"4.0","max":"4.0"},"instance_id":"INSTANCE","capabilities":["agent.coding.cancel","agent.coding.turn","agent.task"],"device_proof":{"device_id":"DEVICE","public_key":"KEY","nonce":"NONCE","signature":"SIG"},"scopes_wanted":["business_app_versions","business_apps","business_commands","notes"],"transport":{"codecs":["gzip"],"max_frame_bytes":16384,"fragmentation":true,"reassembly":true}}},"packageKeys":[{"keyId":"ID","alg":"Ed25519","publicKey":"KEY"}]}})
+        json!({"v4":{"instanceId":"INSTANCE","instance_display_name":"INSTANCE","userId":"alice","actor":{"id":"alice","role":"founder"},"signaling":{"urls":["wss://fixture.invalid"],"room":"ROOM","peerId":"PEER","nativePeerId":"NATIVE","token":"TOKEN","iceServers":[{"urls":"turn:fixture.invalid:3478","username":"synthetic","credential":"synthetic"}]},"hello":{"offer":{"type":"hello","protocol_ver":4,"bootstrap_ver":1,"app_api_ver":{"min":"4.0","max":"4.0"},"instance_id":"INSTANCE","capabilities":["agent.coding.cancel","agent.coding.turn","agent.task"],"device_proof":{"device_id":"DEVICE","public_key":"KEY","nonce":"NONCE","signature":"SIG"},"scopes_wanted":["business_app_versions","business_apps","business_commands","notes"],"transport":{"codecs":["gzip"],"max_frame_bytes":16384,"fragmentation":true,"reassembly":true}}},"packageKeys":[{"keyId":"ID","alg":"Ed25519","publicKey":"KEY"}]}})
     );
     // Test-only export of a synthetic bootstrap for the actual bootV4 consumer.
     if let Some(path) = std::env::var_os("CTOX_LAUNCH_CONTEXT_PROOF") {
