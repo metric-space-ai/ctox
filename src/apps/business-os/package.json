@@ -30,6 +30,7 @@
     "qa:shell-office-height:v4": "node scripts/shell-office-height.v4.browser.mjs",
     "qa:office-notifications": "node scripts/office-notifications.browser.mjs",
     "qa:office-notifications:v4": "node scripts/office-notifications.v4.browser.mjs",
+    "qa:mail:v4": "node modules/mail/tests/mail-browser-qa.v4.mjs",
     "qa:design-gates": "node scripts/run-design-quality-gates.mjs",
     "shell:artifact": "node scripts/build-shell-artifact.mjs",
     "shell:sign-release": "node scripts/sign-shell-release.mjs",

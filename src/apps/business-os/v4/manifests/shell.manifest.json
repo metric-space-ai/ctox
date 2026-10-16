@@ -142,7 +142,7 @@
     "v4/shell/workjet/actions/supervisor.js": "0f16e0fd76f9b1ec968bcbe0d4c599bac531de3a0a19e84954b02e44759874ae",
     "v4/shell/workjet/host-bridge.js": "ff9a327ce175f55bc3e417762f0b2334c27725eb55e34289ef7c78f0e661ea78",
     "v4/shell/workjet/index.js": "02d0af37d40575c907e6d20b19daade552f1b813721dab5fde95732be32a1b04",
-    "v4/shell/workjet/v2-compat.js": "74195f1a8cf90ae3aa58abf9f8bab2630cc50660f8378c9f7a99f4ec199c8f4b",
+    "v4/shell/workjet/v2-compat.js": "0a3acb9cebb6d1d158c0d40c4db39da6cd7e0aa609cc25f8df54975c2d9dd110",
     "v4/shell/workjet/v2-helpers.js": "43b72c23ade702bdc9b8694a72c5ccaa35dab2cd638e4989f16b1528093d0d7c",
     "v4/source/agent-panel.js": "a6388919204c53d43cb74dc0d0b70a47c4fdbdba43bdd575e2b8459288338db6",
     "v4/source/chrome-toggle.js": "66e0217b9aa266dc0c0da18e8c630d071ff10d25827646dead163c9e507bef57",
@@ -192,6 +192,17 @@
       ],
       "owner_app": "ctox"
     },
+    "desktop_files": {
+      "_evidence": {
+        "sources": [
+          "v4/shell/workjet/actions/project.js presentation.content.read, actions/meeting.js narration.read (files.get über desktop_files-Zeile, E30)"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "desktop"
+    },
     "shell_preferences": {
       "_evidence": {
         "sources": [
@@ -203,6 +214,61 @@
         "write"
       ],
       "owner_app": "ctox-platform"
+    },
+    "workjet_computers": {
+      "_evidence": {
+        "sources": [
+          "v4/shell/workjet/actions/computer.js (computer.list, E32 lokales Lesen)"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    },
+    "workjet_projects": {
+      "_evidence": {
+        "sources": [
+          "v4/shell/workjet/actions/project.js (project.list, startCollection workjet_projects)"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    },
+    "workjet_session_transfers": {
+      "_evidence": {
+        "sources": [
+          "v4/shell/workjet/actions/session.js (Sitzungsübergabe)"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    },
+    "workjet_sessions": {
+      "_evidence": {
+        "sources": [
+          "v4/shell/workjet/actions/session.js (session.list, E32 lokales Lesen)"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    },
+    "workjet_working_copies": {
+      "_evidence": {
+        "sources": [
+          "v4/shell/workjet/actions/project.js (project.list, Arbeitskopien)"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
     }
   },
   "handlers": {},
@@ -215,7 +281,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "e2f37c87ce67ec38068551bbdafeee2a451ffd412ea100ac3ee046869f33aaa6",
+    "base_hash": "4a3ecc5a070c9771132adeca20797da3231502e123cd9bf8c9d678824d8055d4",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

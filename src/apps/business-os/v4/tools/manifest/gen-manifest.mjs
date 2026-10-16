@@ -196,6 +196,13 @@ export const SHELL_FOREIGN = {
   ctox_bug_reports: { owner_app: 'ctox', ops: ['read', 'write'], sources: ['v4/shell/report.js REPORT_COLLECTIONS.bugs (FR6b Meldeschleife, api.put)'] },
   // LOOP Runde 2: Melder-Name im Reiter „Meldungen“ aus der Nutzerliste der Instanz (nur lesen).
   business_users: { owner_app: 'ctox', ops: ['read'], sources: ['v4/source/reports-tab.js USERS_COLLECTION (Melder-Name, Rückfall „Teammitglied“)'] },
+  // E30/K-WJ-1: die Workjet-Brücke liest als App 'shell'. Ohne Deklaration verweigert der Kern das Lesen (files.get → forbidden).
+  workjet_projects: { owner_app: 'ctox', ops: ['read'], sources: ['v4/shell/workjet/actions/project.js (project.list, startCollection workjet_projects)'] },
+  workjet_working_copies: { owner_app: 'ctox', ops: ['read'], sources: ['v4/shell/workjet/actions/project.js (project.list, Arbeitskopien)'] },
+  workjet_computers: { owner_app: 'ctox', ops: ['read'], sources: ['v4/shell/workjet/actions/computer.js (computer.list, E32 lokales Lesen)'] },
+  workjet_sessions: { owner_app: 'ctox', ops: ['read'], sources: ['v4/shell/workjet/actions/session.js (session.list, E32 lokales Lesen)'] },
+  workjet_session_transfers: { owner_app: 'ctox', ops: ['read'], sources: ['v4/shell/workjet/actions/session.js (Sitzungsübergabe)'] },
+  desktop_files: { owner_app: 'desktop', ops: ['read'], sources: ['v4/shell/workjet/actions/project.js presentation.content.read, actions/meeting.js narration.read (files.get über desktop_files-Zeile, E30)'] },
 };
 
 // AGENT (§16.44): die Code-Ansicht der Shell sendet ctox.coding.turn / ctox.coding.cancel (v4/source/agent-panel.js).
