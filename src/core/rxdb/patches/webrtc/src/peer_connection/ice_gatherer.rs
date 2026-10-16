@@ -27,6 +27,28 @@ use std::collections::{HashSet, VecDeque};
 use std::net::SocketAddr;
 use std::time::Instant;
 
+/// Identifies the compiled relay-candidate producer in transport diagnostics.
+pub const NATIVE_TURN_GATHERER_MARKER: &str = "ctox-turn-native-2-zero-related-v1";
+
+/// Build the privacy-preserving relay candidate used by the native gatherer.
+/// A present related address must contain a valid IP even when its port is zero.
+pub fn native_relay_candidate(address: SocketAddr) -> Result<RTCIceCandidateInit, Error> {
+    let candidate = CandidateRelayConfig {
+        base_config: CandidateConfig {
+            network: "udp".to_owned(),
+            address: address.ip().to_string(),
+            port: address.port(),
+            component: 1,
+            ..Default::default()
+        },
+        rel_addr: if address.is_ipv4() { "0.0.0.0" } else { "::" }.to_owned(),
+        rel_port: 0,
+        url: None,
+    }
+    .new_candidate_relay()?;
+    RTCIceCandidate::from(&candidate).to_json()
+}
+
 /// ICEGatherOptions provides options relating to the gathering of ICE candidates.
 #[derive(Default, Debug, Clone)]
 pub(crate) struct RTCIceGatherOptions {
@@ -104,22 +126,9 @@ impl RTCIceGatherer {
             self.gather_srflx_candidates().await?;
         }
         for address in &self.relay_addrs {
-            let candidate = CandidateRelayConfig {
-                base_config: CandidateConfig {
-                    network: "udp".to_owned(),
-                    address: address.ip().to_string(),
-                    port: address.port(),
-                    component: 1,
-                    ..Default::default()
-                },
-                rel_addr: if address.is_ipv4() { "0.0.0.0" } else { "::" }.to_owned(),
-                rel_port: 0,
-                url: None,
-            }
-            .new_candidate_relay()?;
             self.events
                 .push_back(RTCIceGathererEvent::LocalIceCandidate(
-                    RTCIceCandidate::from(&candidate).to_json()?,
+                    native_relay_candidate(*address)?,
                 ));
         }
         if self.gathering_clients.is_empty() && self.state != RTCIceGatheringState::Complete {

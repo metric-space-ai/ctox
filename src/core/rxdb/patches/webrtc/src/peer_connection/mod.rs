@@ -23,6 +23,7 @@ use driver::{
 };
 use ice_gatherer::RTCIceGatherOptions;
 use ice_gatherer::RTCIceGatherer;
+pub use ice_gatherer::{NATIVE_TURN_GATHERER_MARKER, native_relay_candidate};
 
 use rtc::data_channel::{RTCDataChannelId, RTCDataChannelInit};
 use rtc::peer_connection::RTCPeerConnectionBuilder;

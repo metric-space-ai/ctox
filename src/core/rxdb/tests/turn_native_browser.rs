@@ -66,10 +66,21 @@ async fn wait_file(path: &std::path::Path) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "isolated coturn + Chromium; see test-turn-native.sh"]
 async fn turn_native_browser_reliable_tcp_tls() {
+    assert_eq!(
+        NATIVE_TURN_GATHERER_MARKER,
+        "ctox-turn-native-2-zero-related-v1"
+    );
+    println!("TURN_GATHERER_BINARY_MARKER={NATIVE_TURN_GATHERER_MARKER}");
     struct Errors;
     impl log::Log for Errors {
-        fn enabled(&self, m: &log::Metadata<'_>) -> bool { m.level() <= log::Level::Warn }
-        fn log(&self, r: &log::Record<'_>) { if self.enabled(r.metadata()) { eprintln!("TURN_NATIVE_DIAGNOSTIC {}", r.args()); } }
+        fn enabled(&self, m: &log::Metadata<'_>) -> bool {
+            m.level() <= log::Level::Warn
+        }
+        fn log(&self, r: &log::Record<'_>) {
+            if self.enabled(r.metadata()) {
+                eprintln!("TURN_NATIVE_DIAGNOSTIC {}", r.args());
+            }
+        }
         fn flush(&self) {}
     }
     static ERRORS: Errors = Errors;
@@ -151,15 +162,30 @@ async fn turn_native_browser_reliable_tcp_tls() {
     let answer = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let description = pc.local_description().await.unwrap();
-            let candidates: Vec<_> = description.sdp.lines().filter(|line| line.starts_with("a=candidate:")).map(str::to_owned).collect();
+            let candidates: Vec<_> = description
+                .sdp
+                .lines()
+                .filter(|line| line.starts_with("a=candidate:"))
+                .map(str::to_owned)
+                .collect();
             if !candidates.is_empty() {
-                assert!(candidates.iter().all(|line| line.contains(" typ relay")), "native SDP leaked a direct candidate");
-                tokio::fs::write(root.join("native-candidates.json"), serde_json::to_vec(&candidates).unwrap()).await.unwrap();
+                assert!(
+                    candidates.iter().all(|line| line.contains(" typ relay")),
+                    "native SDP leaked a direct candidate"
+                );
+                tokio::fs::write(
+                    root.join("native-candidates.json"),
+                    serde_json::to_vec(&candidates).unwrap(),
+                )
+                .await
+                .unwrap();
                 break serde_json::to_vec(&description).unwrap();
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-    }).await.expect("native relay candidate publication");
+    })
+    .await
+    .expect("native relay candidate publication");
     tokio::fs::write(root.join("answer.tmp"), answer)
         .await
         .unwrap();
@@ -188,4 +214,30 @@ async fn turn_native_browser_reliable_tcp_tls() {
         *received, expected,
         "reliable native delivery lost or duplicated a message"
     );
+}
+
+#[test]
+fn turn_relay_gatherer_wire_roundtrips_agent_parser() {
+    for address in ["192.0.2.10:50000", "[2001:db8::10]:50000"] {
+        let init = native_relay_candidate(address.parse().unwrap()).unwrap();
+        let raw = init
+            .candidate
+            .strip_prefix("candidate:")
+            .unwrap_or(&init.candidate);
+        let (related, expected) = if address.starts_with('[') {
+            ("raddr ::", " typ relay raddr :: rport 0")
+        } else {
+            ("raddr 0.0.0.0", " typ relay raddr 0.0.0.0 rport 0")
+        };
+        assert!(raw.ends_with(expected), "actual gatherer wire: {raw}");
+        // Exactly the parser invoked by RTCPeerConnectionInternal::add_ice_local_candidate.
+        let parsed =
+            ice::candidate::unmarshal_candidate(raw).expect("agent accepts exact gatherer output");
+        assert_eq!(parsed.marshal(), raw);
+        assert!(
+            ice::candidate::unmarshal_candidate(&raw.replace(related, "raddr ")).is_err(),
+            "empty related address remains rejected"
+        );
+        println!("TURN_GATHERER_BINARY_MARKER={NATIVE_TURN_GATHERER_MARKER} wire={raw}");
+    }
 }
