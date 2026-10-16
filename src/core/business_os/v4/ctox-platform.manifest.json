@@ -1187,6 +1187,57 @@
         }
       },
       "_note": "§16.44: Coding-Agent-Turns im Quelltext-Modus. Schreibt nur der Core (ctox.coding.turn|cancel), gedrosselt ≤ 4/s; Aufbewahrung 30 Tage ab finished_at_ms (nutzlastfreie Grabsteine, §16.23). 'Klasse runtime' aus §16.44 = Store-Klasse window (runtime ist keine Store-Klasse). own = user_id."
+    },
+    "app_user_preferences": {
+      "schema": {
+        "version": 0,
+        "primaryKey": "id",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "app_id",
+          "user_id",
+          "key",
+          "value"
+        ],
+        "indexes": [
+          [
+            "app_id",
+            "user_id"
+          ]
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 579
+          },
+          "app_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "user_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z0-9._-]+$"
+          },
+          "value": {}
+        }
+      },
+      "class": "full",
+      "client_limit": null,
+      "byte_budget": 17408,
+      "rights": {
+        "read": "own",
+        "write": "own"
+      }
     }
   },
   "exports": {
@@ -1232,6 +1283,9 @@
     ],
     "coding_turns": [
       "read"
+    ],
+    "app_drafts": [
+      "read"
     ]
   },
   "foreign_collections": {},
@@ -1245,5 +1299,21 @@
     "Eigentum Sitzung ctox sync v4 (§16.17).",
     "business_module_catalog entfällt (Generation → business_apps/business_app_versions, §16.14).",
     "rights-Syntax vorläufig; P6 überführt sie in _rights/scope (§2.4, §16.2)."
-  ]
+  ],
+  "row_filters": {
+    "app_user_preferences": {
+      "op": "eq",
+      "path": "/user_id",
+      "value": {
+        "kind": "actor_id"
+      }
+    },
+    "app_drafts": {
+      "op": "eq",
+      "path": "/user_id",
+      "value": {
+        "kind": "actor_id"
+      }
+    }
+  }
 }

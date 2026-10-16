@@ -15,7 +15,9 @@ async function setup(name){
  const transport=new Capture(),k=createKernel({instanceId:name+process.pid,userId:'alice',storage:'memory',multiTab:false,latencyMs:0,transport});await k.ready;
  const page=(collection,docs,cursor='10')=>transport.events.page({collection,epoch:'1',scope_hash:'local',gen:1,cursor_to:cursor,complete:true,backlog:0,docs});
  await page('business_apps',[{id:'ctox-platform',seq:'1',rev:'a',doc:{id:'ctox-platform',active_ver:'platform-7'}}]);
- await page('business_app_versions',[{id:'ctox-platform@platform-7',seq:'2',rev:'v',doc:{id:'ctox-platform@platform-7',manifest:{collections:{business_commands:{schema}}}}}]);
+ await page('business_app_versions',[{id:'ctox-platform@platform-7',seq:'2',rev:'v',doc:{id:'ctox-platform@platform-7',app_id:'ctox-platform',manifest:{collections:{business_commands:{schema}},exports:{business_commands:['read','write']}}}}]);
+ await page('business_app_versions',[{id:'sender@99',seq:'3',rev:'sender-v',doc:{id:'sender@99',app_id:'sender',manifest:{collections:{items:{schema:{type:'object',properties:{id:{type:'string'}}}}},foreign_collections:{business_commands:{owner_app:'ctox-platform',ops:['read','write']}}}}}]);
+ await page('business_apps',[{id:'sender',seq:'4',rev:'sender-app',doc:{id:'sender',active_ver:'99'}}]);
  return {k,transport,page,api:k.appApi('sender','99')};
 }
 test('canonical replay retains the outbox until its own row, despite advanced cursor and stale/foreign pages',async()=>{

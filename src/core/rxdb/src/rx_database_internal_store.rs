@@ -90,7 +90,7 @@ pub fn build_internal_store_schema() -> RxJsonSchema {
         "data".to_string(),
         JsonSchema {
             schema_type: Some("object".into()),
-            additional_properties: Some(true),
+            additional_properties: Some(true.into()),
             ..Default::default()
         },
     );

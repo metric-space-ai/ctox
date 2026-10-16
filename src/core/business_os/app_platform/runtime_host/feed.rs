@@ -265,7 +265,8 @@ impl RuntimeBinding {
         let (health_send, health) = watch::channel(FeedHealth::Healthy);
         let runtime = owners.runtime.clone();
         let platform = super::super::Platform::from_database(&owners.sync, owners.signer.clone())?
-            .with_secret_database(&owners.secrets)?;
+            .with_secret_database(&owners.secrets)?
+            .with_native_model_checks(owners.root.clone());
         let policy_owner = sync_rights::StoreRightsAuthority::attach(
             database.writer.clone(),
             owners.signer.instance_id().into(),
@@ -702,6 +703,19 @@ async fn deliver_completion(
     Ok(())
 }
 
+/// ReadPool already pins a transaction before calling us. This is the same
+/// native fence check as commit, borrowing that snapshot without nesting BEGIN.
+pub(in super::super) async fn check_model_fence(
+    pool: ctox_store::read_pool::ReadPool,
+    check: Arc<dyn Fn(&rusqlite::Transaction<'_>) -> Result<(), StoreError> + Send + Sync>,
+) -> Result<(), StoreError> {
+    pool.read(move |tx| {
+        check(tx).map_err(|error| rusqlite::Error::InvalidParameterName(error.to_string()))
+    })
+    .await
+    .map_err(Into::into)
+}
+
 async fn dispatch_platform(
     database: &Database,
     authority: &Arc<RuntimeAuthority>,
@@ -755,7 +769,45 @@ async fn dispatch_platform(
     } else {
         None
     };
-    let outcome = platform.dispatch(actor, command, now()).await;
+    let model_fence = if command.command_type == "instance.providers.models.check" {
+        let native = authority.clone();
+        let invocation = binding.clone();
+        let pool = database.readers.clone();
+        let runtime = authority.runtime.clone();
+        let codec = authority.codec.clone();
+        let effect: super::super::ModelEffectFence = Arc::new(move |effect| {
+            ctox_app_runtime::core_host::CoreAuthority::with_fence(
+                native.as_ref(),
+                &invocation,
+                &mut || {
+                    let pool = pool.clone();
+                    let codec = codec.clone();
+                    let invocation = invocation.clone();
+                    // Current P9 row, actor, app/version and rights, using the
+                    // existing reader owner, immediately before the model effect.
+                    wait(&runtime, async move {
+                        check_model_fence(
+                            pool,
+                            Arc::new(move |tx| codec.check_fence(tx, &invocation)),
+                        )
+                        .await
+                    })?;
+                    effect()
+                },
+            )
+        });
+        let invocation = binding.clone();
+        let codec = authority.codec.clone();
+        Some(super::super::ModelCheckFence {
+            effect,
+            commit: Arc::new(move |tx| codec.check_fence(tx, &invocation)),
+        })
+    } else {
+        None
+    };
+    let outcome = platform
+        .dispatch_fenced(actor, command, now(), model_fence)
+        .await;
     if let Some(pending) = pending {
         let refreshed = database
             .readers

@@ -2,7 +2,7 @@
 import { testLocks } from './web-locks.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createStubKernel } from '../kernel.mjs';
+import { createStubKernel } from '../testkit.mjs';
 
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 async function until(pred, ms = 4000) { const t0 = Date.now(); while (!(await pred())) { if (Date.now() - t0 > ms) throw new Error('until'); await tick(5); } }

@@ -1,15 +1,5 @@
 {
-  "_capability_evidence": {
-    "agent.coding.cancel": [
-      "handlers/ctox.coding.cancel.js"
-    ],
-    "agent.coding.models": [
-      "handlers/ctox.coding.models.js"
-    ],
-    "agent.coding.turn": [
-      "handlers/ctox.coding.turn.js"
-    ]
-  },
+  "_capability_evidence": {},
   "_declaration": "modules/coding-agents/v4-manifest.json",
   "_format": "ctox-shell-v4-app-manifest-draft-1",
   "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
@@ -26,11 +16,7 @@
   "app_id": "coding-agents",
   "app_ver": null,
   "author": null,
-  "capabilities_required": [
-    "agent.coding.cancel",
-    "agent.coding.models",
-    "agent.coding.turn"
-  ],
+  "capabilities_required": [],
   "collections": {
     "coding_agent_events": {
       "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
@@ -295,11 +281,7 @@
       "owner_app": "ctox-platform"
     }
   },
-  "handlers": {
-    "ctox.coding.cancel": "handlers/ctox.coding.cancel.js",
-    "ctox.coding.models": "handlers/ctox.coding.models.js",
-    "ctox.coding.turn": "handlers/ctox.coding.turn.js"
-  },
+  "handlers": {},
   "layout": {
     "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/coding-agents.jpg (shared/operator-icon-selection.js, sha256 1cf4cc4fd8e7…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
     "_icon_file": "icon.svg",

@@ -8,49 +8,50 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 |---|---|
 | apps | 41 |
 | manifests_total | 42 |
-| collections_total | 236 |
-| collections_in_contract | 201 |
+| collections_total | 237 |
+| collections_in_contract | 233 |
 | owned_by_apps | 221 |
-| owned_by_platform | 15 |
-| owner_proposals | 5 |
-| handlers_total | 399 |
-| apps_with_handlers | 29 |
+| owned_by_platform | 16 |
+| owner_proposals | 6 |
+| handlers_total | 116 |
+| apps_with_handlers | 15 |
 | legacy_total | 0 |
-| capabilities_distinct | 71 |
-| triggers_total | 11 |
-| command_rights_entries | 55 |
-| foreign_declarations | 293 |
+| capabilities_distinct | 41 |
+| triggers_total | 10 |
+| command_rights_entries | 42 |
+| foreign_declarations | 295 |
 | foreign_write_declarations | 32 |
 | foreign_code_only | 94 |
 | foreign_without_export | 0 |
-| platform_clamps | 1 |
+| platform_clamps | 0 |
 | exported_collections | 84 |
-| handler_conflicts | 8 |
+| handler_conflicts | 0 |
+| handlers_platform_type | 282 |
 | schema_missing | 0 |
 | schema_js_present | 3 |
 | schema_js_load_errors | 0 |
 | schema_from_v4_schemas | 41 |
-| no_owner_app | 5 |
-| contract_only | 4 |
+| no_owner_app | 6 |
+| contract_only | 12 |
 | multiple_owners | 0 |
 | drift_schema_js_vs_json_collections | 29 |
 | drift_migration_steps | 3 |
 | drift_copy_divergence | 0 |
 | prefix_mismatch | 2 |
 | class_proposals | 22 |
-| shell_files | 125 |
+| shell_files | 126 |
 | apps_with_styles | 41 |
 | write_guards | 1 |
-| todo_total | 149 |
+| todo_total | 181 |
 | declarations | 40 |
-| commands_out_total | 25 |
-| commands_in_total | 13 |
+| commands_out_total | 20 |
+| commands_in_total | 7 |
 | commands_unmatched | 0 |
 | commands_unrouted | 0 |
 | commands_out_ambiguous | 0 |
 | commands_routes_pending | 13 |
 | commands_in_derived | 1 |
-| commands_out_unresolved | 0 |
+| commands_out_unresolved | 1 |
 | commands_in_without_handler | 0 |
 | exports_beyond_declaration | 0 |
 | net_ingest_total | 2 |
@@ -147,20 +148,29 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | App | Fehler |
 |---|---|
 
-## 4. Nur im Schema-Vertrag, in keiner collections.schema.json (4)
+## 4. Nur im Schema-Vertrag, in keiner collections.schema.json (12)
 
 | Collection | Eigentümer |
 |---|---|
+| app_activations | ctox-platform |
+| app_drafts | ctox-platform |
+| app_user_preferences | ctox-platform |
+| business_app_versions | ctox-platform |
+| business_apps | ctox-platform |
 | business_commands | ctox-platform |
 | business_module_catalog | ctox-platform |
 | ctox_queue_tasks | ctox-platform |
 | ctox_runtime_settings | ctox-platform |
+| files | ctox-platform |
+| mail_server_state | ctox-platform |
+| shell_preferences | ctox-platform |
 
-## 5. Ohne definierende App (5)
+## 5. Ohne definierende App (6)
 
 | Collection | Eigentümer | Grundlage |
 |---|---|---|
 | app_catalog | ctox-platform | keine App definiert die Collection; keine Präfixregel → Plattform |
+| app_user_preferences | ctox-platform | keine App definiert die Collection; keine Präfixregel → Plattform |
 | coding_turns | ctox-platform | keine App definiert die Collection; keine Präfixregel → Plattform |
 | devices | ctox-platform | keine App definiert die Collection; keine Präfixregel → Plattform |
 | machine_enrollments | ctox-platform | keine App definiert die Collection; keine Präfixregel → Plattform |
@@ -188,24 +198,15 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | App | Collection |
 |---|---|
 
-## 10. Befehlstypen mit Handlern in mehreren Apps (8)
+## 10. Befehlstypen mit Handlern in mehreren Apps (0)
 
 | Befehlstyp | Apps |
 |---|---|
-| outbound.research_policy.publish | outbound, outbound-lead-generation |
-| outbound.research_source.auth_assist | outbound, outbound-lead-generation |
-| outbound.research_source.generate_adapter | outbound, outbound-lead-generation |
-| outbound.research_source.reprobe | outbound, outbound-lead-generation |
-| outbound.research_source.test | outbound, outbound-lead-generation |
-| outbound.research_source.upsert | outbound, outbound-lead-generation |
-| outbound.sellify.lookup | outbound, outbound-lead-generation |
-| outbound.update_digest.send_now | outbound, outbound-lead-generation |
 
-## 11. Plattformzugriffe auf exports beschränkt (1)
+## 11. Plattformzugriffe auf exports beschränkt (0)
 
 | App | Collection | gewünscht | gewährt | Grund |
 |---|---|---|---|---|
-| app-store | app_drafts | read | – | nicht in Plattform-exports |
 
 ## 12. foreign ohne passendes exports (0, Soll 0)
 

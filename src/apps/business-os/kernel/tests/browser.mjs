@@ -64,7 +64,7 @@ try{
   await new Promise((r,j)=>{const q=indexedDB.open(name,4);q.onupgradeneeded=()=>q.result.createObjectStore('documents',{keyPath:['collection','id']});q.onsuccess=()=>{
    const db=q.result,t=db.transaction('documents','readwrite');t.objectStore('documents').put({collection:'notes',id:'v3',replicationOriginRole:'master',pushable:0,doc:{id:'v3',title:'kept from V3'}});t.oncomplete=()=>{db.close();r()};t.onabort=()=>j(t.error);
   };q.onerror=()=>j(q.error)});
-  const {createKernel}=await import('/kernel.mjs');const {MemoryCoreTransport}=await import('/fake-core.mjs');
+  const {createKernel}=await import('/kernel.mjs');const {MemoryCoreTransport}=await import('/testkit.mjs');
   const transport=new MemoryCoreTransport({namespace:name});
   const k=createKernel({instanceId:'k1-browser',userId:'alice',transport});await k.ready;globalThis.kernel=k;
   if(k.storageKind!=='indexeddb')throw Error('not IndexedDB');
@@ -77,14 +77,14 @@ try{
  await capture(page,'01-migration-offline.png');
  await page.evaluate(()=>kernel.close());await page.reload();
  const reopened=await page.evaluate(async()=>{
-  const {createKernel}=await import('/kernel.mjs');const {MemoryCoreTransport}=await import('/fake-core.mjs');
+  const {createKernel}=await import('/kernel.mjs');const {MemoryCoreTransport}=await import('/testkit.mjs');
   globalThis.kernel=createKernel({instanceId:'k1-browser',userId:'alice',transport:new MemoryCoreTransport({namespace:'ctox-k1-browser-alice'})});await kernel.ready;
   const api=kernel.appApi('notes','1');if(api.get('notes','offline').get()?.title!=='durable draft')throw Error('draft lost on reload');
   await kernel.sim.settle();document.querySelector('#result').textContent='PASS: reload kept offline input; outbox accepted after reconnect';return {leader:kernel.isLeader};
  });
  const reader=await context.newPage();await reader.goto(url);
  const follower=await reader.evaluate(async()=>{
-  const {createKernel}=await import('/kernel.mjs');const {MemoryCoreTransport}=await import('/fake-core.mjs');
+  const {createKernel}=await import('/kernel.mjs');const {MemoryCoreTransport}=await import('/testkit.mjs');
   globalThis.kernel=createKernel({instanceId:'k1-browser',userId:'alice',transport:new MemoryCoreTransport({namespace:'ctox-k1-browser-alice'})});await kernel.ready;
   if(kernel.isLeader)throw Error('two leaders');
   const handle=kernel.appApi('notes','1').put('notes',{id:'reader',title:'reader write'});await handle.local;await handle.result;
@@ -128,9 +128,9 @@ try{
  const rtc=await reader.evaluate(async()=>{
   const {createKernel}=await import('/kernel.mjs');const {WebRTCKernelTransport,createReliableChannels}=await import('/transport-webrtc.mjs');const {FakeNativePeer,offer,scopeFor}=await import('/tests/fake-native-peer.mjs');
   const a=new RTCPeerConnection({iceServers:[]}),b=new RTCPeerConnection({iceServers:[]}),client=createReliableChannels(a),server={};
-  let serverResolve,serverTimer;const serverReady=new Promise((resolve,reject)=>{serverResolve=resolve;serverTimer=setTimeout(()=>reject(Error('Native channel readiness deadline: '+JSON.stringify(Object.values(server).map(c=>[c.label,c.readyState])))),10000);});serverReady.catch(()=>{});
-  const serverCheck=()=>{if(Object.keys(server).length===6&&Object.values(server).every(c=>c.readyState==='open')){clearTimeout(serverTimer);serverResolve();}};
-  b.addEventListener('datachannel',e=>{const name=e.channel.label.slice('ctox-v4-'.length);server[{control:0,commands:1,interactive:2,live:3,initial:4,transfer:5}[name]]=e.channel;e.channel.addEventListener('open',serverCheck,{once:true});serverCheck();});
+  let serverResolve,serverTimer;const serverReady=new Promise((resolve,reject)=>{serverResolve=resolve;serverTimer=setTimeout(()=>{if(!serverCheck())reject(Error('Native channel readiness deadline: '+JSON.stringify(Object.values(server).map(c=>[c.label,c.readyState]))));},10000);});serverReady.catch(()=>{});
+  const serverCheck=()=>{const ready=Object.keys(server).length===6&&Object.values(server).every(c=>c.readyState==='open');if(ready){clearTimeout(serverTimer);serverResolve();}return ready;};
+  b.addEventListener('datachannel',e=>{const name=e.channel.label.slice('ctox-v4-'.length);server[{control:0,commands:1,interactive:2,live:3,'initial-sync':4,transfer:5}[name]]=e.channel;e.channel.addEventListener('open',serverCheck,{once:true});serverCheck();});
   const gathered=pc=>pc.iceGatheringState==='complete'?Promise.resolve():new Promise((r,j)=>{const t=setTimeout(()=>j(Error('ICE gathering deadline')),10000);const f=()=>{if(pc.iceGatheringState==='complete'){clearTimeout(t);pc.removeEventListener('icegatheringstatechange',f);r()}};pc.addEventListener('icegatheringstatechange',f);});
   let native,k;
   try {
@@ -155,7 +155,7 @@ try{
  });
  await capture(reader,'05-real-webrtc.png');
  const claims=await reader.evaluate(async()=>{
-  const {createLoader}=await import('/loader.mjs');const {MemoryCoreTransport}=await import('/fake-core.mjs');
+  const {createLoader}=await import('/loader.mjs');const {MemoryCoreTransport}=await import('/testkit.mjs');
   let imports=0;globalThis.claimCount=0;const listener=e=>{if(e.data==='claimed')globalThis.claimCount++};navigator.serviceWorker.addEventListener('message',listener);
   let sent=0;const post=ServiceWorker.prototype.postMessage;
   ServiceWorker.prototype.postMessage=function(message,...args){if(message==='ctox:claim')sent++;return post.call(this,message,...args);};

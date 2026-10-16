@@ -1421,28 +1421,7 @@
       "owner_app": "spreadsheets"
     }
   },
-  "handlers": {
-    "customers.account.archive": "handlers/customers.account.archive.js",
-    "customers.account.create": "handlers/customers.account.create.js",
-    "customers.account.update": "handlers/customers.account.update.js",
-    "customers.activity.record": "handlers/customers.activity.record.js",
-    "customers.contact.archive": "handlers/customers.contact.archive.js",
-    "customers.contact.create": "handlers/customers.contact.create.js",
-    "customers.contact.update": "handlers/customers.contact.update.js",
-    "customers.dedupe.resolve": "handlers/customers.dedupe.resolve.js",
-    "customers.import.from_outbound": "handlers/customers.import.from_outbound.js",
-    "customers.note.create": "handlers/customers.note.create.js",
-    "customers.note.update": "handlers/customers.note.update.js",
-    "customers.opportunity.close_lost": "handlers/customers.opportunity.close_lost.js",
-    "customers.opportunity.close_won": "handlers/customers.opportunity.close_won.js",
-    "customers.opportunity.create": "handlers/customers.opportunity.create.js",
-    "customers.opportunity.move_stage": "handlers/customers.opportunity.move_stage.js",
-    "customers.opportunity.update": "handlers/customers.opportunity.update.js",
-    "customers.task.complete": "handlers/customers.task.complete.js",
-    "customers.task.create": "handlers/customers.task.create.js",
-    "customers.task.update": "handlers/customers.task.update.js",
-    "customers.view.save": "handlers/customers.view.save.js"
-  },
+  "handlers": {},
   "layout": {
     "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/customers.jpg (shared/operator-icon-selection.js, sha256 3a03210ceaa9…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
     "_icon_file": "icon.svg",

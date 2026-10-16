@@ -47,6 +47,11 @@ async function v4Page(width) {
   return { P, ctx, theme: await P.evaluate(() => document.documentElement.dataset.theme) };
 }
 
+// CHATFIX: die dokumentierten v4-Korrekturen (v4/shell/chat/chat-v4.css, kein V2-Abbild) gelten auch in der V2-Referenz,
+// ohne Hülle [data-v4-chat-v2]. Sonst würde die Referenz den V2-Fehler (Inspektionszeile weitet die Fensterspalte) als
+// Sollwert festschreiben; alle übrigen Maße bleiben exakt gegen V2 geprüft.
+const V4_FIXES_FOR_V2_REFERENCE = fs.readFileSync(path.join(here, '../chat-v4.css'), 'utf8').replaceAll('[data-v4-chat-v2] ', '');
+
 async function v2Page(width, theme) {
   const ctx = await browser.newContext({ viewport: { width, height: 800 } });
   const P = await ctx.newPage();
@@ -55,7 +60,7 @@ async function v2Page(width, theme) {
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="stylesheet" href="${base}/ui-contract/v1/workjet-ui-contract.css"><link rel="stylesheet" href="${base}/app.css">
     <link rel="stylesheet" href="${base}/shared/base.css"><link rel="stylesheet" href="${base}/mobile-host.css">
-    <link rel="stylesheet" href="${base}/modules/desktop/index.css"></head><body data-module-shell="full">
+    <link rel="stylesheet" href="${base}/modules/desktop/index.css"><style>${V4_FIXES_FOR_V2_REFERENCE}</style></head><body data-module-shell="full">
     <script type="module">
       import { initBusinessChat } from '${base}/shared/business-chat.js';
       const seed = ${JSON.stringify(SEED)};

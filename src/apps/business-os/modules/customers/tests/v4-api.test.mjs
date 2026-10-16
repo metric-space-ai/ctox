@@ -1,6 +1,6 @@
 // customers gegen den verbindlichen App-API-4.0-Stub des Kerns (createStubKernel, gepinnt über CTOX_APP_API_STUB,
 // read-only unter /__stub/ ausgeliefert) in echtem Chromium. Muster: modules/knowledge/tests/v4-api.test.mjs.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/customers/tests/v4-api.test.mjs
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf node --test src/apps/business-os/modules/customers/tests/v4-api.test.mjs
 // Playwright: aus PLAYWRIGHT_MODULE, sonst ~/Documents/ctox/src/apps/business-os/node_modules/playwright.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,8 +10,9 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const SHOTS = join(HERE, 'shots');
@@ -31,8 +32,8 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8">
 let server, browser, page, base;
 
 const ACCOUNTS = [
-  { id: 'acct-a', name: 'Acme GmbH', domain: 'acme.test', industry: 'SaaS', customer_stage: 'active', health_status: 'healthy', account_status: 'active', is_deleted: false, updated_at_ms: 3, last_activity_at_ms: 3 },
-  { id: 'acct-b', name: 'Beta AG', domain: 'beta.test', industry: 'Industrie', customer_stage: 'renewal', health_status: 'at_risk', account_status: 'active', is_deleted: false, updated_at_ms: 2, last_activity_at_ms: 2 },
+  { id: 'acct-a', name: 'Acme GmbH', domain: 'acme.test', industry: 'SaaS', customer_stage: 'active', health_status: 'healthy', account_status: 'active', search_text: 'acme gmbh acme.test saas', is_deleted: false, created_at_ms: 1, updated_at_ms: 3, last_activity_at_ms: 3 },
+  { id: 'acct-b', name: 'Beta AG', domain: 'beta.test', industry: 'Industrie', customer_stage: 'renewal', health_status: 'at_risk', account_status: 'active', search_text: 'beta ag beta.test industrie', is_deleted: false, created_at_ms: 1, updated_at_ms: 2, last_activity_at_ms: 2 },
 ];
 
 before(async () => {
@@ -59,27 +60,35 @@ before(async () => {
   page.on('response', (r) => { if (r.status() >= 400) console.error('[page] HTTP', r.status(), r.url()); });
   page.__errors = errors;
   await page.goto(base);
+  // Befehlsrouten der echten customers-Version (v4/manifests/customers.manifest.json): handlers und command_rights.
+  // FIXT-R: echter Routen-/Rechte-/Collections-Teil plus Eigentümer der Fremd-Collections (_fixture_owners).
+  await page.evaluate((routes) => { window.__customersRoutes = routes; }, realManifestRoutes('customers'));
   await page.evaluate(async (accounts) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import('/modules/customers/index.js');
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, actor: { role: 'admin', permissions: [] } });
     await kernel.ready;
     await kernel.sim.push('business_apps', [{ id: 'customers', title: 'Kunden' }, { id: 'documents', title: 'Dokumente' }]);
+    // Wie die anderen v4-Gate-Dateien (E35): aktive customers-Version mit ihren Befehlsrouten veröffentlichen, nach der
+    // business_apps-Zeile (sonst fehlt active_ver). Ohne Route lehnt der Kern z. B. customers.import.from_outbound ab.
+    // FIXT-R: Eigentümer der Fremd-Collections (echte Manifeste, inkl. ctox-platform) vor der eigenen Version.
+    for (const o of window.__customersRoutes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion('customers', '1', { title: 'Kunden', manifestExtra: window.__customersRoutes });
     await kernel.sim.push('customer_accounts', accounts);
     await kernel.sim.push('customer_contacts', [
-      { id: 'contact-a', account_id: 'acct-a', first_name: 'Ada', last_name: 'Lovelace', email: 'ada@acme.test', job_title: 'CTO', is_primary_contact: true, is_deleted: false, updated_at_ms: 3 },
+      { id: 'contact-a', account_id: 'acct-a', first_name: 'Ada', last_name: 'Lovelace', email: 'ada@acme.test', job_title: 'CTO', is_primary_contact: true, search_text: 'ada lovelace ada@acme.test cto', is_deleted: false, created_at_ms: 1, updated_at_ms: 3 },
     ]);
     await kernel.sim.push('customer_opportunities', [
-      { id: 'opp-a', account_id: 'acct-a', name: 'Renewal 2026', opportunity_type: 'renewal', stage: 'proposal', amount_cents: 1000000, currency: 'EUR', probability: 40, is_deleted: false, updated_at_ms: 3 },
+      { id: 'opp-a', account_id: 'acct-a', name: 'Renewal 2026', opportunity_type: 'renewal', stage: 'proposal', amount_cents: 1000000, currency: 'EUR', probability: 40, position: 0, search_text: 'renewal 2026', is_deleted: false, created_at_ms: 1, updated_at_ms: 3 },
     ]);
     await kernel.sim.push('outbound_companies', [
-      { id: 'co-ready', campaign_id: 'camp-a', name: 'Gamma GmbH', domain: 'gamma.test', qualification_status: 'qualified', research_status: 'done', pipeline_status: 'pipeline', fit_score: 91, payload: {}, updated_at_ms: 9 },
+      { id: 'co-ready', campaign_id: 'camp-a', name: 'Gamma GmbH', domain: 'gamma.test', qualification_status: 'qualified', research_status: 'done', pipeline_status: 'pipeline', fit_score: 91, payload: {}, created_at_ms: 1, updated_at_ms: 9 },
     ]);
     await kernel.sim.push('outbound_pipeline_items', [
-      { id: 'pipe-ready', campaign_id: 'camp-a', company_id: 'co-ready', company_name: 'Gamma GmbH', stage: 'qualified', contact_research_status: 'done', outreach_status: 'ready', contacts: [], payload: {}, updated_at_ms: 9 },
+      { id: 'pipe-ready', campaign_id: 'camp-a', company_id: 'co-ready', company_name: 'Gamma GmbH', stage: 'qualified', contact_research_status: 'done', outreach_status: 'ready', contacts: [], payload: {}, created_at_ms: 1, updated_at_ms: 9 },
     ]);
     await kernel.sim.push('documents', [
-      { id: 'doc-a', title: 'Acme MSA', filename: 'MSA.pdf', linked_records: [{ type: 'customer_account', id: 'acct-a' }], updated_at_ms: 8 },
+      { id: 'doc-a', title: 'Acme MSA', filename: 'MSA.pdf', mime_type: 'application/pdf', status: 'active', current_version_id: 'docver-a1', index_text: 'acme msa', linked_records: [{ type: 'customer_account', id: 'acct-a' }], is_deleted: false, created_at_ms: 1, updated_at_ms: 8 },
     ]);
     kernel.sim.onCommand('customers.account.create', () => ({ ok: true }));
     await kernel.sim.settle();
@@ -118,14 +127,14 @@ test('mount: Live-Daten, nur api.*, gescoptes Root, Titel über api.shell', asyn
 });
 
 test('Live-Änderung vom Core (sim.push) erscheint ohne Neuladen, Löschung verschwindet', async () => {
-  await page.evaluate(() => window.__k.sim.push('customer_accounts', { id: 'acct-g', name: 'Gamma Live KG', is_deleted: false, updated_at_ms: 9, last_activity_at_ms: 9 }));
+  await page.evaluate(() => window.__k.sim.push('customer_accounts', { id: 'acct-g', name: 'Gamma Live KG', account_status: 'active', customer_stage: 'prospect', health_status: 'healthy', search_text: 'gamma live kg', is_deleted: false, created_at_ms: 9, updated_at_ms: 9, last_activity_at_ms: 9 }));
   await settle();
   assert.match(await text('[data-customers-account-list]'), /Gamma Live KG/);
   await page.evaluate(() => window.__k.sim.push('customer_accounts', { id: 'acct-g', _deleted: true }));
   await settle();
   assert.doesNotMatch(await text('[data-customers-account-list]'), /Gamma Live KG/);
   // Weiches Löschen (is_deleted) bleibt wie in v3 unsichtbar.
-  await page.evaluate(() => window.__k.sim.push('customer_accounts', { id: 'acct-s', name: 'Soft Deleted', is_deleted: true, updated_at_ms: 10 }));
+  await page.evaluate(() => window.__k.sim.push('customer_accounts', { id: 'acct-s', name: 'Soft Deleted', account_status: 'active', customer_stage: 'prospect', health_status: 'healthy', search_text: 'soft deleted', is_deleted: true, created_at_ms: 10, updated_at_ms: 10 }));
   await settle();
   assert.doesNotMatch(await text('[data-customers-account-list]'), /Soft Deleted/);
 });
@@ -162,7 +171,7 @@ test('leere Collections rendern keinen Zustandstext und keine Zone', async () =>
 
 test('Schreiben: api.put erscheint live und wird vom Core angenommen', async () => {
   const result = await page.evaluate(async () => {
-    const h = window.__api.put('customer_accounts', { id: 'acct-d', name: 'Delta Put GmbH', is_deleted: false, updated_at_ms: 8, last_activity_at_ms: 8 });
+    const h = window.__api.put('customer_accounts', { id: 'acct-d', name: 'Delta Put GmbH', account_status: 'active', customer_stage: 'prospect', health_status: 'healthy', search_text: 'delta put gmbh', is_deleted: false, created_at_ms: 8, updated_at_ms: 8, last_activity_at_ms: 8 });
     await h.local;
     return h.result;
   });
@@ -248,7 +257,7 @@ test('snapshot/restored: offene Eingabe und Auswahl überleben den Remount', asy
   await page.waitForSelector('[data-customers-form] input[name="name"]');
   await page.fill('[data-customers-form] input[name="name"]', 'Beta halb fertig');
   // Live-Änderung während des Tippens darf die Eingabe nicht verwerfen.
-  await page.evaluate(() => window.__k.sim.push('customer_accounts', { id: 'acct-z', name: 'Zeta Live', is_deleted: false, updated_at_ms: 1, last_activity_at_ms: 1 }));
+  await page.evaluate(() => window.__k.sim.push('customer_accounts', { id: 'acct-z', name: 'Zeta Live', account_status: 'active', customer_stage: 'prospect', health_status: 'healthy', search_text: 'zeta live', is_deleted: false, created_at_ms: 1, updated_at_ms: 1, last_activity_at_ms: 1 }));
   await settle();
   assert.equal(await page.$eval('[data-customers-form] input[name="name"]', (el) => el.value), 'Beta halb fertig');
   const snap = await page.evaluate(async () => {

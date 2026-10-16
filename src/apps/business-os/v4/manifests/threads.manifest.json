@@ -1,9 +1,5 @@
 {
   "_capability_evidence": {
-    "agent.task.enqueue": [
-      "handlers/threads.ai.request.js",
-      "handlers/threads.ctox_approval.approve.js"
-    ],
     "audit.event": [
       "handlers/_lib.js"
     ],
@@ -39,6 +35,8 @@
   "_source_dir": "src/apps/business-os/modules/threads",
   "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
   "_todo": [
+    "command_rights threads.ctox_approval.approve: kein passender Handler.",
+    "command_rights threads.ctox_approval.reject: kein passender Handler.",
     "Projektions-Auslöser (W-4) noch nicht im Vertrag: siehe _proposed_triggers.",
     "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
     "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
@@ -48,7 +46,6 @@
   "app_ver": null,
   "author": null,
   "capabilities_required": [
-    "agent.task.enqueue",
     "audit.event",
     "directory.user",
     "policy.module_decision"
@@ -736,22 +733,6 @@
         "founder",
         "user"
       ]
-    },
-    "threads.ctox_approval.approve": {
-      "_basis": "v4-manifest.json; modules/threads/V4-HANDLERS.md „Zulassung vor dem Handler“ (command_plane.rs:1428-1546, :1224)",
-      "_note": "assigned_to_actor = (reviewer == Akteur)",
-      "_permission": "external.approve",
-      "_scope": "approval:<id>",
-      "assigned_users": true,
-      "roles": []
-    },
-    "threads.ctox_approval.reject": {
-      "_basis": "v4-manifest.json; modules/threads/V4-HANDLERS.md „Zulassung vor dem Handler“ (command_plane.rs:1428-1546, :1224)",
-      "_note": "assigned_to_actor = (reviewer == Akteur)",
-      "_permission": "external.approve",
-      "_scope": "approval:<id>",
-      "assigned_users": true,
-      "roles": []
     }
   },
   "commands_in": [],
@@ -1179,31 +1160,8 @@
   "handlers": {
     "threads.ai.complete": "handlers/threads.ai.complete.js",
     "threads.ai.failed": "handlers/threads.ai.failed.js",
-    "threads.ai.request": "handlers/threads.ai.request.js",
-    "threads.ctox_approval.approve": "handlers/threads.ctox_approval.approve.js",
-    "threads.ctox_approval.cancel": "handlers/threads.ctox_approval.cancel.js",
     "threads.ctox_approval.complete": "handlers/threads.ctox_approval.complete.js",
-    "threads.ctox_approval.edit": "handlers/threads.ctox_approval.edit.js",
-    "threads.ctox_approval.failed": "handlers/threads.ctox_approval.failed.js",
-    "threads.ctox_approval.reject": "handlers/threads.ctox_approval.reject.js",
-    "threads.ctox_approval.request": "handlers/threads.ctox_approval.request.js",
-    "threads.handoff.create": "handlers/threads.handoff.create.js",
-    "threads.link.create": "handlers/threads.link.create.js",
-    "threads.link.remove": "handlers/threads.link.remove.js",
-    "threads.message.create": "handlers/threads.message.create.js",
-    "threads.note.create": "handlers/threads.note.create.js",
-    "threads.note.delete": "handlers/threads.note.delete.js",
-    "threads.note.update": "handlers/threads.note.update.js",
-    "threads.notification.dismiss": "handlers/threads.notification.dismiss.js",
-    "threads.notification.mark_read": "handlers/threads.notification.mark_read.js",
-    "threads.notification.preferences.update": "handlers/threads.notification.preferences.update.js",
-    "threads.thread.archive": "handlers/threads.thread.archive.js",
-    "threads.thread.assign": "handlers/threads.thread.assign.js",
-    "threads.thread.claim": "handlers/threads.thread.claim.js",
-    "threads.thread.snooze": "handlers/threads.thread.snooze.js",
-    "threads.thread.state.update": "handlers/threads.thread.state.update.js",
-    "threads.thread.unwatch": "handlers/threads.thread.unwatch.js",
-    "threads.thread.watch": "handlers/threads.thread.watch.js"
+    "threads.ctox_approval.failed": "handlers/threads.ctox_approval.failed.js"
   },
   "layout": {
     "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/threads.jpg (shared/operator-icon-selection.js, sha256 b4cf784881d8…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",

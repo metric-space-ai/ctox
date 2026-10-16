@@ -29,14 +29,8 @@
     "knowledge.query": [
       "handlers/_lib/knowledge.js"
     ],
-    "mail.channel.mailbox.link": [
-      "handlers/outbound.campaign.mailbox.link.js"
-    ],
     "mail.delivery_log.query": [
       "handlers/_lib/reconcile.js"
-    ],
-    "mail.send": [
-      "handlers/outbound.message.send_approved.js"
     ],
     "net.ingest.webhook.register": [
       "handlers/_lib/tracking.js"
@@ -47,16 +41,10 @@
   },
   "_commands_in_evidence": {
     "mail outbound.message.compose": [
-      "modules/mail/index.js:1258"
+      "modules/mail/index.js:1259"
     ]
   },
   "_commands_out_evidence": {
-    "outbound-lead-generation outbound.research_source.reprobe": [
-      "handlers/_lib/owner-app.js:22"
-    ],
-    "outbound-lead-generation outbound.research_source.test": [
-      "handlers/_lib/owner-app.js:22"
-    ],
     "outbound-lead-generation outbound.scrape.script.read": [
       "handlers/_lib/olg-registry.js:167",
       "v4-manifest.json; handlers/_lib/olg-registry.js requestLatestScript/requestTargetUpsert; customer-modules/outbound-lead-generation/OLG725.md (§16.40, §16.47 Nr. 4)"
@@ -64,11 +52,16 @@
     "outbound-lead-generation outbound.scrape.target.upsert": [
       "handlers/_lib/olg-registry.js:73",
       "v4-manifest.json; handlers/_lib/olg-registry.js requestLatestScript/requestTargetUpsert; customer-modules/outbound-lead-generation/OLG725.md (§16.40, §16.47 Nr. 4)"
-    ],
-    "outbound-lead-generation outbound.update_digest.send_now": [
-      "handlers/_lib/owner-app.js:22"
     ]
   },
+  "_commands_out_unresolved": [
+    {
+      "file": "handlers/_lib/owner-app.js",
+      "line": 22,
+      "module_expr": "OWNER_APP",
+      "type_expr": "command.type"
+    }
+  ],
   "_declaration": "modules/outbound/v4-manifest.json",
   "_format": "ctox-shell-v4-app-manifest-draft-1",
   "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
@@ -85,18 +78,12 @@
   "_source_dir": "src/apps/business-os/modules/outbound",
   "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
   "_todo": [
-    "Befehlstyp outbound.research_policy.publish hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.research_source.auth_assist hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.research_source.generate_adapter hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.research_source.reprobe hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.research_source.test hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.research_source.upsert hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.sellify.lookup hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.update_digest.send_now hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
+    "Trigger-Handler handlers/outbound.scheduler.tick.js fehlt unter handlers/ (v4-manifest.json).",
     "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
     "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
     "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2).",
-    "schema.js ist noch Teil der Dateien; entfällt beim Port (§16.13)."
+    "schema.js ist noch Teil der Dateien; entfällt beim Port (§16.13).",
+    "1 ctx.command-Aufruf(e) mit nicht auflösbarem Ziel (handlers/_lib/owner-app.js:22): Ziel-App/Typ zur Laufzeit bestimmt – commands_out in v4-manifest.json deklarieren oder Ziel festlegen (§16.40)."
   ],
   "app_id": "outbound",
   "app_ver": null,
@@ -110,9 +97,7 @@
     "browser.automation.run",
     "files.get",
     "knowledge.query",
-    "mail.channel.mailbox.link",
     "mail.delivery_log.query",
-    "mail.send",
     "net.ingest.webhook.register",
     "secrets.exists"
   ],
@@ -1454,23 +1439,11 @@
   "commands_out": [
     {
       "app": "outbound-lead-generation",
-      "type": "outbound.research_source.reprobe"
-    },
-    {
-      "app": "outbound-lead-generation",
-      "type": "outbound.research_source.test"
-    },
-    {
-      "app": "outbound-lead-generation",
       "type": "outbound.scrape.script.read"
     },
     {
       "app": "outbound-lead-generation",
       "type": "outbound.scrape.target.upsert"
-    },
-    {
-      "app": "outbound-lead-generation",
-      "type": "outbound.update_digest.send_now"
     }
   ],
   "created_at": null,
@@ -1865,66 +1838,23 @@
     }
   },
   "handlers": {
-    "outbound.audit.export": "handlers/outbound.audit.export.js",
-    "outbound.campaign.apply_setup": "handlers/outbound.campaign.apply_setup.js",
-    "outbound.campaign.briefing.update": "handlers/outbound.campaign.briefing.update.js",
-    "outbound.campaign.mailbox.link": "handlers/outbound.campaign.mailbox.link.js",
     "outbound.campaign.setup.done": "handlers/outbound.campaign.setup.done.js",
     "outbound.campaign.setup.failed": "handlers/outbound.campaign.setup.failed.js",
     "outbound.campaign.setup.request": "handlers/outbound.campaign.setup.request.js",
-    "outbound.campaign.status.set": "handlers/outbound.campaign.status.set.js",
     "outbound.company.research": "handlers/outbound.company.research.js",
     "outbound.company.research.done": "handlers/outbound.company.research.done.js",
-    "outbound.dev.seed_test_data": "handlers/outbound.dev.seed_test_data.js",
-    "outbound.draft.prepare": "handlers/outbound.draft.prepare.js",
-    "outbound.engagement.assign_sender": "handlers/outbound.engagement.assign_sender.js",
-    "outbound.engagement.close": "handlers/outbound.engagement.close.js",
-    "outbound.engagement.create": "handlers/outbound.engagement.create.js",
-    "outbound.engagement.reapply_sequence": "handlers/outbound.engagement.reapply_sequence.js",
-    "outbound.engagement.resume": "handlers/outbound.engagement.resume.js",
-    "outbound.letter_template.save": "handlers/outbound.letter_template.save.js",
-    "outbound.message.approve": "handlers/outbound.message.approve.js",
-    "outbound.message.cancel": "handlers/outbound.message.cancel.js",
     "outbound.message.compose": "handlers/outbound.message.compose.js",
-    "outbound.message.pause": "handlers/outbound.message.pause.js",
-    "outbound.message.prepare": "handlers/outbound.message.prepare.js",
-    "outbound.message.reject": "handlers/outbound.message.reject.js",
-    "outbound.message.request_approval": "handlers/outbound.message.request_approval.js",
-    "outbound.message.request_changes": "handlers/outbound.message.request_changes.js",
-    "outbound.message.resume": "handlers/outbound.message.resume.js",
-    "outbound.message.send_approved": "handlers/outbound.message.send_approved.js",
-    "outbound.message.update_draft": "handlers/outbound.message.update_draft.js",
     "outbound.pipeline.contact_research": "handlers/outbound.pipeline.contact_research.js",
     "outbound.pipeline.contact_research.done": "handlers/outbound.pipeline.contact_research.done.js",
     "outbound.pipeline.lead_qualification": "handlers/outbound.pipeline.lead_qualification.js",
     "outbound.pipeline.outreach_draft": "handlers/outbound.pipeline.outreach_draft.js",
     "outbound.pipeline.outreach_draft.done": "handlers/outbound.pipeline.outreach_draft.done.js",
     "outbound.pipeline.outreach_draft.failed": "handlers/outbound.pipeline.outreach_draft.failed.js",
-    "outbound.pipeline.write_outreach_draft": "handlers/outbound.pipeline.write_outreach_draft.js",
-    "outbound.provider.reconcile": "handlers/outbound.provider.reconcile.js",
-    "outbound.reply.classify": "handlers/outbound.reply.classify.js",
-    "outbound.reply.match": "handlers/outbound.reply.match.js",
-    "outbound.research_policy.publish": "handlers/outbound.research_policy.publish.js",
-    "outbound.research_source.auth_assist": "handlers/outbound.research_source.auth_assist.js",
-    "outbound.research_source.generate_adapter": "handlers/outbound.research_source.generate_adapter.js",
     "outbound.research_source.generate_adapter.done": "handlers/outbound.research_source.generate_adapter.done.js",
-    "outbound.research_source.registry_read": "handlers/outbound.research_source.registry_read.js",
-    "outbound.research_source.reprobe": "handlers/outbound.research_source.reprobe.js",
     "outbound.research_source.script_read.done": "handlers/outbound.research_source.script_read.done.js",
-    "outbound.research_source.test": "handlers/outbound.research_source.test.js",
-    "outbound.research_source.upsert": "handlers/outbound.research_source.upsert.js",
-    "outbound.scheduler.tick": "handlers/outbound.scheduler.tick.js",
-    "outbound.scheduling.mark_booked": "handlers/outbound.scheduling.mark_booked.js",
-    "outbound.scheduling.prepare": "handlers/outbound.scheduling.prepare.js",
-    "outbound.scheduling.update_slots": "handlers/outbound.scheduling.update_slots.js",
-    "outbound.sellify.lookup": "handlers/outbound.sellify.lookup.js",
-    "outbound.sequence.save": "handlers/outbound.sequence.save.js",
-    "outbound.skillbook.save": "handlers/outbound.skillbook.save.js",
-    "outbound.skillbook.seed_defaults": "handlers/outbound.skillbook.seed_defaults.js",
     "outbound.source.import": "handlers/outbound.source.import.js",
     "outbound.tracking.event": "handlers/outbound.tracking.event.js",
-    "outbound.tracking.register": "handlers/outbound.tracking.register.js",
-    "outbound.update_digest.send_now": "handlers/outbound.update_digest.send_now.js"
+    "outbound.tracking.register": "handlers/outbound.tracking.register.js"
   },
   "layout": {
     "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/outbound.jpg (shared/operator-icon-selection.js, sha256 a47a0a7e7e42…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
@@ -2101,10 +2031,6 @@
   ],
   "title": "Outbound",
   "triggers": [
-    {
-      "every": "PT5M",
-      "handler": "handlers/outbound.scheduler.tick.js"
-    },
     {
       "every": "PT1H",
       "handler": "handlers/outbound.tracking.register.js"

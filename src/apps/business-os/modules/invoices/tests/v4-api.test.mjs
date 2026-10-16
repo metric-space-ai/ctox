@@ -1,7 +1,7 @@
 // invoices gegen den eingefrorenen App-API-4.0-Kern-Stub (createStubKernel) in echtem Chromium.
-// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/68b83a3), read-only unter /__stub/.
+// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/f967baf), read-only unter /__stub/.
 // Eigene Attrappe (v4/tools/port/test-api.mjs) nur für den Abo-Zähler. Muster: modules/knowledge/tests/v4-api.test.mjs.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/invoices/tests/v4-api.test.mjs
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf node --test src/apps/business-os/modules/invoices/tests/v4-api.test.mjs
 // Screenshots (1280 / 420) landen in modules/invoices/tests/shots/.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,8 +11,9 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const SHOTS = join(HERE, 'shots');
@@ -57,18 +58,24 @@ before(async () => {
   page.on('response', (r) => { if (r.status() >= 400) console.error('[page] HTTP', r.status(), r.url()); });
   page.__errors = errors;
   await page.goto(base);
+  // Befehlsrouten der echten invoices-Version (v4/manifests/invoices.manifest.json, wie customers/E35): ohne aktive
+  // Version lehnt der Kern seit E26/E27 z. B. invoices.payment.allocate beim Schreiben mit unknown_command ab.
+  await page.evaluate((routes) => { window.__invoicesRoutes = routes; }, realManifestRoutes('invoices'));
   await page.evaluate(async () => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import('/modules/invoices/index.js');
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, userId: 'acc-1', actor: { id: 'acc-1', role: 'admin', permissions: ['apps.source.edit'] } });
     await kernel.ready;
+    // FIXT-R: Eigentümer der Fremd-Collections (echte Manifeste, inkl. ctox-platform) vor der eigenen Version.
+    for (const o of window.__invoicesRoutes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion('invoices', '0.1.0', { title: 'Rechnungen', manifestExtra: window.__invoicesRoutes });
     const day = 86400000;
     const now = Date.now();
-    await kernel.sim.push('customer_accounts', [{ id: 'cust_1', name: 'Acme GmbH', email: 'buchhaltung@acme.test', updated_at_ms: 1 }]);
+    await kernel.sim.push('customer_accounts', [{ id: 'cust_1', name: 'Acme GmbH', email: 'buchhaltung@acme.test', account_status: 'active', customer_stage: 'active', health_status: 'healthy', search_text: 'acme gmbh buchhaltung@acme.test', is_deleted: false, created_at_ms: 1, updated_at_ms: 1 }]);
     await kernel.sim.push('accounting_invoices', [
-      { id: 'inv_posted', state: 'posted', invoice_type: 'sale_out', party_id: 'cust_1', invoice_number: 'RE-2026-0001', invoice_date_ms: now - 20 * day, due_date_ms: now + 10 * day, subtotal_cents: 10000, tax_cents: 1900, total_cents: 11900, paid_cents: 0, open_cents: 11900, currency: 'EUR', lines: [{ id: 'l1', position: 1, description: 'Beratung', quantity: 1000, unit: 'h', unit_price_cents: 10000, tax_rate: 0.19, account_code: '8400' }], updated_at_ms: 3 },
-      { id: 'inv_overdue', state: 'overdue', invoice_type: 'sale_out', party_id: 'cust_1', invoice_number: 'RE-2026-0002', invoice_date_ms: now - 40 * day, due_date_ms: now - 5 * day, total_cents: 5950, paid_cents: 0, open_cents: 5950, currency: 'EUR', lines: [], updated_at_ms: 2 },
-      { id: 'inv_draft', state: 'draft', invoice_type: 'sale_out', party_id: 'cust_1', invoice_number: '', invoice_date_ms: now, due_date_ms: now + 14 * day, total_cents: 0, currency: 'EUR', lines: [{ id: 'd1', position: 1, description: 'Entwurfsposition', quantity: 2000, unit: 'Stk', unit_price_cents: 2500, tax_rate: 0.19, account_code: '8400' }], updated_at_ms: 1 },
+      { id: 'inv_posted', state: 'posted', invoice_type: 'sale_out', party_id: 'cust_1', invoice_number: 'RE-2026-0001', invoice_date_ms: now - 20 * day, due_date_ms: now + 10 * day, subtotal_cents: 10000, tax_cents: 1900, total_cents: 11900, paid_cents: 0, open_cents: 11900, currency: 'EUR', lines: [{ id: 'l1', position: 1, description: 'Beratung', quantity: 1000, unit: 'h', unit_price_cents: 10000, tax_rate: 0.19, account_code: '8400' }], search_text: 're-2026-0001 acme gmbh', is_deleted: false, created_at_ms: 3, updated_at_ms: 3 },
+      { id: 'inv_overdue', state: 'overdue', invoice_type: 'sale_out', party_id: 'cust_1', invoice_number: 'RE-2026-0002', invoice_date_ms: now - 40 * day, due_date_ms: now - 5 * day, total_cents: 5950, paid_cents: 0, open_cents: 5950, currency: 'EUR', lines: [], search_text: 're-2026-0002 acme gmbh', is_deleted: false, created_at_ms: 2, updated_at_ms: 2 },
+      { id: 'inv_draft', state: 'draft', invoice_type: 'sale_out', party_id: 'cust_1', invoice_number: '', invoice_date_ms: now, due_date_ms: now + 14 * day, total_cents: 0, currency: 'EUR', lines: [{ id: 'd1', position: 1, description: 'Entwurfsposition', quantity: 2000, unit: 'Stk', unit_price_cents: 2500, tax_rate: 0.19, account_code: '8400' }], search_text: 'acme gmbh', is_deleted: false, created_at_ms: 1, updated_at_ms: 1 },
     ]);
     await kernel.sim.settle();
     window.__k = kernel;
@@ -116,7 +123,7 @@ test('mount: rendert Live-Daten, nur api.*, gescoptes Root, Titel über api.shel
 });
 
 test('Live-Änderung vom Core (sim.push) erscheint ohne Neuladen, Löschung verschwindet', async () => {
-  await page.evaluate(() => window.__k.sim.push('accounting_invoices', { id: 'inv_live', state: 'paid', invoice_type: 'sale_out', party_id: 'party-404', invoice_number: 'RE-LIVE-9', total_cents: 100, updated_at_ms: 9 }));
+  await page.evaluate(() => window.__k.sim.push('accounting_invoices', { id: 'inv_live', state: 'paid', invoice_type: 'sale_out', party_id: 'party-404', invoice_number: 'RE-LIVE-9', total_cents: 100, currency: 'EUR', search_text: 're-live-9', is_deleted: false, created_at_ms: 9, updated_at_ms: 9 }));
   await settle();
   assert.match(await text('[data-invoices-list]'), /RE-LIVE-9/);
   // Kunde ohne Kontakt: „Unbekannt“, nie die technische ID.
@@ -282,7 +289,7 @@ test('Import: ungültiges JSON → Zone; gültig → invoices.invoice.create', a
 
 test('Schreiben: api.put erscheint live und wird vom Core angenommen', async () => {
   const result = await page.evaluate(async () => {
-    const h = window.__api.put('accounting_invoices', { id: 'inv_put', state: 'posted', invoice_type: 'sale_out', party_id: 'cust_1', invoice_number: 'RE-PUT-1', total_cents: 1, updated_at_ms: 20 });
+    const h = window.__api.put('accounting_invoices', { id: 'inv_put', state: 'posted', invoice_type: 'sale_out', party_id: 'cust_1', invoice_number: 'RE-PUT-1', total_cents: 1, currency: 'EUR', search_text: 're-put-1 acme gmbh', is_deleted: false, created_at_ms: 20, updated_at_ms: 20 });
     await h.local;
     return h.result;
   });
@@ -292,7 +299,7 @@ test('Schreiben: api.put erscheint live und wird vom Core angenommen', async () 
 });
 
 test('snapshot/restored: offener Entwurf, Auswahl und Suche überleben den Remount', async () => {
-  await page.evaluate(() => window.__k.sim.push('accounting_invoices', { id: 'inv_draft2', state: 'draft', invoice_type: 'sale_out', party_id: 'cust_1', invoice_number: '', invoice_date_ms: Date.now(), total_cents: 0, currency: 'EUR', lines: [{ id: 'x1', position: 1, description: 'Alt', quantity: 1000, unit: 'Stk', unit_price_cents: 100, tax_rate: 0.19, account_code: '8400' }], updated_at_ms: 30 }));
+  await page.evaluate(() => window.__k.sim.push('accounting_invoices', { id: 'inv_draft2', state: 'draft', invoice_type: 'sale_out', party_id: 'cust_1', invoice_number: '', invoice_date_ms: Date.now(), total_cents: 0, currency: 'EUR', lines: [{ id: 'x1', position: 1, description: 'Alt', quantity: 1000, unit: 'Stk', unit_price_cents: 100, tax_rate: 0.19, account_code: '8400' }], search_text: 'acme gmbh', is_deleted: false, created_at_ms: 30, updated_at_ms: 30 }));
   await settle();
   await clickSel('[data-invoice-id="inv_draft2"]');
   await settle();
@@ -319,7 +326,7 @@ test('snapshot/restored: offener Entwurf, Auswahl und Suche überleben den Remou
   }), desc);
   assert.deepEqual(after, { desc: 'halb getippt', search: 'acme', selected: 'inv_draft2' });
   // Eine Live-Änderung am Entwurf überschreibt die offene Eingabe nicht.
-  await page.evaluate(() => window.__k.sim.push('accounting_invoices', { id: 'inv_draft2', state: 'draft', invoice_type: 'sale_out', party_id: 'cust_1', invoice_number: '', total_cents: 0, currency: 'EUR', lines: [{ id: 'x1', position: 1, description: 'Server', quantity: 1000, unit: 'Stk', unit_price_cents: 100, tax_rate: 0.19, account_code: '8400' }], updated_at_ms: 31 }));
+  await page.evaluate(() => window.__k.sim.push('accounting_invoices', { id: 'inv_draft2', state: 'draft', invoice_type: 'sale_out', party_id: 'cust_1', invoice_number: '', total_cents: 0, currency: 'EUR', lines: [{ id: 'x1', position: 1, description: 'Server', quantity: 1000, unit: 'Stk', unit_price_cents: 100, tax_rate: 0.19, account_code: '8400' }], search_text: 'acme gmbh', is_deleted: false, created_at_ms: 31, updated_at_ms: 31 }));
   await settle();
   assert.equal(await page.$eval(desc, (el) => el.value), 'halb getippt');
   assert.equal(await page.evaluate(() => window.__c.subscribers('accounting_invoices')), 1, 'alte Abos sind abgemeldet');
@@ -372,7 +379,7 @@ test('FIX9a: Suche ohne Treffer → „Keine Treffer“ + „Filter zurücksetze
   assert.doesNotMatch(await text('[data-invoices-list]'), /Keine Treffer/);
 
   // Listenansicht in schmaler Spalte mit langem Status „Teilweise bezahlt“.
-  await page.evaluate(() => window.__k.sim.push('accounting_invoices', { id: 'inv_part', state: 'partially_paid', invoice_type: 'sale_out', party_id: 'cust_1', invoice_number: 'RE-2026-0003-LANGE-NUMMER-MIT-ZUSATZ', total_cents: 100, paid_cents: 50, open_cents: 50, currency: 'EUR', lines: [], updated_at_ms: 99 }));
+  await page.evaluate(() => window.__k.sim.push('accounting_invoices', { id: 'inv_part', state: 'partially_paid', invoice_type: 'sale_out', party_id: 'cust_1', invoice_number: 'RE-2026-0003-LANGE-NUMMER-MIT-ZUSATZ', total_cents: 100, paid_cents: 50, open_cents: 50, currency: 'EUR', lines: [], search_text: 're-2026-0003-lange-nummer-mit-zusatz acme gmbh', is_deleted: false, created_at_ms: 99, updated_at_ms: 99 }));
   await settle();
   await page.evaluate(() => { const b = document.querySelector('[data-invoices-rail] [data-pg-view="list"]'); if (b) b.click(); });
   await page.$eval('[data-invoices-rail]', (el) => { el.style.width = '230px'; el.style.maxWidth = '230px'; });
@@ -476,7 +483,7 @@ test('Screenshots 1280 und 420 (gegen den Stub)', async () => {
 test('unmount meldet alle Abos ab und leert root', async () => {
   const res = await page.evaluate(async () => {
     await window.__app.unmount();
-    await window.__k.sim.push('accounting_invoices', { id: 'inv_late', state: 'posted', invoice_number: 'LATE', updated_at_ms: 99 });
+    await window.__k.sim.push('accounting_invoices', { id: 'inv_late', state: 'posted', invoice_number: 'LATE', currency: 'EUR', search_text: 'late', is_deleted: false, invoice_type: 'sale_out', created_at_ms: 99, updated_at_ms: 99 });
     await window.__k.sim.settle();
     return {
       subs: ['accounting_invoices', 'customer_accounts', 'accounting_journal_entries'].map((c) => window.__c.subscribers(c)),

@@ -62,6 +62,9 @@ fn build_vendored_ggml() {
     }
     // CMake tracks source/configuration dependencies; retain its compiled
     // kernels across Rust-only/linker edits instead of rebuilding CUDA cold.
+    // A shared target dir can hold a cache configured for another checkout;
+    // CMake then refuses to configure, so start that build dir fresh.
+    discard_foreign_cmake_cache(&build, &src);
 
     let mut configure = Command::new("cmake");
     configure
@@ -214,4 +217,25 @@ fn env_flag(name: &str) -> bool {
             value == "1" || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("yes")
         })
         .unwrap_or(false)
+}
+
+fn discard_foreign_cmake_cache(build: &std::path::Path, src: &std::path::Path) {
+    let Ok(cache) = fs::read_to_string(build.join("CMakeCache.txt")) else {
+        return;
+    };
+    let home = cache
+        .lines()
+        .find_map(|line| line.strip_prefix("CMAKE_HOME_DIRECTORY:INTERNAL="));
+    let current = fs::canonicalize(src).unwrap_or_else(|_| src.to_path_buf());
+    let cached = home.map(|home| {
+        let home = std::path::Path::new(home);
+        fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf())
+    });
+    if cached.as_deref() != Some(current.as_path()) {
+        println!(
+            "cargo:warning=discarding CMake cache configured for another source dir: {}",
+            home.unwrap_or("<unknown>")
+        );
+        fs::remove_dir_all(build).expect("remove foreign CMake build dir");
+    }
 }

@@ -12,6 +12,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -63,12 +64,17 @@ const text = (sel) => page.$eval(sel, (el) => el.textContent);
 const COLLECTIONS = ['business_commands', 'ctox_queue_tasks', 'ctox_bug_reports', 'ctox_crew_members', 'communication_accounts'];
 
 test('Kernel vorbereitet', async () => {
-  await page.evaluate(async () => {
+  // E26/E27: Befehlsrouten + Deklarationen der echten ctox-Version (v4/manifests/ctox.manifest.json);
+  // ohne aktive Version lehnt der Kern App-Befehle (ctox.task.delete) beim Schreiben mit unknown_command ab.
+  await page.evaluate(async (routes) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import('/modules/ctox/index.js');
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, actor: { role: 'admin', permissions: ['apps.source.edit'] } });
     await kernel.ready;
     await kernel.sim.push('business_apps', [{ id: 'ctox', title: 'Crew' }, { id: 'knowledge', title: 'Knowledge' }]);
+    // FIXT-R: Eigentümer der Fremd-Collections (echte Manifeste, inkl. ctox-platform) vor der eigenen Version.
+    for (const o of routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion('ctox', '1.1.2', { title: 'Crew', manifestExtra: routes });
     await kernel.sim.push('ctox_queue_tasks', [
       { id: 'task-alpha', title: 'Alpha Aufgabe', prompt: 'Alpha erledigen', status: 'queued', route_status: 'pending', priority: 'normal', updated_at_ms: Date.now() - 2000 },
       { id: 'task-beta', title: 'Beta Aufgabe', prompt: 'Beta erledigen', status: 'failed', route_status: 'failed', failure_class: 'terminal', updated_at_ms: Date.now() - 4000 },
@@ -83,7 +89,7 @@ test('Kernel vorbereitet', async () => {
     window.__api = api;
     window.__zone = () => kernel.statusZone.forApp('ctox').get().filter((e) => e.source === 'app');
     window.__commands = () => api.query('business_commands', { sort: [{ created_at: 'asc' }] }).get();
-  });
+  }, realManifestRoutes('ctox'));
   assert.ok(await page.evaluate(() => Boolean(window.__api && window.__mod.mount)));
 });
 

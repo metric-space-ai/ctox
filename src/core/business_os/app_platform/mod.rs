@@ -7,6 +7,8 @@
 //! Client activation remains a separate checkpoint-gated protocol.
 
 mod commands;
+#[cfg(test)]
+mod model_check_tests;
 pub(crate) mod runtime_host;
 #[cfg(test)]
 mod tests;
@@ -61,12 +63,35 @@ fn store_failure(error: StoreError) -> Value {
     commands::failure("failed", code, reason, "", &raw_detail)
 }
 
+pub(crate) type ModelEffectFence =
+    Arc<dyn Fn(&mut dyn FnMut() -> anyhow::Result<Value>) -> anyhow::Result<Value> + Send + Sync>;
+#[derive(Clone)]
+pub(crate) struct ModelCheckFence {
+    pub effect: ModelEffectFence,
+    pub commit: Arc<dyn Fn(&rusqlite::Transaction<'_>) -> Result<(), StoreError> + Send + Sync>,
+}
+type ModelChecker = Arc<
+    dyn Fn(
+            String,
+            commands::ModelCheckRequest,
+            Option<ModelEffectFence>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = crate::execution::cliproxyapi_host::model_probe::Probe,
+                    > + Send,
+            >,
+        > + Send
+        + Sync,
+>;
+
 #[derive(Clone)]
 pub(crate) struct Platform {
     writer: WriterHandle,
     signer: Signer,
     migrations: MigrationResolver,
     secret_writer: Option<WriterHandle>,
+    model_checker: Option<ModelChecker>,
 }
 
 impl Platform {
@@ -96,7 +121,24 @@ impl Platform {
             signer,
             migrations: Arc::new(|_, _, _| false),
             secret_writer: None,
+            model_checker: None,
         }
+    }
+
+    /// The daemon lends its own root; command JSON cannot choose it. Network
+    /// work uses the existing native gateway, outside the Store writer.
+    pub(crate) fn with_native_model_checks(mut self, root: std::path::PathBuf) -> Self {
+        self.model_checker = Some(Arc::new(move |actor, request, fence| {
+            Box::pin(crate::execution::cliproxyapi_host::model_probe::check(
+                root.clone(),
+                actor,
+                request.account_id,
+                request.expected_account_revision,
+                request.model_id,
+                fence,
+            ))
+        }));
+        self
     }
 
     /// CUTOVER composition supplies an already registered secrets DB owner.
@@ -124,6 +166,18 @@ impl Platform {
         command: CommandDocument,
         now_ms: u64,
     ) -> Value {
+        self.dispatch_fenced(actor, command, now_ms, None).await
+    }
+
+    /// Only the native feed supplies its retained execution scope. Model IO
+    /// and result publication both recheck it; no fence is accepted from JSON.
+    pub(crate) async fn dispatch_fenced(
+        &self,
+        actor: BusinessOsActor,
+        command: CommandDocument,
+        now_ms: u64,
+        fence: Option<ModelCheckFence>,
+    ) -> Value {
         let prepared = match self.execute(actor.clone(), command.clone(), now_ms) {
             Ok(job) => match job.await {
                 Ok(value) => value,
@@ -131,6 +185,47 @@ impl Platform {
             },
             Err(error) => return store_failure(error),
         };
+        if command.command_type == "instance.providers.models.check"
+            && prepared["status"] == "preparing"
+        {
+            let request: commands::ModelCheckRequest =
+                match serde_json::from_value(command.payload.clone()) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return store_failure(StoreError::Invalid(
+                            "invalid admitted model check".into(),
+                        ))
+                    }
+                };
+            let probe = match &self.model_checker {
+                Some(check) => {
+                    check(
+                        actor.id.clone().unwrap_or_default(),
+                        request,
+                        fence.as_ref().map(|f| f.effect.clone()),
+                    )
+                    .await
+                }
+                None => crate::execution::cliproxyapi_host::model_probe::Probe::unavailable(
+                    &request.model_id,
+                    "gateway_state_unavailable",
+                ),
+            };
+            return match self
+                .writer
+                .submit(WriteJob::new(JobOptions::default(), move |tx| {
+                    if let Some(fence) = fence {
+                        (fence.commit)(tx)?;
+                    }
+                    commands::finish_model_check(tx, &actor, &command, probe, now_ms)
+                })) {
+                Ok(job) => match job.await {
+                    Ok(value) => value,
+                    Err(e) => store_failure(e),
+                },
+                Err(e) => store_failure(e),
+            };
+        }
         if command.command_type != "speech.tts.key.delete" || prepared["status"] != "preparing" {
             return prepared;
         }

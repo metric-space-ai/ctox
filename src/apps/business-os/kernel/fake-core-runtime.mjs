@@ -1,3 +1,4 @@
+import {commandRoute} from './command-routing.mjs';
 // Fake-Core-Laufzeit (K-1c Punkte 4–7): Nutzer und Rechte, Handler-Laufzeit im Prozess (§16.16/§16.25),
 // Trigger-Lauf (§16.20, fremde Collections nur nach §16.34 Nr. 3), Katalog-Primitive audit/agent.task (§16.29/§16.30)
 // und die Plattformbefehle ctox.app.publish|update|rollback|release|remove (§16.29 B, §16.33).
@@ -100,16 +101,13 @@ export function createCoreRuntime(core) {
     const r = rightsOf(row.collection).read;
     return allowed(r, user, { c: baseName(row.collection), id: row.id, doc: row.data, read: true });
   }
-  function commandRight(user, body) {
-    const m = activeManifest(body?.app_id);
-    const rights = m?.command_rights ?? {};
-    const entry = rights[body.type] ?? Object.entries(rights).find(([k]) => k.endsWith('*') && body.type.startsWith(k.slice(0, -1)))?.[1];
-    if (!entry) return true;
-    return user.role === 'admin' || (Array.isArray(entry.roles) && entry.roles.includes(user.role));
-  }
   /** null = erlaubt, sonst Ablehnungscode. */
   function checkWrite(user, entry, old) {
     const c = baseName(entry.collection);
+    if(c==='business_commands' && entry.op==='put' && entry.body?.status==='queued') {
+      const route=commandRoute(entry.body,activeManifest,user,entry.test_route===true);
+      if(route.error)return {code:route.error,reason:route.error};
+    }
     // Plattformbefehle prüft der Core immer (CAS, Codes §16.33); ohne bekannten Nutzer gilt der Client als Admin (Bind-Aufbau).
     if (c === 'business_commands' && entry.op === 'put' && entry.body?.status === 'queued' && String(entry.body.type).startsWith('ctox.app.')) return checkPlatformCommand(user ?? SYSTEM_ADMIN, entry.body);
     if (c === 'business_commands' && entry.op === 'put' && entry.body?.status === 'queued' && String(entry.body.type).startsWith('ctox.coding.')) return checkCodingCommand(user ?? { ...SYSTEM_ADMIN, id: entry.body.actor_id ?? 'admin' }, entry.body);
@@ -118,7 +116,6 @@ export function createCoreRuntime(core) {
       const body = entry.body ?? old?.data;
       if (entry.op === 'put' && body?.status === 'queued') {
         if (String(body.type).startsWith('ctox.app.')) return checkPlatformCommand(user, body);
-        if (!commandRight(user, body)) return 'forbidden';
       }
       return null;
     }
@@ -321,7 +318,9 @@ export function createCoreRuntime(core) {
       async transaction(fn) { return fn(Object.freeze({ ...api })); },
       async command(type, payload = {}, opts = {}) {
         const id = opts.id ?? uuidv7();
-        const doc = { id, type, payload: cloneValue(payload), status: 'queued', app_id: appId, actor_id: command.actor?.id ?? 'core', created_at: new Date().toISOString(), ...(opts.record_id !== undefined ? { record_id: opts.record_id } : {}) };
+        const doc = { id, type, payload: cloneValue(payload), status: 'queued', app_id: appId, actor_id: command.actor?.id ?? 'core', created_at: new Date().toISOString(), ...(opts.record_id !== undefined ? { record_id: opts.record_id } : {}), ...(opts.target_app===undefined?{}:{target_app:opts.target_app}) };
+        const route=commandRoute(doc,activeManifest,core.users.get(command.actor?.id)??command.actor);
+        if(route.error)fail(route.error,route.error);
         await commit('business_commands', [doc], depth);
         core.spawnCommand(doc, depth + 1);
         return { id, status: 'accepted' };
@@ -738,25 +737,29 @@ export function createCoreRuntime(core) {
   async function until(pred, ms = 5000) { const t0 = Date.now(); while (!pred()) { if (Date.now() - t0 > ms) fail('unavailable', 'Turn-Dokument fehlt'); await new Promise((r) => setTimeout(r, 2)); } }
 
   // K-WJ-B2: Plattformbefehle, die execute() ausführt; App-Befehle nur mit handlers-Eintrag der aktiven Version.
-  const PLATFORM_COMMANDS = new Set(['ctox.app.publish', 'ctox.app.update', 'ctox.app.rollback', 'ctox.app.release', 'ctox.app.remove', 'ctox.coding.turn', 'ctox.coding.cancel']);
-  function hasCommandRoute(appId, type) {
-    if (PLATFORM_COMMANDS.has(type)) return true;
-    const handlers = activeManifest(appId)?.handlers;
-    return isPlainObject(handlers) && Object.prototype.hasOwnProperty.call(handlers, type);
+  function hasCommandRoute(appId,type,body={app_id:appId,type}) {
+    // Authorization is checked separately; invalid declarations must be forbidden, not unknown.
+    const r=commandRoute(body,activeManifest,null);
+    return r.error!=='unknown_command';
   }
   /** Ausführung eines Befehls: Plattformbefehl → App-Handler (Routing nach (app_id, type)). null = kein Handler. */
   async function execute(user, doc, depth) {
+    user??={...SYSTEM_ADMIN,id:doc.actor_id??'admin'};
     if (String(doc.type).startsWith('ctox.app.')) return runPlatformCommand(user, doc);
     if (doc.type === 'ctox.coding.turn') return runCodingTurn(doc);
     if (doc.type === 'ctox.coding.cancel') return runCodingCancel(doc);
-    const manifest = activeManifest(doc.app_id);
+    const route=commandRoute(doc,activeManifest,user);
+    if(route.error)return {status:'failed',error:route.error};
+    if(route.platform)return {status:'done',progress:1,result:{route:'core',type:doc.type}}; // explicit fake Core outcome, no app dispatch
+    const manifest = activeManifest(route.target);
     const path = manifest?.handlers?.[doc.type];
     if (!path) return null;
     const command = { id: doc.id, type: doc.type, payload: cloneValue(doc.payload ?? {}), actor: { id: doc.actor_id ?? user?.id ?? 'core', role: user?.role ?? 'system' }, app_id: doc.app_id, app_ver: manifest.app_ver, ...(doc.record_id !== undefined ? { record_id: doc.record_id } : {}) };
-    try { return { status: 'done', progress: 1, result: await runHandler(doc.app_id, manifest, path, command, depth) }; } catch (e) { return { status: 'failed', error: String(e.message) }; }
+    try { return { status: 'done', progress: 1, result: await runHandler(route.target, manifest, path, command, depth) }; } catch (e) { return { status: 'failed', error: String(e.message) }; }
   }
 
   return {
+    resolveCommand: (body,user,testRoute=false)=>commandRoute(body,activeManifest,user,testRoute),
     canRead, checkWrite, execute, hasCommandRoute, onCommit, refreshEvery, idle, log, tasks, acceptCodingTurn, modelRun,
     setAgentOutcome(fn) { agentOutcome = typeof fn === 'function' ? fn : null; },
     capabilities: FAKE_CORE_CAPABILITIES,

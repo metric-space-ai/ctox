@@ -66,7 +66,7 @@ pub fn get_rx_replication_meta_instance_schema(
         "checkpointData".to_string(),
         JsonSchema {
             schema_type: Some("object".into()),
-            additional_properties: Some(true),
+            additional_properties: Some(true.into()),
             ..Default::default()
         },
     );

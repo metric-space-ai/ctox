@@ -19,13 +19,6 @@
     "office.edit.prepare": [
       "handlers/_lib/office.js",
       "handlers/_lib/report-writeback.js"
-    ],
-    "office.render": [
-      "handlers/office.document.export.js",
-      "handlers/office.document.freeze_email_content.js"
-    ],
-    "office.settings.save": [
-      "handlers/ctox.office.settings.save.js"
     ]
   },
   "_commands_out_evidence": {
@@ -58,9 +51,7 @@
     "agent.task.workspace.read",
     "dataframe.window",
     "office.edit.apply",
-    "office.edit.prepare",
-    "office.render",
-    "office.settings.save"
+    "office.edit.prepare"
   ],
   "collections": {
     "document_blob_chunks": {
@@ -572,16 +563,11 @@
     }
   },
   "handlers": {
-    "ctox.office.settings.save": "handlers/ctox.office.settings.save.js",
     "document.extract-requirements": "handlers/document.extract-requirements.js",
     "document.review-risks": "handlers/document.review-risks.js",
     "document.runbook.complete": "handlers/document.runbook.complete.js",
     "document.runbook.failed": "handlers/document.runbook.failed.js",
     "document.summarize": "handlers/document.summarize.js",
-    "office.document.commit": "handlers/office.document.commit.js",
-    "office.document.export": "handlers/office.document.export.js",
-    "office.document.freeze_email_content": "handlers/office.document.freeze_email_content.js",
-    "office.document.prepare": "handlers/office.document.prepare.js",
     "research.systematic.report.complete": "handlers/research.systematic.report.complete.js",
     "research.systematic.report.create": "handlers/research.systematic.report.create.js",
     "research.systematic.report.failed": "handlers/research.systematic.report.failed.js"

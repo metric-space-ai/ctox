@@ -37,9 +37,6 @@
     "command.get": [
       "handlers/_lib/research-writeback.js"
     ],
-    "config.get": [
-      "handlers/outbound.update_digest.send_now.js"
-    ],
     "fence.claim": [
       "handlers/_lib/contact-email-validation.js",
       "handlers/_lib/person-research.js",
@@ -84,14 +81,6 @@
   "_source_dir": "src/apps/business-os/customer-modules/outbound-lead-generation",
   "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
   "_todo": [
-    "Befehlstyp outbound.research_policy.publish hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.research_source.auth_assist hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.research_source.generate_adapter hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.research_source.reprobe hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.research_source.test hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.research_source.upsert hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.sellify.lookup hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
-    "Befehlstyp outbound.update_digest.send_now hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
     "module.json.entry zeigt auf local-modules/…; Kundeninstanzen tragen ggf. eine abweichende installierte module.json (~/.local/state/ctox-sync-v4/docs/thesen-olg-installiert-20261015/module.json) – vor Aktivierung abgleichen.",
     "Abnahme Nicht-Admin (V4-PORT.md §13) legt die Mindestrechte fest; Logo (layout.icon_svg) muss erhalten bleiben.",
     "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
@@ -111,7 +100,6 @@
     "agent.task.workspace.read",
     "browser.auth_assist.request",
     "command.get",
-    "config.get",
     "fence.claim",
     "fence.release",
     "files.get",
@@ -1162,18 +1150,6 @@
       "from": [
         "outbound"
       ],
-      "type": "outbound.research_source.reprobe"
-    },
-    {
-      "from": [
-        "outbound"
-      ],
-      "type": "outbound.research_source.test"
-    },
-    {
-      "from": [
-        "outbound"
-      ],
       "type": "outbound.scrape.script.read"
     },
     {
@@ -1181,12 +1157,6 @@
         "outbound"
       ],
       "type": "outbound.scrape.target.upsert"
-    },
-    {
-      "from": [
-        "outbound"
-      ],
-      "type": "outbound.update_digest.send_now"
     }
   ],
   "commands_out": [],
@@ -1229,7 +1199,7 @@
     "OLG725.md": "baba5a14bec20b7ba6df76507ad874110830b30e56db7d2a72df75d684c293ee",
     "README.md": "7c5762338e4a3b8120ecf823363b3dd7967eec4db8852fce2213b8ac71869a86",
     "V4-HANDLERS.md": "82635f236fc9536797aeca3de6a5de2c9bf5773eab91e9ac80b390619f1cf2ff",
-    "V4-PORT.md": "428a408300283b86dfde02a1c6356dbda78a6b7b8331b836a97f41b4c9868c74",
+    "V4-PORT.md": "8d101191147180ce9637a0f5ba4e9647f9e7270a6c208433da215016fe9285a9",
     "adapter-dedupe.mjs": "bd7c1d612afd359cd70077862df65e63ac029e86c771db70863195eedf80656f",
     "assets/icon/outbound-lead-generation.svg": "da19e50be20343aa5a1d9de7e7be2413e5db41faaa5b92ad690c24dddbedc94e",
     "collections.schema.json": "bc6c7f13a81b9e0ac1e24fd9b9184fed8ccfd604487e0d1abf1a7a640a79e18b",
@@ -1245,15 +1215,15 @@
     "handlers/_lib/person-research-capture.js": "c5ad3275a18dcc23c3dd65936b1e6cc10c2cfadeb3bdc5d28f5508116bce568a",
     "handlers/_lib/person-research.js": "3621a47ae33bf7a3a937c2ef3eccff2d2a2c6206f309fbcd28ad22e2bc0a3c9f",
     "handlers/_lib/policy-report.js": "853da4112fce494add26ecd6425658b82f811705a9592a36229a05ce0531e0ae",
-    "handlers/_lib/research-evidence.js": "94ff44c5500f980e7e06cf0b5892ad72d1f1daf77f5dab1baa4e78da1b91ae2b",
+    "handlers/_lib/research-evidence.js": "2e4cc8b2450b719a2225b4a4c87da87c72fe1680db613d0366a2d6803f117aaa",
     "handlers/_lib/research-field-status.js": "9bcdaa8fef76973e667a525f957f5cd204a50c917ca2fb3f2c1b5470a6f27f64",
     "handlers/_lib/research-outcome-patch.js": "0e85d04c21e97abb9e05ac0de92b653507b280e6761661380fe0da6e6714b59e",
     "handlers/_lib/research-source-adapter.js": "c50a56c45875719752c740b75edccd5f6c514a60edb5156cc497c9e550f8edf1",
     "handlers/_lib/research-validation.js": "b8c1278fd2468afa05baae61ae9582e993915fcd2119307fe0a7eba089d34328",
     "handlers/_lib/research-writeback-checks.js": "872be12465ba84d2dc1da2c2a8d5f52c215baed21973e65ab5034884303b3503",
     "handlers/_lib/research-writeback-payload.js": "96e997be42bbca48679244e501435dc0837a1099d303ea3cb640a5462ba47b38",
-    "handlers/_lib/research-writeback-sanitize.js": "80c73843b045774aaf2f023e97d124c4a295a2e2968ad6aa3dd81beeb442261f",
-    "handlers/_lib/research-writeback.js": "770b98947a2f95477bef1b7bce1815264147962510ebda9893fef55248a94364",
+    "handlers/_lib/research-writeback-sanitize.js": "ba54c0e18a31849566ba4bfe341257dec55a87ceabfa4c29f923e2813c9d16e1",
+    "handlers/_lib/research-writeback.js": "85e6e39d891f7f2b60f321abd5c9892029e95ee9adadca710123d9b9b7940b0f",
     "handlers/_lib/scrape-registry.js": "d1d2f2cab93061cc96be5d7a59e6770d5fc2849c32a160237275d32316b937be",
     "handlers/_lib/scrape-runner.js": "029f11e95efc1ba97b7a0da6a3a99389741296011b18625bd240a1f1a97cc48d",
     "handlers/_lib/sellify-lookup.js": "99f18c477d30ecd978243c0c4f56fc35150f2cad178bf8a4f60c5a0578071902",
@@ -1290,9 +1260,9 @@
     "icon.svg": "da19e50be20343aa5a1d9de7e7be2413e5db41faaa5b92ad690c24dddbedc94e",
     "import-preview-groups.js": "12c6f881d4dc5674f4fe8af73b37f9d8ac06578c78ffc764ea9ae504a1e27666",
     "in-flight-lead-sweep.mjs": "edd455435b3239bb506083a7284fafefb500668198191e8dc366b0a5744163e5",
-    "index.css": "7a071144c456337bf55a73a90e954475c4740391c24696973a721c57702613b5",
+    "index.css": "ba482c1899b42199f5207e160651c7d56ec2b07f76810935313a6ee697a8d2f7",
     "index.html": "29830dda4bfab99f6216f266e5ea7472ca1e908b5b6891ee85c04a0932ebb9bf",
-    "index.js": "6030297708997f396892a0f2863e28da05a1b48bf606a315fa7ac0fc4e496384",
+    "index.js": "83cf20be8e1d8251cf4ed1e657e803b3d69d328137a6791d27ef6a8f1fe00c52",
     "locales/de.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
     "locales/en.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
     "module.json": "2be4554a9011dfdf78e9a95ef3471cefa8ef58c8eb912f94c12a33b2b7449607",
@@ -1318,8 +1288,8 @@
       "_evidence": {
         "code_read": [
           "handlers/_lib/research-writeback.js:8",
-          "index.js:1069",
-          "index.js:1071"
+          "index.js:1073",
+          "index.js:1075"
         ],
         "code_write": [],
         "declaration_basis": "customer-modules/outbound-lead-generation/V4-PORT.md §13, §16a",
@@ -1408,26 +1378,16 @@
     "outbound.lead.research": "handlers/outbound.lead.research.js",
     "outbound.lead.research.done": "handlers/outbound.lead.research.done.js",
     "outbound.lead.research.failed": "handlers/outbound.lead.research.failed.js",
-    "outbound.lead.research_writeback": "handlers/outbound.lead.research_writeback.js",
     "outbound.research.adapters.reconcile": "handlers/outbound.research.adapters.reconcile.js",
     "outbound.research.adapters.reconcile.done": "handlers/outbound.research.adapters.reconcile.done.js",
-    "outbound.research_policy.publish": "handlers/outbound.research_policy.publish.js",
-    "outbound.research_source.auth_assist": "handlers/outbound.research_source.auth_assist.js",
-    "outbound.research_source.generate_adapter": "handlers/outbound.research_source.generate_adapter.js",
     "outbound.research_source.generation.done": "handlers/outbound.research_source.generation.done.js",
-    "outbound.research_source.reprobe": "handlers/outbound.research_source.reprobe.js",
-    "outbound.research_source.test": "handlers/outbound.research_source.test.js",
-    "outbound.research_source.upsert": "handlers/outbound.research_source.upsert.js",
     "outbound.scrape.execute": "handlers/outbound.scrape.execute.js",
     "outbound.scrape.script.read": "handlers/outbound.scrape.script.read.js",
     "outbound.scrape.script.register": "handlers/outbound.scrape.script.register.js",
     "outbound.scrape.target.upsert": "handlers/outbound.scrape.target.upsert.js",
-    "outbound.sellify.lookup": "handlers/outbound.sellify.lookup.js",
     "outbound.sellify.remarks.check": "handlers/outbound.sellify.remarks.check.js",
     "outbound.sellify.remarks.complete": "handlers/outbound.sellify.remarks.complete.js",
     "outbound.sellify.remarks.failed": "handlers/outbound.sellify.remarks.failed.js",
-    "outbound.update_digest.send_now": "handlers/outbound.update_digest.send_now.js",
-    "web_stack.person_research": "handlers/web_stack.person_research.js",
     "web_stack.person_research.done": "handlers/web_stack.person_research.done.js",
     "web_stack.person_research.failed": "handlers/web_stack.person_research.failed.js"
   },
@@ -1534,7 +1494,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "861aa0d520661e0e39116663275c119ea5b3f28ad4d0679d7423f7a605444546",
+    "base_hash": "75b2fbde00d679fe8afa04b48505796f6cdee127f7b63400be80dd33fbe2a2ff",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

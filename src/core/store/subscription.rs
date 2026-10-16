@@ -22,6 +22,10 @@ pub struct SubscriptionKey {
 /// Native policy must validate current rights and exact resolved scope inside every snapshot.
 /// None means unproject, including a document leaving the authorized row filter.
 pub trait ReadAuthority: Send + Sync {
+    /// Verified app+user binding for E51; absent authority fails closed.
+    fn preference_context(&self, _participant: &str) -> Option<crate::preferences::Context> {
+        None
+    }
     fn authorize(&self, tx: &Transaction<'_>, key: &SubscriptionKey) -> rusqlite::Result<()>;
     fn project(
         &self,
@@ -177,6 +181,17 @@ impl Subscription {
                     return Err(invalid("reader database differs from writer owner"));
                 }
                 authority.authorize(tx, &key)?;
+                let prefs = if key.collection == crate::preferences::COLLECTION {
+                    let context = authority
+                        .preference_context(&key.participant)
+                        .ok_or_else(|| invalid("forbidden"))?;
+                    if key.scope_hash != context.scope_hash() {
+                        return Err(invalid("forbidden"));
+                    }
+                    Some(context)
+                } else {
+                    None
+                };
                 let state: Option<String> = tx
                     .query_row(
                         "SELECT state FROM _collections WHERE name=?1 AND gen=?2",
@@ -202,11 +217,18 @@ impl Subscription {
                 let docs = page
                     .docs
                     .iter()
+                    .filter(|doc| prefs.as_ref().is_none_or(|ctx| ctx.owns_id(&doc.id)))
                     .map(|doc| {
                         let body = if doc.op == Operation::Delete {
                             None
                         } else {
-                            authority.project(tx, &key, doc)?
+                            if prefs.as_ref().is_some_and(|ctx| {
+                                !doc.body.as_ref().is_some_and(|body| ctx.owns(body))
+                            }) {
+                                None
+                            } else {
+                                authority.project(tx, &key, doc)?
+                            }
                         };
                         Ok(Document {
                             id: doc.id.clone(),
@@ -279,6 +301,10 @@ pub enum WritePermission {
     Reject(String),
 }
 pub trait WriteAuthority: Send + Sync {
+    /// Resolved from the participant's authenticated launch/session, never its payload.
+    fn preference_context(&self, _participant: &str) -> Option<crate::preferences::Context> {
+        None
+    }
     /// Use the command document's app_id as sender, never a payload claim (§16.40).
     /// Enforce active commands_out/in and the authenticated actor's target right.
     fn authorize_command_intent(
@@ -409,7 +435,16 @@ pub(crate) fn apply_write(
         if participant.is_empty() || request.id.is_empty() || request.gen == 0 {
             return Err(invalid("invalid write binding"));
         }
-        let permission = authority.authorize(tx, participant, request)?;
+        let mut permission = authority.authorize(tx, participant, request)?;
+        let prefs = if request.collection == crate::preferences::COLLECTION {
+            let context = authority.preference_context(participant);
+            if !context.as_ref().is_some_and(|ctx| ctx.owns_id(&request.id)) {
+                permission = WritePermission::Reject("forbidden".into());
+            }
+            context
+        } else {
+            None
+        };
         let issued = operation_time(&request.op_id)?;
         if issued > now_ms.saturating_add(300_000) {
             return Ok(rejected(request, "invalid_time"));
@@ -710,6 +745,13 @@ pub(crate) fn apply_write(
                 let result = rejected(request, "object_required");
                 remember(tx, participant, request, &result, now_ms)?;
                 return Ok(result);
+            }
+            if let Some(ctx) = &prefs {
+                if let Some(reason) = ctx.validate(tx, &current, &request.id, &document)? {
+                    let result = rejected(request, reason);
+                    remember(tx, participant, request, &result, now_ms)?;
+                    return Ok(result);
+                }
             }
             if let WritePermission::Reject(reason) =
                 authority.validate_document(tx, participant, &current, &document)?

@@ -13,7 +13,7 @@ import {
   DECLARATION_FILE, DECLARATION_FORMAT, validateDeclaration, triggerShapeError, collectConstants, resolveString,
   topLevelProps, scanCommandCalls, scanTriggerExports,
   scanUiCommandTypes, blankComments, SHELL_COMMANDS_OUT, PLATFORM_ROUTES_PENDING, PLATFORM_REGISTRY_ROUTES, COMMAND_INVENTORY_FILE,
-  isPlatformRoute, loadPlatformRoutes, enclosingObjectHasDispatchFalse,
+  isPlatformRoute, loadPlatformRoutes, enclosingObjectHasDispatchFalse, splitPlatformHandlers, platformHandlerViolations,
 } from './gen-manifest.mjs';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
@@ -138,15 +138,19 @@ test('Fremdzugriffs-Wünsche aus V4-HANDLERS/V4-PORT stehen im Manifest', () => 
   }
   // reports/file-viewer: exklusive Liste laut V4-PORT.md
   assert.ok(!first.manifests.reports.foreign_collections.workjet_projects);
-  assert.deepEqual(Object.keys(first.manifests['file-viewer'].foreign_collections).sort(), ['business_commands', 'files']);
+  // E30 (16.10.2026): files.get(ref) einer Explorer-/Desktop-Datei ist nur über eine lesbare desktop_files-Zeile berechtigt.
+  assert.deepEqual(Object.keys(first.manifests['file-viewer'].foreign_collections).sort(), ['business_commands', 'desktop_files', 'files']);
 });
 
-test('handlers = vorhandene handlers/*.js ohne _-Präfix, jede Datei in files', () => {
+const PLATFORM_ROUTES_FOR_TEST = loadPlatformRoutes(DEFAULT_REPO);
+test('handlers = vorhandene handlers/*.js ohne _-Präfix (außer Plattform-Typen, E42.1), jede Datei in files', () => {
   let total = 0;
   for (const m of appManifests) {
     const dir = appDirOf(m.app_id);
     const hdir = path.join(dir, 'handlers');
-    const files = fs.existsSync(hdir) ? fs.readdirSync(hdir).filter((f) => f.endsWith('.js') && !f.startsWith('_')) : [];
+    // E42.1: Dateien für Plattform-Typen der Kern-Inventur sind tote Handler und stehen nicht im Manifest.
+    const files = (fs.existsSync(hdir) ? fs.readdirSync(hdir).filter((f) => f.endsWith('.js') && !f.startsWith('_')) : [])
+      .filter((f) => !isPlatformRoute(f.slice(0, -3), PLATFORM_ROUTES_FOR_TEST));
     assert.deepEqual(Object.keys(m.handlers).sort(), files.map((f) => f.slice(0, -3)).sort(), `${m.app_id}: handlers ≠ Dateien`);
     for (const [type, rel] of Object.entries(m.handlers)) {
       assert.equal(rel, `handlers/${type}.js`);
@@ -957,18 +961,25 @@ test('MAN: heutiger Baum – Wünsche aus WUENSCHE.md stehen im Manifest', () =>
   for (const type of ['ctox.chat.task', 'ctox.app.modify.request']) assert.ok(m.ctox.commands_in.some((c) => c.type === type && c.from === '*'), type);
   assert.ok(m.research.commands_out.some((c) => c.app === 'knowledge' && c.type === 'knowledge.book.ingest'));
   assert.deepEqual(m.knowledge.commands_in.find((c) => c.type === 'knowledge.book.ingest').from, ['research']);
+  const routesNow = loadPlatformRoutes(DEFAULT_REPO);
   for (const type of ['outbound.scrape.target.upsert', 'outbound.research_source.test', 'outbound.research_source.reprobe', 'outbound.update_digest.send_now']) {
-    assert.ok(m.outbound.commands_out.some((c) => c.app === 'outbound-lead-generation' && c.type === type), type);
+    // E42.1: Plattform-Typen der Kern-Inventur brauchen kein commands_out; alle anderen gehen an OLG.
+    const routed = m.outbound.commands_out.some((c) => c.app === 'outbound-lead-generation' && c.type === type);
+    assert.equal(routed, !isPlatformRoute(type, routesNow), type);
   }
-  assert.ok(m.support.commands_out.some((c) => c.app === 'tickets' && c.type === 'ctox.ticket.local.create'));
+  // E42.1: ctox.ticket.* ist Plattformroute (control_prefixes) – kein commands_out an tickets, kein commands_in dort.
+  assert.ok(!m.support.commands_out.some((c) => c.type === 'ctox.ticket.local.create'));
+  assert.ok(!(m.tickets.commands_in || []).some((c) => c.type === 'ctox.ticket.local.create'));
   // Trigger
   const has = (app, handler, pred) => m[app].triggers.some((t) => t.handler === handler && pred(t));
-  assert.ok(has('iot', 'handlers/ctox.iot.rules.tick.js', (t) => t.every === 'PT1M'));
-  assert.ok(has('iot', 'handlers/ctox.iot.signal.evaluate.js', (t) => t.on?.collection === 'iot_attributes'));
-  assert.ok(has('outbound', 'handlers/outbound.tracking.register.js', (t) => t.every === 'PT1H'));
-  assert.ok(has('outbound', 'handlers/outbound.scheduler.tick.js', (t) => t.every === 'PT5M'));
-  assert.ok(has('outbound-lead-generation', 'handlers/outbound.contacts.email_validation_sweep.js', (t) => t.every === 'PT1H'));
-  assert.ok(has('kundenpipeline', 'handlers/kundenpipeline.mail.inbound.js', (t) => t.on?.collection === 'communication_messages' && t.on.op === 'insert'));
+  // E42.1: ein Trigger auf einen toten Handler (Plattform-Typ) entfällt – der Kern führt den Typ selbst aus.
+  const liveTrigger = (app, handler, pred) => has(app, handler, pred) === !isPlatformRoute(handler.replace(/^handlers\//, '').replace(/\.js$/, ''), routesNow);
+  assert.ok(liveTrigger('iot', 'handlers/ctox.iot.rules.tick.js', (t) => t.every === 'PT1M'));
+  assert.ok(liveTrigger('iot', 'handlers/ctox.iot.signal.evaluate.js', (t) => t.on?.collection === 'iot_attributes'));
+  assert.ok(liveTrigger('outbound', 'handlers/outbound.tracking.register.js', (t) => t.every === 'PT1H'));
+  assert.ok(liveTrigger('outbound', 'handlers/outbound.scheduler.tick.js', (t) => t.every === 'PT5M'));
+  assert.ok(liveTrigger('outbound-lead-generation', 'handlers/outbound.contacts.email_validation_sweep.js', (t) => t.every === 'PT1H'));
+  assert.ok(liveTrigger('kundenpipeline', 'handlers/kundenpipeline.mail.inbound.js', (t) => t.on?.collection === 'communication_messages' && t.on.op === 'insert'));
   // foreign/exports
   assert.deepEqual(m.kundenpipeline.foreign_collections.communication_messages.ops, ['read', 'watch']);
   for (const op of ['read', 'watch', 'write']) assert.ok(m.conversations.exports.communication_messages.includes(op), op);
@@ -1165,8 +1176,8 @@ test('ROUTE: Typ mit Handlern in mehreren Apps → commands_out_ambiguous (rot)'
   }
 });
 
-test('ROUTE: Shell trägt commands_out {ctox, business_os.chat.task} und {ctox, ctox.chat.task}; ctox nimmt sie von * an', () => {
-  const expected = [{ app: 'ctox', type: 'business_os.chat.task' }, { app: 'ctox', type: 'ctox.chat.task' }];
+test('ROUTE/E46: Shell trägt commands_out {ctox, ctox.chat.task}; business_os.chat.task ist Plattformroute ohne ctox-Handler', () => {
+  const expected = [{ app: 'ctox', type: 'ctox.chat.task' }];
   assert.deepEqual(SHELL_COMMANDS_OUT.map((c) => ({ app: c.app, type: c.type })), expected);
   const sh = first.manifests[SHELL_APP_ID];
   assert.deepEqual(sh.commands_out, expected);
@@ -1177,6 +1188,10 @@ test('ROUTE: Shell trägt commands_out {ctox, business_os.chat.task} und {ctox, 
     assert.ok(ctox.commands_in.some((x) => x.type === c.type && x.from === '*'), `ctox nimmt ${c.type} von * an`);
   }
   assert.ok(!first.drift.commands_unmatched.some((d) => d.from === SHELL_APP_ID));
+  // E46: der Chatbefehl geht nativ an den Kern-Chatpfad; toter ctox-Port-Handler und commands_in-Eintrag sind entfernt.
+  assert.ok(!('business_os.chat.task' in ctox.handlers), 'kein ctox-Handler business_os.chat.task');
+  assert.ok(!ctox.commands_in.some((x) => x.type === 'business_os.chat.task'), 'kein commands_in business_os.chat.task');
+  assert.ok(isPlatformRoute('business_os.chat.task', loadPlatformRoutes(DEFAULT_REPO)));
 });
 
 test('ROUTE heutiger Baum: mail → outbound beidseitig deklariert (FIX9a), abgeleitete commands_in nie *', () => {
@@ -1235,4 +1250,44 @@ test('E42: Inventurklassen und Chat-Befehle sind Plattformrouten; commandType mi
   // PENDING: nur noch die E25-Registry-Typen und die fünf gemessen fehlenden browser.*-Literale
   assert.ok(Object.keys(PLATFORM_ROUTES_PENDING).every((t) => /^ctox\.workjet\.[a-z_.]+\.v1$|^ctox\.plan\.step\.retry$|^browser\./.test(t)));
   assert.ok(!('outbound-lead-generation.import' in PLATFORM_ROUTES_PENDING), 'OLG-Import ist Fehlalarm (dispatch:false)');
+});
+
+test('ROUTE: Hülle mit lokalem Alias (const type = command.type || command.command_type) wird als Umschlag erkannt', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gen-manifest-alias-'));
+  try {
+    fs.writeFileSync(path.join(root, 'a.js'), [
+      'function send(command) { const type = command.type || command.command_type; return state.api.command(type, command.payload); }',
+      "send({ type: 'alias.type.one', payload: {} });",
+      "send({ command_type: 'alias.type.two' });",
+      '',
+    ].join('\n'));
+    assert.deepEqual(scanUiCommandTypes(root, ['a.js']).map((h) => h.type).sort(), ['alias.type.one', 'alias.type.two']);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// E42.1: Plattformroute gilt auch gegen den eigenen Handler der App – solche Handler sind tot und stehen nie im Manifest.
+test('E42.1: Handler für Plattform-Typen werden abgetrennt, der Wächter meldet jeden im Manifest', () => {
+  const routes = { exact: new Set(['ats.consent.check']), prefixes: ['office.document.'] };
+  const { live, shadowed } = splitPlatformHandlers({
+    'office.document.save': 'handlers/office.document.save.js',
+    'ats.consent.check': 'handlers/ats.consent.check.js',
+    'documents.note.add': 'handlers/documents.note.add.js',
+  }, routes);
+  assert.deepEqual(live, { 'documents.note.add': 'handlers/documents.note.add.js' });
+  assert.deepEqual(Object.keys(shadowed).sort(), ['ats.consent.check', 'office.document.save']);
+  assert.deepEqual(platformHandlerViolations([{ app_id: 'documents', handlers: live }], routes), []);
+  // Gegenprobe: ein Manifest, das einen Plattform-Typ als Handler trägt, ist ein Verstoß.
+  const bad = platformHandlerViolations([{ app_id: 'documents', handlers: { ...live, 'office.document.save': 'handlers/office.document.save.js' } }], routes);
+  assert.deepEqual(bad.map((v) => [v.app, v.kind, v.detail.split(' ')[0]]), [['documents', 'handler_platform_type', 'office.document.save']]);
+});
+
+test('E42.1: erzeugte Manifeste tragen keinen Handler für einen Plattform-Typ der Kern-Inventur', () => {
+  const routes = loadPlatformRoutes(DEFAULT_REPO);
+  const dir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../manifests');
+  const manifests = fs.readdirSync(dir).filter((n) => n.endsWith('.manifest.json')).map((n) => JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8')));
+  assert.deepEqual(platformHandlerViolations(manifests, routes), []);
+  const documents = manifests.find((m) => m.app_id === 'documents');
+  assert.ok(!Object.keys(documents.handlers).some((t) => t.startsWith('office.document.')), 'documents: office.document.* tot (E42.1)');
 });

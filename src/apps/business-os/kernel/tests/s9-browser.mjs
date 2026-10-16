@@ -16,7 +16,7 @@ try{
  const context=await browser.newContext(),page=await context.newPage();page.on('pageerror',e=>errors.push(String(e)));
  await page.goto('http://127.0.0.1:'+server.address().port);
  const result=await page.evaluate(async()=>{
-  const {createStubKernel}=await import('/kernel/kernel.mjs');const {exerciseKernelCommands}=await import('/kernel/testkit/command-contracts.mjs');
+  const {createStubKernel}=await import('/kernel/testkit.mjs');const {exerciseKernelCommands}=await import('/kernel/testkit/command-contracts.mjs');
   const kernel=createStubKernel({instanceId:'s9-browser',userId:'fixture',latencyMs:2,multiTab:false});await kernel.ready;
   try{
    kernel.sim.onCommand('probe.ok',async()=>({ok:true}));

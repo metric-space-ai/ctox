@@ -270,7 +270,7 @@ Zuweisung → `forbidden` bei (2). Beleg je Rolle als Bildschirmfoto der geöffn
 
 ### 15a. Restport research_writeback + web_stack.person_research (gekoppelt, offen)
 
-**OWNER-REGEL-Befund (THESEN):** Der Rust-Stand 4794af03d setzt `required_independent_sources(field) = 1` für **jedes**
+**OWNER-REGEL-Befund (Kundeninstanz):** Der Rust-Stand 4794af03d setzt `required_independent_sources(field) = 1` für **jedes**
 Feld (person_research_command.rs:1670, Kommentar „Owner rule 23.09.2026: one matching, cited source is enough for every
 field“). Die Formulierung im Auftrag „Ziel 2 Quellen je Feld, 1 nur im Notfall“ (Owner-Regel 07.10.2026) steht **nicht**
 im Code dieses Stands. Portiert ist wörtlich der Rust-Stand (1); Klärung beim Owner/Recherche-Strang, ob die Regel vom

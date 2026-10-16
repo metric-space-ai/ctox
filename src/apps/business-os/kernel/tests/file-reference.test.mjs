@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {createStubKernel} from '../kernel.mjs';
+import {createStubKernel} from '../testkit.mjs';
 const schema={schema:{type:'object',properties:{id:{type:'string'}}}};
 async function setup(t){
  const k=createStubKernel({instanceId:`e30-${process.pid}-${Math.random()}`,userId:'alice',storage:'memory',multiTab:false,latencyMs:0});t.after(()=>k.close());await k.ready;

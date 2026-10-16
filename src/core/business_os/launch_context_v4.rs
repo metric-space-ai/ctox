@@ -93,6 +93,27 @@ pub(crate) async fn build(
     owners: &Arc<StoreInputs>,
     user: &BusinessOsUser,
 ) -> Result<V4LaunchContext> {
+    build_principal(owners, user, false).await
+}
+/// E50: only the HTTP boundary may authenticate the implicit loopback admin.
+/// No persisted local-dev account or credential is created.
+pub(crate) async fn build_local(owners: &Arc<StoreInputs>) -> Result<V4LaunchContext> {
+    let user = BusinessOsUser {
+        id: "local-dev".into(),
+        display_name: "Local CTOX".into(),
+        role: "admin".into(),
+        active: true,
+        profile: serde_json::json!({}),
+        created_at_ms: 0,
+        updated_at_ms: 0,
+    };
+    build_principal(owners, &user, true).await
+}
+async fn build_principal(
+    owners: &Arc<StoreInputs>,
+    user: &BusinessOsUser,
+    local: bool,
+) -> Result<V4LaunchContext> {
     ensure!(
         user.active && !user.id.is_empty(),
         "forbidden: inactive principal"
@@ -103,7 +124,7 @@ pub(crate) async fn build(
     let key = raw_key;
     let snapshot = owners
         .activation_snapshot(move |tx| {
-            snapshot(tx, &id, &key)
+            snapshot(tx, &id, &key, local)
                 .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))
         })
         .await
@@ -181,7 +202,7 @@ pub(crate) async fn build(
     offer
         .encode()
         .map_err(|e| anyhow!("invalid P4 offer: {e:?}"))?;
-    Ok(V4LaunchContext {
+    let context = V4LaunchContext {
         v4: Launch {
             instance_id: signer.instance_id().into(),
             user_id: actor.id.clone(),
@@ -194,7 +215,12 @@ pub(crate) async fn build(
                 public_key: URL_SAFE_NO_PAD.encode(raw_key),
             }],
         },
-    })
+    };
+    owners
+        .browser_admission()?
+        .register(&context, local)
+        .await?;
+    Ok(context)
 }
 fn validate_signaling(s: &mut Signaling) -> Result<()> {
     ensure!(
@@ -325,8 +351,13 @@ fn snapshot(
     tx: &Transaction<'_>,
     id: &str,
     key: &[u8; 32],
+    local: bool,
 ) -> Result<(Actor, Vec<String>, Vec<String>)> {
-    let user = document(tx, "business_users", id)?;
+    let user = if local && id == "local-dev" {
+        serde_json::json!({"id":"local-dev","role":"admin","active":true})
+    } else {
+        document(tx, "business_users", id)?
+    };
     ensure!(
         user["active"] == true
             && user["id"] == id
@@ -442,4 +473,41 @@ fn snapshot(
 }
 #[cfg(all(test, unix))]
 #[path = "launch_context_v4_tests.rs"]
-mod tests;
+pub(crate) mod tests;
+
+/// Existing role-bound native routing provider, retained in memory. The fixed
+/// protocol changes to V4; the official issuer refreshes its token window.
+pub(crate) fn native_transport(
+    root: &std::path::Path,
+) -> Result<(
+    store::BusinessOsSyncConfig,
+    Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+)> {
+    let config = store::sync_config(root)?;
+    let auth = store::signaling_auth_config(root, &config.signaling_room_password)?;
+    let urls = super::rxdb_peer::native_signaling_url_provider(
+        config.signaling_urls.clone(),
+        config.sync_room.clone(),
+        config.native_peer_id.clone(),
+        auth,
+    );
+    let provider = Arc::new(move || {
+        urls()
+            .into_iter()
+            .filter_map(|s| {
+                let mut u = url::Url::parse(&s).ok()?;
+                let pairs = u
+                    .query_pairs()
+                    .filter(|(k, _)| k != "protocol")
+                    .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                    .collect::<Vec<_>>();
+                u.set_query(None);
+                u.query_pairs_mut()
+                    .extend_pairs(pairs)
+                    .append_pair("protocol", "ctox-v4");
+                Some(u.to_string())
+            })
+            .collect()
+    });
+    Ok((config, provider))
+}

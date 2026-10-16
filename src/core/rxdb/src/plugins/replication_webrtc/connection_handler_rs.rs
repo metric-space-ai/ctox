@@ -1300,6 +1300,25 @@ impl WebRTCRsConnectionHandler {
         ));
         Ok(())
     }
+    /// E50's dedicated browser listener. Existing configure_v4/native challenge
+    /// configuration is unchanged; a ticket callback is required explicitly.
+    pub fn configure_v4_browser(
+        &self,
+        config: super::index_mod::v4_router::V4RouterConfig,
+    ) -> RxResult<()> {
+        let _lifecycle = self.peer_lifecycle.lock();
+        if !self.peers.lock().is_empty() {
+            return Err(new_rx_error("ctox_v4_configuration_after_connect", None));
+        }
+        let mut router = self.v4_router.lock();
+        if router.is_some() {
+            return Err(new_rx_error("ctox_v4_already_configured", None));
+        }
+        *router = Some(Arc::new(
+            super::index_mod::v4_router::V4ConnectionRouter::new_browser(config)?,
+        ));
+        Ok(())
+    }
     fn v4_router(&self) -> Option<Arc<super::index_mod::v4_router::V4ConnectionRouter>> {
         self.v4_router.lock().clone()
     }

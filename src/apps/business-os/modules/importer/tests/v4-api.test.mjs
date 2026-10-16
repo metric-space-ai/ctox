@@ -1,7 +1,7 @@
 // importer gegen den eingefrorenen App-API-4.0-Kern-Stub (createStubKernel) in echtem Chromium.
 // Muster: modules/knowledge/tests/v4-api.test.mjs. Stub-Pfad aus CTOX_APP_API_STUB (Pflicht-Pin
-// ~/.local/state/shell-v4/stub-pins/68b83a3), read-only unter /__stub/ ausgeliefert.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/importer/tests/v4-api.test.mjs
+// ~/.local/state/shell-v4/stub-pins/f967baf), read-only unter /__stub/ ausgeliefert.
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf node --test src/apps/business-os/modules/importer/tests/v4-api.test.mjs
 // Playwright: aus PLAYWRIGHT_MODULE, sonst ~/Documents/ctox/src/apps/business-os/node_modules/playwright.
 // Screenshots (1280 und 420) landen in tests/shots/.
 import { test, before, after } from 'node:test';
@@ -12,9 +12,10 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const APP = 'importer';
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
@@ -55,6 +56,8 @@ before(async () => {
   page.on('response', (r) => { if (r.status() >= 400) console.error('[page] HTTP', r.status(), r.url()); });
   page.__errors = errors;
   await page.goto(base);
+  // FIXT-R: echte Routen/Rechte/Fremd-Collections von importer (v4/manifests/importer.manifest.json).
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes(APP));
   await page.evaluate(async (APP) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import(`/modules/${APP}/index.js`);
@@ -62,6 +65,10 @@ before(async () => {
     await kernel.ready;
     await kernel.sim.push('business_apps', [{ id: 'importer', title: 'App Importer' }, { id: 'radio-atlas', title: 'Radio Atlas' }]);
     await kernel.sim.settle();
+    // FIXT-R: Eigentümer der Fremd-Collections (ctox-platform, desktop) vor der eigenen Version, diese nach der
+    // business_apps-Zeile.
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion(APP, '1', { title: 'App Importer', manifestExtra: window.__routes });
     window.__k = kernel;
     window.__api = kernel.appApi(APP, '1');
     window.__zone = () => (kernel.status || kernel.statusZone).forApp(APP).get().filter((e) => e.source === 'app');

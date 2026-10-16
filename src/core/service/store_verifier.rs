@@ -58,6 +58,17 @@ impl CoreVerifier {
         Ok(inputs)
     }
     /// The caller supplies an authenticated Core actor, never a browser role.
+    pub(crate) fn verify_manifest(&self, canonical: &[u8], signature: &[u8]) -> Result<(), String> {
+        let _inputs = self.current()?;
+        ctox_sync::authority::auth::CanonicalInstancePacket::from_manifest_bytes(canonical)
+            .map_err(|_| "noncanonical manifest")?;
+        ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, &self.public)
+            .verify(canonical, signature)
+            .map_err(|_| "invalid manifest signature")?;
+        self.current()?;
+        Ok(())
+    }
+    /// The caller supplies an authenticated Core actor, never a browser role.
     /// Resolve the scope under the live policy fence, including expiry, exact
     /// device, collection and rights version. A valid old signature is not a grant.
     pub(crate) fn verify_scope(

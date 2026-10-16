@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { createStubKernel } from '../kernel.mjs';
+import { createStubKernel } from '../testkit.mjs';
 import {
   COMMAND_TRANSITIONS, COMMAND_IMMUTABLE_FIELDS, V2_TO_V4_PHASE, V2_TERMINAL_TO_V4, checkCommandTransition,
 } from '../command-state.mjs';

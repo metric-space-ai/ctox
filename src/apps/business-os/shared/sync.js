@@ -22,10 +22,10 @@ import {
   collectionTopic,
   nativeRxdbPeerReady,
   normalizeCollectionReadinessState,
-} from './sync-contract.js?v=20261016-shell-v2-v4-schema-contract';
+} from './sync-contract.js?v=20261016-v4-e51-prefs';
 // Explicit V3 compatibility until cutover; V4 admits its own hello session.
 import { getV3CapabilityToken as getBusinessOsCapabilityToken } from '../kernel/session.mjs';
-import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20261016-shell-v2-v4-schema-contract';
+import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20261016-v4-e51-prefs';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
@@ -35,7 +35,7 @@ const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 // those builds made the new tab follow the old, failed bridge forever. The
 // release epoch isolates only the local BroadcastChannel/Web Lock; both builds
 // still replicate through the same server-authoritative WebRTC room.
-const MULTI_TAB_COORDINATOR_EPOCH = '20261016-shell-v2-v4-schema-contract';
+const MULTI_TAB_COORDINATOR_EPOCH = '20261016-v4-e51-prefs';
 const CTOX_BROWSER_CAPABILITIES = [
   'ctox-control-plane-v1',
   'ctox-role-bound-signaling-v1',

@@ -98,11 +98,11 @@ fn manifest(version: u64) -> Value {
         "collections":{"runtime_records":{"class":"full","client_limit":0,"byte_budget":4096,
             "schema":{"version":version,"type":"object","primaryKey":"id","properties":{"id":{"type":"string"},"label":{"type":"string"}},"required":["id"]}}}})
 }
-struct Fixture {
-    stores: crate::service::store_runtime::DaemonStores,
-    readers: ctox_store::read_pool::ReadPool,
+pub(super) struct Fixture {
+    pub(super) stores: crate::service::store_runtime::DaemonStores,
+    pub(super) readers: ctox_store::read_pool::ReadPool,
     writer: WriterHandle,
-    platform: Platform,
+    pub(super) platform: Platform,
     public_key: Vec<u8>,
     stream_key: Arc<StreamKey>,
 
@@ -112,7 +112,7 @@ struct Fixture {
     _scope: crate::service::store_startup::ForegroundTestScope,
 }
 impl Fixture {
-    async fn new() -> Self {
+    pub(super) async fn new() -> Self {
         #[cfg(unix)]
         let scope = crate::service::store_startup::isolate_test_roots().await;
         let directory = tempfile::tempdir().unwrap();
@@ -297,7 +297,7 @@ impl Fixture {
         self.seed("app_drafts","draft",json!({"id":"draft","app_id":"unknown-at-boot","user_id":"owner","base_app_ver":base,
             "manifest_fields":content,"files":content["files"],"collections_schema":content["collections"]})).await;
     }
-    async fn read(&self, collection: &str, id: &str) -> Option<Value> {
+    pub(super) async fn read(&self, collection: &str, id: &str) -> Option<Value> {
         let collection = collection.to_owned();
         let id = id.to_owned();
         self.readers

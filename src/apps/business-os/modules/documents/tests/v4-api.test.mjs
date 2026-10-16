@@ -1,6 +1,6 @@
 // documents gegen den eingefrorenen App-API-4.0-Kern-Stub (createStubKernel, Pin CTOX_APP_API_STUB, read-only unter
 // /__stub/ ausgeliefert) in echtem Chromium. Muster: modules/knowledge/tests/v4-api.test.mjs.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/documents/tests/v4-api.test.mjs
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf node --test src/apps/business-os/modules/documents/tests/v4-api.test.mjs
 // Screenshots (1280 und 420) mit CTOX_DOCUMENTS_SHOTS=1 nach tests/shots/.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,8 +10,9 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
@@ -51,6 +52,8 @@ before(async () => {
   page.on('response', (r) => { if (r.status() >= 400 && !/\/app\.css$|base\.css$/.test(r.url())) console.error('[page] HTTP', r.status(), r.url()); });
   page.__errors = errors;
   await page.goto(base);
+  // FIXT-R: echte Routen/Rechte/Collections/Fremd-Collections von documents (v4/manifests/documents.manifest.json).
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes('documents'));
   await page.evaluate(async () => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     const format = await import('/modules/documents/vendor/document-format.mjs');
@@ -59,6 +62,10 @@ before(async () => {
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, actor: { role: 'admin', permissions: ['apps.source.edit'] } });
     await kernel.ready;
     await kernel.sim.push('business_apps', [{ id: 'ctox', title: 'CTOX' }, { id: 'documents', title: 'Dokumente' }]);
+    // FIXT-R: Eigentümer der Fremd-Collections (ctox-platform, knowledge, spreadsheets) vor der eigenen Version, diese
+    // nach der business_apps-Zeile.
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion('documents', '1.0.0', { title: 'Dokumente', manifestExtra: window.__routes });
     const md = (text) => format.importMarkdown(text).document;
     const doc = (id, title, updated) => ({
       id, title, filename: `${id}.md`, description: '', mime_type: 'text/markdown', status: 'Imported',

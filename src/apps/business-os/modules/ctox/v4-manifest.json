@@ -122,11 +122,6 @@
     {
       "from": "*",
       "type": "ctox.app.modify.request"
-    },
-    {
-      "from": "*",
-      "type": "business_os.chat.task",
-      "_basis": "Übergang alte Clients (Kern 15.10., §16.40); Löschplan L-35"
     }
   ],
   "exports": {

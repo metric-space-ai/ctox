@@ -5,27 +5,14 @@
       "handlers/_lib/crew.js"
     ],
     "agent.queue.control": [
-      "handlers/_lib/cockpit.js",
-      "handlers/ctox.queue.capacity.js",
-      "handlers/ctox.queue.pause.js"
-    ],
-    "agent.queue.task.claim": [
-      "handlers/ctox.crew.assign.js"
-    ],
-    "agent.queue.task.delete": [
-      "handlers/ctox.task.delete.js"
+      "handlers/_lib/cockpit.js"
     ],
     "agent.queue.task.for_command": [
       "handlers/_lib/tasks.js"
     ],
     "agent.queue.task.get": [
       "handlers/_lib/cockpit.js",
-      "handlers/_lib/tasks.js",
-      "handlers/ctox.task.delete.js"
-    ],
-    "agent.queue.task.update": [
-      "handlers/ctox.task.delete.js",
-      "handlers/ctox.task.update.js"
+      "handlers/_lib/tasks.js"
     ],
     "agent.task.enqueue": [
       "handlers/_lib/context-chat.js"
@@ -43,6 +30,9 @@
   "_source_dir": "src/apps/business-os/modules/ctox",
   "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
   "_todo": [
+    "command_rights ctox.crew.*: kein passender Handler.",
+    "command_rights ctox.queue.*: kein passender Handler.",
+    "command_rights ctox.task.*: kein passender Handler.",
     "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
     "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
     "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2).",
@@ -54,11 +44,8 @@
   "capabilities_required": [
     "agent.flow.record",
     "agent.queue.control",
-    "agent.queue.task.claim",
-    "agent.queue.task.delete",
     "agent.queue.task.for_command",
     "agent.queue.task.get",
-    "agent.queue.task.update",
     "agent.task.enqueue",
     "agent.task.get"
   ],
@@ -3759,22 +3746,6 @@
     }
   },
   "command_rights": {
-    "ctox.crew.*": {
-      "_basis": "v4-manifest.json; modules/ctox/V4-HANDLERS.md „Manifest-Rechte, die der Core vor dem Handler prüft“; project.jour_fixe.prepare/.create: Muster Core-zugestellter Typen (gen-manifest.mjs net.ingest → roles:[]), Begründung v4/tools/textdiaet/JF.md",
-      "_permission": "CrewManage",
-      "_todo": "Rollen/Zuweisung zu CrewManage aus policy.rs übertragen"
-    },
-    "ctox.queue.*": {
-      "_basis": "v4-manifest.json; modules/ctox/V4-HANDLERS.md „Manifest-Rechte, die der Core vor dem Handler prüft“; project.jour_fixe.prepare/.create: Muster Core-zugestellter Typen (gen-manifest.mjs net.ingest → roles:[]), Begründung v4/tools/textdiaet/JF.md",
-      "_permission": "Cockpit-Recht",
-      "_todo": "Rollen/Zuweisung zum Cockpit-Recht aus policy.rs übertragen"
-    },
-    "ctox.task.*": {
-      "_basis": "v4-manifest.json; modules/ctox/V4-HANDLERS.md „Manifest-Rechte, die der Core vor dem Handler prüft“; project.jour_fixe.prepare/.create: Muster Core-zugestellter Typen (gen-manifest.mjs net.ingest → roles:[]), Begründung v4/tools/textdiaet/JF.md",
-      "_permission": "CtoxTaskManage",
-      "_scope": "task",
-      "_todo": "Rollen/Zuweisung zu CtoxTaskManage (Task-Scope) aus policy.rs übertragen"
-    },
     "project.jour_fixe.create": {
       "_basis": "v4-manifest.json; modules/ctox/V4-HANDLERS.md „Manifest-Rechte, die der Core vor dem Handler prüft“; project.jour_fixe.prepare/.create: Muster Core-zugestellter Typen (gen-manifest.mjs net.ingest → roles:[]), Begründung v4/tools/textdiaet/JF.md",
       "_permission": "nur Core-Zustellung: Vorbereitungs-Zeitplan des Kerns legt neue Termine an (AppRuntimeIngress, app_id vom Kern aufgelöst, record_id = vom Absender vergebene meeting_id), nie die UI",
@@ -3789,10 +3760,6 @@
     }
   },
   "commands_in": [
-    {
-      "from": "*",
-      "type": "business_os.chat.task"
-    },
     {
       "from": "*",
       "type": "ctox.app.modify.request"
@@ -3873,7 +3840,6 @@
     "handlers/_lib/jour-fixe.js": "7bb9ed44420cda69409a3b3245d3eb8ab48b0ca6715ff4ec2d9335e8b6bffd84",
     "handlers/_lib/learning.js": "a8a67343cb070f7e786f93636fd2d69f29d9b5849d15d0945d60bd8c49868ab9",
     "handlers/_lib/tasks.js": "d89891eb18085705d8e5423082e70cb48c5e2d8a92d2d9d98284722e44699bec",
-    "handlers/business_os.chat.task.js": "4fdf814638b473ee7b646023afbef6f28fc518af398d001b222999be3a5aaae1",
     "handlers/ctox.app.modify.request.js": "5a38beceb1f88317d0a7a031487ea1d5bdd8a7c853b37fdead18f65382aebd03",
     "handlers/ctox.chat.task.complete.js": "5d65a2791b0ddb6c2e35208e39168ab1c4cddbf68bb6934af7872a625b0b378b",
     "handlers/ctox.chat.task.failed.js": "9dce4f4d3ab52a0994b8b61686df7e38254a82817e30a8aa7842fcd54606df8b",
@@ -3906,7 +3872,7 @@
     "prompts/chat-ask.md": "ad9b7ce9c87b66fbd23d29276b64ff6e3566d7dd73f27c6d0646e6a7edeabcbc",
     "prompts/chat-data.md": "401fe54de442034408ae1e4cafad1a342468dcbcc64ccca9c7a995d5385a38e3",
     "schema.js": "6978d657693d2a00412dacd7bca3f0b2f1c0a65236c07a82f6388530d7c9ff72",
-    "v4-manifest.json": "6de572c65101276b8e02d7d5c2d7ac72cd62b38dbc82a8b3b09afd60e347f2de"
+    "v4-manifest.json": "97c11d2cf6c3f630db0e7bb9cbb4d6edd3a9b99cf1fa6875fa56cb05d37ba45c"
   },
   "foreign_collections": {
     "business_commands": {
@@ -3980,26 +3946,10 @@
     }
   },
   "handlers": {
-    "business_os.chat.task": "handlers/business_os.chat.task.js",
     "ctox.app.modify.request": "handlers/ctox.app.modify.request.js",
     "ctox.chat.task": "handlers/ctox.chat.task.js",
     "ctox.chat.task.complete": "handlers/ctox.chat.task.complete.js",
     "ctox.chat.task.failed": "handlers/ctox.chat.task.failed.js",
-    "ctox.crew.assign": "handlers/ctox.crew.assign.js",
-    "ctox.crew.learning.confirm": "handlers/ctox.crew.learning.confirm.js",
-    "ctox.crew.learning.delete": "handlers/ctox.crew.learning.delete.js",
-    "ctox.crew.learning.update": "handlers/ctox.crew.learning.update.js",
-    "ctox.crew.member.create": "handlers/ctox.crew.member.create.js",
-    "ctox.crew.member.update": "handlers/ctox.crew.member.update.js",
-    "ctox.crew.memory.update": "handlers/ctox.crew.memory.update.js",
-    "ctox.queue.abort_turn": "handlers/ctox.queue.abort_turn.js",
-    "ctox.queue.block": "handlers/ctox.queue.block.js",
-    "ctox.queue.capacity": "handlers/ctox.queue.capacity.js",
-    "ctox.queue.pause": "handlers/ctox.queue.pause.js",
-    "ctox.queue.release": "handlers/ctox.queue.release.js",
-    "ctox.queue.retry": "handlers/ctox.queue.retry.js",
-    "ctox.task.delete": "handlers/ctox.task.delete.js",
-    "ctox.task.update": "handlers/ctox.task.update.js",
     "project.jour_fixe.create": "handlers/project.jour_fixe.create.js",
     "project.jour_fixe.prepare": "handlers/project.jour_fixe.prepare.js"
   },
@@ -4233,7 +4183,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "812c9813233a234bc168784059c89cdb78b2d9124588c9e310f15172004c38d8",
+    "base_hash": "859860ab9c63b17b946debf0a0ac9dc69928ca998959d3922c772d4e37125bba",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

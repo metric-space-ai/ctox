@@ -1,8 +1,8 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
-import { validateSupervisorRouteDisplayValue } from './workjet-supervisor-route-display-contract.generated.mjs?v=20261016-shell-v2-v4-schema-contract';
+import { validateSupervisorRouteDisplayValue } from './workjet-supervisor-route-display-contract.generated.mjs?v=20261016-v4-e51-prefs';
 
-import { validateSupervisorRouteComputationValue } from './workjet-supervisor-route-computation-contract.generated.mjs?v=20261016-shell-v2-v4-schema-contract';
+import { validateSupervisorRouteComputationValue } from './workjet-supervisor-route-computation-contract.generated.mjs?v=20261016-v4-e51-prefs';
 
 const ROUTE_READ = 'project.supervisor.route.read.v1';
 const ROUTE_CAPABILITIES = 'project.supervisor.route.capabilities.v1';

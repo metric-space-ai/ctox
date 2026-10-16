@@ -1,4 +1,4 @@
-export const CTOX_ERROR_CODES = ['invalid', 'forbidden', 'not_found', 'conflict', 'revoked', 'expired', 'quota', 'unavailable', 'stale_base', 'migration_required', 'locally_modified', 'token_expired', 'token_used'];
+export const CTOX_ERROR_CODES = ['revision_conflict', 'invalid', 'forbidden', 'not_found', 'conflict', 'revoked', 'expired', 'quota', 'unavailable', 'stale_base', 'migration_required', 'locally_modified', 'token_expired', 'token_used'];
 export class CtoxError extends Error {
   constructor(code, message, extra = {}) {
     super(message || code);

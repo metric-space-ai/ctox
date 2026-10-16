@@ -26,6 +26,7 @@ function launchContext(){
 }
 const server=createServer(async(req,res)=>{
  const path=decodeURIComponent(new URL(req.url,'http://local').pathname);requests.push(path);
+ if(/(?:^|\/)(?:fake-core[^/]*|testkit)\.mjs$/.test(path)){res.statusCode=404;res.end('Excluded from production slot');return;}
  try{
   if(path==='/api/business-os/launch-context'){
    if(req.headers.cookie!=='ctox_session=fixture'){res.statusCode=401;res.end('{}');return;}
@@ -65,7 +66,7 @@ try{
     return this.send('initial',{...m,sig:[...await signBytes(STREAM_DOMAIN+canonicalJson(m))]});}
   }
   // Native side: a second real RTCPeerConnection answering the browser's offer.
-  const lanes={'ctox-v4-control':0,'ctox-v4-commands':1,'ctox-v4-interactive':2,'ctox-v4-live':3,'ctox-v4-initial-sync':4,'ctox-v4-initial':4,'ctox-v4-transfer':5};
+  const lanes={'ctox-v4-control':0,'ctox-v4-commands':1,'ctox-v4-interactive':2,'ctox-v4-live':3,'ctox-v4-initial-sync':4,'ctox-v4-transfer':5};
   const nativePc=new RTCPeerConnection({iceServers:[]}),incoming={},buffered=[],labels=[];let native,toBrowser,signalLog=[];
   const nativeReady=new Promise(resolveReady=>{nativePc.ondatachannel=({channel})=>{labels.push(channel.label);const lane=lanes[channel.label];incoming[lane]=channel;channel.binaryType='arraybuffer';
    const hold=e=>buffered.push([channel,e.data,hold]);channel.addEventListener('message',hold);
@@ -106,11 +107,12 @@ try{
   return out;
  },{signingJwk,collections:COLLECTIONS});
  const expect=(cond,label)=>{if(!cond){failed=true;console.error('FAIL',label);}};
+ expect(!requests.some(path=>/(?:^|\/)(?:fake-core[^/]*|testkit)\.mjs$/.test(path)),'E52 boot never requests unserved fake-core or testkit modules');
  expect(result.online==='online','link online');expect(result.leader===true,'leader');expect(result.storage==='indexeddb','IndexedDB');
  expect(result.serviceWorker&&new URL(result.serviceWorker).pathname==='/sw.js'&&new URL(result.serviceWorker).searchParams.get('db')==='ctox-boot-browser-alice'&&new URL(result.swScope).pathname==='/','same-origin /sw.js?db=<kernel IDB> scope /');
  expect(result.helloOffer==='browser-device','native received the launch-context hello');expect(result.scopes===7,'seven verified scope tokens');
  expect(result.receipt==='accepted','write accepted over WebRTC');expect(result.page==='via real WebRTC','signed page verified and applied');
- expect(result.labels.length===6,'six reliable lane channels');expect(result.peerConnection,'real RTCPeerConnection');
+ expect(JSON.stringify(result.labels)===JSON.stringify(['ctox-v4-commands','ctox-v4-control','ctox-v4-initial-sync','ctox-v4-interactive','ctox-v4-live','ctox-v4-transfer']),'native reliable lane names');expect(result.peerConnection,'real RTCPeerConnection');
  expect(result.signalingQuery.token==='signal-token'&&result.signalingQuery.role==='browser'&&result.signalingQuery.room==='ctox-v4:boot-browser','signaling query from launch context');
  expect(result.unauthenticated==='true:launch_context_unavailable:unavailable','typed unauthenticated failure');
  expect(result.nativeErrors.length===0,'native fixture clean');expect(errors.length===0,'no page errors: '+errors.join('; '));

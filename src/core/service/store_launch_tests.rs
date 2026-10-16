@@ -22,7 +22,7 @@ async fn launch_auth_uses_current_user_on_retained_bos_reader() -> anyhow::Resul
         .await?
         .unwrap();
     assert_eq!(user.role, "user", "launch used the stale cookie role");
-    assert!(!user.is_admin);
+    assert!(!matches!(user.role.as_str(), "chef" | "admin"));
     bos.writer
         .submit(WriteJob::new(Default::default(), |tx| {
             tx.execute(
