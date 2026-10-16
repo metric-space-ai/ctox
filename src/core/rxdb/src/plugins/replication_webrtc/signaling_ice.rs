@@ -55,6 +55,12 @@ fn parse_servers(value: &Value) -> Option<Vec<RTCIceServer>> {
             {
                 return None;
             }
+            // Match the browser's case-insensitive URI acceptance and provide
+            // canonical schemes to the native gatherer.
+            let urls = urls.into_iter().map(|url| {
+                let (scheme, rest) = url.split_once(':').expect("validated ICE scheme");
+                format!("{}:{rest}", scheme.to_ascii_lowercase())
+            }).collect();
             let bounded = |key, max| match entry.get(key) {
                 None => Some(String::new()),
                 Some(Value::String(value)) if value.len() <= max => Some(value.clone()),
@@ -129,10 +135,11 @@ impl SignalingIceSnapshot {
             "source": "signaling", "receivedAtMs": self.received_at_ms,
             "revision": self.revision, "serverCount": self.servers.len(),
             "turnCredentialExpiresAtMs": self.expires_at_ms,
+            "turnCredentialExpiryKnown": self.expires_at_ms > 0,
             "turnCredentialsExpired": self.expires_at_ms > 0 && now >= self.expires_at_ms,
             "refreshAttemptAtMs": self.refresh_attempt_at_ms,
             "turnConfigured": self.servers.iter().any(|s| s.urls.iter().any(|u| is_turn(u))),
-            "credentialedTurnReady": usable.iter().any(|s| !s.username.is_empty() && !s.credential.is_empty() && s.urls.iter().any(|u| is_turn(u))),
+            "credentialedTurnReady": usable.iter().any(|s| !s.username.trim().is_empty() && !s.credential.trim().is_empty() && s.urls.iter().any(|u| is_turn(u))),
             "turnUdpConfigured": usable.iter().any(|s| s.urls.iter().any(|u| u.to_ascii_lowercase().starts_with("turn:") && !u.contains("transport=tcp"))),
             "turnTcpConfigured": usable.iter().any(|s| s.urls.iter().any(|u| u.to_ascii_lowercase().starts_with("turn:") && u.contains("transport=tcp"))),
             "turnTlsConfigured": usable.iter().any(|s| s.urls.iter().any(|u| u.to_ascii_lowercase().starts_with("turns:"))),

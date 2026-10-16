@@ -112,7 +112,7 @@ impl RTCIceGatherer {
                     component: 1,
                     ..Default::default()
                 },
-                rel_addr: String::new(),
+                rel_addr: if address.is_ipv4() { "0.0.0.0" } else { "::" }.to_owned(),
                 rel_port: 0,
                 url: None,
             }
