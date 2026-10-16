@@ -22,6 +22,7 @@ test('timings distinguish durable queue, dispatch, receipt and terminal completi
   const before = Date.now(), command = api.command('notes.timing', {secret:'must not enter metrics'});
   await command.local;
   const queued = k.metrics.commands.find(row => row.command_id === command.id);
+  assert.ok(queued, 'committed command absent from timing metrics');
   assert.ok(queued.queued >= before && queued.queued <= Date.now());
   assert.deepEqual([queued.sent,queued.acked,queued.completed],[null,null,null]);
   assert.deepEqual(k.metrics.get().commands, k.metrics.commands);

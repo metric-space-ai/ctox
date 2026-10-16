@@ -627,6 +627,7 @@ export function createKernel(opts = {}) {
         await putDoc(t, r);
         return r;
       });
+      if (ns === 'business_commands' && rec.pending) commandTimings.mark(id, 'queued');
       mirrorPut(rec);
       post({ type: 'docs', keys: [[ns, id]], local_seq: rec.lseq });
       post({ type: 'outbox' });
