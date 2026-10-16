@@ -65,10 +65,11 @@ def main():
             result['criteria'][index] = row
         save()
     def run(name, command, timeout=60, env=None):
-        row = dict(name=name, command=[str(v) for v in command], startedAtMs=int(time.time()*1000))
+        row = dict(name=name, command=[str(v) for v in command], startedAtMs=int(time.time()*1000),
+                   stderrLog=str(out/(name+'.stderr.log')))
         result['commands'].append(row)
-        with (out/(name+'.log')).open('w') as log:
-            child = subprocess.Popen(row['command'], stdout=log, stderr=log, start_new_session=True, env=env)
+        with (out/(name+'.log')).open('w') as log, (out/(name+'.stderr.log')).open('w') as err:
+            child = subprocess.Popen(row['command'], stdout=log, stderr=err, start_new_session=True, env=env)
             process = dict(owner=OWNER, pid=child.pid, pgid=child.pid, purpose=name, stopAfterSeconds=timeout)
             result['processes'].append(process)
             save()
