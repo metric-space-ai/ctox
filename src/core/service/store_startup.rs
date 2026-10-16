@@ -300,9 +300,13 @@ impl Foreground {
     async fn drain(mut self) -> Result<(), StoreError> {
         tokio::spawn(async move {
             loop {
-                match self.shutdown().await {
-                    Ok(()) => return Ok(()),
-                    Err(_) => {
+                let drained = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
+                    self.shutdown(),
+                ))
+                .await;
+                match drained {
+                    Ok(Ok(())) => return Ok(()),
+                    Ok(Err(_)) | Err(_) => {
                         eprintln!("ctox v4 drain pending; retaining engine/store custody");
                         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     }
