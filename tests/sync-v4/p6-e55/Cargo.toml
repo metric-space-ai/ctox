@@ -13,6 +13,7 @@ name = "contract"
 path = "contract.rs"
 [dependencies]
 ctox-store = { path = "../../../src/core/store" }
+rxdb = { package = "ctox-rxdb", path = "../../../src/core/rxdb" }
 base64 = "0.22"
 ring = "0.17"
 sha2 = "0.10"
@@ -22,3 +23,9 @@ serde_json = "1"
 tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
 [dev-dependencies]
 tempfile = "3"
+# Match the native data-plane crate's standalone dependency patches.
+[patch.crates-io]
+rtc-turn = { path = "../../../src/core/rxdb/patches/rtc-turn" }
+rtc-ice = { path = "../../../src/core/rxdb/patches/rtc-ice" }
+rtc = { path = "../../../src/core/rxdb/patches/rtc" }
+webrtc = { path = "../../../src/core/rxdb/patches/webrtc" }
