@@ -7,7 +7,8 @@ python3 tests/sync-v4/p6-review-4/run.py
 ```
 
 The default command exits nonzero while any requested contract is red.
-`--only r10|r13|r14|scenarios` narrows the run. `--expect-red` is for qualifying
+`--only regressions|r10|r13|r14|scenarios` narrows the run.
+ `--expect-red` is for qualifying
 known assertion failures; it does not declare the product or scenarios green.
 Individual exits, source bindings and complete logs remain under the order's
 `CARGO_TARGET_DIR/p6-review4-<UTC>/`.
@@ -26,8 +27,9 @@ Individual exits, source bindings and complete logs remain under the order's
   probe on the polling async thread is a failure; Store/reader/blocking threads
   remain allowed. `strace` is required; absence is unverified, never a pass.
 
-The root tests use temporary test-module wiring in the private lane checkout,
-restored in `finally`. No production fix or public test hook is installed.
+The root tests wire private test modules in a disposable source copy under the
+lane target. Supplied production sources remain untouched; copied wiring is
+also restored in `finally`. No production fix or public test hook is installed.
 R13 uses current policy sources when present. Train7 lacks #827, so on that
 baseline the runner explicitly composes its pinned policy/rights source from
 7f972f89b72aa4da7af19b5fae07d50f23c6a600 with the actual train CodingPanel.
