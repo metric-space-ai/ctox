@@ -34,6 +34,21 @@ pub trait SecretBackend: Send + Sync {
     fn list(&self) -> Result<Vec<SecretEntry>>;
 }
 
+impl<T: SecretBackend + ?Sized> SecretBackend for std::sync::Arc<T> {
+    fn put(&self, scope: &str, name: &str, value: &str, metadata: Value) -> Result<()> {
+        (**self).put(scope, name, value, metadata)
+    }
+    fn get(&self, scope: &str, name: &str) -> Result<Option<String>> {
+        (**self).get(scope, name)
+    }
+    fn delete(&self, scope: &str, name: &str) -> Result<()> {
+        (**self).delete(scope, name)
+    }
+    fn list(&self) -> Result<Vec<SecretEntry>> {
+        (**self).list()
+    }
+}
+
 /// In-memory backend for tests and dry runs.
 #[derive(Default)]
 pub struct MemorySecretBackend {

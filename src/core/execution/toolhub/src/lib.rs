@@ -10,6 +10,7 @@
 //!
 //! Concept vocabulary follows Composio (MIT, see LICENSE.upstream).
 
+pub mod builder;
 pub mod http;
 pub mod hub;
 pub mod ids;
