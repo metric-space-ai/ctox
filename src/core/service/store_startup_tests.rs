@@ -6,6 +6,93 @@ use ctox_store::{
 
 struct FixtureFactory;
 
+#[test]
+fn policy_bindings_keep_parallel_runtime_grants_separate() -> anyhow::Result<()> {
+    use crate::business_os::policy::{
+        self, BusinessOsActor, BusinessOsPermission, BusinessOsScope,
+    };
+    anyhow::ensure!(std::env::var_os("CTOX_STATE_ROOT").is_none());
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let mut threads = Vec::new();
+    for grant in [true, false] {
+        let barrier = barrier.clone();
+        threads.push(std::thread::spawn(move || -> anyhow::Result<()> {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(async move {
+                    let root = tempfile::Builder::new().prefix("c6r-").tempdir_in("/tmp")?;
+                    let fixture = ctox_store::testkit::StoreFixture::open(DbId::new(
+                        root.path().join("sync.sqlite3"),
+                    )?)
+                    .await?;
+                    let (writer, readers) = fixture.into_parts();
+                    let authority = policy::sync_rights::StoreRightsAuthority::attach(
+                        writer.clone(),
+                        "isolated-runtime".into(),
+                    )
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                    let rules = if grant {
+                        policy::base_release_rights(&[])
+                    } else {
+                        vec![]
+                    };
+                    authority
+                        .replace(rules, vec![])
+                        .await
+                        .map_err(anyhow::Error::msg)?;
+                    let admin = BusinessOsActor::new(Some("admin".into()), "admin");
+                    let scope = BusinessOsScope::workspace();
+                    assert!(
+                        !policy::evaluate(&admin, BusinessOsPermission::UsersManage, &scope)
+                            .allowed,
+                        "unbound runtime borrowed another runtime's rights"
+                    );
+                    barrier.wait().await;
+                    let binding = policy::bind_policy_authority(authority.clone())
+                        .map_err(anyhow::Error::msg)?;
+                    barrier.wait().await;
+                    assert_eq!(
+                        policy::evaluate(&admin, BusinessOsPermission::UsersManage, &scope).allowed,
+                        grant,
+                        "parallel runtime evaluated another Store's grants"
+                    );
+                    assert_eq!(
+                        tokio::task::spawn_blocking(move || policy::evaluate(
+                            &admin,
+                            BusinessOsPermission::UsersManage,
+                            &scope
+                        )
+                        .allowed)
+                        .await?,
+                        grant,
+                        "blocking Core caller lost its runtime context"
+                    );
+                    barrier.wait().await;
+                    drop(binding);
+                    assert!(
+                        !policy::evaluate(
+                            &BusinessOsActor::new(Some("admin".into()), "admin"),
+                            BusinessOsPermission::UsersManage,
+                            &BusinessOsScope::workspace()
+                        )
+                        .allowed
+                    );
+                    readers.shutdown().await?;
+                    writer.shutdown().await?;
+                    Ok(())
+                })
+        }));
+    }
+    for thread in threads {
+        thread
+            .join()
+            .map_err(|_| anyhow::anyhow!("policy context thread panicked"))??;
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn foreground_binds_current_store_policy_and_retires_it() -> anyhow::Result<()> {
     use crate::business_os::policy::{
