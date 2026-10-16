@@ -981,20 +981,54 @@ struct Z3UdpShape {
     task: tokio::task::JoinHandle<()>,
     packets: Arc<std::sync::atomic::AtomicU64>,
     drops: Arc<std::sync::atomic::AtomicU64>,
+    drop_next_data: Arc<std::sync::atomic::AtomicBool>,
+    injected: Arc<std::sync::atomic::AtomicU64>,
 }
 impl Z3UdpShape {
-    async fn start(server: std::net::SocketAddr, rtt_ms: u64) -> Self {
+    // Inspect only public TURN/DTLS record headers, never decrypted content.
+    // RFC8656: ChannelData has a 4-byte header; SEND uses the DATA TLV (0x0013).
+    fn is_dtls_application(packet: &[u8]) -> bool {
+        if packet.first().is_some_and(|byte| byte & 0xc0 == 0x40) {
+            return packet.get(4) == Some(&23); // DTLS application_data, not ICE STUN.
+        }
+        if !packet.starts_with(&[0, 0x16]) || packet.len() < 20 {
+            return false;
+        }
+        let mut offset = 20;
+        while let Some(header) = packet.get(offset..offset + 4) {
+            let kind = u16::from_be_bytes([header[0], header[1]]);
+            let len = u16::from_be_bytes([header[2], header[3]]) as usize;
+            let Some(data) = packet.get(offset + 4..offset + 4 + len) else {
+                return false;
+            };
+            if kind == 0x0013 {
+                return data.first() == Some(&23);
+            }
+            offset += 4 + len.div_ceil(4) * 4;
+        }
+        false
+    }
+    async fn start(server: std::net::SocketAddr, rtt_ms: u64, drop_every: u64) -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};
         let front = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let back = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
         back.connect(server).await.unwrap();
         let port = front.local_addr().unwrap().port();
-        let packets = Arc::new(AtomicU64::new(0)); let drops = Arc::new(AtomicU64::new(0));
-        let seen = packets.clone(); let lost = drops.clone();
+        let packets = Arc::new(AtomicU64::new(0));
+        let drops = Arc::new(AtomicU64::new(0));
+        let seen = packets.clone();
+        let lost = drops.clone();
+        let drop_next_data = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let injected = Arc::new(AtomicU64::new(0));
+        let armed = drop_next_data.clone();
+        let forced_drops = injected.clone();
         let task = tokio::spawn(async move {
-            let mut from_native = vec![0;65536]; let mut from_turn = vec![0;65536];
+            let mut from_native = vec![0; 65536];
+            let mut from_turn = vec![0; 65536];
             let mut native = None;
-            let mut delayed: futures::stream::FuturesUnordered<futures::future::BoxFuture<'static, (bool, Vec<u8>)>> = futures::stream::FuturesUnordered::new();
+            let mut delayed: futures::stream::FuturesUnordered<
+                futures::future::BoxFuture<'static, (bool, Vec<u8>)>,
+            > = futures::stream::FuturesUnordered::new();
             loop {
                 let packet = tokio::select! {
                     received = front.recv_from(&mut from_native), if delayed.len() < 128 => {
@@ -1009,32 +1043,69 @@ impl Z3UdpShape {
                         continue;
                     }
                 };
-                let n = seen.fetch_add(1, Ordering::Relaxed)+1;
-                if n%100 == 0 {lost.fetch_add(1, Ordering::Relaxed); continue;}
+                let n = seen.fetch_add(1, Ordering::Relaxed) + 1;
+                // Only TURN ChannelData / SEND indications carry the encrypted
+                // peer datagram. Allocation, binding and consent STUN stay intact.
+                let forced = packet.0
+                    && armed.load(Ordering::SeqCst)
+                    && Self::is_dtls_application(&packet.1)
+                    && armed.swap(false, Ordering::SeqCst);
+                if forced {
+                    forced_drops.fetch_add(1, Ordering::Relaxed);
+                }
+                if forced || (drop_every > 0 && n % drop_every == 0) {
+                    lost.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
                 delayed.push(Box::pin(async move {
                     tokio::time::sleep(Duration::from_micros(rtt_ms * 1000 / 4)).await;
                     packet
                 }));
             }
         });
-        Self {port,task,packets,drops}
+        Self {
+            port,
+            task,
+            packets,
+            drops,
+            drop_next_data,
+            injected,
+        }
     }
 }
-impl Drop for Z3UdpShape {fn drop(&mut self) {self.task.abort();}}
+impl Drop for Z3UdpShape {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
 
 static Z3_CLOCK: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-fn z3_elapsed_ms() -> f64 {Z3_CLOCK.get_or_init(Instant::now).elapsed().as_secs_f64()*1000.0}
+fn z3_elapsed_ms() -> f64 {
+    Z3_CLOCK.get_or_init(Instant::now).elapsed().as_secs_f64() * 1000.0
+}
 fn z3_app_timeline(id: u64, event: &str) {
-    eprintln!("SCTP_APP {}",serde_json::json!({"id":id,"event":event,"ms":z3_elapsed_ms()}));
+    eprintln!(
+        "SCTP_APP {}",
+        serde_json::json!({"id":id,"event":event,"ms":z3_elapsed_ms()})
+    );
 }
 struct Z3SctpLogger;
 static Z3_SCTP_LOGGER: Z3SctpLogger = Z3SctpLogger;
 impl log::Log for Z3SctpLogger {
-    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {metadata.target()=="ctox_sctp_timeline" || metadata.level()<=log::Level::Warn}
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.target() == "ctox_sctp_timeline" || metadata.level() <= log::Level::Warn
+    }
     fn log(&self, record: &log::Record<'_>) {
         if self.enabled(record.metadata()) {
-            let prefix = if record.target()=="ctox_sctp_timeline" {"SCTP_TIMELINE"} else {"TURN_TRANSPORT_WARNING"};
-            eprintln!("{prefix} {}",serde_json::json!({"ms":z3_elapsed_ms(),"target":record.target(),"message":record.args().to_string()}));
+            let prefix = if record.target() == "ctox_sctp_timeline" {
+                "SCTP_TIMELINE"
+            } else {
+                "TURN_TRANSPORT_WARNING"
+            };
+            eprintln!(
+                "{prefix} {}",
+                serde_json::json!({"ms":z3_elapsed_ms(),"target":record.target(),"message":record.args().to_string()})
+            );
         }
     }
     fn flush(&self) {}
@@ -1043,25 +1114,39 @@ impl log::Log for Z3SctpLogger {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "isolated coturn UDP listener and unprivileged netns required"]
 async fn z3_p4_turn_loss_rtt() {
-    use webrtc::peer_connection::{RTCConfigurationBuilder,RTCIceServer,RTCIceTransportPolicy};
     use std::sync::atomic::Ordering;
+    use webrtc::peer_connection::{RTCConfigurationBuilder, RTCIceServer, RTCIceTransportPolicy};
     assert_eq!(std::env::var("Z3_OWN_NETNS").as_deref(), Ok("1"));
     let _ = rustls::crypto::ring::default_provider().install_default();
     let _ = log::set_logger(&Z3_SCTP_LOGGER);
     log::set_max_level(log::LevelFilter::Trace);
-    let rtt_ms = std::env::var("Z3_RTT_MS").unwrap_or_else(|_| "150".into()).parse::<u64>().unwrap();
-    assert!([20,150,600].contains(&rtt_ms));
+    let rtt_ms = std::env::var("Z3_RTT_MS")
+        .unwrap_or_else(|_| "150".into())
+        .parse::<u64>()
+        .unwrap();
+    assert!([20, 150, 600].contains(&rtt_ms));
+    // Separate deterministic runtime mutation probe, not the M4 1%-loss gate.
+    // Dropping a quiescent control flight makes the RTO dependency observable
+    // without relying on a random loss falling into the p95 sample.
+    let rto_proof = std::env::var("Z3_RTO_PROOF").as_deref() == Ok("1");
+    if rto_proof {
+        assert_eq!(rtt_ms, 20);
+    }
+    let drop_every = if rto_proof { 0 } else { 100 };
     // This benchmark serializes three application roundtrips per probe. A
     // 600-ms bulk path needs a longer observation window, not a runtime timeout.
     let observation_seconds = if rtt_ms == 600 { 600 } else { 180 };
     // Full acceptance always defaults to 64. A smaller explicitly tagged sample
     // can diagnose a high-RTT path within a bounded task; it cannot pass the gate.
-    let probes = std::env::var("Z3_PROBE_COUNT").map(|value| value.parse::<u64>().unwrap()).unwrap_or(64);
-    assert!([16,64].contains(&probes));
+    let probes = std::env::var("Z3_PROBE_COUNT")
+        .map(|value| value.parse::<u64>().unwrap())
+        .unwrap_or(64);
+    assert!([16, 64].contains(&probes));
     tokio::time::timeout(Duration::from_secs(observation_seconds), async {
         let bulk_enabled = std::env::var("Z3_TURN_BULK").as_deref() == Ok("1");
         let server: std::net::SocketAddr = std::env::var("Z3_TURN_LISTENER").unwrap().parse().unwrap();
-        let a = Z3UdpShape::start(server,rtt_ms).await; let b = Z3UdpShape::start(server,rtt_ms).await;
+        assert!(!rto_proof || !bulk_enabled, "RTO proof must isolate a sparse control flight");
+        let a = Z3UdpShape::start(server,rtt_ms,drop_every).await; let b = Z3UdpShape::start(server,rtt_ms,drop_every).await;
         let configuration = |port| RTCConfigurationBuilder::new()
             .with_ice_transport_policy(RTCIceTransportPolicy::Relay)
             .with_ice_servers(vec![RTCIceServer {urls:vec![format!("turn:127.0.0.1:{port}?transport=udp")],username:"z3-fixture".into(),credential:"z3-fixture-only".into()}]).build();
@@ -1108,6 +1193,23 @@ async fn z3_p4_turn_loss_rtt() {
                 let Some(Incoming::Reliable{bytes,delivery:Some(token),..})=incoming.recv().await else {panic!("TURN application message missing");};
                 assert_eq!(bytes,id.to_be_bytes()); effects.push(id); token.acknowledge().unwrap();
             }
+            if rto_proof {
+                tokio::time::timeout(Duration::from_secs(5),async {
+                    loop {
+                        if [(&sa,&pair.source),(&sb,&pair.target)].iter().all(|(session,scheduler)|
+                            [Lane::Commands,Lane::Control].iter().all(|lane|
+                                session.replay(scheduler.session.as_ref().unwrap().generation,*lane).unwrap().is_empty())) {break;}
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                }).await.expect("quiescent control flight must drain earlier E14 delivery");
+                // Flush SCTP SACKs too; there is no bulk in this proof. The next
+                // outgoing TURN peer datagram is the single-frame control probe.
+                tokio::time::sleep(Duration::from_millis(2*rtt_ms+50)).await;
+                if id % 8 == 0 {
+                    a.drop_next_data.store(true,Ordering::SeqCst);
+                    z3_app_timeline(id,"drop_armed");
+                }
+            }
             let clock=Instant::now();
             let probe = [b"PROB".as_slice(),id.to_be_bytes().as_slice()].concat();
             z3_app_timeline(id,"send");
@@ -1133,9 +1235,14 @@ async fn z3_p4_turn_loss_rtt() {
         let packets=a.packets.load(Ordering::Relaxed)+b.packets.load(Ordering::Relaxed);
         let drops=a.drops.load(Ordering::Relaxed)+b.drops.load(Ordering::Relaxed);
         assert!(drops>0,"loss shaper must drop actual network datagrams");
+        let injected = a.injected.load(Ordering::Relaxed)+b.injected.load(Ordering::Relaxed);
+        if rto_proof {
+            assert_eq!(injected,probes/8,"each armed control flight must lose one actual TURN datagram");
+            assert_eq!(drops,injected,"RTO proof has no background random loss");
+        }
         latency.sort_by(f64::total_cmp);let p95=latency[(latency.len()*95/100).min(latency.len()-1)];
         let p99=latency[(latency.len()*99/100).min(latency.len()-1)];
         pair.close().await;
-        eprintln!("Z3_P4_TURN {}",serde_json::json!({"scenario":3,"relay_only":true,"candidates_a":candidates_a,"candidates_b":candidates_b,"shim":"UDP at TURN control legs","nominal_rtt_ms":rtt_ms,"drop_every":100,"datagrams":packets,"dropped_datagrams":drops,"probes":probes,"full_workload":probes==64,"sent":2*probes,"explicit_send_results":2*probes,"delivery_acknowledged":2*probes,"lost":0,"duplicated":0,"control_p95_ms":p95,"control_p99_ms":p99,"control_roundtrip_ms":latency,"bulk_enabled":bulk_enabled,"bulk_bytes":bulk_sent*16_000,"bulk_seconds":bulk_seconds,"bulk_mb_s":bulk_sent as f64*16_000.0/bulk_seconds/1_000_000.0}));
+        eprintln!("Z3_P4_TURN {}",serde_json::json!({"scenario":3,"relay_only":true,"candidates_a":candidates_a,"candidates_b":candidates_b,"shim":"UDP at TURN control legs","nominal_rtt_ms":rtt_ms,"drop_every":drop_every,"rto_proof":rto_proof,"injected_datagrams":injected,"datagrams":packets,"dropped_datagrams":drops,"probes":probes,"full_workload":probes==64,"sent":2*probes,"explicit_send_results":2*probes,"delivery_acknowledged":2*probes,"lost":0,"duplicated":0,"control_p95_ms":p95,"control_p99_ms":p99,"control_roundtrip_ms":latency,"bulk_enabled":bulk_enabled,"bulk_bytes":bulk_sent*16_000,"bulk_seconds":bulk_seconds,"bulk_mb_s":bulk_sent as f64*16_000.0/bulk_seconds/1_000_000.0}));
     }).await.expect("TURN loss RTT fixture deadline");
 }
