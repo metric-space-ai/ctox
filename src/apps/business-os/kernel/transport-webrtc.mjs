@@ -17,7 +17,7 @@ export class WebRTCKernelTransport extends KernelTransport {
  async connect(identity,events){
   if(this.events)throw new CtoxError('conflict','Transport already bound');this.identity={...identity};this.events=events;this.started=this.now();
   try {
-   const hello=typeof this.options.hello==='function'?await this.options.hello(identity):this.options.hello;
+   const hello=this.options.authSession?await this.options.authSession.hello(identity):typeof this.options.hello==='function'?await this.options.hello(identity):this.options.hello;
    if(hello?.instance_id!==identity.instanceId)throw new CtoxError('forbidden','Hello identity mismatch');
    if(typeof this.options.verifyPackage!=='function')throw new CtoxError('forbidden','Authenticated package verifier required');
    this.hello=new HelloConnection(hello,state=>{if(state.state==='closed'&&state.rejection)this.fail(new CtoxError('unavailable',`hello rejected: ${state.rejection.reason}`));},{handshakeTimeoutMs:this.options.handshakeTimeoutMs??10000});
@@ -55,6 +55,7 @@ export class WebRTCKernelTransport extends KernelTransport {
    const selected=this.hello.receive(JSON.stringify(contract));
    if(selected.type!=='hello_ok')throw new CtoxError('unavailable','Negotiation rejected');
    if(selected.transport.codec==='zstd'&&!this.options.codecs?.zstd)throw new CtoxError('unavailable','Negotiated codec adapter unavailable');
+   await this.options.authSession?.acceptHello(selected);
    this.session=selected;this.scheduler.configure(selected.transport);this.ingress.codec=selected.transport.codec;this.ingress.frameBytes=selected.transport.frame_bytes;
    if(core_time_ms!==undefined){if(!Number.isFinite(core_time_ms)||core_time_ms<0)throw new CtoxError('invalid','Invalid Core clock');this.offset=core_time_ms-(this.started+this.now())/2;}
    this.rtt=this.now()-this.started;this.events.session?.({epoch:selected.epoch,head_seq:selected.head_seq,rights_ver:selected.rights_ver});this.hello.activate();this.events.link({state:'online',rtt_ms:this.now()-this.started,relay:!!this.endpoint.relay});this.readyState.resolve(selected);return;
@@ -92,7 +93,7 @@ export class WebRTCKernelTransport extends KernelTransport {
    default:throw new CtoxError('invalid',`Unknown V4 message ${message.type}`);
   }
  }
- async scope(collection){await this.ready;const resolved=await this.options.resolveScope?.(collection,this.session);if(!resolved?.scope_hash || !Number.isSafeInteger(resolved.gen))throw new CtoxError('forbidden','Canonical subscription scope missing');return {...resolved,collection,epoch:this.session.epoch};}
+ async scope(collection){await this.ready;if(this.options.authSession)return this.options.authSession.scope(collection);const resolved=await this.options.resolveScope?.(collection,this.session);if(!resolved?.scope_hash || !Number.isSafeInteger(resolved.gen))throw new CtoxError('forbidden','Canonical subscription scope missing');return {...resolved,collection,epoch:this.session.epoch};}
  async subscribe(scope){
   await this.ready;const sub={...scope,epoch:this.session.epoch},seq=decimalSeq(sub.checkpoint_seq??'0');this.scopes.set(scope.collection,sub);
   const checkpoint=seq==='0'?null:{instance_id:this.session.instance_id,participant:sub.participant??this.identity.userId,collection:sub.collection,scope_hash:sub.scope_hash,gen:sub.gen,epoch:sub.epoch,seq};
@@ -146,7 +147,7 @@ export class WebRTCKernelTransport extends KernelTransport {
  }
  fail(error){if(this.closed)return;this.events?.status?.('kernel',{level:'error',code:'transport.failed',text:error.message});this.events?.link({state:'offline',rtt_ms:0,relay:false});this.readyState.reject(error);this.close();}
  close(){
-  if(this.closed)return;this.closed=true;this.hello?.close();this.scheduler?.close();this.ingress?.close();
+  if(this.closed)return;this.closed=true;this.options.authSession?.close();this.hello?.close();this.scheduler?.close();this.ingress?.close();
   for(const [t,n,f]of this.listeners)t.removeEventListener(n,f);this.listeners=[];
   for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(new CtoxError('unavailable','Transport closed'));}this.pending.clear();
   this.readyState.reject(new CtoxError('unavailable','Transport closed'));

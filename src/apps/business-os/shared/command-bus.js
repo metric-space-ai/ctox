@@ -1,3 +1,4 @@
+import {acquireBusinessOsCapabilityToken, resetV3CapabilityTokenCacheForTests} from '../kernel/session.mjs';
 import { withTimeout } from './async-timeout.js';
 import { CTOX_COMMAND_AUTHORIZATION } from './command-lifecycle.generated.js';
 import {
@@ -24,12 +25,9 @@ const COMMAND_FOLLOWER_SYNC_FLUSH_TIMEOUT_MS = 45000;
 // the normal control-plane request budget on a large Business OS store. Keep a
 // bounded cold-start window and, below, share one request across all callers so
 // bootstrap/maintenance retries cannot create a server-side request storm.
-const COMMAND_CAPABILITY_TIMEOUT_MS = 120000;
-const COMMAND_CAPABILITY_TERMINAL_NEGATIVE_CACHE_MS = 10000;
 // Transient failures only need enough suppression to avoid an immediate request
 // storm. The submit retry waits slightly longer, so it always performs a fresh
 // acquisition instead of re-reading this short-lived failure.
-const COMMAND_CAPABILITY_TRANSIENT_ANTI_STORM_MS = 100;
 const COMMAND_CAPABILITY_REFRESH_RETRY_BACKOFF_MS = 125;
 const MAX_COMMAND_DOCUMENT_BYTES = 6 * 1024 * 1024;
 const MAX_SIMULTANEOUS_COMMAND_WATCHERS = 128;
@@ -245,129 +243,8 @@ export function createCommandBus({ db, sync = null, session = null } = {}) {
 // token rather than the (spoofable) browser-asserted actor. The generated v2
 // contract currently requires this capability for every mutation and forbids
 // an unauthorised offline intent. Cached until just before expiry.
-let capabilityTokenCache = {
-  token: null,
-  expiresAtMs: 0,
-  failureUntilMs: 0,
-  failureCode: '',
-  failureTransient: false,
-};
-let capabilityTokenRequestInFlight = null;
-
-export async function getBusinessOsCapabilityToken({
-  timeoutMs = COMMAND_CAPABILITY_TIMEOUT_MS,
-  refresh = false,
-} = {}) {
-  const result = await acquireBusinessOsCapabilityToken({ timeoutMs, refresh });
-  return result.token;
-}
-
-async function acquireBusinessOsCapabilityToken({
-  timeoutMs = COMMAND_CAPABILITY_TIMEOUT_MS,
-  refresh = false,
-} = {}) {
-  const now = Date.now();
-  if (!refresh && capabilityTokenCache.token && now < capabilityTokenCache.expiresAtMs - 60_000) {
-    return capabilityAcquisitionResult({ token: capabilityTokenCache.token });
-  }
-  if (now < capabilityTokenCache.failureUntilMs) {
-    return capabilityAcquisitionResult({
-      code: capabilityTokenCache.failureCode,
-      transient: capabilityTokenCache.failureTransient,
-    });
-  }
-  const injected = injectedBusinessOsCapabilityToken(now);
-  if (injected?.token) {
-    capabilityTokenCache = {
-      ...injected,
-      failureUntilMs: 0,
-      failureCode: '',
-      failureTransient: false,
-    };
-    return capabilityAcquisitionResult({ token: capabilityTokenCache.token });
-  }
-  // A native peer reconfiguration can change the grant epoch without expiring
-  // the token. A protocol handshake renews HTTP-session authority; concurrent
-  // reads/submits join that request instead of consuming the old positive cache.
-  // Device-injected authority above stays host-owned and negative caches remain
-  // in force. Renewal never authorizes a locally asserted identity.
-  capabilityTokenCache.token = null;
-  capabilityTokenCache.expiresAtMs = 0;
-  if (!capabilityTokenRequestInFlight) {
-    capabilityTokenRequestInFlight = requestBusinessOsCapabilityToken(timeoutMs);
-  }
-  const inFlight = capabilityTokenRequestInFlight;
-  try {
-    return await inFlight;
-  } finally {
-    if (capabilityTokenRequestInFlight === inFlight) {
-      capabilityTokenRequestInFlight = null;
-    }
-  }
-}
-
-async function requestBusinessOsCapabilityToken(timeoutMs) {
-  const abortController = typeof AbortController === 'function' ? new AbortController() : null;
-  try {
-    const res = await withTimeout(
-      fetch('/api/business-os/auth/capability', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        cache: 'no-store',
-        signal: abortController?.signal,
-      }),
-      timeoutMs,
-      {
-        code: 'native_unavailable',
-        message: 'Business OS capability request timed out.',
-        onTimeout: () => abortController?.abort(),
-      },
-    );
-    if (!res.ok) {
-      const status = Number(res.status || 0);
-      const transient = !isTerminalCapabilityHttpStatus(status);
-      const code = `capability_http_${status || 'unknown'}`;
-      rememberCapabilityFailure(code, { transient });
-      return capabilityAcquisitionResult({ code, transient });
-    }
-    const data = await res.json();
-    if (data && data.capability_token) {
-      capabilityTokenCache = {
-        token: data.capability_token,
-        expiresAtMs: Number(data.expires_at_ms) || Date.now() + 11 * 60 * 60 * 1000,
-        failureUntilMs: 0,
-        failureCode: '',
-        failureTransient: false,
-      };
-      return capabilityAcquisitionResult({ token: capabilityTokenCache.token });
-    }
-    // A successful HTTP response without a token is not an authorization
-    // rejection signal. Stay fail-closed, but classify the malformed control-
-    // plane response as transient rather than pinning all submits for 10 s.
-    rememberCapabilityFailure('capability_missing', { transient: true });
-    return capabilityAcquisitionResult({ code: 'capability_missing', transient: true });
-  } catch (error) {
-    // fetch rejects for timeout/abort and network failures. HTTP authorization
-    // rejection is handled above from its concrete 4xx status.
-    const code = String(error?.code || error?.name || 'capability_unavailable');
-    rememberCapabilityFailure(code, { transient: true });
-    return capabilityAcquisitionResult({ code, transient: true });
-  }
-}
-
-export function resetBusinessOsCapabilityTokenCacheForTests() {
-  capabilityTokenCache = {
-    token: null,
-    expiresAtMs: 0,
-    failureUntilMs: 0,
-    failureCode: '',
-    failureTransient: false,
-  };
-  capabilityTokenRequestInFlight = null;
-  resetCommandRoundtripTimingForTests();
-}
-
+export {getV3CapabilityToken as getBusinessOsCapabilityToken, getV3CapabilityToken as getCapabilityToken} from '../kernel/session.mjs';
+export function resetBusinessOsCapabilityTokenCacheForTests() { resetV3CapabilityTokenCacheForTests(); resetCommandRoundtripTimingForTests(); }
 export function resetCommandRoundtripTimingForTests() {
   commandTimingProbes.clear();
 }
@@ -383,52 +260,6 @@ export function consumeCommandRoundtripTiming(commandId) {
 export function peekCommandRoundtripTiming(commandId) {
   const sample = commandTimingProbes.get(String(commandId || ''));
   return sample ? cloneCommandTimingSample(sample) : null;
-}
-
-function capabilityAcquisitionResult({ token = null, code = '', transient = false } = {}) {
-  return {
-    token: token || null,
-    code: String(code || ''),
-    transient: Boolean(transient),
-  };
-}
-
-function isTerminalCapabilityHttpStatus(status) {
-  return status >= 400 && status < 500;
-}
-
-function rememberCapabilityFailure(code, { transient }) {
-  const cacheMs = transient
-    ? COMMAND_CAPABILITY_TRANSIENT_ANTI_STORM_MS
-    : COMMAND_CAPABILITY_TERMINAL_NEGATIVE_CACHE_MS;
-  capabilityTokenCache = {
-    token: null,
-    expiresAtMs: 0,
-    failureUntilMs: Date.now() + cacheMs,
-    failureCode: String(code || 'capability_unavailable'),
-    failureTransient: Boolean(transient),
-  };
-}
-
-export const getCapabilityToken = getBusinessOsCapabilityToken;
-
-function injectedBusinessOsCapabilityToken(now = Date.now()) {
-  const candidates = [
-    globalThis.CTOX_BUSINESS_OS_SESSION,
-    globalThis.ctoxBusinessOsSession,
-    globalThis.ctoxBusinessOsLaunch?.session,
-    globalThis.CTOX_DESKTOP_SESSION,
-    globalThis.ctoxDesktop?.session,
-  ].filter((item) => item && typeof item === 'object');
-  for (const candidate of candidates) {
-    const token = String(candidate.capability_token || candidate.capabilityToken || '').trim();
-    if (!token) continue;
-    const expiresAtMs = Number(candidate.capability_expires_at_ms || candidate.capabilityExpiresAtMs || 0)
-      || now + 11 * 60 * 60 * 1000;
-    if (expiresAtMs <= now + 60_000) continue;
-    return { token, expiresAtMs };
-  }
-  return null;
 }
 
 async function acquireCapabilityTokenForSubmit({ refresh = false } = {}) {
