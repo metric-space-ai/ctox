@@ -2,7 +2,7 @@
 """Detached lane job: real kernel outbox -> native P8 + committed policy -> kernel journal."""
 import argparse,hashlib,json,os,shutil,signal,subprocess,time
 from pathlib import Path
-P=argparse.ArgumentParser();P.add_argument('--deadline',type=float,required=True);P.add_argument('--reuse-native');a=P.parse_args()
+P=argparse.ArgumentParser();P.add_argument('--deadline',type=float,required=True);P.add_argument('--reuse-native');P.add_argument('--outbound-only',action='store_true');a=P.parse_args()
 ROOT=Path(__file__).resolve().parents[3];HERE=Path(__file__).resolve().parent
 assert os.environ.get('BUILD_LANE_BIN') and os.environ.get('CARGO_TARGET_DIR'),'canonical lane required'
 OUT=Path(os.environ['CARGO_TARGET_DIR'])/('p6-fields-'+time.strftime('%Y%m%dT%H%M%SZ',time.gmtime()));OUT.mkdir()
@@ -64,28 +64,31 @@ try:
  else:baseline=build('baseline-build')
  retained=OUT/'native-baseline';shutil.copy2(baseline,retained)
  record['binary']={'path':str(retained),'sha256':sha(retained)};save()
- assert case('baseline-patch','patch',retained)==0,'peer patch contract failed'
- assert case('baseline-guard','guard',retained)==0,'explicit server guard contract failed'
- record['stale_intent_exit']=case('baseline-stale','stale',retained);save()
- kernel=ROOT/'src/apps/business-os/kernel/kernel.mjs';before=kernel.read_bytes()
- old=b'collection: ns, id, op, body: clean, base_rev:';assert before.count(old)==1
- try:
-  kernel.write_bytes(before.replace(old,b'collection: ns, id, op, body: st.data, base_rev:'))
-  record.setdefault('mutation_sources',[]).append({'name':'kernel-whole-document','path':str(kernel.relative_to(ROOT)),'line':before[:before.index(old)].count(b'\n')+1});save()
-  case('mutation-kernel-whole-document','patch',retained,'kernel patch carried stale server-owned fields')
- finally:kernel.write_bytes(before)
- for label,path,old,new,mode,marker in [
-  ('native-guard','src/core/store/manifest_rules.rs','return Err("command_only_field".into());','return Ok(());','guard','server-owned mutation lost specific rejection'),
-  ('native-merge','src/core/store/write_contract.rs','if client == base {\n            return server.cloned();','if client == base {\n            return client.cloned();','patch','peer-only patch was rejected after concurrent native update'),
-  ('native-journal','src/core/store/subscription.rs','    tx.execute("INSERT INTO _ops(op_id,participant,collection,id,gen,request_json,result_json,result_rev,created_at_ms,expires_at_ms)','    if result.reason.as_deref() == Some("command_only_field") { return Ok(()); }\n    tx.execute("INSERT INTO _ops(op_id,participant,collection,id,gen,request_json,result_json,result_rev,created_at_ms,expires_at_ms)','guard','server-owned rejection missing from _ops')]:
-  p=ROOT/path;original=p.read_bytes();text=original.decode();assert text.count(old)==1,label
+ if not a.outbound_only:
+  assert case('baseline-patch','patch',retained)==0,'peer patch contract failed'
+  assert case('baseline-guard','guard',retained)==0,'explicit server guard contract failed'
+  record['stale_intent_exit']=case('baseline-stale','stale',retained);save()
+  kernel=ROOT/'src/apps/business-os/kernel/kernel.mjs';before=kernel.read_bytes()
+  old=b'collection: ns, id, op, body: clean, base_rev:';assert before.count(old)==1
   try:
-   p.write_text(text.replace(old,new));record['mutation_sources'].append({'name':label,'path':path,'line':text[:text.index(old)].count('\n')+1});save()
-   mutant=build('build-'+label);case('mutation-'+label,mode,mutant,marker)
-  finally:p.write_bytes(original)
- assert case('restored-patch','patch',retained)==0
- assert case('restored-guard','guard',retained)==0
- record['pass']=record['stale_intent_exit']==0
+   kernel.write_bytes(before.replace(old,b'collection: ns, id, op, body: st.data, base_rev:'))
+   record.setdefault('mutation_sources',[]).append({'name':'kernel-whole-document','path':str(kernel.relative_to(ROOT)),'line':before[:before.index(old)].count(b'\n')+1});save()
+   case('mutation-kernel-whole-document','patch',retained,'kernel patch carried stale server-owned fields')
+  finally:kernel.write_bytes(before)
+  for label,path,old,new,mode,marker in [
+   ('native-guard','src/core/store/manifest_rules.rs','return Err("command_only_field".into());','return Ok(());','guard','server-owned mutation lost specific rejection'),
+   ('native-merge','src/core/store/write_contract.rs','if client == base {\n            return server.cloned();','if client == base {\n            return client.cloned();','patch','peer-only patch was rejected after concurrent native update'),
+   ('native-journal','src/core/store/subscription.rs','    tx.execute("INSERT INTO _ops(op_id,participant,collection,id,gen,request_json,result_json,result_rev,created_at_ms,expires_at_ms)','    if result.reason.as_deref() == Some("command_only_field") { return Ok(()); }\n    tx.execute("INSERT INTO _ops(op_id,participant,collection,id,gen,request_json,result_json,result_rev,created_at_ms,expires_at_ms)','guard','server-owned rejection missing from _ops')]:
+   p=ROOT/path;original=p.read_bytes();text=original.decode();assert text.count(old)==1,label
+   try:
+    p.write_text(text.replace(old,new));record['mutation_sources'].append({'name':label,'path':path,'line':text[:text.index(old)].count('\n')+1});save()
+    mutant=build('build-'+label);case('mutation-'+label,mode,mutant,marker)
+   finally:p.write_bytes(original)
+  assert case('restored-patch','patch',retained)==0
+  assert case('restored-guard','guard',retained)==0
+  record['pass']=record['stale_intent_exit']==0
+ code,_=run('outbound-real-guards',[retained,'p6_fields_outbound_','--nocapture','--test-threads=1'],70)
+ record['outbound_guard_exit']=code;record['pass']=record.get('pass',True) and code==0;save()
 except Exception as error:
  record['error']=str(error);print('P6_FIELDS_ERROR',str(error),flush=True)
 finally:

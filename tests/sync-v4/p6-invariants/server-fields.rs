@@ -95,3 +95,6 @@ fn check(case:&str){
 #[test] fn p6_fields_peer_patch_preserves_concurrent_native_fields(){check("patch");}
 #[test] fn p6_fields_explicit_server_change_rejected_and_journaled(){check("guard");}
 #[test] fn p6_fields_stale_server_intent_rejected_and_journaled(){check("stale");}
+
+#[path = "server-fields-outbound.rs"]
+mod outbound_incident;
