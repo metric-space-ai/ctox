@@ -571,6 +571,19 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
 }
 
 fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    let command = args.first().map(String::as_str);
+    let owns_lifecycle = matches!(command, None | Some("service" | "start" | "stop" | "status" | "tui" | "tui-smoke" | "business-os" | "business" | "sync"));
+    let stateless = matches!(command, Some("help" | "--help" | "-h" | "version" | "office" | "jour-fixe" | "update" | "upgrade" | "doctor" | "source-status"));
+    if owns_lifecycle || stateless {
+        return dispatch_owned_command(root, args);
+    }
+    let work = root.to_owned();
+    let args = args.to_owned();
+    persistence::run_cli_owned(root, move || dispatch_owned_command(&work, &args))
+        .context("CTOX CLI owner execution failed")
+}
+
+fn dispatch_owned_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         Some("sync") => sync_host::handle_command(root, &args[1..]),
         None => tui::run_tui(root),
@@ -927,12 +940,12 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                     None
                 };
             if let Some(level) = requested_autonomy {
-                let mut env_map = runtime_env::load_runtime_env_map(&root)?;
-                env_map.insert(
-                    "CTOX_AUTONOMY_LEVEL".to_string(),
-                    level.as_str().to_string(),
-                );
-                runtime_env::save_runtime_env_map(&root, &env_map)?;
+                let work = root.to_owned();
+                persistence::run_cli_owned(root, move || {
+                    let mut env_map = runtime_env::load_runtime_env_map(&work)?;
+                    env_map.insert("CTOX_AUTONOMY_LEVEL".to_string(), level.as_str().to_string());
+                    runtime_env::save_runtime_env_map(&work, &env_map)
+                })?;
             }
             service::run_foreground(root)
         }

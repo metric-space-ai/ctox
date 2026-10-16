@@ -737,6 +737,13 @@ export function createCoreRuntime(core) {
   }
   async function until(pred, ms = 5000) { const t0 = Date.now(); while (!pred()) { if (Date.now() - t0 > ms) fail('unavailable', 'Turn-Dokument fehlt'); await new Promise((r) => setTimeout(r, 2)); } }
 
+  // K-WJ-B2: Plattformbefehle, die execute() ausführt; App-Befehle nur mit handlers-Eintrag der aktiven Version.
+  const PLATFORM_COMMANDS = new Set(['ctox.app.publish', 'ctox.app.update', 'ctox.app.rollback', 'ctox.app.release', 'ctox.app.remove', 'ctox.coding.turn', 'ctox.coding.cancel']);
+  function hasCommandRoute(appId, type) {
+    if (PLATFORM_COMMANDS.has(type)) return true;
+    const handlers = activeManifest(appId)?.handlers;
+    return isPlainObject(handlers) && Object.prototype.hasOwnProperty.call(handlers, type);
+  }
   /** Ausführung eines Befehls: Plattformbefehl → App-Handler (Routing nach (app_id, type)). null = kein Handler. */
   async function execute(user, doc, depth) {
     if (String(doc.type).startsWith('ctox.app.')) return runPlatformCommand(user, doc);
@@ -750,7 +757,7 @@ export function createCoreRuntime(core) {
   }
 
   return {
-    canRead, checkWrite, execute, onCommit, refreshEvery, idle, log, tasks, acceptCodingTurn, modelRun,
+    canRead, checkWrite, execute, hasCommandRoute, onCommit, refreshEvery, idle, log, tasks, acceptCodingTurn, modelRun,
     setAgentOutcome(fn) { agentOutcome = typeof fn === 'function' ? fn : null; },
     capabilities: FAKE_CORE_CAPABILITIES,
   };

@@ -107,9 +107,14 @@ struct Fixture {
     stream_key: Arc<StreamKey>,
 
     _directory: tempfile::TempDir,
+    _policy: super::super::super::policy::PolicyAuthorityRegistration,
+    #[cfg(unix)]
+    _scope: crate::service::store_startup::ForegroundTestScope,
 }
 impl Fixture {
     async fn new() -> Self {
+        #[cfg(unix)]
+        let scope = crate::service::store_startup::isolate_test_roots().await;
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("store.sqlite");
         let mut stores = crate::service::store_runtime::DaemonStores::start(
@@ -125,6 +130,10 @@ impl Fixture {
                     schema_json:json!({"version":1,"type":"object","primaryKey":"id","properties":{"id":{"type":"string"}},"required":["id"]}),
                     class:"full".into(),client_limit:0,byte_budget:1_048_576,rights_ver:1,app_ver:"platform-1".into()})?;
             }
+            // Native publication now evaluates the actual P6 transaction policy.
+            // Seed its canonical role/action rows, as the runtime bootstrap does.
+            super::super::super::policy::sync_rights::initialize(tx)?;
+            super::super::super::policy::sync_rights::replace(tx, 1, &super::super::super::policy::base_release_rights(&[]))?;
             Ok(())
         })).await.unwrap();
         let writer = database.writer.clone();
@@ -141,6 +150,13 @@ impl Fixture {
         let platform = Platform::from_database(&database, stream_key.clone());
         let platform = platform.unwrap();
 
+        let rights = super::super::super::policy::sync_rights::StoreRightsAuthority::attach(
+            writer.clone(),
+            "isolated-core".into(),
+        )
+        .await
+        .unwrap();
+        let policy = super::super::super::policy::bind_policy_authority(rights).unwrap();
         let f = Self {
             stores,
             readers: database.readers,
@@ -149,6 +165,9 @@ impl Fixture {
             platform,
             public_key,
             stream_key,
+            _policy: policy,
+            #[cfg(unix)]
+            _scope: scope,
         };
         f.bootstrap_ipc(json!("*")).await;
         f
