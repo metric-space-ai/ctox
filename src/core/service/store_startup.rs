@@ -168,7 +168,14 @@ impl NativeOwners {
         inputs.publish_instance_signer(signer.clone())?;
         inputs
             .verifier
-            .set(super::store_verifier::CoreVerifier::new(inputs, rights)?)
+            .set(super::store_verifier::CoreVerifier::new(
+                inputs,
+                rights.clone(),
+            )?)
+            .map_err(|_| StoreError::AlreadyOwned)?;
+        inputs
+            .browser
+            .set(super::store_browser::BrowserAdmission::new(inputs, rights)?)
             .map_err(|_| StoreError::AlreadyOwned)?;
         #[cfg(unix)]
         {

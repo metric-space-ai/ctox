@@ -57,6 +57,9 @@ impl InstanceSigner for InstanceSigning {
                         canonical,
                     )
                 })
+                .or_else(|_| {
+                    ctox_sync::authority::auth::CanonicalInstancePacket::from_scope_bytes(canonical)
+                })
                 .map_err(|_| "instance packet is not canonical".to_owned())?;
         Ok(self.identity.sign_instance_packet(&encoded))
     }
