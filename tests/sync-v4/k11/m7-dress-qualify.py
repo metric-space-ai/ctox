@@ -62,8 +62,22 @@ try:
         compile((here/name).read_bytes(),str(here/name),'exec')
     for name in ('upgrade.mjs','upgrade-controller.mjs','installer-smoke.mjs','installer-outcome.mjs','sandbox.mjs'):
         run('syntax-'+name,['node','--check',here/name],timeout=15)
-    run('package',['python3',here/'m7-release.py','--reuse-build',producer,'--output',out/'release'],timeout=600)
-    receipt=out/'release/release.json'
+    assert base in producer.parents, 'Owned lane artifact receipt required'
+    prior=json.loads(producer.read_text())
+    current_tree=subprocess.check_output(['git','rev-parse','HEAD:src'],text=True).strip()
+    if prior.get('terminal') and prior.get('pass') and prior.get('packageVerification',{}).get('verified') and prior.get('sourceTree')==current_tree:
+        spec=importlib.util.spec_from_file_location('release',here/'m7-release.py')
+        module=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        assert module.digest(Path(prior['binary']))==prior['binarySha256']
+        proof=module.verify_package(prior)
+        report['steps'].append(dict(name='package-reuse-verification',exit=0,groupAbsent=True,
+                                   receipt=str(producer),receiptSha256=module.digest(producer),verification=proof))
+        receipt=producer
+        save()
+    else:
+        run('package',['python3',here/'m7-release.py','--reuse-build',producer,'--output',out/'release'],timeout=600)
+        receipt=out/'release/release.json'
     release=json.loads(receipt.read_text())
     report['release']={k:release[k] for k in ('revision','runnerRevision','binary','binarySha256','package','packageSha256','sourceTree')}
     live=out/'liveness-root'
