@@ -131,6 +131,7 @@ pub fn handle_secret_command(root: &Path, args: &[String]) -> Result<()> {
                 .context("usage: ctox secret get --scope <scope> --name <name>")?;
             let name = required_flag_value(args, "--name")
                 .context("usage: ctox secret get --scope <scope> --name <name>")?;
+            reveal_gate(args, |key| std::env::var(key).ok())?;
             let value = get_secret_value(root, scope, name)?;
             print_json(&json!({"ok": true, "scope": scope, "name": name, "value": value}))
         }
@@ -171,9 +172,37 @@ pub fn handle_secret_command(root: &Path, args: &[String]) -> Result<()> {
             print_json(&json!({"ok": true, "rewrite": result}))
         }
         _ => anyhow::bail!(
-            "usage:\n  ctox secret init\n  ctox secret put --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>]\n  ctox secret intake --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>] [--db <path> --conversation-id <id> --match-text <text> [--label <text>]]\n  ctox secret list [--scope <scope>]\n  ctox secret show --scope <scope> --name <name>\n  ctox secret get --scope <scope> --name <name>\n  ctox secret delete --scope <scope> --name <name>\n  ctox secret memory-rewrite --db <path> --conversation-id <id> --scope <scope> --name <name> --match-text <text> [--label <text>]"
+            "usage:\n  ctox secret init\n  ctox secret put --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>]\n  ctox secret intake --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>] [--db <path> --conversation-id <id> --match-text <text> [--label <text>]]\n  ctox secret list [--scope <scope>]\n  ctox secret show --scope <scope> --name <name>\n  ctox secret get --scope <scope> --name <name> --reveal\n  ctox secret delete --scope <scope> --name <name>\n  ctox secret memory-rewrite --db <path> --conversation-id <id> --scope <scope> --name <name> --match-text <text> [--label <text>]"
         ),
     }
+}
+
+/// Environment variables the agent harness sets on every agent shell command
+/// (see harness/core/src/exec_env.rs).
+const AGENT_SESSION_ENV_VARS: [&str; 2] = ["CTOX_AGENT_ID", "CTOX_TURN_ID"];
+/// Set by trusted CTOX parents (e.g. `scrape execute`) whose child legitimately
+/// needs a plaintext value inside its own process.
+const REVEAL_ALLOWED_ENV_VAR: &str = "CTOX_SECRET_REVEAL_ALLOWED";
+
+/// `ctox secret get` prints plaintext. It requires an explicit `--reveal`, and
+/// is refused inside agent sessions so the value cannot land in a transcript.
+/// Agents use `ctox secret exec --env VAR=scope/name -- <cmd>` instead.
+/// This is a guardrail against accidental disclosure, not an OS-level
+/// boundary: agents run as the same user as the store.
+fn reveal_gate(args: &[String], env: impl Fn(&str) -> Option<String>) -> Result<()> {
+    anyhow::ensure!(
+        has_flag(args, "--reveal"),
+        "ctox secret get prints the plaintext value and needs --reveal; agents should use `ctox secret exec --env VAR=<scope>/<name> -- <command>` instead"
+    );
+    let in_agent = AGENT_SESSION_ENV_VARS
+        .iter()
+        .any(|key| env(key).is_some_and(|value| !value.trim().is_empty()));
+    let allowed = env(REVEAL_ALLOWED_ENV_VAR).is_some_and(|value| value == "1");
+    anyhow::ensure!(
+        !in_agent || allowed,
+        "ctox secret get --reveal is refused inside an agent session; use `ctox secret exec --env VAR=<scope>/<name> -- <command>` so the value never enters the transcript"
+    );
+    Ok(())
 }
 
 pub fn list_secret_records(root: &Path, scope: Option<&str>) -> Result<Vec<SecretRecordView>> {
@@ -2051,6 +2080,24 @@ mod tests {
         path.push(format!("ctox-secret-test-{}-{}", label, std::process::id()));
         let _ = fs::remove_dir_all(&path);
         path
+    }
+
+    #[test]
+    fn reveal_gate_requires_flag_and_refuses_agent_sessions() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let none = |_: &str| None;
+        assert!(reveal_gate(&args(&["get"]), none).is_err());
+        assert!(reveal_gate(&args(&["get", "--reveal"]), none).is_ok());
+        let agent = |k: &str| (k == "CTOX_AGENT_ID").then(|| "agent-1".to_string());
+        assert!(reveal_gate(&args(&["get", "--reveal"]), agent).is_err());
+        let turn = |k: &str| (k == "CTOX_TURN_ID").then(|| "turn-1".to_string());
+        assert!(reveal_gate(&args(&["get", "--reveal"]), turn).is_err());
+        let trusted = |k: &str| match k {
+            "CTOX_AGENT_ID" => Some("agent-1".to_string()),
+            "CTOX_SECRET_REVEAL_ALLOWED" => Some("1".to_string()),
+            _ => None,
+        };
+        assert!(reveal_gate(&args(&["get", "--reveal"]), trusted).is_ok());
     }
 
     #[test]
