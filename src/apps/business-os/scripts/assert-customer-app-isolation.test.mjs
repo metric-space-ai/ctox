@@ -81,4 +81,3 @@ test('CLI checks direct and symlinked entrypoints against release data', (t) => 
     assert.match(result.stdout, /customer app isolation: ok/);
   }
 });
-
