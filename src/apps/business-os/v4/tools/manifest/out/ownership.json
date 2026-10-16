@@ -2347,6 +2347,26 @@
       "proposal": false,
       "schema_js_definers": []
     },
+    "workjet_luma_state": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "workjet"
+      ],
+      "owner": "workjet",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "workjet_mailbox_envelopes": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "workjet"
+      ],
+      "owner": "workjet",
+      "proposal": false,
+      "schema_js_definers": []
+    },
     "workjet_project_chats": {
       "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
       "in_contract": true,
@@ -2418,6 +2438,36 @@
       "schema_js_definers": [
         "ctox"
       ]
+    },
+    "workjet_worker_dispatch_intents": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "workjet"
+      ],
+      "owner": "workjet",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "workjet_worker_dispatch_outcomes": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "workjet"
+      ],
+      "owner": "workjet",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "workjet_worker_dispatch_sources": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "workjet"
+      ],
+      "owner": "workjet",
+      "proposal": false,
+      "schema_js_definers": []
     },
     "workjet_worker_profile_bindings": {
       "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
