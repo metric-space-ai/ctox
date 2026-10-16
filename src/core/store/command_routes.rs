@@ -313,6 +313,26 @@ pub const ROUTES: &[Route] = &[
         "ctox.workjet.working_copy.upsert",
         "src/core/business_os/command_plane.rs:1734"
     ),
+    core_route!(
+        "ctox.crew.execution.list",
+        "src/core/business_os/mcp_native_tasks.rs::execute"
+    ),
+    core_route!(
+        "ctox.crew.execution.claim",
+        "src/core/business_os/mcp_native_tasks.rs::execute"
+    ),
+    core_route!(
+        "ctox.crew.execution.plan.update",
+        "src/core/business_os/mcp_native_tasks.rs::execute"
+    ),
+    core_route!(
+        "ctox.crew.execution.report",
+        "src/core/business_os/mcp_native_tasks.rs::execute"
+    ),
+    core_route!(
+        "ctox.task.create",
+        "src/core/business_os/mcp_native_tasks.rs::execute"
+    ),
 ];
 pub fn owns_type(method: &str) -> bool {
     method.starts_with("ctox.workjet.") || method == "ctox.plan.step.retry"

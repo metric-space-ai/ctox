@@ -294,13 +294,18 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 157] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 162] = [
     "ctox.secret.request.list",
     "ctox.secret.request.fulfill",
     "ctox.secret.request.decline",
     "ctox.workjet.remote_worker.admit",
     "ctox.maintenance.restart",
     "instance.providers.models.check",
+    "ctox.crew.execution.list",
+    "ctox.crew.execution.claim",
+    "ctox.crew.execution.plan.update",
+    "ctox.crew.execution.report",
+    "ctox.task.create",
     "news.topic.schedule",
     "news.source.auth_assist",
     "ctox.crew.member.create",
@@ -1320,7 +1325,11 @@ enum CentralCommandPolicyRequirement {
 impl CentralCommandPolicyRequirement {
     fn for_command(command: &BusinessCommand) -> Option<Self> {
         let command_type = command.command_type.as_str();
-        let fixed = if command_type == "ctox.workjet.computer.ssh_key.ensure" {
+        let fixed = if command_type == "ctox.task.create" {
+            Some(CommandPolicyRequirement::workspace(
+                BusinessOsPermission::CtoxTaskCreate,
+            ))
+        } else if command_type == "ctox.workjet.computer.ssh_key.ensure" {
             Some(CommandPolicyRequirement::workspace(
                 BusinessOsPermission::SecretsManage,
             ))
@@ -1751,6 +1760,15 @@ fn dispatch_business_command(
     authorized_session: Option<&BusinessOsSession>,
 ) -> anyhow::Result<BusinessCommandDispatchOutcome> {
     match command.command_type.as_str() {
+        "ctox.crew.execution.list"
+        | "ctox.crew.execution.claim"
+        | "ctox.crew.execution.plan.update"
+        | "ctox.crew.execution.report"
+        | "ctox.task.create" => {
+            // New OS primitives are invoked only by the retained V4 adapter.
+            // Legacy control admission has no P9 invocation fence.
+            anyhow::bail!("forbidden: native execution authority required")
+        }
         "ctox.crew.member.create"
         | "ctox.crew.member.update"
         | "ctox.crew.memory.update"
