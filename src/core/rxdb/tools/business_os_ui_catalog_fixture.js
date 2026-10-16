@@ -27,15 +27,14 @@ function prepareUiCatalogFixture(sourceRoot, runtimeRoot) {
       || fs.realpathSync(templates) !== fs.realpathSync(sourceTemplates)) {
     throw new Error('UI catalog fixture requires the fresh smoke template-store symlink');
   }
-  const registry = JSON.parse(fs.readFileSync(path.join(source, 'src/apps/business-os/modules/registry.json'), 'utf8'));
   const installs = CATALOG_MODULES.map((moduleId) => {
-    const entries = registry.modules.filter((entry) => entry.id === moduleId);
-    if (entries.length !== 1 || entries[0].install_scope !== 'store'
-        || entries[0].default_installed !== false || entries[0].core !== false) {
-      throw new Error(`UI catalog fixture requires one non-default store entry: ${moduleId}`);
-    }
     const manifest = JSON.parse(fs.readFileSync(path.join(source, 'src/apps/business-os/modules', moduleId, 'module.json'), 'utf8'));
     if (manifest.id !== moduleId) throw new Error(`UI catalog source identity mismatch: ${moduleId}`);
+    // The app artifact owns its metadata; the old shell's generated index is
+    // not another authority. These are optional fixtures, never defaults.
+    if (manifest.install_scope !== 'store' || manifest.default_installed !== false || manifest.core !== false) {
+      throw new Error(`UI catalog fixture requires a non-default store artifact: ${moduleId}`);
+    }
     return { moduleId, templateId: `smoke-ui-${moduleId}`, title: manifest.title || moduleId };
   });
   fs.unlinkSync(templates);

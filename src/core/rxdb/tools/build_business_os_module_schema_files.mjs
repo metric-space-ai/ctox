@@ -2,7 +2,8 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { readModuleSchemaArtifact } from './module_schema_artifact.mjs';
 
 const SCHEMA_FORMAT = 'ctox-business-os-module-collections-v1';
 
@@ -26,16 +27,14 @@ for (const sourceRoot of sourceRoots) {
     const manifestPath = resolve(moduleDir, 'module.json');
     if (!existsSync(manifestPath)) continue;
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-    const schemaJsPath = resolveSchemaJsPath(moduleDir, manifest, sourceRoot);
     const schemaJsonPath = resolve(moduleDir, 'collections.schema.json');
-    if (!schemaJsPath) {
-      if (!existsSync(schemaJsonPath)) {
-        missing.push(relative(repoRoot, schemaJsonPath));
-      }
+    const sourceSchemaPath = resolveSchemaArtifactPath(moduleDir, manifest, sourceRoot);
+    if (!sourceSchemaPath) {
+      missing.push(relative(repoRoot, schemaJsonPath));
       continue;
     }
     if (String(manifest.install_scope || '').toLowerCase() === 'sample') continue;
-    const schemaModule = await import(pathToFileURL(schemaJsPath).href);
+    const schemaModule = await readModuleSchemaArtifact(sourceSchemaPath);
     const collections = normalizeCollections(schemaModule.collections || {});
     const existingDocument = existsSync(schemaJsonPath)
       ? JSON.parse(await readFile(schemaJsonPath, 'utf8'))
@@ -90,11 +89,11 @@ function normalizeCollections(collections) {
   return sortObjectDeep(normalized);
 }
 
-function resolveSchemaJsPath(moduleDir, manifest, sourceRoot) {
-  const local = resolve(moduleDir, 'schema.js');
+function resolveSchemaArtifactPath(moduleDir, manifest, sourceRoot) {
+  const local = resolve(moduleDir, 'collections.schema.json');
   if (existsSync(local)) return local;
   if (sourceRoot.endsWith('/installed-modules')) {
-    const source = resolve(appRoot, 'modules', manifest.id || '', 'schema.js');
+    const source = resolve(appRoot, 'modules', manifest.id || '', 'collections.schema.json');
     if (existsSync(source)) return source;
   }
   return null;

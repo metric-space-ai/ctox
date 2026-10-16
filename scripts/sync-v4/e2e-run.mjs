@@ -68,7 +68,7 @@ if (!['eager','demand-only'].includes(config.leadProfile)) throw Error('Unsuppor
 if(!Number.isInteger(config.durationSeconds)||config.durationSeconds<30||config.durationSeconds>2100) throw Error('Run duration bound 30..2100 seconds');
 for (const file of [config.turnBin, config.chrome]) fs.accessSync(file, fs.constants.X_OK);
 fs.accessSync(join(config.modulesRoot, 'playwright/package.json'), fs.constants.R_OK);
-fs.accessSync(join(config.source, 'src/apps/business-os/app.js'), fs.constants.R_OK);
+fs.accessSync(join(config.source, 'src/apps/business-os/index.html'), fs.constants.R_OK);
 const file = join(output,'config.private.json'); fs.writeFileSync(file,JSON.stringify(config,null,2),{mode:0o600});
 const child = spawn('sudo',['-n','unshare','--net','--',process.execPath,join(snapshot,'scripts/e2e-netns.mjs'),file],{stdio:'inherit',detached:true});
 const record = { owner, controllerPid: process.pid, privilegeControllerPid: child.pid, group: child.pid, output,

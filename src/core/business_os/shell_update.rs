@@ -25,16 +25,10 @@ const MAX_EXTRACTED_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_EXTRACTED_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const CURRENT_KEY: &str = "MCowBQYDK2VwAyEAZECH2XB0VlZWQ7zUzoChyiRkKtfGNK9HmSMvZQuwGjk=";
 const NEXT_KEY: &str = "MCowBQYDK2VwAyEAdAgcqbHB2Sr86KzrWcdYxKCxb6Ofz4sVxhkEhTgvo7s=";
-const REQUIRED_SHELL_FILES: &[&str] = &[
-    "index.html",
-    "app.js",
-    "app.css",
-    "mobile-host.js",
-    "mobile-host.css",
-    "system-apps.json",
-    "standard-app-bundle.json",
-    "shared/shell-release-status.js",
-];
+// Only the bootstrap document is a native contract. Its modules and styles
+// belong to the signed release inventory, not a second Core-owned app list.
+// Every inventory entry is still size/hash checked before activation and read.
+const REQUIRED_SHELL_FILES: &[&str] = &["index.html"];
 type VerifiedReleaseCell = Arc<Mutex<Option<Arc<super::shell_assets::VerifiedRelease>>>>;
 static VERIFIED_RELEASES: OnceLock<Mutex<BTreeMap<(PathBuf, String), VerifiedReleaseCell>>> =
     OnceLock::new();
@@ -641,15 +635,15 @@ fn collect_slot_files(root: &Path, directory: &Path, files: &mut BTreeSet<String
     Ok(())
 }
 
-pub(super) fn shell_build_from_app_js(source: &str) -> Option<String> {
-    ["const APP_BUILD = '", "const APP_BUILD = \""]
-        .into_iter()
-        .find_map(|marker| {
-            let tail = source.split_once(marker)?.1;
-            let quote = marker.chars().last()?;
-            let build = tail.split_once(quote)?.0.trim();
-            (!build.is_empty()).then(|| build.to_owned())
-        })
+fn shell_build_from_index(source: &str) -> Option<String> {
+    // Compatibility for already-open generation URLs. V4 release addresses
+    // are pinned by the verified manifest; no executable app source is read.
+    source.split("?v=").skip(1).find_map(|tail| {
+        let build = tail
+            .split(['"', '\'', '&', '<', '>', ' ', '\n', '\r'])
+            .next()?;
+        build.contains("-shell-v2-").then(|| build.to_owned())
+    })
 }
 
 fn shell_build_matches(requested: &str, build: &str) -> bool {
@@ -673,12 +667,12 @@ fn shell_slot_candidate_for_build(
         }
         candidates.push(slot.clone());
         let path = slots.join(slot);
-        let source = match fs::read_to_string(path.join("app.js")) {
+        let source = match fs::read_to_string(path.join("index.html")) {
             Ok(source) => source,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error.into()),
         };
-        let Some(build) = shell_build_from_app_js(&source) else {
+        let Some(build) = shell_build_from_index(&source) else {
             continue;
         };
         if shell_build_matches(requested, &build) {
@@ -1269,9 +1263,26 @@ mod tests {
         incomplete
             .payload
             .files
-            .retain(|file| file.path != "app.css");
-        let error = verify_release_inventory(&incomplete).expect_err("missing app.css must fail");
-        assert!(format!("{error:#}").contains("missing required runtime file: app.css"));
+            .retain(|file| file.path != "index.html");
+        let error = verify_release_inventory(&incomplete).expect_err("missing bootstrap must fail");
+        assert!(format!("{error:#}").contains("missing required runtime file: index.html"));
+    }
+
+    #[test]
+    fn signed_inventory_owns_the_shell_module_layout() -> Result<()> {
+        let mut manifest = sample_manifest("0.0.0", None, "shell-current-2026-08");
+        manifest.payload.files = ["index.html", "kernel/index.mjs", "v4/boot/boot.js"]
+            .into_iter()
+            .map(|path| ReleaseFile {
+                path: path.to_owned(),
+                size: 1,
+                sha256: "0".repeat(64),
+            })
+            .collect();
+        let inventory = verify_release_inventory(&manifest)?;
+        assert!(inventory.contains_key("v4/boot/boot.js"));
+        assert_eq!(inventory.len(), manifest.payload.files.len());
+        Ok(())
     }
 
     #[test]
@@ -1281,12 +1292,12 @@ mod tests {
         fs::create_dir_all(slots.join("1.1.0"))?;
         fs::create_dir_all(slots.join("1.0.0"))?;
         fs::write(
-            slots.join("1.1.0/app.js"),
-            "const APP_BUILD = '20260901-shell-v2-current-v400';\n",
+            slots.join("1.1.0/index.html"),
+            "<script src='kernel/index.mjs?v=20260901-shell-v2-current-v400'></script>",
         )?;
         fs::write(
-            slots.join("1.0.0/app.js"),
-            "const APP_BUILD = '20260831-shell-v2-previous-v399';\n",
+            slots.join("1.0.0/index.html"),
+            "<script src='kernel/index.mjs?v=20260831-shell-v2-previous-v399'></script>",
         )?;
         let state = ShellUpdateState {
             current_slot: Some("1.1.0".to_owned()),

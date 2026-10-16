@@ -6,8 +6,8 @@ use super::module_lifecycle::{
 };
 use super::store::{
     augment_module_manifest_file_plane, backfill_local_module_icon,
-    ensure_local_icon_manifest_value, hex_sha256, is_core_module, module_asset_revision,
-    source_sanitize_slug, ModuleManifest, ModuleUpsertRequest,
+    ensure_local_icon_manifest_value, hex_sha256, module_asset_revision, source_sanitize_slug,
+    ModuleManifest, ModuleUpsertRequest,
 };
 use anyhow::Context;
 use serde::Serialize;
@@ -79,13 +79,12 @@ pub(super) fn load_module_manifests(
             if !module_ships_on_first_install(&scope) {
                 continue;
             }
-            let core = scope == "core";
             manifest.install_scope = scope;
             manifest.default_installed = true;
-            manifest.source = if core { "core" } else { "internal" }.to_owned();
-            manifest.core = core;
+            manifest.source = "internal".to_owned();
+            manifest.core = false;
             manifest.editable = true;
-            manifest.deletable = !core;
+            manifest.deletable = false; // release-owned source, never installed-modules/
             manifests.push(manifest);
         }
     }
@@ -204,9 +203,6 @@ pub(super) fn load_local_module_manifests(
         if manifest.install_scope.trim().eq_ignore_ascii_case("sample") {
             continue;
         }
-        if is_core_module(&manifest.id) {
-            continue;
-        }
         manifest.entry = format!("local-modules/{}/index.html", manifest.id);
         manifest.source = "local".to_owned();
         manifest.install_scope = "local".to_owned();
@@ -228,8 +224,17 @@ pub(super) fn upsert_module_manifest(
     anyhow::ensure!(!module_id.is_empty(), "module id is required");
     let title = request.title.trim();
     anyhow::ensure!(!title.is_empty(), "module title is required");
-    let is_core = is_core_module(&module_id);
-    let target = if is_core {
+    let packaged_path = source_app_root
+        .join("modules")
+        .join(&module_id)
+        .join("module.json");
+    let is_packaged = if packaged_path.is_file() {
+        let packaged: ModuleManifest = serde_json::from_slice(&fs::read(&packaged_path)?)?;
+        module_ships_on_first_install(&module_install_scope(&packaged))
+    } else {
+        false
+    };
+    let target = if is_packaged {
         source_app_root.join("modules").join(&module_id)
     } else {
         installed_app_root
@@ -261,7 +266,7 @@ pub(super) fn upsert_module_manifest(
     {
         manifest_value["version"] = Value::String("0.1.0".to_owned());
     }
-    let entry = if is_core {
+    let entry = if is_packaged {
         format!("modules/{module_id}/index.html")
     } else if request.entry.trim().is_empty() {
         format!("installed-modules/{module_id}/index.html")
@@ -281,18 +286,18 @@ pub(super) fn upsert_module_manifest(
     if !request.layout.is_null() {
         manifest_value["layout"] = request.layout;
     }
-    if !is_core {
+    if !is_packaged {
         ensure_local_icon_manifest_value(&mut manifest_value, &target);
     }
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest_value)?)
         .with_context(|| format!("failed to write {}", manifest_path.display()))?;
 
     let mut manifest: ModuleManifest = serde_json::from_value(manifest_value)?;
-    manifest.source = if is_core { "core" } else { "installed" }.to_owned();
-    manifest.install_scope = if is_core { "core" } else { "installed" }.to_owned();
-    manifest.default_installed = is_core;
-    manifest.core = is_core;
+    manifest.source = if is_packaged { "internal" } else { "installed" }.to_owned();
+    manifest.install_scope = if is_packaged { "internal" } else { "installed" }.to_owned();
+    manifest.default_installed = is_packaged;
+    manifest.core = false;
     manifest.editable = true;
-    manifest.deletable = !is_core;
+    manifest.deletable = !is_packaged;
     Ok(manifest)
 }

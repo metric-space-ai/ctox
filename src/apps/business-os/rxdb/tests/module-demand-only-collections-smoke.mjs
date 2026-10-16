@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createSyncRuntime, __ctoxSyncTestHooks } from '../../shared/sync.js';
-import { roleMayReadCollection } from '../../shared/permissions.js';
+
 import { createMultiTabSyncCoordinator } from '../src/multi-tab-sync-coordinator.mjs';
 
 const {
@@ -266,22 +266,12 @@ function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null
 }
 
 {
-  for (const collection of [
-    'business_users', 'ctox_runtime_settings', 'business_module_acl',
-    'business_module_source_files', 'business_module_commits',
-    'business_module_source_blob_chunks', 'ctox_runs',
-    'ctox_crew_learnings', 'ctox_harness_events',
-  ]) {
-    assert.equal(roleMayReadCollection('user', collection), false, `${collection} is private to the requester`);
-  }
-  assert.equal(roleMayReadCollection('user', 'ctox_crew_members'), true);
-  assert.equal(roleMayReadCollection('user', 'ctox_harness_status'), true);
-  assert.equal(roleMayReadCollection('founder', 'ctox_runs'), true);
-  assert.equal(roleMayReadCollection('founder', 'business_users'), false);
-  assert.equal(roleMayReadCollection('admin', 'business_users'), true);
-
+  // This runtime consumes an authority decision; it must not derive one from
+  // a Shell role facade. The native role matrix is exercised by
+  // cockpit_collections_are_founder_readable_but_user_denied and the V4
+  // manifest-rights tests. Here verify that a denied decision never starts IO.
   const { runtime, starts } = createMockSyncRuntime({
-    mayReadCollection: (collection) => roleMayReadCollection('user', collection),
+    mayReadCollection: (collection) => collection !== 'business_users',
   });
   await assert.rejects(
     () => runtime.startCollection('business_users'),
@@ -306,12 +296,12 @@ function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null
 }
 
 {
-  let role = 'admin';
+  let granted = true;
   let restrictedChecks = 0;
   const { runtime, starts } = createMockSyncRuntime({
     mayReadCollection(collection) {
-      if (collection === 'business_users' && ++restrictedChecks === 2) role = 'founder';
-      return roleMayReadCollection(role, collection);
+      if (collection === 'business_users' && ++restrictedChecks === 2) granted = false;
+      return collection !== 'business_users' || granted;
     },
   });
   const lease = await runtime.leaseModule({

@@ -167,7 +167,6 @@ const DEFAULT_SIGNALING_URL: &str = "wss://signaling.ctox.dev/v2";
 const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
 const BUSINESS_OS_SIGNALING_URLS_FILE: &str = "business-os-signaling-urls.json";
 pub(super) const DOCUMENT_BLOB_CHUNK_SIZE: usize = 256_000;
-const SYSTEM_APPS_JSON: &str = include_str!("../../apps/business-os/system-apps.json");
 
 pub(crate) const APPSEC_MODULE_ID: &str = "appsec-pentest";
 const APPSEC_BUSINESS_OS_COLLECTIONS: &[&str] = &[
@@ -762,7 +761,7 @@ fn default_update_mode() -> String {
 
 /// Install (`visible = true`) or remove (`visible = false`) a packaged catalog
 /// module as a launcher tab on this instance. Only meaningful in `"base"`
-/// provisioning mode; core modules are always tabs.
+/// provisioning mode. V4 activation is owned by the platform catalog.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModuleSetVisibleRequest {
     pub module_id: String,
@@ -5053,38 +5052,8 @@ fn html_escape(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
-pub(super) fn is_core_module(id: &str) -> bool {
-    system_module_ids().iter().any(|core| id == core)
-}
-
-fn system_module_ids() -> &'static [String] {
-    static IDS: OnceLock<Vec<String>> = OnceLock::new();
-    IDS.get_or_init(|| {
-        let value: Value = serde_json::from_str(SYSTEM_APPS_JSON)
-            .expect("embedded Business OS system app manifest must be valid JSON");
-        let ids = value
-            .get("apps")
-            .and_then(Value::as_array)
-            .expect("embedded Business OS system app manifest must contain an apps array")
-            .iter()
-            .map(|value| {
-                value
-                    .as_str()
-                    .map(str::trim)
-                    .filter(|id| !id.is_empty())
-                    .map(str::to_owned)
-                    .expect("embedded Business OS system app ids must be non-empty strings")
-            })
-            .collect::<Vec<_>>();
-        let unique = ids.iter().collect::<BTreeSet<_>>();
-        assert_eq!(
-            unique.len(),
-            ids.len(),
-            "embedded Business OS system app ids must be unique"
-        );
-        ids
-    })
-}
+// App identity is not native authority. V4 activation and installation are
+// owned by the platform app catalog; no native app-name classification remains.
 
 pub(super) fn copy_dir_recursive(source: &Path, target: &Path) -> anyhow::Result<()> {
     if target.exists() {
@@ -6134,10 +6103,6 @@ pub fn uninstall_app_module(
         .allowed,
         "chef or admin role required to uninstall modules"
     );
-
-    if is_core_module(&module_id) {
-        anyhow::bail!("Core modules cannot be uninstalled");
-    }
 
     let dest_dir = app_root.join("installed-modules").join(&module_id);
     if !dest_dir.is_dir() {
@@ -36520,97 +36485,85 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn source_core_manifests_match_canonical_system_app_manifest() -> anyhow::Result<()> {
-        let repository_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let modules_root = repository_root.join("src/apps/business-os/modules");
-        let mut manifest_ids = BTreeSet::new();
-        for entry in fs::read_dir(&modules_root)? {
-            let path = entry?.path().join("module.json");
-            if !path.is_file() {
-                continue;
-            }
-            let manifest: ModuleManifest = serde_json::from_slice(&fs::read(path)?)?;
-            if module_install_scope(&manifest) == "core" {
-                manifest_ids.insert(manifest.id);
+    fn packaged_and_runtime_apps_do_not_mint_native_authority() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let source = temp.path().join("release");
+        let runtime = temp.path().join("apps");
+        for (path, id, scope) in [
+            (
+                source.join("modules/new-release-app"),
+                "new-release-app",
+                "internal",
+            ),
+            (source.join("modules/ctox"), "ctox", "internal"),
+            (
+                source.join("modules/forged-platform"),
+                "forged-platform",
+                "core",
+            ),
+            (
+                runtime.join("installed-modules/runtime-app"),
+                "runtime-app",
+                "core",
+            ),
+            (runtime.join("local-modules/local-app"), "local-app", "core"),
+        ] {
+            fs::create_dir_all(&path)?;
+            fs::write(path.join("index.html"), "<!doctype html><title>App</title>")?;
+            fs::write(
+                path.join("module.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "id": id, "title": id, "install_scope": scope, "core": true,
+                    "default_installed": true, "deletable": false
+                }))?,
+            )?;
+        }
+        let catalog = load_module_manifests(temp.path(), &source, &runtime)?;
+        assert!(
+            !catalog
+                .manifests
+                .iter()
+                .any(|app| app.id == "forged-platform"),
+            "an unrecognized core hint must not self-install globally"
+        );
+        for id in ["new-release-app", "ctox", "runtime-app", "local-app"] {
+            let app = catalog
+                .manifests
+                .iter()
+                .find(|app| app.id == id)
+                .context("app missing")?;
+            assert!(
+                !app.core,
+                "app metadata must never mint native/platform authority"
+            );
+            if matches!(id, "new-release-app" | "ctox") {
+                assert_eq!(app.source, "internal");
+                assert!(app.default_installed);
+                assert!(
+                    !app.deletable,
+                    "package source is not runtime-installed data"
+                );
+            } else {
+                assert!(
+                    !app.default_installed,
+                    "runtime metadata cannot self-install globally"
+                );
+                assert!(app.entry.starts_with(if id == "runtime-app" {
+                    "installed-modules/"
+                } else {
+                    "local-modules/"
+                }));
             }
         }
-        let canonical_ids = system_module_ids().iter().cloned().collect::<BTreeSet<_>>();
-        let expected_core_ids = [
-            "desktop",
-            "app-store",
-            "creator",
-            "explorer",
-            "file-viewer",
-            "appsec-pentest",
-            "browser",
-            "coding-agents",
-            "importer",
-            "credentials",
-            "ctox",
-            "documents",
-            "iot",
-            "knowledge",
-            "notes",
-            "reports",
-            "research",
-            "spreadsheets",
-            "threads",
-            "tickets",
-            "kundenpipeline",
-        ]
-        .into_iter()
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>();
-        assert_eq!(canonical_ids, expected_core_ids);
-        assert_eq!(manifest_ids, canonical_ids);
-        let marketplace = load_marketplace_module_manifests(
-            repository_root,
-            modules_root.parent().context("Business OS source root")?,
-        )?;
-        let expected_marketplace_ids = [
-            "buchhaltung",
-            "calendar",
-            "consent",
-            "conversations",
-            "customers",
-            "cv-print-builder",
-            "esign",
-            "intake",
-            "interviews",
-            "invoices",
-            "mail",
-            "matching",
-            "nachweise",
-            "outbound",
-            "placements",
-            "shiftflow",
-            "submissions",
-            "support",
-        ]
-        .into_iter()
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>();
-        let marketplace_ids = marketplace
-            .iter()
-            .filter_map(|module| module.get("id").and_then(Value::as_str))
-            .map(str::to_owned)
-            .collect::<BTreeSet<_>>();
-        assert_eq!(marketplace.len(), expected_marketplace_ids.len());
-        assert_eq!(marketplace_ids, expected_marketplace_ids);
-        let invalid_marketplace = marketplace
-            .iter()
-            .filter(|module| {
-                module.get("install_scope").and_then(Value::as_str) != Some("store")
-                    || module
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .is_none_or(|id| canonical_ids.contains(id))
-            })
-            .collect::<Vec<_>>();
-        assert!(
-            invalid_marketplace.is_empty(),
-            "invalid marketplace entries: {invalid_marketplace:#?}"
-        );
+        delete_installed_module(
+            &runtime,
+            temp.path(),
+            ModuleDeleteRequest {
+                module_id: "new-release-app".into(),
+            },
+        )
+        .expect_err("runtime deletion must never reach release-owned source");
+        assert!(source.join("modules/new-release-app/module.json").is_file());
         Ok(())
     }
 

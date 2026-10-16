@@ -10,7 +10,7 @@ on:
       - '.github/workflows/workjet-computer-migration.yml'
       - 'src/core/business_os/rxdb_peer.rs'
       - 'src/core/business_os/business_os_schema*'
-      - 'src/apps/business-os/modules/ctox/schema.js'
+      - 'src/apps/business-os/v4/manifests/ctox.manifest.json'
       - 'src/apps/business-os/modules/**/collections.schema.json'
       - 'src/apps/business-os/rxdb/tests/workjet-computer-migration-smoke.mjs'
       - 'tests/fixtures/workjet-computers-v0-67e44b11d.json'

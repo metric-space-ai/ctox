@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { collections, migrationStrategies } from '../../modules/ctox/schema.js';
+import { packagedSchema } from './packaged-schema.mjs';
 import { applyDeclarativeMigration } from '../../shared/declarative-migrations.js';
 
-const packaged = JSON.parse(readFileSync(new URL('../../modules/ctox/collections.schema.json', import.meta.url)));
+const packaged = await packagedSchema('ctox');
+const { collections } = packaged;
 const contract = JSON.parse(readFileSync(new URL('../../../../core/business_os/business_os_schema_contract.json', import.meta.url)));
 const schema = collections.workjet_computers;
 assert.equal(schema.version, 1, 'a changed v0 hash requires a new collection version');
@@ -32,11 +33,9 @@ for (const [original, expected] of [
   [bound, bound],
 ]) {
   const before = structuredClone(original);
-  const js = migrationStrategies.workjet_computers[1](original);
   const declarative = applyDeclarativeMigration(original, packaged.migration_strategies.workjet_computers['1']);
-  assert.deepEqual(js, expected);
-  assert.deepEqual(declarative, expected, 'packaged and browser transformations agree');
+  assert.deepEqual(declarative, expected, 'declarative migration preserves the installed-data corpus');
   assert.deepEqual(original, before, 'migration does not mutate source or revision metadata');
-  assert.deepEqual(migrationStrategies.workjet_computers[1](js), js, 'retry is idempotent');
+  assert.deepEqual(applyDeclarativeMigration(declarative, packaged.migration_strategies.workjet_computers['1']), declarative, 'retry is idempotent');
 }
 console.log('Workjet computer migration preserves legacy data, bindings, tombstones and revisions');

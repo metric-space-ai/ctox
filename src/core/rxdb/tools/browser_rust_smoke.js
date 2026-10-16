@@ -4460,7 +4460,7 @@ function ensureCtoxSmokeBinary() {
     const failureText = request.failure()?.errorText || '';
     return smokeMode === 'network-flap-browser-to-rust'
       && /ERR_INTERNET_DISCONNECTED/i.test(failureText)
-      && request.url().includes('/business-os/modules/registry.json');
+      && new URL(request.url()).pathname.startsWith('/business-os/');
   }
 
   let browser;
@@ -5758,7 +5758,7 @@ function ensureCtoxSmokeBinary() {
             permissionsMod,
             lifecycleMod,
           ] = await Promise.all([
-            import('/shared/permissions.js'),
+            import('/shared/business-permissions.js'),
             import('/shared/app-lifecycle.js'),
           ]);
           const { BusinessOsPermissions } = permissionsMod;
@@ -8054,7 +8054,7 @@ function ensureCtoxSmokeBinary() {
           }
         }
         if (outboundActiveUiSmokeMode) {
-          const outboundSchemaMod = await import('/modules/outbound/schema.js');
+          const { default: outboundSchemaMod } = await import('/modules/outbound/collections.schema.json', { with: { type: 'json' } });
           const outboundCollections = {};
           for (const [name, schema] of Object.entries(outboundSchemaMod.collections || {})) {
             if (!appState.db.raw?.[name]) outboundCollections[name] = { schema };
@@ -8249,7 +8249,7 @@ function ensureCtoxSmokeBinary() {
         const rxdb = await import('/rxdb/dist/ctox-rxdb-js.mjs');
         registerRxdbPlugin(rxdb, rxdb.RxDBMigrationSchemaPlugin || rxdb.RxDBMigrationPlugin);
         const desktopSchemaMod = await import('/modules/desktop/schema.js');
-        const ctoxSchemaMod = await import('/modules/ctox/schema.js');
+        const { default: ctoxSchemaMod } = await import('/modules/ctox/collections.schema.json', { with: { type: 'json' } });
         db = await rxdb.createRxDatabase({
           name: `ctox_smoke_${Date.now()}`,
           storage: rxdb.getCtoxIndexedDbStorage(),
@@ -9677,7 +9677,7 @@ function ensureCtoxSmokeBinary() {
           shellPermissionsUiMod,
           rolesMod,
         ] = await Promise.all([
-          import('/shared/permissions.js'),
+          import('/shared/business-permissions.js'),
           import('/shared/shell-permissions-ui.js'),
           import('/shared/roles.js'),
         ]);
@@ -10246,7 +10246,7 @@ function ensureCtoxSmokeBinary() {
         if (typeof smoke?.createLiveDbFacade !== 'function') throw new Error('Business OS smoke DB facade hook is unavailable for agent scope UI smoke');
         appState = state;
 
-        const { BusinessOsPermissions } = await import('/shared/permissions.js');
+        const { BusinessOsPermissions } = await import('/shared/business-permissions.js');
         const targetModule = {
           id: 'phase12-agent-scope-app',
           title: 'Phase 12 Agent Scope App',
@@ -11246,7 +11246,7 @@ function ensureCtoxSmokeBinary() {
           permissionsMod,
           lifecycleMod,
         ] = await Promise.all([
-          import('/shared/permissions.js'),
+          import('/shared/business-permissions.js'),
           import('/shared/app-lifecycle.js'),
         ]);
         const { BusinessOsPermissions } = permissionsMod;
@@ -11995,7 +11995,7 @@ function ensureCtoxSmokeBinary() {
               source: 'local',
               install_scope: 'store',
               entry: 'modules/outbound/index.html',
-              schema: '/modules/outbound/schema.js',
+              schema: '/modules/outbound/collections.schema.json',
               collection: 'outbound_campaigns',
               collections: [
                 'business_commands',
@@ -12153,7 +12153,9 @@ function ensureCtoxSmokeBinary() {
             state.session = packagedGuardSession;
             state.governance = governance;
             if (spec.schema && !state.db?.collection?.(packagedGuardCollection)) {
-              const schemaModule = await import(spec.schema);
+              const schemaModule = spec.schema.endsWith('.json')
+                ? (await import(spec.schema, { with: { type: 'json' } })).default
+                : await import(spec.schema);
               const missingCollections = {};
               for (const name of spec.collections) {
                 if (state.db?.collection?.(name) || !schemaModule.collections?.[name]) continue;
@@ -12691,7 +12693,7 @@ function ensureCtoxSmokeBinary() {
           permissionsMod,
           lifecycleMod,
         ] = await Promise.all([
-          import('/shared/permissions.js'),
+          import('/shared/business-permissions.js'),
           import('/shared/app-lifecycle.js'),
         ]);
         const { BusinessOsPermissions } = permissionsMod;
@@ -13101,7 +13103,7 @@ function ensureCtoxSmokeBinary() {
           permissionsMod,
           lifecycleMod,
         ] = await Promise.all([
-          import('/shared/permissions.js'),
+          import('/shared/business-permissions.js'),
           import('/shared/app-lifecycle.js'),
         ]);
         const { BusinessOsPermissions } = permissionsMod;

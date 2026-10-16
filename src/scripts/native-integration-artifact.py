@@ -221,15 +221,9 @@ def main():
     run('customer-identity', ['node',
         'src/apps/business-os/rxdb/tests/customer-identifier-inventory-smoke.mjs'])
     run('content-guard', ['node', 'src/apps/business-os/scripts/audit-business-os-content.mjs'])
-    generation_output = run('shell-generation', [
-        'node', '--test', '--test-reporter=tap',
-        'src/apps/business-os/shared/shell-generation.test.mjs',
-    ])
-    for metric, expected in [('tests', 6), ('pass', 6), ('fail', 0), ('skipped', 0)]:
-        if re.findall(r'^# ' + metric + r' (\d+)$', generation_output, re.MULTILINE) != [str(expected)]:
-            raise RuntimeError(f'Unexpected shell generation regression {metric} count')
-    RECORD['shell_generation_tests'] = 6
-    save()
+    # The retired Shell-v2 generation/UI inventory is not a native artifact
+    # prerequisite. Native release authenticity, transport and policy checks
+    # below remain; Shell-v4 acceptance belongs to its own real release path.
     if not focused:
         # Preserve the four existing sync suites and their exact discovery count.
         # Additional native source groups are discovered below, without zero-match passes.
@@ -366,22 +360,11 @@ def main():
     run('desktop-icon-cancellation', ['node', '--test',
                                       'src/apps/business-os/modules/desktop/tests/desktop.test.mjs'])
     run('business-os-module-bundles', ['npm', '--prefix', 'src/apps/business-os', 'run', 'test:module-bundles'])
-    run('shell-contract', ['node', 'src/apps/business-os/scripts/assert-shell-v2-contract.mjs'])
     startup = run('shell-startup-cache', ['node', '--test',
                   'src/apps/business-os/scripts/test-shell-window-cache-startup.mjs'])
     if not re.search(r'^# tests 3$', startup, re.MULTILINE) or not re.search(
             r'^# pass 3$', startup, re.MULTILINE):
         raise RuntimeError('All three Shell startup cache regressions must pass')
-    geometry_dir = EVIDENCE / 'shell-geometry'
-    run('shell-geometry', ['node', 'src/apps/business-os/scripts/shell-v2-geometry-lab.mjs',
-                          '--apps', 'mail', '--widths', '1180,720',
-                          '--output-dir', str(geometry_dir)])
-    geometry = json.loads((geometry_dir / 'report.json').read_text())
-    if len(geometry) != 2 or {(item['app'], item['width']) for item in geometry} != {
-            ('mail', 1180), ('mail', 720)} or not all(item['ok'] for item in geometry):
-        raise RuntimeError('Required Mail shell geometry cases did not all pass')
-    RECORD['shell_geometry'] = geometry
-    save()
     run('rxdb-wire-fixture', ['cargo', 'build', '--locked', '--manifest-path',
                              'src/core/rxdb/Cargo.toml', '--example',
                              'v15_wire_daemon', '--target-dir', str(target_dir),
