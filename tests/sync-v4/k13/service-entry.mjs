@@ -1,7 +1,7 @@
 // Test-only adapter for #810's Native lifecycle. No product/harness file edits.
 import fs from 'node:fs';
 import {resolve} from 'node:path';
-import {createHash} from 'node:crypto';
+import {hashFile} from './build-receipt.mjs';
 
 export function installServiceEntry(Native) {
   Native.prototype.prepare=async function() {
@@ -23,7 +23,7 @@ export function installServiceEntry(Native) {
   };
   Native.prototype.serve=function() {
     const args=['service','--foreground','--root',this.config.root];
-    const actual=createHash('sha256').update(fs.readFileSync(this.config.binary)).digest('hex');
+    const actual=hashFile(this.config.binary);
     if(actual!==this.config.binarySha256)throw Error('P6 service binary changed after verification');
     const child=this.start('daemon',this.config.binary,args);
     fs.writeFileSync(resolve(this.config.output,'p6-daemon-entry.json'),JSON.stringify({
