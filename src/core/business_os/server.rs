@@ -164,6 +164,11 @@ pub fn serve_business_os(root: &Path, options: BusinessOsServeOptions) -> anyhow
     {
         eprintln!("[business-os] reconciled release-managed module shadows: {reconciled}");
     }
+    // Prepare the generation-bound bootstrap catalog before accepting its
+    // first document request. Later installs are detected by the same reader.
+    if let Err(err) = store::cached_module_catalog_for_bootstrap(root) {
+        eprintln!("[business-os] bootstrap catalog admission failed: {err:#}");
+    }
     // Claim the HTTP surface before opening the store or starting the native
     // peer. A legacy standalone shell may still own the address during an
     // upgrade; failing here keeps that ownership conflict away from SQLite.
@@ -3875,7 +3880,7 @@ fn launch_config_value(
     sync_config: &store::BusinessOsSyncConfig,
 ) -> anyhow::Result<Value> {
     let mut value = serde_json::to_value(sync_config)?;
-    if let Ok(catalog) = store::module_catalog_for_rxdb(root) {
+    if let Ok(catalog) = store::cached_module_catalog_for_bootstrap(root) {
         if let Some(object) = value.as_object_mut() {
             object.insert("module_catalog_snapshot".to_owned(), catalog);
             object.insert(
