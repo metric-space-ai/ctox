@@ -134,6 +134,18 @@ async fn p6_e55_revoked_app_is_unreadable_before_reauthentication() {
     f.session.revoke_app("a").unwrap();
     assert!(f.read(&renewed,"alpha@g1",1001).await.is_err(), "revoked app remained readable");
     let token = f.session.issue("a",1001).await.unwrap();
+    // A principal change is fenced even before the transport has rebound the
+    // cached peer. The mandatory adapter check runs in this actual writer TX.
+    f.store.writer().submit(WriteJob::new(Default::default(), |tx| {
+        tx.execute("UPDATE c_business_users SET data=json_set(data,'$.active',0) WHERE id='alice'",[])?;
+        Ok(())
+    })).unwrap().await.unwrap();
+    assert!(f.read(&token,"alpha@g1",1002).await.is_err(), "changed principal retained grant");
+    assert!(f.session.issue("a",1002).await.is_err(), "changed principal obtained grant");
+    f.store.writer().submit(WriteJob::new(Default::default(), |tx| {
+        tx.execute("UPDATE c_business_users SET data=json_set(data,'$.active',1) WHERE id='alice'",[])?;
+        Ok(())
+    })).unwrap().await.unwrap();
     // Publish policy through the same real writer. Old grants must fail even
     // before the commit-driven control notification has been consumed.
     f.auth.replace(vec![], manifests()).await.unwrap();
