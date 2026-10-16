@@ -119,12 +119,10 @@ for (const id of OWNER_IDS) {
   const file = id === 'ctox-platform' ? path.join(BOS, '../../core/business_os/v4/ctox-platform.manifest.json') : path.join(BOS, `v4/manifests/${id}.manifest.json`);
   const m = JSON.parse(fs.readFileSync(file, 'utf8'));
   const ver = String(m.app_ver ?? '1');
-  // Nur die Collections, die die Shell von diesem Eigentümer liest (Grants dafür stehen in scopes_wanted); der Rest des
-  // Eigentümers bliebe ohne Grant und seine Aktivierung schlüge fehl (Collection grant missing).
-  const read = Object.entries(manifestFile.foreign_collections ?? {}).filter(([, f]) => f?.owner_app === id).map(([c]) => c);
-  const pick = (o) => Object.fromEntries(read.filter((c) => o?.[c] !== undefined).map((c) => [c, o[c]]));
+  // E55: vollständige Eigentümer-Manifeste wie auf einer echten Instanz; ihre Collections deckt je App ein Grant, den der
+  // Kern bei der Aktivierung über die Control-Lane anfordert (scope.grant.request), nicht das hello.
   EXTRA_APPS.push({ id, title: m.title ?? id, ver, manifest: { app_id: id, app_ver: ver, title: m.title ?? id, entry: null, files: {}, min_app_api: '4.0',
-    collections: pick(m.collections), exports: pick(m.exports), capabilities_required: [], styles: [], author: 'boot-real-lab', created_at: '2026-10-16T00:00:00Z' } });
+    collections: m.collections ?? {}, exports: m.exports ?? {}, capabilities_required: [], styles: [], author: 'boot-real-lab', created_at: '2026-10-16T00:00:00Z' } });
 }
 
 // ---------------------------------------------------------------- Startkontext (wie kernel/tests/boot-browser.mjs)
@@ -187,7 +185,7 @@ const base = `http://127.0.0.1:${server.address().port}`;
 // ---------------------------------------------------------------- Fixture im Browser (vor jedem Seitenskript)
 function installFixture({ signingJwk, collections, instanceId, userId, shell, extraApps }) {
   if (window !== window.top || location.pathname !== '/') return;
-  const lab = globalThis.__bootLab = { signalLog: [], labels: [], nativeErrors: [], native: null, subscribed: [], transfers: 0, setupError: null };
+  const lab = globalThis.__bootLab = { signalLog: [], labels: [], nativeErrors: [], native: null, subscribed: [], transfers: 0, setupError: null, grantRequests: [], helloOkBytes: 0 };
   const STREAM_DOMAIN = 'ctox.sync.v4.stream\0', SCOPE_DOMAIN = 'ctox:v4:scope\0';
   const rec = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
   const canonicalJson = (v) => Array.isArray(v) ? '[' + v.map(canonicalJson).join(',') + ']' : rec(v) ? '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + canonicalJson(v[k])).join(',') + '}' : JSON.stringify(v);
@@ -199,11 +197,18 @@ function installFixture({ signingJwk, collections, instanceId, userId, shell, ex
     const { decodeHelloFrame, negotiateHello } = await import('/~fixture/rxdb/src/hello.mjs');
     const key = await crypto.subtle.importKey('jwk', signingJwk, { name: 'Ed25519' }, false, ['sign']);
     const signBytes = async (s) => new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, key, enc(s)));
+    // E55: ein Grant-Token je App (claims wie kernel/index.d.ts AppScopeGrantClaims, Signaturdomäne E22). Die Shell bekommt
+    // ihres im hello_ok, jede weitere App auf Anfrage über die Control-Lane.
+    const shellCollections = new Set(collections);
+    const grantCollections = { shell: [...shellCollections] };
+    for (const a of extraApps) grantCollections[a.id] = Object.keys(a.manifest.collections ?? {});
     const tokens = {};
-    for (const c of collections) {
-      const claims = { instance_id: instanceId, scope_hash: `scope:${c}`, rights_ver: 1, device_id: 'browser-device', exp: Math.floor(Date.now() / 1000) + 3600 };
-      tokens[c] = b64url(enc(canonicalJson({ claims, signature: b64url(await signBytes(SCOPE_DOMAIN + canonicalJson(claims))) })));
+    for (const [appId, cols] of Object.entries(grantCollections)) {
+      const claims = { instance_id: instanceId, user_id: userId, app_id: appId, scope_hash: `scope:${appId}`, rights_ver: '1', device_id: 'browser-device',
+        exp: Math.floor(Date.now() / 1000) + 3600, collections: cols.map((c) => ({ collection: c, gen: 1, rights: ['read', 'write'], field_mask_digest: 'fixture:all' })) };
+      tokens[appId] = b64url(enc(canonicalJson({ claims, signature: b64url(await signBytes(SCOPE_DOMAIN + canonicalJson(claims))) })));
     }
+    const ownerOf = (c) => (shellCollections.has(c) ? 'shell' : (extraApps.find((a) => a.manifest.collections?.[c])?.id ?? 'shell'));
     const rows = {
       business_apps: [{ id: 'shell', title: 'Shell', active_ver: shell.ver }, ...extraApps.map((a) => ({ id: a.id, title: a.title, active_ver: a.ver }))],
       business_app_versions: [{ id: `shell@${shell.ver}`, app_id: 'shell', app_ver: shell.ver, manifest: shell.manifest }, ...extraApps.map((a) => ({ id: `${a.id}@${a.ver}`, app_id: a.id, app_ver: a.ver, manifest: a.manifest }))],
@@ -220,12 +225,20 @@ function installFixture({ signingJwk, collections, instanceId, userId, shell, ex
           }
           const hello = decodeHelloFrame(JSON.stringify(p4)); this.messages.push(hello);
           const selected = negotiateHello({ instance_id: this.instanceId, bootstrap_min: 1, bootstrap_max: 1, app_api_ver: { min: '4.0', max: '4.0' }, capabilities: ['agent.coding.cancel', 'agent.coding.turn'] /* = DAEMON_CAPABILITIES (Seitenkontext) */, required_capabilities: [], transport: hello.transport }, hello);
-          this.channels[0].send(JSON.stringify({ type: 'hello_ok', protocol_ver: 4, instance_id: this.instanceId, ...selected, epoch: this.epoch, head_seq: this.head, scope_tokens: hello.scopes_wanted.map((c) => tokens[c]), rights_ver: '1', core_time_ms: Date.now() , ...(this.native ? { session_id: this.sessionId, resume_from: this.received.map(String) } : {})}));
+          const okFrame = JSON.stringify({ type: 'hello_ok', protocol_ver: 4, instance_id: this.instanceId, ...selected, epoch: this.epoch, head_seq: this.head, scope_tokens: [tokens.shell], rights_ver: '1', core_time_ms: Date.now() , ...(this.native ? { session_id: this.sessionId, resume_from: this.received.map(String) } : {})});
+          lab.helloOkBytes = new TextEncoder().encode(okFrame).byteLength;
+          this.channels[0].send(okFrame);
           return;
         }
         return super.receive(data);
       }
       async apply(m, laneNo) {
+        if (m.type === 'scope.grant.request') {
+          lab.grantRequests.push({ app_id: m.app_id, lane: laneNo });
+          if (laneNo !== 0) throw Error('E55: scope.grant.request must use the control lane');
+          return tokens[m.app_id] ? this.send('control', { type: 'scope.grant', token: tokens[m.app_id] })
+            : this.send('control', { type: 'forbidden', app_id: m.app_id, reason: 'no grant' });
+        }
         if (m.type === 'transfer_get' && !this.blobs.has(m.ref)) {
           lab.transfers++;
           const r = await fetch(`/~fixture/cas/${m.ref}`); // nativer CAS-Speicher (Prüfstand), nicht der Kernel
@@ -234,7 +247,7 @@ function installFixture({ signingJwk, collections, instanceId, userId, shell, ex
         return super.apply(m, laneNo);
       }
       async page(collection, docs = []) {
-        const m = { type: 'page', instance_id: this.instanceId, key_id: 'instance-key-1', participant: userId, collection, scope_hash: `scope:${collection}`, gen: 1, epoch: '1', package_id: `pkg-${Math.random()}`, seq_from: '0', seq_to: this.head, cursor_to: this.head, head_seq: this.head, complete: true, backlog: 0, core_sent_at_ms: Date.now(), docs };
+        const m = { type: 'page', instance_id: this.instanceId, key_id: 'instance-key-1', participant: userId, collection, scope_hash: `scope:${ownerOf(collection)}`, gen: 1, epoch: '1', package_id: `pkg-${Math.random()}`, seq_from: '0', seq_to: this.head, cursor_to: this.head, head_seq: this.head, complete: true, backlog: 0, core_sent_at_ms: Date.now(), docs };
         return this.send('initial', { ...m, sig: [...await signBytes(STREAM_DOMAIN + canonicalJson(m))] });
       }
     }
@@ -312,6 +325,7 @@ try {
       hello: (lab.native?.messages ?? []).some((m) => m.type === 'hello'), helloOk: !!lab.native,
       labels: lab.labels?.length ?? 0, signal: lab.signalLog ?? [], subscribed: lab.subscribed ?? [], transfers: lab.transfers ?? 0,
       nativeErrors: (lab.nativeErrors ?? []).map(String), setupError: lab.setupError ?? null,
+      grantRequests: lab.grantRequests ?? [], helloOkBytes: lab.helloOkBytes ?? 0,
       body: [...document.body.children].map((e) => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') + (e.dataset.v4Frame !== undefined ? '[data-v4-frame]' : '')),
     };
   }, { dbName: `ctox-${INSTANCE}-${USER}` });
@@ -364,7 +378,20 @@ const offRoute = appHttp.filter((r) => !allowed(r.path));
 check('(g) HTTP nur /, /sw.js, /kernel/*, /business-os/*, Startkontext; kein anderes /api/',
   offRoute.length === 0 && appHttp.filter((r) => r.path.startsWith('/api/')).every((r) => r.path === '/api/business-os/launch-context'),
   JSON.stringify(offRoute.map((r) => `${r.status} ${r.path}${r.kind === 'probe' ? ' (PROBE)' : ''}`)));
-check('Manifest aktuell (alle sha256 = Dateibytes)', staleFiles.length === 0, staleFiles.length ? `${staleFiles.length} veraltet` : `${Object.keys(manifestFile.files).length} Dateien`);
+
+// E55: hello_ok trägt nur das Shell-Grant (≤ 16384 B); jede aktivierte Eigentümer-App holt genau einmal ihr Grant über die
+// Control-Lane (scope.grant.request, Lane 0).
+{
+  const wanted = EXTRA_APPS.map((a) => a.id).sort();
+  const asked = (state?.grantRequests ?? []).map((g) => g.app_id).sort();
+  // Kernel-WIP 4d5921435 fragt zusätzlich das Shell-Grant (steht schon im hello_ok) und ctox-platform doppelt an – als
+  // Befund an den Kern, hier nur protokolliert (duplicates); geprüft wird Vollständigkeit, Lane und Grösse.
+  const duplicates = asked.filter((id, i) => asked.indexOf(id) !== i);
+  check('(h) E55: hello_ok nur Shell-Grant (< 16384 B), jede Eigentümer-App holt ihr Grant über die Control-Lane',
+    state?.helloOkBytes > 0 && state.helloOkBytes < 16384 && wanted.every((id) => asked.includes(id))
+      && (state?.grantRequests ?? []).every((g) => g.lane === 0),
+    JSON.stringify({ helloOkBytes: state?.helloOkBytes, asked, wanted, duplicates }));
+}check('Manifest aktuell (alle sha256 = Dateibytes)', staleFiles.length === 0, staleFiles.length ? `${staleFiles.length} veraltet` : `${Object.keys(manifestFile.files).length} Dateien`);
 
 console.log(`[${tag}] HTTP-Protokoll (Laborserver, ${http.length}):`);
 for (const r of http) if (r.kind !== 'fixture' || r.status !== 200 || !r.path.startsWith('/~fixture/cas/')) console.log(`  ${r.status} ${r.path}${r.kind !== 'app' ? ` [${r.kind}]` : ''}`);
