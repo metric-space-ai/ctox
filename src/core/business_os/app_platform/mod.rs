@@ -94,6 +94,7 @@ pub(crate) struct Platform {
     migrations: MigrationResolver,
     secret_writer: Option<WriterHandle>,
     model_checker: Option<ModelChecker>,
+    worker_reader: Option<ctox_store::read_pool::ReadPool>,
 }
 
 impl Platform {
@@ -141,12 +142,24 @@ impl Platform {
             migrations: Arc::new(|_, _, _| false),
             secret_writer: None,
             model_checker: None,
+            worker_reader: None,
         }
     }
 
     /// The daemon lends its own root; command JSON cannot choose it. Network
     /// work uses the existing native gateway, outside the Store writer.
     pub(crate) fn with_native_model_checks(mut self, root: std::path::PathBuf) -> Self {
+        // This is the existing native-root attachment point. Borrow its BOS
+        // reader as well; do not alter the concurrently-owned feed or open a DB.
+        self.worker_reader = crate::service::store_inputs::store_inputs(&root)
+            .ok()
+            .and_then(|inputs| {
+                inputs
+                    .databases
+                    .get("bos")
+                    .filter(|db| db.readers.generation() == db.writer.generation().0)
+                    .map(|db| db.readers.clone())
+            });
         self.model_checker = Some(Arc::new(move |actor, request, fence| {
             Box::pin(crate::execution::cliproxyapi_host::model_probe::check(
                 root.clone(),
@@ -158,6 +171,56 @@ impl Platform {
             ))
         }));
         self
+    }
+
+    pub(crate) fn with_native_worker_database(
+        mut self,
+        database: &crate::service::store_runtime::Database,
+    ) -> Result<Self, StoreError> {
+        if database.readers.generation() != database.writer.generation().0 {
+            return Err(StoreError::Invalid(
+                "worker identity owner generation differs".into(),
+            ));
+        }
+        self.worker_reader = Some(database.readers.clone());
+        Ok(self)
+    }
+
+    async fn worker_binding(
+        &self,
+        device: String,
+    ) -> Result<Option<crate::business_os::machine_enrollment::ActiveDeviceEnrollment>, StoreError>
+    {
+        let reader = self.worker_reader.as_ref().ok_or(StoreError::Closed)?;
+        reader
+            .read(move |tx| {
+                Ok(
+                    crate::business_os::devices::active_machine_enrollment(tx, &device).map_err(
+                        |_| StoreError::Invalid("native machine binding lookup failed".into()),
+                    ),
+                )
+            })
+            .await?
+    }
+
+    /// Native execution consumer: resolve the live source again, then inspect
+    /// this grant's current canonical rights, actor, scope and expiry. No DB
+    /// owner is nested in another writer and no claimed JSON binding is used.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) async fn worker_grant(
+        &self,
+        id: String,
+        actor: BusinessOsActor,
+        app: String,
+        device: String,
+        now: u64,
+    ) -> Result<Option<Value>, StoreError> {
+        let binding = self.worker_binding(device.clone()).await?;
+        self.writer
+            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+                platform_routes::worker_grant(tx, &id, &actor, &app, &device, now, binding.as_ref())
+            }))?
+            .await
     }
 
     /// CUTOVER composition supplies an already registered secrets DB owner.
@@ -197,6 +260,40 @@ impl Platform {
         now_ms: u64,
         fence: Option<ModelCheckFence>,
     ) -> Value {
+        if command.command_type == "ctox.workjet.remote_worker.admit" {
+            let device = command.payload["device_id"]
+                .as_str()
+                .unwrap_or("")
+                .to_owned();
+            use crate::business_os::machine_enrollment::DeviceEnrollmentResolution;
+            let binding = match self.worker_binding(device).await {
+                Ok(binding) => DeviceEnrollmentResolution::Resolved(binding),
+                Err(_) => DeviceEnrollmentResolution::Unavailable,
+            };
+            let signer = self.signer.clone();
+            let migrations = self.migrations.clone();
+            let secret_owner_available = self.secret_writer.is_some();
+            return match self
+                .writer
+                .submit(WriteJob::new(JobOptions::default(), move |tx| {
+                    if let Some(fence) = fence {
+                        (fence.commit)(tx)?;
+                    }
+                    commands::execute_with_worker_binding(
+                        tx,
+                        &actor,
+                        &command,
+                        now_ms,
+                        secret_owner_available,
+                        signer.as_ref(),
+                        migrations.as_ref(),
+                        &binding,
+                    )
+                })) {
+                Ok(job) => job.await.unwrap_or_else(store_failure),
+                Err(e) => store_failure(e),
+            };
+        }
         let prepared = match self.execute(actor.clone(), command.clone(), now_ms) {
             Ok(job) => match job.await {
                 Ok(value) => value,

@@ -123,6 +123,24 @@ pub(super) fn execute(
     command: &CommandDocument,
     now: u64,
 ) -> Result<Value, StoreError> {
+    execute_with_binding(
+        tx,
+        actor,
+        command,
+        now,
+        &crate::business_os::machine_enrollment::DeviceEnrollmentResolution::Unavailable,
+    )
+}
+
+/// Only the native resolver supplies this typed binding after reading the
+/// existing BOS owner. No wire value or caller role can create one.
+pub(super) fn execute_with_binding(
+    tx: &Transaction<'_>,
+    actor: &BusinessOsActor,
+    command: &CommandDocument,
+    now: u64,
+    resolution: &crate::business_os::machine_enrollment::DeviceEnrollmentResolution,
+) -> Result<Value, StoreError> {
     initialize(tx)?;
     let admitted = allowed(tx, actor, &command.command_type);
     tx.execute(
@@ -173,6 +191,18 @@ pub(super) fn execute(
                 }
             }
             "ctox.workjet.remote_worker.admit" => {
+                let crate::business_os::machine_enrollment::DeviceEnrollmentResolution::Resolved(
+                    binding,
+                ) = resolution
+                else {
+                    return commands::record(
+                        tx,
+                        actor,
+                        command,
+                        deny("unavailable", "native_machine_binding_required"),
+                        now,
+                    );
+                };
                 let a: Admission =
                     serde_json::from_value(command.payload.clone()).map_err(|_| invalid())?;
                 if a.ttl_ms == 0
@@ -191,14 +221,19 @@ pub(super) fn execute(
                     let device = commands::get(tx, "devices", &a.device_id)?;
                     let enrollment = commands::get(tx, "machine_enrollments", &a.enrollment_id)?;
                     let owner = actor.id.as_deref().unwrap();
-                    let current = device.as_ref().is_some_and(|d| {
-                        d["kind"] == "machine"
-                            && d["user_id"] == owner
-                            && d["machine_enrollment_id"] == a.enrollment_id
-                            && d["revoked"] != true
-                    }) && enrollment
+                    let current = device
                         .as_ref()
-                        .is_some_and(|e| e["status"] == "green" && e["created_by"] == owner);
+                        .zip(enrollment.as_ref())
+                        .is_some_and(|(d, e)| {
+                            crate::business_os::machine_enrollment::worker_binding_is_current(
+                                d,
+                                e,
+                                &a.device_id,
+                                &a.enrollment_id,
+                                owner,
+                                binding.as_ref(),
+                            )
+                        });
                     if !current {
                         deny("forbidden", "machine_binding_invalid")
                     } else {
@@ -214,11 +249,9 @@ pub(super) fn execute(
                 if command.payload != json!({}) {
                     deny("invalid", "payload_invalid")
                 } else {
-                    tx.execute(
-                        "INSERT INTO _platform_maintenance_requests VALUES(?1,?2,'awaiting_reply')",
-                        params![command.id, actor.id],
-                    )?;
-                    json!({"restart_requested":true,"awaiting_reply":true})
+                    // Post-M7: no request can claim a restart until the native
+                    // completion publication and service consumer are attached.
+                    deny("unavailable", "restart_publication_consumer_required")
                 }
             }
             _ => return Err(invalid()),
@@ -267,6 +300,7 @@ pub(crate) fn worker_grant(
     app: &str,
     device_id: &str,
     now: u64,
+    binding: Option<&crate::business_os::machine_enrollment::ActiveDeviceEnrollment>,
 ) -> Result<Option<Value>, StoreError> {
     initialize(tx)?;
     let Some(owner_id) = actor.id.as_deref() else {
@@ -296,15 +330,16 @@ pub(crate) fn worker_grant(
     }
     let device = commands::get(tx, "devices", device_id)?;
     let machine = commands::get(tx, "machine_enrollments", &enrollment)?;
-    if !device.as_ref().is_some_and(|d| {
-        d["kind"] == "machine"
-            && d["user_id"] == owner
-            && d["machine_enrollment_id"] == enrollment
-            && d["revoked"] != true
-    }) || !machine
-        .as_ref()
-        .is_some_and(|m| m["status"] == "green" && m["created_by"] == owner)
-    {
+    if !device.as_ref().zip(machine.as_ref()).is_some_and(|(d, m)| {
+        crate::business_os::machine_enrollment::worker_binding_is_current(
+            d,
+            m,
+            device_id,
+            &enrollment,
+            &owner,
+            binding,
+        )
+    }) {
         return Ok(None);
     }
     let scopes: Value = serde_json::from_str(&scopes).map_err(|_| invalid())?;

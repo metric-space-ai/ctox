@@ -736,6 +736,30 @@ pub(super) fn execute(
           + Send
           + Sync),
 ) -> Result<Value, StoreError> {
+    execute_with_worker_binding(
+        tx,
+        actor,
+        command,
+        now,
+        secret_owner_available,
+        signer,
+        migrations,
+        &crate::business_os::machine_enrollment::DeviceEnrollmentResolution::Unavailable,
+    )
+}
+
+pub(super) fn execute_with_worker_binding(
+    tx: &Transaction<'_>,
+    actor: &BusinessOsActor,
+    command: &CommandDocument,
+    now: u64,
+    secret_owner_available: bool,
+    signer: &dyn InstanceSigner,
+    migrations: &(dyn Fn(&CollectionDefinition, &CollectionDefinition, &Value) -> bool
+          + Send
+          + Sync),
+    worker_binding: &crate::business_os::machine_enrollment::DeviceEnrollmentResolution,
+) -> Result<Value, StoreError> {
     ctox_store::change_log::subscription::write_contract::routes::validate_persisted_input(
         &json!({"type":command.command_type,"payload":command.payload}),
     )
@@ -773,7 +797,13 @@ pub(super) fn execute(
         }
     }
     if super::platform_routes::handles(&command.command_type) {
-        return super::platform_routes::execute(tx, actor, command, now);
+        return super::platform_routes::execute_with_binding(
+            tx,
+            actor,
+            command,
+            now,
+            worker_binding,
+        );
     }
     if matches!(
         command.command_type.as_str(),

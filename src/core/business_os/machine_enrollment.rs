@@ -98,6 +98,89 @@ pub(crate) fn ensure_table(conn: &Connection) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Core-owned live binding metadata. No token, proof or peer-supplied owner
+/// is projected. Ambiguous bindings fail closed instead of choosing a row.
+#[derive(Clone)]
+pub(crate) enum DeviceEnrollmentResolution {
+    Unavailable,
+    Resolved(Option<ActiveDeviceEnrollment>),
+}
+
+#[derive(Clone)]
+pub(crate) struct ActiveDeviceEnrollment {
+    pub device_id: String,
+    pub enrollment_id: String,
+    pub owner_id: String,
+}
+
+pub(crate) fn active_device_enrollments(
+    conn: &Connection,
+) -> anyhow::Result<std::collections::BTreeMap<String, ActiveDeviceEnrollment>> {
+    let tables: i64 = conn.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('business_machine_enrollments','business_mobile_invites')",
+        [], |r| r.get(0),
+    )?;
+    let mut bindings = std::collections::BTreeMap::new();
+    if tables != 2 {
+        return Ok(bindings);
+    }
+    let mut ambiguous = std::collections::BTreeSet::new();
+    let mut query = conn.prepare(
+        "SELECT i.device_pairing_id, m.enrollment_id, m.created_by
+         FROM business_machine_enrollments m
+         JOIN business_mobile_invites i ON i.user_id=m.bound_user_id
+         WHERE m.status='green' AND m.redeemed_at_ms IS NOT NULL
+           AND (m.invite_user_id IS NULL OR m.invite_user_id=i.user_id)
+           AND i.revoked_at_ms IS NULL AND i.redeemed_at_ms IS NOT NULL
+           AND i.device_pairing_id IS NOT NULL AND i.device_pairing_id<>''",
+    )?;
+    for row in query.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            ActiveDeviceEnrollment {
+                device_id: r.get(0)?,
+                enrollment_id: r.get(1)?,
+                owner_id: r.get(2)?,
+            },
+        ))
+    })? {
+        let (id, binding) = row?;
+        if bindings.insert(id.clone(), binding).is_some() {
+            ambiguous.insert(id);
+        }
+    }
+    for id in ambiguous {
+        bindings.remove(&id);
+    }
+    Ok(bindings)
+}
+
+/// The canonical writer consumes only core-owned projections. Both admission
+/// and execution recheck this same snapshot; same creator alone is not a bind.
+pub(crate) fn worker_binding_is_current(
+    device: &Value,
+    enrollment: &Value,
+    device_id: &str,
+    enrollment_id: &str,
+    owner: &str,
+    binding: Option<&ActiveDeviceEnrollment>,
+) -> bool {
+    binding.is_some_and(|b| {
+        b.device_id == device_id && b.enrollment_id == enrollment_id && b.owner_id == owner
+    }) && !owner.is_empty()
+        && device["id"] == device_id
+        && device["kind"] == "machine"
+        && device["user_id"] == owner
+        && device["kind_source"] == "enrollment"
+        && device["revoked"] != true
+        && device["_deleted"] != true
+        && enrollment["id"] == enrollment_id
+        && enrollment["status"] == "green"
+        && enrollment["created_by"] == owner
+        && enrollment["revoked"] != true
+        && enrollment["_deleted"] != true
+}
+
 fn sha256_hex(value: &str) -> String {
     ring::digest::digest(&ring::digest::SHA256, value.as_bytes())
         .as_ref()

@@ -84,6 +84,15 @@ pub(crate) fn may_read(viewer_id: &str, viewer_manages_machines: bool, device: &
             && device.get("user_id").and_then(Value::as_str) == Some(viewer_id))
 }
 
+/// Resolve through the retained BOS owner, never from app payload or a guessed
+/// same-creator association. Keep the public device document schema unchanged.
+pub(crate) fn active_machine_enrollment(
+    conn: &Connection,
+    device_id: &str,
+) -> anyhow::Result<Option<super::machine_enrollment::ActiveDeviceEnrollment>> {
+    Ok(super::machine_enrollment::active_device_enrollments(conn)?.remove(device_id))
+}
+
 /// All active device documents of this instance.
 pub(crate) fn list(conn: &Connection) -> anyhow::Result<Vec<Value>> {
     if !table_exists(conn, "business_mobile_invites")? {
