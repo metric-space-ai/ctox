@@ -13,7 +13,7 @@ import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const APP = '/customer-modules/outbound-lead-generation';
