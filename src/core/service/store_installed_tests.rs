@@ -190,18 +190,32 @@ impl Installed {
     }
     async fn membership(&self) -> anyhow::Result<()> {
         let path = self.endpoint().await?;
-        tokio::time::timeout(Duration::from_secs(15),async move {
+        tokio::time::timeout(Duration::from_secs(15), async move {
             let mut stream = tokio::net::UnixStream::connect(path).await?;
-            let request = serde_json::to_vec(&serde_json::json!({"version":1,"requestId":"cutover5-idle","operation":{"type":"workerMembership","nodeId":"9001"}}))?;
-            stream.write_all(&(request.len() as u32).to_be_bytes()).await?;
+            let request = serde_json::to_vec(&ctox_sync::contracts::SyncIpcRequest {
+                version: ctox_sync::ipc::IPC_PROTOCOL_VERSION,
+                request_id: "cutover5-idle".into(),
+                operation: ctox_sync::contracts::SyncIpcOperation::WorkerMembership {
+                    node_id: 9001,
+                },
+            })?;
+            stream
+                .write_all(&(request.len() as u32).to_be_bytes())
+                .await?;
             stream.write_all(&request).await?;
             let size = stream.read_u32().await? as usize;
-            anyhow::ensure!(size <= 1048576,"IPC frame exceeded bound");
-            let mut response=vec![0;size];stream.read_exact(&mut response).await?;
-            let value:serde_json::Value=serde_json::from_slice(&response)?;
-            anyhow::ensure!(value["result"]["type"]=="workerMembership" && value["result"]["worker"].is_null(),"native quorum read failed: {value}");
-            Ok::<_,anyhow::Error>(())
-        }).await?
+            anyhow::ensure!(size <= 1048576, "IPC frame exceeded bound");
+            let mut response = vec![0; size];
+            stream.read_exact(&mut response).await?;
+            let value: serde_json::Value = serde_json::from_slice(&response)?;
+            anyhow::ensure!(
+                value["result"]["type"] == "workerMembership"
+                    && value["result"]["worker"].is_null(),
+                "native quorum read failed: {value}"
+            );
+            Ok::<_, anyhow::Error>(())
+        })
+        .await?
     }
     async fn stop(&mut self) -> anyhow::Result<()> {
         let pid = self.child.id().unwrap();
