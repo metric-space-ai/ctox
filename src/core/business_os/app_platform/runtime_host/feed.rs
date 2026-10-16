@@ -69,7 +69,7 @@ impl RuntimeBinding {
             )
             .await;
             if result.is_err() {
-                eprintln!("native app runtime feed stopped; ingress is closing");
+                eprintln!("native app runtime feed stopped; ingress is closing: {result:?}");
             }
             let drained = registration.shutdown().await;
             result.and(drained)

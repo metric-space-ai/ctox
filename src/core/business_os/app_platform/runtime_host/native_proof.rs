@@ -270,12 +270,14 @@ async fn native_daemon_hotplug_roundtrip_and_change() -> Result<()> {
         anyhow::ensure!(denied["status"]=="failed","removed app still admitted command: {denied}");
         Ok(json!({"publish_us":publish_us,"command_roundtrip_p99_us":samples[98],"samples":samples.len(),"native_quorum":true,"published":true,"change":true,"removed":true,"post_remove_denied":true}))
     }.await;
+    if let Err(error) = &proof { eprintln!("native hot-plug operation failed: {error:#}"); }
+    let mut shutdown_errors = Vec::new();
     for owner in &mut owners {
-        owner.shutdown().await?;
+        if let Err(error) = owner.shutdown().await { shutdown_errors.push(error.to_string()); }
     }
     assert!(
-        proof.is_ok(),
-        "productive native hot-plug failed: {proof:?}"
+        proof.is_ok() && shutdown_errors.is_empty(),
+        "productive native hot-plug failed: {proof:?}; shutdown: {shutdown_errors:?}"
     );
     println!("APP_PLATFORM_NATIVE_PROOF {}", proof?);
     Ok(())
