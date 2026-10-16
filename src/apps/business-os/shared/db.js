@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261015-shell-v2-settings-reconnect';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261016-shell-v2-plan-step-retry';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',
