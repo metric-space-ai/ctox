@@ -89,6 +89,15 @@ impl Dispatcher for Inspect {
         if self.closing.load(Ordering::Acquire) {
             return Err(StoreError::Closed);
         }
+        if request.method == "http.listen" {
+            return self
+                .http
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+                .ok_or(StoreError::Closed)?
+                .dispatch(request, options);
+        }
         if request.kind == JobKind::Read && request.method == "sync.identity" {
             if !request.payload.is_empty() {
                 return Err(StoreError::Invalid(
@@ -114,15 +123,6 @@ impl Dispatcher for Inspect {
                 let _ = reply.send(result);
             });
             return Ok(JobHandle::from_receiver(receive));
-        }
-        if request.method == "http.listen" {
-            return self
-                .http
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .clone()
-                .ok_or(StoreError::Closed)?
-                .dispatch(request, options);
         }
         if request.method == "queue.ack" {
             let queue = self

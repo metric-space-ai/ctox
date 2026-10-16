@@ -34,6 +34,7 @@ pub(crate) struct StoreInputs {
     native_session: OnceLock<NativeSessionInputs>,
     instance_signer:
         OnceLock<Arc<dyn ctox_store::change_log::subscription::protocol::InstanceSigner>>,
+    pub(super) verifier: OnceLock<Arc<super::store_verifier::CoreVerifier>>,
     closing: Arc<AtomicBool>,
     retired: AtomicBool,
     sync_reads: Arc<tokio::sync::Semaphore>,
@@ -66,6 +67,7 @@ impl InputRegistration {
             databases,
             native_session: OnceLock::new(),
             instance_signer: OnceLock::new(),
+            verifier: OnceLock::new(),
             closing,
             retired: AtomicBool::new(false),
             sync_reads: Arc::new(tokio::sync::Semaphore::new(64)),
@@ -120,6 +122,12 @@ pub(crate) struct ActivationSnapshot<T> {
     pub commits: CommitReceiver,
 }
 impl StoreInputs {
+    pub(crate) fn instance_verifier(
+        &self,
+    ) -> Result<Arc<super::store_verifier::CoreVerifier>, StoreError> {
+        self.check()?;
+        self.verifier.get().cloned().ok_or(StoreError::Closed)
+    }
     /// Available only after the real native host has attached. A storage-only
     /// daemon does not manufacture an execution authority for app activation.
     pub(crate) fn native_session(&self) -> Result<&NativeSessionInputs, StoreError> {

@@ -144,7 +144,7 @@ impl NativeOwners {
         )
         .await
         .map_err(|_| StoreError::Invalid("Store policy authority attachment failed".into()))?;
-        let policy = crate::business_os::policy::bind_policy_authority(rights)
+        let policy = crate::business_os::policy::bind_policy_authority(rights.clone())
             .map_err(|_| StoreError::Invalid("Store policy authority binding failed".into()))?;
         let signer_active = Arc::new(AtomicBool::new(true));
         let signer: Arc<dyn ctox_store::change_log::subscription::protocol::InstanceSigner> =
@@ -166,6 +166,10 @@ impl NativeOwners {
             session: None,
         };
         inputs.publish_instance_signer(signer.clone())?;
+        inputs
+            .verifier
+            .set(super::store_verifier::CoreVerifier::new(inputs, rights)?)
+            .map_err(|_| StoreError::AlreadyOwned)?;
         #[cfg(unix)]
         {
             native.session = super::store_native::NativeSessionOwner::start(
