@@ -367,7 +367,7 @@ async fn foreground_owns_real_files_and_drains_engine_before_store() -> anyhow::
         "instance identity changed after restart"
     );
     assert_eq!(second_signer.instance_id(), first_signer.instance_id());
-    let message = b"canonical instance restart proof";
+    let message = b"ctox.sync.v4.stream\0{\"proof\":\"instance restart\"}";
     let signature = second_signer.sign(message).map_err(anyhow::Error::msg)?;
     let hex = second_signer.key_id().strip_prefix("ed25519:").unwrap();
     let public: Vec<u8> = hex
