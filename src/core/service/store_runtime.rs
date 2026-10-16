@@ -367,6 +367,13 @@ impl DaemonStores {
         Ok(())
     }
 
+    /// A standalone foreground surface retains the same Core/Secrets owners
+    /// without a Sync engine. Its same-user public identity reader still needs
+    /// the trusted root; IPC clients never supply a root or key reference.
+    pub(crate) fn expose_identity_root(&mut self, root: &std::path::Path) {
+        *self.native_root.lock().unwrap_or_else(|p| p.into_inner()) = Some(root.to_owned());
+    }
+
     pub fn retire_inputs(&mut self) {
         self.inputs.take();
     }

@@ -466,6 +466,7 @@ pub(crate) fn with_cli_owners<T>(root: &Path, operation: impl FnOnce() -> Result
         let secrets_db = stores.register("secrets", DbId::new(crate::paths::secrets_db(&work))?, false,
             Arc::new(|tx| {crate::secrets::initialize_owned_secret_schema(tx).map_err(|_|ctox_store::StoreError::Invalid("secret schema initialization failed".into()))?; Ok(())})).await?;
         let secrets_owner = crate::secrets::SecretStore::attach(&work, secrets_db.writer, secrets_db.readers).await?;
+        stores.expose_identity_root(&work);
         Ok::<_, anyhow::Error>((core_owner, lcm, runtime_owner, secrets_owner))
     });
     let result = match attached {
