@@ -4281,6 +4281,29 @@ fn copy_launch_binary(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Source, adopted and prebuilt releases share one idempotent Linux setup.
+/// Legacy releases lack this mode: never run their full interactive installer.
+fn refresh_process_sandbox_profile(current_root: &Path) {
+    let script = current_root.join("install.sh");
+    let supported = fs::read_to_string(&script)
+        .map(|text| text.contains("# CTOX_E20_APPARMOR_INSTALL_V1"))
+        .unwrap_or(false);
+    if !supported {
+        progress_info(
+            "E20 AppArmor setup not supplied by this release; sandbox availability is unchanged",
+        );
+        return;
+    }
+    let result = Command::new("/bin/bash")
+        .arg(script)
+        .arg("--ensure-process-sandbox")
+        .stdin(std::process::Stdio::null())
+        .status();
+    if !result.is_ok_and(|status| status.success()) {
+        progress_info("E20 AppArmor setup failed; process.run requires a working sandbox and has no unconfined fallback");
+    }
+}
+
 fn refresh_service_unit(
     current_root: &Path,
     state_root: &Path,
@@ -4293,6 +4316,7 @@ fn refresh_service_unit(
     if !cfg!(target_os = "linux") {
         return Ok(());
     }
+    refresh_process_sandbox_profile(current_root);
     let Some(home_dir) = home_dir() else {
         return Ok(());
     };
@@ -4930,6 +4954,10 @@ fn create_symlink(target: &Path, link_path: &Path) -> Result<()> {
         Ok(())
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "process_sandbox_runtime_test.rs"]
+mod process_sandbox_runtime_test;
 
 #[cfg(test)]
 mod tests {

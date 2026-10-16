@@ -881,6 +881,222 @@ can_sudo() {
 }
 
 # ── Linux system prerequisites ────────────────────────────────────────────────
+# CTOX_E20_APPARMOR_INSTALL_V1 — also called by binary release upgrades.
+ensure_linux_process_sandbox() {
+  [[ "$(uname -s)" == "Linux" ]] || return 0
+  local code rc=0
+  local -a profile_args=("$@")
+  code="$(cat <<'CTOX_APPARMOR_PY'
+import fcntl
+import hashlib
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+
+MARKER = '# CTOX managed E20 userns profile v1\n'
+PROFILE = 'ctox-e20-bwrap'
+
+
+def restricted_ubuntu(root=Path('/')):
+    """Only Ubuntu 24.04+ whose kernel actually restricts user namespaces."""
+    try:
+        release = dict(line.split('=', 1) for line in
+                       (root / 'etc/os-release').read_text().splitlines()
+                       if '=' in line and not line.startswith('#'))
+        identity = release.get('ID', '').strip('\"\'')
+        version = release.get('VERSION_ID', '').strip('\"\'')
+        if identity != 'ubuntu' or not re.fullmatch(r'\d+\.\d+(?:\.\d+)?', version):
+            return False
+        if tuple(map(int, version.split('.')[:2])) < (24, 4):
+            return False
+        return (root / 'proc/sys/kernel/apparmor_restrict_unprivileged_userns').read_text().strip() == '1'
+    except FileNotFoundError:
+        return False
+
+
+def trusted(path):
+    """No user-writable executable, ancestor, symlink target or policy directory."""
+    path = path.resolve(strict=True)
+    for part in (path, *path.parents):
+        mode = part.stat()
+        if mode.st_uid != 0 or mode.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise RuntimeError('sandbox installation path is not root-owned and protected: ' + str(part))
+    return path
+
+
+def render(binary, profile_name=PROFILE, payload_name='ctox-e20-payload'):
+    value = str(binary)
+    if not re.fullmatch(r'/[a-zA-Z0-9_./+-]+', value):
+        raise RuntimeError('unsafe AppArmor attachment path')
+    if not all(re.fullmatch(r'[a-zA-Z0-9-]+', name)
+               for name in (profile_name, payload_name)):
+        raise RuntimeError('unsafe AppArmor profile name')
+    return MARKER + '''# Target is the exact protected bubblewrap selected by process.run.
+abi <abi/4.0>,
+include <tunables/global>
+profile ctox-e20-bwrap ATTACHMENT flags=(attach_disconnected,mediate_deleted) {
+  userns,
+  capability,
+  mount,
+  umount,
+  pivot_root,
+  /{,**} rwlkm,
+  network,
+  unix,
+  signal,
+  ptrace,
+  mqueue,
+  dbus,
+  /** px -> ctox-e20-bwrap//&ctox-e20-payload,
+}
+profile ctox-e20-payload flags=(attach_disconnected,mediate_deleted) {
+  userns,
+  /{,**} rwlkm,
+  network,
+  unix,
+  signal,
+  ptrace,
+  mqueue,
+  dbus,
+  mount,
+  umount,
+  pivot_root,
+  /** ix,
+  audit deny capability,
+}
+'''.replace('ATTACHMENT', value).replace('ctox-e20-bwrap', profile_name).replace(
+        'ctox-e20-payload', payload_name)
+
+
+def command(args):
+    # Never inherit loader/parser configuration across the privilege boundary.
+    env = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'}
+    return subprocess.run(args, check=True, env=env, timeout=60,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+def replace_file(path, data):
+    fd, name = tempfile.mkstemp(prefix='.ctox-e20-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'wb') as stream:
+            os.fchmod(stream.fileno(), 0o644)
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
+def install_profile(binary, destination=Path('/etc/apparmor.d/ctox-e20-bwrap'),
+                    parser=Path('/usr/sbin/apparmor_parser'), profiles=Path('/sys/kernel/security/apparmor/profiles'),
+                    profile_name=PROFILE, payload_name='ctox-e20-payload',
+                    distribution_binary=Path('/usr/bin/bwrap')):
+    """Own only this profile; preserve distributor/operator profiles and files."""
+    binary = trusted(binary)
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        raise RuntimeError('bubblewrap is not executable')
+    parser = trusted(parser)
+    directory = trusted(destination.parent)
+    if destination.is_symlink():
+        raise RuntimeError('refusing symlink at the managed AppArmor profile')
+    lock = directory / '.ctox-e20.lock'
+    fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        if os.fstat(fd).st_uid != 0 or os.fstat(fd).st_mode & 0o022:
+            raise RuntimeError('untrusted AppArmor installer lock')
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        if destination.exists():
+            trusted(destination)
+        previous = destination.read_bytes() if destination.exists() else None
+        if previous is not None and not previous.startswith(MARKER.encode()):
+            raise RuntimeError('refusing to overwrite a foreign AppArmor profile')
+        loaded = profiles.read_text()
+        if previous is None and binary == distribution_binary.resolve() and any(
+                                    line.split(' ', 1)[0] in ('bwrap', '/usr/bin/bwrap', '/bin/bwrap')
+                                    for line in loaded.splitlines()):
+            print('E20: using the existing distribution bubblewrap profile')
+            return 'distribution'
+        if previous is None and any(line.split(' ', 1)[0] in (profile_name, payload_name) for line in loaded.splitlines()):
+            raise RuntimeError('managed profile name is already owned outside this installation')
+        wanted = render(binary, profile_name, payload_name).encode()
+        fd_stage, stage_name = tempfile.mkstemp(prefix='.ctox-e20-check-', dir=directory)
+        stage = Path(stage_name)
+        try:
+            with os.fdopen(fd_stage, 'wb') as stream:
+                stream.write(wanted)
+            command([str(parser), '--jobs=2', '--skip-kernel-load', '--skip-cache',
+                     '--warn=rule-not-enforced', '--Werror=rule-not-enforced', str(stage)])
+            changed = previous != wanted
+            if changed:
+                replace_file(destination, wanted)
+            try:
+                command([str(parser), '--jobs=2', '--skip-cache', '--replace', str(destination)])
+            except BaseException:
+                if changed:
+                    if previous is None:
+                        destination.unlink(missing_ok=True)
+                    else:
+                        replace_file(destination, previous)
+                raise
+        finally:
+            stage.unlink(missing_ok=True)
+        print('E20: AppArmor userns profile ' + ('installed' if changed else 'reloaded'))
+        return 'installed' if changed else 'reloaded'
+    finally:
+        os.close(fd)
+
+
+def main():
+    if not restricted_ubuntu():
+        if sys.argv[1:] == ['check-required']:
+            sys.exit(3)
+        print('E20: no Ubuntu userns profile required')
+        return
+    if sys.argv[1:] == ['check-required']:
+        return
+    args = sys.argv[1:]
+    if not (args == ['install'] or len(args) == 3 and args[0] == 'install') or os.geteuid() != 0:
+        raise RuntimeError('AppArmor installation requires the privileged installer')
+    if len(args) == 3:
+        binary, destination = map(Path, args[1:])
+        if not binary.is_absolute() or not destination.is_absolute():
+            raise RuntimeError('explicit sandbox installation paths must be absolute')
+        binary = trusted(binary)
+        suffix = hashlib.sha256(str(binary).encode()).hexdigest()[:16]
+        name = PROFILE + '-' + suffix
+        install_profile(binary, destination, profile_name=name, payload_name=name + '-payload')
+        return
+    binary = next((Path(p) for p in ('/usr/bin/bwrap', '/bin/bwrap', '/usr/local/bin/bwrap')
+                   if Path(p).is_file() and os.access(p, os.X_OK)), None)
+    if binary is None:
+        raise RuntimeError('bubblewrap is missing; process.run remains unavailable')
+    install_profile(binary)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        print('E20 AppArmor setup failed; process.run remains unavailable: ' + str(error), file=sys.stderr)
+        sys.exit(1)
+CTOX_APPARMOR_PY
+)"
+  # No privilege prompt outside the exact OS/kernel gate.
+  /usr/bin/python3 -c "$code" check-required || rc=$?
+  [[ "$rc" -ne 3 ]] || return 0
+  [[ "$rc" -eq 0 ]] || return "$rc"
+  if [[ "$EUID" -eq 0 ]]; then
+    /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/python3 -c "$code" install "${profile_args[@]}"
+  else
+    run_sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/python3 -c "$code" install "${profile_args[@]}"
+  fi
+}
+
 apt_package_installed() {
   dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"
 }
@@ -2657,6 +2873,7 @@ run_rebuild() {
   # Keep the web stack operational after source upgrades, not only after first
   # install. These are idempotent and leave existing runtime config untouched.
   ensure_web_runtime_defaults "$STATE_ROOT" || tui_note "web runtime defaults could not be refreshed during rebuild; keeping existing runtime config"
+  ensure_linux_process_sandbox || tui_note "E20 sandbox profile unavailable; sandboxed process.run stays unavailable"
   setup_browser_runtime "$root" || true
   build_google_fetch_helper "$root" || true
 
@@ -3034,6 +3251,7 @@ main() {
   write_wrapper_script "$active_root"
   sync_skills_to_codex_home "$source_root"
   write_platform_capabilities "$STATE_ROOT"
+  ensure_linux_process_sandbox || tui_note "E20 sandbox profile unavailable; sandboxed process.run stays unavailable"
   CTOX_DETECTED_GPU="$detected_gpu" write_runtime_sqlite_config "$STATE_ROOT"
   tui_complete_step 9 "$INSTALL_ROOT"
 
@@ -3097,5 +3315,15 @@ main() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  main "$@"
+  if [[ "${1:-}" == "--ensure-process-sandbox" ]]; then
+    if [[ "$#" -eq 1 ]]; then
+      ensure_linux_process_sandbox
+    elif [[ "$#" -eq 5 && "$2" == "--bwrap" && "$4" == "--profile" ]]; then
+      ensure_linux_process_sandbox "$3" "$5"
+    else
+      exit 64
+    fi
+  else
+    main "$@"
+  fi
 fi
