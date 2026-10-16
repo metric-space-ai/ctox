@@ -13,6 +13,9 @@ function coreFor(namespace) {
   const core = { head: 0n, docs: new Map(), ops: new Map(), artifacts: new Map(), blobs: new Map(), listeners: new Set(), users: new Map(), pending: new Set() };
   const key = (collection, id) => JSON.stringify([collection, id]);
   core.headSeq = () => core.head;
+  /** E27.8: nur die Abos der geschriebenen Collection beliefern, alle Teilnehmer gleichzeitig. Je Teilnehmer läuft höchstens
+   *  eine Seite (MemoryCoreTransport.deliver), damit dessen eigene Writes in IndexedDB nie hinter einem Stapel Seiten warten. */
+  core.fanOut = (collection) => Promise.all([...core.listeners].filter((peer) => peer.subscriptions.has(collection)).map((peer) => peer.deliver(collection)));
   /** Einziger Commit-Weg im Core: Dokumente schreiben, an alle Teilnehmer ausliefern, Trigger auslösen. */
   core.commit = async (collection, docs, depth = 0) => {
     const sequences = [], changes = [];
@@ -27,7 +30,7 @@ function coreFor(namespace) {
       core.docs.set(key(collection, data.id), row); sequences.push(seq);
       changes.push({ id: data.id, op: deleted ? 'delete' : old && !old.deleted ? 'update' : 'insert', doc });
     }
-    for (const peer of core.listeners) for (const held of peer.subscriptions.keys()) await peer.deliver(held);
+    await core.fanOut(collection);
     core.runtime.onCommit(collection, changes, depth);
     return sequences;
   };
@@ -44,6 +47,7 @@ function coreFor(namespace) {
 async function runCommand(core, doc, depth, via) {
   const latency = via?.latencyMs ?? 5;
   const sleep = () => new Promise((r) => setTimeout(r, latency));
+  // E27.8: simulierte Leitungslatenz nur einmal vor der Annahme; danach startet der Handler ohne Timer-Verzug.
   // result ist ein Wert, kein Merge-Patch: null-Felder (z. B. exit_code bei Zeitüberschreitung) bleiben erhalten
   const update = async (patch) => {
     const current = core.docs.get(JSON.stringify(['business_commands', doc.id]))?.data ?? doc;
@@ -51,7 +55,7 @@ async function runCommand(core, doc, depth, via) {
     if (Object.prototype.hasOwnProperty.call(patch, 'result')) next.result = cloneValue(patch.result);
     await core.commit('business_commands', [next]);
   };
-  await sleep(); await update({ status: 'accepted' }); await sleep(); await update({ status: 'running', progress: 0.5 });
+  await sleep(); await update({ status: 'accepted' }); await update({ status: 'running', progress: 0.5 });
   const user = core.users.get(doc.actor_id) ?? null;
   let final;
   if (via?.failures.has(doc.type)) { final = { status: 'failed', error: via.failures.get(doc.type) }; via.failures.delete(doc.type); }
@@ -62,7 +66,7 @@ async function runCommand(core, doc, depth, via) {
     // Ohne Handler gibt es kein Ergebnis mehr (K-1c Punkt 6): Befehl scheitert sichtbar statt {ok:true}.
     final ??= { status: 'failed', error: `no_handler: ${doc.type} hat keinen Handler in ${doc.app_id}` };
   }
-  await sleep(); await update(final);
+  await update(final);
 }
 export class MemoryCoreTransport extends KernelTransport {
   /** user = {id, role, permissions}: der Core kennt den Nutzer (Rechte wirken); ohne user prüft der Core keine Rechte. */
@@ -75,6 +79,9 @@ export class MemoryCoreTransport extends KernelTransport {
     this.user = user ? cloneValue(user) : null;
     this.deviceLabel = deviceLabel ?? 'browser';
     this.pending = this.core.pending; this.online = true; this.closed = false; this.subscriptions = new Map();
+    // E27.8: eine Zustellspur je Teilnehmer. waiting: Collection → Wartende (zusammengelegt, bis die Seite startet);
+    // sent: Abos, die ihre erste Seite haben – danach gehen leere Seiten nicht mehr hinaus (jede kostet eine DB-Transaktion).
+    this.waiting = new Map(); this.draining = null; this.sent = new Set();
   }
   /** Katalog-Primitive, die dieser Core anbietet (§16.29); die Aktivierung prüft capabilities_required dagegen. */
   get capabilities() { return this.core.runtime.capabilities; }
@@ -85,6 +92,7 @@ export class MemoryCoreTransport extends KernelTransport {
   async connect(identity, events) {
     if (this.identity && JSON.stringify(identity) !== JSON.stringify(this.identity)) throw new CtoxError('forbidden', 'Transport identity mismatch');
     this.identity = cloneValue(identity); this.events = events; this.closed = false; this.connects = (this.connects ?? 0) + 1;
+    this.sent.clear(); // neue Verbindung: jedes Abo bekommt wieder eine erste (ggf. leere) vollständige Seite
     if (this.user && this.user.id === identity.userId && !this.core.users.has(this.user.id)) this.core.users.set(this.user.id, this.user);
     this.core.listeners.add(this); events.link?.({ state: this.online ? 'online' : 'offline', rtt_ms: this.latencyMs, relay: false });
     const known = this.core.users.get(identity.userId);
@@ -97,22 +105,42 @@ export class MemoryCoreTransport extends KernelTransport {
   get backlog(){return [...this.core.docs.values()].filter(row=>this.subscriptions.has(row.collection) && BigInt(row.seq)>BigInt(this.subscriptions.get(row.collection).checkpoint_seq??'0')).length;}
   get head() { return decimalSeq(this.core.head); }
   async subscribe(sub) {
-    this.subscriptions.set(sub.collection, cloneValue(sub));
-    if (this.online) await this.deliver(sub.collection);
+    this.subscriptions.set(sub.collection, cloneValue(sub)); this.sent.delete(sub.collection);
+    if (this.online) await this.deliver(sub.collection, { priority: true }); // erste Seite eines neuen Abos vor Rückstand
   }
-  async deliver(collection) {
+  /** Höchstens eine Seite je Teilnehmer gleichzeitig, Abos in Anforderungsreihenfolge. Eine noch nicht gestartete
+   *  Zustellung desselben Abos wird geteilt (sie liest beim Start alle Zeilen über dem Checkpoint). Teilnehmer parallel. */
+  deliver(collection, { priority = false } = {}) {
+    let w = this.waiting.get(collection);
+    if (!w) { w = {}; w.promise = new Promise((resolve, reject) => { w.resolve = resolve; w.reject = reject; }); this.waiting.set(collection, w); }
+    // Write-Vorrang: die Seite zum eigenen Write dieses Teilnehmers überholt wartende Zustellungen (nicht die laufende).
+    if (priority && this.waiting.size > 1) this.waiting = new Map([[collection, w], ...[...this.waiting].filter(([c]) => c !== collection)]);
+    if (!this.draining) this.draining = this.drain();
+    return w.promise;
+  }
+  async drain() {
+    try {
+      while (this.waiting.size) {
+        const [collection, w] = this.waiting.entries().next().value;
+        this.waiting.delete(collection);
+        try { w.resolve(await this.deliverNow(collection)); } catch (error) { w.reject(error); }
+      }
+    } finally { this.draining = null; }
+  }
+  async deliverNow(collection) {
     if (this.closed || !this.online || !this.events?.page) return;
     const sub = this.subscriptions.get(collection); if (!sub) return;
     const user = this.currentUser;
     // Zeilenrechte: nicht lesbare Zeilen erreichen den Client nicht (Lesbarkeit kann sich ändern → als gelöscht liefern)
     const rows = [...this.core.docs.values()].filter(d => d.collection === collection && BigInt(d.seq) > BigInt(sub.checkpoint_seq ?? '0')).sort((a,b) => BigInt(a.seq) < BigInt(b.seq) ? -1 : 1)
       .map((r) => (this.core.runtime.canRead(user, r) ? r : { ...r, data: null, deleted: true }));
+    if (!rows.length && this.sent.has(collection)) return; // nichts Neues: keine leere Seite
     const page = { ...sub, epoch: '1', docs: cloneValue(rows), cursor_to: this.head, head_seq: this.head, backlog: 0, complete: true };
     // K-BF1: Checkpoint VOR der Übergabe vorziehen. Der Leiter meldet seinen Rückstand (this.backlog) noch während
     // events.page an die Folger; mit dem alten Checkpoint trug diese letzte Meldung N > 0, und nichts korrigierte sie.
     // Scheitert die Annahme, wird der Checkpoint zurückgesetzt, solange keine spätere Seite ihn weitergeschoben hat.
     const previous = sub.checkpoint_seq; sub.checkpoint_seq = page.cursor_to;
-    try { await this.events.page(page); }
+    try { await this.events.page(page); this.sent.add(collection); }
     catch (error) { if (sub.checkpoint_seq === page.cursor_to) sub.checkpoint_seq = previous; throw error; }
   }
   async push(collection, docs) { return this.core.commit(collection, docs); }
@@ -121,6 +149,10 @@ export class MemoryCoreTransport extends KernelTransport {
     const previous = this.core.ops.get(entry.op_id); if (previous) return cloneValue(previous);
     const old = this.core.docs.get(this.key(entry.collection,entry.id));
     let result = this.reject.length ? { status:'rejected', reason:this.reject.shift() } : null;
+    // K-WJ-B2 (E27.2): Befehlstyp ohne veröffentlichte Route → beim Schreiben abgelehnt, nie erst accepted und später failed
+    if (!result && entry.collection === 'business_commands' && entry.op === 'put' && entry.body?.status === 'queued' && !(old?.data && !old.deleted) && !this.commandRouteKnown(entry.body)) {
+      result = { status: 'rejected', code: 'unknown_command', reason: `unknown_command:${entry.body.type}` };
+    }
     if (!result) {
       const code = this.core.runtime.checkWrite(this.currentUser, entry, old);
       if (code) result = typeof code === 'object' ? { status: 'rejected', code: code.code, reason: code.reason } : { status: 'rejected', reason: code };
@@ -149,7 +181,7 @@ export class MemoryCoreTransport extends KernelTransport {
     }
     this.core.ops.set(entry.op_id,cloneValue(result));
     // Pages follow the write result through the SAME stream. No separate live path.
-    setTimeout(()=>{for(const peer of this.core.listeners) void peer.deliver(entry.collection);},0);
+    setTimeout(()=>{for(const peer of this.core.listeners) void peer.deliver(entry.collection, { priority: peer === this });},0);
     // §16.44: Turn-Annahme (Prüfung + Reservierung des Entwurfs) im selben Schritt wie der Write
     if (result.status !== 'rejected' && !duplicateCommand && entry.collection === 'business_commands' && entry.body?.type === 'ctox.coding.turn' && entry.body?.status === 'queued') {
       this.core.runtime.acceptCodingTurn(this.currentUser ?? { id: entry.body.actor_id ?? this.identity?.userId }, entry.body);
@@ -158,6 +190,12 @@ export class MemoryCoreTransport extends KernelTransport {
     return cloneValue(result);
   }
   runCommand(doc) { return this.core.spawnCommand(doc, 0, this); }
+  /** Veröffentlichte Befehls-Registry dieses Cores: Plattformbefehle, die Handler-Routen (app_id, type) der aktiven
+   *  App-Versionen und die an diesem Transport registrierten Test-Routen (sim.onCommand / sim.failCommand). */
+  commandRouteKnown(body) {
+    const type = String(body?.type ?? '');
+    return this.handlers.has(type) || this.failures.has(type) || this.core.runtime.hasCommandRoute(body?.app_id, type);
+  }
   async artifact(hash) { if(!this.core.artifacts.has(hash)) throw new CtoxError('not_found','Artifact missing'); return this.core.artifacts.get(hash); }
   putArtifact(hash, content) { this.core.artifacts.set(hash, content); }
   async blob(ref, range) { const blob=this.core.blobs.get(ref); if(!blob) throw new CtoxError('not_found','Blob missing'); return range === undefined ? blob : blob.slice(range.start, range.end, blob.type); }
