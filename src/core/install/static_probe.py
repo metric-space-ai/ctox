@@ -4,6 +4,7 @@ import argparse
 import concurrent.futures
 import hashlib
 import http.client
+import gzip
 import json
 import os
 from pathlib import Path
@@ -31,6 +32,7 @@ def main():
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--mode', choices=['gdb', 'strace', 'plain'], default='gdb')
     parser.add_argument('--interrupt-ms', type=int, default=5000)
+    parser.add_argument('--catalog', action='store_true')
     args = parser.parse_args()
     assert os.environ.get('BUILD_LANE_BIN'), 'Canonical Linux lane required'
     source_profile = Path(args.profile).resolve()
@@ -112,7 +114,16 @@ def main():
             connection.request('GET', path, headers={'Accept-Encoding': 'gzip', 'Connection': 'close'})
             response = connection.getresponse()
             row.update(status=response.status, headersMs=(time.monotonic()-started)*1000)
-            row['bytes'] = len(response.read())
+            data = response.read()
+            row['bytes'] = len(data)
+            if args.catalog and path == '/' and response.status == 200:
+                html = (gzip.decompress(data) if response.getheader('content-encoding') == 'gzip' else data).decode()
+                config = json.JSONDecoder().raw_decode(html.split('window.CTOX_BUSINESS_OS_CONFIG=', 1)[1])[0]
+                catalog = config.get('module_catalog_snapshot', {})
+                modules = {m['id']: m for m in catalog.get('modules', [])}
+                row['catalog'] = dict(probeTitle=modules.get('e2e-probe', {}).get('title'),
+                                      installedTitle=modules.get('e2e-cache-installed', {}).get('title'),
+                                      builtAt=catalog.get('updated_at_ms'))
             row['bodyMs'] = (time.monotonic()-started)*1000
         except Exception as error:
             row['error'] = str(error)
@@ -166,9 +177,53 @@ def main():
                     if 'error' in row:
                         break
                 result['assetAfter'] = request('/app.js?v=m7-phase', 5)
+                if args.catalog:
+                    # Only this new synthetic snapshot is changed, never its
+                    # installed source or any actual tenant. Atomic same-size,
+                    # same-mtime replacement proves inode identity matters.
+                    module = runtime / 'business-os/local-modules/e2e-probe/module.json'
+                    original = module.read_bytes()
+                    info = module.stat()
+                    body = json.loads(original)
+                    previous_title = body['title']
+                    body['title'] = ('Z' if previous_title[0] != 'Z' else 'Y') + previous_title[1:]
+                    changed = body['title']
+                    temporary = module.with_name('m7-next.json')
+                    temporary.write_text(json.dumps(body, separators=(',', ':')))
+                    assert temporary.stat().st_size == info.st_size
+                    os.utime(temporary, ns=(info.st_atime_ns, info.st_mtime_ns))
+                    os.replace(temporary, module)
+                    after = request('/')
+                    result['catalogChanges'] = dict(sameSize=True, sameMtime=module.stat().st_mtime_ns == info.st_mtime_ns,
+                        replacedInode=module.stat().st_ino != info.st_ino, modified=after,
+                        modificationFresh=after.get('catalog', {}).get('probeTitle') == changed)
+                    addition = module.parent.parent / 'e2e-cache-installed'
+                    assert not addition.exists()
+                    addition.mkdir()
+                    try:
+                        body['id'] = 'e2e-cache-installed'
+                        body['title'] = 'M7 installed cache probe'
+                        (addition / 'module.json').write_text(json.dumps(body))
+                        (addition / 'index.js').write_text('export function mount() { return () => {}; }\n')
+                        shutil.copy2(module.parent / 'collections.schema.json', addition / 'collections.schema.json')
+                        installed = request('/')
+                        result['catalogChanges']['installed'] = installed
+                        result['catalogChanges']['installFresh'] = installed.get('catalog', {}).get('installedTitle') == body['title']
+                    finally:
+                        shutil.rmtree(addition)
+                    removed = request('/')
+                    result['catalogChanges']['removed'] = removed
+                    result['catalogChanges']['removeFresh'] = removed.get('catalog', {}).get('installedTitle') is None
+                    temporary.write_bytes(original)
+                    os.replace(temporary, module)
+                    restored = request('/')
+                    result['catalogChanges']['restored'] = restored
+                    result['catalogChanges']['restoreFresh'] = restored.get('catalog', {}).get('probeTitle') == previous_title
+                    result['catalogChanges']['pass'] = all(result['catalogChanges'][key] for key in ['modificationFresh', 'installFresh', 'removeFresh', 'restoreFresh'])
             rows = result['rows']
             result['p99Ms'] = max(r['bodyMs'] for r in rows) if len(rows) == 20 and all(r['bodyMs'] is not None for r in rows) else None
-            result['pass'] = len(rows) == 20 and all(r.get('status') == 200 and r['bodyMs'] is not None and r['bodyMs'] < 500 for r in rows)
+            result['latencyPass'] = len(rows) == 20 and all(r.get('status') == 200 and r['bodyMs'] is not None and r['bodyMs'] < 500 for r in rows)
+            result['pass'] = result['latencyPass'] and (not args.catalog or result.get('catalogChanges', {}).get('pass', False))
     except Exception as error:
         result['error'] = str(error)
     finally:
