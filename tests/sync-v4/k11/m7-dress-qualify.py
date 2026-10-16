@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """One bounded Linux qualification consuming the one immutable release build."""
 import json
+import importlib.util
 import os
 from pathlib import Path
 import signal
@@ -91,6 +92,35 @@ except Exception as error:
 finally:
     report['terminal']=True
     report['finishedAtMs']=int(time.time()*1000)
+    decision=out/'dress/m7-go-nogo.json'
+    if decision.exists():
+        matrix=json.loads(decision.read_text())
+    else:
+        spec=importlib.util.spec_from_file_location('dress',here/'m7-dress.py')
+        module=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        matrix=dict(schema='ctox.m7.go-nogo.v1',owner=module.OWNER,terminal=True,go=False,
+                    candidate=report.get('release',{}).get('revision'),
+                    criteria=[dict(id=name,status='not_run',owner=owner,
+                        reason='Qualification stopped before the rehearsal: '+report.get('error','unknown failure'))
+                        for name,owner in module.CRITERIA.items()])
+    live=next((s for s in report['steps'] if s['name']=='release-spawn-liveness'),None)
+    matrix['criteria'].append(dict(id='release-spawn-liveness',
+        status=('pass' if live.get('exit')==0 and live.get('groupAbsent') else 'fail') if live else 'not_run',
+        owner='Harness',evidence=str(out/'release-spawn-liveness.log'),
+        reason='Actual canonical release guard exit and process cleanup; not the full lane suite'))
+    if report.get('referenceStatic'):
+        matrix['criteria'].append(dict(id='reference-static-component',
+            status='pass' if report['referenceStatic'].get('pass_') is True else 'fail',owner='DevOps',
+            measured=report['referenceStatic'],evidence=str(out/'static/result.json')))
+    if report.get('error'):
+        matrix['criteria'].append(dict(id='qualification-execution',status='fail',owner='DevOps',
+            reason=report['error'],evidence=str(out/'qualification.json')))
+    matrix['qualificationFinishedAtMs']=report['finishedAtMs']
+    matrix['go']=bool(matrix['criteria']) and all(c['status']=='pass' for c in matrix['criteria'])
+    matrix['remainingBlockers']=[{k:c.get(k) for k in ('id','status','owner','reason')}
+                                for c in matrix['criteria'] if c['status']!='pass']
+    (out/'m7-go-nogo.json').write_text(json.dumps(matrix,indent=2)+'\n')
     save()
 print(json.dumps({k:v for k,v in report.items() if k not in ('dress','steps')}))
 raise SystemExit(0 if report['pass_'] else 1)
