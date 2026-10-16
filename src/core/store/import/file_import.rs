@@ -65,6 +65,44 @@ pub struct PreparedFiles {
     pub source_rows: BTreeMap<String, usize>,
     pub references: BTreeMap<String, String>,
 }
+pub(crate) struct ByteFile {
+    pub id: String,
+    pub name: String,
+    pub mime: String,
+    pub owner_app: String,
+    pub owner_user: Option<String>,
+    pub bytes: Vec<u8>,
+}
+/// Staging adapter for E28 fields. The existing file/CAS importer owns bytes.
+pub(crate) async fn prepare_bytes(
+    files: Vec<ByteFile>,
+    cas: &Cas,
+    scratch: &Path,
+) -> Result<PreparedFiles> {
+    let count = files.len();
+    let pending = files
+        .into_iter()
+        .map(|f| Pending {
+            id: f.id,
+            name: f.name,
+            mime: f.mime,
+            owner_app: f.owner_app,
+            owner_user: f.owner_user,
+            created_at_ms: 0,
+            expected: Some(format!("{:x}", Sha256::digest(&f.bytes))),
+            content: Content::Bytes(f.bytes),
+        })
+        .collect();
+    prepare(
+        FilePlan {
+            pending,
+            source_rows: BTreeMap::from([("jour_fixe_fields".into(), count)]),
+        },
+        cas,
+        scratch,
+    )
+    .await
+}
 /// Attach metadata to the ordinary owner import after bytes are in CAS.
 pub fn attach(
     mut snapshot: super::core_import::CoreImport,

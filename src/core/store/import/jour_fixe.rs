@@ -1,5 +1,5 @@
-//! E23.3: frozen native meeting rows -> the registered CTOX meeting head.
-//! No schema invention: populated fields without a V4 destination stop import.
+//! E23.3/E28: frozen BOS meeting rows -> registered CTOX meetings and files.
+//! Large fields are staged in the existing CAS outside the source transaction.
 use super::*;
 use rusqlite::OptionalExtension;
 use serde_json::{json, Map};
@@ -7,6 +7,84 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 pub const COLLECTION: &str = "workjet_jour_fixe_meetings";
+/// Caller opens the frozen business-os.sqlite3 snapshot, never a live file.
+/// Missing table is an error: a mistaken Core snapshot cannot look empty.
+pub fn collect_bos(
+    tx: &Transaction<'_>,
+    max_documents: usize,
+    max_bytes: usize,
+) -> Result<core_import::CoreImport> {
+    let mut out = core_import::CoreImport {
+        documents: vec![],
+        dataframe_rows: vec![],
+        report: ImportReport::default(),
+    };
+    collect_into(tx, &mut out)?;
+    if out
+        .report
+        .diagnostics
+        .iter()
+        .any(|d| d == &format!("source_table_absent:{COLLECTION}"))
+    {
+        return Err(invalid("import_jour_fixe_bos_source_table_missing"));
+    }
+    if out.documents.len() > max_documents
+        || out
+            .documents
+            .iter()
+            .map(|d| d.body.to_string().len())
+            .sum::<usize>()
+            > max_bytes
+    {
+        return Err(invalid("import_snapshot_budget_exceeded"));
+    }
+    Ok(out)
+}
+
+/// Call AFTER ending the BOS read transaction. Existing Transfer-CAS and files
+/// metadata are used; bytes are verified before entering a writer job.
+pub async fn prepare_files(
+    mut snapshot: core_import::CoreImport,
+    cas: &crate::cas::Cas,
+    scratch: &std::path::Path,
+) -> Result<core_import::CoreImport> {
+    let mut files = Vec::new();
+    for doc in snapshot
+        .documents
+        .iter_mut()
+        .filter(|d| d.collection == COLLECTION)
+    {
+        let before = document_hash(&doc.body)?;
+        for key in CHILDREN {
+            let bytes =
+                serde_json::to_vec(&doc.body[*key]).map_err(|_| invalid("meeting_field_json"))?;
+            if bytes.len() <= INLINE_LIMIT {
+                continue;
+            }
+            let sha = format!("{:x}", Sha256::digest(&bytes));
+            let size = bytes.len();
+            let id = format!(
+                "jf:{:x}",
+                Sha256::digest(format!("{}:{key}", doc.id).as_bytes())
+            );
+            files.push(file_import::ByteFile {
+                id,
+                name: format!("{}-{key}.json", doc.id),
+                mime: "application/json".into(),
+                owner_app: "ctox".into(),
+                owner_user: doc.body["owner_user_id"].as_str().map(str::to_owned),
+                bytes,
+            });
+            doc.body[*key] = json!({"blob_ref":sha,"size":size,"sha256":sha});
+        }
+        if before != document_hash(&doc.body)? {
+            return Err(invalid("meeting_blob_hash_mismatch"));
+        }
+    }
+    let prepared = file_import::prepare_bytes(files, cas, scratch).await?;
+    file_import::attach(snapshot, prepared)
+}
+
 /// Source SQL columns are deliberately listed independently of the JSON head.
 const BINDINGS: &[(&str, &str)] = &[
     ("meeting_id", "id"),
@@ -31,6 +109,7 @@ const HEAD: &[&str] = &[
 ];
 const CHILDREN: &[&str] = &["slides", "comments", "transcript"];
 const OPTIONAL: &[&str] = &["previous_goal", "todos", "error"];
+pub const INLINE_LIMIT: usize = 256 * 1024;
 
 fn hash(value: Value) -> String {
     fn ordered(value: Value) -> Value {
@@ -62,9 +141,16 @@ fn normalize_metadata(mut metadata: Map<String, Value>) -> Map<String, Value> {
     metadata
 }
 
-fn row_value(id: Value, project: Value, owner: Value, scheduled: Value, metadata: Value) -> Value {
+fn row_value(
+    id: Value,
+    project: Value,
+    owner: Value,
+    scheduled: Value,
+    metadata: Value,
+    task: Value,
+) -> Value {
     json!({"meeting_id":id,"project_id":project,"owner_user_id":owner,
-        "scheduled_at_ms":scheduled,"metadata_json":metadata,"preparation_task_id":null})
+        "scheduled_at_ms":scheduled,"metadata_json":metadata,"preparation_task_id":task})
 }
 
 fn required_head(body: &Value) -> Result<()> {
@@ -110,8 +196,42 @@ fn required_head(body: &Value) -> Result<()> {
     Ok(())
 }
 
-/// Reverse only the published head mapping; empty wire children and absent
-/// nullable preparation_task_id are reconstructed without discarding content.
+/// Hash the whole semantic row, including each child's content digest. Inline
+/// arrays and verified CAS references have the same representation, never an
+/// omitted field. The source JSON's irrelevant object-key order is normalized.
+fn field_fingerprint(value: &Value) -> Result<Value> {
+    if value.is_array() {
+        let bytes = serde_json::to_vec(value).map_err(|_| invalid("meeting_field_json"))?;
+        return Ok(json!({"size":bytes.len(),"sha256":format!("{:x}", Sha256::digest(&bytes))}));
+    }
+    let object = value
+        .as_object()
+        .ok_or_else(|| invalid("meeting_field_shape"))?;
+    let sha = value["sha256"]
+        .as_str()
+        .ok_or_else(|| invalid("meeting_blob_sha256"))?;
+    if object.len() != 3
+        || sha.len() != 64
+        || !sha
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        || value["blob_ref"] != sha
+        || value["size"]
+            .as_u64()
+            .is_none_or(|n| n <= INLINE_LIMIT as u64 || n > 9_007_199_254_740_991)
+    {
+        return Err(invalid("meeting_blob_ref"));
+    }
+    Ok(json!({"size":value["size"],"sha256":sha}))
+}
+fn row_hash(mut row: Value) -> Result<String> {
+    for key in CHILDREN {
+        row["metadata_json"][*key] = field_fingerprint(&row["metadata_json"][*key])?;
+    }
+    Ok(hash(row))
+}
+
+/// Reverse every imported SQL column, preserving the complete wire metadata.
 pub fn document_hash(body: &Value) -> Result<String> {
     required_head(body)?;
     let mut metadata: Map<_, _> = HEAD
@@ -119,15 +239,23 @@ pub fn document_hash(body: &Value) -> Result<String> {
         .filter_map(|k| body.get(*k).cloned().map(|v| ((*k).into(), v)))
         .collect();
     for key in CHILDREN {
-        metadata.insert((*key).into(), json!([]));
+        metadata.insert(
+            (*key).into(),
+            body.get(*key)
+                .cloned()
+                .ok_or_else(|| invalid(format!("import_jour_fixe_required:{key}")))?,
+        );
     }
-    Ok(hash(row_value(
+    row_hash(row_value(
         body["id"].clone(),
         body["project_id"].clone(),
         body["owner_user_id"].clone(),
         body["scheduled_at_ms"].clone(),
         Value::Object(normalize_metadata(metadata)),
-    )))
+        body.get("preparation_task_id")
+            .cloned()
+            .ok_or_else(|| invalid("import_jour_fixe_required:preparation_task_id"))?,
+    ))
 }
 
 pub(super) fn collect_into(tx: &Transaction<'_>, out: &mut core_import::CoreImport) -> Result<()> {
@@ -195,25 +323,20 @@ pub(super) fn collect_into(tx: &Transaction<'_>, out: &mut core_import::CoreImpo
                 unknown.join(",")
             )));
         }
-        let mut gaps = Vec::new();
-        if task.is_some() {
-            gaps.push("preparation_task_id".to_owned());
+        if task
+            .as_ref()
+            .is_some_and(|t| t.is_empty() || t.chars().count() > 128)
+        {
+            return Err(invalid("import_jour_fixe_preparation_task_id"));
         }
-        for key in CHILDREN {
+        for (key, limit) in [("slides", 100), ("comments", 1000), ("transcript", 10000)] {
             let items = map
-                .get(*key)
+                .get(key)
                 .and_then(Value::as_array)
                 .ok_or_else(|| invalid(format!("import_jour_fixe_required:{key}")))?;
-            if !items.is_empty() {
-                gaps.push(format!("metadata_json.{key}"));
+            if items.len() > limit {
+                return Err(invalid(format!("import_jour_fixe_max_items:{key}")));
             }
-        }
-        if !gaps.is_empty() {
-            return Err(invalid(format!(
-                "import_jour_fixe_schema_gap:{}:{}",
-                id,
-                gaps.join(",")
-            )));
         }
         let source = row_value(
             json!(id),
@@ -221,6 +344,7 @@ pub(super) fn collect_into(tx: &Transaction<'_>, out: &mut core_import::CoreImpo
             json!(owner),
             json!(scheduled),
             Value::Object(normalize_metadata(map.clone())),
+            json!(task),
         );
         let mut body: Map<String, Value> = HEAD
             .iter()
@@ -233,11 +357,15 @@ pub(super) fn collect_into(tx: &Transaction<'_>, out: &mut core_import::CoreImpo
             }
             body.insert((*field).into(), source[*column].clone());
         }
+        for key in CHILDREN {
+            body.insert((*key).into(), metadata[*key].clone());
+        }
+        body.insert("preparation_task_id".into(), json!(task));
         let mut body = normalize_metadata(body);
         body.insert("updated_at_ms".into(), json!(0)); // unknown; never fabricate an update time
         body.insert("is_deleted".into(), json!(false));
         let body = Value::Object(body);
-        let source_hash = hash(source);
+        let source_hash = row_hash(source)?;
         if document_hash(&body)? != source_hash {
             return Err(invalid(format!(
                 "import_content_mismatch:{COLLECTION}:{id}"
@@ -298,6 +426,13 @@ pub(super) fn check_target_schema(tx: &Transaction<'_>, doc: &Document) -> Resul
             "import_jour_fixe_target_fields:{}",
             missing.join(",")
         )));
+    }
+    for key in CHILDREN {
+        if doc.body[*key].is_array()
+            && serde_json::to_vec(&doc.body[*key]).unwrap().len() > INLINE_LIMIT
+        {
+            return Err(invalid(format!("import_jour_fixe_blob_not_prepared:{key}")));
+        }
     }
     required_head(&doc.body)
 }

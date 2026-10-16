@@ -362,7 +362,6 @@ pub fn collect(
             .insert(name.into(), Counts::default());
     }
     mail_tracking(tx, &mut out)?;
-    super::jour_fixe::collect_into(tx, &mut out)?;
     tickets(tx, &mut out)?;
     iot(tx, &mut out)?;
     crew(tx, services, &mut out)?;

@@ -115,6 +115,103 @@
         "items"
       ]
     },
+    "comments": {
+      "type": [
+        "array",
+        "object"
+      ],
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "slide_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "deck_revision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "x": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "author_user_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "created_at_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "supervisor_event_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "meeting_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "id",
+          "slide_id",
+          "deck_revision",
+          "x",
+          "y",
+          "text",
+          "author_user_id",
+          "created_at_ms",
+          "meeting_id"
+        ]
+      },
+      "additionalProperties": false,
+      "properties": {
+        "blob_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 262145,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "blob_ref",
+        "size",
+        "sha256"
+      ],
+      "description": "Liste nach Wire-Vertrag workjet-jour-fixe-v1.json; \u00fcber 256 KiB legt der Import den Inhalt als BlobRef ab und das Feld tr\u00e4gt {blob_ref, size, sha256} (E28). items gilt nur f\u00fcr die Liste, properties/required nur f\u00fcr die Blob-Form."
+    },
     "created_at_ms": {
       "type": "number"
     },
@@ -145,6 +242,14 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 256
+    },
+    "preparation_task_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "maxLength": 128
     },
     "prepare_at_ms": {
       "type": "integer",
@@ -195,6 +300,148 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991
+    },
+    "slides": {
+      "type": [
+        "array",
+        "object"
+      ],
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "body_markdown": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          },
+          "audio": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "file_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "sha256": {
+                "type": "string",
+                "minLength": 64,
+                "maxLength": 64
+              },
+              "mime_type": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "duration_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "narration_text_sha256": {
+                "type": "string",
+                "minLength": 64,
+                "maxLength": 64
+              },
+              "source_run_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "model": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "format": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32
+              },
+              "synthesis_duration_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "native_gateway",
+                  "authenticated_owner_local_audio"
+                ]
+              },
+              "generation_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "required": [
+              "file_id",
+              "sha256",
+              "mime_type",
+              "duration_ms",
+              "narration_text_sha256",
+              "source_run_id",
+              "model",
+              "format",
+              "synthesis_duration_ms"
+            ]
+          },
+          "meeting_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "id",
+          "position",
+          "title",
+          "body_markdown",
+          "meeting_id"
+        ]
+      },
+      "additionalProperties": false,
+      "properties": {
+        "blob_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 262145,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "blob_ref",
+        "size",
+        "sha256"
+      ],
+      "description": "Liste nach Wire-Vertrag workjet-jour-fixe-v1.json; \u00fcber 256 KiB legt der Import den Inhalt als BlobRef ab und das Feld tr\u00e4gt {blob_ref, size, sha256} (E28). items gilt nur f\u00fcr die Liste, properties/required nur f\u00fcr die Blob-Form."
     },
     "state": {
       "type": "string",
@@ -353,6 +600,185 @@
         "meeting_id"
       ]
     },
+    "transcript": {
+      "type": [
+        "array",
+        "object"
+      ],
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "speaker": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "supervisor"
+            ]
+          },
+          "modality": {
+            "type": "string",
+            "enum": [
+              "text",
+              "speech"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          },
+          "started_at_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "ended_at_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "source_run_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "audio": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "file_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "sha256": {
+                "type": "string",
+                "minLength": 64,
+                "maxLength": 64
+              },
+              "mime_type": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "duration_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "narration_text_sha256": {
+                "type": "string",
+                "minLength": 64,
+                "maxLength": 64
+              },
+              "source_run_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "model": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "format": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32
+              },
+              "synthesis_duration_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "native_gateway",
+                  "authenticated_owner_local_audio"
+                ]
+              },
+              "generation_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "required": [
+              "file_id",
+              "sha256",
+              "mime_type",
+              "duration_ms",
+              "narration_text_sha256",
+              "source_run_id",
+              "model",
+              "format",
+              "synthesis_duration_ms"
+            ]
+          },
+          "stream_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "sentence_end_latency_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "meeting_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "id",
+          "sequence",
+          "speaker",
+          "modality",
+          "text",
+          "started_at_ms",
+          "ended_at_ms",
+          "meeting_id"
+        ]
+      },
+      "additionalProperties": false,
+      "properties": {
+        "blob_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 262145,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "blob_ref",
+        "size",
+        "sha256"
+      ],
+      "description": "Liste nach Wire-Vertrag workjet-jour-fixe-v1.json; \u00fcber 256 KiB legt der Import den Inhalt als BlobRef ab und das Feld tr\u00e4gt {blob_ref, size, sha256} (E28). items gilt nur f\u00fcr die Liste, properties/required nur f\u00fcr die Blob-Form."
+    },
     "updated_at_ms": {
       "type": "number"
     }
@@ -371,5 +797,5 @@
     "updated_at_ms"
   ],
   "type": "object",
-  "version": 0
+  "version": 1
 }
