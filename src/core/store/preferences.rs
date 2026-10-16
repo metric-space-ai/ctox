@@ -18,27 +18,42 @@ pub struct Context {
     rights_ver: u64,
 }
 impl Context {
-    pub fn authenticated(app_id: &str, user_id: &str, rights_ver: u64) -> Result<Self, &'static str> {
-        if rights_ver == 0 { return Err("forbidden"); }
+    pub fn authenticated(
+        app_id: &str,
+        user_id: &str,
+        rights_ver: u64,
+    ) -> Result<Self, &'static str> {
+        if rights_ver == 0 {
+            return Err("forbidden");
+        }
         for part in [app_id, user_id] {
             if part.is_empty() || part.len() > 256 || part.contains('/') {
                 return Err("forbidden");
             }
         }
-        Ok(Self { app_id: app_id.into(), user_id: user_id.into(), rights_ver })
+        Ok(Self {
+            app_id: app_id.into(),
+            user_id: user_id.into(),
+            rights_ver,
+        })
     }
     pub fn scope_hash(&self) -> String {
         fn ordered(v: Value) -> Value {
             match v {
                 Value::Object(m) => {
-                    let sorted: std::collections::BTreeMap<_,_> = m.into_iter().collect();
-                    Value::Object(sorted.into_iter().map(|(k,v)| (k,ordered(v))).collect())
+                    let sorted: std::collections::BTreeMap<_, _> = m.into_iter().collect();
+                    Value::Object(sorted.into_iter().map(|(k, v)| (k, ordered(v))).collect())
                 }
                 Value::Array(a) => Value::Array(a.into_iter().map(ordered).collect()),
                 v => v,
             }
         }
-        format!("{:x}", Sha256::digest(serde_json::to_vec(&ordered(self.resolved_scope())).expect("scope JSON")))
+        format!(
+            "{:x}",
+            Sha256::digest(
+                serde_json::to_vec(&ordered(self.resolved_scope())).expect("scope JSON")
+            )
+        )
     }
     /// Standard ResolvedScope wire shape, shared with native token issuance.
     pub fn resolved_scope(&self) -> Value {
@@ -51,23 +66,36 @@ impl Context {
         }]})
     }
     pub fn id(&self, key: &str) -> Result<String, &'static str> {
-        if key.is_empty() || key.len() > 64 || !key.bytes().all(|b|
-            b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b)) {
+        if key.is_empty()
+            || key.len() > 64
+            || !key
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b))
+        {
             return Err("invalid_preference_key");
         }
         Ok(format!("{}/{}/{key}", self.app_id, self.user_id))
     }
     pub fn owns_id(&self, id: &str) -> bool {
-        id.rsplit_once('/').is_some_and(|(_, key)| self.id(key).is_ok_and(|own| own == id))
+        id.rsplit_once('/')
+            .is_some_and(|(_, key)| self.id(key).is_ok_and(|own| own == id))
     }
     pub fn owns(&self, doc: &Value) -> bool {
         doc["app_id"].as_str() == Some(self.app_id.as_str())
             && doc["user_id"].as_str() == Some(self.user_id.as_str())
-            && doc["key"].as_str().and_then(|key| self.id(key).ok()).as_deref() == doc["id"].as_str()
+            && doc["key"]
+                .as_str()
+                .and_then(|key| self.id(key).ok())
+                .as_deref()
+                == doc["id"].as_str()
             && doc["id"].as_str().is_some_and(|id| self.owns_id(id))
     }
     pub fn document(&self, key: &str, value: Value) -> Result<Value, &'static str> {
-        if serde_json::to_vec(&value).map_err(|_| "invalid_preference_value")?.len() > MAX_VALUE_BYTES {
+        if serde_json::to_vec(&value)
+            .map_err(|_| "invalid_preference_value")?
+            .len()
+            > MAX_VALUE_BYTES
+        {
             return Err("quota");
         }
         Ok(serde_json::json!({"id":self.id(key)?,"app_id":self.app_id,
@@ -75,14 +103,27 @@ impl Context {
     }
     /// Runs after merge, inside the SAME writer transaction as the effect. A
     /// replacement at the limit is allowed; tombstones do not consume quota.
-    pub fn validate(&self, tx: &Transaction<'_>, collection: &Collection, id: &str, doc: &Value) -> rusqlite::Result<Option<&'static str>> {
+    pub fn validate(
+        &self,
+        tx: &Transaction<'_>,
+        collection: &Collection,
+        id: &str,
+        doc: &Value,
+    ) -> rusqlite::Result<Option<&'static str>> {
         if !self.owns(doc) || doc["id"].as_str() != Some(id) {
             return Ok(Some("forbidden"));
         }
-        if !doc.as_object().is_some_and(|m| m.len() == 5 && m.contains_key("value")) {
+        if !doc
+            .as_object()
+            .is_some_and(|m| m.len() == 5 && m.contains_key("value"))
+        {
             return Ok(Some("invalid_preference_value"));
         }
-        if serde_json::to_vec(&doc["value"]).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?.len() > MAX_VALUE_BYTES {
+        if serde_json::to_vec(&doc["value"])
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+            .len()
+            > MAX_VALUE_BYTES
+        {
             return Ok(Some("quota"));
         }
         let table = identifier(&collection.table)?;

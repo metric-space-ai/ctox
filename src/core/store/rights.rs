@@ -331,11 +331,17 @@ impl RightsSnapshot {
         use manifest_rules::AppOperation;
         if collection == ctox_store::preferences::COLLECTION {
             if !self.manifests.iter().any(|m| m.app_id() == app)
-                || !self.manifests.iter().any(|m| m.app_id() == "ctox-platform" && m.owns(collection)) {
+                || !self
+                    .manifests
+                    .iter()
+                    .any(|m| m.app_id() == "ctox-platform" && m.owns(collection))
+            {
                 return Err("forbidden".into());
             }
-            let context = ctox_store::preferences::Context::authenticated(app, actor, self.rights_ver)?;
-            return serde_json::from_value(context.resolved_scope()).map_err(|_| "invalid preference scope".into());
+            let context =
+                ctox_store::preferences::Context::authenticated(app, actor, self.rights_ver)?;
+            return serde_json::from_value(context.resolved_scope())
+                .map_err(|_| "invalid preference scope".into());
         }
         self.manifests
             .iter()
@@ -354,7 +360,9 @@ impl RightsSnapshot {
     ) -> scope::Result<serde_json::Value> {
         let scope = self.resolve_app_collection(app, role, actor, collection)?;
         if collection == ctox_store::preferences::COLLECTION
-            && !ctox_store::preferences::Context::authenticated(app, actor, self.rights_ver)?.owns(doc) {
+            && !ctox_store::preferences::Context::authenticated(app, actor, self.rights_ver)?
+                .owns(doc)
+        {
             return Err("forbidden".into());
         }
         let p = scope.projection(collection).ok_or("forbidden")?;
@@ -404,8 +412,13 @@ impl RightsSnapshot {
             None => RowFilter::All,
         };
         let own_user = if rule.collection == ctox_store::preferences::COLLECTION {
-            RowFilter::Eq { path: "/user_id".into(), value: scope::FilterValue::ActorId }
-        } else { RowFilter::All };
+            RowFilter::Eq {
+                path: "/user_id".into(),
+                value: scope::FilterValue::ActorId,
+            }
+        } else {
+            RowFilter::All
+        };
         RowFilter::And {
             filters: vec![rule.row_filter.clone(), policy, own_user],
         }
@@ -437,8 +450,11 @@ impl RightsSnapshot {
             self.rights_ver,
             self.rules
                 .iter()
-                .filter(|r| r.role == role && r.ops.contains(&Operation::Read)
-                    && r.collection != ctox_store::preferences::COLLECTION)
+                .filter(|r| {
+                    r.role == role
+                        && r.ops.contains(&Operation::Read)
+                        && r.collection != ctox_store::preferences::COLLECTION
+                })
                 .map(|r| {
                     Ok(Projection {
                         collection: r.collection.clone(),
@@ -580,11 +596,11 @@ impl RightsSnapshot {
 }
 
 #[cfg(test)]
-#[path = "rights_tests.rs"]
-mod tests;
-#[cfg(test)]
 #[path = "preferences_policy_tests.rs"]
 mod preferences_tests;
+#[cfg(test)]
+#[path = "rights_tests.rs"]
+mod tests;
 
 /// One Core-side authority for all active subscriptions. A queued change is
 /// projected again at the synchronous frame handoff; callers must not enqueue

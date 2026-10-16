@@ -23,7 +23,9 @@ pub struct SubscriptionKey {
 /// None means unproject, including a document leaving the authorized row filter.
 pub trait ReadAuthority: Send + Sync {
     /// Verified app+user binding for E51; absent authority fails closed.
-    fn preference_context(&self, _participant: &str) -> Option<crate::preferences::Context> { None }
+    fn preference_context(&self, _participant: &str) -> Option<crate::preferences::Context> {
+        None
+    }
     fn authorize(&self, tx: &Transaction<'_>, key: &SubscriptionKey) -> rusqlite::Result<()>;
     fn project(
         &self,
@@ -180,11 +182,16 @@ impl Subscription {
                 }
                 authority.authorize(tx, &key)?;
                 let prefs = if key.collection == crate::preferences::COLLECTION {
-                    let context = authority.preference_context(&key.participant)
+                    let context = authority
+                        .preference_context(&key.participant)
                         .ok_or_else(|| invalid("forbidden"))?;
-                    if key.scope_hash != context.scope_hash() { return Err(invalid("forbidden")); }
+                    if key.scope_hash != context.scope_hash() {
+                        return Err(invalid("forbidden"));
+                    }
                     Some(context)
-                } else { None };
+                } else {
+                    None
+                };
                 let state: Option<String> = tx
                     .query_row(
                         "SELECT state FROM _collections WHERE name=?1 AND gen=?2",
@@ -215,9 +222,13 @@ impl Subscription {
                         let body = if doc.op == Operation::Delete {
                             None
                         } else {
-                            if prefs.as_ref().is_some_and(|ctx| !doc.body.as_ref().is_some_and(|body| ctx.owns(body))) {
+                            if prefs.as_ref().is_some_and(|ctx| {
+                                !doc.body.as_ref().is_some_and(|body| ctx.owns(body))
+                            }) {
                                 None
-                            } else { authority.project(tx, &key, doc)? }
+                            } else {
+                                authority.project(tx, &key, doc)?
+                            }
                         };
                         Ok(Document {
                             id: doc.id.clone(),
@@ -291,7 +302,9 @@ pub enum WritePermission {
 }
 pub trait WriteAuthority: Send + Sync {
     /// Resolved from the participant's authenticated launch/session, never its payload.
-    fn preference_context(&self, _participant: &str) -> Option<crate::preferences::Context> { None }
+    fn preference_context(&self, _participant: &str) -> Option<crate::preferences::Context> {
+        None
+    }
     /// Use the command document's app_id as sender, never a payload claim (§16.40).
     /// Enforce active commands_out/in and the authenticated actor's target right.
     fn authorize_command_intent(
@@ -429,7 +442,9 @@ pub(crate) fn apply_write(
                 permission = WritePermission::Reject("forbidden".into());
             }
             context
-        } else { None };
+        } else {
+            None
+        };
         let issued = operation_time(&request.op_id)?;
         if issued > now_ms.saturating_add(300_000) {
             return Ok(rejected(request, "invalid_time"));
