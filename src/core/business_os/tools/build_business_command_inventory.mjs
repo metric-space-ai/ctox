@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { functionBody } from './rust-function-body.mjs';
-import { APP_ROOTS, SHELL_TREES, hashFiles, scanUiCommandTypes, uiCodeFiles } from '../../../apps/business-os/v4/tools/manifest/gen-manifest.mjs';
+import { APP_ROOTS, SHELL_TREES, hashFiles, listHandlers, scanUiCommandTypes, uiCodeFiles } from '../../../apps/business-os/v4/tools/manifest/gen-manifest.mjs';
 
 const toolDir = path.dirname(fileURLToPath(import.meta.url));
 const businessOsDir = path.resolve(toolDir, '..');
@@ -86,19 +86,30 @@ const browserLiteralTypes = [...new Set([
   // dispatchCtoxCommand(state, 'x'), …). Diese löst der UI-Scan des Shell-Manifest-Generators auf (dieselbe Quelle wie
   // commands_out, E39/E40); ohne ihn fielen alle v4-Sendestellen aus der Inventur (Shell v4, 16.10.2026).
   ...v4UiCommandTypes(),
-])].sort();
+// E42.2 (E17: Kern ohne App-Logik): ein Typ mit eigener App-Handler-Datei (handlers/<typ>.js) verlässt die Literal-Klasse –
+// der portierte Handler läuft in der App statt als CTOX-Queue-Task im Kern. Typen nativer Klassen bleiben Kern (E42.1).
+])].filter((type) => !appHandledTypes().has(type)).sort();
 
-function v4UiCommandTypes() {
-  // Nur Typen OHNE App-Handler: was eine App selbst behandelt (handlers im v4-Manifest), routet der Kern per
-  // commands_out an diese App (E39) – als Literal-Typ würde es sonst als CTOX-Queue-Task an der App vorbeilaufen.
-  const handled = new Set();
-  const manifestsDir = path.join(browserRoot, 'v4/manifests');
-  if (fs.existsSync(manifestsDir)) {
-    for (const name of fs.readdirSync(manifestsDir).filter((n) => n.endsWith('.manifest.json'))) {
-      const manifest = JSON.parse(fs.readFileSync(path.join(manifestsDir, name), 'utf8'));
-      for (const type of Object.keys(manifest.handlers || {})) handled.add(type);
+function appHandledTypes() {
+  // Funktionseigenschaft statt let: die Inventur oben ruft das vor dieser Zeile auf (Hoisting, keine TDZ).
+  if (appHandledTypes.cache) return appHandledTypes.cache;
+  const handled = appHandledTypes.cache = new Set();
+  for (const root of APP_ROOTS) {
+    const rootDir = path.join(browserRoot, root);
+    if (!fs.existsSync(rootDir)) continue;
+    for (const name of fs.readdirSync(rootDir)) {
+      const appDir = path.join(rootDir, name);
+      if (fs.existsSync(path.join(appDir, 'module.json'))) for (const type of Object.keys(listHandlers(appDir))) handled.add(type);
     }
   }
+  return handled;
+}
+
+function v4UiCommandTypes() {
+  // Nur Typen OHNE App-Handler: was eine App selbst behandelt, routet der Kern per commands_out an diese App (E39) –
+  // als Literal-Typ würde es sonst als CTOX-Queue-Task an der App vorbeilaufen. Quelle sind die Handler-Dateien
+  // (handlers/<typ>.js), nicht die erzeugten Manifeste: die lassen seit E42.1 Handler für Plattform-Typen weg (sonst Zirkel).
+  const handled = new Set();
   const types = [];
   for (const root of APP_ROOTS) {
     const rootDir = path.join(browserRoot, root);
@@ -106,6 +117,7 @@ function v4UiCommandTypes() {
     for (const name of fs.readdirSync(rootDir)) {
       const appDir = path.join(rootDir, name);
       if (!fs.existsSync(path.join(appDir, 'module.json'))) continue;
+      for (const type of Object.keys(listHandlers(appDir))) handled.add(type);
       for (const hit of scanUiCommandTypes(appDir, uiCodeFiles(hashFiles(appDir)))) types.push(hit.type);
     }
   }

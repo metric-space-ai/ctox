@@ -1,15 +1,5 @@
 {
-  "_capability_evidence": {
-    "audit.event": [
-      "handlers/_ats.js"
-    ],
-    "audit.query": [
-      "handlers/ats.subject.export.js"
-    ],
-    "config.get": [
-      "handlers/_ats.js"
-    ]
-  },
+  "_capability_evidence": {},
   "_config_keys": [
     "CTOX_BUSINESS_OS_REQUIRE_LEGAL_BASIS_EVIDENCE"
   ],
@@ -22,6 +12,7 @@
   "_source_dir": "src/apps/business-os/modules/consent",
   "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
   "_todo": [
+    "command_rights ats.*: kein passender Handler.",
     "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
     "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
     "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
@@ -29,11 +20,7 @@
   "app_id": "consent",
   "app_ver": null,
   "author": null,
-  "capabilities_required": [
-    "audit.event",
-    "audit.query",
-    "config.get"
-  ],
+  "capabilities_required": [],
   "collections": {
     "business_consents": {
       "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
@@ -95,16 +82,7 @@
       }
     }
   },
-  "command_rights": {
-    "ats.*": {
-      "_basis": "v4-manifest.json; modules/consent/V4-HANDLERS.md Abweichung 2 (Rollenprüfung chef/admin bleibt Kern-Policy, is_ats_mutating_command)",
-      "assigned_users": false,
-      "roles": [
-        "admin",
-        "chef"
-      ]
-    }
-  },
+  "command_rights": {},
   "commands_in": [],
   "commands_out": [],
   "created_at": null,
@@ -347,13 +325,7 @@
       "owner_app": "submissions"
     }
   },
-  "handlers": {
-    "ats.consent.check": "handlers/ats.consent.check.js",
-    "ats.retention.due": "handlers/ats.retention.due.js",
-    "ats.retention.purge": "handlers/ats.retention.purge.js",
-    "ats.subject.erase": "handlers/ats.subject.erase.js",
-    "ats.subject.export": "handlers/ats.subject.export.js"
-  },
+  "handlers": {},
   "layout": {
     "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/consent.jpg (shared/operator-icon-selection.js, sha256 a88624722831…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
     "_icon_file": "icon.svg",

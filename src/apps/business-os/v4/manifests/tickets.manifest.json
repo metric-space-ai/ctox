@@ -1,12 +1,5 @@
 {
-  "_capability_evidence": {
-    "agent.task.enqueue": [
-      "handlers/_tickets.js"
-    ],
-    "audit.event": [
-      "handlers/_tickets.js"
-    ]
-  },
+  "_capability_evidence": {},
   "_declaration": "modules/tickets/v4-manifest.json",
   "_format": "ctox-shell-v4-app-manifest-draft-1",
   "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
@@ -23,10 +16,7 @@
   "app_id": "tickets",
   "app_ver": null,
   "author": null,
-  "capabilities_required": [
-    "agent.task.enqueue",
-    "audit.event"
-  ],
+  "capabilities_required": [],
   "collections": {
     "ctox_ticket_approvals": {
       "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
@@ -426,14 +416,7 @@
     }
   },
   "command_rights": {},
-  "commands_in": [
-    {
-      "from": [
-        "support"
-      ],
-      "type": "ctox.ticket.local.create"
-    }
-  ],
+  "commands_in": [],
   "commands_out": [],
   "created_at": null,
   "entry": "index.js",
@@ -557,22 +540,7 @@
       "owner_app": "notes"
     }
   },
-  "handlers": {
-    "ctox.ticket.approve": "handlers/ctox.ticket.approve.js",
-    "ctox.ticket.close": "handlers/ctox.ticket.close.js",
-    "ctox.ticket.execute": "handlers/ctox.ticket.execute.js",
-    "ctox.ticket.local.comment": "handlers/ctox.ticket.local.comment.js",
-    "ctox.ticket.local.create": "handlers/ctox.ticket.local.create.js",
-    "ctox.ticket.local.transition": "handlers/ctox.ticket.local.transition.js",
-    "ctox.ticket.publish_clarification": "handlers/ctox.ticket.publish_clarification.js",
-    "ctox.ticket.request_clarification": "handlers/ctox.ticket.request_clarification.js",
-    "ctox.ticket.resolve_clarification": "handlers/ctox.ticket.resolve_clarification.js",
-    "ctox.ticket.verify": "handlers/ctox.ticket.verify.js",
-    "ctox.ticket.writeback.complete": "handlers/ctox.ticket.writeback.complete.js",
-    "ctox.ticket.writeback.failed": "handlers/ctox.ticket.writeback.failed.js",
-    "ctox.ticket.writeback_comment": "handlers/ctox.ticket.writeback_comment.js",
-    "ctox.ticket.writeback_transition": "handlers/ctox.ticket.writeback_transition.js"
-  },
+  "handlers": {},
   "layout": {
     "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/tickets.jpg (shared/operator-icon-selection.js, sha256 6d0cbd213897…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
     "_icon_file": "icon.svg",

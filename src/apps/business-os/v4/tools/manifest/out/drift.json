@@ -3,7 +3,7 @@
     {
       "app": "outbound",
       "evidence": [
-        "modules/mail/index.js:1258"
+        "modules/mail/index.js:1259"
       ],
       "from": "mail",
       "type": "outbound.message.compose"
@@ -11,7 +11,15 @@
   ],
   "commands_in_without_handler": [],
   "commands_out_ambiguous": [],
-  "commands_out_unresolved": [],
+  "commands_out_unresolved": [
+    {
+      "app": "outbound",
+      "file": "handlers/_lib/owner-app.js",
+      "line": 22,
+      "module_expr": "OWNER_APP",
+      "type_expr": "command.type"
+    }
+  ],
   "commands_routes_pending": [
     {
       "app": null,
@@ -96,6 +104,22 @@
   "commands_unrouted": [],
   "contract_only": [
     {
+      "collection": "app_activations",
+      "proposed_owner": "ctox-platform"
+    },
+    {
+      "collection": "app_drafts",
+      "proposed_owner": "ctox-platform"
+    },
+    {
+      "collection": "business_app_versions",
+      "proposed_owner": "ctox-platform"
+    },
+    {
+      "collection": "business_apps",
+      "proposed_owner": "ctox-platform"
+    },
+    {
       "collection": "business_commands",
       "proposed_owner": "ctox-platform"
     },
@@ -110,67 +134,1434 @@
     {
       "collection": "ctox_runtime_settings",
       "proposed_owner": "ctox-platform"
+    },
+    {
+      "collection": "files",
+      "proposed_owner": "ctox-platform"
+    },
+    {
+      "collection": "mail_server_state",
+      "proposed_owner": "ctox-platform"
+    },
+    {
+      "collection": "shell_preferences",
+      "proposed_owner": "ctox-platform"
     }
   ],
   "copy_divergence": [],
   "exports_beyond_declaration": [],
   "foreign_without_export": [],
-  "handler_conflicts": [
+  "handler_conflicts": [],
+  "handlers_platform_type": [
     {
-      "apps": [
-        "outbound",
-        "outbound-lead-generation"
-      ],
-      "command_type": "outbound.research_policy.publish"
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.app.audit.js",
+      "type": "ctox.appsec.app.audit"
     },
     {
-      "apps": [
-        "outbound",
-        "outbound-lead-generation"
-      ],
-      "command_type": "outbound.research_source.auth_assist"
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.approval.grant.js",
+      "type": "ctox.appsec.approval.grant"
     },
     {
-      "apps": [
-        "outbound",
-        "outbound-lead-generation"
-      ],
-      "command_type": "outbound.research_source.generate_adapter"
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.approval.request.js",
+      "type": "ctox.appsec.approval.request"
     },
     {
-      "apps": [
-        "outbound",
-        "outbound-lead-generation"
-      ],
-      "command_type": "outbound.research_source.reprobe"
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.approval.revoke.js",
+      "type": "ctox.appsec.approval.revoke"
     },
     {
-      "apps": [
-        "outbound",
-        "outbound-lead-generation"
-      ],
-      "command_type": "outbound.research_source.test"
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.assessment.archive.js",
+      "type": "ctox.appsec.assessment.archive"
     },
     {
-      "apps": [
-        "outbound",
-        "outbound-lead-generation"
-      ],
-      "command_type": "outbound.research_source.upsert"
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.assessment.create.js",
+      "type": "ctox.appsec.assessment.create"
     },
     {
-      "apps": [
-        "outbound",
-        "outbound-lead-generation"
-      ],
-      "command_type": "outbound.sellify.lookup"
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.assessment.run.js",
+      "type": "ctox.appsec.assessment.run"
     },
     {
-      "apps": [
-        "outbound",
-        "outbound-lead-generation"
-      ],
-      "command_type": "outbound.update_digest.send_now"
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.audit.run.js",
+      "type": "ctox.appsec.audit.run"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.authz.build_matrix.js",
+      "type": "ctox.appsec.authz.build_matrix"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.authz.credential_proof_from_evidence.js",
+      "type": "ctox.appsec.authz.credential_proof_from_evidence"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.authz.credential_proof_template.js",
+      "type": "ctox.appsec.authz.credential_proof_template"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.authz.plan.js",
+      "type": "ctox.appsec.authz.plan"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.authz.preflight.js",
+      "type": "ctox.appsec.authz.preflight"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.authz.run.js",
+      "type": "ctox.appsec.authz.run"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.authz.status.js",
+      "type": "ctox.appsec.authz.status"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.exploit.get.js",
+      "type": "ctox.appsec.exploit.get"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.exploit.list.js",
+      "type": "ctox.appsec.exploit.list"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.exploit.verify.js",
+      "type": "ctox.appsec.exploit.verify"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.finding.remediate.js",
+      "type": "ctox.appsec.finding.remediate"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.finding.remediate.complete.js",
+      "type": "ctox.appsec.finding.remediate.complete"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.finding.remediate.failed.js",
+      "type": "ctox.appsec.finding.remediate.failed"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.graph.build.js",
+      "type": "ctox.appsec.graph.build"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.investigation.execute.js",
+      "type": "ctox.appsec.investigation.execute"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.investigation.plan.js",
+      "type": "ctox.appsec.investigation.plan"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.investigation.refute.js",
+      "type": "ctox.appsec.investigation.refute"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.investigation.resolve.js",
+      "type": "ctox.appsec.investigation.resolve"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.lab.create.js",
+      "type": "ctox.appsec.lab.create"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.lab.run.js",
+      "type": "ctox.appsec.lab.run"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.pipeline.rework.js",
+      "type": "ctox.appsec.pipeline.rework"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.replay.baseline.js",
+      "type": "ctox.appsec.replay.baseline"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.replay.investigations.js",
+      "type": "ctox.appsec.replay.investigations"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.report.export.js",
+      "type": "ctox.appsec.report.export"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.review.js",
+      "type": "ctox.appsec.review"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.state.sync.js",
+      "type": "ctox.appsec.state.sync"
+    },
+    {
+      "app": "appsec-pentest",
+      "file": "handlers/ctox.appsec.tools.doctor.js",
+      "type": "ctox.appsec.tools.doctor"
+    },
+    {
+      "app": "browser",
+      "file": "handlers/browser.back.js",
+      "type": "browser.back"
+    },
+    {
+      "app": "browser",
+      "file": "handlers/browser.clipboard.clear.js",
+      "type": "browser.clipboard.clear"
+    },
+    {
+      "app": "browser",
+      "file": "handlers/browser.clipboard.copy.js",
+      "type": "browser.clipboard.copy"
+    },
+    {
+      "app": "browser",
+      "file": "handlers/browser.clipboard.paste.js",
+      "type": "browser.clipboard.paste"
+    },
+    {
+      "app": "browser",
+      "file": "handlers/browser.controller.acquire.js",
+      "type": "browser.controller.acquire"
+    },
+    {
+      "app": "browser",
+      "file": "handlers/browser.controller.release.js",
+      "type": "browser.controller.release"
+    },
+    {
+      "app": "browser",
+      "file": "handlers/browser.controller.renew.js",
+      "type": "browser.controller.renew"
+    },
+    {
+      "app": "browser",
+      "file": "handlers/browser.credential.fill.js",
+      "type": "browser.credential.fill"
+    },
+    {
+      "app": "browser",
+      "file": "handlers/browser.dialog.respond.js",
+      "type": "browser.dialog.respond"
+    },
+    {
+      "app": "browser",
+      "file": "handlers/browser.forward.js",
+      "type": "browser.forward"
+    },
+    {
+      "app": "browser",
+      "file": "handlers/browser.navigate.js",
+      "type": "browser.navigate"
+    },
+    {
+      "app": "browser",
+      "file": "handlers/browser.permission.respond.js",
+      "type": "browser.permission.respond"
+    },
+    {
+      "app": "browser",
+      "file": "handlers/browser.reload.js",
+      "type": "browser.reload"
+    },
+    {
+      "app": "browser",
+      "file": "handlers/browser.reset.js",
+      "type": "browser.reset"
+    },
+    {
+      "app": "browser",
+      "file": "handlers/browser.session.start.js",
+      "type": "browser.session.start"
+    },
+    {
+      "app": "browser",
+      "file": "handlers/browser.session.stop.js",
+      "type": "browser.session.stop"
+    },
+    {
+      "app": "browser",
+      "file": "handlers/browser.tab.activate.js",
+      "type": "browser.tab.activate"
+    },
+    {
+      "app": "browser",
+      "file": "handlers/browser.tab.close.js",
+      "type": "browser.tab.close"
+    },
+    {
+      "app": "browser",
+      "file": "handlers/browser.tab.open.js",
+      "type": "browser.tab.open"
+    },
+    {
+      "app": "browser",
+      "file": "handlers/web_stack.auth_assist.complete.js",
+      "type": "web_stack.auth_assist.complete"
+    },
+    {
+      "app": "coding-agents",
+      "file": "handlers/ctox.coding.cancel.js",
+      "type": "ctox.coding.cancel"
+    },
+    {
+      "app": "coding-agents",
+      "file": "handlers/ctox.coding.models.js",
+      "type": "ctox.coding.models"
+    },
+    {
+      "app": "coding-agents",
+      "file": "handlers/ctox.coding.turn.js",
+      "type": "ctox.coding.turn"
+    },
+    {
+      "app": "consent",
+      "file": "handlers/ats.consent.check.js",
+      "type": "ats.consent.check"
+    },
+    {
+      "app": "consent",
+      "file": "handlers/ats.retention.due.js",
+      "type": "ats.retention.due"
+    },
+    {
+      "app": "consent",
+      "file": "handlers/ats.retention.purge.js",
+      "type": "ats.retention.purge"
+    },
+    {
+      "app": "consent",
+      "file": "handlers/ats.subject.erase.js",
+      "type": "ats.subject.erase"
+    },
+    {
+      "app": "consent",
+      "file": "handlers/ats.subject.export.js",
+      "type": "ats.subject.export"
+    },
+    {
+      "app": "credentials",
+      "file": "handlers/ctox.secret.delete.js",
+      "type": "ctox.secret.delete"
+    },
+    {
+      "app": "credentials",
+      "file": "handlers/ctox.secret.list.js",
+      "type": "ctox.secret.list"
+    },
+    {
+      "app": "credentials",
+      "file": "handlers/ctox.secret.put.js",
+      "type": "ctox.secret.put"
+    },
+    {
+      "app": "ctox",
+      "file": "handlers/ctox.crew.assign.js",
+      "type": "ctox.crew.assign"
+    },
+    {
+      "app": "ctox",
+      "file": "handlers/ctox.crew.learning.confirm.js",
+      "type": "ctox.crew.learning.confirm"
+    },
+    {
+      "app": "ctox",
+      "file": "handlers/ctox.crew.learning.delete.js",
+      "type": "ctox.crew.learning.delete"
+    },
+    {
+      "app": "ctox",
+      "file": "handlers/ctox.crew.learning.update.js",
+      "type": "ctox.crew.learning.update"
+    },
+    {
+      "app": "ctox",
+      "file": "handlers/ctox.crew.member.create.js",
+      "type": "ctox.crew.member.create"
+    },
+    {
+      "app": "ctox",
+      "file": "handlers/ctox.crew.member.update.js",
+      "type": "ctox.crew.member.update"
+    },
+    {
+      "app": "ctox",
+      "file": "handlers/ctox.crew.memory.update.js",
+      "type": "ctox.crew.memory.update"
+    },
+    {
+      "app": "ctox",
+      "file": "handlers/ctox.queue.abort_turn.js",
+      "type": "ctox.queue.abort_turn"
+    },
+    {
+      "app": "ctox",
+      "file": "handlers/ctox.queue.block.js",
+      "type": "ctox.queue.block"
+    },
+    {
+      "app": "ctox",
+      "file": "handlers/ctox.queue.capacity.js",
+      "type": "ctox.queue.capacity"
+    },
+    {
+      "app": "ctox",
+      "file": "handlers/ctox.queue.pause.js",
+      "type": "ctox.queue.pause"
+    },
+    {
+      "app": "ctox",
+      "file": "handlers/ctox.queue.release.js",
+      "type": "ctox.queue.release"
+    },
+    {
+      "app": "ctox",
+      "file": "handlers/ctox.queue.retry.js",
+      "type": "ctox.queue.retry"
+    },
+    {
+      "app": "ctox",
+      "file": "handlers/ctox.task.delete.js",
+      "type": "ctox.task.delete"
+    },
+    {
+      "app": "ctox",
+      "file": "handlers/ctox.task.update.js",
+      "type": "ctox.task.update"
+    },
+    {
+      "app": "customers",
+      "file": "handlers/customers.account.archive.js",
+      "type": "customers.account.archive"
+    },
+    {
+      "app": "customers",
+      "file": "handlers/customers.account.create.js",
+      "type": "customers.account.create"
+    },
+    {
+      "app": "customers",
+      "file": "handlers/customers.account.update.js",
+      "type": "customers.account.update"
+    },
+    {
+      "app": "customers",
+      "file": "handlers/customers.activity.record.js",
+      "type": "customers.activity.record"
+    },
+    {
+      "app": "customers",
+      "file": "handlers/customers.contact.archive.js",
+      "type": "customers.contact.archive"
+    },
+    {
+      "app": "customers",
+      "file": "handlers/customers.contact.create.js",
+      "type": "customers.contact.create"
+    },
+    {
+      "app": "customers",
+      "file": "handlers/customers.contact.update.js",
+      "type": "customers.contact.update"
+    },
+    {
+      "app": "customers",
+      "file": "handlers/customers.dedupe.resolve.js",
+      "type": "customers.dedupe.resolve"
+    },
+    {
+      "app": "customers",
+      "file": "handlers/customers.import.from_outbound.js",
+      "type": "customers.import.from_outbound"
+    },
+    {
+      "app": "customers",
+      "file": "handlers/customers.note.create.js",
+      "type": "customers.note.create"
+    },
+    {
+      "app": "customers",
+      "file": "handlers/customers.note.update.js",
+      "type": "customers.note.update"
+    },
+    {
+      "app": "customers",
+      "file": "handlers/customers.opportunity.close_lost.js",
+      "type": "customers.opportunity.close_lost"
+    },
+    {
+      "app": "customers",
+      "file": "handlers/customers.opportunity.close_won.js",
+      "type": "customers.opportunity.close_won"
+    },
+    {
+      "app": "customers",
+      "file": "handlers/customers.opportunity.create.js",
+      "type": "customers.opportunity.create"
+    },
+    {
+      "app": "customers",
+      "file": "handlers/customers.opportunity.move_stage.js",
+      "type": "customers.opportunity.move_stage"
+    },
+    {
+      "app": "customers",
+      "file": "handlers/customers.opportunity.update.js",
+      "type": "customers.opportunity.update"
+    },
+    {
+      "app": "customers",
+      "file": "handlers/customers.task.complete.js",
+      "type": "customers.task.complete"
+    },
+    {
+      "app": "customers",
+      "file": "handlers/customers.task.create.js",
+      "type": "customers.task.create"
+    },
+    {
+      "app": "customers",
+      "file": "handlers/customers.task.update.js",
+      "type": "customers.task.update"
+    },
+    {
+      "app": "customers",
+      "file": "handlers/customers.view.save.js",
+      "type": "customers.view.save"
+    },
+    {
+      "app": "documents",
+      "file": "handlers/ctox.office.settings.save.js",
+      "type": "ctox.office.settings.save"
+    },
+    {
+      "app": "documents",
+      "file": "handlers/office.document.commit.js",
+      "type": "office.document.commit"
+    },
+    {
+      "app": "documents",
+      "file": "handlers/office.document.export.js",
+      "type": "office.document.export"
+    },
+    {
+      "app": "documents",
+      "file": "handlers/office.document.freeze_email_content.js",
+      "type": "office.document.freeze_email_content"
+    },
+    {
+      "app": "documents",
+      "file": "handlers/office.document.prepare.js",
+      "type": "office.document.prepare"
+    },
+    {
+      "app": "esign",
+      "file": "handlers/ats.signature.request.js",
+      "type": "ats.signature.request"
+    },
+    {
+      "app": "esign",
+      "file": "handlers/ats.signature.sign.js",
+      "type": "ats.signature.sign"
+    },
+    {
+      "app": "intake",
+      "file": "handlers/ats.intake.capture.js",
+      "type": "ats.intake.capture"
+    },
+    {
+      "app": "interviews",
+      "file": "handlers/ats.interview.transcribe.js",
+      "type": "ats.interview.transcribe"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.dunning.letter.send.js",
+      "type": "invoices.dunning.letter.send"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.dunning.run.js",
+      "type": "invoices.dunning.run"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.import.from_outbound.js",
+      "type": "invoices.import.from_outbound"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.invoice.assign_payment_terms.js",
+      "type": "invoices.invoice.assign_payment_terms"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.invoice.cancel.js",
+      "type": "invoices.invoice.cancel"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.invoice.create.js",
+      "type": "invoices.invoice.create"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.invoice.create_credit_note.js",
+      "type": "invoices.invoice.create_credit_note"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.invoice.delete.js",
+      "type": "invoices.invoice.delete"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.invoice.post.js",
+      "type": "invoices.invoice.post"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.invoice.update.js",
+      "type": "invoices.invoice.update"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.line.create.js",
+      "type": "invoices.line.create"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.line.delete.js",
+      "type": "invoices.line.delete"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.line.update.js",
+      "type": "invoices.line.update"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.payment.allocate.js",
+      "type": "invoices.payment.allocate"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.payment.match_suggestions.js",
+      "type": "invoices.payment.match_suggestions"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.payment.unallocate.js",
+      "type": "invoices.payment.unallocate"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.proposal.approve.js",
+      "type": "invoices.proposal.approve"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.proposal.create.js",
+      "type": "invoices.proposal.create"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.proposal.reject.js",
+      "type": "invoices.proposal.reject"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.recurring.create.js",
+      "type": "invoices.recurring.create"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.recurring.pause.js",
+      "type": "invoices.recurring.pause"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.recurring.run.js",
+      "type": "invoices.recurring.run"
+    },
+    {
+      "app": "invoices",
+      "file": "handlers/invoices.recurring.update.js",
+      "type": "invoices.recurring.update"
+    },
+    {
+      "app": "iot",
+      "file": "handlers/ctox.iot.agent.configure.js",
+      "type": "ctox.iot.agent.configure"
+    },
+    {
+      "app": "iot",
+      "file": "handlers/ctox.iot.alarm.update.js",
+      "type": "ctox.iot.alarm.update"
+    },
+    {
+      "app": "iot",
+      "file": "handlers/ctox.iot.asset.delete.js",
+      "type": "ctox.iot.asset.delete"
+    },
+    {
+      "app": "iot",
+      "file": "handlers/ctox.iot.asset.upsert.js",
+      "type": "ctox.iot.asset.upsert"
+    },
+    {
+      "app": "iot",
+      "file": "handlers/ctox.iot.attribute.write.js",
+      "type": "ctox.iot.attribute.write"
+    },
+    {
+      "app": "iot",
+      "file": "handlers/ctox.iot.datapoints.query.js",
+      "type": "ctox.iot.datapoints.query"
+    },
+    {
+      "app": "iot",
+      "file": "handlers/ctox.iot.ruleset.save.js",
+      "type": "ctox.iot.ruleset.save"
+    },
+    {
+      "app": "iot",
+      "file": "handlers/ctox.iot.ruleset.toggle.js",
+      "type": "ctox.iot.ruleset.toggle"
+    },
+    {
+      "app": "mail",
+      "file": "handlers/ctox.mailserver.delete_domain.js",
+      "type": "ctox.mailserver.delete_domain"
+    },
+    {
+      "app": "mail",
+      "file": "handlers/ctox.mailserver.delete_user.js",
+      "type": "ctox.mailserver.delete_user"
+    },
+    {
+      "app": "mail",
+      "file": "handlers/ctox.mailserver.get_config.js",
+      "type": "ctox.mailserver.get_config"
+    },
+    {
+      "app": "mail",
+      "file": "handlers/ctox.mailserver.save_domain.js",
+      "type": "ctox.mailserver.save_domain"
+    },
+    {
+      "app": "mail",
+      "file": "handlers/ctox.mailserver.save_runtime.js",
+      "type": "ctox.mailserver.save_runtime"
+    },
+    {
+      "app": "mail",
+      "file": "handlers/ctox.mailserver.save_user.js",
+      "type": "ctox.mailserver.save_user"
+    },
+    {
+      "app": "nachweise",
+      "file": "handlers/ats.credential.verify.js",
+      "type": "ats.credential.verify"
+    },
+    {
+      "app": "nachweise",
+      "file": "handlers/ats.deployment.check.js",
+      "type": "ats.deployment.check"
+    },
+    {
+      "app": "nachweise",
+      "file": "handlers/ats.leistungsnachweis.signoff.js",
+      "type": "ats.leistungsnachweis.signoff"
+    },
+    {
+      "app": "news",
+      "file": "handlers/news.source.auth_assist.js",
+      "type": "news.source.auth_assist"
+    },
+    {
+      "app": "news",
+      "file": "handlers/news.topic.schedule.js",
+      "type": "news.topic.schedule"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.audit.export.js",
+      "type": "outbound.audit.export"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.campaign.apply_setup.js",
+      "type": "outbound.campaign.apply_setup"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.campaign.briefing.update.js",
+      "type": "outbound.campaign.briefing.update"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.campaign.mailbox.link.js",
+      "type": "outbound.campaign.mailbox.link"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.campaign.status.set.js",
+      "type": "outbound.campaign.status.set"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.dev.seed_test_data.js",
+      "type": "outbound.dev.seed_test_data"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.draft.prepare.js",
+      "type": "outbound.draft.prepare"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.engagement.assign_sender.js",
+      "type": "outbound.engagement.assign_sender"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.engagement.close.js",
+      "type": "outbound.engagement.close"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.engagement.create.js",
+      "type": "outbound.engagement.create"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.engagement.reapply_sequence.js",
+      "type": "outbound.engagement.reapply_sequence"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.engagement.resume.js",
+      "type": "outbound.engagement.resume"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.letter_template.save.js",
+      "type": "outbound.letter_template.save"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.message.approve.js",
+      "type": "outbound.message.approve"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.message.cancel.js",
+      "type": "outbound.message.cancel"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.message.pause.js",
+      "type": "outbound.message.pause"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.message.prepare.js",
+      "type": "outbound.message.prepare"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.message.reject.js",
+      "type": "outbound.message.reject"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.message.request_approval.js",
+      "type": "outbound.message.request_approval"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.message.request_changes.js",
+      "type": "outbound.message.request_changes"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.message.resume.js",
+      "type": "outbound.message.resume"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.message.send_approved.js",
+      "type": "outbound.message.send_approved"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.message.update_draft.js",
+      "type": "outbound.message.update_draft"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.pipeline.write_outreach_draft.js",
+      "type": "outbound.pipeline.write_outreach_draft"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.provider.reconcile.js",
+      "type": "outbound.provider.reconcile"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.reply.classify.js",
+      "type": "outbound.reply.classify"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.reply.match.js",
+      "type": "outbound.reply.match"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.research_policy.publish.js",
+      "type": "outbound.research_policy.publish"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.research_source.auth_assist.js",
+      "type": "outbound.research_source.auth_assist"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.research_source.generate_adapter.js",
+      "type": "outbound.research_source.generate_adapter"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.research_source.registry_read.js",
+      "type": "outbound.research_source.registry_read"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.research_source.reprobe.js",
+      "type": "outbound.research_source.reprobe"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.research_source.test.js",
+      "type": "outbound.research_source.test"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.research_source.upsert.js",
+      "type": "outbound.research_source.upsert"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.scheduler.tick.js",
+      "type": "outbound.scheduler.tick"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.scheduling.mark_booked.js",
+      "type": "outbound.scheduling.mark_booked"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.scheduling.prepare.js",
+      "type": "outbound.scheduling.prepare"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.scheduling.update_slots.js",
+      "type": "outbound.scheduling.update_slots"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.sellify.lookup.js",
+      "type": "outbound.sellify.lookup"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.sequence.save.js",
+      "type": "outbound.sequence.save"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.skillbook.save.js",
+      "type": "outbound.skillbook.save"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.skillbook.seed_defaults.js",
+      "type": "outbound.skillbook.seed_defaults"
+    },
+    {
+      "app": "outbound",
+      "file": "handlers/outbound.update_digest.send_now.js",
+      "type": "outbound.update_digest.send_now"
+    },
+    {
+      "app": "outbound-lead-generation",
+      "file": "handlers/outbound.lead.research_writeback.js",
+      "type": "outbound.lead.research_writeback"
+    },
+    {
+      "app": "outbound-lead-generation",
+      "file": "handlers/outbound.research_policy.publish.js",
+      "type": "outbound.research_policy.publish"
+    },
+    {
+      "app": "outbound-lead-generation",
+      "file": "handlers/outbound.research_source.auth_assist.js",
+      "type": "outbound.research_source.auth_assist"
+    },
+    {
+      "app": "outbound-lead-generation",
+      "file": "handlers/outbound.research_source.generate_adapter.js",
+      "type": "outbound.research_source.generate_adapter"
+    },
+    {
+      "app": "outbound-lead-generation",
+      "file": "handlers/outbound.research_source.reprobe.js",
+      "type": "outbound.research_source.reprobe"
+    },
+    {
+      "app": "outbound-lead-generation",
+      "file": "handlers/outbound.research_source.test.js",
+      "type": "outbound.research_source.test"
+    },
+    {
+      "app": "outbound-lead-generation",
+      "file": "handlers/outbound.research_source.upsert.js",
+      "type": "outbound.research_source.upsert"
+    },
+    {
+      "app": "outbound-lead-generation",
+      "file": "handlers/outbound.sellify.lookup.js",
+      "type": "outbound.sellify.lookup"
+    },
+    {
+      "app": "outbound-lead-generation",
+      "file": "handlers/outbound.update_digest.send_now.js",
+      "type": "outbound.update_digest.send_now"
+    },
+    {
+      "app": "outbound-lead-generation",
+      "file": "handlers/web_stack.person_research.js",
+      "type": "web_stack.person_research"
+    },
+    {
+      "app": "placements",
+      "file": "handlers/ats.placement.create.js",
+      "type": "ats.placement.create"
+    },
+    {
+      "app": "placements",
+      "file": "handlers/ats.placement.early_leave.js",
+      "type": "ats.placement.early_leave"
+    },
+    {
+      "app": "spreadsheets",
+      "file": "handlers/office.spreadsheet.commit.js",
+      "type": "office.spreadsheet.commit"
+    },
+    {
+      "app": "spreadsheets",
+      "file": "handlers/office.spreadsheet.export.js",
+      "type": "office.spreadsheet.export"
+    },
+    {
+      "app": "spreadsheets",
+      "file": "handlers/office.spreadsheet.prepare.js",
+      "type": "office.spreadsheet.prepare"
+    },
+    {
+      "app": "submissions",
+      "file": "handlers/ats.submission.present.js",
+      "type": "ats.submission.present"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.agent.apply_suggestion.js",
+      "type": "support.agent.apply_suggestion"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.agent.reject_suggestion.js",
+      "type": "support.agent.reject_suggestion"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.agent.writeback.js",
+      "type": "support.agent.writeback"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.assignment_policy.upsert.js",
+      "type": "support.assignment_policy.upsert"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.automation_rule.upsert.js",
+      "type": "support.automation_rule.upsert"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.automation.evaluate.js",
+      "type": "support.automation.evaluate"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.bulk.assign.js",
+      "type": "support.bulk.assign"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.bulk.priority.js",
+      "type": "support.bulk.priority"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.bulk.resolve.js",
+      "type": "support.bulk.resolve"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.bulk.snooze.js",
+      "type": "support.bulk.snooze"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.bulk.status.js",
+      "type": "support.bulk.status"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.conversation.assign.js",
+      "type": "support.conversation.assign"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.conversation.claim.js",
+      "type": "support.conversation.claim"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.conversation.open_from_thread.js",
+      "type": "support.conversation.open_from_thread"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.conversation.priority.js",
+      "type": "support.conversation.priority"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.conversation.reopen.js",
+      "type": "support.conversation.reopen"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.conversation.resolve.js",
+      "type": "support.conversation.resolve"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.conversation.snooze.js",
+      "type": "support.conversation.snooze"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.conversation.status.js",
+      "type": "support.conversation.status"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.identity.link.js",
+      "type": "support.identity.link"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.inbox.upsert.js",
+      "type": "support.inbox.upsert"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.macro.run.js",
+      "type": "support.macro.run"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.macro.upsert.js",
+      "type": "support.macro.upsert"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.note.create.js",
+      "type": "support.note.create"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.reply.draft.js",
+      "type": "support.reply.draft"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.reply.send.js",
+      "type": "support.reply.send"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.reporting.rebuild_rollups.js",
+      "type": "support.reporting.rebuild_rollups"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.sla_policy.upsert.js",
+      "type": "support.sla_policy.upsert"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.sla.apply.js",
+      "type": "support.sla.apply"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.sla.recalculate.js",
+      "type": "support.sla.recalculate"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.ticket.create_from_conversation.js",
+      "type": "support.ticket.create_from_conversation"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.ticket.link.js",
+      "type": "support.ticket.link"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.view_filter.upsert.js",
+      "type": "support.view_filter.upsert"
+    },
+    {
+      "app": "support",
+      "file": "handlers/support.view.upsert.js",
+      "type": "support.view.upsert"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.ai.request.js",
+      "type": "threads.ai.request"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.ctox_approval.approve.js",
+      "type": "threads.ctox_approval.approve"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.ctox_approval.cancel.js",
+      "type": "threads.ctox_approval.cancel"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.ctox_approval.edit.js",
+      "type": "threads.ctox_approval.edit"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.ctox_approval.reject.js",
+      "type": "threads.ctox_approval.reject"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.ctox_approval.request.js",
+      "type": "threads.ctox_approval.request"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.handoff.create.js",
+      "type": "threads.handoff.create"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.link.create.js",
+      "type": "threads.link.create"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.link.remove.js",
+      "type": "threads.link.remove"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.message.create.js",
+      "type": "threads.message.create"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.note.create.js",
+      "type": "threads.note.create"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.note.delete.js",
+      "type": "threads.note.delete"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.note.update.js",
+      "type": "threads.note.update"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.notification.dismiss.js",
+      "type": "threads.notification.dismiss"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.notification.mark_read.js",
+      "type": "threads.notification.mark_read"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.notification.preferences.update.js",
+      "type": "threads.notification.preferences.update"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.thread.archive.js",
+      "type": "threads.thread.archive"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.thread.assign.js",
+      "type": "threads.thread.assign"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.thread.claim.js",
+      "type": "threads.thread.claim"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.thread.snooze.js",
+      "type": "threads.thread.snooze"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.thread.state.update.js",
+      "type": "threads.thread.state.update"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.thread.unwatch.js",
+      "type": "threads.thread.unwatch"
+    },
+    {
+      "app": "threads",
+      "file": "handlers/threads.thread.watch.js",
+      "type": "threads.thread.watch"
+    },
+    {
+      "app": "tickets",
+      "file": "handlers/ctox.ticket.approve.js",
+      "type": "ctox.ticket.approve"
+    },
+    {
+      "app": "tickets",
+      "file": "handlers/ctox.ticket.close.js",
+      "type": "ctox.ticket.close"
+    },
+    {
+      "app": "tickets",
+      "file": "handlers/ctox.ticket.execute.js",
+      "type": "ctox.ticket.execute"
+    },
+    {
+      "app": "tickets",
+      "file": "handlers/ctox.ticket.local.comment.js",
+      "type": "ctox.ticket.local.comment"
+    },
+    {
+      "app": "tickets",
+      "file": "handlers/ctox.ticket.local.create.js",
+      "type": "ctox.ticket.local.create"
+    },
+    {
+      "app": "tickets",
+      "file": "handlers/ctox.ticket.local.transition.js",
+      "type": "ctox.ticket.local.transition"
+    },
+    {
+      "app": "tickets",
+      "file": "handlers/ctox.ticket.publish_clarification.js",
+      "type": "ctox.ticket.publish_clarification"
+    },
+    {
+      "app": "tickets",
+      "file": "handlers/ctox.ticket.request_clarification.js",
+      "type": "ctox.ticket.request_clarification"
+    },
+    {
+      "app": "tickets",
+      "file": "handlers/ctox.ticket.resolve_clarification.js",
+      "type": "ctox.ticket.resolve_clarification"
+    },
+    {
+      "app": "tickets",
+      "file": "handlers/ctox.ticket.verify.js",
+      "type": "ctox.ticket.verify"
+    },
+    {
+      "app": "tickets",
+      "file": "handlers/ctox.ticket.writeback_comment.js",
+      "type": "ctox.ticket.writeback_comment"
+    },
+    {
+      "app": "tickets",
+      "file": "handlers/ctox.ticket.writeback_transition.js",
+      "type": "ctox.ticket.writeback_transition"
+    },
+    {
+      "app": "tickets",
+      "file": "handlers/ctox.ticket.writeback.complete.js",
+      "type": "ctox.ticket.writeback.complete"
+    },
+    {
+      "app": "tickets",
+      "file": "handlers/ctox.ticket.writeback.failed.js",
+      "type": "ctox.ticket.writeback.failed"
     }
   ],
   "migration_steps": [

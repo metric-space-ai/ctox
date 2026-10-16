@@ -1075,31 +1075,7 @@
       "owner_app": "outbound"
     }
   },
-  "handlers": {
-    "invoices.dunning.letter.send": "handlers/invoices.dunning.letter.send.js",
-    "invoices.dunning.run": "handlers/invoices.dunning.run.js",
-    "invoices.import.from_outbound": "handlers/invoices.import.from_outbound.js",
-    "invoices.invoice.assign_payment_terms": "handlers/invoices.invoice.assign_payment_terms.js",
-    "invoices.invoice.cancel": "handlers/invoices.invoice.cancel.js",
-    "invoices.invoice.create": "handlers/invoices.invoice.create.js",
-    "invoices.invoice.create_credit_note": "handlers/invoices.invoice.create_credit_note.js",
-    "invoices.invoice.delete": "handlers/invoices.invoice.delete.js",
-    "invoices.invoice.post": "handlers/invoices.invoice.post.js",
-    "invoices.invoice.update": "handlers/invoices.invoice.update.js",
-    "invoices.line.create": "handlers/invoices.line.create.js",
-    "invoices.line.delete": "handlers/invoices.line.delete.js",
-    "invoices.line.update": "handlers/invoices.line.update.js",
-    "invoices.payment.allocate": "handlers/invoices.payment.allocate.js",
-    "invoices.payment.match_suggestions": "handlers/invoices.payment.match_suggestions.js",
-    "invoices.payment.unallocate": "handlers/invoices.payment.unallocate.js",
-    "invoices.proposal.approve": "handlers/invoices.proposal.approve.js",
-    "invoices.proposal.create": "handlers/invoices.proposal.create.js",
-    "invoices.proposal.reject": "handlers/invoices.proposal.reject.js",
-    "invoices.recurring.create": "handlers/invoices.recurring.create.js",
-    "invoices.recurring.pause": "handlers/invoices.recurring.pause.js",
-    "invoices.recurring.run": "handlers/invoices.recurring.run.js",
-    "invoices.recurring.update": "handlers/invoices.recurring.update.js"
-  },
+  "handlers": {},
   "layout": {
     "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/invoices.jpg (shared/operator-icon-selection.js, sha256 1a0828f86f17…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
     "_icon_file": "icon.svg",
