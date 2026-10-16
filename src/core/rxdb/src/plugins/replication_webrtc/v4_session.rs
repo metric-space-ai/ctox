@@ -53,7 +53,10 @@ fn invalid() -> crate::rx_error::RxError {
 
 /// Association lifetime owns every lane and subscription task. Dropping it
 /// aborts pending reads; source cursors resume only from committed checkpoints.
-struct SubscriptionTask { task: tokio::task::JoinHandle<()>, scope_hash: String }
+struct SubscriptionTask {
+    task: tokio::task::JoinHandle<()>,
+    scope_hash: String,
+}
 impl Drop for SubscriptionTask {
     fn drop(&mut self) {
         self.task.abort();
