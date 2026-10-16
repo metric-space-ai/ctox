@@ -53,7 +53,11 @@ def interrupted(signum, _frame):
 signal.signal(signal.SIGTERM,interrupted)
 signal.signal(signal.SIGINT,interrupted)
 
-def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
+def digest(path):
+    hash = hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024*1024), b''): hash.update(chunk)
+    return hash.hexdigest()
 def save():
     (OUT/'results.json').write_text(json.dumps(dict(train=TRAIN, rights_composition=RIGHTS,
         source_head=subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip(),
