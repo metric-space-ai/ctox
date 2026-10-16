@@ -21,7 +21,7 @@ if run('format',['rustfmt','--edition','2021','--config','skip_children=true',*o
 for f in owned:
     dest=out/'formatted'/f;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes((root/f).read_bytes())
 original=source.read_bytes(); record['production_sha256']=hashlib.sha256(original).hexdigest(); record['input_sha256']={f:hashlib.sha256((root/f).read_bytes()).hexdigest() for f in owned+['src/core/store/rights.rs','src/core/store/scope.rs','src/core/store/manifest_rules.rs','tests/sync-v4/p6-e55/run.py','tests/sync-v4/p6-e55/Cargo.toml']}; save()
-cmd=['cargo','test','--manifest-path','tests/sync-v4/p6-e55/Cargo.toml','--test','contract','--jobs','2','--','--test-threads=2']
+cmd=['cargo','test','--locked','--manifest-path','tests/sync-v4/p6-e55/Cargo.toml','--test','contract','--jobs','2','--','--test-threads=2']
 try:
     if run('baseline',cmd)!=0: raise RuntimeError('baseline failed; no mutation evidence')
     mutants=[

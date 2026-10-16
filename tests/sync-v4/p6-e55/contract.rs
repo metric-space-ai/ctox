@@ -2,7 +2,6 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ctox_store::change_log::subscription::protocol::InstanceSigner;
 use ctox_store::{testkit::StoreFixture, DbId, StoreError, WriteJob};
 use p6_e55_contract::rights::{
-    self,
     app_grant::*,
     manifest_rules::ManifestRules,
     scope::{canonical_json, FieldMask, FilterValue, RowFilter},
@@ -119,7 +118,7 @@ impl Fixture {
                     class:"replicated".into(), client_limit:100, byte_budget:65536, rights_ver:1, app_ver:"1".into()
                 })?;
             }
-            tx.execute("INSERT INTO c_business_users (id,rev,data,deleted) VALUES('alice','1',?1,0)", [json!({"id":"alice","role":"user","active":true}).to_string()])?;
+            tx.execute("INSERT INTO c_business_users (id,rev,schema_ver,data,deleted) VALUES('alice','1',1,?1,0)", [json!({"id":"alice","role":"user","active":true}).to_string()])?;
             Ok(())
         })).unwrap().await.unwrap();
         let auth = StoreRightsAuthority::attach(store.writer(), "instance".into())
