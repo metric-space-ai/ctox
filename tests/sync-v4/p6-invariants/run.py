@@ -136,6 +136,7 @@ source_paths = [
 ]
 (OUT/'source-binding.json').write_text(json.dumps({
     'head':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
+    'build_env':{key:ENV[key] for key in ['CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS','CARGO_BUILD_JOBS','RUST_TEST_THREADS','TOKIO_WORKER_THREADS'] if key in ENV},
     'sources':{p:hashlib.sha256((ROOT/p).read_bytes()).hexdigest() for p in source_paths}
 },indent=2)+'\n')
 try:
