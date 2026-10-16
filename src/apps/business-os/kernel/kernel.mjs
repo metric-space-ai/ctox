@@ -331,12 +331,13 @@ export function createKernel(opts = {}) {
     if (!jsonEq(view, collectionsView)) { collectionsView = view; return true; }
     return false;
   }
-  function trackScope(collection, scope, patch) {
+  // report=false: der Aufrufer meldet selbst, nachdem auch Checkpoint und Rückstand nachgezogen sind (K-BF1).
+  function trackScope(collection, scope, patch, report = true) {
     const key = checkpointKey(scope);
     let e = collScopes.get(collection);
     if (!e || e.key !== key) { e = { key, gen: scope.gen ?? genOf(collection), backlog: 0, complete: false, error: null, state: null, since_ms: Date.now() }; collScopes.set(collection, e); }
     Object.assign(e, patch);
-    if (refreshCollections()) netChanged();
+    if (refreshCollections() && report) netChanged();
   }
   function untrackCollection(collection) { if (collScopes.delete(collection) && refreshCollections()) netChanged(); }
   let followerNet = null;
@@ -764,9 +765,12 @@ export function createKernel(opts = {}) {
     for(const completed of out.settled)publishWrite(completed);
     if(out.settled.length)await refreshOutboxStat();
     scopeCursors.set(page.collection,maxSeq(scopeCursors.get(page.collection)??'0',cursor));notify('checkpoint');
+    // K-BF1: erst Checkpoint, Rückstand und Collection-Zustand vollständig nachziehen, dann genau EINE Meldung an die
+    // Folger. Vorher meldete trackScope() die neuen Collection-Zustände mit dem alten extraBacklog („alle live, backlog N“).
     scopeBacklog.set(checkpointKey(scope),Math.max(0,Number(page.backlog??0)));
-    trackScope(page.collection, scope, { backlog: Math.max(0, Number(page.backlog ?? 0)), complete: !!page.complete, error: null });
-    setCheckpoint(out.cp); extraBacklog=[...scopeBacklog.values()].reduce((a,b)=>a+b,0); netChanged();
+    setCheckpoint(out.cp); extraBacklog=[...scopeBacklog.values()].reduce((a,b)=>a+b,0);
+    trackScope(page.collection, scope, { backlog: Math.max(0, Number(page.backlog ?? 0)), complete: !!page.complete, error: null }, false);
+    netChanged();
     post({type:'docs',keys:out.recs.map(r=>[r.collection,r.id]),checkpoint:out.cp});
   }
   async function receiveResult(message) {
