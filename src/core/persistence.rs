@@ -315,19 +315,52 @@ fn sync_slots() -> std::sync::Arc<tokio::sync::Semaphore> {
         .get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(4)))
         .clone()
 }
+/// Admission failures remain distinguishable from an absent configuration row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoreSyncError {
+    Required,
+    AsyncContext,
+    OwnerCallback,
+    RuntimeNotDriven,
+    WorkerClosed,
+}
+impl std::fmt::Display for CoreSyncError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Required => "synchronous Core caller must use run_core_sync or run_core_blocking",
+            Self::AsyncContext => {
+                "async Core caller must await run_core_sync or an async owner API"
+            }
+            Self::OwnerCallback => "Core owner callbacks must use their borrowed transaction",
+            Self::RuntimeNotDriven => {
+                "blocking Core entry requires an existing multi-thread runtime"
+            }
+            Self::WorkerClosed => "Core compatibility worker closed without a reply",
+        })
+    }
+}
+impl std::error::Error for CoreSyncError {}
+
 pub(crate) fn require_sync_owner_context() -> Result<()> {
-    // A private admission token is set only on the bounded compatibility
-    // executor. Owner callbacks and async workers can never wait recursively.
-    anyhow::ensure!(
-        CORE_SYNC_CONTEXT.with(std::cell::Cell::get),
-        "synchronous Core caller must use run_core_sync or an async owner API"
-    );
+    if !CORE_SYNC_CONTEXT.with(std::cell::Cell::get) {
+        return Err(CoreSyncError::Required.into());
+    }
     Ok(())
 }
 
-/// Transitional sync callers await this bounded bridge. It reuses the existing
-/// runtime, caps waiting compatibility work at four, and never executes SQLite
-/// itself. Do not call a sync facade directly from an async worker.
+fn with_core_sync_context<T>(operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            CORE_SYNC_CONTEXT.with(|value| value.set(self.0));
+        }
+    }
+    let _reset = Reset(CORE_SYNC_CONTEXT.with(|value| value.replace(true)));
+    operation()
+}
+
+/// Async entry. Admission is shared with ordinary-thread callers and remains
+/// bounded at four; SQLite is owned by the existing writer/read pool.
 pub(crate) async fn run_core_sync<T: Send + 'static>(
     operation: impl FnOnce() -> Result<T> + Send + 'static,
 ) -> Result<T> {
@@ -336,17 +369,56 @@ pub(crate) async fn run_core_sync<T: Send + 'static>(
         .map_err(|_| ctox_store::StoreError::Busy)?;
     tokio::task::spawn_blocking(move || {
         let _admission = admission;
-        struct Reset(bool);
-        impl Drop for Reset {
-            fn drop(&mut self) {
-                CORE_SYNC_CONTEXT.with(|value| value.set(self.0));
-            }
-        }
-        let _reset = Reset(CORE_SYNC_CONTEXT.with(|value| value.replace(true)));
-        operation()
+        with_core_sync_context(operation)
     })
     .await
     .context("Core compatibility worker failed")?
+}
+
+/// Ordinary OS threads borrow the daemon's runtime, never create one. This
+/// cannot be used on an async worker or from a SQLite actor callback. Already
+/// admitted compatibility phases reuse their token without a recursive wait.
+pub(crate) fn run_core_blocking<T: Send + 'static>(
+    runtime: &tokio::runtime::Handle,
+    operation: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    if CORE_SYNC_CONTEXT.with(std::cell::Cell::get) {
+        return operation();
+    }
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return Err(CoreSyncError::AsyncContext.into());
+    }
+    // The Store actor is a dedicated named OS thread (writer.rs::spawn_actor),
+    // unlike the runtime's async/read workers. It must never wait on itself.
+    if std::thread::current()
+        .name()
+        .is_some_and(|name| name.starts_with("ctox-store-"))
+    {
+        return Err(CoreSyncError::OwnerCallback.into());
+    }
+    if runtime.runtime_flavor() != tokio::runtime::RuntimeFlavor::MultiThread {
+        return Err(CoreSyncError::RuntimeNotDriven.into());
+    }
+    let admission = sync_slots()
+        .try_acquire_owned()
+        .map_err(|_| ctox_store::StoreError::Busy)?;
+    let (reply, result) = std::sync::mpsc::sync_channel(1);
+    runtime.spawn_blocking(move || {
+        let _admission = admission;
+        let value = with_core_sync_context(operation);
+        let _ = reply.send(value);
+    });
+    result.recv().map_err(|_| CoreSyncError::WorkerClosed)?
+}
+
+/// Uses only the Core handle installed for this root. Missing/retired owners
+/// are errors; there is no new runtime, pool or file opener here.
+pub(crate) fn run_core_blocking_at<T: Send + 'static>(
+    root: &Path,
+    operation: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let runtime = injected_core(root)?.runtime.clone();
+    run_core_blocking(&runtime, operation)
 }
 
 type InstalledCoreOwners =
@@ -940,3 +1012,7 @@ mod owner_adapter_tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "persistence_blocking_tests.rs"]
+mod blocking_tests;

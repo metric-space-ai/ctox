@@ -242,16 +242,20 @@ pub fn clear_runtime_env_value(root: &Path, key: &str) -> Result<()> {
 /// Read exactly ONE persisted key from the runtime_env_kv store (bypassing the
 /// secrets/runtime-state merge). Returns None for an absent or blank value.
 pub fn get_runtime_env_value(root: &Path, key: &str) -> Option<String> {
+    try_get_runtime_env_value(root, key).ok().flatten()
+}
+
+pub fn try_get_runtime_env_value(root: &Path, key: &str) -> Result<Option<String>> {
     if key.trim().is_empty()
         || secrets::is_secret_key(key)
         || runtime_state::is_runtime_state_key(key)
     {
-        return None;
+        return Ok(None);
     }
-    load_persisted_runtime_env_map_cached(root)
-        .ok()
-        .and_then(|map| map.get(key).cloned())
-        .filter(|value| !value.trim().is_empty())
+    Ok(load_persisted_runtime_env_map_cached(root)?
+        .get(key)
+        .cloned()
+        .filter(|value| !value.trim().is_empty()))
 }
 
 /// Runtime env and runtime state share this file owner, distinct from Secrets.
@@ -393,6 +397,7 @@ fn is_disabled_selector(value: &str) -> bool {
 pub(crate) struct RuntimeOwnerFixture {
     pub(crate) store: RuntimeStore,
     core: std::sync::Arc<crate::persistence::CorePersistence>,
+    _core_adapter: crate::lcm::owner_adapter::OwnerAdapter,
     core_writer: ctox_store::writer::WriterHandle,
     writer: ctox_store::writer::WriterHandle,
     readers: ctox_store::read_pool::ReadPool,
@@ -411,6 +416,12 @@ impl RuntimeOwnerFixture {
             StoreFixture::open(DbId::new(crate::persistence::sqlite_path(root))?)
                 .await?
                 .into_parts();
+        let core_adapter = crate::lcm::owner_adapter::OwnerAdapter::attach(
+            &crate::persistence::sqlite_path(root),
+            core_writer.clone(),
+            core_readers.clone(),
+        )
+        .await?;
         let core =
             crate::persistence::install_core_owner(root, core_writer.clone(), core_readers).await?;
         let (writer, readers) = StoreFixture::open(DbId::new(runtime_config_path(root))?)
@@ -424,6 +435,7 @@ impl RuntimeOwnerFixture {
         Ok(Self {
             store,
             core,
+            _core_adapter: core_adapter,
             core_writer,
             writer,
             readers,

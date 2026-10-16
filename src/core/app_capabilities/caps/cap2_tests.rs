@@ -454,16 +454,43 @@ fn app_capabilities_cap2_mail_delivery_once_contract() {
             settings.insert("CTO_EMAIL_ADDRESS".into(), "instance@example.test".into());
             settings.insert("CTO_EMAIL_PROVIDER".into(), "imap".into());
             crate::inference::runtime_env::save_runtime_env_map(root, &settings).unwrap();
-            let sender = mail::resolve_sender(root, &ctx, "instance@example.test").unwrap();
-            assert_eq!(sender.address, "instance@example.test");
-            assert_eq!(sender.provider.as_deref(), Some("imap"));
-            assert_eq!(
-                mail::resolve_sender(root, &ctx, "unconfigured@example.test")
+            let sender_root = root.to_path_buf();
+            std::thread::spawn(move || {
+                let root = sender_root.as_path();
+                let sender = mail::resolve_sender(root, &ctx, "instance@example.test").unwrap();
+                assert_eq!(sender.address, "instance@example.test");
+                assert_eq!(sender.provider.as_deref(), Some("imap"));
+                assert_eq!(
+                    mail::resolve_sender(root, &ctx, "unconfigured@example.test")
+                        .err()
+                        .unwrap()
+                        .code,
+                    ErrorCode::NotFound
+                );
+            })
+            .join()
+            .expect("plain HTTP sender thread");
+            let runtime = crate::lcm::owner_adapter::OwnerAdapter::for_path(
+                &crate::inference::runtime_env::runtime_config_path(root),
+            )
+            .unwrap();
+            runtime
+                .write_blocking(|tx| {
+                    tx.execute_batch(
+                        "ALTER TABLE runtime_env_kv RENAME COLUMN env_key TO broken_key;",
+                    )?;
+                    Ok(())
+                })
+                .unwrap();
+            let sender_root = root.to_path_buf();
+            let error = std::thread::spawn(move || {
+                mail::resolve_sender(&sender_root, &Host::new().ctx, "instance@example.test")
                     .err()
-                    .unwrap()
-                    .code,
-                ErrorCode::NotFound
-            );
+                    .expect("failed Runtime store must not become an unconfigured sender")
+            })
+            .join()
+            .unwrap();
+            assert_eq!(error.code, ErrorCode::Unavailable);
         });
     }
     {

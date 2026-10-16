@@ -4552,19 +4552,8 @@ pub(crate) fn ticket_case_status_stamp(root: &Path) -> Result<TicketCaseStatusSt
     if !path.exists() {
         return Ok(empty_ticket_case_status_stamp(false, false));
     }
-    let conn = Connection::open_with_flags(
-        &path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .with_context(|| {
-        format!(
-            "failed to open ticket db {} for status stamp",
-            path.display()
-        )
-    })?;
-    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
-        .context("failed to configure SQLite busy_timeout for ticket status stamp")?;
-    let table_exists = conn
+    crate::lcm::with_lcm_read(&path, move |conn: &Connection| {
+        let table_exists = conn
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ticket_cases' LIMIT 1",
             [],
@@ -4572,23 +4561,24 @@ pub(crate) fn ticket_case_status_stamp(root: &Path) -> Result<TicketCaseStatusSt
         )
         .optional()?
         .unwrap_or(false);
-    if !table_exists {
-        return Ok(empty_ticket_case_status_stamp(true, false));
-    }
-    let (open_case_count, latest_open_case_updated_at) = conn.query_row(
-        r#"
+        if !table_exists {
+            return Ok(empty_ticket_case_status_stamp(true, false));
+        }
+        let (open_case_count, latest_open_case_updated_at) = conn.query_row(
+            r#"
         SELECT COUNT(*), COALESCE(MAX(updated_at), '')
         FROM ticket_cases
         WHERE state <> 'closed'
         "#,
-        [],
-        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
-    )?;
-    Ok(TicketCaseStatusStamp {
-        database_exists: true,
-        table_exists: true,
-        open_case_count: open_case_count.max(0) as usize,
-        latest_open_case_updated_at,
+            [],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )?;
+        Ok(TicketCaseStatusStamp {
+            database_exists: true,
+            table_exists: true,
+            open_case_count: open_case_count.max(0) as usize,
+            latest_open_case_updated_at,
+        })
     })
 }
 

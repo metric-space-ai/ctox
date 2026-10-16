@@ -1065,7 +1065,7 @@ fn schema_state(conn: &Connection) -> Result<serde_json::Value> {
 }
 
 fn resolve_db_path(root: &Path) -> std::path::PathBuf {
-    root.join(DEFAULT_DB_RELATIVE_PATH)
+    crate::paths::core_db(root)
 }
 
 fn schedule_due_gate_stamp(path: &Path) -> ScheduleDueGateStamp {
@@ -1087,42 +1087,43 @@ fn schedule_due_source_stamp(path: &Path) -> Result<ScheduleDueSourceStamp> {
         });
     }
 
-    let conn = open_existing_schedule_db_read_only(path)?;
-    let table_exists = sqlite_table_exists(&conn, "scheduled_tasks")?;
-    if !table_exists {
-        return Ok(ScheduleDueSourceStamp {
-            database_exists: true,
-            table_exists: false,
-            enabled_task_count: 0,
-            earliest_next_run_at: None,
-            latest_task_updated_at: None,
-            source_fingerprint: 0,
-        });
-    }
+    crate::lcm::with_lcm_read(path, |conn: &Connection| {
+        let table_exists = sqlite_table_exists(&conn, "scheduled_tasks")?;
+        if !table_exists {
+            return Ok(ScheduleDueSourceStamp {
+                database_exists: true,
+                table_exists: false,
+                enabled_task_count: 0,
+                earliest_next_run_at: None,
+                latest_task_updated_at: None,
+                source_fingerprint: 0,
+            });
+        }
 
-    let (enabled_task_count, earliest_next_run_at, latest_task_updated_at) = conn.query_row(
-        r#"
+        let (enabled_task_count, earliest_next_run_at, latest_task_updated_at) = conn.query_row(
+            r#"
         SELECT COUNT(*), MIN(next_run_at), MAX(updated_at)
         FROM scheduled_tasks
         WHERE enabled = 1
         "#,
-        [],
-        |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, Option<String>>(2)?,
-            ))
-        },
-    )?;
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )?;
 
-    Ok(ScheduleDueSourceStamp {
-        database_exists: true,
-        table_exists: true,
-        enabled_task_count,
-        earliest_next_run_at,
-        latest_task_updated_at,
-        source_fingerprint: schedule_due_source_fingerprint(&conn)?,
+        Ok(ScheduleDueSourceStamp {
+            database_exists: true,
+            table_exists: true,
+            enabled_task_count,
+            earliest_next_run_at,
+            latest_task_updated_at,
+            source_fingerprint: schedule_due_source_fingerprint(&conn)?,
+        })
     })
 }
 
@@ -1150,19 +1151,6 @@ fn schedule_due_source_fingerprint(conn: &Connection) -> Result<u64> {
         row.get::<_, String>(8)?.hash(&mut hasher);
     }
     Ok(hasher.finish())
-}
-
-fn open_existing_schedule_db_read_only(path: &Path) -> Result<Connection> {
-    let conn = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .with_context(|| format!("failed to open schedule db read-only {}", path.display()))?;
-    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
-        .context("failed to configure SQLite busy_timeout for schedule source stamp")?;
-    conn.execute_batch("PRAGMA query_only = ON;")
-        .context("failed to set schedule source stamp connection read-only")?;
-    Ok(conn)
 }
 
 fn sqlite_table_exists(conn: &Connection, table_name: &str) -> Result<bool> {

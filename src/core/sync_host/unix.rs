@@ -33,10 +33,9 @@ fn load_config(root: &Path) -> Result<Option<HostConfiguration>> {
     if !path.exists() {
         return Ok(None);
     }
-    let connection =
-        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    connection.busy_timeout(Duration::from_secs(2))?;
-    Ok(host_config::load(&connection)?)
+    crate::lcm::with_lcm_read(&path, |connection: &rusqlite::Connection| {
+        Ok(host_config::load(connection)?)
+    })
 }
 pub(super) fn configuration(root: &Path) -> Result<HostConfiguration> {
     load_config(root)?.context("native Sync host is not configured")

@@ -2,6 +2,7 @@
 // License: Apache-2.0
 //! Native execution identity, allocated before execution, separate from finalization.
 use super::*;
+use rusqlite::Connection;
 
 pub struct WorkerRunInput<'a> {
     pub attempt_id: &'a str,
@@ -11,7 +12,7 @@ pub struct WorkerRunInput<'a> {
     pub task_ids: &'a [String],
 }
 
-impl LcmEngine {
+impl<C: std::ops::Deref<Target = Connection>> LcmEngine<C> {
     pub(super) fn ensure_worker_run_identity_schema(&self) -> Result<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS worker_run_identities (
@@ -50,10 +51,7 @@ impl LcmEngine {
             "invalid native worker run task binding"
         );
         let task_ids_json = serde_json::to_string(&task_ids)?;
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
+        let tx = LcmTransaction::begin(&self.conn)?;
         let existing: Option<(String, String, i64, String, String)> = tx
             .query_row(
                 "SELECT run_id,work_key,conversation_id,source_label,task_ids_json
@@ -113,7 +111,22 @@ impl LcmEngine {
 }
 
 pub fn run_register_worker_run(db_path: &Path, input: WorkerRunInput<'_>) -> Result<String> {
-    LcmEngine::open(db_path, LcmConfig::default())?.register_worker_run(input)
+    let (attempt_id, work_key, source_label, task_ids) = (
+        input.attempt_id.to_owned(),
+        input.work_key.to_owned(),
+        input.source_label.to_owned(),
+        input.task_ids.to_vec(),
+    );
+    let conversation_id = input.conversation_id;
+    owned_lcm_write(db_path, move |engine| {
+        engine.register_worker_run(WorkerRunInput {
+            attempt_id: &attempt_id,
+            work_key: &work_key,
+            conversation_id,
+            source_label: &source_label,
+            task_ids: &task_ids,
+        })
+    })
 }
 
 /// Projection compatibility: old finalization keys remain unchanged. New runs
@@ -148,35 +161,82 @@ mod tests {
             task_ids: tasks,
         }
     }
-    #[test]
-    fn active_run_identity_survives_reopen_and_is_independent_of_attempt_and_task() -> Result<()> {
+    #[tokio::test]
+    async fn active_run_identity_survives_reopen_and_is_independent_of_attempt_and_task(
+    ) -> Result<()> {
         let temp = tempfile::tempdir()?;
         let db = temp.path().join("core.sqlite3");
-        let tasks = vec!["task-b".into(), "task-a".into()];
-        let run = run_register_worker_run(&db, input("attempt", &tasks))?;
-        assert!(uuid::Uuid::parse_str(run.strip_prefix("worker-run:").unwrap()).is_ok());
-        assert_ne!(run, "attempt");
-        assert!(!tasks.contains(&run));
-        let reversed = vec!["task-a".into(), "task-b".into()];
-        assert_eq!(
-            run,
-            run_register_worker_run(&db, input("attempt", &reversed))?
-        );
-        assert_ne!(
-            run,
-            run_register_worker_run(&db, input("attempt-2", &tasks))?
-        );
-        let conn = Connection::open(&db)?;
-        assert_eq!(projected_worker_run_id(&conn, "attempt")?, run);
-        let count: i64 = conn.query_row(
-            "SELECT count(*) FROM worker_attempt_finalizations",
-            [],
-            |r| r.get(0),
-        )?;
-        assert_eq!(
-            count, 0,
-            "identity admission must not fabricate finalization"
-        );
+        drop(LcmEngine::open(&db, LcmConfig::default())?);
+        let (writer, readers) =
+            ctox_store::testkit::StoreFixture::open(ctox_store::DbId::new(&db)?)
+                .await?
+                .into_parts();
+        let adapter =
+            owner_adapter::OwnerAdapter::attach(&db, writer.clone(), readers.clone()).await?;
+        writer
+            .submit(ctox_store::WriteJob::new(Default::default(), |tx| {
+                tx.execute_batch(
+                    "CREATE TEMP TABLE identity_audit(id TEXT);
+              CREATE TEMP TRIGGER audit_identity AFTER INSERT ON main.worker_run_identities
+              BEGIN INSERT INTO identity_audit VALUES(new.run_id); END;",
+                )?;
+                Ok(())
+            }))?
+            .await?;
+        let job_db = db.clone();
+        let run = crate::persistence::run_core_sync(move || {
+            let tasks = vec!["task-b".into(), "task-a".into()];
+            let run = run_register_worker_run(&job_db, input("attempt", &tasks))?;
+            anyhow::ensure!(
+                uuid::Uuid::parse_str(run.strip_prefix("worker-run:").unwrap()).is_ok()
+            );
+            anyhow::ensure!(run != "attempt" && !tasks.contains(&run));
+            let reversed = vec!["task-a".into(), "task-b".into()];
+            anyhow::ensure!(run == run_register_worker_run(&job_db, input("attempt", &reversed))?);
+            let foreign = vec!["foreign-task".into()];
+            anyhow::ensure!(run_register_worker_run(&job_db, input("attempt", &foreign)).is_err());
+            anyhow::ensure!(run != run_register_worker_run(&job_db, input("attempt-2", &tasks))?);
+            Ok(run)
+        })
+        .await?;
+        writer
+            .submit(ctox_store::WriteJob::new(Default::default(), |tx| {
+                assert_eq!(
+                    tx.query_row("SELECT count(*) FROM temp.identity_audit", [], |r| r
+                        .get::<_, i64>(0))?,
+                    2,
+                    "worker identity escaped the existing writer connection"
+                );
+                assert_eq!(
+                    tx.query_row(
+                        "SELECT count(*) FROM worker_attempt_finalizations",
+                        [],
+                        |r| r.get::<_, i64>(0)
+                    )?,
+                    0
+                );
+                Ok(())
+            }))?
+            .await?;
+        drop(adapter);
+        readers.shutdown().await?;
+        writer.shutdown().await?;
+        let (writer, readers) =
+            ctox_store::testkit::StoreFixture::open(ctox_store::DbId::new(&db)?)
+                .await?
+                .into_parts();
+        let adapter =
+            owner_adapter::OwnerAdapter::attach(&db, writer.clone(), readers.clone()).await?;
+        let expected = run.clone();
+        readers
+            .read_job(ctox_store::ReadJob::new(Default::default(), move |conn| {
+                assert_eq!(projected_worker_run_id(conn, "attempt").unwrap(), expected);
+                Ok(())
+            }))
+            .await?;
+        drop(adapter);
+        readers.shutdown().await?;
+        writer.shutdown().await?;
         Ok(())
     }
     #[test]

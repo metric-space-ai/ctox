@@ -5981,19 +5981,24 @@ fn find_fresh_email_otp(
     profile_owner: &str,
     mailbox_granted: bool,
 ) -> Option<(String, String)> {
-    let conn = rusqlite::Connection::open_with_flags(
-        crate::paths::core_db(root),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    let recipe = *recipe;
+    let mailbox_address = mailbox_address.to_owned();
+    let profile_owner = profile_owner.to_owned();
+    crate::lcm::with_lcm_read(
+        &crate::paths::core_db(root),
+        move |conn: &rusqlite::Connection| {
+            Ok(find_fresh_email_otp_in_conn(
+                conn,
+                &recipe,
+                not_before_epoch_s,
+                &mailbox_address,
+                &profile_owner,
+                mailbox_granted,
+            ))
+        },
     )
-    .ok()?;
-    find_fresh_email_otp_in_conn(
-        &conn,
-        recipe,
-        not_before_epoch_s,
-        mailbox_address,
-        profile_owner,
-        mailbox_granted,
-    )
+    .ok()
+    .flatten()
 }
 
 fn find_fresh_email_otp_in_conn(
