@@ -20,6 +20,7 @@ if USE_CURRENT_RIGHTS:
 parser = argparse.ArgumentParser()
 parser.add_argument('--only', choices=['all', 'regressions', 'r10', 'r13', 'r14', 'scenarios']
 , default='all')
+parser.add_argument('--deadline',type=float,help='absolute UTC Unix deadline; reserve time for owned-process cleanup')
 parser.add_argument('--expect-red', action='store_true', help='qualify specifically reproduced assertion failures; default remains a red target')
 args = parser.parse_args()
 assert sys.platform == 'linux' and os.environ.get('BUILD_LANE_BIN') and os.environ.get('CARGO_TARGET_DIR'), 'canonical GPU lane required'
@@ -34,6 +35,19 @@ STEPS = []
 (OUT/"test-source-binding.json").write_text(json.dumps({str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in HERE.iterdir() if p.is_file()},indent=2))
 
 RESULTS = {}
+ACTIVE = None
+def interrupted(signum, _frame):
+    if ACTIVE is not None and ACTIVE.poll() is None:
+        try: os.killpg(ACTIVE.pid,signal.SIGTERM)
+        except ProcessLookupError: pass
+        try: ACTIVE.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try: os.killpg(ACTIVE.pid,signal.SIGKILL)
+            except ProcessLookupError: pass
+            ACTIVE.wait()
+    raise SystemExit(128+signum)
+signal.signal(signal.SIGTERM,interrupted)
+signal.signal(signal.SIGINT,interrupted)
 
 def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
 def save():
@@ -41,9 +55,15 @@ def save():
         source_head=subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip(),
         steps=STEPS, results=RESULTS), indent=2)+'\n')
 def run(name, command, timeout=1200, **kwargs):
+    global ACTIVE
+    if args.deadline is not None:
+        remaining=int(args.deadline-time.time()-20)
+        if remaining<1: raise SystemExit('order deadline: remaining targets build unverified')
+        timeout=min(timeout,remaining)
     at=time.time()
     child=subprocess.Popen([str(x) for x in command], stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,text=True,start_new_session=True,**kwargs)
+    ACTIVE=child
     (OUT/(name+'-process.json')).write_text(json.dumps(dict(owner='01a101a1-d8e3',
         pid=child.pid,pgid=child.pid,purpose=name,output=str(OUT),stop=f'terminal or {timeout}s'),indent=2))
     try:
@@ -57,6 +77,7 @@ def run(name, command, timeout=1200, **kwargs):
             stdout,_=child.communicate()
         code=124
     p=subprocess.CompletedProcess(command,code,stdout)
+    ACTIVE=None
     p.pid=child.pid
     (OUT/(name+'.log')).write_text(p.stdout)
     STEPS.append(dict(name=name, command=[str(x) for x in command], exit=p.returncode, seconds=time.time()-at))
@@ -113,8 +134,23 @@ if args.only in ('all','regressions','r10','r14'):
 
     # Wire private test modules in a disposable source copy. Supplied foreign
     # production sources remain untouched even in the lane checkout.
-    overlay=OUT/'root-test-source'
+    # Reuse this order's first source-copy location so local path dependencies
+    # keep their package identities on a corrective rerun.
+    copies=sorted(TARGET.glob('p6-review4-*/root-test-source'))
+    overlay=copies[0] if copies else OUT/'root-test-source'
+    assert overlay.resolve().is_relative_to(TARGET.resolve()), 'source copy escaped the order target'
+    if overlay.exists(): shutil.rmtree(overlay)
     shutil.copytree(ROOT,overlay,symlinks=True,ignore=shutil.ignore_patterns('.git','target','node_modules','.greppy'))
+    if not USE_CURRENT_RIGHTS:
+        # Train7's bare policy has E0308 (36 vs 37). This is the existing #827
+        # composition, not a product patch. Target caller/adapter bytes stay
+        # exactly train7; the policy dependency is recorded independently.
+        relative_files=['src/core/business_os/policy.rs']+['src/core/store/'+name+'.rs' for name in
+            ['rights','scope','manifest_rules','rights_matrix_tests','rights_tests','scope_tests']]+['src/core/rxdb/src/plugins/replication_webrtc/scope_filter.rs']
+        for relative in relative_files:
+            dest=overlay/relative;dest.parent.mkdir(parents=True,exist_ok=True)
+            dest.write_bytes(subprocess.check_output(['git','show',RIGHTS+':'+relative]))
+        RESULTS['root_policy_composition']=dict(revision=RIGHTS,target_callers=TRAIN);save()
     sources={overlay/'src/core/service/store_startup.rs':(HERE/'r10.rs','p6_review4'),
              overlay/'src/core/store/lcm_adapter.rs':(HERE/'r14.rs','p6_review4')}
     originals={}

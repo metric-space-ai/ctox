@@ -30,9 +30,11 @@ Individual exits, source bindings and complete logs remain under the order's
 The root tests wire private test modules in a disposable source copy under the
 lane target. Supplied production sources remain untouched; copied wiring is
 also restored in `finally`. No production fix or public test hook is installed.
-R13 uses current policy sources when present. Train7 lacks #827, so on that
-baseline the runner explicitly composes its pinned policy/rights source from
-7f972f89b72aa4da7af19b5fae07d50f23c6a600 with the actual train CodingPanel.
+The targets use current policy sources when present. Bare train7 lacks #827
+and its permission catalog fails E0308 (36 declared, 37 entries). On that
+baseline the disposable root test copy and R13 harness explicitly compose the
+existing policy/rights source from 7f972f89b72aa4da7af19b5fae07d50f23c6a600.
+The actual train Foreground, OwnerAdapter and CodingPanel remain unchanged.
 Only session/credential/crew signatures are compile stubs; policy, Store and
 Draft writeback are production code. This composition is separately recorded.
 
