@@ -2,26 +2,48 @@
 use super::*;
 use ctox_app_runtime::core_host::{CoreAuthority, StoreCodec};
 
-#[tokio::test(flavor="multi_thread",worker_threads=2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn p6_core_only_handler_has_native_origin_and_rejects_ui() -> Result<()> {
     let _scope = crate::service::store_startup::isolate_test_roots().await;
-    anyhow::ensure!(std::env::var_os("CTOX_STATE_ROOT").is_none(),"configured state forbidden");
+    anyhow::ensure!(
+        std::env::var_os("CTOX_STATE_ROOT").is_none(),
+        "configured state forbidden"
+    );
     let relay = Signal::start().await?;
     let mut roots = Vec::new();
     let mut bootstrap = Vec::new();
     let mut peers = BTreeMap::new();
     for node in 1..=3 {
-        let root = tempfile::Builder::new().prefix("p6or-").tempdir_in("/tmp")?;
-        let owner = Foreground::start(root.path().to_owned(),Handle::current()).await?;
-        owner.inputs.sync.writer.submit(WriteJob::new(Default::default(),seed))?.await?;
-        peers.insert(node,Peer{identity:owner.inputs.instance_signer()?.key_id().into(),executor:true,data_replica:true});
+        let root = tempfile::Builder::new()
+            .prefix("p6or-")
+            .tempdir_in("/tmp")?;
+        let owner = Foreground::start(root.path().to_owned(), Handle::current()).await?;
+        owner
+            .inputs
+            .sync
+            .writer
+            .submit(WriteJob::new(Default::default(), seed))?
+            .await?;
+        peers.insert(
+            node,
+            Peer {
+                identity: owner.inputs.instance_signer()?.key_id().into(),
+                executor: true,
+                data_replica: true,
+            },
+        );
         roots.push(root);
         bootstrap.push(owner);
     }
-    for (index,owner) in bootstrap.iter_mut().enumerate() {
+    for (index, owner) in bootstrap.iter_mut().enumerate() {
         let config = ctox_sync::host_config::HostConfiguration {
-            version:1,scope_id:"p6-origin".into(),local:HostMember::Voter{node_id:index as u64+1},
-            voters:peers.clone(),timing:Default::default()
+            version: 1,
+            scope_id: "p6-origin".into(),
+            local: HostMember::Voter {
+                node_id: index as u64 + 1,
+            },
+            voters: peers.clone(),
+            timing: Default::default(),
         };
         config.validate()?;
         let encoded = serde_json::to_string(&config)?;
@@ -31,13 +53,22 @@ async fn p6_core_only_handler_has_native_origin_and_rejects_ui() -> Result<()> {
         }))?.await?;
         let root = owner.inputs.root.clone();
         let transport = json!({"signalingUrls":[relay.1],"iceServers":[]}).to_string();
-        crate::persistence::run_core_sync(move||crate::secrets::write_secret_record(
-            &root,crate::sync_host::SIGNING_IDENTITY_SECRET_KEY.0,"transport:p6-origin",&transport,None,json!({"source":"p6-origin-fixture"}))).await?;
+        crate::persistence::run_core_sync(move || {
+            crate::secrets::write_secret_record(
+                &root,
+                crate::sync_host::SIGNING_IDENTITY_SECRET_KEY.0,
+                "transport:p6-origin",
+                &transport,
+                None,
+                json!({"source":"p6-origin-fixture"}),
+            )
+        })
+        .await?;
         owner.shutdown().await?;
     }
-    let mut owners=Vec::new();
+    let mut owners = Vec::new();
     for root in &roots {
-        owners.push(Foreground::start(root.path().to_owned(),Handle::current()).await?);
+        owners.push(Foreground::start(root.path().to_owned(), Handle::current()).await?);
     }
     let result:Result<()> = async {
         for owner in &owners {
@@ -76,6 +107,8 @@ async fn p6_core_only_handler_has_native_origin_and_rejects_ui() -> Result<()> {
         anyhow::ensure!(core.is_ok(),"native core-origin event denied by E23.1 core-only rights: {}",core.err().unwrap());
         Ok(())
     }.await;
-    for owner in &mut owners {owner.shutdown().await?;}
+    for owner in &mut owners {
+        owner.shutdown().await?;
+    }
     result
 }
