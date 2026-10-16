@@ -1204,9 +1204,9 @@
       "route": "instance.providers.models.check",
       "handler": "src/core/business_os/app_platform/provider_model_check.rs",
       "test": "native_model_check_is_permissioned_bound_and_not_reexecuted",
-      "verification": "Train-14 source composed; final lane verification pending",
+      "verification": "Train-14 source composed; native owner check unverified after the Cargo harness cap",
       "productive": "not_run",
-      "gap": "Train-14 includes the real fenced native provider_model_check owner; isolated owner invariant is queued. Installed peer/provider measurement remains not_run."
+      "gap": "Train-14 includes the real fenced native provider_model_check owner. Its Cargo step hit the 300 s harness cap, so native execution is not verified. Installed peer/provider measurement remains not_run."
     }
   ]
 }
