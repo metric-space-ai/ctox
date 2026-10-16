@@ -542,6 +542,7 @@ async fn kernel_component(e25: bool) {
                             collection: "business_commands".into(),
                             id: id.clone(),
                             base_rev: receipt.result.rev.clone(),
+                            expected_revision: None,
                             base_seq: receipt.result.seq,
                             gen: 1,
                             schema_ver: 3,

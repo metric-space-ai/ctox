@@ -654,7 +654,8 @@ pub fn rejection_code(reason: &str) -> &str {
         | "command_terminal"
         | "op_id_conflict" => "conflict",
         "forbidden" | "command_delete_forbidden" => "forbidden",
-        "expired" | "revoked" | "migration_required" | "not_found" | "unknown_command" => reason,
+        "expired" | "revoked" | "migration_required" | "not_found" | "unknown_command"
+        | "revision_conflict" => reason,
         "command_payload_quota" => "quota",
         "collection_unavailable" => "unavailable",
         _ => "invalid",
