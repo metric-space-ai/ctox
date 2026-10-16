@@ -255,6 +255,17 @@ impl Foreground {
                 return Err(error);
             }
         }
+        let app_engine =
+            crate::business_os::app_platform::runtime_host::attach_native(owner.inputs.clone())
+                .await; // APP-PLATFORM-4 attach
+        match app_engine {
+            Ok(Some(engine)) => owner.engines.push(engine),
+            Ok(None) => (),
+            Err(error) => {
+                owner.shutdown().await?;
+                return Err(error);
+            }
+        }
         let factories = {
             let mut state = FACTORIES
                 .get_or_init(Mutex::default)
