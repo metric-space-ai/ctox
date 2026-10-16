@@ -32,12 +32,14 @@ export class FakeNativePeer {
  async receive(data){
   if(typeof data==='string'){
    const m=JSON.parse(data);if(m.type==='ack'){const n=Number(m.upto);if(!Number.isSafeInteger(n)||n>this.sent[m.lane])throw Error('Invalid client ACK');this.acked[m.lane]=Math.max(n,this.acked[m.lane]);this.wake();return;}
-   const hello=decodeHelloFrame(data);this.messages.push(hello);
+   const {session_id,resume_from,...p4}=m;this.native=session_id!==undefined;
+   if(this.native){if(typeof session_id!=='string'||!Array.isArray(resume_from)||resume_from.length!==6)throw Error('Invalid E14 hello');this.sessionId=session_id;this.received=resume_from.map(Number);}
+   const hello=decodeHelloFrame(JSON.stringify(p4));this.messages.push(m);
    const selected=negotiateHello({instance_id:this.instanceId,bootstrap_min:1,bootstrap_max:1,app_api_ver:{min:'4.0',max:'4.0'},capabilities:[],required_capabilities:[],transport:hello.transport},hello);
-   this.channels[0].send(JSON.stringify({type:'hello_ok',protocol_ver:4,instance_id:this.instanceId,...selected,epoch:this.epoch,head_seq:this.head,scope_tokens:['test-scope-token'],rights_ver:'1',core_time_ms:Date.now()+this.clockOffset}));return;
+   this.channels[0].send(JSON.stringify({type:'hello_ok',protocol_ver:4,instance_id:this.instanceId,...selected,epoch:this.epoch,head_seq:this.head,scope_tokens:['test-scope-token'],rights_ver:'1',core_time_ms:Date.now()+this.clockOffset,...(this.native?{session_id:this.sessionId,resume_from:this.received.map(String)}:{})}));return;
   }
   const bytes=data instanceof ArrayBuffer?new Uint8Array(data):data,lane=bytes[4];if(lane>5)throw Error('Invalid native lane');
-  const next=this.ingress[lane].then(()=>this.consume(bytes,lane));this.ingress[lane]=next.catch(()=>{});return next;
+  const next=this.ingress[lane].then(()=>this.native?this.consumeNative(bytes,lane):this.consume(bytes,lane));this.ingress[lane]=next.catch(()=>{});return next;
  }
  async consume(bytes,lane){
   const d=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
@@ -54,16 +56,49 @@ export class FakeNativePeer {
  }
  send(lane,message){lane=typeof lane==='string'?laneId[lane]:lane;const next=this.egress[lane].then(()=>this.frame(lane,message));this.egress[lane]=next.catch(()=>{});return next;}
  async frame(lane,message){
+  if(this.native)return this.frameNative(lane,message);
   const raw=new TextEncoder().encode(JSON.stringify(message)),encoded=await gzip(raw),packet=++this.packet,step=16352,count=Math.max(1,Math.ceil(encoded.length/step));
   for(let index=0;index<count;index++){
    const payload=encoded.slice(index*step,(index+1)*step),frame=new Uint8Array(32+payload.length),d=new DataView(frame.buffer);await this.credit(lane,frame.length);
    d.setUint32(0,0x43545834);d.setUint8(4,lane);d.setUint8(5,1);for(const [at,value]of [[8,packet],[12,index],[16,count],[20,encoded.length],[24,raw.length],[28,++this.sent[lane]]])d.setUint32(at,value);frame.set(payload,32);this.channels[lane].send(frame);
   }
  }
+ // Native P5 independently decoded here, never via the client framer.
+ async consumeNative(bytes,lane){
+  const d=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength),length=bytes[6];
+  if(bytes.length<37||bytes.length>16384||d.getUint32(0)!==0x43545834||length<1||length>20||bytes.slice(7+length,27).some(Boolean))throw Error('Native P5 header mismatch');
+  const id=new TextDecoder('utf-8',{fatal:true}).decode(bytes.slice(7,7+length));
+  if(!/^(0|[1-9][0-9]*)$/.test(id)||BigInt(id)>18446744073709551615n)throw Error('Native P5 id mismatch');
+  const index=d.getUint32(27),count=d.getUint32(31),lengthRaw=d.getUint16(35),key=`${lane}:${id}`;
+  if(!count||index>=count||lengthRaw>16347||(index+1<count&&lengthRaw!==16347)||bytes[5]!==0&&bytes[5]!==2)throw Error('Native P5 fragment mismatch');
+  const raw=bytes[5]===2?await gzip(bytes.slice(37),true):bytes.slice(37);
+  if(raw.length!==lengthRaw)throw Error('Native P5 length mismatch');
+  let part=this.parts.get(key);if(!part){if(index!==0)throw Error('Missing first P5 fragment');part={chunks:[],count,size:0};this.parts.set(key,part);}
+  if(part.count!==count||part.chunks.length!==index||part.size+raw.length>16777216)throw Error('Native P5 reassembly mismatch');
+  part.chunks.push(raw);part.size+=raw.length;if(part.chunks.length!==count)return;
+  this.parts.delete(key);const joined=new Uint8Array(part.size);let at=0;for(const chunk of part.chunks){joined.set(chunk,at);at+=chunk.length;}
+  const m=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(joined));
+  if(id==='0'){
+   if(lane!==0||m.type!=='ack'||m.session_id!==this.sessionId||!Number.isInteger(m.lane)||m.lane<0||m.lane>5||BigInt(m.upto)>BigInt(this.sent[m.lane]))throw Error('Invalid E14 ACK');
+   this.acked[m.lane]=Math.max(this.acked[m.lane],Number(m.upto));this.wake();return;
+  }
+  if(BigInt(id)>BigInt(this.received[lane])+1n)throw Error('Native E14 delivery gap');
+  if(BigInt(id)>BigInt(this.received[lane])){await this.apply(m,lane);this.received[lane]=Number(id);}
+  await this.frameNative(0,{type:'ack',session_id:this.sessionId,lane,upto:String(this.received[lane])},'0');
+ }
+ async frameNative(lane,message,ackId){
+  const raw=new TextEncoder().encode(JSON.stringify(message)),step=16347,count=Math.max(1,Math.ceil(raw.length/step)),id=ackId??String(++this.sent[lane]);
+  for(let index=0;index<count;index++){
+   const part=raw.slice(index*step,(index+1)*step);let payload=part,codec=0;
+   if(part.length>=1024){const zipped=await gzip(part);if(zipped.length<part.length){payload=zipped;codec=2;}}
+   const frame=new Uint8Array(37+payload.length),d=new DataView(frame.buffer);
+   frame.set([67,84,88,52,lane,codec,id.length]);frame.set(new TextEncoder().encode(id),7);d.setUint32(27,index);d.setUint32(31,count);d.setUint16(35,part.length);frame.set(payload,37);this.channels[lane].send(frame);
+  }
+ }
  async apply(m,lane){
   this.messages.push(m);
   if(m.type==='subscribe'){if(lane!==0)throw Error('subscribe outside control');if(this.onSubscribe)await this.onSubscribe(m,this);return;}
-  if(m.type==='write'){if(lane!==1||typeof m.base_seq!=='string'||!m.op_id)throw Error('invalid write wire');await this.send('commands',{type:'write_result',op_id:m.op_id,status:'accepted',rev:'core-rev',seq:String(BigInt(this.head)+1n)});return;}
+  if(m.type==='write'){if(lane!==1||(m.base_seq!==null&&typeof m.base_seq!=='string')||!m.op_id)throw Error('invalid write wire');await this.send('commands',{type:'write_result',op_id:m.op_id,status:'accepted',rev:'core-rev',seq:String(BigInt(this.head)+1n)});return;}
   if(m.type==='priority'||m.type==='app_activation')return;
   if(m.type==='transfer_get'){
    const blob=this.blobs.get(m.ref);if(!blob)throw Error('missing CAS test object');const bytes=new Uint8Array(await blob.slice(m.offset,m.offset+m.limit).arrayBuffer());let text='';for(const b of bytes)text+=String.fromCharCode(b);

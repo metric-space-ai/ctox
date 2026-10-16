@@ -833,7 +833,6 @@ export function createKernel(opts = {}) {
     await t.del('outbox',e.op_id);
     const rec=recompute(e.collection,e.id,base,await t.outboxFor(e.collection,e.id));await putDoc(t,rec);
     const info={op_id:e.op_id,app_id:e.app_id,collection:e.collection,id:e.id};
-    if(res.status==='merged')res.status='accepted';
     delete res.type;delete res.client_seq;delete res.requires_page;
     await t.put('meta',{key:`result:${e.op_id}`,info,result:res});
     return {rec,res,info};
