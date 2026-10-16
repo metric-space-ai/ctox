@@ -2,10 +2,10 @@
   "_capability_evidence": {},
   "_commands_out_evidence": {
     "ctox ctox.app.modify.request": [
-      "index.js:4145"
+      "index.js:4373"
     ],
     "ctox ctox.chat.task": [
-      "index.js:4145"
+      "index.js:4373"
     ]
   },
   "_declaration": "modules/buchhaltung/v4-manifest.json",
@@ -516,7 +516,7 @@
     ]
   },
   "files": {
-    "BUCH.md": "512630abd86dd71510b7d33048517d12f89ea16f989c6013febaae25b22c20dd",
+    "BUCH.md": "9e0813ba818953272903671423161904c98d695ddf5d10023d7bbe5eb1922aeb",
     "V4-HANDLERS.md": "a6a6b2d30bf95b0498bb75fc4a47f22a444cb42b0974ccccf69f89fac3a0ec2e",
     "V4-PORT.md": "e57e250b57c0b8fa10cc0b71d19de6d2629fe9b65ccf2d37e4f1c22170e32938",
     "assets/icon.jpg": "ffc3ab2ffd28030717493bdbbe0527ee4a9367d5c4c99445d7db5344de801795",
@@ -531,9 +531,9 @@
     "core/travel_expenses.js": "568c19170a77c1c29b373c8397b4fc5eb517aa9f14660751b6f1613255f7f05c",
     "exporters/datev.js": "34bd7cc59dc6220d5f391dd9da72bf1e14f959fd8ac3a4631b9c759229fcea41",
     "icon.svg": "e869d739f5c146dd1e8ab6ba0e7ed174ffe6e98e2862504de1f75d148861cc90",
-    "index.css": "ffe2071271918bcf4c1a8b2d38ee124f018ef71259ab0228b804be8c7cb2b696",
+    "index.css": "7ed8b28adecae07faff418eadac92be2a439c650be76b882848c4fe1b009f8bb",
     "index.html": "79121fdee1cc512ff89eea1e962ccfcc610bf63d91b4ebc821f513d7921c0781",
-    "index.js": "1d7dd9286dd0281be46f8558ffbf7f8faeb7a69a54f7e8f605cc78475982ce18",
+    "index.js": "218a76c55e6f1d9f692bba825fbc258c2e894317e35a0338c46e8a174e2fe9e7",
     "locales/de.json": "6250300df9cc3d6622889d9748c8dbb49b66ff88941eb3ef2641b5d12ddcf3db",
     "locales/en.json": "08d36c647adeb2207ecd29df740f6c78a1df4fe6136ee1f598e4dd1bd17a18c7",
     "module.json": "54e7b291a5abfb57c880c64c14a7c58756a1c4226ac786b552c44b194cf20ef0",
@@ -604,7 +604,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "3d8f933d5b4ecb1b4d92ac4f02b6f21cfc50fd3425322a2909255ac66083beb3",
+    "base_hash": "8fbe0ebab784c0adedb2a8996cc15f18f4a4193f7f3d73dc02ff9e0bffcd900c",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },
