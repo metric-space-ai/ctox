@@ -90,20 +90,6 @@ impl BrowserIngress {
             Err(StoreError::Busy)
         }
     }
-    pub async fn wait_ready(&self) -> Result<(), StoreError> {
-        loop {
-            let changed = self.changed.notified();
-            match self.state.load(std::sync::atomic::Ordering::Acquire) {
-                2 => return Ok(()),
-                1 => changed.await,
-                _ => {
-                    return Err(StoreError::Invalid(
-                        "browser V4 signaling bring-up unavailable".into(),
-                    ))
-                }
-            }
-        }
-    }
     #[cfg(test)]
     pub(super) fn owner_started(&self) -> bool {
         self.state.load(std::sync::atomic::Ordering::Acquire) != 0
@@ -505,6 +491,8 @@ impl V4StreamSource for Source {
 }
 #[path = "store_browser_write.rs"]
 mod browser_write;
+#[path = "store_browser_gap.rs"]
+pub(super) mod gap;
 async fn deliver_batch(
     batch: ctox_store::change_log::subscription::write_contract::WriteBatch,
     sender: &tokio::sync::mpsc::Sender<RxResult<Value>>,
@@ -527,29 +515,22 @@ fn arm_gap(
     sender: tokio::sync::mpsc::Sender<RxResult<Value>>,
     deadline: Option<u64>,
 ) -> RxResult<()> {
-    let mut slot = peer.gap.lock().map_err(|_| invalid())?;
-    if slot.as_ref().map(|(at, _)| *at) == deadline {
-        return Ok(());
-    }
-    if let Some((_, task)) = slot.take() {
-        task.abort();
-    }
-    if let Some(at) = deadline {
-        let weak = Arc::downgrade(peer);
-        let device = peer.device.clone();
-        let task = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(at.saturating_sub(now()))).await;
-            let Some(peer) = weak.upgrade() else { return };
-            if peer.expires <= Instant::now() {
-                return;
-            }
-            if let Ok(batch) = writer.expire(device, now()).await {
-                let _ = deliver_batch(batch, &sender).await;
-            }
-        });
-        *slot = Some((at, task));
-    }
-    Ok(())
+    let deliver: gap::Delivery = Arc::new(move |batch| {
+        let sender = sender.clone();
+        Box::pin(async move {
+            let _ = deliver_batch(batch, &sender).await;
+        })
+    });
+    peer.gap
+        .arm(
+            writer,
+            peer.device.clone(),
+            peer.expires,
+            deliver,
+            deadline,
+            now,
+        )
+        .map_err(|_| invalid())
 }
 fn now() -> u64 {
     SystemTime::now()

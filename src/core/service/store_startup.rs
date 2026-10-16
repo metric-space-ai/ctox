@@ -411,18 +411,9 @@ pub(crate) async fn run(root: PathBuf) -> anyhow::Result<()> {
     #[cfg(unix)]
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut owner = Foreground::start(root.clone(), Handle::current()).await?;
-    // Network bring-up belongs to owner start, before the production HTTP
-    // listener is exposed. A failed peer is fatal and retains/drains its stores.
-    let browser_start = owner
-        .inputs
-        .browser_ingress
-        .get()
-        .ok_or(StoreError::Closed)?
-        .clone();
-    if let Err(error) = browser_start.wait_ready().await {
-        owner.drain().await?;
-        return Err(error.into());
-    }
+    // Static assets do not wait for the network. Owner startup already owns
+    // bring-up; launch reads readiness and the fatal watcher below drains a
+    // failed peer. No HTTP request can initiate or retry signaling.
     // E36: the ordinary daemon owns HTTP too. Read the established typed
     // runtime-store settings through its existing reader, never a CLI opener.
     let http_start = async {

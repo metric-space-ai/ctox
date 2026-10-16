@@ -262,7 +262,7 @@ impl BrowserAdmission {
                 .collect::<Result<_, _>>()
                 .map_err(StoreError::Invalid)?,
             results: Mutex::new(None),
-            gap: Mutex::new(None),
+            gap: Default::default(),
         });
         let mut peers = self.peers.lock().map_err(|_| StoreError::Closed)?;
         peers.retain(|_, p| p.expires > Instant::now());
@@ -349,16 +349,7 @@ pub(super) struct BrowserPeer {
     pub tokens: HashMap<String, sync_rights::scope::SignedScope>,
     pub results:
         Mutex<Option<tokio::sync::mpsc::Sender<rxdb::rx_error::RxResult<serde_json::Value>>>>,
-    pub gap: Mutex<Option<(u64, tokio::task::JoinHandle<()>)>>,
-}
-impl Drop for BrowserPeer {
-    fn drop(&mut self) {
-        if let Ok(slot) = self.gap.get_mut() {
-            if let Some((_, task)) = slot.take() {
-                task.abort();
-            }
-        }
-    }
+    pub gap: Arc<super::store_browser_ingress::gap::GapTimer>,
 }
 fn digest(hello: &Hello) -> Result<[u8; 32], StoreError> {
     let bytes = HelloFrame::Hello(hello.clone())
