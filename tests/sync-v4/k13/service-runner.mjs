@@ -69,7 +69,7 @@ try {
   if(row.status!=='measured') {
     const reason=row.reason??row.error??report.error??'Native scenario control unavailable';
     const category=reason.match(/not_run\(([^)]+)\)/)?.[1]??'native-browser-entry';
-    row.criteria=Object.fromEntries(Object.entries(scenario.criterion).map(([name,target])=>[name,{target,actual:null,status:'not_run('+category+')'}]));
+    row.criteria=Object.fromEntries(Object.entries(scenario.criterion).map(([name,target])=>[name,{target,actual:null,status:row.status==='failed'?'not_measured(scenario_failed)':'not_run('+category+')'}]));
   }
   clearTimeout(deadline);
   for(const context of contexts)await context.close().catch(()=>{});
