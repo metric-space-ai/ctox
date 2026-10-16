@@ -885,8 +885,10 @@ can_sudo() {
 ensure_linux_process_sandbox() {
   [[ "$(uname -s)" == "Linux" ]] || return 0
   local code rc=0
+  local -a profile_args=("$@")
   code="$(cat <<'CTOX_APPARMOR_PY'
 import fcntl
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -926,10 +928,13 @@ def trusted(path):
     return path
 
 
-def render(binary):
+def render(binary, profile_name=PROFILE, payload_name='ctox-e20-payload'):
     value = str(binary)
     if not re.fullmatch(r'/[a-zA-Z0-9_./+-]+', value):
         raise RuntimeError('unsafe AppArmor attachment path')
+    if not all(re.fullmatch(r'[a-zA-Z0-9-]+', name)
+               for name in (profile_name, payload_name)):
+        raise RuntimeError('unsafe AppArmor profile name')
     return MARKER + '''# Target is the exact protected bubblewrap selected by process.run.
 abi <abi/4.0>,
 include <tunables/global>
@@ -963,7 +968,8 @@ profile ctox-e20-payload flags=(attach_disconnected,mediate_deleted) {
   /** ix,
   audit deny capability,
 }
-'''.replace('ATTACHMENT', value)
+'''.replace('ATTACHMENT', value).replace('ctox-e20-bwrap', profile_name).replace(
+        'ctox-e20-payload', payload_name)
 
 
 def command(args):
@@ -987,7 +993,9 @@ def replace_file(path, data):
 
 
 def install_profile(binary, destination=Path('/etc/apparmor.d/ctox-e20-bwrap'),
-                    parser=Path('/usr/sbin/apparmor_parser'), profiles=Path('/sys/kernel/security/apparmor/profiles')):
+                    parser=Path('/usr/sbin/apparmor_parser'), profiles=Path('/sys/kernel/security/apparmor/profiles'),
+                    profile_name=PROFILE, payload_name='ctox-e20-payload',
+                    distribution_binary=Path('/usr/bin/bwrap')):
     """Own only this profile; preserve distributor/operator profiles and files."""
     binary = trusted(binary)
     if not binary.is_file() or not os.access(binary, os.X_OK):
@@ -1008,13 +1016,14 @@ def install_profile(binary, destination=Path('/etc/apparmor.d/ctox-e20-bwrap'),
         if previous is not None and not previous.startswith(MARKER.encode()):
             raise RuntimeError('refusing to overwrite a foreign AppArmor profile')
         loaded = profiles.read_text()
-        if previous is None and any(line.split(' ', 1)[0] in ('bwrap', '/usr/bin/bwrap', '/bin/bwrap')
+        if previous is None and binary == distribution_binary.resolve() and any(
+                                    line.split(' ', 1)[0] in ('bwrap', '/usr/bin/bwrap', '/bin/bwrap')
                                     for line in loaded.splitlines()):
             print('E20: using the existing distribution bubblewrap profile')
             return 'distribution'
-        if previous is None and any(line.split(' ', 1)[0] in (PROFILE, 'ctox-e20-payload') for line in loaded.splitlines()):
+        if previous is None and any(line.split(' ', 1)[0] in (profile_name, payload_name) for line in loaded.splitlines()):
             raise RuntimeError('managed profile name is already owned outside this installation')
-        wanted = render(binary).encode()
+        wanted = render(binary, profile_name, payload_name).encode()
         fd_stage, stage_name = tempfile.mkstemp(prefix='.ctox-e20-check-', dir=directory)
         stage = Path(stage_name)
         try:
@@ -1050,8 +1059,18 @@ def main():
         return
     if sys.argv[1:] == ['check-required']:
         return
-    if sys.argv[1:] != ['install'] or os.geteuid() != 0:
+    args = sys.argv[1:]
+    if not (args == ['install'] or len(args) == 3 and args[0] == 'install') or os.geteuid() != 0:
         raise RuntimeError('AppArmor installation requires the privileged installer')
+    if len(args) == 3:
+        binary, destination = map(Path, args[1:])
+        if not binary.is_absolute() or not destination.is_absolute():
+            raise RuntimeError('explicit sandbox installation paths must be absolute')
+        binary = trusted(binary)
+        suffix = hashlib.sha256(str(binary).encode()).hexdigest()[:16]
+        name = PROFILE + '-' + suffix
+        install_profile(binary, destination, profile_name=name, payload_name=name + '-payload')
+        return
     binary = next((Path(p) for p in ('/usr/bin/bwrap', '/bin/bwrap', '/usr/local/bin/bwrap')
                    if Path(p).is_file() and os.access(p, os.X_OK)), None)
     if binary is None:
@@ -1072,9 +1091,9 @@ CTOX_APPARMOR_PY
   [[ "$rc" -ne 3 ]] || return 0
   [[ "$rc" -eq 0 ]] || return "$rc"
   if [[ "$EUID" -eq 0 ]]; then
-    /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/python3 -c "$code" install
+    /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/python3 -c "$code" install "${profile_args[@]}"
   else
-    run_sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/python3 -c "$code" install
+    run_sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/python3 -c "$code" install "${profile_args[@]}"
   fi
 }
 
@@ -3297,8 +3316,13 @@ main() {
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   if [[ "${1:-}" == "--ensure-process-sandbox" ]]; then
-    [[ "$#" -eq 1 ]] || exit 64
-    ensure_linux_process_sandbox
+    if [[ "$#" -eq 1 ]]; then
+      ensure_linux_process_sandbox
+    elif [[ "$#" -eq 5 && "$2" == "--bwrap" && "$4" == "--profile" ]]; then
+      ensure_linux_process_sandbox "$3" "$5"
+    else
+      exit 64
+    fi
   else
     main "$@"
   fi

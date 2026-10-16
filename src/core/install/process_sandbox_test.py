@@ -119,7 +119,19 @@ class InstallerContract(unittest.TestCase):
                 command.assert_not_called()
                 profile.unlink()
                 loaded.write_text('bwrap (enforce)\n')
-                self.assertEqual(helper.install_profile(binary, profile, Path('/bin/true'), loaded), 'distribution')
+                # A distribution attachment must not suppress policy for a
+                # private copy at a different canonical executable path.
+                self.assertEqual(helper.install_profile(
+                    binary, profile, Path('/bin/true'), loaded,
+                    profile_name='ctox-e20-private', payload_name='ctox-e20-private-payload'), 'installed')
+                self.assertIn('profile ctox-e20-private ' + str(binary), profile.read_text())
+                self.assertIn('/** px -> &ctox-e20-private-payload,', profile.read_text())
+                self.assertEqual(loaded.read_text(), 'bwrap (enforce)\n')
+                profile.unlink()
+                command.reset_mock()
+                self.assertEqual(helper.install_profile(
+                    binary, profile, Path('/bin/true'), loaded,
+                    distribution_binary=binary), 'distribution')
                 self.assertFalse(profile.exists())
                 command.assert_not_called()
                 for name in (helper.PROFILE, 'ctox-e20-payload'):
