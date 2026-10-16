@@ -1,7 +1,7 @@
 // Test-only adapter for #810's Native lifecycle. No product/harness file edits.
 import fs from 'node:fs';
 import {resolve} from 'node:path';
-import {createHash} from 'node:crypto';
+import {hashFile} from './build-receipt.mjs';
 
 export function installServiceEntry(Native) {
   Native.prototype.prepare=async function() {
@@ -23,12 +23,15 @@ export function installServiceEntry(Native) {
   };
   Native.prototype.serve=function() {
     const args=['service','--foreground','--root',this.config.root];
-    const actual=createHash('sha256').update(fs.readFileSync(this.config.binary)).digest('hex');
+    const actual=hashFile(this.config.binary);
     if(actual!==this.config.binarySha256)throw Error('P6 service binary changed after verification');
-    const child=this.start('daemon',this.config.binary,args);
+    const child=this.start('daemon',this.config.binary,args);this.daemon=child;
+    const processRecord=this.receipts.find(row=>row.pid===child.pid);
+    processRecord.owner=this.config.owner;processRecord.pidNamespace=fs.readlinkSync('/proc/self/ns/pid');
+    processRecord.pidScope='private namespace';this.save();
     fs.writeFileSync(resolve(this.config.output,'p6-daemon-entry.json'),JSON.stringify({
       revision:this.config.revision,binarySha256:actual,root:this.config.root,
-      args,pid:child.pid,at:new Date().toISOString()
+      args,pid:child.pid,pidNamespace:fs.readlinkSync('/proc/self/ns/pid'),at:new Date().toISOString()
     },null,2),{mode:0o600});
   };
 }
