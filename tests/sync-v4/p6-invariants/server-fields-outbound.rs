@@ -17,7 +17,7 @@ fn p6_fields_outbound_contact_native_status_is_guarded(){
     // failure. This neither fixes the source manifest nor weakens its guard.
     let paths=manifest["write_guard"][LEADS]["command_only_fields"].clone();
     let guard=ManifestRules::from_manifest("outbound-lead-generation","p6-contract",[LEADS.into()].into(),
-        &json!({"write_guard":{LEADS:{"command_only_fields":paths}}})).unwrap();
+        &json!({"write_guard":{"outbound_lead_generation_leads":{"command_only_fields":paths}}})).unwrap();
     let before=json!({"id":"synthetic-lead","contacts":[{"id":"synthetic-contact","name":"A","field_status":{"email":{"revision":"native-1","review":"approved"}}}]});
     let mut peer=before.clone();peer["contacts"][0]["name"]=json!("peer name");
     assert!(guard.guard_direct_write(LEADS,Some(&before),Some(&peer)).is_ok(),"peer contact name was denied by native-only guard");
