@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { collections } from '../../modules/ctox/schema.js';
+import { normalizeCollectionsSchema } from '../../v4/tools/manifest/gen-manifest.mjs';
+import migrateLearning from '../../v4/schemas/migrations/ctox/ctox_crew_learnings.js';
+// E45: compare the generated native contract with the canonical source,
+// preserving the platform collection used by the Crew lifecycle guard.
+const source = (app) => normalizeCollectionsSchema(JSON.parse(readFileSync(
+  new URL(`../../v4/schemas/${app}.collections.schema.json`, import.meta.url),
+))).collections;
+const collections = { ...source('ctox-platform'), ...source('ctox') };
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js';
 const fixture = JSON.parse(readFileSync(new URL('../../../../core/rxdb/tests/fixtures/crew-identity.json', import.meta.url)));
 const contract = JSON.parse(readFileSync(new URL('../../../../core/business_os/business_os_schema_contract.json', import.meta.url)));
@@ -11,7 +18,9 @@ for (const field of fixture.public_fields) {
   assert.ok(Object.hasOwn(collections.ctox_crew_members.properties, field), field);
   assert.ok(!['soul', 'specialties', 'stats'].includes(field), field);
 }
-for (const [collection, doc] of [['ctox_crew_members', fixture.member], ['ctox_crew_learnings', fixture.learning]]) {
+for (const [collection, original] of [['ctox_crew_members', fixture.member], ['ctox_crew_learnings', fixture.learning]]) {
+  // Historical fixture stays intact; validate its real canonical migration.
+  const doc = collection === 'ctox_crew_learnings' ? migrateLearning(structuredClone(original)) : original;
   assert.deepEqual(contract[collection], collections[collection]);
   for (const field of collections[collection].required) assert.notEqual(doc[field], undefined);
   for (const index of collections[collection].indexes.flat()) assert.notEqual(doc[index], null);
