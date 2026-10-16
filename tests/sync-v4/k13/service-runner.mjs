@@ -11,7 +11,7 @@ const config=JSON.parse(fs.readFileSync(process.argv[2]));
 if(!config.canonicalTmpdir || !fs.statSync(config.canonicalTmpdir).isDirectory())throw Error('Canonical lane TMPDIR required');
 process.env.TMPDIR=config.canonicalTmpdir;
 installServiceEntry(Native);
-const native=new Native(config),contexts=[],bindings=new WeakMap();
+const native=new Native(config),contexts=[],bindings=new WeakMap(),principals=new WeakMap();
 const scenario=(await import(pathToFileURL(join(config.scenarioRoot,config.scenario.toLowerCase(),'scenario.mjs')))).default;
 const row={id:scenario.id,criterion:scenario.criterion,status:'not_run',pass:false,acceptanceComplete:false};
 const report={bootstrapResponses:[],browserErrors:[],owner:config.owner,revision:config.revision,binarySha256:config.binarySha256,netem:config.netem,
@@ -78,19 +78,17 @@ try {
   const origin='http://127.0.0.1:'+config.port;
   const require=createRequire(join(config.modulesRoot,'playwright/package.json'));
   const {chromium}=require('playwright');
-  browser=await chromium.launch({executablePath:config.chrome,headless:true,timeout:30000,args:['--disable-gpu','--no-sandbox']});
+  // No executablePath/channel override: Playwright selects its pinned Chromium.
+  const executable=chromium.executablePath();
+  if(!fs.existsSync(executable))throw Error('not_run(playwright-chromium): bundled Chromium is not installed');
+  report.browser={kind:'playwright-chromium',executable};save();
+  browser=await chromium.launch({headless:true,timeout:30000,args:['--disable-gpu','--no-sandbox']});
   const page=async(identity=native.fixture.identities.find(i=>i.name==='admin'))=>{
     const enrolled=native.fixture.identities.find(i=>i.id===identity.id);
     if(!enrolled?.cookie)throw Error('Server-issued fixture cookie required before navigation');
     const context=await browser.newContext();contexts.push(context);
     await context.addCookies([{name:'ctox_business_os_auth',value:enrolled.cookie,url:origin,httpOnly:true,sameSite:'Strict'}]);
-    // Diagnostic control-plane probe only; the page still fetches its own
-    // fresh context through the unmodified bootV4 entry below.
-    try {
-      const launch=await context.request.get(origin+'/api/business-os/launch-context',{timeout:15000,maxRedirects:0});
-      report.bootstrapResponses.push({userId:enrolled.id,path:'/api/business-os/launch-context',status:launch.status(),diagnostic:true});
-    } catch {report.bootstrapResponses.push({userId:enrolled.id,path:'/api/business-os/launch-context',failed:'diagnostic request unavailable',diagnostic:true});}
-    save();
+    // bootV4 alone fetches the single-use E50 launch ticket.
     const connect=await installBrowserEntry(context,origin);
     const p=await context.newPage();
     const bootstrapPath=path=>path==='/api/business-os/launch-context' || path==='/sw.js' || path.startsWith('/kernel/') || path.startsWith('/business-os/');
@@ -99,13 +97,33 @@ try {
     const browserError=(kind,message)=>{if(report.browserErrors.length<50){report.browserErrors.push({userId:enrolled.id,kind,message:String(message).replace(/(?:https?|wss?):\/\/\S+/g,'[endpoint]').replace(/[A-Za-z0-9_-]{32,}/g,'[long-value]').slice(0,500)});save();}};
     p.on('pageerror',error=>browserError(error.name,error.message));
     p.on('console',message=>{if(message.type()==='error')browserError('console',message.text());});
-    await p.exposeBinding('__p6NativeControl',(_source,{operation,args})=>call(enrolled,operation,args));
-    bindings.set(p,()=>connect(p,enrolled,native.fixture));
+    principals.set(p,enrolled);
+    await p.exposeBinding('__p6NativeControl',(_source,{operation,args})=>call(principals.get(p),operation,args));
+    bindings.set(p,()=>connect(p,principals.get(p),native.fixture));
     const response=await p.goto(origin+'/',{waitUntil:'domcontentloaded',timeout:20000});
     report.browserEntries.push({userId:enrolled.id,path:'/',status:response?.status()});save();
     return p;
   };
-  const h={config,page,newClient:page,pause,offline:(p,value)=>p.context().setOffline(value),
+  const reauthenticate=async(p,identity)=>{
+    const next=native.fixture.identities.find(i=>i.id===identity.id);
+    if(!next?.cookie)throw Error('Server-issued replacement session required');
+    // This awaited barrier precedes BOTH the credential change and the next launch.
+    const retired=await p.evaluate(async()=>{
+      const b=globalThis.__p6Boot;if(!b)throw Error('No admitted identity to retire');
+      const old={userId:b.kernel.userId,role:b.launchContext.actor.role};
+      await b.kernel.logout();await b.loader.close();
+      const channels=Object.values(b.transport.channels??{});
+      if(!b.transport.closed || channels.some(c=>c.readyState!=='closed'))throw Error('Old peer subscriptions remain active');
+      return {...old,transportClosed:true,channelsClosed:true};
+    });
+    report.identityHandoffs??=[];report.identityHandoffs.push({...retired,nextUserId:next.id,nextRole:next.role,retractedBeforeCredentials:true});save();
+    await p.context().clearCookies();
+    await p.context().addCookies([{name:'ctox_business_os_auth',value:next.cookie,url:origin,httpOnly:true,sameSite:'Strict'}]);
+    principals.set(p,next);
+    await p.goto(origin+'/',{waitUntil:'domcontentloaded',timeout:20000});
+    return bindings.get(p)();
+  };
+  const h={config,page,newClient:page,reauthenticate,pause,offline:(p,value)=>p.context().setOffline(value),
     observe:(phase,measured)=>{row.phase=phase;(row.observations??=[]).push({phase,...measured});save();},
     os:async p=>{try{const value=await bindings.get(p)();report.browserEntries.at(-1).proof=value.proof;save();return value;}finally{report.browserEntries.at(-1).boot=await p.evaluate(()=>({called:!!globalThis.__p6BootOptions,completed:!!globalThis.__p6Boot,error:globalThis.__p6BootError??null})).catch(()=>({pageClosed:true}));save();}}};
   Object.assign(row,await scenario.run(h));

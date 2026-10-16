@@ -16,7 +16,7 @@ for(let i=0;i<argv.length;i+=2) {
 }
 if(process.platform!=='linux' || !process.env.BUILD_LANE_BIN || !process.env.TMPDIR || !process.env.CARGO_TARGET_DIR)
   throw Error('Canonical Linux lane required');
-const allowed=new Set(['--build','--expected-revision','--output','--chrome','--modules-root','--turn-bin','--turn-lib','--prepare-only','--scenario','--control-only']);
+const allowed=new Set(['--build','--expected-revision','--output','--modules-root','--turn-bin','--turn-lib','--prepare-only','--scenario','--control-only']);
 for(const flag of flags.keys())if(!allowed.has(flag))throw Error('Unsupported P6 option: '+flag);
 const expected=flags.get('--expected-revision');
 if(!/^[a-f0-9]{40}$/.test(expected??''))throw Error('Immutable expected daemon revision required');
@@ -82,7 +82,6 @@ if(build && !summary.scenarios.length) {
       root:join('/tmp','p6-'+id.toLowerCase()+'-'+expected.slice(0,8)),port:19865,signalingPort:19866,turnPort:34789,
       runner:join(here,'service-runner.mjs'),sourceManifest,buildReceipt:resolve(flags.get('--build')),
       lane,canonicalTmpdir:process.env.TMPDIR,durationSeconds:seconds,hostNetworkNamespace:fs.readlinkSync('/proc/self/ns/net'),
-      chrome:flags.get('--chrome')??'/opt/google/chrome/chrome',
       modulesRoot:flags.get('--modules-root')??join(lane,'deps/shell-browser-collection-auth/node_modules'),
       turnBin:flags.get('--turn-bin')??'/usr/bin/turnserver',turnLib:flags.get('--turn-lib','--prepare-only')??''};
     const configPath=join(dir,'config.private.json');
