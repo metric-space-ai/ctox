@@ -148,10 +148,7 @@ impl RuntimeAuthority {
         };
         let command_id = id.clone();
         let owner = self.clone();
-        let binding = self
-            .database
-            .writer
-            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+        let binding = feed::retry_write(&self.database, &self.health(), "command.claim", move |tx| {
                 let mut saved = document(tx, "business_commands", &command_id)?
                     .ok_or_else(|| invalid("not_found: command"))?;
                 if saved != doc {
@@ -169,7 +166,7 @@ impl RuntimeAuthority {
                 saved["status"] = json!("running");
                 store_command(tx, &saved)?;
                 owner.binding(tx, &saved, &lease)
-            }))?
+            })
             .await?;
         let run = text(&binding["fence"], "run_id")?.to_owned();
         let spec = ExecutionSpec {
@@ -314,10 +311,7 @@ impl RuntimeAuthority {
             participant: participant.clone(),
         };
         let command_id = id.clone();
-        let lease = self
-            .database
-            .writer
-            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+        let lease = feed::retry_write(&self.database, &self.health(), "command.renew", move |tx| {
                 Ok(write_contract::claim_command(
                     tx,
                     &participant,
@@ -327,7 +321,7 @@ impl RuntimeAuthority {
                     &gate,
                 )?
                 .map_err(|e| invalid(format!("{}: {}", e.code, e.reason)))?)
-            }))?
+            })
             .await?;
         if let Some(held) = self
             .held
