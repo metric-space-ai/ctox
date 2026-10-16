@@ -13,6 +13,9 @@ name = "contract"
 path = "contract.rs"
 [dependencies]
 ctox-store = { path = "../../../src/core/store" }
+ctox-sync = { path = "../../../src/core/sync" }
+# Match the foreground lock: latest allocative breaks starlark_map hashbrown support.
+allocative = "=0.3.4"
 rxdb = { package = "ctox-rxdb", path = "../../../src/core/rxdb" }
 base64 = "0.22"
 ring = "0.17"

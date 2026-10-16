@@ -80,6 +80,7 @@ pub trait GrantPeerAuthority: Send + Sync {
         user: &str,
         role: &str,
         device: &str,
+        app_id: &str,
     ) -> scope::Result<()>;
 }
 /// No Deserialize/Clone identity setter: only the authenticated native adapter
@@ -291,7 +292,7 @@ impl AppGrantSession {
                     return Err("revoked".into());
                 }
                 self.peer_authority
-                    .validate(tx, &state.user, &state.role, &state.device)?;
+                    .validate(tx, &state.user, &state.role, &state.device, app)?;
                 if !state.last_exp.contains_key(app) && state.last_exp.len() >= MAX_APPS {
                     return Err("grant app budget".into());
                 }
@@ -420,7 +421,7 @@ impl AppGrantSession {
                 let state = self.state.lock().map_err(|_| "grant session unavailable")?;
                 let claims = &grant.claims;
                 self.peer_authority
-                    .validate(tx, &state.user, &state.role, &state.device)?;
+                    .validate(tx, &state.user, &state.role, &state.device, &claims.app_id)?;
                 if !state.active
                     || claims.instance_id != instance
                     || claims.user_id != state.user

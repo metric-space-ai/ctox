@@ -360,7 +360,10 @@ impl WebRTCPublicationGuard for Publication {
         result.ok_or_else(invalid)?
     }
 }
+#[path = "store_browser_scope_grant.rs"]
+pub(super) mod scope_grant_route;
 impl V4StreamSource for Source {
+    fn control(&self, peer: &str, message: Value) -> BoxFuture<'static, RxResult<Option<Value>>> { scope_grant_route::control(self, peer, message) }
     fn publication(&self, peer: &str, packet: &Value) -> RxResult<Arc<dyn WebRTCPublicationGuard>> {
         let binding = self.admission.peer(peer).map_err(|_| invalid())?;
         if matches!(packet["type"].as_str(), Some("page" | "live"))

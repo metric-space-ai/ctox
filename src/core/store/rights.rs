@@ -9,6 +9,8 @@ pub mod manifest_rules;
 pub mod scope;
 #[path = "app_grant.rs"]
 pub mod app_grant;
+#[path = "app_grant_route.rs"]
+pub mod app_grant_route;
 use manifest_rules::{CommandPermit, ManifestRules};
 use scope::{FieldMask, Projection, ResolvedScope, RowFilter};
 

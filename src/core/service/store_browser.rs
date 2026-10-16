@@ -152,7 +152,7 @@ impl BrowserAdmission {
         let device = hello.device_proof.device_id.clone();
         let binding_actor = actor.clone();
         let wanted = hello.scopes_wanted.clone();
-        let (authorized, local) = self
+        let (mut authorized, local) = self
             .authority
             .writer()
             .submit(WriteJob::new(Default::default(), move |tx| {
@@ -264,12 +264,15 @@ impl BrowserAdmission {
             results: Mutex::new(None),
             gap: Default::default(),
         });
-        let mut peers = self.peers.lock().map_err(|_| StoreError::Closed)?;
-        peers.retain(|_, p| p.expires > Instant::now());
-        if peers.len() >= 4096 || peers.contains_key(&transport_peer) {
-            return Err(StoreError::Busy);
+        {
+            let mut peers = self.peers.lock().map_err(|_| StoreError::Closed)?;
+            peers.retain(|_, p| p.expires > Instant::now());
+            if peers.len() >= 4096 || peers.contains_key(&transport_peer) {
+                return Err(StoreError::Busy);
+            }
+            peers.insert(transport_peer.clone(), binding);
         }
-        peers.insert(transport_peer, binding);
+        authorized.scope_tokens = vec![super::store_browser_ingress::scope_grant_route::shell(self, &inputs, &transport_peer).await?];
         Ok(authorized)
     }
     pub(super) fn ensure_current(&self) -> Result<(), StoreError> {
