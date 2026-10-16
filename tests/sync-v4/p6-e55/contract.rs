@@ -17,6 +17,7 @@ use std::sync::{
 // Only cryptographic test custody is replaced. Production app rights, writer,
 // registry, canonical encoder, verifier, projection and session fences are real.
 struct Key {
+    identity: ctox_sync::authority::auth::SigningIdentity,
     pair: Ed25519KeyPair,
     pin: String,
     active: AtomicBool,
@@ -34,6 +35,8 @@ impl Key {
                 .collect::<String>()
         );
         Arc::new(Self {
+            identity: ctox_sync::authority::auth::SigningIdentity::from_pkcs8(doc.as_ref())
+                .unwrap(),
             pair,
             pin,
             active: AtomicBool::new(true),
@@ -54,7 +57,9 @@ impl InstanceSigner for Key {
         assert!(bytes.starts_with(DOMAIN));
         let claims: AppGrantClaims = serde_json::from_slice(&bytes[DOMAIN.len()..]).unwrap();
         assert_eq!(signing_bytes(&claims).unwrap(), bytes);
-        Ok(self.pair.sign(bytes).as_ref().to_vec())
+        let packet = ctox_sync::authority::auth::CanonicalInstancePacket::from_scope_bytes(bytes)
+            .map_err(|_| "canonical E22 encoder denied")?;
+        Ok(self.identity.sign_instance_packet(&packet))
     }
 }
 struct CurrentPeer;
@@ -65,9 +70,11 @@ impl GrantPeerAuthority for CurrentPeer {
         user: &str,
         role: &str,
         device: &str,
+        app_id: &str,
     ) -> Result<(), String> {
         let live: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM c_business_users WHERE id=?1 AND json_extract(data,'$.role')=?2 AND json_extract(data,'$.active')=1 AND deleted=0)",rusqlite::params![user,role],|r|r.get(0)).map_err(|_|"principal unavailable")?;
-        if !live || device != "device" {
+        let may_use: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM c_business_apps WHERE id=?1 AND json_extract(data,'$.state')='active' AND EXISTS(SELECT 1 FROM json_each(json_extract(data,'$.assigned_user_ids')) WHERE value=?2) AND deleted=0)",rusqlite::params![app_id,user],|r|r.get(0)).map_err(|_|"app authority unavailable")?;
+        if !live || !may_use || device != "device" {
             return Err("revoked".into());
         }
         Ok(())
@@ -84,10 +91,12 @@ fn manifests() -> Vec<ManifestRules> {
     vec![
         ManifestRules::from_manifest("a", "1", ["alpha".into()].into(), &json!({})).unwrap(),
         ManifestRules::from_manifest("b", "1", ["beta".into()].into(), &json!({})).unwrap(),
+        ManifestRules::from_manifest("shell", "1", ["shell_docs".into()].into(), &json!({}))
+            .unwrap(),
     ]
 }
 fn rules() -> Vec<Right> {
-    ["alpha", "beta"]
+    ["alpha", "beta", "shell_docs"]
         .into_iter()
         .map(|name| Right {
             role: "user".into(),
@@ -111,7 +120,7 @@ impl Fixture {
             .unwrap();
         store.writer().submit(WriteJob::new(Default::default(), |tx| {
             ctox_store::schema::initialize(tx)?;
-            for (name, app) in [("alpha", "a"), ("beta", "b"), ("business_users", "ctox-platform")] {
+            for (name, app) in [("alpha", "a"), ("beta", "b"), ("shell_docs", "shell"), ("business_users", "ctox-platform"), ("business_apps", "ctox-platform")] {
                 ctox_store::schema::create_collection(tx, &ctox_store::schema::CollectionDefinition {
                     name:name.into(), app_id:app.into(), schema_ver:1,
                     schema_json:json!({"type":"object", "properties":{"id":{"type":"string"}, "owner":{"type":"string"}, "name":{"type":"string"}}, "required":["id"]}),
@@ -119,6 +128,9 @@ impl Fixture {
                 })?;
             }
             tx.execute("INSERT INTO c_business_users (id,rev,schema_ver,data,deleted) VALUES('alice','1',1,?1,0)", [json!({"id":"alice","role":"user","active":true}).to_string()])?;
+            for app in ["a", "b", "shell"] {
+                tx.execute("INSERT INTO c_business_apps (id,rev,schema_ver,data,deleted) VALUES(?1,'1',1,?2,0)", rusqlite::params![app,json!({"id":app,"state":"active","assigned_user_ids":["alice"]}).to_string()])?;
+            }
             Ok(())
         })).unwrap().await.unwrap();
         let auth = StoreRightsAuthority::attach(store.writer(), "instance".into())
@@ -336,5 +348,113 @@ async fn p6_e55_revoked_app_is_unreadable_before_reauthentication() {
         "retired signer remained usable"
     );
     fresh.close().await;
+    f.close().await;
+}
+
+#[tokio::test]
+async fn p6_e55_route_forbidden_duplicate_and_kernel_key_pin() {
+    use p6_e55_contract::rights::app_grant_route::AppGrantRoute;
+    let f = Fixture::new().await;
+    f.store.writer().submit(WriteJob::new(Default::default(), |tx| {
+        tx.execute("UPDATE c_business_apps SET data=json_set(data,'$.assigned_user_ids',json('[]')) WHERE id='b'",[])?;
+        Ok(())
+    })).unwrap().await.unwrap();
+    let route = Arc::new(AppGrantRoute::new(f.session.clone(), f.auth.clone()));
+    let shell = route.shell_token(1000).await.unwrap();
+    assert_eq!(
+        claims(&shell)["app_id"],
+        "shell",
+        "hello grant is not shell"
+    );
+    assert_eq!(
+        claims(&shell)["collections"].as_array().unwrap().len(),
+        1,
+        "hello leaked other app collections"
+    );
+    let denied = route
+        .handle(json!({"type":"scope.grant.request","app_id":"b"}), 1000)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        denied["type"], "forbidden",
+        "unauthorized app received grant"
+    );
+    assert!(
+        route
+            .handle(json!({"type":"scope.grant.request","app_id":"b"}), 1000)
+            .await
+            .unwrap()
+            .is_none(),
+        "duplicate denial answered twice"
+    );
+    let (first, second) = tokio::join!(
+        route.handle(json!({"type":"scope.grant.request","app_id":"a"}), 1000),
+        route.handle(json!({"type":"scope.grant.request","app_id":"a"}), 1000)
+    );
+    let replies = [first.unwrap(), second.unwrap()];
+    assert_eq!(
+        replies.iter().filter(|r| r.is_some()).count(),
+        1,
+        "duplicate app request answered twice"
+    );
+    let response = replies.into_iter().flatten().next().unwrap();
+    assert_eq!(response["type"], "scope.grant");
+    let token = response["token"].as_str().unwrap();
+    assert!(f.read(token, "alpha", 1001).await.is_ok());
+    let mut forged: Value =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(token).unwrap()).unwrap();
+    let wrong = Key::new();
+    let c: AppGrantClaims = serde_json::from_value(forged["claims"].clone()).unwrap();
+    forged["signature"] =
+        json!(URL_SAFE_NO_PAD.encode(wrong.pair.sign(&signing_bytes(&c).unwrap()).as_ref()));
+    let wrong_token = URL_SAFE_NO_PAD.encode(canonical_json(&forged).unwrap());
+    if let Ok(path) = std::env::var("P6_E55_VECTOR") {
+        std::fs::write(
+            path,
+            json!({"token":token,"wrong_token":wrong_token,"public":f.key.pin,"claims":c})
+                .to_string(),
+        )
+        .unwrap();
+    }
+    assert!(
+        f.read(&wrong_token, "alpha", 1001).await.is_err(),
+        "foreign signing key accepted"
+    );
+    f.store.writer().submit(WriteJob::new(Default::default(), |tx| {
+        tx.execute("UPDATE c_business_apps SET data=json_set(data,'$.assigned_user_ids',json('[]')) WHERE id='a'",[])?;
+        Ok(())
+    })).unwrap().await.unwrap();
+    assert!(
+        f.read(token, "alpha", 1002).await.is_err(),
+        "app assignment revoked but remained readable"
+    );
+    let session = f.session.clone();
+    let revoked = f
+        .store
+        .writer()
+        .submit(WriteJob::new(Default::default(), move |tx| {
+            session
+                .revocations_in_transaction(tx, 1002)
+                .map_err(StoreError::Invalid)
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(
+        revoked
+            .iter()
+            .map(|v| v.app_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["a"]
+    );
+    assert_eq!(
+        route
+            .handle(json!({"type":"scope.grant.request","app_id":"a"}), 1240)
+            .await
+            .unwrap()
+            .unwrap()["type"],
+        "forbidden"
+    );
     f.close().await;
 }

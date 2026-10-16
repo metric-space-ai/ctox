@@ -80,6 +80,7 @@ pub trait GrantPeerAuthority: Send + Sync {
         user: &str,
         role: &str,
         device: &str,
+        app_id: &str,
     ) -> scope::Result<()>;
 }
 /// No Deserialize/Clone identity setter: only the authenticated native adapter
@@ -291,7 +292,7 @@ impl AppGrantSession {
                     return Err("revoked".into());
                 }
                 self.peer_authority
-                    .validate(tx, &state.user, &state.role, &state.device)?;
+                    .validate(tx, &state.user, &state.role, &state.device, app)?;
                 if !state.last_exp.contains_key(app) && state.last_exp.len() >= MAX_APPS {
                     return Err("grant app budget".into());
                 }
@@ -419,8 +420,13 @@ impl AppGrantSession {
             .with_snapshot(rights.rights_ver, &head.epoch, |instance, _| {
                 let state = self.state.lock().map_err(|_| "grant session unavailable")?;
                 let claims = &grant.claims;
-                self.peer_authority
-                    .validate(tx, &state.user, &state.role, &state.device)?;
+                self.peer_authority.validate(
+                    tx,
+                    &state.user,
+                    &state.role,
+                    &state.device,
+                    &claims.app_id,
+                )?;
                 if !state.active
                     || claims.instance_id != instance
                     || claims.user_id != state.user
@@ -487,16 +493,15 @@ impl AppGrantSession {
     ) -> scope::Result<Vec<ScopeRevoke>> {
         let rights = super::read(tx).map_err(|_| "grant rights unavailable")?;
         let mut state = self.state.lock().map_err(|_| "grant session unavailable")?;
-        let peer_valid = self
-            .peer_authority
-            .validate(tx, &state.user, &state.role, &state.device)
-            .is_ok();
         let invalid: Vec<_> = state
             .issued
             .iter()
             .filter_map(|(app, issued)| {
                 let valid = state.active
-                    && peer_valid
+                    && self
+                        .peer_authority
+                        .validate(tx, &state.user, &state.role, &state.device, app)
+                        .is_ok()
                     && now < issued.claims.exp
                     && issued.claims.rights_ver == rights.rights_ver.to_string()
                     && resolve(tx, &rights, &state, app).is_ok_and(|(cols, hash)| {

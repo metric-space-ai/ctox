@@ -76,6 +76,8 @@ pub struct SigningIdentity {
 
 /// Encoder-owned bytes. The private field prevents callers from labelling
 /// arbitrary memory as a canonical instance packet.
+#[path = "auth/app_grant_packet.rs"]
+mod app_grant_packet;
 pub struct CanonicalInstancePacket(Vec<u8>);
 impl CanonicalInstancePacket {
     const DOMAIN: &'static [u8] = b"ctox.sync.v4.stream\0";
@@ -118,13 +120,13 @@ impl CanonicalInstancePacket {
                 .ok_or_else(|| invalid("scope domain"))?,
         )
         .map_err(|_| invalid("scope claims"))?;
-        if value.as_object().is_none_or(|m| m.len() != 5)
-            || value["instance_id"].as_str().is_none_or(str::is_empty)
-            || value["device_id"].as_str().is_none_or(str::is_empty)
-            || value["scope_hash"].as_str().is_none_or(str::is_empty)
-            || value["rights_ver"].as_u64().is_none()
-            || value["exp"].as_u64().is_none()
-        {
+        let legacy = value.as_object().is_some_and(|m| m.len() == 5)
+            && value["instance_id"].as_str().is_some_and(|s| !s.is_empty())
+            && value["device_id"].as_str().is_some_and(|s| !s.is_empty())
+            && value["scope_hash"].as_str().is_some_and(|s| !s.is_empty())
+            && value["rights_ver"].as_u64().is_some()
+            && value["exp"].as_u64().is_some();
+        if !legacy && !app_grant_packet::valid(&value) {
             return Err(invalid("scope claims contract"));
         }
         let stream = Self::encode_stream(value)?;
