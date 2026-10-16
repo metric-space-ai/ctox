@@ -12,6 +12,21 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+// Timing also survives cancellation at the HTTP deadline; no credentials logged.
+struct SignalingPhase(std::time::Instant);
+impl Drop for SignalingPhase {
+    fn drop(&mut self) {
+        eprintln!(
+            "ctox_bootstrap_signaling_timing={}",
+            serde_json::json!({"signaling_bringup_us":self.0.elapsed().as_micros()})
+        );
+    }
+}
+async fn timed_ingress(owners: &Arc<StoreInputs>) -> Result<(), StoreError> {
+    let _phase = SignalingPhase(std::time::Instant::now());
+    owners.ensure_browser_ingress().await
+}
+
 async fn build(
     owners: &Arc<StoreInputs>,
     user: &BusinessOsUser,
@@ -82,7 +97,7 @@ pub(super) fn response(
                 let context = crate::business_os::launch_context_v4::build_local(&owners)
                     .await
                     .map_err(|_| StoreError::Invalid("local launch unavailable".into()))?;
-                owners.ensure_browser_ingress().await?;
+                timed_ingress(&owners).await?;
                 owners.instance_signer()?;
                 return Ok((
                     200,
@@ -116,7 +131,7 @@ pub(super) fn response(
                     b"{\"error\":\"authentication_required\"}".to_vec(),
                 ));
             }
-            owners.ensure_browser_ingress().await?;
+            timed_ingress(&owners).await?;
             owners.instance_signer()?;
             let body = serde_json::to_vec(&context)
                 .map_err(|_| StoreError::Invalid("launch encoding unavailable".into()))?;
