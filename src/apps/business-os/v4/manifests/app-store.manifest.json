@@ -9,7 +9,6 @@
   "_source_dir": "src/apps/business-os/modules/app-store",
   "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
   "_todo": [
-    "app_drafts: Plattform exportiert die Collection nicht – Zugriff (read) nicht deklariert.",
     "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
     "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
     "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
@@ -58,7 +57,7 @@
     "locales/de.json": "8ab9b7c32aeccc8a3f6b1ff7c480431ec62a67fdad27c2e713d52f8a4b70e108",
     "locales/en.json": "bdda3f7c4dd8468ccd040eb0e023fdb5a015eb4ab317ea5f1c7f675e5efdc753",
     "module.json": "3963ab1dcf0690144873916c901ee818788a621b3d4aeacaaa8c5679d7a87be9",
-    "v4-manifest.json": "7e788f6fea787bb81cd4e9484944ae6c97b6debbe6d38924e35bcf390efed1fc",
+    "v4-manifest.json": "84e1a51804e0f5a51cce115d7d4a04e1ddb877d0ae909dc086ab69ff5dc40065",
     "vendor/store-shelf/box-art.mjs": "e3a842c0d2264aa147349429eb1d46e1be58f2405832602179fe7131f7c670ff",
     "vendor/store-shelf/provenance.json": "ad1b9705156e73e5e600fbe23d5d5437963da8c4d1ab6edc29e53459f6dbb037",
     "vendor/store-shelf/store-shelf.mjs": "b435eac8d877955abaf5340331b7a7c5ba5ce629d3bf54ab009dc79dc4c5a1a9",
@@ -85,6 +84,25 @@
       ],
       "owner_app": "ctox-platform"
     },
+    "app_drafts": {
+      "_evidence": {
+        "code_read": [
+          "index.js:2",
+          "index.js:155",
+          "index.js:1760"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/app-store/V4-PORT.md OFFEN 8 (documents/notes/spreadsheets Fehltreffer; files braucht write über api.files.put); app_drafts read: Kern E56.1a (ctox-platform exportiert read, Zeilenfilter user_id = actor_id), index.js:155 eigene Entwürfe → ctox.app.publish",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
     "business_app_versions": {
       "_evidence": {
         "code_read": [
@@ -93,7 +111,7 @@
           "index.js:514"
         ],
         "code_write": [],
-        "declaration_basis": "modules/app-store/V4-PORT.md OFFEN 8 (documents/notes/spreadsheets Fehltreffer; files braucht write über api.files.put)",
+        "declaration_basis": "modules/app-store/V4-PORT.md OFFEN 8 (documents/notes/spreadsheets Fehltreffer; files braucht write über api.files.put); app_drafts read: Kern E56.1a (ctox-platform exportiert read, Zeilenfilter user_id = actor_id), index.js:155 eigene Entwürfe → ctox.app.publish",
         "sources": [
           "code",
           "v4-manifest.json"
@@ -112,7 +130,7 @@
           "index.js:513"
         ],
         "code_write": [],
-        "declaration_basis": "modules/app-store/V4-PORT.md OFFEN 8 (documents/notes/spreadsheets Fehltreffer; files braucht write über api.files.put)",
+        "declaration_basis": "modules/app-store/V4-PORT.md OFFEN 8 (documents/notes/spreadsheets Fehltreffer; files braucht write über api.files.put); app_drafts read: Kern E56.1a (ctox-platform exportiert read, Zeilenfilter user_id = actor_id), index.js:155 eigene Entwürfe → ctox.app.publish",
         "sources": [
           "code",
           "v4-manifest.json"
@@ -148,7 +166,7 @@
           "vendor/store-shelf/box-art.mjs:303"
         ],
         "code_write": [],
-        "declaration_basis": "modules/app-store/V4-PORT.md OFFEN 8 (documents/notes/spreadsheets Fehltreffer; files braucht write über api.files.put)",
+        "declaration_basis": "modules/app-store/V4-PORT.md OFFEN 8 (documents/notes/spreadsheets Fehltreffer; files braucht write über api.files.put); app_drafts read: Kern E56.1a (ctox-platform exportiert read, Zeilenfilter user_id = actor_id), index.js:155 eigene Entwürfe → ctox.app.publish",
         "sources": [
           "code",
           "v4-manifest.json"
@@ -246,7 +264,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "30cc0e6eba548ef140d3535afe6dee81a13c68ef9fd916f3d9c2e270e320cebc",
+    "base_hash": "0ece22e7189cfc5e434801b95862d30b047f96af8d632f44d13090dfc466110e",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },
