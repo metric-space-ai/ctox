@@ -193,36 +193,41 @@ pub(crate) fn narrative_lines(narrative: &str) -> Vec<String> {
 
 /// One-time move of the legacy `crew_member_learnings` rows into the member's
 /// anchors document. Idempotent through `migrated_to_lcm`.
-pub(crate) fn migrate_learnings_into_memory(
-    conn: &Connection,
-    engine: &LcmClient,
-    member_id: &str,
-) -> Result<usize> {
-    let rows = conn
-        .prepare(
-            "SELECT id,text,kind,scope_json,evidence_run_id,confirmed_by_owner
+pub(crate) fn migrate_learnings_into_memory(root: &Path, member_id: &str) -> Result<usize> {
+    let path = crate::paths::core_db(root);
+    let member = member_id.to_owned();
+    let rows = crate::lcm::with_lcm_read(&path, move |conn| {
+        let member_id = member.as_str();
+        let rows = conn
+            .prepare(
+                "SELECT id,text,kind,scope_json,evidence_run_id,confirmed_by_owner
              FROM crew_member_learnings
              WHERE member_id=?1 AND archived=0 AND COALESCE(migrated_to_lcm,0)=0
              ORDER BY created_at,id LIMIT 200",
-        )?
-        .query_map([member_id], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, String>(4)?,
-                r.get::<_, bool>(5)?,
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    if rows.is_empty() {
-        return Ok(0);
-    }
+            )?
+            .query_map([member_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, bool>(5)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })?;
     let conversation = member_conversation_id(member_id);
-    engine.continuity_init_documents(conversation)?;
     let mut moved = 0;
     for (id, text, kind, scope, evidence, confirmed) in rows {
+        let expected = (
+            text.clone(),
+            kind.clone(),
+            scope.clone(),
+            evidence.clone(),
+            confirmed,
+        );
         let scope: LearningScope = serde_json::from_str(&scope).unwrap_or_default();
         let diff = anchor_diff(
             &id.replace(':', "_"),
@@ -236,12 +241,26 @@ pub(crate) fn migrate_learnings_into_memory(
             &scope,
             &evidence,
         );
-        engine.continuity_apply_diff(conversation, ContinuityKind::Anchors, &diff)?;
-        conn.execute(
-            "UPDATE crew_member_learnings SET migrated_to_lcm=1 WHERE id=?1",
-            [&id],
-        )?;
-        moved += 1;
+        let changed = crate::lcm::with_lcm_write_session(&path, move |conn, engine| {
+            let current = conn.query_row(
+                "SELECT text,kind,scope_json,evidence_run_id,confirmed_by_owner FROM crew_member_learnings WHERE id=?1 AND archived=0 AND COALESCE(migrated_to_lcm,0)=0",
+                [&id], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,bool>(4)?)),
+            ).optional()?;
+            let Some(current) = current else {
+                return Ok(false);
+            };
+            if current != expected {
+                return Err(ctox_store::StoreError::Busy.into());
+            }
+            engine.continuity_init_documents(conversation)?;
+            engine.continuity_apply_diff(conversation, ContinuityKind::Anchors, &diff)?;
+            conn.execute(
+                "UPDATE crew_member_learnings SET migrated_to_lcm=1 WHERE id=?1",
+                [&id],
+            )?;
+            Ok(true)
+        })?;
+        moved += usize::from(changed);
     }
     Ok(moved)
 }

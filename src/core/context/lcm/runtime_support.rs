@@ -1557,6 +1557,15 @@ impl LcmClient {
     }
 }
 
+/// A domain phase may combine existing LCM methods with its own marker SQL.
+/// The borrowed session cannot escape or recursively submit another owner job.
+pub(crate) fn with_lcm_write_session<T: Send + 'static>(
+    path: &Path,
+    operation: impl FnOnce(&Connection, &LcmEngine<&Connection>) -> Result<T> + Send + 'static,
+) -> Result<T> {
+    owned_lcm_write(path, move |engine| operation(&engine.conn, engine))
+}
+
 /// SQL-only phases for compatibility callers whose durable tables share Core.
 /// Closures cannot retain a connection, submit recursive jobs, or run model I/O.
 pub(crate) fn with_lcm_write<T: Send + 'static>(

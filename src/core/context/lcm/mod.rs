@@ -45,7 +45,8 @@ pub use runtime_support::{
     run_terminalize_worker_attempt, run_worker_attempt,
 };
 pub(crate) use runtime_support::{
-    seed_mission_state_for_queue_with, with_lcm_read, with_lcm_write, LcmClient,
+    seed_mission_state_for_queue_with, with_lcm_read, with_lcm_write, with_lcm_write_session,
+    LcmClient,
 };
 pub(crate) use worker_runs::projected_worker_run_id;
 pub use worker_runs::{run_register_worker_run, WorkerRunInput};
