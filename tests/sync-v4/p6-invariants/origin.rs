@@ -129,23 +129,40 @@ async fn p6_native_cluster() -> Result<(Signal, Vec<tempfile::TempDir>, Vec<Fore
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn p6_native_authority_is_retired_after_session_end() -> Result<()> {
     let _scope = crate::service::store_startup::isolate_test_roots().await;
-    anyhow::ensure!(std::env::var_os("CTOX_STATE_ROOT").is_none(), "configured state forbidden");
+    anyhow::ensure!(
+        std::env::var_os("CTOX_STATE_ROOT").is_none(),
+        "configured state forbidden"
+    );
     let (_relay, _roots, mut owners) = p6_native_cluster().await?;
-    let mut authorities=Vec::new();
-    let mut signers=Vec::new();
+    let mut authorities = Vec::new();
+    let mut signers = Vec::new();
     for owner in &owners {
-        let native=owner.inputs.native_session()?;
-        let authority=native.execution_authority.clone();
-        assert!(tokio::time::timeout(Duration::from_secs(15),authority.worker_membership(9001)).await??.is_none());
+        let native = owner.inputs.native_session()?;
+        let authority = native.execution_authority.clone();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(15), authority.worker_membership(9001))
+                .await??
+                .is_none()
+        );
         authorities.push(authority);
         signers.push(native.instance_signer.clone());
     }
-    for owner in &mut owners { owner.shutdown().await?; }
+    for owner in &mut owners {
+        owner.shutdown().await?;
+    }
     for authority in &authorities {
-        assert!(tokio::time::timeout(Duration::from_secs(5),authority.worker_membership(9001)).await?.is_err(),"retired native authority returned a usable membership response");
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), authority.worker_membership(9001))
+                .await?
+                .is_err(),
+            "retired native authority returned a usable membership response"
+        );
     }
     for signer in &signers {
-        assert!(signer.sign(b"retired native host").is_err(),"retired native signer remained usable");
+        assert!(
+            signer.sign(b"retired native host").is_err(),
+            "retired native signer remained usable"
+        );
     }
     Ok(())
 }
