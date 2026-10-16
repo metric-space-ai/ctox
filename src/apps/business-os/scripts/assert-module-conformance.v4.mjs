@@ -44,7 +44,8 @@
 //                              whichever module registers first wins at
 //                              runtime, so divergence would be a silent
 //                              version/shape conflict.
-//   mount-export               index.js exports mount().
+//   mount-export               index.js exports mount(). E54.3b: handler-only apps (entry null, instance_visible false,
+//                              at least one handlers/*.js) have no window and no mount.
 //   mount-signature            mount takes the shell context as its single
 //                              parameter: mount(ctx).
 //   no-db-raw                  modules must not unwrap the shell DB facade
@@ -184,7 +185,14 @@ for (const id of moduleDirs) {
   // mount-export / mount-signature
   const indexJsPath = join(dir, 'index.js');
   const indexJs = existsSync(indexJsPath) ? readFileSync(indexJsPath, 'utf8') : '';
-  if (!indexJs) {
+  // E54.3b: Handler-Apps ohne Fenster (entry null, nicht instanzsichtbar, mindestens eine Handler-Datei) haben kein mount.
+  // Jede andere App ohne index.js bleibt rot.
+  const handlerOnly = !indexJs && manifest.entry === null && manifest.instance_visible === false
+    && existsSync(join(dir, 'handlers'))
+    && readdirSync(join(dir, 'handlers')).some((name) => name.endsWith('.js') && !name.startsWith('_'));
+  if (handlerOnly) {
+    // kein mount-export / mount-signature
+  } else if (!indexJs) {
     offend('mount-export', 'missing index.js');
   } else {
     const mountMatch = indexJs.match(/export\s+(?:async\s+)?function\s+mount\s*\(([^)]*)\)/)
