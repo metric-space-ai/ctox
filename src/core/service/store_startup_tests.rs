@@ -49,10 +49,12 @@ fn policy_bindings_keep_parallel_runtime_grants_separate() -> anyhow::Result<()>
                             .allowed,
                         "unbound runtime borrowed another runtime's rights"
                     );
-                    barrier.wait().await;
+                    tokio::time::timeout(std::time::Duration::from_secs(10), barrier.wait())
+                        .await?;
                     let binding = policy::bind_policy_authority(authority.clone())
                         .map_err(anyhow::Error::msg)?;
-                    barrier.wait().await;
+                    tokio::time::timeout(std::time::Duration::from_secs(10), barrier.wait())
+                        .await?;
                     assert_eq!(
                         policy::evaluate(&admin, BusinessOsPermission::UsersManage, &scope).allowed,
                         grant,
@@ -69,7 +71,8 @@ fn policy_bindings_keep_parallel_runtime_grants_separate() -> anyhow::Result<()>
                         grant,
                         "blocking Core caller lost its runtime context"
                     );
-                    barrier.wait().await;
+                    tokio::time::timeout(std::time::Duration::from_secs(10), barrier.wait())
+                        .await?;
                     drop(binding);
                     assert!(
                         !policy::evaluate(
