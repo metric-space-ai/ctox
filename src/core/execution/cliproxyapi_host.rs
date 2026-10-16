@@ -1080,6 +1080,9 @@ fn load_instance_chatgpt_auth(
     serde_json::from_str(&serialized).map_err(|_| codex_auth::SecretStoreError::InvalidValue)
 }
 
+// Legacy account-control apply/finish retain their atomic Runtime fence until
+// their authority callback and exact Secret cleanup have an owner reservation seam.
+// Counted by the opener inventory; migrated proxy/signature paths never call it.
 fn open_instance_proxy_config_db(root: &Path) -> anyhow::Result<Connection> {
     let path = crate::inference::runtime_env::runtime_config_path(root);
     if let Some(parent) = path.parent() {
@@ -1096,22 +1099,46 @@ fn open_instance_proxy_config_db(root: &Path) -> anyhow::Result<Connection> {
     Ok(conn)
 }
 
-fn open_instance_proxy_config_db_read_only(root: &Path) -> anyhow::Result<Option<Connection>> {
+fn with_instance_proxy_write<T: Send + 'static>(
+    root: &Path,
+    operation: impl FnOnce(&Connection) -> anyhow::Result<T> + Send + 'static,
+) -> anyhow::Result<T> {
+    crate::lcm::with_lcm_write(
+        &crate::inference::runtime_env::runtime_config_path(root),
+        move |conn| {
+            conn.execute_batch(&format!(
+                "CREATE TABLE IF NOT EXISTS {INSTANCE_PROXY_CONFIG_TABLE} (\
+         config_id INTEGER PRIMARY KEY CHECK(config_id = 1), \
+         revision INTEGER NOT NULL, default_provider TEXT NOT NULL, \
+         config_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL)"
+            ))?;
+            operation(conn)
+        },
+    )
+}
+
+fn with_instance_proxy_read<T: Send + 'static>(
+    root: &Path,
+    operation: impl FnOnce(&Connection) -> anyhow::Result<T> + Send + 'static,
+) -> anyhow::Result<Option<T>> {
     let path = crate::inference::runtime_env::runtime_config_path(root);
     if !path.exists() {
         return Ok(None);
     }
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    conn.busy_timeout(std::time::Duration::from_secs(5))?;
-    let table_exists = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
-            [INSTANCE_PROXY_CONFIG_TABLE],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some();
-    Ok(table_exists.then_some(conn))
+    crate::lcm::with_lcm_read(&path, move |conn| {
+        let table_exists = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [INSTANCE_PROXY_CONFIG_TABLE],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !table_exists {
+            return Ok(None);
+        }
+        operation(conn).map(Some)
+    })
 }
 
 /// Provider-scoped durable signature replay state. Keys contain only the
@@ -1132,16 +1159,14 @@ impl CtoxSignatureKvStore {
         }
     }
 
-    fn open(&self) -> Result<Connection, SignatureCacheStoreError> {
-        let conn = open_instance_proxy_config_db(&self.root)
-            .map_err(|_| SignatureCacheStoreError::Unavailable)?;
-        conn.execute_batch(&format!(
-            "CREATE TABLE IF NOT EXISTS {INSTANCE_SIGNATURE_CACHE_TABLE} (\
-             cache_key TEXT PRIMARY KEY, value BLOB NOT NULL, \
-             expires_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)"
-        ))
-        .map_err(|_| SignatureCacheStoreError::Unavailable)?;
-        Ok(conn)
+    fn with_writer<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&Connection) -> anyhow::Result<T> + Send + 'static,
+    ) -> anyhow::Result<T> {
+        with_instance_proxy_write(&self.root, move |conn| {
+            conn.execute_batch(&format!("CREATE TABLE IF NOT EXISTS {INSTANCE_SIGNATURE_CACHE_TABLE} (cache_key TEXT PRIMARY KEY,value BLOB NOT NULL,expires_at_ms INTEGER NOT NULL,updated_at_ms INTEGER NOT NULL)"))?;
+            operation(conn).map_err(|_| anyhow::Error::new(SignatureOperationRejected))
+        })
     }
 
     fn now_ms() -> Result<i64, SignatureCacheStoreError> {
@@ -1179,6 +1204,25 @@ impl fmt::Debug for CtoxSignatureKvStore {
     }
 }
 
+#[derive(Debug)]
+struct SignatureOperationRejected;
+impl fmt::Display for SignatureOperationRejected {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("signature cache operation failed")
+    }
+}
+impl std::error::Error for SignatureOperationRejected {}
+fn signature_store_error(
+    error: anyhow::Error,
+    operation: SignatureCacheStoreError,
+) -> SignatureCacheStoreError {
+    if error.downcast_ref::<SignatureOperationRejected>().is_some() {
+        operation
+    } else {
+        SignatureCacheStoreError::Unavailable
+    }
+}
+
 impl SignatureKvStore for CtoxSignatureKvStore {
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, SignatureCacheStoreError> {
         if !Self::valid_key(key) {
@@ -1188,34 +1232,13 @@ impl SignatureKvStore for CtoxSignatureKvStore {
             .operation_lock
             .lock()
             .map_err(|_| SignatureCacheStoreError::Read)?;
-        let mut conn = self.open()?;
-        let now_ms = Self::now_ms()?;
-        let transaction = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|_| SignatureCacheStoreError::Read)?;
-        transaction
-            .execute(
-                &format!(
-                    "DELETE FROM {INSTANCE_SIGNATURE_CACHE_TABLE} \
-                     WHERE cache_key = ?1 AND expires_at_ms <= ?2"
-                ),
-                params![key, now_ms],
-            )
-            .map_err(|_| SignatureCacheStoreError::Read)?;
-        let value = transaction
-            .query_row(
-                &format!("SELECT value FROM {INSTANCE_SIGNATURE_CACHE_TABLE} WHERE cache_key = ?1"),
-                [key],
-                |row| row.get::<_, Vec<u8>>(0),
-            )
-            .optional()
-            .map_err(|_| SignatureCacheStoreError::Read)?;
-        transaction
-            .commit()
-            .map_err(|_| SignatureCacheStoreError::Read)?;
-        Ok(value)
+        let key = key.to_owned();
+        let now = Self::now_ms()?;
+        self.with_writer(move |conn| {
+            conn.execute(&format!("DELETE FROM {INSTANCE_SIGNATURE_CACHE_TABLE} WHERE cache_key=?1 AND expires_at_ms<=?2"),params![key,now])?;
+            Ok(conn.query_row(&format!("SELECT value FROM {INSTANCE_SIGNATURE_CACHE_TABLE} WHERE cache_key=?1"),[key],|row|row.get::<_,Vec<u8>>(0)).optional()?)
+        }).map_err(|error|signature_store_error(error,SignatureCacheStoreError::Read))
     }
-
     fn set(
         &self,
         key: &str,
@@ -1232,23 +1255,12 @@ impl SignatureKvStore for CtoxSignatureKvStore {
             .operation_lock
             .lock()
             .map_err(|_| SignatureCacheStoreError::Write)?;
-        let conn = self.open()?;
-        let now_ms = Self::now_ms()?;
-        let expires_at_ms = Self::deadline_ms(now_ms, ttl)?;
-        let changed = conn
-            .execute(
-                &format!(
-                    "INSERT INTO {INSTANCE_SIGNATURE_CACHE_TABLE} \
-                     (cache_key, value, expires_at_ms, updated_at_ms) VALUES (?1, ?2, ?3, ?4) \
-                     ON CONFLICT(cache_key) DO UPDATE SET value = excluded.value, \
-                     expires_at_ms = excluded.expires_at_ms, updated_at_ms = excluded.updated_at_ms"
-                ),
-                params![key, value, expires_at_ms, now_ms],
-            )
-            .map_err(|_| SignatureCacheStoreError::Write)?;
-        Ok(changed == 1)
+        let now = Self::now_ms()?;
+        let expires = Self::deadline_ms(now, ttl)?;
+        let key = key.to_owned();
+        let value = value.to_vec();
+        self.with_writer(move |conn|Ok(conn.execute(&format!("INSERT INTO {INSTANCE_SIGNATURE_CACHE_TABLE}(cache_key,value,expires_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4) ON CONFLICT(cache_key) DO UPDATE SET value=excluded.value,expires_at_ms=excluded.expires_at_ms,updated_at_ms=excluded.updated_at_ms"),params![key,value,expires,now])?==1)).map_err(|error|signature_store_error(error,SignatureCacheStoreError::Write))
     }
-
     fn delete(&self, key: &str) -> Result<bool, SignatureCacheStoreError> {
         if !Self::valid_key(key) {
             return Err(SignatureCacheStoreError::Delete);
@@ -1257,15 +1269,15 @@ impl SignatureKvStore for CtoxSignatureKvStore {
             .operation_lock
             .lock()
             .map_err(|_| SignatureCacheStoreError::Delete)?;
-        let conn = self.open()?;
-        conn.execute(
-            &format!("DELETE FROM {INSTANCE_SIGNATURE_CACHE_TABLE} WHERE cache_key = ?1"),
-            [key],
-        )
-        .map(|changed| changed == 1)
-        .map_err(|_| SignatureCacheStoreError::Delete)
+        let key = key.to_owned();
+        self.with_writer(move |conn| {
+            Ok(conn.execute(
+                &format!("DELETE FROM {INSTANCE_SIGNATURE_CACHE_TABLE} WHERE cache_key=?1"),
+                [key],
+            )? == 1)
+        })
+        .map_err(|error| signature_store_error(error, SignatureCacheStoreError::Delete))
     }
-
     fn expire(
         &self,
         key: &str,
@@ -1278,35 +1290,13 @@ impl SignatureKvStore for CtoxSignatureKvStore {
             .operation_lock
             .lock()
             .map_err(|_| SignatureCacheStoreError::Expire)?;
-        let mut conn = self.open()?;
-        let now_ms = Self::now_ms()?;
-        let expires_at_ms =
-            Self::deadline_ms(now_ms, ttl).map_err(|_| SignatureCacheStoreError::Expire)?;
-        let transaction = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|_| SignatureCacheStoreError::Expire)?;
-        transaction
-            .execute(
-                &format!(
-                    "DELETE FROM {INSTANCE_SIGNATURE_CACHE_TABLE} \
-                     WHERE cache_key = ?1 AND expires_at_ms <= ?2"
-                ),
-                params![key, now_ms],
-            )
-            .map_err(|_| SignatureCacheStoreError::Expire)?;
-        let changed = transaction
-            .execute(
-                &format!(
-                    "UPDATE {INSTANCE_SIGNATURE_CACHE_TABLE} SET expires_at_ms = ?2, \
-                     updated_at_ms = ?3 WHERE cache_key = ?1"
-                ),
-                params![key, expires_at_ms, now_ms],
-            )
-            .map_err(|_| SignatureCacheStoreError::Expire)?;
-        transaction
-            .commit()
-            .map_err(|_| SignatureCacheStoreError::Expire)?;
-        Ok(changed == 1)
+        let now = Self::now_ms()?;
+        let expires = Self::deadline_ms(now, ttl).map_err(|_| SignatureCacheStoreError::Expire)?;
+        let key = key.to_owned();
+        self.with_writer(move |conn| {
+            conn.execute(&format!("DELETE FROM {INSTANCE_SIGNATURE_CACHE_TABLE} WHERE cache_key=?1 AND expires_at_ms<=?2"),params![key,now])?;
+            Ok(conn.execute(&format!("UPDATE {INSTANCE_SIGNATURE_CACHE_TABLE} SET expires_at_ms=?2,updated_at_ms=?3 WHERE cache_key=?1"),params![key,expires,now])?==1)
+        }).map_err(|error|signature_store_error(error,SignatureCacheStoreError::Expire))
     }
 }
 
@@ -1378,25 +1368,26 @@ fn validate_persisted_proxy_topology(config: &CliproxyRuntimeConfig) -> anyhow::
 pub fn load_instance_proxy_config(
     root: &Path,
 ) -> anyhow::Result<Option<StoredInstanceProxyConfig>> {
-    let Some(conn) = open_instance_proxy_config_db_read_only(root)? else {
-        return Ok(None);
-    };
-    let row = conn
-        .query_row(
-            &format!(
-                "SELECT revision, default_provider, config_json \
+    let row = with_instance_proxy_read(root, |conn| {
+        let row = conn
+            .query_row(
+                &format!(
+                    "SELECT revision, default_provider, config_json \
                  FROM {INSTANCE_PROXY_CONFIG_TABLE} WHERE config_id = 1"
-            ),
-            [],
-            |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            },
-        )
-        .optional()?;
+                ),
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        Ok(row)
+    })?
+    .flatten();
     let Some((revision, default_provider, config_json)) = row else {
         return Ok(None);
     };
@@ -1419,6 +1410,50 @@ pub fn load_instance_proxy_config(
 /// The immediate transaction makes configuration replacement a single-writer
 /// operation and prevents a stale Business OS/Management mutation from
 /// silently overwriting a newer operator choice.
+fn save_instance_proxy_config_row(
+    root: &Path,
+    expected_revision: u64,
+    default_provider: String,
+    config_json: String,
+) -> anyhow::Result<u64> {
+    with_instance_proxy_write(root, move |tx| {
+        let current = tx
+            .query_row(
+                &format!("SELECT revision FROM {INSTANCE_PROXY_CONFIG_TABLE} WHERE config_id = 1"),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|_| anyhow::anyhow!("invalid proxy revision"))?
+            .unwrap_or(0);
+        if current != expected_revision {
+            return Err(anyhow::Error::new(ProxyConfigRevisionConflict));
+        }
+        let revision = current
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("proxy runtime config revision overflow"))?;
+        let updated_at_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let updated_at_ms = i64::try_from(updated_at_ms).unwrap_or(i64::MAX);
+        tx.execute(
+            &format!(
+                "INSERT INTO {INSTANCE_PROXY_CONFIG_TABLE} \
+             (config_id, revision, default_provider, config_json, updated_at_ms) \
+             VALUES (1, ?1, ?2, ?3, ?4) \
+             ON CONFLICT(config_id) DO UPDATE SET revision=excluded.revision, \
+             default_provider=excluded.default_provider, config_json=excluded.config_json, \
+             updated_at_ms=excluded.updated_at_ms"
+            ),
+            params![revision, default_provider, config_json, updated_at_ms],
+        )?;
+        Ok(revision)
+    })
+}
+
 pub fn save_instance_proxy_config(
     root: &Path,
     expected_revision: u64,
@@ -1428,42 +1463,12 @@ pub fn save_instance_proxy_config(
     validate_persisted_proxy_topology(&runtime)?;
     let default_provider = validate_default_provider(default_provider, &runtime)?;
     let config_json = serde_json::to_string(&runtime)?;
-    let mut conn = open_instance_proxy_config_db(root)?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let current = tx
-        .query_row(
-            &format!("SELECT revision FROM {INSTANCE_PROXY_CONFIG_TABLE} WHERE config_id = 1"),
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?
-        .map(u64::try_from)
-        .transpose()
-        .map_err(|_| anyhow::anyhow!("invalid proxy revision"))?
-        .unwrap_or(0);
-    if current != expected_revision {
-        return Err(anyhow::Error::new(ProxyConfigRevisionConflict));
-    }
-    let revision = current
-        .checked_add(1)
-        .ok_or_else(|| anyhow::anyhow!("proxy runtime config revision overflow"))?;
-    let updated_at_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let updated_at_ms = i64::try_from(updated_at_ms).unwrap_or(i64::MAX);
-    tx.execute(
-        &format!(
-            "INSERT INTO {INSTANCE_PROXY_CONFIG_TABLE} \
-             (config_id, revision, default_provider, config_json, updated_at_ms) \
-             VALUES (1, ?1, ?2, ?3, ?4) \
-             ON CONFLICT(config_id) DO UPDATE SET revision=excluded.revision, \
-             default_provider=excluded.default_provider, config_json=excluded.config_json, \
-             updated_at_ms=excluded.updated_at_ms"
-        ),
-        params![revision, default_provider, config_json, updated_at_ms],
+    let revision = save_instance_proxy_config_row(
+        root,
+        expected_revision,
+        default_provider.clone(),
+        config_json,
     )?;
-    tx.commit()?;
     Ok(StoredInstanceProxyConfig {
         schema: INSTANCE_PROXY_CONFIG_SCHEMA.to_owned(),
         revision,
@@ -6889,3 +6894,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "runtime_config_owner_tests.rs"]
+mod runtime_config_owner_tests;
