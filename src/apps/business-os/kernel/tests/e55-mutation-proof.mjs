@@ -3,7 +3,8 @@ import {readFile,writeFile} from 'node:fs/promises';
 import {spawnSync} from 'node:child_process';
 const root=new URL('../',import.meta.url);
 const cases=[
- {name:'grant-required',file:'kernel.mjs',old:'const grant=await transport.grantApp(appId);',next:"const grant='mutant';",args:['tests/e55.test.mjs'],reason:'ERR_ASSERTION'},
+ {name:'forged-token',file:'boot.mjs',old:"if(await subtle.verify({name:'Ed25519'},key,signature,bytes))return true;",next:'if(true)return true;',args:['--test-name-pattern=app grants reject wrong identity','tests/boot.test.mjs'],reason:'ERR_ASSERTION'},
+ {name:'grant-required',file:'kernel.mjs',old:'const grant=await transport.grantApp(appId);',next:"const grant='mutant';",args:['--test-name-pattern=activation without a grant','tests/e55.test.mjs'],reason:'ERR_ASSERTION'},
  {name:'bulk-grants-in-hello',file:'tests/boot.test.mjs',old:"scope_tokens:[this.tokenFor('shell')]",next:"scope_tokens:[this.tokenFor('shell'),...Array.from({length:41},(_,a)=>this.tokenFor('app'+a))]",args:['--test-name-pattern=E55 41','tests/boot.test.mjs'],reason:'hello'},
 ];
 for(const c of cases){
