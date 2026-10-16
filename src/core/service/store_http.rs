@@ -413,7 +413,7 @@ mod tests {
             for url in [
                 "/kernel/tests/private.mjs",
                 "/business-os/kernel/tests/private.mjs",
-                "/business-os/%2e%2e/index.html",
+                "/business-os/%2e%2e%2findex.html",
             ] {
                 assert_eq!(get(url)?.status(), 404, "bootstrap path escape: {url}");
             }
