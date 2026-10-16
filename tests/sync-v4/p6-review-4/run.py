@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path.cwd()
 HERE = ROOT / 'tests/sync-v4/p6-review-4'
-TRAIN = '3c6cd65ef3a4721fc5b33776dc3ce0a30cd3dfb6'
+TRAIN = 'a6dda5aab750a1020cd0ae0a5b9af4276b2ce8bb'
 RIGHTS = "7f972f89b72aa4da7af19b5fae07d50f23c6a600"
 USE_CURRENT_RIGHTS = (ROOT / "src/core/store/rights.rs").is_file()
 if USE_CURRENT_RIGHTS:
