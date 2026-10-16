@@ -14,7 +14,8 @@ import sqlite3
 import time
 
 
-def configure(root):
+def configure(root, address='127.0.0.1:0'):
+    assert address in ('127.0.0.1:0', '127.0.0.1:8765')
     assert os.uname().sysname=='Linux' and os.environ.get('BUILD_LANE_BIN')
     root=Path(root).resolve()
     base=(Path(os.environ['BUILD_LANE_BIN'])/'../artifacts').resolve()
@@ -40,9 +41,9 @@ def configure(root):
         assert [r[1] for r in db.execute('PRAGMA table_info(runtime_env_kv)')]==['env_key','env_value']
         key='CTOX_BUSINESS_OS_WEB_ADDR'
         old=db.execute('SELECT env_value FROM runtime_env_kv WHERE env_key=?',(key,)).fetchone()
-        db.execute('INSERT INTO runtime_env_kv(env_key,env_value) VALUES (?,?) ON CONFLICT(env_key) DO UPDATE SET env_value=excluded.env_value',(key,'127.0.0.1:0'))
+        db.execute('INSERT INTO runtime_env_kv(env_key,env_value) VALUES (?,?) ON CONFLICT(env_key) DO UPDATE SET env_value=excluded.env_value',(key,address))
     return dict(owner=marker['owner'],synthetic=True,fixtureSetup=True,productionChange=False,
-        key=key,value='127.0.0.1:0',priorPublicAddress=old[0] if old else None,
+        key=key,value=address,priorPublicAddress=old[0] if old else None,
         existingDatabase=existed,measuredAtMs=int(time.time()*1000),root=str(root))
 
 

@@ -8,7 +8,7 @@ import {Native,verifiedBuild,owner} from '../../sync-v4-e2e/native.mjs';
 import {schema} from '../../sync-v4-e2e/browser.mjs';
 import {completedTransition} from './installer-outcome.mjs';
 if(process.platform!=='linux'||!process.env.BUILD_LANE_BIN)throw Error('Canonical Linux lane required');
-const [oldReceipt,newReceipt,outArg,roundtrip]=process.argv.slice(2),before=verifiedBuild(oldReceipt),after=verifiedBuild(newReceipt);
+const [oldReceipt,newReceipt,outArg,roundtrip,dressConfig]=process.argv.slice(2),before=verifiedBuild(oldReceipt),after=verifiedBuild(newReceipt);
 const output=resolve(outArg),allowed=resolve(process.env.BUILD_LANE_BIN,'../artifacts')+'/';
 if(!output.startsWith(allowed))throw Error('New private artifact prefix required');
 fs.mkdirSync(output,{recursive:false,mode:0o700});
@@ -25,6 +25,7 @@ const snapshot=(phase)=>{
 };
 try{
  const fixture=await native.prepare(schema,resolve(dirname(new URL(import.meta.url).pathname),'../../sync-v4-e2e'));
+ if(dressConfig){const p=spawnSync('python3',['-c',"import importlib.util;from pathlib import Path;s=importlib.util.spec_from_file_location('fixture',Path('tests/sync-v4/k11/m7-bootstrap-fixture.py'));m=importlib.util.module_from_spec(s);s.loader.exec_module(m);m.configure(Path(__import__('sys').argv[1]),'127.0.0.1:8765')",root],{encoding:'utf8',timeout:10000});if(p.status!==0)throw Error('Offline private HTTP fixture setup failed: '+p.stderr);}
  const truth=native.seed('read',resolve(dirname(new URL(import.meta.url).pathname),'../../sync-v4-e2e'));
  const bodies=native.seed('bodies',resolve(dirname(new URL(import.meta.url).pathname),'../../sync-v4-e2e'));
  const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(k=>[k,canonical(value[k])])):value;
@@ -32,7 +33,7 @@ try{
  record.fixture={rows:truth.rows.length,documentsCovered:bodies.rows.length,fullDocumentSha256:digest(bodies.rows),metadataSha256:digest(truth.rows)};save();
  record.root=root;record.beforeSnapshot=snapshot('before');save();
  const controller=join(dirname(new URL(import.meta.url).pathname),'upgrade-controller.mjs'),log=fs.openSync(join(output,'controller.log'),'w',0o600);
- const run=spawnSync(process.execPath,[controller,oldReceipt,newReceipt,root,join(output,'upgrade'),roundtrip==='yes'?'yes':'no'],{stdio:['ignore',log,log],timeout:11*60*1000});fs.closeSync(log);
+ const run=spawnSync(process.execPath,[controller,oldReceipt,newReceipt,root,join(output,'upgrade'),roundtrip==='yes'?'yes':'no','',dressConfig||''],{stdio:['ignore',log,log],timeout:11*60*1000});fs.closeSync(log);
  record.controllerExit=run.status;record.controllerError=run.error?.message;
  for(const [name,file]of [['installer','installer.json'],['failure','failure.json'],['controller','controller.json']]){
   const p=join(output,'upgrade',file);if(fs.existsSync(p))record[name]=JSON.parse(fs.readFileSync(p));
