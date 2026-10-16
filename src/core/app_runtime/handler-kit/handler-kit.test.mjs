@@ -15,6 +15,15 @@ const docs = [
   { id: 'c', n: 2, title: 'alpha', nullable: 3 },
 ];
 const ids = selector => mango(docs, { selector }).map(doc => doc.id);
+test('P9 reads use the app projection, never command bodies including inside transactions', async () => {
+  const ctx = createContext(manifest({collections:{coding_turns:{},business_commands:{}}}), {
+    collections:{coding_turns:[{id:'turn',state:'done',command_id:'intent'}],business_commands:[{id:'intent',payload:{prompt:'fixture-private-intent'}}]},
+  });
+  assert.equal((await ctx.get('coding_turns','turn')).state,'done');
+  for (const read of [() => ctx.read('business_commands'), () => ctx.get('business_commands','intent'), () => ctx.transaction(tx => tx.read('business_commands'))]) {
+    await assert.rejects(async () => read(), e => e.code === 'forbidden' && /projection/.test(e.message), 'direct command read reintroduced');
+  }
+});
 test('Mango distinguishes missing, null and exists and handles equality/inequality', () => {
   assert.deepEqual(ids({ nullable: { $eq: null } }), ['b']);
   assert.deepEqual(ids({ nullable: { $exists: false } }), ['a']);

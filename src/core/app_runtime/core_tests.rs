@@ -665,6 +665,57 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn app_reads_use_projection_without_exposing_command_documents() {
+    let f = Fixture::new();
+    f.host
+        .writer
+        .submit(WriteJob::new(JobOptions::default(), |tx| {
+            for (collection, body) in [
+                ("rows", json!({"id":"projected","status":"done"})),
+                (
+                    "business_commands",
+                    json!({"id":"intent","payload":{"prompt":"fixture-private-intent"}}),
+                ),
+            ] {
+                tx.execute(
+                    "INSERT INTO docs VALUES(?,?,1,0,?)",
+                    params![collection, body["id"].as_str().unwrap(), body.to_string()],
+                )?;
+            }
+            Ok(())
+        }))
+        .unwrap()
+        .blocking_wait()
+        .unwrap();
+    let mut binding = f.binding();
+    // Even a legacy manifest declaring the command ledger cannot expose it.
+    binding["manifest"]["collections"]["business_commands"] = json!({});
+    assert_eq!(
+        f.host
+            .invoke_bound(&binding, "read", &json!(["rows", {}]))
+            .unwrap()["documents"][0]["status"],
+        "done"
+    );
+    let direct = f
+        .host
+        .invoke_bound(&binding, "read", &json!(["business_commands", {}]));
+    assert!(direct.is_err(), "direct command read accepted: {direct:?}");
+    assert!(direct.unwrap_err().to_string().starts_with("forbidden:"));
+    let snapshot = f
+        .host
+        .invoke_bound(&binding, "transaction.begin", &json!([]))
+        .unwrap();
+    assert!(
+        snapshot["collections"].get("business_commands").is_none(),
+        "command bodies leaked in transaction snapshot"
+    );
+    assert_eq!(snapshot["collections"]["rows"][0]["status"], "done");
+    f.host
+        .invoke_bound(&binding, "transaction.abort", &json!([snapshot["token"]]))
+        .unwrap();
+}
+
+#[test]
 fn active_cas_skills_prompts_and_handler_assets_switch_together_and_archive_on_remove() {
     let f = Fixture::new();
     let handler = "export default async(command,ctx)=>ctx.asset(command.payload.path);";

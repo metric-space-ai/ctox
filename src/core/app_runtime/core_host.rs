@@ -371,6 +371,10 @@ impl CoreRuntimeHost {
         }))
     }
     fn read(&self, binding: &Value, collection: &str) -> Result<Value> {
+        ensure!(
+            collection != "business_commands",
+            "forbidden: read an app projection instead of command documents"
+        );
         let codec = self.codec.clone();
         let binding = binding.clone();
         let collection = collection.to_owned();
@@ -521,6 +525,9 @@ impl CoreRuntimeHost {
                 write_only.push(name.clone());
             }
         }
+        // Command authority stays in Core; even a legacy manifest must not put
+        // command bodies into an app's transactional read snapshot.
+        names.retain(|name| name != "business_commands");
         let codec = self.codec.clone();
         let context = binding.clone();
         let snapshot = self.read_job(ReadJob::new(Self::options(), move |db| {
@@ -686,6 +693,27 @@ impl RuntimeHost for CoreRuntimeHost {
             effect()?;
             Ok(Value::Null)
         })?;
+        Ok(())
+    }
+    fn complete_bound(&self, binding: &Value) -> Result<()> {
+        // A retained native invocation alone is not the current P9 Store lease.
+        // Consume the existing codec in the canonical writer; do not publish or
+        // mutate a command here. Its durable completion rechecks atomically.
+        let codec = self.codec.clone();
+        let authority = self.authority.clone();
+        let binding = binding.clone();
+        let job = self
+            .writer
+            .submit(WriteJob::new(Self::options(), move |tx| {
+                authority
+                    .with_fence(&binding, &mut || {
+                        codec.check_fence(tx, &binding).map_err(store_failure)?;
+                        Ok(Value::Null)
+                    })
+                    .map_err(denied)
+            }))
+            .map_err(store_failure)?;
+        self.wait(job)?;
         Ok(())
     }
     fn finish(&self, binding: &Value) {

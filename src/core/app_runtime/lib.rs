@@ -17,6 +17,8 @@ use uuid::Uuid;
 pub mod artifact_text;
 #[cfg(feature = "core-store")]
 pub mod capability_host;
+#[cfg(all(test, feature = "core-store"))]
+mod completion_fence_tests;
 #[cfg(feature = "core-store")]
 pub mod core_host;
 #[cfg(all(test, feature = "core-store"))]
@@ -114,6 +116,12 @@ pub trait RuntimeHost: Send + Sync + 'static {
             method,
             args,
         )
+    }
+    /// Revalidate the retained executor before accepting a terminal IPC frame.
+    /// Production start_bound uses CoreAuthority's current lease/fence gate;
+    /// durable completion still performs its own atomic Store-writer check.
+    fn complete_bound(&self, binding: &Value) -> Result<()> {
+        self.start_bound(binding, &mut || Ok(()))
     }
     fn finish(&self, _binding: &Value) {}
     fn now_ms(&self) -> u64 {
@@ -823,6 +831,9 @@ impl RuntimePool {
                     }
                     Some("result") => {
                         ensure!(frame["id"] == call_id, "invalid: result correlation");
+                        if let Some(binding) = &binding {
+                            self.inner.host.complete_bound(binding)?;
+                        }
                         ensure!(
                             serde_json::to_vec(&frame["value"])?.len() <= RESULT_LIMIT,
                             "quota: handler result"
@@ -831,6 +842,9 @@ impl RuntimePool {
                     }
                     Some("error") => {
                         ensure!(frame["id"] == call_id, "invalid: error correlation");
+                        if let Some(binding) = &binding {
+                            self.inner.host.complete_bound(binding)?;
+                        }
                         return Err(serde_json::from_value::<HandlerError>(
                             frame["error"].clone(),
                         )?
@@ -943,6 +957,10 @@ fn callback(
                 .first()
                 .and_then(Value::as_str)
                 .context("invalid: collection")?;
+            ensure!(
+                method != "read" || name != "business_commands",
+                "forbidden: read an app projection instead of command documents"
+            );
             if bundle.manifest["collections"].get(name).is_none() {
                 let rule = &bundle.manifest["foreign_collections"][name];
                 let owner = string(rule, "owner_app")?;

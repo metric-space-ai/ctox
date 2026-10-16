@@ -289,6 +289,18 @@ fn store_error(error: RxError) -> anyhow::Error {
     anyhow::anyhow!("{code}: native Store operation rejected ({})", error.code())
 }
 impl RuntimeHost for LegacyStoreAdapter {
+    fn admit(&self, manifest: &Value, binding: &Value) -> Result<()> {
+        self.authority.admit(manifest, binding)
+    }
+    fn start_bound(&self, binding: &Value, effect: &mut dyn FnMut() -> Result<()>) -> Result<()> {
+        self.authority.start_bound(binding, effect)
+    }
+    fn complete_bound(&self, binding: &Value) -> Result<()> {
+        self.authority.complete_bound(binding)
+    }
+    fn finish(&self, binding: &Value) {
+        self.authority.finish(binding);
+    }
     fn authorize(&self, app: &str, actor: &Value, operation: &Value) -> Result<()> {
         self.authority.authorize(app, actor, operation)
     }
