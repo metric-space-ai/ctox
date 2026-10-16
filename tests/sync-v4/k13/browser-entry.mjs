@@ -31,8 +31,8 @@ export async function installBrowserEntry(context, origin) {
         throw Error('not_run(native-device-enrollment): admitted device is not bound to kernel identity');
       const shell=kernel.shellApi();
       globalThis.__e2eOS={kernel,shell,transport:t,transportKind:'native-webrtc',nativePeerId:launch.signaling.nativePeerId,
-        // Authentication is supplied by E38. Native regression operations are
-        // deliberately absent until a real owner-backed provider exists.
+        // E38 supplies the device binding; the private native socket resolves
+        // the server-issued cookie again for every fixture operation.
         authenticatedControl:{async authenticate(args){
           if(args.userId!==kernel.userId || args.deviceId!==deviceId)throw Error('A separately authenticated enrolled context is required');
           return {userId:kernel.userId,deviceId,instanceId:kernel.instanceId,role:launch.actor.role,is_admin:launch.actor.is_admin};
@@ -41,7 +41,10 @@ export async function installBrowserEntry(context, origin) {
       globalThis.__e2eOS.regression={contract:'ctox.sync-v4.regression-control.v1',
         prepare:args=>globalThis.__p6NativeControl({operation:'prepare',args}),
         control:async(operation,args)=>{const result=await globalThis.__p6NativeControl({operation,args});
-          if(operation==='authenticate' && args.deviceId!==deviceId)throw Error('Native device mismatch');return result;}};
+          if(operation==='authenticate'){
+            if(args.deviceId!=null && args.deviceId!==deviceId)throw Error('Native device mismatch');
+            return {...result,deviceId};
+          }return result;}};
       return {instanceId,userId,deviceId,role:launch.actor.role,transportKind:'native-webrtc',helloAdmitted:true,loader:true,
         shellVersion:loader.shellVersion,storageKind:kernel.storageKind,entry:location.pathname,launchContext:true};
     },{instanceId:fixture.instanceId,userId:identity.id,role:identity.role});

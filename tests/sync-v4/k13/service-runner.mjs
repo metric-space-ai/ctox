@@ -14,7 +14,7 @@ installServiceEntry(Native);
 const native=new Native(config),contexts=[],bindings=new WeakMap();
 const scenario=(await import(pathToFileURL(join(config.scenarioRoot,config.scenario.toLowerCase(),'scenario.mjs')))).default;
 const row={id:scenario.id,criterion:scenario.criterion,status:'not_run',pass:false,acceptanceComplete:false};
-const report={owner:config.owner,revision:config.revision,binarySha256:config.binarySha256,netem:config.netem,
+const report={bootstrapResponses:[],owner:config.owner,revision:config.revision,binarySha256:config.binarySha256,netem:config.netem,
   startedAt:new Date().toISOString(),processLimits:fs.readFileSync('/proc/self/limits','utf8').split('\n').filter(line=>line.startsWith('Max processes')),
   scenarios:[row],terminal:false,pass:false,browserEntries:[]};
 const save=()=>fs.writeFileSync(join(config.output,'result.json'),JSON.stringify(report,null,2));
@@ -74,6 +74,7 @@ try {
     await context.addCookies([{name:'ctox_business_os_auth',value:enrolled.cookie,url:origin,httpOnly:true,sameSite:'Strict'}]);
     const connect=await installBrowserEntry(context,origin);
     const p=await context.newPage();
+    p.on('response',response=>{const url=new URL(response.url());if(url.origin===origin && ['/api/business-os/launch-context','/kernel/boot.mjs','/business-os/v4/boot.js','/sw.js'].includes(url.pathname)){report.bootstrapResponses.push({userId:enrolled.id,path:url.pathname,status:response.status()});save();}});
     await p.exposeBinding('__p6NativeControl',(_source,{operation,args})=>call(enrolled,operation,args));
     bindings.set(p,()=>connect(p,enrolled,native.fixture));
     const response=await p.goto(origin+'/',{waitUntil:'domcontentloaded',timeout:20000});
@@ -82,7 +83,7 @@ try {
   };
   const h={config,page,newClient:page,pause,offline:(p,value)=>p.context().setOffline(value),
     observe:(phase,measured)=>{row.phase=phase;(row.observations??=[]).push({phase,...measured});save();},
-    os:async p=>{const value=await bindings.get(p)();report.browserEntries.at(-1).proof=value.proof;save();return value;}};
+    os:async p=>{try{const value=await bindings.get(p)();report.browserEntries.at(-1).proof=value.proof;save();return value;}finally{report.browserEntries.at(-1).boot=await p.evaluate(()=>({called:!!globalThis.__p6BootOptions,completed:!!globalThis.__p6Boot,error:globalThis.__p6BootError??null})).catch(()=>({pageClosed:true}));save();}}};
   Object.assign(row,await scenario.run(h));
   }
 } catch(error) {
